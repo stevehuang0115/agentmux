@@ -9,8 +9,14 @@ const socket_io_1 = require("socket.io");
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const dotenv_1 = __importDefault(require("dotenv"));
 const tmux_1 = require("./tmux");
 const validation_1 = require("./validation");
+const user_1 = require("./models/user");
+const auth_1 = require("./middleware/auth");
+const auth_2 = require("./routes/auth");
+// Load environment variables
+dotenv_1.default.config();
 const app = (0, express_1.default)();
 const server = (0, http_1.createServer)(app);
 const io = new socket_io_1.Server(server, {
@@ -20,7 +26,14 @@ const io = new socket_io_1.Server(server, {
     }
 });
 const PORT = process.env.PORT || 3001;
+// Initialize services
 const tmuxManager = new tmux_1.TmuxManager();
+const userStore = new user_1.UserStore();
+const authService = new auth_1.AuthService(userStore);
+// Create default admin user in development
+if (process.env.NODE_ENV !== 'production') {
+    userStore.createDefaultAdmin();
+}
 // Security middleware
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)());
@@ -31,13 +44,17 @@ const limiter = (0, express_rate_limit_1.default)({
     max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
+// Routes
+app.use('/auth', (0, auth_2.createAuthRoutes)(userStore, authService));
 // Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+// WebSocket authentication middleware
+io.use(authService.authenticateSocket());
 // WebSocket connection handling
 io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+    console.log(`Client connected: ${socket.id} (User: ${socket.user?.username})`);
     // List all tmux sessions
     socket.on('list-sessions', async (callback) => {
         try {

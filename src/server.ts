@@ -4,8 +4,15 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import dotenv from 'dotenv';
 import { TmuxManager, TmuxMessage } from './tmux';
 import { Validator } from './validation';
+import { UserStore } from './models/user';
+import { AuthService, AuthenticatedSocket } from './middleware/auth';
+import { createAuthRoutes } from './routes/auth';
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 const server = createServer(app);
@@ -17,7 +24,16 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3001;
+
+// Initialize services
 const tmuxManager = new TmuxManager();
+const userStore = new UserStore();
+const authService = new AuthService(userStore);
+
+// Create default admin user in development
+if (process.env.NODE_ENV !== 'production') {
+  userStore.createDefaultAdmin();
+}
 
 // Security middleware
 app.use(helmet());
@@ -31,14 +47,20 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
+// Routes
+app.use('/auth', createAuthRoutes(userStore, authService));
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// WebSocket authentication middleware
+io.use(authService.authenticateSocket());
+
 // WebSocket connection handling
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
+io.on('connection', (socket: AuthenticatedSocket) => {
+  console.log(`Client connected: ${socket.id} (User: ${socket.user?.username})`);
 
   // List all tmux sessions
   socket.on('list-sessions', async (callback) => {
