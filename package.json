@@ -15,7 +15,22 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
-  "keywords": ["tmux", "websocket", "orchestration", "agent", "automation", "cli"],
+  "keywords": [
+    "tmux",
+    "websocket",
+    "orchestration",
+    "agent",
+    "automation",
+    "cli"
+  ],
+  "files": [
+    "dist/",
+    "public/",
+    "index.js",
+    "INSTRUCTIONS.md",
+    "README.md",
+    "DEPLOYMENT.md"
+  ],
   "author": "AgentMux Team",
   "license": "MIT",
   "dependencies": {
@@ -42,6 +57,7 @@
     "@types/ws": "^8.18.1",
     "jest": "^30.1.0",
     "nodemon": "^3.1.10",
+    "puppeteer": "^24.17.0",
     "socket.io-client": "^4.8.1",
     "supertest": "^7.1.4",
     "ts-jest": "^29.4.1",

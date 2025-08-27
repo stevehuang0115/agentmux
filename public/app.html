@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentMux - Tmux Sessions</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #2a2a2a;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4caf50;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .main-content {
+            display: flex;
+            height: calc(100vh - 70px);
+        }
+        
+        .sessions-panel {
+            width: 300px;
+            background: #2a2a2a;
+            border-right: 1px solid #444;
+            overflow-y: auto;
+        }
+        
+        .sessions-header {
+            padding: 1rem;
+            background: #333;
+            border-bottom: 1px solid #444;
+            font-weight: bold;
+        }
+        
+        .session-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .session-item:hover {
+            background: #3a3a3a;
+        }
+        
+        .session-name {
+            font-weight: bold;
+            color: #4caf50;
+        }
+        
+        .window-item {
+            padding: 0.5rem 1.5rem;
+            font-size: 0.9rem;
+            color: #bbb;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .window-item:hover {
+            background: #3a3a3a;
+            color: #fff;
+        }
+        
+        .window-item.active {
+            background: #4caf50;
+            color: #000;
+        }
+        
+        .control-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .window-header {
+            background: #333;
+            padding: 1rem;
+            border-bottom: 1px solid #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .output-area {
+            flex: 1;
+            background: #1e1e1e;
+            padding: 1rem;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .input-area {
+            background: #2a2a2a;
+            padding: 1rem;
+            border-top: 1px solid #444;
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .input-area input {
+            flex: 1;
+            background: #1e1e1e;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 0.75rem;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+        
+        .btn {
+            background: #4caf50;
+            color: #000;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        
+        .btn:hover {
+            background: #45a049;
+        }
+        
+        .btn.secondary {
+            background: #666;
+            color: #fff;
+        }
+        
+        .btn.secondary:hover {
+            background: #777;
+        }
+        
+        .no-session {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            flex-direction: column;
+            color: #666;
+            gap: 1rem;
+        }
+        
+        .loading {
+            color: #4caf50;
+            text-align: center;
+            padding: 2rem;
+        }
+        
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🚀 AgentMux</h1>
+            <small>Tmux Session Manager</small>
+        </div>
+        <div class="status">
+            <div class="status-dot"></div>
+            <span id="connectionStatus">Connected</span>
+        </div>
+    </div>
+    
+    <div class="main-content">
+        <div class="sessions-panel">
+            <div class="sessions-header">Tmux Sessions</div>
+            <div id="sessionsList" class="loading">
+                Loading sessions...
+            </div>
+        </div>
+        
+        <div class="control-panel">
+            <div id="noSession" class="no-session">
+                <div>
+                    <h3>Select a tmux session</h3>
+                    <p>Choose a session and window from the left panel to start</p>
+                </div>
+            </div>
+            
+            <div id="sessionControl" style="display: none;">
+                <div class="window-header">
+                    <div>
+                        <strong id="currentTarget">No session selected</strong>
+                    </div>
+                    <div>
+                        <button class="btn secondary" onclick="refreshOutput()">Refresh</button>
+                        <button class="btn secondary" onclick="clearOutput()">Clear</button>
+                    </div>
+                </div>
+                
+                <div class="output-area" id="outputArea">
+                    <pre id="outputContent"></pre>
+                </div>
+                
+                <div class="input-area">
+                    <input type="text" id="commandInput" placeholder="Enter command to send to tmux session..." />
+                    <button class="btn" onclick="sendCommand()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let socket;
+        let currentTarget = null;
+        let sessions = [];
+        
+        // Initialize WebSocket connection (NO AUTH REQUIRED!)
+        function initSocket() {
+            console.log('Initializing socket connection...');
+            socket = io();
+            
+            socket.on('connect', () => {
+                console.log('Socket connected');
+                document.getElementById('connectionStatus').textContent = 'Connected';
+                setTimeout(loadSessions, 500); // Small delay to ensure connection is stable
+            });
+            
+            socket.on('disconnect', () => {
+                console.log('Socket disconnected');
+                document.getElementById('connectionStatus').textContent = 'Disconnected';
+            });
+            
+            socket.on('connect_error', (error) => {
+                console.log('Socket connection error:', error);
+                document.getElementById('connectionStatus').textContent = 'Error: ' + error.message;
+            });
+        }
+        
+        // Load tmux sessions
+        function loadSessions() {
+            console.log('Loading sessions...');
+            socket.emit('list-sessions', (response) => {
+                console.log('Sessions response:', response);
+                if (response.success) {
+                    sessions = response.data;
+                    renderSessions();
+                } else {
+                    document.getElementById('sessionsList').innerHTML = 
+                        '<div style="padding: 1rem; color: #ff6b6b;">Error: ' + (response.error || 'No sessions found') + '<br><small>Check console for details</small></div>';
+                }
+            });
+        }
+        
+        // Render sessions in sidebar
+        function renderSessions() {
+            const container = document.getElementById('sessionsList');
+            
+            if (sessions.length === 0) {
+                container.innerHTML = '<div style="padding: 1rem; color: #666;">No active sessions</div>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            sessions.forEach(session => {
+                const sessionDiv = document.createElement('div');
+                sessionDiv.innerHTML = \`
+                    <div class="session-name">\${session.name}</div>
+                \`;
+                
+                session.windows.forEach(window => {
+                    const windowDiv = document.createElement('div');
+                    windowDiv.className = 'window-item';
+                    windowDiv.textContent = \`\${window.index}: \${window.name}\${window.active ? ' (active)' : ''}\`;
+                    windowDiv.onclick = () => selectWindow(session.name, window.index, window.name);
+                    sessionDiv.appendChild(windowDiv);
+                });
+                
+                container.appendChild(sessionDiv);
+            });
+        }
+        
+        // Select a window
+        function selectWindow(sessionName, windowIndex, windowName) {
+            currentTarget = \`\${sessionName}:\${windowIndex}\`;
+            
+            // Update UI
+            document.querySelectorAll('.window-item').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.getElementById('currentTarget').textContent = \`\${sessionName}:\${windowIndex} (\${windowName})\`;
+            document.getElementById('noSession').style.display = 'none';
+            document.getElementById('sessionControl').style.display = 'flex';
+            
+            // Load initial output
+            refreshOutput();
+        }
+        
+        // Refresh output from current window
+        function refreshOutput() {
+            if (!currentTarget) return;
+            
+            const [session, window] = currentTarget.split(':');
+            socket.emit('capture-pane', { 
+                session, 
+                window: parseInt(window),
+                lines: 100 
+            }, (response) => {
+                if (response.success) {
+                    document.getElementById('outputContent').textContent = response.data;
+                    scrollToBottom();
+                } else {
+                    document.getElementById('outputContent').textContent = 'Error: ' + response.error;
+                }
+            });
+        }
+        
+        // Send command to current window
+        function sendCommand() {
+            if (!currentTarget) return;
+            
+            const input = document.getElementById('commandInput');
+            const command = input.value.trim();
+            if (!command) return;
+            
+            const [session, window] = currentTarget.split(':');
+            socket.emit('send-message', {
+                session,
+                window: parseInt(window),
+                message: command
+            }, (response) => {
+                if (response.success) {
+                    input.value = '';
+                    // Refresh output after sending
+                    setTimeout(refreshOutput, 500);
+                } else {
+                    alert('Error sending command: ' + response.error);
+                }
+            });
+        }
+        
+        // Clear output display
+        function clearOutput() {
+            document.getElementById('outputContent').textContent = '';
+        }
+        
+        // Scroll to bottom of output
+        function scrollToBottom() {
+            const outputArea = document.getElementById('outputArea');
+            outputArea.scrollTop = outputArea.scrollHeight;
+        }
+        
+        // Handle Enter key in command input
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('commandInput').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    sendCommand();
+                }
+            });
+            
+            // Initialize connection
+            initSocket();
+        });
+    </script>
+</body>
+</html>

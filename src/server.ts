@@ -35,8 +35,16 @@ if (process.env.NODE_ENV !== 'production') {
   userStore.createDefaultAdmin();
 }
 
-// Security middleware
-app.use(helmet());
+// Security middleware - Allow inline scripts for frontend
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+    },
+  },
+}));
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
@@ -47,31 +55,13 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Static files
-app.use(express.static('public'));
-
-// Root route
+// Root route - DIRECT TO CORE DASHBOARD
 app.get('/', (req, res) => {
-  res.json({
-    name: 'AgentMux API',
-    version: '1.0.0',
-    description: 'Secure WebSocket server for tmux session management',
-    endpoints: {
-      auth: {
-        login: 'POST /auth/login',
-        register: 'POST /auth/register',
-        me: 'GET /auth/me',
-        logout: 'POST /auth/logout'
-      },
-      websocket: 'ws://localhost:3001 (requires JWT token)',
-      health: 'GET /health'
-    },
-    defaultCredentials: {
-      username: 'admin',
-      password: 'admin123'
-    }
-  });
+  res.redirect('/app.html');
 });
+
+// Static files (after root route)
+app.use(express.static('public'));
 
 // Routes
 app.use('/auth', createAuthRoutes(userStore, authService));
@@ -81,8 +71,29 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// WebSocket authentication middleware
-io.use(authService.authenticateSocket());
+// WebSocket authentication middleware - BYPASS FOR LOCALHOST
+io.use((socket, next) => {
+  const isLocalhost = socket.request.connection.remoteAddress === '127.0.0.1' || 
+                     socket.request.connection.remoteAddress === '::1' ||
+                     socket.handshake.headers.host?.includes('localhost');
+  
+  if (isLocalhost) {
+    // Auto-create default user for localhost
+    (socket as AuthenticatedSocket).user = {
+      id: 'localhost-user',
+      username: 'localhost',
+      email: 'localhost@agentmux.local',
+      passwordHash: '',
+      createdAt: new Date(),
+      isActive: true
+    };
+    (socket as AuthenticatedSocket).userId = 'localhost-user';
+    return next();
+  }
+  
+  // Use normal auth for non-localhost
+  return authService.authenticateSocket()(socket, next);
+});
 
 // WebSocket connection handling
 io.on('connection', (socket: AuthenticatedSocket) => {
