@@ -44,6 +44,30 @@ const limiter = (0, express_rate_limit_1.default)({
     max: 100 // limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
+// Static files
+app.use(express_1.default.static('public'));
+// Root route
+app.get('/', (req, res) => {
+    res.json({
+        name: 'AgentMux API',
+        version: '1.0.0',
+        description: 'Secure WebSocket server for tmux session management',
+        endpoints: {
+            auth: {
+                login: 'POST /auth/login',
+                register: 'POST /auth/register',
+                me: 'GET /auth/me',
+                logout: 'POST /auth/logout'
+            },
+            websocket: 'ws://localhost:3001 (requires JWT token)',
+            health: 'GET /health'
+        },
+        defaultCredentials: {
+            username: 'admin',
+            password: 'admin123'
+        }
+    });
+});
 // Routes
 app.use('/auth', (0, auth_2.createAuthRoutes)(userStore, authService));
 // Health check

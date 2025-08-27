@@ -1,7 +1,12 @@
 {
   "name": "agent-mux",
   "version": "1.0.0",
+  "description": "Secure WebSocket server for tmux session management and orchestration",
   "main": "index.js",
+  "bin": {
+    "agent-mux": "./index.js",
+    "agentmux": "./index.js"
+  },
   "scripts": {
     "dev": "ts-node src/server.ts",
     "build": "tsc",
@@ -10,10 +15,9 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": ["tmux", "websocket", "orchestration", "agent", "automation", "cli"],
+  "author": "AgentMux Team",
+  "license": "MIT",
   "dependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",

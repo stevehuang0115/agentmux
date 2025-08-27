@@ -1,25 +1,29 @@
 #!/bin/bash
 
-# Send message to Claude agent in tmux window
-# Usage: send-claude-message.sh <session:window> <message>
+# AgentMux - Send Claude Message Script
+# Usage: ./send-claude-message.sh <target> "message"
+# Example: ./send-claude-message.sh session:0 "Hello Claude!"
 
 if [ $# -lt 2 ]; then
-    echo "Usage: $0 <session:window> <message>"
-    echo "Example: $0 agentic-seek:3 'Hello Claude!'"
+    echo "Usage: $0 <target> "message""
+    echo "Example: $0 session:0 "Hello Claude!""
     exit 1
 fi
 
-WINDOW="$1"
-shift  # Remove first argument, rest is the message
-MESSAGE="$*"
+TARGET="$1"
+MESSAGE="$2"
 
-# Send the message
-tmux send-keys -t "$WINDOW" "$MESSAGE"
+# Validate target format
+if [[ ! "$TARGET" =~ ^[a-zA-Z0-9_-]+:[a-zA-Z0-9_.-]+$ ]]; then
+    echo "❌ Invalid target format. Use: session:window or session:window.pane"
+    exit 1
+fi
 
-# Wait 0.5 seconds for UI to register
+echo "📤 Sending message to $TARGET..."
+
+# Send message to tmux
+tmux send-keys -t "$TARGET" "$MESSAGE"
 sleep 0.5
+tmux send-keys -t "$TARGET" Enter
 
-# Send Enter to submit
-tmux send-keys -t "$WINDOW" Enter
-
-echo "Message sent to $WINDOW: $MESSAGE"
+echo "✅ Message sent successfully"

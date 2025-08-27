@@ -1,30 +1,35 @@
 #!/bin/bash
-# Dynamic scheduler with note for next check
+
+# AgentMux - Schedule with Note Script
 # Usage: ./schedule_with_note.sh <minutes> "<note>" [target_window]
 
-MINUTES=${1:-3}
-NOTE=${2:-"Standard check-in"}
-TARGET=${3:-"tmux-orc:0"}
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <minutes> "<note>" [target_window]"
+    echo "Example: $0 15 "Check agent progress" tmux-orc:0"
+    exit 1
+fi
 
-# Create a note file for the next check
-echo "=== Next Check Note ($(date)) ===" > ./next_check_note.txt
-echo "Scheduled for: $MINUTES minutes" >> ./next_check_note.txt
-echo "" >> ./next_check_note.txt
-echo "$NOTE" >> ./next_check_note.txt
+MINUTES="$1"
+NOTE="$2"
+TARGET_WINDOW="${3:-tmux-orc:0}"
 
-echo "Scheduling check in $MINUTES minutes with note: $NOTE"
+# Validate minutes is a number
+if ! [[ "$MINUTES" =~ ^[0-9]+$ ]]; then
+    echo "❌ Minutes must be a number"
+    exit 1
+fi
 
-# Calculate the exact time when the check will run
-CURRENT_TIME=$(date +"%H:%M:%S")
-RUN_TIME=$(date -v +${MINUTES}M +"%H:%M:%S" 2>/dev/null || date -d "+${MINUTES} minutes" +"%H:%M:%S" 2>/dev/null)
+# Check if target window exists (skip check for now to avoid blocking)
+echo "⏰ Scheduling reminder for $MINUTES minutes: $NOTE"
+echo "   Target: $TARGET_WINDOW"
 
-# Use nohup to completely detach the sleep process
-# Use bc for floating point calculation
-SECONDS=$(echo "$MINUTES * 60" | bc)
-nohup bash -c "sleep $SECONDS && tmux send-keys -t $TARGET 'Time for orchestrator check! cat ./next_check_note.txt' && sleep 1 && tmux send-keys -t $TARGET Enter" > /dev/null 2>&1 &
+# Create the scheduled command
+COMMAND="./send-claude-message.sh '$TARGET_WINDOW' '⏰ SCHEDULED REMINDER: $NOTE'"
 
-# Get the PID of the background process
-SCHEDULE_PID=$!
+# Schedule using background process (cross-platform)
+(
+    sleep $((MINUTES * 60))
+    eval "$COMMAND" 2>/dev/null || echo "⚠️ Could not deliver scheduled message to $TARGET_WINDOW"
+) &
 
-echo "Scheduled successfully - process detached (PID: $SCHEDULE_PID)"
-echo "SCHEDULED TO RUN AT: $RUN_TIME (in $MINUTES minutes from $CURRENT_TIME)"
+echo "✅ Reminder scheduled for $MINUTES minutes from now (PID: $!)"
