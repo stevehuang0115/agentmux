@@ -13,6 +13,8 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = require("fs");
 const tmux_1 = require("./tmux");
+const websocketManager_1 = require("./websocketManager");
+const tmuxController_1 = require("./tmuxController");
 const validation_1 = require("./validation");
 const user_1 = require("./models/user");
 const auth_1 = require("./middleware/auth");
@@ -30,8 +32,10 @@ const io = new socket_io_1.Server(server, {
 const PORT = process.env.PORT || 3001;
 // Initialize services
 const tmuxManager = new tmux_1.TmuxManager();
+const tmuxController = new tmuxController_1.TmuxController();
 const userStore = new user_1.UserStore();
 const authService = new auth_1.AuthService(userStore);
+const wsManager = new websocketManager_1.WebSocketManager(io, tmuxManager);
 // Create default admin user in development
 if (process.env.NODE_ENV !== 'production') {
     userStore.createDefaultAdmin();

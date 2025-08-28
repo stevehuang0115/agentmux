@@ -92,45 +92,92 @@ console.log('✅ Generated send-claude-message.sh');
 console.log('✅ Generated schedule_with_note.sh');
 console.log('');
 
-// Auto-start server
-console.log('🔧 Building AgentMux server...');
-const buildProcess = spawn('npm', ['run', 'build'], { stdio: 'pipe' });
-
-buildProcess.on('close', (code) => {
-  if (code === 0) {
-    console.log('✅ Build completed');
-    console.log('🚀 Starting AgentMux server...');
+// Install dependencies if needed
+console.log('🔍 Checking dependencies...');
+if (!fs.existsSync('./node_modules') || !fs.existsSync('./frontend/node_modules')) {
+  console.log('📦 Installing dependencies...');
+  
+  const installMain = spawn('npm', ['install'], { stdio: 'inherit' });
+  installMain.on('close', (code) => {
+    if (code !== 0) {
+      console.error('❌ Failed to install main dependencies');
+      process.exit(1);
+    }
     
-    // Start the server
-    const server = spawn('npm', ['start'], { 
-      stdio: ['inherit', 'inherit', 'inherit'],
-      detached: false 
+    const installFrontend = spawn('npm', ['install'], { 
+      cwd: './frontend',
+      stdio: 'inherit' 
     });
+    
+    installFrontend.on('close', (code) => {
+      if (code !== 0) {
+        console.error('❌ Failed to install frontend dependencies');
+        process.exit(1);
+      }
+      startBuild();
+    });
+  });
+} else {
+  startBuild();
+}
 
-    // Auto-open browser after server starts
-    setTimeout(() => {
-      const url = 'http://localhost:3001';
-      const start = (process.platform === 'darwin' ? 'open' :
-                    process.platform === 'win32' ? 'start' : 'xdg-open');
+function startBuild() {
+  // Auto-start server
+  console.log('🔧 Building AgentMux server...');
+  const buildProcess = spawn('npm', ['run', 'build'], { stdio: 'pipe' });
+
+  let buildOutput = '';
+  buildProcess.stdout?.on('data', (data) => {
+    buildOutput += data.toString();
+  });
+  
+  buildProcess.stderr?.on('data', (data) => {
+    console.error(data.toString());
+  });
+
+  buildProcess.on('close', (code) => {
+    if (code === 0) {
+      console.log('✅ Build completed');
+      console.log('🚀 Starting AgentMux server...');
       
-      console.log(`\n🌐 Opening browser: ${url}\n`);
-      spawn(start, [url], { stdio: 'ignore', detached: true });
-    }, 3000);
+      // Start the server
+      const server = spawn('npm', ['start'], { 
+        stdio: ['inherit', 'inherit', 'inherit'],
+        detached: false 
+      });
 
-    // Handle graceful shutdown
-    process.on('SIGINT', () => {
-      console.log('\n🛑 Shutting down AgentMux...');
-      server.kill('SIGTERM');
-      process.exit(0);
-    });
+      // Auto-open browser after server starts
+      setTimeout(() => {
+        const url = 'http://localhost:3001';
+        const start = (process.platform === 'darwin' ? 'open' :
+                      process.platform === 'win32' ? 'start' : 'xdg-open');
+        
+        console.log(`\n🌐 Opening browser: ${url}\n`);
+        console.log('📋 AgentMux Dashboard Features:');
+        console.log('   • Real-time terminal streaming');
+        console.log('   • Live session monitoring');
+        console.log('   • Interactive command execution');
+        console.log('   • Multi-window session management\n');
+        
+        spawn(start, [url], { stdio: 'ignore', detached: true });
+      }, 3000);
 
-    server.on('close', (code) => {
-      console.log(`AgentMux server exited with code ${code}`);
-      process.exit(code);
-    });
+      // Handle graceful shutdown
+      process.on('SIGINT', () => {
+        console.log('\n🛑 Shutting down AgentMux...');
+        server.kill('SIGTERM');
+        process.exit(0);
+      });
 
-  } else {
-    console.error('❌ Build failed');
-    process.exit(1);
-  }
-});
+      server.on('close', (code) => {
+        console.log(`AgentMux server exited with code ${code}`);
+        process.exit(code);
+      });
+
+    } else {
+      console.error('❌ Build failed');
+      console.error('Build output:', buildOutput);
+      process.exit(1);
+    }
+  });
+}

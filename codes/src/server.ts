@@ -8,6 +8,8 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { existsSync } from 'fs';
 import { TmuxManager, TmuxMessage } from './tmux';
+import { WebSocketManager } from './websocketManager';
+import { TmuxController } from './tmuxController';
 import { Validator } from './validation';
 import { UserStore } from './models/user';
 import { AuthService, AuthenticatedSocket } from './middleware/auth';
@@ -29,8 +31,10 @@ const PORT = process.env.PORT || 3001;
 
 // Initialize services
 const tmuxManager = new TmuxManager();
+const tmuxController = new TmuxController();
 const userStore = new UserStore();
 const authService = new AuthService(userStore);
+const wsManager = new WebSocketManager(io, tmuxManager);
 
 // Create default admin user in development
 if (process.env.NODE_ENV !== 'production') {
