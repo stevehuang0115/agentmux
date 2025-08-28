@@ -8,6 +8,33 @@ import rateLimit from 'express-rate-limit';
 
 // Mock validation function tests
 describe('Security Validation Tests', () => {
+  let app: express.Application;
+  let server: any;
+
+  beforeAll(() => {
+    app = express();
+    server = createServer(app);
+    
+    // Apply security middleware
+    app.use(helmet());
+    app.use(cors());
+    app.use(express.json({ limit: '1mb' }));
+
+    // Add basic test routes
+    app.get('/test', (req, res) => {
+      res.json({ status: 'ok' });
+    });
+    
+    app.post('/test', (req, res) => {
+      res.json({ received: true });
+    });
+  });
+
+  afterAll(() => {
+    if (server) {
+      server.close();
+    }
+  });
   describe('Input Sanitization', () => {
     const dangerousInputs = [
       // Command injection attempts
@@ -115,7 +142,7 @@ describe('Security Validation Tests', () => {
       process.env.NODE_ENV = 'production';
       
       try {
-        const response = await request(server)
+        const response = await request(app)
           .get('/test')
           .set('Origin', 'http://malicious.com');
         
@@ -127,7 +154,7 @@ describe('Security Validation Tests', () => {
     });
 
     it('should include security headers from helmet', async () => {
-      const response = await request(server).get('/test');
+      const response = await request(app).get('/test');
       
       expect(response.headers).toHaveProperty('x-dns-prefetch-control', 'off');
       expect(response.headers).toHaveProperty('x-frame-options', 'SAMEORIGIN');
@@ -138,7 +165,7 @@ describe('Security Validation Tests', () => {
     it('should enforce JSON payload size limits', async () => {
       const largePayload = { data: 'x'.repeat(2 * 1024 * 1024) }; // 2MB
       
-      await request(server)
+      await request(app)
         .post('/test')
         .send(largePayload)
         .expect(413); // Payload Too Large
@@ -166,11 +193,11 @@ describe('Security Validation Tests', () => {
     });
   });
 
-    describe('Resource Protection', () => {
+  describe('Resource Protection', () => {
       it('should handle concurrent connection attempts', async () => {
         // Test multiple simultaneous requests
         const requests = Array(10).fill(null).map(() => 
-          request(server).get('/test')
+          request(app).get('/test')
         );
         
         const responses = await Promise.all(requests);

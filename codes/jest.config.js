@@ -10,10 +10,7 @@ module.exports = {
   transform: {
     '^.+\\.(ts|tsx)$': ['ts-jest', {
       tsconfig: {
-        jsx: 'react-jsx',
-        compilerOptions: {
-          jsx: 'react-jsx'
-        }
+        jsx: 'react-jsx'
       }
     }],
   },

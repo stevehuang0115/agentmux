@@ -84,6 +84,28 @@ app.get('/', (req, res) => {
 // Routes
 app.use('/auth', createAuthRoutes(userStore, authService));
 
+// REST API Routes
+app.get('/api/sessions', async (req, res) => {
+  try {
+    console.log('🔍 API: Getting sessions...');
+    const sessions = await tmuxManager.listSessions();
+    console.log('✅ API: Found sessions:', sessions.length);
+    res.json({ 
+      success: true, 
+      data: sessions,
+      timestamp: new Date().toISOString(),
+      count: sessions.length 
+    });
+  } catch (error) {
+    console.error('❌ API: Session fetch failed:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      timestamp: new Date().toISOString() 
+    });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

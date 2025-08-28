@@ -1,30 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { socketManager } from '../lib/socket';
 import { Socket } from 'socket.io-client';
-
-export interface TmuxSession {
-  name: string;
-  windows: TmuxWindow[];
-}
-
-export interface TmuxWindow {
-  index: number;
-  name: string;
-  active: boolean;
-}
+import { useStore, TmuxSession, TmuxWindow, TerminalSession } from './useStore';
 
 export interface TmuxMessage {
   session: string;
   window: number | string;
   pane?: number;
   message: string;
-}
-
-export interface TerminalSession {
-  id: string;
-  sessionName: string;
-  windowName?: string;
-  output: string[];
 }
 
 export interface UseWebSocketReturn {
@@ -60,13 +43,22 @@ export interface UseWebSocketReturn {
 }
 
 export const useWebSocket = (): UseWebSocketReturn => {
-  // Connection state
-  const [isConnected, setIsConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
+  // Get store actions and state
+  const {
+    setSessions,
+    setConnectionStatus,
+    setConnected,
+    setLoading,
+    setError: setStoreError,
+    addTerminal,
+    updateTerminal,
+    removeTerminal,
+    setCaptureContent: setStoreCaptureContent,
+    clearCaptureContent
+  } = useStore();
+
+  // Connection state (local for WebSocket management)
   const [socket, setSocket] = useState<Socket | null>(null);
-  
-  // Data state
-  const [sessions, setSessions] = useState<TmuxSession[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [terminals, setTerminals] = useState<Map<string, TerminalSession>>(new Map());
   const [captureContent, setCaptureContent] = useState<Map<string, string>>(new Map());
@@ -79,10 +71,12 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
   // Connect to WebSocket
   const connect = useCallback(() => {
-    if (isConnected || isConnecting) return;
+    const { isConnected, connectionStatus } = useStore.getState();
+    if (isConnected || connectionStatus === 'connecting') return;
 
-    setIsConnecting(true);
+    setConnectionStatus('connecting');
     setError(null);
+    setStoreError(null);
 
     try {
       const newSocket = socketManager.connect();
@@ -92,21 +86,24 @@ export const useWebSocket = (): UseWebSocketReturn => {
       // Connection events
       newSocket.on('connect', () => {
         console.log('WebSocket connected');
-        setIsConnected(true);
-        setIsConnecting(false);
+        setConnectionStatus('connected');
+        setConnected(true);
         setError(null);
+        setStoreError(null);
       });
 
       newSocket.on('disconnect', (reason) => {
         console.log('WebSocket disconnected:', reason);
-        setIsConnected(false);
-        setIsConnecting(false);
+        setConnectionStatus('disconnected');
+        setConnected(false);
       });
 
       newSocket.on('connect_error', (error) => {
         console.error('WebSocket connection error:', error);
-        setError(`Connection failed: ${error.message}`);
-        setIsConnecting(false);
+        const errorMsg = `Connection failed: ${error.message}`;
+        setError(errorMsg);
+        setStoreError(errorMsg);
+        setConnectionStatus('error');
       });
 
       // Terminal streaming events
@@ -172,10 +169,12 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
     } catch (error) {
       console.error('Failed to connect to WebSocket:', error);
-      setError(error instanceof Error ? error.message : 'Connection failed');
-      setIsConnecting(false);
+      const errorMsg = error instanceof Error ? error.message : 'Connection failed';
+      setError(errorMsg);
+      setStoreError(errorMsg);
+      setConnectionStatus('error');
     }
-  }, [isConnected, isConnecting]);
+  }, [setConnectionStatus, setStoreError]);
 
   // Auto-connect on mount
   useEffect(() => {
@@ -190,23 +189,50 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
   // Tmux operations
   const refreshSessions = useCallback(async (): Promise<void> => {
-    if (!socket?.connected) {
-      throw new Error('WebSocket not connected');
-    }
-
     setLoadingSessions(true);
+    setLoading(true);
+    
     try {
-      const sessionData = await socketManager.listSessions();
-      setSessions(sessionData);
+      let sessionData: TmuxSession[];
+      
+      // Try WebSocket first
+      if (socket?.connected) {
+        try {
+          sessionData = await socketManager.listSessions();
+        } catch (wsError) {
+          console.warn('WebSocket session fetch failed, trying REST API:', wsError);
+          // Fallback to REST API
+          const response = await fetch('/api/sessions');
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const result = await response.json();
+          if (!result.success) throw new Error(result.error || 'API request failed');
+          sessionData = result.data;
+        }
+      } else {
+        // Use REST API directly if WebSocket not connected
+        console.log('WebSocket not connected, using REST API');
+        const response = await fetch('/api/sessions');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const result = await response.json();
+        if (!result.success) throw new Error(result.error || 'API request failed');
+        sessionData = result.data;
+      }
+      
+      setSessions(sessionData); // Update Zustand store
       setError(null);
+      setStoreError(null);
+      console.log('✅ Sessions loaded:', sessionData.length, 'sessions');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load sessions';
+      console.error('❌ Session loading failed:', errorMessage);
       setError(errorMessage);
+      setStoreError(errorMessage);
       throw new Error(errorMessage);
     } finally {
       setLoadingSessions(false);
+      setLoading(false);
     }
-  }, [socket]);
+  }, [socket, setSessions, setLoading, setStoreError]);
 
   const sendMessage = useCallback(async (message: TmuxMessage): Promise<void> => {
     if (!socket?.connected) {
@@ -301,7 +327,9 @@ export const useWebSocket = (): UseWebSocketReturn => {
             id: response.terminalId,
             sessionName,
             windowName,
-            output: []
+            output: [],
+            created: new Date(),
+            lastActivity: new Date()
           };
           
           setTerminals(prev => {
@@ -385,12 +413,12 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
   return {
     // Connection state
-    isConnected,
-    isConnecting,
+    isConnected: useStore.getState().isConnected,
+    isConnecting: useStore.getState().connectionStatus === 'connecting',
     socket,
     
     // Tmux operations
-    sessions,
+    sessions: useStore.getState().sessions,
     loadingSessions,
     refreshSessions,
     sendMessage,

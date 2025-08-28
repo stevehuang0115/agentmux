@@ -233,7 +233,7 @@ describe('End-to-End Tests', () => {
       await page.goto(baseURL, { waitUntil: 'networkidle2' });
       
       // Wait a bit for WebSocket connection attempt
-      await page.waitForTimeout(2000);
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // Should have attempted WebSocket connection
       expect(socketConnected).toBe(true);
@@ -283,7 +283,7 @@ describe('End-to-End Tests', () => {
       await page.setOfflineMode(true);
       
       // Wait a moment
-      await page.waitForTimeout(1000);
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Check if UI shows appropriate error state
       const bodyText = await page.evaluate(() => document.body.textContent);
@@ -313,7 +313,7 @@ describe('End-to-End Tests', () => {
       await page.goto(baseURL, { waitUntil: 'networkidle2' });
       
       // Wait for any form elements to load
-      await page.waitForTimeout(1000);
+      await new Promise(resolve => setTimeout(resolve, 1000));
       
       // Check if input elements have proper labels or placeholders
       const inputs = await page.$$('input');
