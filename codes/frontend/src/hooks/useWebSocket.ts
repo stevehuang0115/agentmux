@@ -186,7 +186,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
     const loadInitialSessions = async () => {
       try {
         console.log('🔄 Loading initial sessions via API...');
-        const apiUrl = window.location.origin + '/api/sessions';
+        const apiUrl = 'http://localhost:3001/api/sessions';
         console.log('🔗 API URL:', apiUrl);
         const response = await fetch(apiUrl);
         if (response.ok) {
@@ -233,7 +233,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
       console.log('🔄 Refreshing sessions...');
       
       // Always try REST API first (it's proven to work)
-      const apiUrl = window.location.origin + '/api/sessions';
+      const apiUrl = 'http://localhost:3001/api/sessions';
       const response = await fetch(apiUrl);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       

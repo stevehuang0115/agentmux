@@ -33,8 +33,8 @@ class SocketManager {
 
     this.isConnecting = true;
     
-    // Connect to the same origin (unified server)
-    const socketUrl = window.location.origin;
+    // Connect to the backend server
+    const socketUrl = 'http://localhost:3001';
 
     this.socket = io(socketUrl, {
       autoConnect: true,
