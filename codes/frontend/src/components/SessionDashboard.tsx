@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect, useState } from 'react';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../context/WebSocketContext';
 import { useStore } from '../hooks/useStore';
 import { TerminalViewer } from './TerminalViewer';
 
@@ -21,7 +21,7 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
     createWindow,
     killWindow,
     error: wsError 
-  } = useWebSocket();
+  } = useWebSocketContext();
   
   const { 
     selectedSession,

@@ -1,6 +1,6 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useWebSocketContext } from '../context/WebSocketContext';
 import { useStore } from '../hooks/useStore';
 
 interface TerminalViewerProps {
@@ -35,7 +35,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     captureContent,
     isConnected,
     sendMessage 
-  } = useWebSocket();
+  } = useWebSocketContext();
   
   const { settings } = useStore();
   const [currentTerminalId, setCurrentTerminalId] = useState<string | null>(terminalId || null);

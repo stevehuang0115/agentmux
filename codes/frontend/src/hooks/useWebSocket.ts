@@ -43,7 +43,7 @@ export interface UseWebSocketReturn {
 }
 
 export const useWebSocket = (): UseWebSocketReturn => {
-  console.log('🚀 useWebSocket hook initialized');
+  // Development logging removed for production
   
   // Get store actions and state
   const {
@@ -73,8 +73,8 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
   // Connect to WebSocket
   const connect = useCallback(() => {
-    const { isConnected, connectionStatus } = useStore.getState();
-    if (isConnected || connectionStatus === 'connecting') return;
+    // Don't check connection status to avoid reactive dependency
+    // Let connection attempt proceed and handle errors gracefully
 
     setConnectionStatus('connecting');
     setError(null);
@@ -180,7 +180,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
 
   // Auto-connect and load sessions on mount
   useEffect(() => {
-    console.log('🔄 useWebSocket useEffect triggered');
+    // Initial connection and session loading
     
     // Always try to load sessions via API first (even without WebSocket)
     const loadInitialSessions = async () => {

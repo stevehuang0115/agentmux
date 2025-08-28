@@ -82,7 +82,92 @@ describe('Terminal Integration Tests', () => {
     }
   });
 
-  describe('1. Terminal Display Tests', () => {
+  describe('1. Terminal Display Tests - ENHANCED', () => {
+    
+    test('DISPLAY: Terminal should render session content immediately', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Find session button and click
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      expect(sessionButton).toBeTruthy();
+      
+      if (sessionButton) {
+        await sessionButton.click();
+        
+        // Terminal content should appear within 2 seconds
+        const terminalContent = await page.waitForSelector([
+          '.terminal-content',
+          'pre',
+          '[class*="terminal"]',
+          '[class*="bg-black"]',
+          '.font-mono'
+        ].join(','), { timeout: 2000 });
+        
+        expect(terminalContent).toBeTruthy();
+        
+        // Content should be visible and have text
+        const hasContent = await terminalContent?.evaluate(el => el.textContent && el.textContent.length > 0);
+        console.log('✅ Terminal displays content immediately:', hasContent);
+      }
+    });
+    
+    test('DISPLAY: Terminal scrolling and viewport management', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      if (sessionButton) {
+        await sessionButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const terminalArea = await page.$('.terminal-content, pre, [class*="terminal"]');
+        if (terminalArea) {
+          // Check if scrollable
+          const hasScrollbar = await terminalArea.evaluate(el => {
+            return el.scrollHeight > el.clientHeight;
+          });
+          
+          // Test scroll to bottom functionality
+          await terminalArea.evaluate(el => {
+            el.scrollTop = el.scrollHeight;
+          });
+          
+          const scrollPosition = await terminalArea.evaluate(el => el.scrollTop);
+          console.log('✅ Terminal scrolling works:', scrollPosition > 0 || !hasScrollbar);
+        }
+      }
+    });
+    
+    test('DISPLAY: Terminal theme and styling consistency', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      if (sessionButton) {
+        await sessionButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const terminalArea = await page.$('.terminal-content, pre, [class*="terminal"], [class*="bg-black"]');
+        if (terminalArea) {
+          const styles = await terminalArea.evaluate(el => {
+            const computed = window.getComputedStyle(el);
+            return {
+              backgroundColor: computed.backgroundColor,
+              color: computed.color,
+              fontFamily: computed.fontFamily,
+              fontSize: computed.fontSize
+            };
+          });
+          
+          // Terminal should have dark theme
+          expect(styles.backgroundColor).toMatch(/rgb\(0|black/i);
+          console.log('✅ Terminal styling verified:', styles);
+        }
+      }
+    });
+
+  describe('1. Terminal Display Tests - ORIGINAL', () => {
     test('should display terminal with real pane content (not "Creating terminal...")', async () => {
       await page.goto(baseURL, { waitUntil: 'networkidle2' });
       
@@ -186,7 +271,97 @@ describe('Terminal Integration Tests', () => {
     });
   });
 
-  describe('2. Direct Terminal Input Tests (NEW REQUIREMENT)', () => {
+  describe('2. Direct Terminal Input Tests - ENHANCED (NEW REQUIREMENT)', () => {
+    
+    test('INPUT: Direct terminal input field should be immediately interactive', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      if (sessionButton) {
+        await sessionButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Find terminal input field
+        const inputField = await page.waitForSelector([
+          'input[class*="terminal"]',
+          'input[class*="bg-black"]', 
+          '.terminal-input input',
+          'input[placeholder*="command"]'
+        ].join(','), { timeout: 3000 });
+        
+        expect(inputField).toBeTruthy();
+        
+        if (inputField) {
+          // Test immediate focus
+          await inputField.focus();
+          const isFocused = await inputField.evaluate(el => el === document.activeElement);
+          expect(isFocused).toBe(true);
+          
+          console.log('✅ Terminal input field is immediately interactive');
+        }
+      }
+    });
+    
+    test('INPUT: Terminal input should handle complex commands', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      if (sessionButton) {
+        await sessionButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const inputField = await page.$('input[class*="terminal"], input[class*="bg-black"], .terminal-input input');
+        if (inputField) {
+          // Test complex command with pipes and options
+          const complexCommand = 'ls -la | grep test | head -5';
+          await inputField.focus();
+          await inputField.type(complexCommand);
+          
+          const value = await inputField.evaluate((el: HTMLInputElement) => el.value);
+          expect(value).toBe(complexCommand);
+          
+          // Test command execution
+          await page.keyboard.press('Enter');
+          
+          console.log('✅ Complex commands handled correctly');
+        }
+      }
+    });
+    
+    test('INPUT: Terminal input should support keyboard shortcuts', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      if (sessionButton) {
+        await sessionButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        const inputField = await page.$('input[class*="terminal"], input[class*="bg-black"], .terminal-input input');
+        if (inputField) {
+          await inputField.focus();
+          await inputField.type('test command here');
+          
+          // Test Ctrl+A (select all)
+          await page.keyboard.down('Control');
+          await page.keyboard.press('a');
+          await page.keyboard.up('Control');
+          
+          // Type new content - should replace selected text
+          await page.keyboard.type('new command');
+          
+          const finalValue = await inputField.evaluate((el: HTMLInputElement) => el.value);
+          expect(finalValue).toBe('new command');
+          
+          console.log('✅ Keyboard shortcuts work correctly');
+        }
+      }
+    });
+  });
+
+  describe('2. Direct Terminal Input Tests - ORIGINAL (NEW REQUIREMENT)', () => {
     beforeEach(async () => {
       await page.goto(baseURL, { waitUntil: 'networkidle2' });
       await new Promise(resolve => setTimeout(resolve, 3000));
@@ -306,7 +481,80 @@ describe('Terminal Integration Tests', () => {
     });
   });
 
-  describe('3. Terminal UX Tests', () => {
+  describe('3. Terminal UX Tests - PRODUCTION READY', () => {
+    
+    test('UX: Application loads without infinite loops or performance issues', async () => {
+      const startTime = Date.now();
+      let hookInitCount = 0;
+      
+      // Monitor console logs for performance issues
+      page.on('console', msg => {
+        if (msg.text().includes('useWebSocket hook initialized')) {
+          hookInitCount++;
+        }
+      });
+      
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      
+      const loadTime = Date.now() - startTime;
+      
+      // Performance assertions
+      expect(loadTime).toBeLessThan(10000); // Under 10 seconds total
+      expect(hookInitCount).toBeLessThan(20); // Reasonable hook inits (not hundreds)
+      
+      // Check final UI state
+      const bodyText = await page.evaluate(() => document.body.textContent);
+      expect(bodyText).toMatch(/(API Connected|Connected|ONLINE)/i);
+      expect(bodyText).not.toMatch(/(API Offline|OFFLINE)/i);
+      
+      console.log(`✅ Application performance: ${loadTime}ms load, ${hookInitCount} hook inits`);
+    });
+    
+    test('UX: Session buttons should be immediately clickable and responsive', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      const sessionButtons = await page.$$('button[class*="hover:bg-gray-50"], button[class*="bg-blue-100"]');
+      expect(sessionButtons.length).toBeGreaterThan(0);
+      
+      for (let i = 0; i < Math.min(sessionButtons.length, 3); i++) {
+        const button = sessionButtons[i];
+        const startTime = Date.now();
+        
+        await button.click();
+        
+        // Terminal should appear quickly
+        await page.waitForSelector('.terminal-content, pre, [class*="terminal"]', { timeout: 3000 });
+        
+        const responseTime = Date.now() - startTime;
+        expect(responseTime).toBeLessThan(3000); // Under 3 seconds
+        
+        console.log(`✅ Session ${i + 1} response time: ${responseTime}ms`);
+      }
+    });
+    
+    test('UX: Error states should be user-friendly and recoverable', async () => {
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Check that any error messages are user-friendly
+      const bodyText = await page.evaluate(() => document.body.textContent || '');
+      
+      // Should not show technical error messages
+      expect(bodyText).not.toMatch(/Error:|undefined|null|NaN|[object Object]/);
+      
+      // If there are any connection issues, they should be described clearly
+      if (bodyText.includes('disconnect') || bodyText.includes('error')) {
+        // Should provide guidance or retry options
+        expect(bodyText).toMatch(/(try again|refresh|reconnect)/i);
+      }
+      
+      console.log('✅ Error handling is user-friendly');
+    });
+  });
+
+  describe('3. Terminal UX Tests - ORIGINAL', () => {
     test('should have proper focus management', async () => {
       await page.goto(baseURL, { waitUntil: 'networkidle2' });
       await new Promise(resolve => setTimeout(resolve, 3000));

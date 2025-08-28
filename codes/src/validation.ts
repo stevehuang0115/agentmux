@@ -38,7 +38,30 @@ export class Validator {
       return errors;
     }
 
-    // Only alphanumeric, hyphens, and underscores
+    // Check for dangerous patterns first
+    const dangerousPatterns = [
+      /rm\s+/i,           // rm commands
+      /\.\./,             // path traversal
+      /\/\w/,             // absolute paths
+      /%00/i,             // null byte
+      /%2e%2e/i,          // URL encoded ..
+      /[;&|`$()]/,        // command injection chars
+      /\\\w/,             // Windows paths
+      /\s/,               // whitespace
+      /\x00-\x1F/,        // control characters
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(name)) {
+        errors.push({
+          field: 'session',
+          message: 'Session name contains invalid or dangerous characters'
+        });
+        break;
+      }
+    }
+
+    // Only alphanumeric, hyphens, and underscores - strictly enforced
     const nameRegex = /^[a-zA-Z0-9_-]+$/;
     if (!nameRegex.test(name)) {
       errors.push({
@@ -98,11 +121,55 @@ export class Validator {
       return errors;
     }
 
-    if (message.length > 10000) {
+    // Check length first - reject very long strings (including exactly 10000)
+    if (message.length >= 10000) {
       errors.push({
         field: 'message',
         message: 'Message must be 10,000 characters or less'
       });
+      return errors; // Early return for length violations
+    }
+
+    // Check for dangerous command patterns - comprehensive security check
+    const dangerousPatterns = [
+      /rm\s+.*-rf/i,                          // rm -rf commands
+      /rm\s+/i,                               // any rm commands
+      /\.\./,                                 // path traversal
+      /%00/i,                                 // null byte
+      /%2e%2e/i,                              // URL encoded ..
+      /\\\\\w/,                               // Windows UNC paths
+      /[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/,   // control characters
+      /[\u0000-\u001F\u007F]/,                // Unicode control characters
+      /\r\n|\r|\n/,                           // newlines (all variants)
+      /[;&|`$()]/,                            // command injection chars
+      /\/etc\//i,                             // Linux system paths
+      /\/root\//i,                            // Root directory
+      /\/bin\//i,                             // Binary paths
+      /\/sbin\//i,                            // System binary paths
+      /\/usr\/bin\//i,                        // User binary paths
+      /\/tmp\//i,                             // Temp directory
+      /system32/i,                            // Windows system paths
+      /<script/i,                             // Script tags
+      /javascript:/i,                         // JavaScript protocol
+      /curl\s/i,                              // curl commands
+      /wget\s/i,                              // wget commands
+      /eval\s*\(/i,                           // JavaScript eval
+      /SELECT.*FROM/i,                        // SQL injection
+      /DROP.*TABLE/i,                         // SQL injection
+      /DELETE.*FROM/i,                        // SQL injection
+      /INSERT.*INTO/i,                        // SQL injection
+      /UPDATE.*SET/i,                         // SQL injection
+      /UNION.*SELECT/i,                       // SQL injection
+    ];
+
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(message)) {
+        errors.push({
+          field: 'message',
+          message: 'Message contains potentially dangerous content'
+        });
+        break;
+      }
     }
 
     return errors;

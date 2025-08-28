@@ -5,6 +5,7 @@ import { createServer } from 'http';
 import helmet from 'helmet';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
+import { Validator } from '../src/validation';
 
 // Mock validation function tests
 describe('Security Validation Tests', () => {
@@ -73,12 +74,12 @@ describe('Security Validation Tests', () => {
     dangerousInputs.forEach((input, index) => {
       it(`should detect dangerous input pattern ${index + 1}: ${input.substring(0, 50)}...`, () => {
         // Test session name validation
-        const sessionResult = validateSessionName(input);
-        expect(sessionResult.isValid).toBe(false);
+        const sessionErrors = Validator.validateSessionName(input);
+        expect(sessionErrors.length).toBeGreaterThan(0); // Should have errors
         
         // Test message validation  
-        const messageResult = validateMessage(input);
-        expect(messageResult.isValid).toBe(false);
+        const messageErrors = Validator.validateMessage(input);
+        expect(messageErrors.length).toBeGreaterThan(0); // Should have errors
       });
     });
 
@@ -93,14 +94,14 @@ describe('Security Validation Tests', () => {
       ];
       
       safeInputs.forEach(input => {
-        const sessionResult = validateSessionName(input);
-        const messageResult = validateMessage(input);
+        const sessionErrors = Validator.validateSessionName(input);
+        const messageErrors = Validator.validateMessage(input);
         
         if (input.length < 100 && !/\s/.test(input)) {
-          expect(sessionResult.isValid).toBe(true);
+          expect(sessionErrors.length).toBe(0); // Should have no errors
         }
         if (input.length < 1000) {
-          expect(messageResult.isValid).toBe(true);
+          expect(messageErrors.length).toBe(0); // Should have no errors
         }
       });
     });
