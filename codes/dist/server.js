@@ -52,13 +52,24 @@ app.use((0, helmet_1.default)({
 }));
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '1mb' }));
-// Rate limiting - Disabled in test environment
-if (process.env.NODE_ENV !== 'test') {
+// Rate limiting - Disabled in test and development environments
+if (process.env.NODE_ENV === 'production') {
     const limiter = (0, express_rate_limit_1.default)({
         windowMs: 15 * 60 * 1000, // 15 minutes
-        max: 100 // limit each IP to 100 requests per windowMs
+        max: 1000, // Increased from 100 to 1000 requests per window
+        skip: (req) => {
+            // Skip rate limiting for localhost
+            const isLocalhost = req.ip === '127.0.0.1' ||
+                req.ip === '::1' ||
+                req.ip === '::ffff:127.0.0.1' ||
+                req.hostname === 'localhost';
+            return isLocalhost;
+        }
     });
     app.use(limiter);
+}
+else {
+    console.log('🔓 Rate limiting disabled for development environment');
 }
 // Serve Next.js static assets first
 app.use('/_next', express_1.default.static(path_1.default.join(__dirname, '../public/react/_next')));
