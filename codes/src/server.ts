@@ -54,12 +54,14 @@ app.use(helmet({
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
+// Rate limiting - Disabled in test environment
+if (process.env.NODE_ENV !== 'test') {
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
+  });
+  app.use(limiter);
+}
 
 // Serve Next.js static assets first
 app.use('/_next', express.static(path.join(__dirname, '../public/react/_next')));

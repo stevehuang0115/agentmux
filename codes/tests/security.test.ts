@@ -166,23 +166,23 @@ describe('Security Validation Tests', () => {
     });
   });
 
-  describe('Resource Protection', () => {
-    it('should handle concurrent connection attempts', async () => {
-      // Test multiple simultaneous requests
-      const requests = Array(10).fill(null).map(() => 
-        request(server).get('/test')
-      );
-      
-      const responses = await Promise.all(requests);
-      
-      // Most should succeed, some might be rate limited
-      const successCount = responses.filter(r => r.status === 200).length;
-      const rateLimitedCount = responses.filter(r => r.status === 429).length;
-      
-      expect(successCount + rateLimitedCount).toBe(10);
-      expect(successCount).toBeGreaterThan(0);
+    describe('Resource Protection', () => {
+      it('should handle concurrent connection attempts', async () => {
+        // Test multiple simultaneous requests
+        const requests = Array(10).fill(null).map(() => 
+          request(server).get('/test')
+        );
+        
+        const responses = await Promise.all(requests);
+        
+        // Most should succeed, some might be rate limited
+        const successCount = responses.filter(r => r.status === 200).length;
+        const rateLimitedCount = responses.filter(r => r.status === 429).length;
+        
+        expect(successCount + rateLimitedCount).toBe(10);
+        expect(successCount).toBeGreaterThan(0);
+      });
     });
-  });
 });
 
 // Mock validation functions for testing

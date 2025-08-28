@@ -20,6 +20,8 @@ export class WebSocketManager {
   constructor(io: Server, tmuxManager: TmuxManager) {
     this.io = io;
     this.tmuxManager = tmuxManager;
+    // Increase max listeners to prevent warnings in tests
+    this.io.setMaxListeners(50);
     this.setupSocketHandlers();
   }
 

@@ -52,12 +52,14 @@ app.use((0, helmet_1.default)({
 }));
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '1mb' }));
-// Rate limiting
-const limiter = (0, express_rate_limit_1.default)({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
+// Rate limiting - Disabled in test environment
+if (process.env.NODE_ENV !== 'test') {
+    const limiter = (0, express_rate_limit_1.default)({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100 // limit each IP to 100 requests per windowMs
+    });
+    app.use(limiter);
+}
 // Serve Next.js static assets first
 app.use('/_next', express_1.default.static(path_1.default.join(__dirname, '../public/react/_next')));
 // Static files

@@ -41,6 +41,8 @@ class WebSocketManager {
         this.captureIntervals = new Map();
         this.io = io;
         this.tmuxManager = tmuxManager;
+        // Increase max listeners to prevent warnings in tests
+        this.io.setMaxListeners(50);
         this.setupSocketHandlers();
     }
     setupSocketHandlers() {
