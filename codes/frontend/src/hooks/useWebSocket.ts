@@ -222,7 +222,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
         socketRef.current.disconnect();
       }
     };
-  }, [connect]); // Zustand actions are stable, don't include them in deps
+  }, []); // Run only once on mount - Zustand actions are stable
 
   // Tmux operations
   const refreshSessions = useCallback(async (): Promise<void> => {
