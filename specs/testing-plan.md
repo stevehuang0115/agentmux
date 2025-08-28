@@ -36,7 +36,7 @@ Test the logic within API route handlers (mocking TmuxService).
 Test WebSocket message handling logic.
 
 2.2. Integration Testing
-Objective: To test the interaction between different parts of the application.
+Objective: To test the interaction between different parts of the application. This includes ensuring that the frontend and backend can communicate effectively, and that components correctly interact with services.
 
 Tools:
 
@@ -53,6 +53,8 @@ Backend:
 Test the full request-response cycle of REST API endpoints, ensuring they interact correctly with the TmuxService and return the expected data.
 
 Test the WebSocket connection handshake and message flow between the client and server logic.
+
+Verify that running `npm start` correctly launches both the frontend and backend servers concurrently.
 
 2.3. End-to-End (E2E) Testing
 Objective: To simulate real user scenarios from start to finish, ensuring the entire application works as a cohesive whole.

@@ -111,7 +111,7 @@ Dependency Check: Verify that tmux is installed on the user's system. If not, ex
 
 Script Generation: Check if send-claude-message.sh and schedule_with_note.sh exist in the current directory. If not, create them from embedded templates within the script. Make them executable (chmod +x).
 
-Server Launch: Start the backend Node.js server.
+Server Launch: Start the backend Node.js server. The start script (`npm start`) should be configured to concurrently run both the backend server and the frontend Next.js development server, making the entire application available under a single URL.
 
 Browser Launch: Use a library like open to automatically open the user's default web browser to the correct URL (e.g., http://localhost:3000).
 

@@ -1,6 +1,6 @@
 # 🚀 AgentMux - Complete Setup & Usage Guide
 
-**AgentMux** is a secure WebSocket server for tmux session management and AI agent orchestration. Get up and running in seconds with NPX!
+**AgentMux** is a WebSocket server for tmux session management and AI agent orchestration. Get up and running in seconds with NPX!
 
 ## 🚀 Quick Start (NPX)
 
@@ -13,16 +13,13 @@ npx agent-mux
 This single command will:
 1. ✅ Auto-generate required scripts
 2. ✅ Build the server 
-3. ✅ Start the authentication system
+3. ✅ Start the tmux dashboard
 4. ✅ Auto-open browser to http://localhost:3001
 5. ✅ Create helper scripts in your current directory
 
-## 🔑 Default Credentials
+## 🎯 Dashboard Access
 
-Once the server starts, use these test credentials:
-
-- **Username**: `admin`
-- **Password**: `admin123`
+Once started, visit **http://localhost:3001** to access the tmux dashboard. No authentication required for localhost development.
 
 ## 📡 Generated Scripts
 
@@ -42,21 +39,19 @@ Schedule timed reminders to agents:
 ./schedule_with_note.sh 30 "Deploy update" project:1
 ```
 
-## 🌐 API Endpoints
+## 🌐 Available URLs
 
-Once running, these endpoints are available at `http://localhost:3001`:
+Once running, these are available at `http://localhost:3001`:
 
-### Authentication
-- `POST /auth/login` - User login
-- `POST /auth/register` - Create new user  
-- `GET /auth/me` - Get current user (requires JWT)
-- `POST /auth/logout` - User logout
+### Dashboard
+- `/` - Main tmux dashboard interface
+- `/app.html` - Direct dashboard access
 
 ### WebSocket
-- `ws://localhost:3001` - WebSocket connection (requires JWT token)
+- `ws://localhost:3001` - WebSocket connection for tmux operations
 
 ### Health
-- `GET /health` - Server health check
+- `/health` - Server health check
 
 ## 🔧 Manual Installation
 
@@ -76,23 +71,9 @@ npm run build
 npm start
 ```
 
-## 🔐 Authentication Flow
-
-1. **Login**: POST to `/auth/login` with username/password
-2. **Get Token**: Extract JWT token from response
-3. **WebSocket**: Connect with token in auth header
-4. **Tmux Operations**: All tmux commands require authenticated WebSocket
-
-### Example Login
-```bash
-curl -X POST http://localhost:3001/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
-```
-
 ## 🎯 Tmux Integration
 
-AgentMux provides secure WebSocket access to tmux operations:
+AgentMux provides WebSocket access to tmux operations:
 
 - **List Sessions**: Get all available tmux sessions
 - **Send Messages**: Send commands to specific windows/panes
@@ -100,23 +81,18 @@ AgentMux provides secure WebSocket access to tmux operations:
 - **Create Windows**: Spawn new tmux windows
 - **Kill Windows**: Remove tmux windows
 
-All operations require JWT authentication for security.
+Access is simplified for localhost development - no authentication barriers!
 
 ## ⚙️ Configuration
 
 ### Environment Variables
 ```bash
-PORT=3001                    # Server port
-JWT_SECRET=your-secret-key   # JWT signing key
-JWT_EXPIRES_IN=24h          # Token expiration
-NODE_ENV=production         # Environment mode
+PORT=3001           # Server port (default: 3001)
+NODE_ENV=production # Environment mode
 ```
 
 ### Production Setup
 ```bash
-# Set secure JWT secret
-export JWT_SECRET="your-very-secure-secret-key-here"
-
 # Set production mode
 export NODE_ENV=production
 
@@ -126,13 +102,11 @@ npm start
 
 ## 🔒 Security Features
 
-- ✅ JWT-based authentication
-- ✅ bcrypt password hashing  
-- ✅ Rate limiting (100 requests/15 minutes)
 - ✅ Input validation and sanitization
 - ✅ CORS protection
 - ✅ Helmet.js security headers
 - ✅ No command injection vulnerabilities
+- ✅ Localhost development mode (no auth barriers)
 
 ## 🛠️ Development
 
@@ -197,11 +171,7 @@ sudo apt-get install tmux
 # 1. Start AgentMux
 npx agent-mux
 
-# 2. Login and get token
-TOKEN=$(curl -s -X POST http://localhost:3001/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}' | \
-  grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+# 2. Visit dashboard at http://localhost:3001
 
 # 3. Send message to tmux session
 ./send-claude-message.sh my-project:0 "Start working on the login feature"
@@ -214,11 +184,7 @@ TOKEN=$(curl -s -X POST http://localhost:3001/auth/login \
 ```javascript
 import io from 'socket.io-client';
 
-const socket = io('http://localhost:3001', {
-  auth: {
-    token: 'your-jwt-token-here'
-  }
-});
+const socket = io('http://localhost:3001');
 
 // List tmux sessions
 socket.emit('list-sessions', (response) => {
@@ -239,9 +205,9 @@ socket.emit('send-message', {
 
 - [ ] Run `npx agent-mux`
 - [ ] Verify server starts on port 3001
-- [ ] Login with admin/admin123
+- [ ] Visit http://localhost:3001 dashboard
+- [ ] View your tmux sessions
 - [ ] Test generated scripts
-- [ ] Create your first tmux session
 - [ ] Send a message to Claude agent
 - [ ] Schedule a reminder
 

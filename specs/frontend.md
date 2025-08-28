@@ -6,7 +6,7 @@ Last Updated: August 27, 2025
    The AgentMux frontend will be a responsive, modern single-page application (SPA) designed to provide a seamless and interactive user experience for managing tmux sessions. The primary goal is to create an interface that is both powerful for experienced users and intuitive for those less familiar with tmux's command-line interface.
 
 2. Technology Stack
-   Framework: React 18+ with TypeScript. We will use functional components and Hooks for all UI logic.
+   Framework: Next.js (React 18+) with TypeScript. We will use functional components and Hooks for all UI logic.
 
 Styling: Tailwind CSS. A utility-first CSS framework will allow for rapid and consistent styling. We will use a tailwind.config.js file for custom theme definitions (colors, spacing, fonts).
 
@@ -15,8 +15,6 @@ State Management: Zustand. For its simplicity and minimal boilerplate, Zustand w
 Real-time Communication: Native WebSocket API. We will create a dedicated service to manage the WebSocket connection, handle message serialization/deserialization, and manage connection state (connecting, open, closed).
 
 Terminal Emulation: Xterm.js. This library will be used to render a fully functional, high-performance terminal in the browser. We will use its addons for fit (to resize the terminal to its container) and search functionality.
-
-Build Tool: Vite. For its fast development server and optimized build process.
 
 3. Architecture & Component Structure
    The application will follow a modular, component-based architecture.
@@ -48,7 +46,7 @@ Sidebar.tsx: Renders the TreeView of sessions, windows, and panes. It will also 
 
 MainView.tsx: The main content area that houses the Terminal component for the currently selected pane.
 
-Terminal.tsx: A wrapper around Xterm.js. It will handle terminal initialization, WebSocket data binding (passing user input to the server and writing server output to the terminal), and resizing.
+Terminal.tsx: A wrapper around Xterm.js. It will handle terminal initialization and WebSocket data binding. Crucially, it will capture keyboard and clipboard events directly within the terminal view, sending input to the backend in real-time. This approach eliminates the need for a separate <textarea> and "Send" button, providing a seamless, native terminal experience.
 
 SessionManager.tsx: A top-level component that orchestrates the data flow, fetching the initial session list and handling WebSocket events to update the state.
 
@@ -63,7 +61,7 @@ useStore.ts: The central Zustand store for global state, including sessions, act
 
 Left Sidebar (25% width): A collapsible sidebar containing the session TreeView. At the top, a header with the "AgentMux" logo and a "New Session" button.
 
-Main Content (75% width): The MainView which displays the terminal for the active pane. A clear header will show the path of the active pane (e.g., session-name:window-index.pane-index).
+Main Content (75% width): The MainView which displays the terminal for the active pane. A clear header will show the path of the active pane (e.g., session-name:window-index.pane-index). The terminal view itself must be scrollable to allow users to review previous output.
 
 Interactivity:
 
