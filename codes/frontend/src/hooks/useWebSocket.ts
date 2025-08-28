@@ -43,6 +43,8 @@ export interface UseWebSocketReturn {
 }
 
 export const useWebSocket = (): UseWebSocketReturn => {
+  console.log('🚀 useWebSocket hook initialized');
+  
   // Get store actions and state
   const {
     setSessions,
@@ -174,24 +176,33 @@ export const useWebSocket = (): UseWebSocketReturn => {
       setStoreError(errorMsg);
       setConnectionStatus('error');
     }
-  }, [setConnectionStatus, setStoreError]);
+  }, []); // Zustand actions are stable, no dependencies needed
 
   // Auto-connect and load sessions on mount
   useEffect(() => {
+    console.log('🔄 useWebSocket useEffect triggered');
+    
     // Always try to load sessions via API first (even without WebSocket)
     const loadInitialSessions = async () => {
       try {
         console.log('🔄 Loading initial sessions via API...');
-        const response = await fetch('/api/sessions');
+        const apiUrl = window.location.origin + '/api/sessions';
+        console.log('🔗 API URL:', apiUrl);
+        const response = await fetch(apiUrl);
         if (response.ok) {
           const result = await response.json();
           if (result.success && result.data) {
             console.log('✅ API sessions loaded:', result.count, 'sessions');
+            console.log('🔄 Calling setSessions with data:', result.data);
             setSessions(result.data);
+            console.log('🔄 Calling setStoreError(null)');
             setStoreError(null);
+            console.log('🔄 Calling setConnectionStatus("connected")');
             // Set as connected since API is working
             setConnectionStatus('connected');
+            console.log('🔄 Calling setConnected(true)');
             setConnected(true);
+            console.log('✅ All state updates called successfully');
           }
         }
       } catch (error) {
@@ -211,7 +222,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
         socketRef.current.disconnect();
       }
     };
-  }, [connect, setSessions, setConnectionStatus, setConnected, setStoreError]);
+  }, [connect]); // Zustand actions are stable, don't include them in deps
 
   // Tmux operations
   const refreshSessions = useCallback(async (): Promise<void> => {
@@ -222,7 +233,8 @@ export const useWebSocket = (): UseWebSocketReturn => {
       console.log('🔄 Refreshing sessions...');
       
       // Always try REST API first (it's proven to work)
-      const response = await fetch('/api/sessions');
+      const apiUrl = window.location.origin + '/api/sessions';
+      const response = await fetch(apiUrl);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       
       const result = await response.json();
@@ -257,7 +269,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
       setLoadingSessions(false);
       setLoading(false);
     }
-  }, [setSessions, setLoading, setStoreError, setConnectionStatus, setConnected]);
+  }, []); // Zustand actions are stable, no dependencies needed
 
   const sendMessage = useCallback(async (message: TmuxMessage): Promise<void> => {
     if (!socket?.connected) {
