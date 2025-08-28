@@ -185,24 +185,16 @@ export const useWebSocket = (): UseWebSocketReturn => {
     // Always try to load sessions via API first (even without WebSocket)
     const loadInitialSessions = async () => {
       try {
-        console.log('🔄 Loading initial sessions via API...');
         const apiUrl = 'http://localhost:3001/api/sessions';
-        console.log('🔗 API URL:', apiUrl);
         const response = await fetch(apiUrl);
         if (response.ok) {
           const result = await response.json();
           if (result.success && result.data) {
-            console.log('✅ API sessions loaded:', result.count, 'sessions');
-            console.log('🔄 Calling setSessions with data:', result.data);
             setSessions(result.data);
-            console.log('🔄 Calling setStoreError(null)');
             setStoreError(null);
-            console.log('🔄 Calling setConnectionStatus("connected")');
             // Set as connected since API is working
             setConnectionStatus('connected');
-            console.log('🔄 Calling setConnected(true)');
             setConnected(true);
-            console.log('✅ All state updates called successfully');
           }
         }
       } catch (error) {
@@ -230,8 +222,6 @@ export const useWebSocket = (): UseWebSocketReturn => {
     setLoading(true);
     
     try {
-      console.log('🔄 Refreshing sessions...');
-      
       // Always try REST API first (it's proven to work)
       const apiUrl = 'http://localhost:3001/api/sessions';
       const response = await fetch(apiUrl);
@@ -245,14 +235,9 @@ export const useWebSocket = (): UseWebSocketReturn => {
       setError(null);
       setStoreError(null);
       
-      console.log(`✅ Sessions refreshed: ${result.count} sessions loaded`);
-      console.log('📊 Session details:', sessionData.map((s: TmuxSession) => `${s.name} (${s.windows.length}w)`).join(', '));
-      
       // Set as connected since API is working
-      if (!useStore.getState().isConnected) {
-        setConnectionStatus('connected');
-        setConnected(true);
-      }
+      setConnectionStatus('connected');
+      setConnected(true);
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load sessions';

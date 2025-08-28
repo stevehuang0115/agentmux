@@ -38,20 +38,25 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   const [newWindowName, setNewWindowName] = useState('');
   const [showNewWindowForm, setShowNewWindowForm] = useState(false);
 
-  // Auto-refresh sessions - don't wait for WebSocket connection
+  // Load sessions once on mount and set up auto-refresh
   useEffect(() => {
-    if (!loadingSessions) {
-      // Load immediately on mount
-      refreshSessions().catch(console.error);
-      
-      // Set up auto-refresh interval (every 5 seconds)
-      const interval = setInterval(() => {
+    let mounted = true;
+    
+    // Load immediately on mount
+    refreshSessions().catch(console.error);
+    
+    // Set up auto-refresh interval (every 5 seconds)
+    const interval = setInterval(() => {
+      if (mounted) {
         refreshSessions().catch(console.error);
-      }, 5000);
-      
-      return () => clearInterval(interval);
-    }
-  }, [loadingSessions, refreshSessions]);
+      }
+    }, 5000);
+    
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []); // Run only once on mount
 
   // Auto-select first session if none selected
   useEffect(() => {

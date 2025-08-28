@@ -33,25 +33,22 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     startCapture,
     stopCapture,
     captureContent,
-    isConnected 
+    isConnected,
+    sendMessage 
   } = useWebSocket();
   
   const { settings } = useStore();
   const [currentTerminalId, setCurrentTerminalId] = useState<string | null>(terminalId || null);
   const [isCapturing, setIsCapturing] = useState(false);
 
-  // Auto-create terminal if sessionName provided but no terminalId
+  // Start tmux capture instead of creating terminal
   useEffect(() => {
-    if (!currentTerminalId && sessionName && isConnected) {
-      createTerminal(sessionName, `window-${windowIndex}`)
-        .then(newTerminalId => {
-          setCurrentTerminalId(newTerminalId);
-        })
-        .catch(error => {
-          console.error('Failed to create terminal:', error);
-        });
+    if (sessionName && windowIndex !== undefined && isConnected && !isCapturing) {
+      console.log(`Starting tmux capture for ${sessionName}:${windowIndex}`);
+      startCapture(sessionName, windowIndex, paneIndex, 1000);
+      setIsCapturing(true);
     }
-  }, [currentTerminalId, sessionName, windowIndex, isConnected, createTerminal]);
+  }, [sessionName, windowIndex, paneIndex, isConnected, startCapture, isCapturing]);
 
   // Get terminal data
   const terminal = currentTerminalId ? terminals.get(currentTerminalId) : null;
@@ -68,12 +65,27 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     }
   }, [output, capturedContent, autoScroll]);
 
-  // Handle input submission
+  // Handle input submission - send to terminal or tmux session
   const handleInputSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputValue.trim() || !currentTerminalId) return;
+    if (!inputValue.trim()) return;
 
-    sendTerminalInput(currentTerminalId, inputValue + '\r');
+    if (currentTerminalId && !isCapturing) {
+      // Send to terminal
+      sendTerminalInput(currentTerminalId, inputValue + '\r');
+    } else if (sessionName && isCapturing) {
+      // Send directly to tmux session
+      try {
+        sendMessage({
+          session: sessionName,
+          window: windowIndex,
+          pane: paneIndex,
+          message: inputValue
+        });
+      } catch (error) {
+        console.error('Failed to send command to tmux:', error);
+      }
+    }
     setInputValue('');
   };
 
@@ -151,11 +163,19 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     }
   }, [currentTerminalId, resizeTerminal]);
 
-  const displayContent = isCapturing ? capturedContent : output;
-  const canInput = currentTerminalId && !isCapturing && isConnected;
+  // Prioritize captured content for direct tmux display
+  const displayContent = capturedContent || output;
+  // Enable input when we have a session/window (either terminal or tmux capture)
+  const canInput = isConnected && ((currentTerminalId && !isCapturing) || (sessionName && isCapturing));
 
   return (
     <div className={`terminal-viewer ${className}`}>
+      <style>{`
+        @keyframes blink {
+          0%, 50% { opacity: 1; }
+          51%, 100% { opacity: 0; }
+        }
+      `}</style>
       {/* Terminal Header */}
       <div className="terminal-header bg-gray-800 text-white px-4 py-2 text-sm flex items-center justify-between">
         <div className="flex items-center space-x-2">
@@ -198,49 +218,115 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
       </div>
 
       {/* Terminal Content */}
-      <pre
-        ref={terminalRef}
-        className="terminal-content bg-black text-green-400 p-4 overflow-auto font-mono text-sm leading-tight"
+      <div 
+        className="terminal-content bg-black text-green-400 p-4 overflow-auto font-mono text-sm leading-tight cursor-text"
         style={{ 
           height,
           fontSize: `${settings.terminalFontSize}px`,
-          fontFamily: settings.terminalFontFamily
+          fontFamily: settings.terminalFontFamily,
+        }}
+        tabIndex={0}
+        onClick={() => {
+          // Focus the terminal for keyboard input
+          if (canInput && inputRef.current) {
+            inputRef.current.focus();
+          }
+        }}
+        onKeyDown={(e) => {
+          // Direct keyboard input to terminal
+          if (!canInput) return;
+          
+          // Focus input field for regular typing
+          if (inputRef.current && e.key.length === 1) {
+            inputRef.current.focus();
+            // Don't prevent default - let the input handle it
+            return;
+          }
+
+          // Handle special keys directly
+          if (e.key === 'Enter' && inputValue.trim()) {
+            const syntheticEvent = {
+              preventDefault: () => e.preventDefault()
+            } as React.FormEvent<HTMLInputElement>;
+            handleInputSubmit(syntheticEvent);
+          }
         }}
       >
-        {displayContent || (
-          <span className="text-gray-600">
-            {isConnected 
-              ? (currentTerminalId ? 'Terminal ready...' : 'Creating terminal...')
-              : 'Connecting...'
-            }
-          </span>
-        )}
-      </pre>
-
-      {/* Terminal Input */}
-      {canInput && (
-        <form onSubmit={handleInputSubmit} className="terminal-input bg-gray-900 p-2">
-          <div className="flex items-center space-x-2">
-            <span className="text-green-400 font-mono">$</span>
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type command... (Ctrl+C, Ctrl+D, arrow keys supported)"
-              className="flex-1 bg-black text-green-400 font-mono border-none outline-none px-2 py-1"
-              autoFocus
+        <pre
+          ref={terminalRef}
+          style={{ 
+            margin: 0,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all'
+          }}
+          dangerouslySetInnerHTML={{
+            __html: displayContent || (
+              isConnected 
+                ? (isCapturing ? '<span style="color: #666">Loading tmux content...</span>' : '<span style="color: #666">Connecting to tmux...</span>')
+                : '<span style="color: #666">Connecting...</span>'
+            )
+          }}
+        />
+        
+        {/* Live input cursor when focused */}
+        {canInput && inputValue && (
+          <div style={{ color: '#0f0', display: 'inline' }}>
+            <span style={{ color: '#0f0' }}>$ {inputValue}</span>
+            <span 
+              style={{ 
+                backgroundColor: '#0f0', 
+                animation: 'blink 1s infinite',
+                width: '8px',
+                height: '16px',
+                display: 'inline-block',
+                marginLeft: '2px'
+              }}
             />
-            <button
-              type="submit"
-              className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
-              disabled={!inputValue.trim()}
-            >
-              Send
-            </button>
           </div>
-        </form>
+        )}
+      </div>
+
+      {/* Hidden input field for keyboard capture */}
+      {canInput && (
+        <>
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            style={{
+              position: 'absolute',
+              left: '-9999px',
+              opacity: 0,
+              height: '1px',
+              width: '1px'
+            }}
+            autoFocus
+          />
+          
+          {/* Optional: Show traditional input at bottom for fallback */}
+          <form onSubmit={handleInputSubmit} className="terminal-input bg-gray-900 p-2 border-t border-gray-700">
+            <div className="flex items-center space-x-2">
+              <span className="text-green-400 font-mono">$</span>
+              <input
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Type command... (or click terminal area above)"
+                className="flex-1 bg-black text-green-400 font-mono border-none outline-none px-2 py-1"
+              />
+              <button
+                type="submit"
+                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm"
+                disabled={!inputValue.trim()}
+              >
+                Send
+              </button>
+            </div>
+          </form>
+        </>
       )}
 
       {!isConnected && (
