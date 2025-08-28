@@ -176,8 +176,34 @@ export const useWebSocket = (): UseWebSocketReturn => {
     }
   }, [setConnectionStatus, setStoreError]);
 
-  // Auto-connect on mount
+  // Auto-connect and load sessions on mount
   useEffect(() => {
+    // Always try to load sessions via API first (even without WebSocket)
+    const loadInitialSessions = async () => {
+      try {
+        console.log('🔄 Loading initial sessions via API...');
+        const response = await fetch('/api/sessions');
+        if (response.ok) {
+          const result = await response.json();
+          if (result.success && result.data) {
+            console.log('✅ API sessions loaded:', result.count, 'sessions');
+            setSessions(result.data);
+            setStoreError(null);
+            // Set as connected since API is working
+            setConnectionStatus('connected');
+            setConnected(true);
+          }
+        }
+      } catch (error) {
+        console.error('❌ Initial API load failed:', error);
+        setStoreError('Failed to load sessions via API');
+      }
+    };
+
+    // Load sessions immediately
+    loadInitialSessions();
+    
+    // Then try WebSocket connection
     connect();
 
     return () => {
@@ -185,7 +211,7 @@ export const useWebSocket = (): UseWebSocketReturn => {
         socketRef.current.disconnect();
       }
     };
-  }, [connect]);
+  }, [connect, setSessions, setConnectionStatus, setConnected, setStoreError]);
 
   // Tmux operations
   const refreshSessions = useCallback(async (): Promise<void> => {
@@ -193,46 +219,45 @@ export const useWebSocket = (): UseWebSocketReturn => {
     setLoading(true);
     
     try {
-      let sessionData: TmuxSession[];
+      console.log('🔄 Refreshing sessions...');
       
-      // Try WebSocket first
-      if (socket?.connected) {
-        try {
-          sessionData = await socketManager.listSessions();
-        } catch (wsError) {
-          console.warn('WebSocket session fetch failed, trying REST API:', wsError);
-          // Fallback to REST API
-          const response = await fetch('/api/sessions');
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const result = await response.json();
-          if (!result.success) throw new Error(result.error || 'API request failed');
-          sessionData = result.data;
-        }
-      } else {
-        // Use REST API directly if WebSocket not connected
-        console.log('WebSocket not connected, using REST API');
-        const response = await fetch('/api/sessions');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json();
-        if (!result.success) throw new Error(result.error || 'API request failed');
-        sessionData = result.data;
-      }
+      // Always try REST API first (it's proven to work)
+      const response = await fetch('/api/sessions');
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       
+      const result = await response.json();
+      if (!result.success) throw new Error(result.error || 'API request failed');
+      
+      const sessionData = result.data;
       setSessions(sessionData); // Update Zustand store
       setError(null);
       setStoreError(null);
-      console.log('✅ Sessions loaded:', sessionData.length, 'sessions');
+      
+      console.log(`✅ Sessions refreshed: ${result.count} sessions loaded`);
+      console.log('📊 Session details:', sessionData.map((s: TmuxSession) => `${s.name} (${s.windows.length}w)`).join(', '));
+      
+      // Set as connected since API is working
+      if (!useStore.getState().isConnected) {
+        setConnectionStatus('connected');
+        setConnected(true);
+      }
+      
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to load sessions';
-      console.error('❌ Session loading failed:', errorMessage);
+      console.error('❌ Session refresh failed:', errorMessage);
       setError(errorMessage);
       setStoreError(errorMessage);
+      
+      // Set as disconnected if API fails
+      setConnectionStatus('error');
+      setConnected(false);
+      
       throw new Error(errorMessage);
     } finally {
       setLoadingSessions(false);
       setLoading(false);
     }
-  }, [socket, setSessions, setLoading, setStoreError]);
+  }, [setSessions, setLoading, setStoreError, setConnectionStatus, setConnected]);
 
   const sendMessage = useCallback(async (message: TmuxMessage): Promise<void> => {
     if (!socket?.connected) {
@@ -411,14 +436,17 @@ export const useWebSocket = (): UseWebSocketReturn => {
     setError(null);
   }, []);
 
+  // Get reactive state from store
+  const storeState = useStore();
+  
   return {
     // Connection state
-    isConnected: useStore.getState().isConnected,
-    isConnecting: useStore.getState().connectionStatus === 'connecting',
+    isConnected: storeState.isConnected,
+    isConnecting: storeState.connectionStatus === 'connecting',
     socket,
     
     // Tmux operations
-    sessions: useStore.getState().sessions,
+    sessions: storeState.sessions,
     loadingSessions,
     refreshSessions,
     sendMessage,

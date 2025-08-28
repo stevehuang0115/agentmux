@@ -38,14 +38,20 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
   const [newWindowName, setNewWindowName] = useState('');
   const [showNewWindowForm, setShowNewWindowForm] = useState(false);
 
-  // Auto-refresh sessions
+  // Auto-refresh sessions - don't wait for WebSocket connection
   useEffect(() => {
-    if (isConnected && !loadingSessions) {
-      refreshSessions();
-      const interval = setInterval(refreshSessions, 5000);
+    if (!loadingSessions) {
+      // Load immediately on mount
+      refreshSessions().catch(console.error);
+      
+      // Set up auto-refresh interval (every 5 seconds)
+      const interval = setInterval(() => {
+        refreshSessions().catch(console.error);
+      }, 5000);
+      
       return () => clearInterval(interval);
     }
-  }, [isConnected, loadingSessions, refreshSessions]);
+  }, [loadingSessions, refreshSessions]);
 
   // Auto-select first session if none selected
   useEffect(() => {
@@ -125,8 +131,8 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
                 isConnecting ? 'bg-yellow-500' : 'bg-red-500'
               }`} />
               <span>
-                {isConnected ? 'Connected' : 
-                 isConnecting ? 'Connecting...' : 'Disconnected'}
+                {isConnected ? 'API Connected' : 
+                 isConnecting ? 'Connecting...' : 'API Offline'}
               </span>
               
               {isConnected && (
@@ -321,7 +327,7 @@ export const SessionDashboard: React.FC<SessionDashboardProps> = ({
                 ? 'bg-green-100 text-green-800' 
                 : 'bg-red-100 text-red-800'
             }`}>
-              {isConnected ? 'LIVE' : 'OFFLINE'}
+              {isConnected ? 'ONLINE' : 'OFFLINE'}
             </span>
           </div>
         </div>
