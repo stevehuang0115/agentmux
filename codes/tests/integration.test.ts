@@ -11,12 +11,15 @@ describe('Integration Tests', () => {
   let baseURL: string;
 
   beforeAll(async () => {
+    // Find a free port for testing
+    const testPort = Math.floor(Math.random() * 10000) + 10000;
+    
     // Start the server process
     const serverScript = path.join(__dirname, '../dist/server.js');
     serverProcess = spawn('node', [serverScript], {
       env: { 
         ...process.env, 
-        PORT: '0', // Let OS assign a free port
+        PORT: testPort.toString(),
         NODE_ENV: 'test' 
       },
       stdio: ['pipe', 'pipe', 'pipe']
@@ -25,31 +28,61 @@ describe('Integration Tests', () => {
     // Wait for server to start and capture the port
     await new Promise<void>((resolve, reject) => {
       let output = '';
-      const timeout = setTimeout(() => {
-        reject(new Error('Server startup timeout'));
-      }, 10000);
+      let startupChecks = 0;
+      const maxChecks = 20; // 10 seconds total
+      
+      const checkStartup = () => {
+        startupChecks++;
+        if (startupChecks > maxChecks) {
+          reject(new Error(`Server startup timeout after ${maxChecks * 500}ms`));
+          return;
+        }
+        
+        // Check if server is responding on the expected port
+        const http = require('http');
+        const req = http.get(`http://localhost:${testPort}/health`, (res: any) => {
+          if (res.statusCode === 200) {
+            serverPort = testPort;
+            baseURL = `http://localhost:${serverPort}`;
+            resolve();
+          }
+        }).on('error', () => {
+          // Server not ready yet, retry
+          setTimeout(checkStartup, 500);
+        });
+        
+        req.setTimeout(1000);
+        req.on('timeout', () => {
+          req.destroy();
+          setTimeout(checkStartup, 500);
+        });
+      };
 
       serverProcess.stdout?.on('data', (data) => {
         output += data.toString();
-        const portMatch = output.match(/AgentMux server running on port (\d+)/);
-        if (portMatch) {
-          clearTimeout(timeout);
-          serverPort = parseInt(portMatch[1], 10);
-          baseURL = `http://localhost:${serverPort}`;
-          resolve();
+        console.log('[Server]:', data.toString().trim());
+        // Start health checks once we see server output
+        if (output.includes('AgentMux server running') && startupChecks === 0) {
+          setTimeout(checkStartup, 1000); // Give server 1 second to fully initialize
         }
       });
 
       serverProcess.stderr?.on('data', (data) => {
-        console.error('Server stderr:', data.toString());
+        console.error('[Server Error]:', data.toString().trim());
       });
 
       serverProcess.on('error', (error) => {
-        clearTimeout(timeout);
         reject(error);
       });
+      
+      // Start initial check after 2 seconds
+      setTimeout(() => {
+        if (startupChecks === 0) {
+          checkStartup();
+        }
+      }, 2000);
     });
-  });
+  }, 30000); // Increase Jest timeout to 30 seconds
 
   afterAll(async () => {
     if (serverProcess) {
