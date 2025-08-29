@@ -19,6 +19,8 @@ class AgentMuxAPI {
       ? `${this.baseURL}${endpoint}` 
       : `${this.baseURL}/api${endpoint}`;
       
+    console.log('🌐 API Request:', options?.method || 'GET', fullURL);
+      
     const response = await fetch(fullURL, {
       headers: {
         'Content-Type': 'application/json',
@@ -27,7 +29,14 @@ class AgentMuxAPI {
       ...options,
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ API Response Error:', response.status, errorText);
+      throw new Error(`HTTP ${response.status}: ${errorText}`);
+    }
+
     const result: APIResponse<T> = await response.json();
+    console.log('✅ API Response:', endpoint, result.success ? 'SUCCESS' : 'FAILED');
 
     if (!result.success) {
       throw new Error(result.error || 'API request failed');

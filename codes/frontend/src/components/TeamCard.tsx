@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { Team, TeamStatus, Role } from '../types/agentmux';
 import { useAgentMux } from '../context/AgentMuxContext';
+import { TerminalViewer } from './TerminalViewer';
 
 interface TeamCardProps {
   team: Team;
@@ -11,6 +12,7 @@ interface TeamCardProps {
 export const TeamCard: React.FC<TeamCardProps> = ({ team }) => {
   const { updateTeam, deleteTeam, assignments, projects } = useAgentMux();
   const [isEditing, setIsEditing] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
   const [editName, setEditName] = useState(team.name);
   const [editRoles, setEditRoles] = useState<Role[]>([...team.roles]);
 
@@ -229,7 +231,15 @@ export const TeamCard: React.FC<TeamCardProps> = ({ team }) => {
           <div>Last active: {new Date(team.lastActivity).toLocaleString()}</div>
         )}
         {team.tmuxSession && (
-          <div>tmux: {team.tmuxSession}</div>
+          <div className="flex items-center justify-between">
+            <span>tmux: {team.tmuxSession}</span>
+            <button
+              onClick={() => setShowTerminal(true)}
+              className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+            >
+              View Terminal 🖥️
+            </button>
+          </div>
         )}
       </div>
 
@@ -302,6 +312,33 @@ export const TeamCard: React.FC<TeamCardProps> = ({ team }) => {
           )}
         </div>
       </div>
+
+      {/* Terminal Modal */}
+      {showTerminal && team.tmuxSession && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg w-full max-w-6xl h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold">
+                {team.name} - Terminal ({team.tmuxSession})
+              </h3>
+              <button
+                onClick={() => setShowTerminal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 p-4">
+              <TerminalViewer
+                sessionName={team.tmuxSession}
+                windowIndex={0}
+                height="100%"
+                className="h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

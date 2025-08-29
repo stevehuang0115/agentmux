@@ -89,9 +89,15 @@ export function AgentMuxProvider({
   // Refresh all data
   const refreshData = useCallback(async () => {
     try {
+      console.log('🔄 AgentMux: Starting data refresh...');
       setState(prev => ({ ...prev, loading: true, error: undefined }));
       
       const data = await agentMuxAPI.getAllData();
+      console.log('📊 AgentMux: Received data:', { 
+        projects: data.projects.length, 
+        teams: data.teams.length, 
+        assignments: data.assignments.length 
+      });
       
       setState(prev => ({
         ...prev,
@@ -102,6 +108,7 @@ export function AgentMuxProvider({
         isConnected: true,
       }));
     } catch (error) {
+      console.error('❌ AgentMux API Error:', error);
       handleError(error);
     }
   }, []);
