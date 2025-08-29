@@ -40,7 +40,7 @@ export interface ActivityEntry {
   type: 'project' | 'team' | 'pane';
   targetId: string;
   status: 'active' | 'idle';
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AgentMuxData {

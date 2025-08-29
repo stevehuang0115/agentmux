@@ -71,11 +71,11 @@ export function AgentMuxProvider({
   });
 
   // Error handler
-  const handleError = (error: any) => {
+  const handleError = (error: unknown) => {
     console.error('AgentMux API Error:', error);
     setState(prev => ({
       ...prev,
-      error: error.message || 'An error occurred',
+      error: error instanceof Error ? error.message : 'An error occurred',
       loading: false,
       isConnected: false,
     }));
