@@ -275,7 +275,7 @@ export function AgentMuxProvider({
       mounted = false;
       clearInterval(interval);
     };
-  }, [pollingInterval]);
+  }, [pollingInterval, refreshActivity, refreshData]);
 
   const contextValue = {
     ...state,
