@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { existsSync } from 'fs';
 import { TmuxManager, TmuxMessage } from './tmux';
-import { WebSocketManager } from './websocketManager';
+// import { WebSocketManager } from './websocketManager'; // DISABLED: node-pty dependency
 // import { TmuxController } from './tmuxController'; // DISABLED: node-pty dependency
 import { Validator } from './validation';
 import { UserStore } from './models/user';
@@ -69,7 +69,7 @@ const basicTmuxController = {
 const activityPoller = new ActivityPoller(fileStorage);
 const userStore = new UserStore();
 const authService = new AuthService(userStore);
-const wsManager = new WebSocketManager(io, tmuxManager);
+// const wsManager = new WebSocketManager(io, tmuxManager); // DISABLED: node-pty dependency
 
 // Create default admin user in development
 if (process.env.NODE_ENV !== 'production') {

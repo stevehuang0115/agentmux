@@ -13,7 +13,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = require("fs");
 const tmux_1 = require("./tmux");
-const websocketManager_1 = require("./websocketManager");
+// import { WebSocketManager } from './websocketManager'; // DISABLED: node-pty dependency
 // import { TmuxController } from './tmuxController'; // DISABLED: node-pty dependency
 const validation_1 = require("./validation");
 const user_1 = require("./models/user");
@@ -70,7 +70,7 @@ const basicTmuxController = {
 const activityPoller = new ActivityPoller_1.ActivityPoller(fileStorage);
 const userStore = new user_1.UserStore();
 const authService = new auth_1.AuthService(userStore);
-const wsManager = new websocketManager_1.WebSocketManager(io, tmuxManager);
+// const wsManager = new WebSocketManager(io, tmuxManager); // DISABLED: node-pty dependency
 // Create default admin user in development
 if (process.env.NODE_ENV !== 'production') {
     userStore.createDefaultAdmin();
