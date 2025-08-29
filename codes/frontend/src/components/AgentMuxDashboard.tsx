@@ -5,6 +5,8 @@ import { useAgentMux } from '../context/AgentMuxContext';
 import { ProjectCard } from './ProjectCard';
 import { TeamCard } from './TeamCard';
 import { AssignmentBoard } from './AssignmentBoard';
+import { ProjectForm } from './ProjectForm';
+import { TeamForm } from './TeamForm';
 
 type TabType = 'projects' | 'teams' | 'assignments';
 
@@ -27,6 +29,8 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
   } = useAgentMux();
 
   const [activeTab, setActiveTab] = useState<TabType>('projects');
+  const [showProjectForm, setShowProjectForm] = useState(false);
+  const [showTeamForm, setShowTeamForm] = useState(false);
 
   // Connection status
   const connectionStatus = isConnected ? 'ONLINE' : 'OFFLINE';
@@ -116,7 +120,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900">Projects</h2>
               <button
-                onClick={() => {/* TODO: Implement project creation form */}}
+                onClick={() => setShowProjectForm(true)}
                 className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
               >
                 + New Project
@@ -131,7 +135,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
                   Create your first project to get started with AgentMux
                 </p>
                 <button
-                  onClick={() => {/* TODO: Implement project creation form */}}
+                  onClick={() => setShowProjectForm(true)}
                   className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
                 >
                   Create Project
@@ -153,7 +157,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900">Teams</h2>
               <button
-                onClick={() => {/* TODO: Implement team creation form */}}
+                onClick={() => setShowTeamForm(true)}
                 className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
               >
                 + New Team
@@ -168,7 +172,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
                   Create your first team with roles to start working on projects
                 </p>
                 <button
-                  onClick={() => {/* TODO: Implement team creation form */}}
+                  onClick={() => setShowTeamForm(true)}
                   className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700"
                 >
                   Create Team
@@ -213,6 +217,17 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
             </div>
           </div>
         )}
+
+        {/* Modal Forms */}
+        <ProjectForm
+          isOpen={showProjectForm}
+          onClose={() => setShowProjectForm(false)}
+        />
+        
+        <TeamForm
+          isOpen={showTeamForm}
+          onClose={() => setShowTeamForm(false)}
+        />
       </div>
     </div>
   );

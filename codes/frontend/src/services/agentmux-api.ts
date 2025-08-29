@@ -11,11 +11,15 @@ import {
 } from '../types/agentmux';
 
 class AgentMuxAPI {
-  private baseURL = '/api';
+  private baseURL = 'http://localhost:3001';
   
   // Generic API request handler
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseURL}${endpoint}`, {
+    const fullURL = endpoint.startsWith('/api/') || endpoint === '/health' 
+      ? `${this.baseURL}${endpoint}` 
+      : `${this.baseURL}/api${endpoint}`;
+      
+    const response = await fetch(fullURL, {
       headers: {
         'Content-Type': 'application/json',
         ...options?.headers,
@@ -32,7 +36,7 @@ class AgentMuxAPI {
     return result.data as T;
   }
 
-  // Health check
+  // Health check (special endpoint at /health, not /api/health)
   async health(): Promise<{ status: string }> {
     return this.request<{ status: string }>('/health');
   }
@@ -51,7 +55,7 @@ class AgentMuxAPI {
 
   async updateProject(id: string, updates: Partial<Project>): Promise<Project> {
     return this.request<Project>(`/projects/${id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(updates),
     });
   }
@@ -76,7 +80,7 @@ class AgentMuxAPI {
 
   async updateTeam(id: string, updates: Partial<Team>): Promise<Team> {
     return this.request<Team>(`/teams/${id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(updates),
     });
   }
@@ -101,7 +105,7 @@ class AgentMuxAPI {
 
   async updateAssignment(id: string, updates: Partial<Assignment>): Promise<Assignment> {
     return this.request<Assignment>(`/assignments/${id}`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify(updates),
     });
   }

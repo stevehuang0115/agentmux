@@ -100,18 +100,15 @@ export class ActivityPoller extends EventEmitter {
         return;
       }
 
-      // Check each window/pane defined in team roles
-      for (let i = 0; i < team.roles.length; i++) {
-        const role = team.roles[i];
-        // Use role index as window index for now
-        await this.checkPaneActivity(
-          team.tmuxSessionName,
-          i,
-          0, // Default to pane 0
-          team.id,
-          team.assignedProjectId
-        );
-      }
+      // Check only the first window (index 0) for Phase 1
+      // In Phase 1, each team has one tmux session with one window
+      await this.checkPaneActivity(
+        team.tmuxSessionName,
+        0, // Always check window 0
+        0, // Always check pane 0  
+        team.id,
+        team.assignedProjectId
+      );
     } catch (error) {
       console.error(`Error checking activity for team ${team.name}:`, error);
     }
