@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { Project, Team, Assignment, ActivityEntry } from '../types/agentmux';
 import { agentMuxAPI } from '../services/agentmux-api';
 
@@ -87,7 +87,7 @@ export function AgentMuxProvider({
   };
 
   // Refresh all data
-  const refreshData = async () => {
+  const refreshData = useCallback(async () => {
     try {
       setState(prev => ({ ...prev, loading: true, error: undefined }));
       
@@ -104,17 +104,17 @@ export function AgentMuxProvider({
     } catch (error) {
       handleError(error);
     }
-  };
+  }, []);
 
   // Refresh activity
-  const refreshActivity = async () => {
+  const refreshActivity = useCallback(async () => {
     try {
       const activity = await agentMuxAPI.getActivity();
       setState(prev => ({ ...prev, activity }));
     } catch (error) {
       handleError(error);
     }
-  };
+  }, []);
 
   // Project operations
   const createProject = async (project: Omit<Project, 'id' | 'createdAt'>) => {
