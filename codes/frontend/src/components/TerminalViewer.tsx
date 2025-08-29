@@ -60,10 +60,20 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
 
   // Auto-scroll to bottom when new content arrives
   useEffect(() => {
-    if (autoScroll && terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    if (autoScroll && terminalRef.current && terminalRef.current.parentElement) {
+      // Scroll the parent container (the terminal-content div) to bottom
+      const container = terminalRef.current.parentElement;
+      container.scrollTop = container.scrollHeight;
     }
   }, [output, capturedContent, autoScroll]);
+
+  // Also auto-scroll on initial load
+  useEffect(() => {
+    if (terminalRef.current && terminalRef.current.parentElement) {
+      const container = terminalRef.current.parentElement;
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [output, capturedContent]);
 
   // Handle input submission - send to terminal or tmux session
   const handleInputSubmit = (e: React.FormEvent) => {
@@ -130,6 +140,84 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     }
   };
 
+  // Handle real-time keystroke forwarding - send EVERY keystroke immediately
+  const handleRealTimeInput = (e: React.KeyboardEvent) => {
+    if (!canInput) return;
+
+    // Handle special key combinations first
+    if (e.ctrlKey && e.key === 'c') {
+      if (currentTerminalId) {
+        sendTerminalInput(currentTerminalId, '\x03');
+      } else if (sessionName && isCapturing) {
+        sendMessage({
+          session: sessionName,
+          window: windowIndex,
+          pane: paneIndex,
+          message: '\x03'
+        });
+      }
+      return;
+    }
+
+    if (e.ctrlKey && e.key === 'd') {
+      if (currentTerminalId) {
+        sendTerminalInput(currentTerminalId, '\x04');
+      } else if (sessionName && isCapturing) {
+        sendMessage({
+          session: sessionName,
+          window: windowIndex,
+          pane: paneIndex,
+          message: '\x04'
+        });
+      }
+      return;
+    }
+
+    // Handle arrow keys
+    let keySequence = '';
+    switch (e.key) {
+      case 'ArrowUp': keySequence = '\x1b[A'; break;
+      case 'ArrowDown': keySequence = '\x1b[B'; break;
+      case 'ArrowLeft': keySequence = '\x1b[D'; break;
+      case 'ArrowRight': keySequence = '\x1b[C'; break;
+      case 'Backspace': keySequence = '\x7f'; break;
+      case 'Delete': keySequence = '\x1b[3~'; break;
+      case 'Tab': keySequence = '\t'; break;
+      case 'Enter': keySequence = '\r'; break;
+      case 'Escape': keySequence = '\x1b'; break;
+      default:
+        // Regular character
+        if (e.key.length === 1) {
+          keySequence = e.key;
+        }
+        break;
+    }
+
+    if (keySequence) {
+      if (currentTerminalId && !isCapturing) {
+        // Send to terminal
+        sendTerminalInput(currentTerminalId, keySequence);
+      } else if (sessionName && isCapturing) {
+        // Send directly to tmux session
+        sendMessage({
+          session: sessionName,
+          window: windowIndex,
+          pane: paneIndex,
+          message: keySequence
+        });
+      }
+      
+      // Update visual input for display (but don't rely on it for sending)
+      if (e.key === 'Backspace') {
+        setInputValue(prev => prev.slice(0, -1));
+      } else if (e.key === 'Enter') {
+        setInputValue('');
+      } else if (e.key.length === 1) {
+        setInputValue(prev => prev + e.key);
+      }
+    }
+  };
+
   // Toggle between terminal and capture mode
   const toggleCaptureMode = () => {
     if (!captureTarget) return;
@@ -169,7 +257,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
   const canInput = isConnected && ((currentTerminalId && !isCapturing) || (sessionName && isCapturing));
 
   return (
-    <div className={`terminal-viewer ${className}`}>
+    <div className={`terminal-viewer ${className} flex flex-col h-full`}>
       <style>{`
         @keyframes blink {
           0%, 50% { opacity: 1; }
@@ -219,11 +307,20 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
 
       {/* Terminal Content */}
       <div 
-        className="terminal-content bg-black text-green-400 p-4 overflow-auto font-mono text-sm leading-tight cursor-text"
+        className="terminal-content bg-black text-green-400 p-4 overflow-auto font-mono text-sm leading-tight cursor-text flex-1"
         style={{ 
-          height,
+          minHeight: '400px',
+          maxHeight: 'calc(100vh - 200px)', // Fill viewport minus header/footer space
           fontSize: `${settings.terminalFontSize}px`,
           fontFamily: settings.terminalFontFamily,
+        }}
+        onScroll={(e) => {
+          // Auto-detect if user scrolled to bottom
+          const container = e.currentTarget;
+          const isAtBottom = container.scrollTop >= (container.scrollHeight - container.clientHeight - 10);
+          if (isAtBottom !== autoScroll) {
+            setAutoScroll(isAtBottom);
+          }
         }}
         tabIndex={0}
         onClick={() => {
@@ -233,22 +330,17 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
           }
         }}
         onKeyDown={(e) => {
-          // Direct keyboard input to terminal
+          // Direct keyboard input to terminal - forward EVERY keystroke immediately
           if (!canInput) return;
           
-          // Focus input field for regular typing
-          if (inputRef.current && e.key.length === 1) {
+          e.preventDefault(); // Prevent default browser behavior
+          
+          // Forward keystroke immediately to terminal
+          handleRealTimeInput(e);
+          
+          // Keep input field focused for continued typing
+          if (inputRef.current) {
             inputRef.current.focus();
-            // Don't prevent default - let the input handle it
-            return;
-          }
-
-          // Handle special keys directly
-          if (e.key === 'Enter' && inputValue.trim()) {
-            const syntheticEvent = {
-              preventDefault: () => e.preventDefault()
-            } as React.FormEvent<HTMLInputElement>;
-            handleInputSubmit(syntheticEvent);
           }
         }}
       >

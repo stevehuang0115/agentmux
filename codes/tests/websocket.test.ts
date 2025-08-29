@@ -30,7 +30,10 @@ describe('WebSocket Security Tests', () => {
   });
 
   beforeEach((done) => {
-    // Setup WebSocket handlers similar to main server
+    // Clean up any existing listeners to prevent memory leaks
+    ioServer.removeAllListeners('connection');
+    
+    // Setup WebSocket handlers similar to main server  
     ioServer.on('connection', (socket) => {
       // Mock tmux operations for testing
       socket.on('list-sessions', (callback) => {
@@ -41,6 +44,12 @@ describe('WebSocket Security Tests', () => {
         // Validate input to prevent command injection
         if (!data.session || !data.message) {
           callback({ success: false, error: 'Missing required fields' });
+          return;
+        }
+        
+        // Check for excessive length (security measure)
+        if (data.session.length > 1000 || data.message.length > 50000) {
+          callback({ success: false, error: 'Input too long' });
           return;
         }
         
@@ -94,8 +103,12 @@ describe('WebSocket Security Tests', () => {
   });
 
   afterEach(() => {
-    if (clientSocket.connected) {
-      clientSocket.disconnect();
+    // Clean up client socket
+    if (clientSocket) {
+      clientSocket.removeAllListeners(); // Remove all event listeners
+      if (clientSocket.connected) {
+        clientSocket.disconnect();
+      }
     }
   });
 
@@ -113,22 +126,23 @@ describe('WebSocket Security Tests', () => {
         autoConnect: false
       });
 
-      const connectCycle = () => {
-        testClient.connect();
-        testClient.on('connect', () => {
-          connectCount++;
-          testClient.disconnect();
-          
-          if (connectCount < maxConnections) {
-            setTimeout(connectCycle, 10);
-          } else {
-            expect(connectCount).toBe(maxConnections);
-            done();
-          }
-        });
+      const connectHandler = () => {
+        connectCount++;
+        testClient.disconnect();
+        
+        if (connectCount < maxConnections) {
+          setTimeout(() => {
+            testClient.connect();
+          }, 10);
+        } else {
+          testClient.removeListener('connect', connectHandler);
+          expect(connectCount).toBe(maxConnections);
+          done();
+        }
       };
       
-      connectCycle();
+      testClient.on('connect', connectHandler);
+      testClient.connect();
     });
   });
 

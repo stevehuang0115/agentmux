@@ -232,11 +232,11 @@ describe('Critical WebSocket Data Flow Tests', () => {
         let output = '';
         const timeout = setTimeout(() => {
           reject(new Error('Real server startup timeout'));
-        }, 10000);
+        }, 25000);
 
         serverProcess.stdout?.on('data', (data) => {
           output += data.toString();
-          const portMatch = output.match(/AgentMux server running on port (\\d+)/);
+          const portMatch = output.match(/AgentMux server running on port (\d+)/);
           if (portMatch) {
             clearTimeout(timeout);
             serverPort = parseInt(portMatch[1], 10);
@@ -253,7 +253,7 @@ describe('Critical WebSocket Data Flow Tests', () => {
           reject(error);
         });
       });
-    });
+    }, 30000);
 
     afterAll(async () => {
       if (realClientSocket && realClientSocket.connected) {

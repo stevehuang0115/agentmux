@@ -122,8 +122,8 @@ describe('Integration Tests', () => {
         .expect(201);
 
       expect(response.body).toHaveProperty('success', true);
-      expect(response.body).toHaveProperty('token');
-      expect(response.body.user).toHaveProperty('username', userData.username);
+      expect(response.body.data).toHaveProperty('token');
+      expect(response.body.data.user).toHaveProperty('username', userData.username);
     });
 
     test('POST /auth/login should authenticate user', async () => {
@@ -148,8 +148,8 @@ describe('Integration Tests', () => {
         .expect(200);
 
       expect(loginResponse.body).toHaveProperty('success', true);
-      expect(loginResponse.body).toHaveProperty('token');
-      expect(loginResponse.body.user).toHaveProperty('username', userData.username);
+      expect(loginResponse.body.data).toHaveProperty('token');
+      expect(loginResponse.body.data.user).toHaveProperty('username', userData.username);
     });
   });
 

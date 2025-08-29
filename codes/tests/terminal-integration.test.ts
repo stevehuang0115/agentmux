@@ -166,6 +166,7 @@ describe('Terminal Integration Tests', () => {
         }
       }
     });
+  });
 
   describe('1. Terminal Display Tests - ORIGINAL', () => {
     test('should display terminal with real pane content (not "Creating terminal...")', async () => {
@@ -686,57 +687,59 @@ describe('Terminal Integration Tests', () => {
     });
   });
 
-  test('PRODUCTION READINESS: Complete terminal workflow', async () => {
-    console.log('🎯 Running complete terminal workflow test...');
-    
-    await page.goto(baseURL, { waitUntil: 'networkidle2' });
-    
-    // Step 1: Load and select session
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
-    
-    if (!sessionButton) {
-      throw new Error('No sessions available for testing');
-    }
-    
-    await sessionButton.click();
-    console.log('✅ Step 1: Session selected');
-    
-    // Step 2: Verify terminal loads
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const terminalContent = await page.$eval('.terminal-content, pre', el => el.textContent || '').catch(() => '');
-    expect(terminalContent.length).toBeGreaterThan(5);
-    console.log('✅ Step 2: Terminal content loaded');
-    
-    // Step 3: Test command input
-    const inputMethod = await page.$('input[class*="terminal"], .terminal-input input') ||
-                        await page.$('textarea[placeholder*="command"]');
-    
-    if (!inputMethod) {
-      throw new Error('No input method available');
-    }
-    
-    await inputMethod.focus();
-    await inputMethod.type('echo "Production ready test"');
-    console.log('✅ Step 3: Command typed');
-    
-    // Step 4: Execute command
-    const sendButton = await page.$('button[type="submit"], button:contains("Send")');
-    if (sendButton) {
-      await sendButton.click();
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      console.log('✅ Step 4: Command executed');
-    }
-    
-    // Step 5: Verify system responsiveness
-    const finalContent = await page.$eval('.terminal-content, pre', el => el.textContent || '').catch(() => '');
-    const systemResponsive = finalContent.length > terminalContent.length || 
-                            finalContent.includes('Production ready') ||
-                            finalContent !== terminalContent;
-    
-    expect(systemResponsive).toBe(true);
-    console.log('✅ Step 5: System responsive to commands');
-    
-    console.log('🎯 PRODUCTION READINESS: VERIFIED ✅');
+  describe('Production Readiness Tests', () => {
+    test('PRODUCTION READINESS: Complete terminal workflow', async () => {
+      console.log('🎯 Running complete terminal workflow test...');
+      
+      await page.goto(baseURL, { waitUntil: 'networkidle2' });
+      
+      // Step 1: Load and select session
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const sessionButton = await page.$('button[class*="hover:bg-gray-50"]:first-of-type');
+      
+      if (!sessionButton) {
+        throw new Error('No sessions available for testing');
+      }
+      
+      await sessionButton.click();
+      console.log('✅ Step 1: Session selected');
+      
+      // Step 2: Verify terminal loads
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const terminalContent = await page.$eval('.terminal-content, pre', el => el.textContent || '').catch(() => '');
+      expect(terminalContent.length).toBeGreaterThan(5);
+      console.log('✅ Step 2: Terminal content loaded');
+      
+      // Step 3: Test command input
+      const inputMethod = await page.$('input[class*="terminal"], .terminal-input input') ||
+                          await page.$('textarea[placeholder*="command"]');
+      
+      if (!inputMethod) {
+        throw new Error('No input method available');
+      }
+      
+      await inputMethod.focus();
+      await inputMethod.type('echo "Production ready test"');
+      console.log('✅ Step 3: Command typed');
+      
+      // Step 4: Execute command
+      const sendButton = await page.$('button[type="submit"], button:contains("Send")');
+      if (sendButton) {
+        await sendButton.click();
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log('✅ Step 4: Command executed');
+      }
+      
+      // Step 5: Verify system responsiveness
+      const finalContent = await page.$eval('.terminal-content, pre', el => el.textContent || '').catch(() => '');
+      const systemResponsive = finalContent.length > terminalContent.length || 
+                              finalContent.includes('Production ready') ||
+                              finalContent !== terminalContent;
+      
+      expect(systemResponsive).toBe(true);
+      console.log('✅ Step 5: System responsive to commands');
+      
+      console.log('🎯 PRODUCTION READINESS: VERIFIED ✅');
+    });
   });
 });
