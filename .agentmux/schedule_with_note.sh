@@ -11,7 +11,7 @@ fi
 
 MINUTES="$1"
 NOTE="$2"
-TARGET_WINDOW="${3:-tmux-orc:0}"
+TARGET_WINDOW="${3:-agentmux-orc:0}"
 
 # Validate minutes is a number
 if ! [[ "$MINUTES" =~ ^[0-9]+$ ]]; then

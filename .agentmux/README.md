@@ -55,11 +55,13 @@ The codes are in /Users/yellowsunhy/Desktop/projects/justslash/agent-mux/codes
 The specifications are in /Users/yellowsunhy/Desktop/projects/justslash/agent-mux/specs
 
 Please:
-1. Create a team (PM + Frontend Developer + Backend Developer + QA)
-2. Have them build according to the specs
-3. Check on the team every 15 minutes
-4. Ensure 30-minute commits
-5. Only notify me when the team complete the build and testing
+1. Create a frontend team (PM + Developer + QA)
+2. Create a backend team (PM + Developer + QA)
+3. Create a MCP team (PM + Developer + QA)
+4. Have them build according to the specs
+5. Check on the team every 15 minutes
+6. Ensure 30-minute commits
+7. Only notify me when the team complete the build and testing
 
 Start all teams on Phase 1 simultaneously.
 
