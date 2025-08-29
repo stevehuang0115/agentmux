@@ -14,7 +14,7 @@ const path_1 = __importDefault(require("path"));
 const fs_1 = require("fs");
 const tmux_1 = require("./tmux");
 const websocketManager_1 = require("./websocketManager");
-const tmuxController_1 = require("./tmuxController");
+// import { TmuxController } from './tmuxController'; // DISABLED: node-pty dependency
 const validation_1 = require("./validation");
 const user_1 = require("./models/user");
 const auth_1 = require("./middleware/auth");
@@ -34,8 +34,39 @@ const io = new socket_io_1.Server(server, {
 const PORT = process.env.PORT || 3001;
 // Initialize services
 const tmuxManager = new tmux_1.TmuxManager();
-const tmuxController = new tmuxController_1.TmuxController();
+// const tmuxController = new TmuxController(); // DISABLED: node-pty dependency
 const fileStorage = new FileStorage_1.FileStorage();
+// Basic tmux controller wrapper using tmuxManager for Phase 1
+const basicTmuxController = {
+    async createSession(sessionName) {
+        try {
+            const { spawn } = require('child_process');
+            const proc = spawn('tmux', ['new-session', '-d', '-s', sessionName]);
+            return new Promise((resolve) => {
+                proc.on('close', (code) => resolve(code === 0));
+                proc.on('error', () => resolve(false));
+            });
+        }
+        catch (error) {
+            console.error('Error creating tmux session:', error);
+            return false;
+        }
+    },
+    async killSession(sessionName) {
+        try {
+            const { spawn } = require('child_process');
+            const proc = spawn('tmux', ['kill-session', '-t', sessionName]);
+            return new Promise((resolve) => {
+                proc.on('close', (code) => resolve(code === 0));
+                proc.on('error', () => resolve(false));
+            });
+        }
+        catch (error) {
+            console.error('Error killing tmux session:', error);
+            return false;
+        }
+    }
+};
 const activityPoller = new ActivityPoller_1.ActivityPoller(fileStorage);
 const userStore = new user_1.UserStore();
 const authService = new auth_1.AuthService(userStore);
@@ -214,7 +245,7 @@ app.post('/api/teams', async (req, res) => {
         // Create tmux session for the team
         if (team.name && !team.tmuxSessionName) {
             const sessionName = `agentmux-${team.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-            const sessionCreated = await tmuxController.createSession(sessionName);
+            const sessionCreated = await basicTmuxController.createSession(sessionName);
             if (sessionCreated) {
                 // Update team with session name
                 const updatedTeam = await fileStorage.updateTeam(team.id, {
@@ -259,7 +290,7 @@ app.delete('/api/teams/:id', async (req, res) => {
         const teams = await fileStorage.getTeams();
         const team = teams.find(t => t.id === req.params.id);
         if (team && team.tmuxSessionName) {
-            await tmuxController.killSession(team.tmuxSessionName);
+            await basicTmuxController.killSession(team.tmuxSessionName);
         }
         const deleted = await fileStorage.deleteTeam(req.params.id);
         if (!deleted) {

@@ -9,7 +9,7 @@ import path from 'path';
 import { existsSync } from 'fs';
 import { TmuxManager, TmuxMessage } from './tmux';
 import { WebSocketManager } from './websocketManager';
-import { TmuxController } from './tmuxController';
+// import { TmuxController } from './tmuxController'; // DISABLED: node-pty dependency
 import { Validator } from './validation';
 import { UserStore } from './models/user';
 import { AuthService, AuthenticatedSocket } from './middleware/auth';
@@ -33,8 +33,39 @@ const PORT = process.env.PORT || 3001;
 
 // Initialize services
 const tmuxManager = new TmuxManager();
-const tmuxController = new TmuxController();
+// const tmuxController = new TmuxController(); // DISABLED: node-pty dependency
 const fileStorage = new FileStorage();
+
+// Basic tmux controller wrapper using tmuxManager for Phase 1
+const basicTmuxController = {
+  async createSession(sessionName: string): Promise<boolean> {
+    try {
+      const { spawn } = require('child_process');
+      const proc = spawn('tmux', ['new-session', '-d', '-s', sessionName]);
+      return new Promise((resolve) => {
+        proc.on('close', (code: number) => resolve(code === 0));
+        proc.on('error', () => resolve(false));
+      });
+    } catch (error) {
+      console.error('Error creating tmux session:', error);
+      return false;
+    }
+  },
+  
+  async killSession(sessionName: string): Promise<boolean> {
+    try {
+      const { spawn } = require('child_process');
+      const proc = spawn('tmux', ['kill-session', '-t', sessionName]);
+      return new Promise((resolve) => {
+        proc.on('close', (code: number) => resolve(code === 0));
+        proc.on('error', () => resolve(false));
+      });
+    } catch (error) {
+      console.error('Error killing tmux session:', error);
+      return false;
+    }
+  }
+};
 const activityPoller = new ActivityPoller(fileStorage);
 const userStore = new UserStore();
 const authService = new AuthService(userStore);
@@ -221,7 +252,7 @@ app.post('/api/teams', async (req, res) => {
     // Create tmux session for the team
     if (team.name && !team.tmuxSessionName) {
       const sessionName = `agentmux-${team.name.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-      const sessionCreated = await tmuxController.createSession(sessionName);
+      const sessionCreated = await basicTmuxController.createSession(sessionName);
       
       if (sessionCreated) {
         // Update team with session name
@@ -266,7 +297,7 @@ app.delete('/api/teams/:id', async (req, res) => {
     const team = teams.find(t => t.id === req.params.id);
     
     if (team && team.tmuxSessionName) {
-      await tmuxController.killSession(team.tmuxSessionName);
+      await basicTmuxController.killSession(team.tmuxSessionName);
     }
     
     const deleted = await fileStorage.deleteTeam(req.params.id);
