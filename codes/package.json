@@ -48,7 +48,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "node-fetch": "^3.3.2",
-    "node-pty": "^1.0.0",
+    "node-pty": "^1.1.0-beta17",
     "socket.io": "^4.8.1",
     "ws": "^8.18.3",
     "yargs": "^18.0.0"
