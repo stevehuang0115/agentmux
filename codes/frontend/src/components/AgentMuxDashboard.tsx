@@ -27,8 +27,6 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
   } = useAgentMux();
 
   const [activeTab, setActiveTab] = useState<TabType>('projects');
-  const [showNewProjectForm, setShowNewProjectForm] = useState(false);
-  const [showNewTeamForm, setShowNewTeamForm] = useState(false);
 
   // Connection status
   const connectionStatus = isConnected ? 'ONLINE' : 'OFFLINE';
