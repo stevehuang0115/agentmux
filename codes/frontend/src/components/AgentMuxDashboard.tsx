@@ -116,7 +116,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900">Projects</h2>
               <button
-                onClick={() => setShowNewProjectForm(true)}
+                onClick={() => {/* TODO: Implement project creation form */}}
                 className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
               >
                 + New Project
@@ -131,7 +131,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
                   Create your first project to get started with AgentMux
                 </p>
                 <button
-                  onClick={() => setShowNewProjectForm(true)}
+                  onClick={() => {/* TODO: Implement project creation form */}}
                   className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700"
                 >
                   Create Project
@@ -153,7 +153,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-semibold text-gray-900">Teams</h2>
               <button
-                onClick={() => setShowNewTeamForm(true)}
+                onClick={() => {/* TODO: Implement team creation form */}}
                 className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
               >
                 + New Team
@@ -168,7 +168,7 @@ export const AgentMuxDashboard: React.FC<AgentMuxDashboardProps> = ({
                   Create your first team with roles to start working on projects
                 </p>
                 <button
-                  onClick={() => setShowNewTeamForm(true)}
+                  onClick={() => {/* TODO: Implement team creation form */}}
                   className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700"
                 >
                   Create Team

@@ -263,7 +263,7 @@ export function AgentMuxProvider({
           await agentMuxAPI.health();
           await refreshData();
           await refreshActivity();
-        } catch (error) {
+        } catch {
           if (mounted) {
             setState(prev => ({ ...prev, isConnected: false }));
           }
