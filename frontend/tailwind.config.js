@@ -1,0 +1,1 @@
+/** @type {import('tailwindcss').Config} */\nexport default {\n  content: [\n    \"./index.html\",\n    \"./src/**/*.{js,ts,jsx,tsx}\",\n  ],\n  theme: {\n    extend: {\n      fontFamily: {\n        mono: ['Menlo', 'Monaco', 'Courier New', 'monospace'],\n      },\n    },\n  },\n  plugins: [],\n}

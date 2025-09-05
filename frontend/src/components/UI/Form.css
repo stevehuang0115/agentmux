@@ -1,0 +1,197 @@
+/* Form Component Styles */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.form-row {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: start;
+}
+
+.form-row .form-group {
+  flex: 1;
+}
+
+.form-label {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.form-required {
+  color: var(--color-error);
+  margin-left: 2px;
+}
+
+.form-help {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+  margin-top: var(--spacing-xs);
+}
+
+.form-error {
+  font-size: var(--text-xs);
+  color: var(--color-error);
+  line-height: 1.4;
+  margin-top: var(--spacing-xs);
+}
+
+.form-input,
+.form-textarea {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.form-input:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha);
+}
+
+.form-input--error,
+.form-textarea--error {
+  border-color: var(--color-error);
+}
+
+.form-input--error:focus,
+.form-textarea--error:focus {
+  border-color: var(--color-error);
+  box-shadow: 0 0 0 3px var(--color-error-alpha);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.form-section {
+  padding: var(--spacing-lg) 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.form-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.form-section-header {
+  margin-bottom: var(--spacing-lg);
+}
+
+.form-section-title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-xs) 0;
+}
+
+.form-section-description {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.form-section-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+/* Form info boxes */
+.form-info-box {
+  padding: var(--spacing-md);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+
+.form-info-box--success {
+  background-color: var(--color-success-bg, #f0fdf4);
+  border-color: var(--color-success-border, #bbf7d0);
+  color: var(--color-success-text, #15803d);
+}
+
+.form-info-box--info {
+  background-color: var(--color-info-bg, #eff6ff);
+  border-color: var(--color-info-border, #bfdbfe);
+  color: var(--color-info-text, #1d4ed8);
+}
+
+.form-info-box--warning {
+  background-color: var(--color-warning-bg, #fffbeb);
+  border-color: var(--color-warning-border, #fde68a);
+  color: var(--color-warning-text, #d97706);
+}
+
+.form-info-box--error {
+  background-color: var(--color-error-bg, #fef2f2);
+  border-color: var(--color-error-border, #fecaca);
+  color: var(--color-error-text, #dc2626);
+}
+
+.form-info-header {
+  margin-bottom: var(--spacing-xs);
+}
+
+.form-info-header h4 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.form-info-content {
+  font-size: var(--text-sm);
+}
+
+.form-info-content > div:not(:last-child) {
+  margin-bottom: var(--spacing-xs);
+}
+
+/* Input group for combining input with buttons */
+.field-input-group {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: center;
+}
+
+.field-input {
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-alpha);
+}
+
+.field-help {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+  line-height: 1.4;
+}

@@ -1,0 +1,265 @@
+/* Modal Overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: modal-fade-in 0.2s ease-out;
+}
+
+/* Modal Content */
+.modal-content {
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  max-height: 90vh;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  animation: modal-slide-in 0.3s ease-out;
+}
+
+/* Modal Sizes */
+.modal-sm {
+  width: 100%;
+  max-width: 400px;
+}
+
+.modal-md {
+  width: 100%;
+  max-width: 500px;
+}
+
+.modal-lg {
+  width: 100%;
+  max-width: 700px;
+}
+
+.modal-xl {
+  width: 100%;
+  max-width: 900px;
+}
+
+/* Modal Header */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg) var(--spacing-lg) 0;
+  flex-shrink: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.modal-close-btn {
+  margin: -0.5rem -0.5rem -0.5rem 0;
+}
+
+/* Modal Body */
+.modal-body {
+  padding: var(--spacing-lg);
+  flex: 1;
+  overflow-y: auto;
+}
+
+.modal-header + .modal-body {
+  padding-top: var(--spacing-base);
+}
+
+/* Modal Footer */
+.modal-footer {
+  padding: 0 var(--spacing-lg) var(--spacing-lg);
+  flex-shrink: 0;
+}
+
+/* Dialog Specific Styles */
+.dialog-modal .modal-body {
+  padding: var(--spacing-lg);
+}
+
+.dialog-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-base) 0;
+}
+
+.dialog-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  margin-bottom: var(--spacing-sm);
+}
+
+.dialog-icon-success {
+  background: #dcfce7;
+  color: var(--color-success);
+}
+
+.dialog-icon-error {
+  background: #fef2f2;
+  color: var(--color-error);
+}
+
+.dialog-icon-warning {
+  background: #fef3c7;
+  color: var(--color-warning);
+}
+
+.dialog-icon-info {
+  background: #dbeafe;
+  color: var(--color-primary);
+}
+
+.dialog-message {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  white-space: pre-line;
+  word-break: break-word;
+  max-width: 90%;
+  margin: var(--spacing-sm) 0;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: var(--spacing-base);
+  width: 100%;
+}
+
+.dialog-actions > * {
+  flex: 1;
+}
+
+/* Animations */
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: var(--spacing-base);
+    align-items: flex-end;
+  }
+  
+  .modal-content {
+    width: 100%;
+    max-height: 80vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    animation: modal-slide-up 0.3s ease-out;
+  }
+  
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    padding-left: var(--spacing-base);
+    padding-right: var(--spacing-base);
+  }
+  
+  .dialog-actions {
+    flex-direction: column-reverse;
+  }
+}
+
+@keyframes modal-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-content {
+    animation: none;
+  }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+  .dialog-icon-success {
+    background: #14532d;
+    color: #4ade80;
+  }
+  
+  .dialog-icon-error {
+    background: #7f1d1d;
+    color: #f87171;
+  }
+  
+  .dialog-icon-warning {
+    background: #92400e;
+    color: #fbbf24;
+  }
+  
+  .dialog-icon-info {
+    background: #1e3a8a;
+    color: #60a5fa;
+  }
+}
+
+/* Focus Management */
+.modal-content:focus {
+  outline: none;
+}
+
+/* Ensure proper stacking */
+.modal-overlay {
+  z-index: 9999;
+}
+
+/* Prevent body scroll when modal is open */
+body.modal-open {
+  overflow: hidden;
+}
+
+/* Handle long content */
+.modal-body {
+  word-break: break-word;
+}
+
+/* Improve touch targets on mobile */
+@media (max-width: 640px) {
+  .modal-close-btn,
+  .dialog-actions button {
+    min-height: 44px;
+  }
+}

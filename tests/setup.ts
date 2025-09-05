@@ -1,0 +1,1 @@
+// Jest setup file\n\n// Mock environment variables\nprocess.env.NODE_ENV = 'test';\nprocess.env.AGENTMUX_HOME = '/tmp/agentmux-test';\nprocess.env.WEB_PORT = '3000';\nprocess.env.MCP_PORT = '3001';\n\n// Global test timeout\njest.setTimeout(10000);\n\n// Clean up after each test\nafterEach(() => {\n  jest.clearAllMocks();\n});"}

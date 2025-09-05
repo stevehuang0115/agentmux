@@ -1,0 +1,155 @@
+import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
+import * as path from 'path';
+export class TaskFolderService {
+    /**
+     * Creates the status folder structure for a milestone
+     * Creates: open/, in_progress/, done/, blocked/ folders
+     */
+    async createMilestoneStatusFolders(milestonePath) {
+        const statusFolders = ['open', 'in_progress', 'done', 'blocked'];
+        for (const folder of statusFolders) {
+            const folderPath = path.join(milestonePath, folder);
+            await fs.mkdir(folderPath, { recursive: true });
+        }
+    }
+    /**
+     * Creates m0_defining_project milestone with status folders
+     */
+    async createM0DefininingProjectMilestone(projectPath) {
+        const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+        const m0Path = path.join(tasksPath, 'm0_defining_project');
+        // Create main tasks directory and m0 milestone
+        await fs.mkdir(m0Path, { recursive: true });
+        // Create status folders
+        await this.createMilestoneStatusFolders(m0Path);
+        return m0Path;
+    }
+    /**
+     * Ensures all existing milestone folders have status subfolders
+     */
+    async ensureStatusFoldersForProject(projectPath) {
+        const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+        if (!fsSync.existsSync(tasksPath)) {
+            return;
+        }
+        const items = await fs.readdir(tasksPath);
+        for (const item of items) {
+            const itemPath = path.join(tasksPath, item);
+            const stat = await fs.stat(itemPath);
+            if (stat.isDirectory() && item.startsWith('m') && item.includes('_')) {
+                // This is a milestone folder, ensure it has status subfolders
+                await this.createMilestoneStatusFolders(itemPath);
+            }
+        }
+    }
+    /**
+     * Moves a task file between status folders
+     */
+    async moveTaskToStatus(taskFilePath, newStatus) {
+        const fileName = path.basename(taskFilePath);
+        const milestoneDir = path.dirname(path.dirname(taskFilePath));
+        const newPath = path.join(milestoneDir, newStatus, fileName);
+        // Ensure target folder exists
+        await fs.mkdir(path.dirname(newPath), { recursive: true });
+        // Move the file
+        await fs.rename(taskFilePath, newPath);
+        return newPath;
+    }
+    /**
+     * Creates a task file in the specified status folder
+     */
+    async createTaskFile(milestonePath, taskFileName, taskContent, status = 'open') {
+        const statusFolderPath = path.join(milestonePath, status);
+        const taskFilePath = path.join(statusFolderPath, taskFileName);
+        // Ensure status folder exists
+        await fs.mkdir(statusFolderPath, { recursive: true });
+        // Write the task file
+        await fs.writeFile(taskFilePath, taskContent, 'utf-8');
+        return taskFilePath;
+    }
+    /**
+     * Lists all task files in a specific status folder
+     */
+    async getTasksInStatus(milestonePath, status) {
+        const statusFolderPath = path.join(milestonePath, status);
+        if (!fsSync.existsSync(statusFolderPath)) {
+            return [];
+        }
+        const files = await fs.readdir(statusFolderPath);
+        return files.filter(file => file.endsWith('.md'));
+    }
+    /**
+     * Gets task file path by scanning all status folders for a task
+     */
+    async findTaskFile(milestonePath, taskFileName) {
+        const statusFolders = ['open', 'in_progress', 'done', 'blocked'];
+        for (const status of statusFolders) {
+            const filePath = path.join(milestonePath, status, taskFileName);
+            if (fsSync.existsSync(filePath)) {
+                return filePath;
+            }
+        }
+        return null;
+    }
+    /**
+     * Gets the current status of a task based on which folder it's in
+     */
+    async getTaskStatus(milestonePath, taskFileName) {
+        const statusFolders = ['open', 'in_progress', 'done', 'blocked'];
+        for (const status of statusFolders) {
+            const filePath = path.join(milestonePath, status, taskFileName);
+            if (fsSync.existsSync(filePath)) {
+                return status;
+            }
+        }
+        return 'not_found';
+    }
+    /**
+     * Creates a task file from a JSON step configuration
+     */
+    generateTaskFileContent(step, projectName, projectPath, projectId, initialGoal, userJourney) {
+        const processedPrompts = step.prompts.map((prompt) => prompt
+            .replace(/\{PROJECT_NAME\}/g, projectName)
+            .replace(/\{PROJECT_ID\}/g, projectId)
+            .replace(/\{PROJECT_PATH\}/g, projectPath)
+            .replace(/\{INITIAL_GOAL\}/g, initialGoal || 'See project specifications')
+            .replace(/\{USER_JOURNEY\}/g, userJourney || 'See project specifications'));
+        const taskContent = `---
+targetRole: ${step.targetRole}
+stepId: ${step.id}
+delayMinutes: ${step.delayMinutes}
+conditional: ${step.conditional || 'none'}
+verification: ${JSON.stringify(step.verification, null, 2)}
+---
+
+# ${step.name}
+
+## Objective
+${processedPrompts[0] || step.name}
+
+## Detailed Instructions
+${processedPrompts.slice(1).join('\n\n')}
+
+## Acceptance Criteria
+- [ ] Task completed according to verification criteria
+- [ ] All deliverables created and validated
+- [ ] Task moved to 'done' folder upon completion
+
+## Dependencies
+${step.conditional !== 'none' ? `- Previous step must be completed: ${step.conditional}` : '- None'}
+
+## Verification
+\`\`\`json
+${JSON.stringify(step.verification, null, 2)}
+\`\`\`
+
+## Notes
+- Move this file to 'in_progress/' folder when starting work
+- Move to 'done/' folder when completed
+- Move to 'blocked/' folder if unable to proceed (include block reason)
+`;
+        return taskContent;
+    }
+}
+//# sourceMappingURL=task-folder.service.js.map

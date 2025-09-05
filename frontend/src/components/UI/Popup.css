@@ -1,0 +1,188 @@
+/* Popup Component Styles - Enhanced Modal */
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+  gap: var(--spacing-md);
+}
+
+.modal-header-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+}
+
+.modal-subtitle {
+  margin: var(--spacing-xs) 0 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.modal-close-btn {
+  flex-shrink: 0;
+  margin-top: -4px; /* Optical alignment */
+}
+
+/* Modal Body - Content area */
+.modal-body {
+  padding: var(--spacing-lg);
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(90vh - 200px); /* Account for header and footer */
+}
+
+/* Modal Footer - Outside body, inside content */
+.modal-footer {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-lg);
+  border-top: 1px solid var(--color-border);
+  background-color: var(--color-background-muted, #f9fafb);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.modal-footer--left {
+  justify-content: flex-start;
+}
+
+.modal-footer--center {
+  justify-content: center;
+}
+
+.modal-footer--right {
+  justify-content: flex-end;
+}
+
+.modal-footer--space-between {
+  justify-content: space-between;
+}
+
+/* Loading states */
+.modal-loading {
+  position: relative;
+}
+
+.modal-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  z-index: 10;
+}
+
+.modal-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-border-light);
+  border-top: 3px solid var(--color-primary);
+  border-radius: 50%;
+  animation: modal-spin 1s linear infinite;
+}
+
+@keyframes modal-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Popup message styling */
+.popup-message {
+  font-size: var(--text-base);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+}
+
+.popup-message p {
+  margin: 0 0 var(--spacing-md) 0;
+}
+
+.popup-message p:last-child {
+  margin-bottom: 0;
+}
+
+/* Enhanced modal content structure */
+.modal-content {
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  background: var(--color-background, #ffffff);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  border: 1px solid var(--color-border);
+  position: relative;
+}
+
+/* Responsive design */
+@media (max-width: 640px) {
+  .modal-content {
+    margin: var(--spacing-md);
+    max-height: calc(100vh - 2rem);
+    width: calc(100vw - 2rem);
+  }
+  
+  .modal-header,
+  .modal-body,
+  .modal-footer {
+    padding: var(--spacing-md);
+  }
+  
+  .modal-title {
+    font-size: var(--text-lg);
+  }
+  
+  .modal-footer {
+    flex-direction: column;
+  }
+  
+  .modal-footer--space-between {
+    flex-direction: column-reverse;
+  }
+  
+  .modal-footer--right {
+    align-items: stretch;
+  }
+}
+
+/* Focus management */
+.modal-content:focus {
+  outline: none;
+}
+
+/* Accessibility improvements */
+@media (prefers-reduced-motion: reduce) {
+  .modal-spinner {
+    animation: none;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .modal-header,
+  .modal-footer {
+    border-color: ButtonText;
+  }
+  
+  .modal-loading-overlay {
+    background-color: Canvas;
+    border: 1px solid ButtonText;
+  }
+}
