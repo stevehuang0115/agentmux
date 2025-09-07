@@ -375,7 +375,10 @@ export const Dashboard: React.FC = () => {
                     'font-medium',
                     selectedMember.status === 'working' ? 'text-green-600' :
                     selectedMember.status === 'blocked' ? 'text-yellow-600' :
-                    selectedMember.status === 'terminated' ? 'text-red-600' : 'text-gray-600'
+                    selectedMember.status === 'terminated' ? 'text-red-600' :
+                    selectedMember.status === 'ready' ? 'text-green-600' :
+                    selectedMember.status === 'activating' ? 'text-orange-600' :
+                    selectedMember.status === 'active' ? 'text-emerald-600' : 'text-gray-600'
                   )}>{selectedMember.status}</span></span>
                 </div>
               </div>

@@ -166,43 +166,55 @@ describe('TmuxService - Orchestration Features', () => {
       const result = await tmuxService.initializeOrchestrator('agentmux-orc', 5000);
 
       expect(result.success).toBe(true);
-      expect(result.message).toBe('Orchestrator initialized with Claude successfully');
+      expect(result.message).toBe('Agent registered successfully via direct prompt');
     });
 
-    test('should handle Claude initialization timeout', async () => {
-      // Mock session exists but Claude never becomes ready
-      mockSpawn
-        .mockImplementationOnce(() => {
-          // sessionExists check - session exists
-          const mockProcess = {
-            stdout: { on: jest.fn() },
-            stderr: { on: jest.fn() },
-            on: jest.fn((event, callback) => {
-              if (event === 'close') setTimeout(() => callback(0), 10);
-            })
-          } as any;
-          return mockProcess;
-        })
-        .mockImplementation(() => {
-          // Subsequent calls - no Claude ready signal
-          const mockProcess = {
-            stdout: { on: jest.fn((event, callback) => {
-              if (event === 'data') {
-                setTimeout(() => callback('bash prompt'), 10);
+    test('should handle Claude initialization with robust escalation', async () => {
+      // Mock fs/promises for orchestrator status check
+      const mockFsPromises = {
+        readFile: jest.fn().mockResolvedValue(JSON.stringify({
+          orchestrator: { status: 'active', sessionId: 'agentmux-orc' },
+          teams: []
+        }))
+      };
+      jest.doMock('fs/promises', () => mockFsPromises);
+
+      // Mock comprehensive tmux commands for the robust escalation system
+      let captureCallCount = 0;
+      mockSpawn.mockImplementation((cmd, args) => {
+        const mockProcess = {
+          stdout: { on: jest.fn((event, callback) => {
+            if (event === 'data') {
+              const fullCmd = `${cmd} ${args?.join(' ') || ''}`;
+              if (fullCmd.includes('capture-pane')) {
+                captureCallCount++;
+                // First call (before /): shorter output
+                // Second call (after /): longer output to indicate Claude responded
+                if (captureCallCount === 1) {
+                  setTimeout(() => callback('$ '), 10);
+                } else {
+                  setTimeout(() => callback('$ /\n> command palette opened\n$ '), 10);
+                }
+              } else if (fullCmd.includes('has-session')) {
+                // Session exists
+                setTimeout(() => callback(''), 10);
+              } else {
+                setTimeout(() => callback(''), 10);
               }
-            })},
-            stderr: { on: jest.fn() },
-            on: jest.fn((event, callback) => {
-              if (event === 'close') setTimeout(() => callback(0), 10);
-            })
-          } as any;
-          return mockProcess;
-        });
+            }
+          })},
+          stderr: { on: jest.fn() },
+          on: jest.fn((event, callback) => {
+            if (event === 'close') setTimeout(() => callback(0), 10);
+          })
+        } as any;
+        return mockProcess;
+      });
 
-      const result = await tmuxService.initializeOrchestrator('agentmux-orc', 1000); // Short timeout
+      const result = await tmuxService.initializeOrchestrator('agentmux-orc', 30000);
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Timeout waiting for Claude to initialize');
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Agent registered successfully');
     });
 
     test('should handle missing session during initialization', async () => {
@@ -221,43 +233,48 @@ describe('TmuxService - Orchestration Features', () => {
       const result = await tmuxService.initializeOrchestrator('nonexistent-session');
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Session \'nonexistent-session\' does not exist');
+      expect(result.error).toContain('Failed to initialize agent');
     });
 
     test('should detect Claude initialization errors', async () => {
-      // Mock session exists but Claude command fails
-      mockSpawn
-        .mockImplementationOnce(() => {
-          // sessionExists check - session exists
-          const mockProcess = {
-            stdout: { on: jest.fn() },
-            stderr: { on: jest.fn() },
-            on: jest.fn((event, callback) => {
-              if (event === 'close') setTimeout(() => callback(0), 10);
-            })
-          } as any;
-          return mockProcess;
-        })
-        .mockImplementation(() => {
-          // Subsequent calls - Claude command not found
-          const mockProcess = {
-            stdout: { on: jest.fn((event, callback) => {
-              if (event === 'data') {
-                setTimeout(() => callback('command not found: claude'), 10);
+      // Mock session exists but Claude is never detected
+      let callCount = 0;
+      mockSpawn.mockImplementation((cmd, args) => {
+        callCount++;
+        const mockProcess = {
+          stdout: { on: jest.fn((event, callback) => {
+            if (event === 'data') {
+              const fullCmd = `${cmd} ${args?.join(' ') || ''}`;
+              if (fullCmd.includes('has-session')) {
+                // Session exists
+                setTimeout(() => callback(''), 10);
+              } else if (fullCmd.includes('capture-pane') || fullCmd.includes('send-keys')) {
+                // All attempts to detect Claude fail - no change in terminal output
+                setTimeout(() => callback('$ '), 10); // Just shell prompt, no Claude response
+              } else {
+                setTimeout(() => callback(''), 10);
               }
-            })},
-            stderr: { on: jest.fn() },
-            on: jest.fn((event, callback) => {
-              if (event === 'close') setTimeout(() => callback(0), 10);
-            })
-          } as any;
-          return mockProcess;
-        });
+            }
+          })},
+          stderr: { on: jest.fn() },
+          on: jest.fn((event, callback) => {
+            if (event === 'close') {
+              const fullCmd = `${cmd} ${args?.join(' ') || ''}`;
+              if (fullCmd.includes('has-session')) {
+                setTimeout(() => callback(0), 10); // Session exists
+              } else {
+                setTimeout(() => callback(0), 10); // Commands execute but Claude never detected
+              }
+            }
+          })
+        } as any;
+        return mockProcess;
+      });
 
-      const result = await tmuxService.initializeOrchestrator('agentmux-orc', 3000);
+      const result = await tmuxService.initializeOrchestrator('agentmux-orc', 1000); // Very short timeout
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Timeout waiting for Claude to initialize');
+      expect(result.error).toContain('Failed to initialize agent');
     });
   });
 
@@ -378,12 +395,14 @@ describe('TmuxService - Orchestration Features', () => {
 
       expect(result.success).toBe(true);
       
-      // Verify that spawn was called with send-keys command containing project details
-      expect(mockSpawn).toHaveBeenCalledWith('tmux', expect.arrayContaining(['send-keys']));
+      // Verify that spawn was called with send-keys command containing project details (bash wrapper format)
+      expect(mockSpawn).toHaveBeenCalledWith('bash', expect.arrayContaining(['-c', expect.stringContaining('send-keys')]));
       
-      // The second call should contain the prompt
+      // Find the call that contains the prompt (bash wrapper format)
       const sendKeysCall = mockSpawn.mock.calls.find(call => 
-        call[1].includes('send-keys') && call[1].join(' ').includes('## Project: E-commerce Platform')
+        call[0] === 'bash' && 
+        call[1] && call[1][0] === '-c' &&
+        call[1][1] && call[1][1].includes('send-keys') && call[1][1].includes('## Project: E-commerce Platform')
       );
       expect(sendKeysCall).toBeDefined();
     });

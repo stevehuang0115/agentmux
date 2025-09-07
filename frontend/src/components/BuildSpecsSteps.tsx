@@ -69,10 +69,10 @@ export const BuildSpecsSteps: React.FC<BuildSpecsStepsExtendedProps> = ({ buildS
     fetchSpecsStatus();
     loadBuildSpecConfig();
     
-    // Set up polling to check for file changes every 10 seconds
+    // Set up polling to check for file changes every 30 seconds (reduced frequency)
     const interval = setInterval(() => {
       fetchSpecsStatus();
-    }, 10000);
+    }, 30000);
     
     return () => clearInterval(interval);
   }, [projectId]);

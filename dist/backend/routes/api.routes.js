@@ -4,13 +4,21 @@ export function createApiRoutes(apiController) {
     // Team Management Routes
     router.post('/teams', (req, res) => apiController.createTeam(req, res));
     router.get('/teams', (req, res) => apiController.getTeams(req, res));
+    router.get('/teams/activity-check', (req, res) => apiController.getTeamActivityStatus(req, res));
     router.get('/teams/:id', (req, res) => apiController.getTeam(req, res));
     router.post('/teams/:id/start', (req, res) => apiController.startTeam(req, res));
     router.post('/teams/:id/stop', (req, res) => apiController.stopTeam(req, res));
     router.get('/teams/:teamId/members/:memberId/session', (req, res) => apiController.getTeamMemberSession(req, res));
+    router.post('/teams/:id/members', (req, res) => apiController.addTeamMember(req, res));
+    router.patch('/teams/:teamId/members/:memberId', (req, res) => apiController.updateTeamMember(req, res));
+    router.delete('/teams/:teamId/members/:memberId', (req, res) => apiController.deleteTeamMember(req, res));
+    router.post('/teams/:teamId/members/:memberId/start', (req, res) => apiController.startTeamMember(req, res));
+    router.post('/teams/:teamId/members/:memberId/stop', (req, res) => apiController.stopTeamMember(req, res));
     router.get('/teams/:id/workload', (req, res) => apiController.getTeamWorkload(req, res));
     router.patch('/teams/:id/status', (req, res) => apiController.updateTeamStatus(req, res));
     router.delete('/teams/:id', (req, res) => apiController.deleteTeam(req, res));
+    router.post('/team-members/report-ready', (req, res) => apiController.reportMemberReady(req, res));
+    router.post('/team-members/register-status', (req, res) => apiController.registerMemberStatus(req, res));
     // Project Management Routes
     router.post('/projects', (req, res) => apiController.createProject(req, res));
     router.get('/projects', (req, res) => apiController.getProjects(req, res));
@@ -25,6 +33,7 @@ export function createApiRoutes(apiController) {
     router.get('/projects/:projectId/file-content', (req, res) => apiController.getFileContent(req, res));
     router.get('/projects/:id/completion', (req, res) => apiController.getProjectCompletion(req, res));
     router.delete('/projects/:id', (req, res) => apiController.deleteProject(req, res));
+    router.post('/projects/:projectId/assign-task', (req, res) => apiController.assignTaskToOrchestrator(req, res));
     // Project Detail View Routes
     router.get('/projects/:id/stats', (req, res) => apiController.getProjectStats(req, res));
     router.get('/projects/:id/specs-status', (req, res) => apiController.getProjectSpecsStatus(req, res));
@@ -106,6 +115,7 @@ export function createApiRoutes(apiController) {
     router.get('/assignments', (req, res) => apiController.getAssignments(req, res));
     router.patch('/assignments/:id', (req, res) => apiController.updateAssignment(req, res));
     // Orchestrator Routes
+    router.post('/orchestrator/setup', (req, res) => apiController.setupOrchestrator(req, res));
     router.get('/orchestrator/commands', (req, res) => apiController.getOrchestratorCommands(req, res));
     router.post('/orchestrator/execute', (req, res) => apiController.executeOrchestratorCommand(req, res));
     router.post('/orchestrator/send-message', (req, res) => apiController.sendOrchestratorMessage(req, res));

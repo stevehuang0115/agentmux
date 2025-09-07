@@ -9,6 +9,7 @@ export declare class ApiController {
     private taskTrackingService;
     private taskFolderService;
     private activeProjectsService;
+    private promptTemplateService;
     constructor(storageService: StorageService, tmuxService: TmuxService, schedulerService: SchedulerService, messageSchedulerService?: MessageSchedulerService | undefined);
     createTeam(req: Request, res: Response): Promise<void>;
     getTeams(req: Request, res: Response): Promise<void>;
@@ -19,6 +20,11 @@ export declare class ApiController {
     getTeamWorkload(req: Request, res: Response): Promise<void>;
     deleteTeam(req: Request, res: Response): Promise<void>;
     getTeamMemberSession(req: Request, res: Response): Promise<void>;
+    addTeamMember(req: Request, res: Response): Promise<void>;
+    updateTeamMember(req: Request, res: Response): Promise<void>;
+    deleteTeamMember(req: Request, res: Response): Promise<void>;
+    startTeamMember(req: Request, res: Response): Promise<void>;
+    stopTeamMember(req: Request, res: Response): Promise<void>;
     getAlignmentStatus(req: Request, res: Response): Promise<void>;
     continueWithMisalignment(req: Request, res: Response): Promise<void>;
     getBuildSpecConfig(req: Request, res: Response): Promise<void>;
@@ -64,6 +70,10 @@ export declare class ApiController {
     executeOrchestratorCommand(req: Request, res: Response): Promise<void>;
     sendOrchestratorMessage(req: Request, res: Response): Promise<void>;
     sendOrchestratorEnter(req: Request, res: Response): Promise<void>;
+    setupOrchestrator(req: Request, res: Response): Promise<void>;
+    private buildOrchestratorSystemPrompt;
+    private waitForOrchestratorRegistration;
+    private checkAgentRegistrationStatus;
     createTicket(req: Request, res: Response): Promise<void>;
     getTickets(req: Request, res: Response): Promise<void>;
     getTicket(req: Request, res: Response): Promise<void>;
@@ -127,5 +137,13 @@ export declare class ApiController {
     getMilestones(req: Request, res: Response): Promise<void>;
     getTasksByStatus(req: Request, res: Response): Promise<void>;
     getTasksByMilestone(req: Request, res: Response): Promise<void>;
+    getOrchestratorStatus(req: Request, res: Response): Promise<void>;
+    getTeamActivityStatus(req: Request, res: Response): Promise<void>;
+    assignTaskToOrchestrator(req: Request, res: Response): Promise<void>;
+    reportMemberReady(req: Request, res: Response): Promise<void>;
+    /**
+     * Register member status (simple active registration)
+     */
+    registerMemberStatus(req: Request, res: Response): Promise<void>;
 }
 //# sourceMappingURL=api.controller.d.ts.map

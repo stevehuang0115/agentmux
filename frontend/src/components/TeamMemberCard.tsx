@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Edit2, Trash2, Save, X } from 'lucide-react';
+import { User, Edit2, Trash2, Save, X, Play, Square } from 'lucide-react';
 import { TeamMember } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
 
@@ -7,15 +7,23 @@ interface TeamMemberCardProps {
   member: TeamMember;
   onUpdate: (memberId: string, updates: Partial<TeamMember>) => void;
   onDelete: (memberId: string) => void;
+  onStart?: (memberId: string) => Promise<void>;
+  onStop?: (memberId: string) => Promise<void>;
+  teamId?: string;
 }
 
 export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({ 
   member, 
   onUpdate, 
-  onDelete 
+  onDelete,
+  onStart,
+  onStop,
+  teamId
 }) => {
   const { openTerminalWithSession } = useTerminal();
   const [isEditing, setIsEditing] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [editForm, setEditForm] = useState({
     name: member.name,
     role: member.role
@@ -48,13 +56,81 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'working': return '#10b981'; // green
-      case 'idle': return '#f59e0b'; // amber
-      case 'error': return '#ef4444'; // red
-      default: return '#6b7280'; // gray
+  const handleStart = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    if (!onStart || !teamId) return;
+    
+    if (window.confirm(`Start ${member.name}?\n\nThis will:\n• Create a tmux session for this team member\n• Initialize Claude Code in the session\n• Set member status to "activating"`)) {
+      setIsStarting(true);
+      try {
+        await onStart(member.id);
+      } finally {
+        setIsStarting(false);
+      }
     }
+  };
+
+  const handleStop = async (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent card click
+    if (!onStop || !teamId) return;
+    
+    if (window.confirm(`Stop ${member.name}?\n\nThis will:\n• Terminate the tmux session\n• Set member status to "idle"`)) {
+      setIsStopping(true);
+      try {
+        await onStop(member.id);
+      } finally {
+        setIsStopping(false);
+      }
+    }
+  };
+
+  const getOverallStatus = () => {
+    // Use agentStatus if available, otherwise fall back to status
+    const agentStatus: string = member.agentStatus || member.status;
+    const workingStatus = member.workingStatus;
+    
+    // ACTIVATING - blue (prioritize agentStatus over sessionName)
+    if (agentStatus === 'activating') {
+      return {
+        status: 'ACTIVATING', 
+        color: '#3b82f6',
+        shouldAnimate: false
+      };
+    }
+    
+    // ACTIVE and IN_PROGRESS - green flashing
+    if (agentStatus === 'active' && workingStatus === 'in_progress') {
+      return {
+        status: 'IN_PROGRESS',
+        color: '#10b981', 
+        shouldAnimate: true
+      };
+    }
+    
+    // ACTIVE but IDLE - green static
+    if (agentStatus === 'active' && (workingStatus === 'idle' || !workingStatus)) {
+      return {
+        status: 'IDLE',
+        color: '#10b981',
+        shouldAnimate: false
+      };
+    }
+    
+    // INACTIVE (inactive status or no session) - grey
+    if (agentStatus === 'inactive' || member.status === 'terminated' || (!member.sessionName && agentStatus !== 'activating')) {
+      return {
+        status: 'INACTIVE',
+        color: '#9ca3af',
+        shouldAnimate: false
+      };
+    }
+    
+    // Default fallback
+    return {
+      status: 'INACTIVE',
+      color: '#9ca3af',
+      shouldAnimate: false
+    };
   };
 
   const handleMemberClick = () => {
@@ -76,6 +152,22 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   };
 
   const isClickable = member.sessionName && !isEditing;
+  
+  // Show Stop button when member is activating or active (priority over start button)
+  const shouldShowStopButton = 
+    onStop && 
+    teamId && 
+    (member.agentStatus === 'activating' || member.agentStatus === 'active' || 
+     member.status === 'activating' || member.status === 'active') && 
+    !isEditing;
+
+  // Show Start button for inactive agents (but not if stop button should show)
+  const shouldShowStartButton = 
+    onStart && 
+    teamId && 
+    !shouldShowStopButton && 
+    (member.agentStatus === 'inactive' || member.status === 'idle' || member.status === 'terminated') && 
+    !isEditing;
 
   return (
     <div 
@@ -101,13 +193,22 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
                 className="member-name-input"
                 placeholder="Member name"
               />
-              <input
-                type="text"
+              <select
                 value={editForm.role}
                 onChange={(e) => setEditForm({ ...editForm, role: e.target.value as TeamMember['role'] })}
                 className="member-role-input"
-                placeholder="Member role"
-              />
+              >
+                <option value="">Select a role...</option>
+                <option value="orchestrator">Orchestrator</option>
+                <option value="tpm">Technical Product Manager</option>
+                <option value="pgm">Program Manager</option>
+                <option value="developer">Developer</option>
+                <option value="frontend-developer">Frontend Developer</option>
+                <option value="backend-developer">Backend Developer</option>
+                <option value="qa">QA Engineer</option>
+                <option value="tester">Test Engineer</option>
+                <option value="designer">Designer</option>
+              </select>
             </div>
           ) : (
             <>
@@ -136,6 +237,26 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
             </div>
           ) : (
             <div className="member-controls">
+              {shouldShowStartButton && (
+                <button 
+                  onClick={handleStart}
+                  className="action-btn start-btn"
+                  title="Start this team member"
+                  disabled={isStarting}
+                >
+                  <Play size={16} />
+                </button>
+              )}
+              {shouldShowStopButton && (
+                <button 
+                  onClick={handleStop}
+                  className="action-btn stop-btn"
+                  title="Stop this team member"
+                  disabled={isStopping}
+                >
+                  <Square size={16} />
+                </button>
+              )}
               <button 
                 onClick={handleEdit}
                 className="action-btn edit-btn"
@@ -159,39 +280,39 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
         <div className="member-status-row">
           <div className="status-item">
             <span className="status-label">Status:</span>
-            <span 
-              className="status-badge"
-              style={{ 
-                backgroundColor: getStatusColor(member.status),
-                color: 'white',
-                padding: '2px 8px',
-                borderRadius: '12px',
-                fontSize: '12px',
-                fontWeight: '500'
-              }}
-            >
-              {member.status}
-            </span>
-          </div>
-          <div className="status-item">
-            <span className="status-label">Session:</span>
-            <div 
-              className={`session-indicator ${member.sessionName ? 'active' : 'inactive'}`}
-              title={getSessionStatusTitle(member.sessionName)}
-            >
-              <div className="session-dot"></div>
-              {member.sessionName && <span className="session-label">Active</span>}
+            <div className="status-circle-container">
+              <div 
+                className={`status-circle ${getOverallStatus().shouldAnimate ? 'pulsing' : ''}`}
+                style={{ 
+                  backgroundColor: getOverallStatus().color,
+                  width: '12px',
+                  height: '12px',
+                  borderRadius: '50%',
+                  display: 'inline-block',
+                  marginRight: '6px',
+                  animation: getOverallStatus().shouldAnimate ? 'pulse-status 2s infinite' : 'none'
+                }}
+              />
+              <span className="status-text">{getOverallStatus().status}</span>
             </div>
           </div>
         </div>
         
         <div className="member-meta">
           <div className="meta-item">
-            <span className="meta-label">Last Activity:</span>
+            <span className="meta-label">Last Update:</span>
             <span className="meta-value">
               {new Date(member.updatedAt).toLocaleString()}
             </span>
           </div>
+          {member.lastActivityCheck && (
+            <div className="meta-item">
+              <span className="meta-label">Activity Check:</span>
+              <span className="meta-value">
+                {new Date(member.lastActivityCheck).toLocaleString()}
+              </span>
+            </div>
+          )}
           {member.sessionName && (
             <div className="meta-item">
               <span className="meta-label">Session:</span>

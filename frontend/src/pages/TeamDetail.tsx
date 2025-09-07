@@ -6,7 +6,9 @@ import { TeamMemberCard } from '../components/TeamMemberCard';
 import { useTerminal } from '../contexts/TerminalContext';
 import { Button } from '../components/UI/Button';
 import { StartTeamModal } from '../components/StartTeamModal';
+import { ScoreCard, ScoreCardGrid } from '../components/UI/ScoreCard';
 import { safeParseJSON } from '../utils/api';
+import '../components/UI/ScoreCard.css';
 
 interface Terminal {
   id: string;
@@ -24,12 +26,12 @@ export const TeamDetail: React.FC = () => {
   const [selectedTerminal, setSelectedTerminal] = useState<string>('');
   const [terminalOutput, setTerminalOutput] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'settings'>('overview');
   const [showAddMember, setShowAddMember] = useState(false);
   const [newMember, setNewMember] = useState({ name: '', role: '' });
   const [orchestratorSessionActive, setOrchestratorSessionActive] = useState(false);
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
+  const [projectName, setProjectName] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) {
@@ -41,6 +43,14 @@ export const TeamDetail: React.FC = () => {
       }
     }
   }, [id, team?.name]);
+
+  useEffect(() => {
+    if (team?.currentProject) {
+      fetchProjectName(team.currentProject);
+    } else {
+      setProjectName(null);
+    }
+  }, [team?.currentProject]);
 
   useEffect(() => {
     if (selectedTerminal) {
@@ -115,6 +125,23 @@ export const TeamDetail: React.FC = () => {
     } catch (error) {
       console.error('Error checking orchestrator session:', error);
       setOrchestratorSessionActive(false);
+    }
+  };
+
+  const fetchProjectName = async (projectId: string) => {
+    try {
+      const response = await fetch('/api/projects');
+      if (response.ok) {
+        const result = await response.json();
+        const projectsData = result.success ? (result.data || []) : (result || []);
+        const project = projectsData.find((p: any) => p.id === projectId);
+        setProjectName(project ? project.name : projectId);
+      } else {
+        setProjectName(projectId);
+      }
+    } catch (error) {
+      console.error('Error fetching project name:', error);
+      setProjectName(projectId);
     }
   };
 
@@ -236,32 +263,37 @@ export const TeamDetail: React.FC = () => {
   const renderCombinedOverviewTab = () => (
     <div className="tab-content">
       {/* Team Stats Section */}
-      <div className="team-stats-horizontal">
-        <div className="stat-card">
-          <div className="stat-label">Team Status</div>
-          <div className="stat-value">
-            <span className={`status-badge status-${getTeamStatus()}`}>
-              {getTeamStatus()?.toUpperCase()}
-            </span>
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Active Members</div>
-          <div className="stat-value stat-number">
+      <ScoreCardGrid variant="horizontal">
+        <ScoreCard 
+          label="Team Status" 
+          variant="horizontal"
+        >
+          <span className={`status-badge status-${getTeamStatus()}`}>
+            {getTeamStatus()?.toUpperCase()}
+          </span>
+        </ScoreCard>
+        
+        <ScoreCard 
+          label="Active Members" 
+          variant="horizontal"
+        >
+          <span className="score-card__value--number">
             {team?.members?.filter(m => m.sessionName).length || 0} / {team?.members?.length || 0}
-          </div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Project</div>
-          <div className="stat-value">{team?.currentProject || 'None'}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Created</div>
-          <div className="stat-value">
-            {team?.createdAt ? new Date(team.createdAt).toLocaleDateString() : 'N/A'}
-          </div>
-        </div>
-      </div>
+          </span>
+        </ScoreCard>
+        
+        <ScoreCard 
+          label="Project" 
+          value={projectName || 'None'}
+          variant="horizontal"
+        />
+        
+        <ScoreCard 
+          label="Created" 
+          value={team?.createdAt ? new Date(team.createdAt).toLocaleDateString() : 'N/A'}
+          variant="horizontal"
+        />
+      </ScoreCardGrid>
 
       {/* Team Description Section */}
       {team?.description && (
@@ -330,6 +362,9 @@ export const TeamDetail: React.FC = () => {
               member={member}
               onUpdate={handleUpdateMember}
               onDelete={handleDeleteMember}
+              onStart={handleStartMember}
+              onStop={handleStopMember}
+              teamId={id}
             />
           ))}
           
@@ -412,96 +447,55 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
+  const handleStartMember = async (memberId: string) => {
+    try {
+      const response = await fetch(`/api/teams/${id}/members/${memberId}/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-  const renderTerminalsTab = () => (
-    <div className="tab-content">
-      <div className="terminals-section">
-        <div className="terminals-sidebar">
-          <h3>Active Terminals</h3>
-          <div className="terminals-list">
-            {terminals.map((terminal) => (
-              <div
-                key={terminal.id}
-                className={`terminal-item ${selectedTerminal === terminal.id ? 'active' : ''}`}
-                onClick={() => setSelectedTerminal(terminal.id)}
-              >
-                <div className="terminal-name">{terminal.name}</div>
-                <div className={`terminal-status status-${terminal.status}`}>
-                  {terminal.status}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      const result = await response.json();
 
-        <div className="terminal-viewer">
-          {selectedTerminal ? (
-            <>
-              <div className="terminal-header">
-                <h3>{terminals.find(t => t.id === selectedTerminal)?.name}</h3>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={fetchTerminalOutput}
-                >
-                  Refresh
-                </Button>
-              </div>
-              <div className="terminal-output">
-                <pre>{terminalOutput || 'No output available'}</pre>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">
-              <p>Select a terminal to view its output</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+      if (response.ok) {
+        // Refresh team data to show updated status
+        fetchTeamData();
+        console.log(`Member ${memberId} started successfully`);
+      } else {
+        alert(result.error || 'Failed to start team member');
+      }
+    } catch (error) {
+      console.error('Error starting team member:', error);
+      alert('Error starting team member. Please try again.');
+    }
+  };
 
-  const renderSettingsTab = () => (
-    <div className="tab-content">
-      <div className="settings-section">
-        <h3>Team Settings</h3>
-        <div className="settings-form">
-          <div className="form-group">
-            <label>Maximum Agents</label>
-            <input
-              type="number"
-              value={team?.members?.length || 3}
-              min="1"
-              max="10"
-              disabled
-            />
-          </div>
-          
-          <div className="form-group">
-            <label>Team Status</label>
-            <select value={team?.status || 'inactive'} disabled>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
-        </div>
+  const handleStopMember = async (memberId: string) => {
+    try {
+      const response = await fetch(`/api/teams/${id}/members/${memberId}/stop`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-        {/* Hide delete section for Orchestrator Team */}
-        {!(team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') && (
-          <div className="danger-zone">
-            <h4>Danger Zone</h4>
-            <p className="danger-description">
-              Deleting a team will permanently remove all team data, stop all tmux sessions, and cannot be undone.
-            </p>
-            <Button variant="danger" onClick={handleDeleteTeam}>
-              Delete Team
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+      const result = await response.json();
+
+      if (response.ok) {
+        // Refresh team data to show updated status
+        fetchTeamData();
+        console.log(`Member ${memberId} stopped successfully`);
+      } else {
+        alert(result.error || 'Failed to stop team member');
+      }
+    } catch (error) {
+      console.error('Error stopping team member:', error);
+      alert('Error stopping team member. Please try again.');
+    }
+  };
+
+
 
   if (loading) {
     return (
@@ -527,16 +521,8 @@ export const TeamDetail: React.FC = () => {
       <div className="page-header">
         <div className="header-info">
           <h1 className="page-title">{team.name}</h1>
-          <p className="page-description">
-            Team with {team.members?.length || 0} member{team.members?.length !== 1 ? 's' : ''}
-            {team.currentProject ? ` • Working on project` : ` • Available for assignment`}
-          </p>
         </div>
         <div className="header-controls">
-          <span className={`status-badge status-${team.status}`}>
-            {team.status.toUpperCase()}
-          </span>
-          
           {/* Team action buttons in header */}
           {getTeamStatus() === 'idle' ? (
             <Button variant="success" onClick={handleStartTeam}>
@@ -554,30 +540,18 @@ export const TeamDetail: React.FC = () => {
               View Terminal
             </Button>
           )}
+          
+          {/* Delete Team button - hide for Orchestrator Team */}
+          {!(team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') && (
+            <Button variant="danger" onClick={handleDeleteTeam}>
+              Delete Team
+            </Button>
+          )}
         </div>
       </div>
 
-      <div className="tabs-container">
-        <div className="tabs-nav">
-          {[
-            { key: 'overview', label: 'Overview' },
-            { key: 'settings', label: 'Settings' }
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              className={`tab-button ${activeTab === tab.key ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.key as any)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="tabs-content">
-          {activeTab === 'overview' && renderCombinedOverviewTab()}
-          {activeTab === 'settings' && renderSettingsTab()}
-        </div>
-      </div>
+      {/* Overview Content */}
+      {renderCombinedOverviewTab()}
 
       {/* Start Team Modal */}
       <StartTeamModal

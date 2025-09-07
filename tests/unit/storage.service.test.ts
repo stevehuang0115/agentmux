@@ -47,6 +47,8 @@ describe('StorageService', () => {
             role: 'developer',
             systemPrompt: 'Test prompt',
             status: 'idle',
+            agentStatus: 'inactive',
+            workingStatus: 'idle',
             createdAt: '2023-01-01T00:00:00.000Z',
             updatedAt: '2023-01-01T00:00:00.000Z',
           }
@@ -64,8 +66,14 @@ describe('StorageService', () => {
 
       expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
         path.join(testHome, 'teams.json'),
-        JSON.stringify([testTeam], null, 2)
+        expect.stringContaining('"teams"')
       );
+      
+      // Verify the content structure has teams array and orchestrator
+      const writeCall = mockFsPromises.writeFile.mock.calls[0];
+      const savedData = JSON.parse(writeCall[1] as string);
+      expect(savedData.teams).toEqual([testTeam]);
+      expect(savedData.orchestrator).toBeDefined();
     });
 
     test('should update team status', async () => {
@@ -79,15 +87,19 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify([existingTeam]));
+      const initialData = {
+        teams: [existingTeam],
+        orchestrator: { sessionId: 'agentmux-orc', status: 'activating', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+      };
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(initialData));
       mockFsPromises.writeFile.mockResolvedValue(undefined);
 
       await storageService.updateTeamStatus('test-id', 'working');
 
       expect(mockFsPromises.writeFile).toHaveBeenCalled();
       const writeCall = mockFsPromises.writeFile.mock.calls[0];
-      const updatedTeams = JSON.parse(writeCall[1]);
-      expect(updatedTeams[0].status).toBe('working');
+      const updatedData = JSON.parse(writeCall[1]);
+      expect(updatedData.teams[0].status).toBe('working');
     });
   });
 

@@ -5,7 +5,7 @@ export declare class TeamModel implements Team {
     description?: string;
     members: TeamMember[];
     currentProject?: string;
-    status: 'idle' | 'working' | 'blocked' | 'terminated';
+    status: Team['status'];
     createdAt: string;
     updatedAt: string;
     constructor(data: Partial<Team>);

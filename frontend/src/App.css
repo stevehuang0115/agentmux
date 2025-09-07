@@ -6,6 +6,76 @@
 @import './components/UI/Toggle.css';
 @import './components/UI/Popup.css';
 
+/* Orchestrator Status Banner Styles */
+.orchestrator-status-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 20px;
+  transition: all 0.3s ease;
+}
+
+.orchestrator-status-banner.warning {
+  background-color: #fef3c7;
+  border-color: #f59e0b;
+  color: #92400e;
+}
+
+.orchestrator-status-banner.error {
+  background-color: #fee2e2;
+  border-color: #ef4444;
+  color: #dc2626;
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.banner-icon {
+  flex-shrink: 0;
+}
+
+.banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.banner-title {
+  font-weight: 600;
+  margin: 0;
+}
+
+.banner-message {
+  font-size: 13px;
+  opacity: 0.8;
+  margin: 0;
+}
+
+.banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.refresh-btn.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Build Specs Steps Component Styles - Horizontal Layout */
 .build-specs-steps-horizontal {
 	margin-top: 2rem;
@@ -1154,6 +1224,28 @@ body {
 
 .status-dot--idle {
 	background: var(--color-text-muted);
+}
+
+.status-dot--activating {
+	background: var(--color-warning);
+	animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-dot--active {
+	background: var(--color-success);
+}
+
+.status-dot--ready {
+	background: #10b981; /* Slightly softer green than active */
+}
+
+@keyframes pulse {
+	0%, 100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.6;
+	}
 }
 
 .session-indicator {
@@ -6002,6 +6094,23 @@ body {
 	background: var(--color-error);
 }
 
+.assigned-team-card .status-dot--terminated {
+	background: var(--color-text-muted);
+}
+
+.assigned-team-card .status-dot--ready {
+	background: #10b981;
+}
+
+.assigned-team-card .status-dot--activating {
+	background: var(--color-warning);
+	animation: pulse 1.5s ease-in-out infinite;
+}
+
+.assigned-team-card .status-dot--active {
+	background: var(--color-success);
+}
+
 .assigned-team-card .status-text {
 	font-size: 0.75rem;
 	font-weight: 500;
@@ -6178,6 +6287,18 @@ body {
 	border-color: var(--color-primary);
 	background: var(--color-primary-light);
 	color: var(--color-primary);
+}
+
+.team-member-card .start-btn:hover {
+	border-color: var(--color-success);
+	background: #dcfce7;
+	color: var(--color-success);
+}
+
+.team-member-card .start-btn:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	background: var(--color-surface);
 }
 
 .team-member-card .delete-btn:hover {
@@ -6394,8 +6515,54 @@ body {
 }
 
 .members-list {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 1rem;
+}
+
+@media (max-width: 768px) {
+	.members-list {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* Status circle styles */
+.status-circle-container {
 	display: flex;
-	flex-direction: column;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.status-circle {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+	display: inline-block;
+	transition: all 0.2s ease;
+}
+
+.status-circle.pulsing {
+	animation: pulse-status 2s infinite;
+	box-shadow: 0 0 6px currentColor;
+}
+
+.status-text {
+	font-size: 0.875rem;
+	font-weight: 500;
+	color: var(--color-text-primary);
+	text-transform: uppercase;
+	letter-spacing: 0.025em;
+}
+
+@keyframes pulse-status {
+	0%, 100% {
+		opacity: 1;
+		transform: scale(1);
+	}
+	50% {
+		opacity: 0.7;
+		transform: scale(1.1);
+	}
 }
 
 /* Button styles update for green Start Team button */

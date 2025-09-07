@@ -52,7 +52,11 @@ export async function startCommand(options: StartOptions) {
     console.log(chalk.blue('⏳ Waiting for servers to initialize...'));
     await waitForServer(webPort);
 
-    // 6. Open browser to dashboard
+    // 6. Setup orchestrator session
+    console.log(chalk.blue('🎯 Setting up orchestrator session...'));
+    await setupOrchestratorSession(webPort);
+
+    // 7. Open browser to dashboard
     if (openBrowser) {
       console.log(chalk.blue('🌐 Opening dashboard...'));
       await open(`http://localhost:${webPort}`);
@@ -65,7 +69,7 @@ export async function startCommand(options: StartOptions) {
     console.log('');
     console.log(chalk.yellow('Press Ctrl+C to stop all services'));
 
-    // 7. Monitor for shutdown signals
+    // 8. Monitor for shutdown signals
     setupShutdownHandlers([backendProcess, mcpProcess]);
 
     // Keep process alive
@@ -74,6 +78,24 @@ export async function startCommand(options: StartOptions) {
   } catch (error) {
     console.error(chalk.red('❌ Failed to start AgentMux:'), error instanceof Error ? error.message : error);
     process.exit(1);
+  }
+}
+
+async function setupOrchestratorSession(webPort: number): Promise<void> {
+  try {
+    // Call the backend API to setup orchestrator session
+    const response = await axios.post(`http://localhost:${webPort}/api/orchestrator/setup`, {}, {
+      timeout: 30000 // 30 second timeout for setup
+    });
+
+    if (response.data.success) {
+      console.log(chalk.green('✅ Orchestrator session ready'));
+    } else {
+      console.log(chalk.yellow(`⚠️  Orchestrator setup warning: ${response.data.message || 'Unknown issue'}`));
+    }
+  } catch (error) {
+    console.log(chalk.yellow('⚠️  Could not setup orchestrator session - it will be created when needed'));
+    console.log(chalk.gray(`   Error: ${error instanceof Error ? error.message : 'Unknown error'}`));
   }
 }
 
@@ -158,10 +180,13 @@ async function startMCPServer(mcpPort: number): Promise<ChildProcess> {
   
   const env = {
     ...process.env,
-    MCP_PORT: mcpPort.toString()
+    MCP_PORT: mcpPort.toString(),
+    PROJECT_PATH: projectRoot,
+    TMUX_SESSION_NAME: 'mcp-server',
+    AGENT_ROLE: 'orchestrator'
   };
 
-  const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/index.js')], {
+  const mcpProcess = spawn('node', [path.join(projectRoot, 'mcp-server/mcp-http-server.js')], {
     env,
     stdio: 'pipe',
     detached: false,

@@ -153,7 +153,7 @@ npx agentmux start
 3. **Configure Claude Code MCP settings:**
 
 ```bash
-claude mcp add --transport http agentmux http://localhost:3001/mcp
+claude mcp add --transport http agentmux http://localhost:3001/mcp --scope user
 ```
 
 Create or update your Claude Code configuration file (`~/.claude-code/config.json`):

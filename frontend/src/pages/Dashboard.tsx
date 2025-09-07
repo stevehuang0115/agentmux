@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
 import { TeamCard } from '@/components/Cards/TeamCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
+import { ScoreCard, ScoreCardGrid } from '@/components/UI/ScoreCard';
 import { Team, Project, ApiResponse } from '@/types';
 import axios from 'axios';
 import { FolderOpen, Users, ArrowRight } from 'lucide-react';
+import '@/components/UI/ScoreCard.css';
 
 const API_BASE = '/api';
 
@@ -81,31 +83,31 @@ export const Dashboard: React.FC = () => {
 
       {/* Quick Stats */}
       <section className="dashboard-stats">
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-value">{projects.length}</div>
-            <div className="stat-label">Projects</div>
-          </div>
+        <ScoreCardGrid variant="dashboard">
+          <ScoreCard 
+            label="Projects" 
+            value={projects.length}
+            variant="dashboard"
+          />
           
-          <div className="stat-card">
-            <div className="stat-value">{teams.length}</div>
-            <div className="stat-label">Teams</div>
-          </div>
+          <ScoreCard 
+            label="Teams" 
+            value={teams.length}
+            variant="dashboard"
+          />
           
-          <div className="stat-card">
-            <div className="stat-value">
-              {teams.filter(t => t.status === 'working').length}
-            </div>
-            <div className="stat-label">Working</div>
-          </div>
+          <ScoreCard 
+            label="Working" 
+            value={teams.filter(t => t.status === 'working').length}
+            variant="dashboard"
+          />
           
-          <div className="stat-card">
-            <div className="stat-value">
-              {projects.filter(p => p.status === 'active').length}
-            </div>
-            <div className="stat-label">Running</div>
-          </div>
-        </div>
+          <ScoreCard 
+            label="Running" 
+            value={projects.filter(p => p.status === 'active').length}
+            variant="dashboard"
+          />
+        </ScoreCardGrid>
       </section>
 
       {/* Projects Section */}

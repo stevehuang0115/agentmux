@@ -165,7 +165,7 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
     if (autoRefresh) {
       const interval = setInterval(() => {
         fetchSessionData();
-      }, 5000); // Refresh every 5 seconds
+      }, 15000); // Refresh every 15 seconds (reduced frequency)
       setRefreshInterval(interval);
     } else {
       if (refreshInterval) {
@@ -235,7 +235,10 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
       idle: '#6b7280',
       working: '#10b981',
       blocked: '#ef4444',
-      terminated: '#9ca3af'
+      terminated: '#9ca3af',
+      ready: '#10b981',
+      activating: '#f59e0b', // Orange for activating state
+      active: '#059669' // Bright green for active state
     };
     return statusColors[status] || '#6b7280';
   };

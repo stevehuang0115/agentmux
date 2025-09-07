@@ -3,10 +3,15 @@ export interface TeamMember {
   id: string;
   name: string;
   sessionName: string; // tmux session name
-  role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'qa' | 'tester' | 'designer';
+  role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'qa' | 'tester' | 'designer';
   systemPrompt: string;
-  status: 'idle' | 'working' | 'blocked' | 'terminated';
+  status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active'; // Legacy field for backward compatibility
+  agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
+  workingStatus: 'idle' | 'in_progress'; // Activity level status
   currentTickets?: string[];
+  readyAt?: string; // ISO timestamp when agent reported ready
+  capabilities?: string[]; // Agent-reported capabilities
+  lastActivityCheck?: string; // ISO timestamp of last activity monitoring
   createdAt: string;
   updatedAt: string;
 }
@@ -17,7 +22,7 @@ export interface Team {
   description?: string;
   members: TeamMember[];
   currentProject?: string;
-  status: 'idle' | 'working' | 'blocked' | 'terminated';
+  status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active';
   createdAt: string;
   updatedAt: string;
 }
@@ -28,7 +33,7 @@ export interface UITeam {
   name: string;
   project: string;
   members: number;
-  status: 'idle' | 'working' | 'blocked' | 'terminated';
+  status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active';
   lastActivity: string;
   description?: string;
 }

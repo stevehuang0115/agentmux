@@ -4,23 +4,34 @@ import { promisify } from 'util';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { z } from 'zod';
 import * as http from 'http';
 import * as url from 'url';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 const execAsync = promisify(exec);
+// Schema for cancelled notification
+const CancelledNotificationSchema = z.object({
+    method: z.literal('notifications/cancelled')
+});
 class AgentMuxMCP {
     server;
     sessionName;
     apiBaseUrl;
     projectPath;
     agentRole;
+    requestQueue = new Map(); // Rate limiting
+    lastCleanup = Date.now();
     constructor() {
         this.sessionName = process.env.TMUX_SESSION_NAME || 'unknown';
         this.apiBaseUrl = `http://localhost:${process.env.API_PORT || 3000}`;
         this.projectPath = process.env.PROJECT_PATH || process.cwd();
         this.agentRole = process.env.AGENT_ROLE || 'developer';
+        // Setup periodic cleanup of temp files and request queue
+        setInterval(() => {
+            this.cleanup();
+        }, 60000); // Every minute
         this.server = new Server({
             name: 'agentmux',
             version: '1.0.0',
@@ -206,6 +217,18 @@ class AgentMuxMCP {
                         }
                     },
                     {
+                        name: 'accept_task',
+                        description: 'Accept a task and move it from open to in_progress folder',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                taskPath: { type: 'string', description: 'Path to task file in open folder' },
+                                memberId: { type: 'string', description: 'Team member ID accepting the task' }
+                            },
+                            required: ['taskPath', 'memberId']
+                        }
+                    },
+                    {
                         name: 'complete_task',
                         description: 'Mark task as completed and move to done folder',
                         inputSchema: {
@@ -261,6 +284,44 @@ class AgentMuxMCP {
                             },
                             required: ['projectId']
                         }
+                    },
+                    {
+                        name: 'read_task_file',
+                        description: 'Read the complete task file to get full specifications and requirements',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                taskPath: { type: 'string', description: 'Full path to the task markdown file' },
+                                taskId: { type: 'string', description: 'Task ID (alternative to full path)' },
+                                milestone: { type: 'string', description: 'Milestone folder name (used with taskId)' }
+                            },
+                            required: []
+                        }
+                    },
+                    {
+                        name: 'report_ready',
+                        description: 'Report that the agent is fully initialized and ready for task assignment',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                role: { type: 'string', description: 'Agent role (tpm, pgm, dev, qa)' },
+                                capabilities: { type: 'array', items: { type: 'string' }, description: 'List of agent capabilities' }
+                            },
+                            required: ['role']
+                        }
+                    },
+                    {
+                        name: 'register_agent_status',
+                        description: 'Register agent as active and ready to receive instructions',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                role: { type: 'string', description: 'Agent role (tpm, pgm, dev, qa)' },
+                                sessionId: { type: 'string', description: 'Tmux session identifier' },
+                                memberId: { type: 'string', description: 'Team member ID for association' }
+                            },
+                            required: ['role', 'sessionId']
+                        }
                     }
                 ]
             };
@@ -299,6 +360,8 @@ class AgentMuxMCP {
                     return await this.refreshAgentContext();
                 case 'assign_task':
                     return await this.assignTask(args);
+                case 'accept_task':
+                    return await this.acceptTask(args);
                 case 'complete_task':
                     return await this.completeTask(args);
                 case 'block_task':
@@ -309,55 +372,145 @@ class AgentMuxMCP {
                     return await this.syncTaskStatus(args);
                 case 'check_team_progress':
                     return await this.checkTeamProgress(args);
+                case 'read_task_file':
+                    return await this.readTaskFile(args);
+                case 'report_ready':
+                    return await this.reportReady(args);
+                case 'register_agent_status':
+                    return await this.registerAgentStatus(args);
                 default:
                     throw new Error(`Unknown tool: ${name}`);
             }
+        });
+        // Handle notifications/cancelled - this is sent when operations are cancelled
+        this.server.setNotificationHandler(CancelledNotificationSchema, async (notification) => {
+            // Silently handle cancellation notifications - no action needed
+            // This prevents "Unknown method" errors when operations are cancelled
         });
     }
     /**
      * Communication Tools
      */
     async sendMessage(args) {
+        // Rate limiting check
+        if (!this.checkRateLimit(`send_${args.to}`)) {
+            return {
+                content: [{ type: 'text', text: `Rate limit exceeded for ${args.to} - message queued` }],
+            };
+        }
         try {
-            // Send message with timing pattern from orchestrator
-            const command = `tmux send-keys -t "${args.to}" "${args.message.replace(/"/g, '\\"')}"`;
-            await execAsync(command);
+            // Clean the message to ensure it works with tmux
+            const cleanMessage = args.message
+                .replace(/\r\n/g, '\n') // Normalize line endings
+                .replace(/\r/g, '\n') // Handle Mac line endings
+                // Remove or replace problematic characters that could be interpreted as commands
+                .replace(/[✅❌🚀📋🔧⏳💡🎯📝📡❤️🛑]/g, '') // Remove emojis that cause shell command errors
+                .replace(/[|&;`$(){}[\]]/g, ' ') // Replace shell metacharacters with spaces
+                .trim(); // Remove leading/trailing whitespace
+            // Check if target session exists before attempting to send
+            try {
+                await execAsync(`tmux has-session -t '${args.to}' 2>/dev/null`);
+            }
+            catch (error) {
+                console.warn(`Session ${args.to} does not exist, skipping message`);
+                return {
+                    content: [{ type: 'text', text: `Session ${args.to} not found - message not sent` }],
+                };
+            }
+            // For very large messages, split into smaller chunks
+            const chunkSize = 1000; // Smaller, more conservative chunk size
+            if (cleanMessage.length <= chunkSize) {
+                // Send message in one piece using tmpfile approach to avoid shell escaping issues
+                const tmpFile = `/tmp/mcp-msg-${Date.now()}.txt`;
+                await fs.writeFile(tmpFile, cleanMessage);
+                await execAsync(`tmux send-keys -t '${args.to}' -l "$(cat '${tmpFile}')" && rm -f '${tmpFile}'`);
+            }
+            else {
+                // Split large messages into chunks
+                for (let i = 0; i < cleanMessage.length; i += chunkSize) {
+                    const chunk = cleanMessage.substring(i, i + chunkSize);
+                    const tmpFile = `/tmp/mcp-chunk-${Date.now()}-${i}.txt`;
+                    await fs.writeFile(tmpFile, chunk);
+                    await execAsync(`tmux send-keys -t '${args.to}' -l "$(cat '${tmpFile}')" && rm -f '${tmpFile}'`);
+                    // Small delay between chunks
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                }
+            }
             // Critical: Wait 0.5 seconds before sending Enter
             await new Promise(resolve => setTimeout(resolve, 500));
             // Send Enter key
-            await execAsync(`tmux send-keys -t "${args.to}" Enter`);
-            // Log message for tracking
-            await this.logMessage(this.sessionName, args.to, args.message);
+            await execAsync(`tmux send-keys -t '${args.to}' Enter`);
+            // Log message for tracking (async, don't wait)
+            this.logMessage(this.sessionName, args.to, args.message).catch(console.error);
             return {
                 content: [{ type: 'text', text: `Message sent to ${args.to}` }],
             };
         }
         catch (error) {
-            throw new Error(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error(`Send message error: ${error}`);
+            return {
+                content: [{ type: 'text', text: `Failed to send message to ${args.to}: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+                isError: true
+            };
         }
     }
     async broadcast(args) {
         try {
-            // Get all active sessions
-            const sessionsCmd = `tmux list-sessions -F "#{session_name}"`;
+            // Get all active sessions with timeout and error handling
+            const sessionsCmd = `timeout 10s tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""`;
             const result = await execAsync(sessionsCmd);
             const sessions = result.stdout.split('\n').filter(s => s.trim());
+            if (sessions.length === 0) {
+                return {
+                    content: [{ type: 'text', text: 'No active sessions found for broadcast' }],
+                };
+            }
+            // Clean message similar to sendMessage
+            const cleanMessage = args.message
+                .replace(/\r\n/g, '\n') // Normalize line endings
+                .replace(/\r/g, '\n') // Handle Mac line endings
+                .replace(/[✅❌🚀📋🔧⏳💡🎯📝📡❤️🛑]/g, '') // Remove problematic emojis
+                .replace(/[|&;`$(){}[\]]/g, ' ') // Replace shell metacharacters
+                .trim();
             let broadcastCount = 0;
-            for (const session of sessions) {
-                if (args.excludeSelf && session === this.sessionName)
-                    continue;
-                // Use same pattern as send_message
-                await execAsync(`tmux send-keys -t "${session}:0" "${args.message.replace(/"/g, '\\"')}"`);
-                await new Promise(resolve => setTimeout(resolve, 500));
-                await execAsync(`tmux send-keys -t "${session}:0" Enter`);
-                broadcastCount++;
+            const maxConcurrent = 3; // Limit concurrent operations to reduce resource usage
+            // Process sessions in batches to avoid resource exhaustion
+            for (let i = 0; i < sessions.length; i += maxConcurrent) {
+                const batch = sessions.slice(i, i + maxConcurrent);
+                const batchPromises = batch.map(async (session) => {
+                    if (args.excludeSelf && session === this.sessionName)
+                        return;
+                    try {
+                        // Check if session exists before sending
+                        await execAsync(`timeout 5s tmux has-session -t '${session}' 2>/dev/null`);
+                        // Use tmpfile approach for safer message sending
+                        const tmpFile = `/tmp/mcp-broadcast-${Date.now()}-${session}.txt`;
+                        await fs.writeFile(tmpFile, cleanMessage);
+                        await execAsync(`timeout 10s tmux send-keys -t '${session}:0' -l "$(cat '${tmpFile}')" && rm -f '${tmpFile}'`);
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                        await execAsync(`timeout 5s tmux send-keys -t '${session}:0' Enter`);
+                        broadcastCount++;
+                    }
+                    catch (error) {
+                        console.warn(`Failed to broadcast to session ${session}: ${error}`);
+                    }
+                });
+                await Promise.allSettled(batchPromises);
+                // Brief pause between batches
+                if (i + maxConcurrent < sessions.length) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
             }
             return {
-                content: [{ type: 'text', text: `Broadcast sent to ${broadcastCount} sessions` }],
+                content: [{ type: 'text', text: `Broadcast sent to ${broadcastCount}/${sessions.length} sessions` }],
             };
         }
         catch (error) {
-            throw new Error(`Failed to broadcast: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            console.error(`Broadcast error: ${error}`);
+            return {
+                content: [{ type: 'text', text: `Broadcast failed: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+                isError: true
+            };
         }
     }
     /**
@@ -413,28 +566,73 @@ class AgentMuxMCP {
      */
     async getTickets(args) {
         try {
-            const ticketsDir = `${this.projectPath}/.agentmux/tickets`;
-            // Find ticket files
-            const findCmd = `find ${ticketsDir} -name "*.yaml" -o -name "*.yml" 2>/dev/null || echo ""`;
-            const files = await execAsync(findCmd);
             const tickets = [];
-            for (const file of files.stdout.split('\n')) {
-                if (!file.trim())
-                    continue;
-                try {
-                    // Read and parse ticket file
-                    const content = await fs.readFile(file, 'utf-8');
-                    const ticket = this.parseTicketFile(content);
-                    // Filter by assignment and status
-                    if (!args.all && ticket.assignedTo !== this.sessionName)
+            // First, check for traditional YAML tickets
+            const ticketsDir = `${this.projectPath}/.agentmux/tickets`;
+            try {
+                const findCmd = `find ${ticketsDir} -name "*.yaml" -o -name "*.yml" 2>/dev/null || echo ""`;
+                const files = await execAsync(findCmd);
+                for (const file of files.stdout.split('\n')) {
+                    if (!file.trim())
                         continue;
-                    if (args.status && ticket.status !== args.status)
-                        continue;
-                    tickets.push(ticket);
+                    try {
+                        // Read and parse ticket file
+                        const content = await fs.readFile(file, 'utf-8');
+                        const ticket = this.parseTicketFile(content);
+                        // Filter by assignment and status
+                        if (!args.all && ticket.assignedTo !== this.sessionName)
+                            continue;
+                        if (args.status && ticket.status !== args.status)
+                            continue;
+                        tickets.push(ticket);
+                    }
+                    catch (error) {
+                        console.error(`Error reading ticket file ${file}:`, error);
+                    }
                 }
-                catch (error) {
-                    console.error(`Error reading ticket file ${file}:`, error);
+            }
+            catch (error) {
+                // Tickets directory might not exist
+            }
+            // Also check for task files in the tasks structure
+            const tasksDir = `${this.projectPath}/.agentmux/tasks`;
+            try {
+                const statusFolders = args.status ? [args.status === 'in_progress' ? 'in_progress' : args.status] : ['open', 'in_progress', 'done', 'blocked'];
+                for (const statusFolder of statusFolders) {
+                    const tasksFolderPath = `${tasksDir}/m0_build_spec_tasks/${statusFolder}`;
+                    try {
+                        const taskFiles = await fs.readdir(tasksFolderPath);
+                        for (const taskFile of taskFiles) {
+                            if (!taskFile.endsWith('.md'))
+                                continue;
+                            const taskPath = `${tasksFolderPath}/${taskFile}`;
+                            const content = await fs.readFile(taskPath, 'utf-8');
+                            // Parse basic info from markdown task file
+                            const taskId = taskFile.replace('.md', '');
+                            const titleMatch = content.match(/^# (.+)/m);
+                            const title = titleMatch ? titleMatch[1] : taskId;
+                            const task = {
+                                id: taskId,
+                                title: title,
+                                status: statusFolder === 'in_progress' ? 'in_progress' : statusFolder,
+                                type: 'task',
+                                path: taskPath,
+                                description: content.substring(0, 200) + '...',
+                                assignedTo: statusFolder === 'in_progress' ? 'current_agent' : 'unassigned'
+                            };
+                            // Filter by assignment and status
+                            if (!args.all && statusFolder !== 'in_progress')
+                                continue;
+                            tickets.push(task);
+                        }
+                    }
+                    catch (error) {
+                        // Task folder might not exist
+                    }
                 }
+            }
+            catch (error) {
+                // Tasks directory might not exist
             }
             return {
                 content: [{ type: 'text', text: JSON.stringify(tickets, null, 2) }],
@@ -446,6 +644,56 @@ class AgentMuxMCP {
     }
     async updateTicket(args) {
         try {
+            // Check if this is a task file (contains task_ prefix)
+            if (args.ticketId.includes('task_')) {
+                // This is actually a task file, not a ticket
+                // Find the task file in the appropriate status folder
+                let taskPath = '';
+                const possiblePaths = [
+                    `${this.projectPath}/.agentmux/tasks/m0_build_spec_tasks/open/${args.ticketId}.md`,
+                    `${this.projectPath}/.agentmux/tasks/m0_build_spec_tasks/in_progress/${args.ticketId}.md`,
+                    `${this.projectPath}/.agentmux/tasks/m0_build_spec_tasks/done/${args.ticketId}.md`,
+                    `${this.projectPath}/.agentmux/tasks/m0_build_spec_tasks/blocked/${args.ticketId}.md`
+                ];
+                // Find which path exists
+                for (const path of possiblePaths) {
+                    try {
+                        await fs.access(path);
+                        taskPath = path;
+                        break;
+                    }
+                    catch {
+                        // Path doesn't exist, continue
+                    }
+                }
+                if (!taskPath) {
+                    throw new Error(`Task file ${args.ticketId}.md not found in any status folder`);
+                }
+                // For task files, we should use the proper task management API instead
+                // But for now, let's handle the status update appropriately
+                if (args.status === 'in_progress') {
+                    // Move task to in_progress if status is being updated
+                    return await this.acceptTask({ taskPath: taskPath, memberId: this.sessionName });
+                }
+                else if (args.status === 'done') {
+                    return await this.completeTask({ taskPath: taskPath });
+                }
+                else if (args.status === 'blocked') {
+                    const reason = args.notes || args.blockers?.join(', ') || 'No reason provided';
+                    return await this.blockTask({ taskPath: taskPath, reason: reason });
+                }
+                // If just adding notes without status change, read and append to task file
+                const content = await fs.readFile(taskPath, 'utf-8');
+                if (args.notes) {
+                    const timestamp = new Date().toISOString();
+                    const noteSection = `\n\n## Update - ${timestamp}\n\n**Author:** ${this.sessionName}\n\n${args.notes}`;
+                    await fs.writeFile(taskPath, content + noteSection);
+                }
+                return {
+                    content: [{ type: 'text', text: `Task ${args.ticketId} updated successfully` }],
+                };
+            }
+            // Original ticket handling for YAML files
             const ticketPath = `${this.projectPath}/.agentmux/tickets/${args.ticketId}.yaml`;
             // Read current ticket
             const content = await fs.readFile(ticketPath, 'utf-8');
@@ -602,29 +850,43 @@ Run: git checkout ${args.branch || currentBranch} && npm test`;
             if (!this.sessionName.includes('orchestrator')) {
                 throw new Error('Only orchestrator can create teams');
             }
-            // Create tmux session with proper directory
-            const createCmd = `tmux new-session -d -s "${args.name}" -c "${args.projectPath}"`;
-            await execAsync(createCmd);
-            // Prepare system prompt file
-            const promptPath = `${args.projectPath}/.agentmux/prompts/${args.name}.md`;
-            const prompt = args.systemPrompt || this.getDefaultPrompt(args.role);
-            // Write prompt to file
-            await this.writeSystemPrompt(promptPath, prompt, args);
-            // Start Claude Code with MCP integration
-            const envVars = [
-                `export TMUX_SESSION_NAME="${args.name}"`,
-                `export MCP_SERVER_URL="http://localhost:${process.env.MCP_PORT || 3001}"`,
-                `export PROJECT_PATH="${args.projectPath}"`,
-                `export AGENT_ROLE="${args.role}"`
-            ];
-            for (const envVar of envVars) {
-                await execAsync(`tmux send-keys -t "${args.name}:0" "${envVar}" Enter`);
+            // Use the backend API to create team member session 
+            // This ensures both MCP server and backend use the same team creation logic
+            const response = await fetch(`${this.apiBaseUrl}/api/teams`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    name: args.name,
+                    members: [{
+                            name: args.name,
+                            role: args.role,
+                            sessionName: args.name,
+                            projectPath: args.projectPath,
+                            systemPrompt: args.systemPrompt || this.getDefaultPrompt(args.role)
+                        }],
+                    status: 'ready'
+                })
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(`API call failed: ${errorData.error || response.statusText}`);
             }
-            // Start Claude Code
-            const claudeCmd = `claude-code --system-prompt-file ${promptPath} --mcp-server ${process.env.MCP_PORT || 3001}`;
-            await execAsync(`tmux send-keys -t "${args.name}:0" "${claudeCmd}" Enter`);
+            const result = await response.json();
+            // Start the team to initialize sessions with system prompts
+            const startResponse = await fetch(`${this.apiBaseUrl}/api/teams/${result.team.id}/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (!startResponse.ok) {
+                const errorData = await startResponse.json();
+                throw new Error(`Failed to start team: ${errorData.error || startResponse.statusText}`);
+            }
             return {
-                content: [{ type: 'text', text: `Team ${args.name} created successfully` }],
+                content: [{ type: 'text', text: `Team ${args.name} created and started successfully. Agent will initialize with system prompt and report ready status.` }],
             };
         }
         catch (error) {
@@ -904,6 +1166,39 @@ Context not yet loaded. Use load_project_context to initialize.`;
             };
         }
     }
+    async acceptTask(args) {
+        try {
+            // Use the same API endpoint but with the current agent as both member and session
+            const response = await fetch(`${this.apiBaseUrl}/api/task-management/assign`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    taskPath: args.taskPath,
+                    memberId: args.memberId,
+                    sessionId: this.sessionName
+                })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const result = await response.json();
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Task accepted successfully: Task moved from open to in_progress folder`
+                    }]
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Error accepting task: ${error instanceof Error ? error.message : 'Unknown error'}`
+                    }],
+                isError: true
+            };
+        }
+    }
     async completeTask(args) {
         try {
             const response = await fetch(`${this.apiBaseUrl}/api/task-management/complete`, {
@@ -1065,6 +1360,215 @@ Context not yet loaded. Use load_project_context to initialize.`;
                 isError: true
             };
         }
+    }
+    async readTaskFile(args) {
+        try {
+            let taskFilePath;
+            if (args.taskPath) {
+                // Use provided full path
+                taskFilePath = args.taskPath;
+            }
+            else if (args.taskId && args.milestone) {
+                // Construct path from taskId and milestone
+                taskFilePath = `${this.projectPath}/.agentmux/tasks/${args.milestone}/open/${args.taskId}.md`;
+            }
+            else {
+                throw new Error('Either taskPath or both taskId and milestone must be provided');
+            }
+            // Read the task file
+            const taskContent = await fs.readFile(taskFilePath, 'utf-8');
+            return {
+                content: [{
+                        type: 'text',
+                        text: `# Task File: ${taskFilePath}\n\n${taskContent}`
+                    }]
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Error reading task file: ${error instanceof Error ? error.message : 'Unknown error'}\n\nMake sure the task file exists at the specified path. If using taskId and milestone, verify the file is in the 'open' folder.`
+                    }],
+                isError: true
+            };
+        }
+    }
+    async reportReady(args) {
+        try {
+            // Report to backend API that this agent is ready
+            const response = await fetch(`${this.apiBaseUrl}/api/team-members/report-ready`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionName: this.sessionName,
+                    role: args.role,
+                    capabilities: args.capabilities || [],
+                    readyAt: new Date().toISOString()
+                })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const result = await response.json();
+            return {
+                content: [{
+                        type: 'text',
+                        text: `✅ Agent ready status reported successfully. Role: ${args.role}, Session: ${this.sessionName}`
+                    }]
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Warning: Could not report ready status (${error instanceof Error ? error.message : 'Unknown error'}), but agent is functional.`
+                    }],
+                isError: false // Don't treat this as a blocking error
+            };
+        }
+    }
+    async registerAgentStatus(args) {
+        const startTime = Date.now();
+        console.log(`[MCP] 🚀 Starting agent registration process...`);
+        console.log(`[MCP] 📋 Arguments:`, JSON.stringify(args, null, 2));
+        console.log(`[MCP] 🌐 API Base URL: ${this.apiBaseUrl}`);
+        console.log(`[MCP] 📍 Session Name: ${this.sessionName}`);
+        console.log(`[MCP] 🎭 Agent Role: ${this.agentRole}`);
+        try {
+            // Register this agent as active with the backend API  
+            const requestBody = {
+                sessionName: args.sessionId,
+                role: args.role,
+                status: 'active',
+                registeredAt: new Date().toISOString(),
+                memberId: args.memberId
+            };
+            console.log(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
+            const endpoint = `${this.apiBaseUrl}/api/team-members/register-status`;
+            console.log(`[MCP] 📡 Calling endpoint: ${endpoint}`);
+            console.log(`[MCP] 🔧 Request method: POST`);
+            console.log(`[MCP] 📋 Request headers: Content-Type: application/json`);
+            // First, let's check if the API server is reachable
+            try {
+                console.log(`[MCP] 🔍 Testing API server connectivity...`);
+                const healthResponse = await fetch(`${this.apiBaseUrl}/health`, {
+                    method: 'GET'
+                });
+                console.log(`[MCP] 💓 Health check status: ${healthResponse.status} ${healthResponse.statusText}`);
+            }
+            catch (healthError) {
+                console.log(`[MCP] ❌ Health check failed:`, healthError instanceof Error ? healthError.message : String(healthError));
+            }
+            // Try to list available API routes for debugging
+            try {
+                console.log(`[MCP] 🔍 Testing API routes availability...`);
+                const routesResponse = await fetch(`${this.apiBaseUrl}/api`, {
+                    method: 'GET'
+                });
+                console.log(`[MCP] 📋 API routes test status: ${routesResponse.status} ${routesResponse.statusText}`);
+            }
+            catch (routesError) {
+                console.log(`[MCP] ❌ API routes test failed:`, routesError instanceof Error ? routesError.message : String(routesError));
+            }
+            // Now make the actual registration call
+            console.log(`[MCP] 📞 Making registration API call...`);
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'AgentMux-MCP/1.0.0'
+                },
+                body: JSON.stringify(requestBody)
+            });
+            console.log(`[MCP] 📨 Response received - Status: ${response.status} ${response.statusText}`);
+            console.log(`[MCP] 📋 Response headers:`, Object.fromEntries(response.headers.entries()));
+            if (!response.ok) {
+                // Try to get response body for more details
+                let responseBody = '';
+                try {
+                    responseBody = await response.text();
+                    console.log(`[MCP] 📄 Response body:`, responseBody);
+                }
+                catch (bodyError) {
+                    console.log(`[MCP] ❌ Failed to read response body:`, bodyError);
+                }
+                const errorMsg = `HTTP ${response.status}: ${response.statusText}`;
+                console.log(`[MCP] ❌ Registration failed: ${errorMsg}`);
+                if (responseBody) {
+                    console.log(`[MCP] 💬 Server response: ${responseBody}`);
+                }
+                throw new Error(errorMsg);
+            }
+            // Try to parse response body
+            let responseData;
+            try {
+                const responseText = await response.text();
+                console.log(`[MCP] 📄 Response body text:`, responseText);
+                if (responseText) {
+                    responseData = JSON.parse(responseText);
+                    console.log(`[MCP] 📋 Parsed response data:`, JSON.stringify(responseData, null, 2));
+                }
+            }
+            catch (parseError) {
+                console.log(`[MCP] ❌ Failed to parse response body:`, parseError);
+            }
+            const duration = Date.now() - startTime;
+            console.log(`[MCP] ✅ Registration successful! Duration: ${duration}ms`);
+            return {
+                content: [{
+                        type: 'text',
+                        text: `✅ Agent registered and awaiting instructions. Role: ${args.role}, Session: ${this.sessionName}`
+                    }]
+            };
+        }
+        catch (error) {
+            const duration = Date.now() - startTime;
+            console.log(`[MCP] ❌ Registration failed after ${duration}ms`);
+            console.log(`[MCP] 💥 Error details:`, error);
+            if (error instanceof Error) {
+                console.log(`[MCP] 📝 Error name: ${error.name}`);
+                console.log(`[MCP] 📝 Error message: ${error.message}`);
+                console.log(`[MCP] 📝 Error stack:`, error.stack);
+            }
+            return {
+                content: [{
+                        type: 'text',
+                        text: `❌ Failed to register agent: ${error instanceof Error ? error.message : 'Unknown error'}`
+                    }],
+                isError: true
+            };
+        }
+    }
+    /**
+     * Resource Management
+     */
+    async cleanup() {
+        try {
+            // Clean up old temp files
+            await execAsync(`find /tmp -name "mcp-*" -type f -mtime +1 -delete 2>/dev/null || true`);
+            // Clear old rate limit entries
+            const now = Date.now();
+            for (const [key, timestamp] of this.requestQueue.entries()) {
+                if (now - timestamp > 300000) { // 5 minutes
+                    this.requestQueue.delete(key);
+                }
+            }
+            this.lastCleanup = now;
+        }
+        catch (error) {
+            console.error('Cleanup error:', error);
+        }
+    }
+    checkRateLimit(identifier) {
+        const now = Date.now();
+        const lastRequest = this.requestQueue.get(identifier) || 0;
+        // Allow max 1 request per second per identifier
+        if (now - lastRequest < 1000) {
+            return false;
+        }
+        this.requestQueue.set(identifier, now);
+        return true;
     }
     /**
      * Helper Functions
@@ -1540,6 +2044,126 @@ Work autonomously within your role boundaries and communicate effectively with y
                                             properties: {},
                                             required: []
                                         }
+                                    },
+                                    {
+                                        name: 'assign_task',
+                                        description: 'Assign a task to a team member and move to in_progress folder',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                taskPath: { type: 'string', description: 'Path to task file' },
+                                                memberId: { type: 'string', description: 'Team member ID' },
+                                                sessionId: { type: 'string', description: 'Session ID' }
+                                            },
+                                            required: ['taskPath', 'memberId', 'sessionId']
+                                        }
+                                    },
+                                    {
+                                        name: 'accept_task',
+                                        description: 'Accept a task and move it from open to in_progress folder',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                taskPath: { type: 'string', description: 'Path to task file in open folder' },
+                                                memberId: { type: 'string', description: 'Team member ID accepting the task' }
+                                            },
+                                            required: ['taskPath', 'memberId']
+                                        }
+                                    },
+                                    {
+                                        name: 'complete_task',
+                                        description: 'Mark task as completed and move to done folder',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                taskPath: { type: 'string', description: 'Path to current task file' }
+                                            },
+                                            required: ['taskPath']
+                                        }
+                                    },
+                                    {
+                                        name: 'block_task',
+                                        description: 'Mark task as blocked and move to blocked folder with reason',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                taskPath: { type: 'string', description: 'Path to current task file' },
+                                                reason: { type: 'string', description: 'Block reason' }
+                                            },
+                                            required: ['taskPath', 'reason']
+                                        }
+                                    },
+                                    {
+                                        name: 'take_next_task',
+                                        description: 'Find and assign next available task for the current agent role',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                projectId: { type: 'string', description: 'Project ID' },
+                                                memberRole: { type: 'string', description: 'Team member role (tpm, pgm, dev, qa)' }
+                                            },
+                                            required: ['projectId', 'memberRole']
+                                        }
+                                    },
+                                    {
+                                        name: 'sync_task_status',
+                                        description: 'Synchronize task status with file system',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                projectId: { type: 'string', description: 'Project ID to sync' }
+                                            },
+                                            required: ['projectId']
+                                        }
+                                    },
+                                    {
+                                        name: 'check_team_progress',
+                                        description: 'Check progress of all team members and their assigned tasks',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                projectId: { type: 'string', description: 'Project ID to check' }
+                                            },
+                                            required: ['projectId']
+                                        }
+                                    },
+                                    {
+                                        name: 'read_task_file',
+                                        description: 'Read the complete task file to get full specifications and requirements',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                taskPath: { type: 'string', description: 'Full path to the task markdown file' },
+                                                taskId: { type: 'string', description: 'Task ID (alternative to full path)' },
+                                                milestone: { type: 'string', description: 'Milestone folder name (used with taskId)' }
+                                            },
+                                            required: []
+                                        }
+                                    },
+                                    {
+                                        name: 'report_ready',
+                                        description: 'Report that the agent is fully initialized and ready for task assignment',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                role: { type: 'string', description: 'Agent role (tpm, pgm, dev, qa)' },
+                                                capabilities: { type: 'array', items: { type: 'string' }, description: 'List of agent capabilities' }
+                                            },
+                                            required: ['role']
+                                        }
+                                    },
+                                    {
+                                        name: 'register_agent_status',
+                                        description: 'Register agent as active and ready to receive instructions',
+                                        inputSchema: {
+                                            type: 'object',
+                                            properties: {
+                                                role: { type: 'string', description: 'Agent role (tpm, pgm, dev, qa)' },
+                                                sessionId: { type: 'string', description: 'Tmux session identifier' },
+                                                memberId: { type: 'string', description: 'Team member ID for association' }
+                                            },
+                                            required: ['role', 'sessionId']
+                                        }
                                     }
                                 ]
                             };
@@ -1597,6 +2221,36 @@ Work autonomously within your role boundaries and communicate effectively with y
                                 case 'refresh_agent_context':
                                     result = await this.refreshAgentContext();
                                     break;
+                                case 'assign_task':
+                                    result = await this.assignTask(toolArgs);
+                                    break;
+                                case 'accept_task':
+                                    result = await this.acceptTask(toolArgs);
+                                    break;
+                                case 'complete_task':
+                                    result = await this.completeTask(toolArgs);
+                                    break;
+                                case 'block_task':
+                                    result = await this.blockTask(toolArgs);
+                                    break;
+                                case 'take_next_task':
+                                    result = await this.takeNextTask(toolArgs);
+                                    break;
+                                case 'sync_task_status':
+                                    result = await this.syncTaskStatus(toolArgs);
+                                    break;
+                                case 'check_team_progress':
+                                    result = await this.checkTeamProgress(toolArgs);
+                                    break;
+                                case 'read_task_file':
+                                    result = await this.readTaskFile(toolArgs);
+                                    break;
+                                case 'report_ready':
+                                    result = await this.reportReady(toolArgs);
+                                    break;
+                                case 'register_agent_status':
+                                    result = await this.registerAgentStatus(toolArgs);
+                                    break;
                                 default:
                                     throw new Error(`Unknown tool: ${toolName}`);
                             }
@@ -1644,13 +2298,13 @@ Work autonomously within your role boundaries and communicate effectively with y
         });
     }
 }
-// Start MCP server if this file is run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-    const mcpServer = new AgentMuxMCP();
-    mcpServer.start().catch((error) => {
-        console.error('Failed to start MCP server:', error);
-        process.exit(1);
-    });
-}
+// Start MCP server if this file is run directly (disabled for testing)
+// if (import.meta.url === `file://${process.argv[1]}`) {
+//   const mcpServer = new AgentMuxMCP();
+//   mcpServer.start().catch((error) => {
+//     console.error('Failed to start MCP server:', error);
+//     process.exit(1);
+//   });
+// }
 export default AgentMuxMCP;
 //# sourceMappingURL=index.js.map

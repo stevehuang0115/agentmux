@@ -9,6 +9,7 @@ export declare class AgentMuxServer {
     private tmuxService;
     private schedulerService;
     private messageSchedulerService;
+    private activityMonitorService;
     private apiController;
     private terminalGateway;
     constructor(config?: Partial<StartupConfig>);

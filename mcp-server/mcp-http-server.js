@@ -49,6 +49,16 @@ class AgentMuxMCPServer {
       return await this.callTool(name, args || {});
     }
 
+    if (request.method === 'notifications/initialized') {
+      console.log('🎯 Client initialized successfully');
+      return {}; // Notifications don't return results
+    }
+
+    if (request.method === 'notifications/cancelled') {
+      console.log('🚫 Operation cancelled by client');
+      return {}; // Notifications don't return results
+    }
+
     throw new Error(`Unknown method: ${request.method}`);
   }
 
@@ -78,6 +88,8 @@ class AgentMuxMCPServer {
         return await this.delegateTask(args);
       case 'kill_agent':
         return await this.killAgent(args);
+      case 'register_agent_status':
+        return await this.registerAgentStatus(args);
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
@@ -191,16 +203,15 @@ class AgentMuxMCPServer {
 
   async getTickets(args) {
     try {
-      console.log('🎫 Getting tickets');
+      console.log('🎫 Getting tickets and tasks');
       const { status, all } = args;
       
-      const ticketsDir = path.join(this.projectPath, '.agentmux', 'tickets');
-      
-      // Create directory if it doesn't exist
-      await fs.mkdir(ticketsDir, { recursive: true });
-      
       const tickets = [];
+      
+      // First, check for traditional YAML tickets
+      const ticketsDir = path.join(this.projectPath, '.agentmux', 'tickets');
       try {
+        await fs.mkdir(ticketsDir, { recursive: true });
         const files = await fs.readdir(ticketsDir);
         for (const file of files) {
           if (file.endsWith('.yaml') || file.endsWith('.yml')) {
@@ -214,13 +225,57 @@ class AgentMuxMCPServer {
           }
         }
       } catch (e) {
-        // No tickets yet
+        // No tickets directory yet
+      }
+      
+      // Also check for task files in the tasks structure
+      const tasksDir = path.join(this.projectPath, '.agentmux', 'tasks');
+      try {
+        const statusFolders = status ? [status === 'in_progress' ? 'in_progress' : status] : ['open', 'in_progress', 'done', 'blocked'];
+        
+        for (const statusFolder of statusFolders) {
+          const tasksFolderPath = path.join(tasksDir, 'm0_build_spec_tasks', statusFolder);
+          try {
+            const taskFiles = await fs.readdir(tasksFolderPath);
+            
+            for (const taskFile of taskFiles) {
+              if (!taskFile.endsWith('.md')) continue;
+              
+              const taskPath = path.join(tasksFolderPath, taskFile);
+              const content = await fs.readFile(taskPath, 'utf-8');
+              
+              // Parse basic info from markdown task file
+              const taskId = taskFile.replace('.md', '');
+              const titleMatch = content.match(/^# (.+)/m);
+              const title = titleMatch ? titleMatch[1] : taskId;
+              
+              const task = {
+                id: taskId,
+                title: title,
+                status: statusFolder === 'in_progress' ? 'in_progress' : statusFolder,
+                type: 'task',
+                path: taskPath,
+                description: content.substring(0, 200) + '...',
+                assignedTo: statusFolder === 'in_progress' ? 'current_agent' : 'unassigned'
+              };
+              
+              // Filter by assignment and status
+              if (!all && statusFolder !== 'in_progress') continue;
+              
+              tickets.push(task);
+            }
+          } catch (error) {
+            // Task folder might not exist
+          }
+        }
+      } catch (error) {
+        // Tasks directory might not exist
       }
       
       return {
         content: [{ 
           type: 'text', 
-          text: `📋 Tickets:\n${JSON.stringify(tickets, null, 2)}` 
+          text: `📋 Tickets and Tasks:\n${JSON.stringify(tickets, null, 2)}` 
         }]
       };
     } catch (error) {
@@ -236,8 +291,113 @@ class AgentMuxMCPServer {
   async updateTicket(args) {
     try {
       const { ticketId, status, notes } = args;
-      console.log(`📝 Updating ticket ${ticketId}`);
+      console.log(`📝 Updating ticket/task ${ticketId}`);
       
+      // Check if this is a task file (contains task_ prefix)
+      if (ticketId.includes('task_')) {
+        console.log(`📋 Detected task file: ${ticketId}`);
+        
+        // Find the task file in the appropriate status folder
+        let taskPath = '';
+        const possiblePaths = [
+          path.join(this.projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'open', `${ticketId}.md`),
+          path.join(this.projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'in_progress', `${ticketId}.md`),
+          path.join(this.projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'done', `${ticketId}.md`),
+          path.join(this.projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'blocked', `${ticketId}.md`)
+        ];
+        
+        // Find which path exists
+        for (const filePath of possiblePaths) {
+          try {
+            await fs.access(filePath);
+            taskPath = filePath;
+            console.log(`📍 Found task file at: ${taskPath}`);
+            break;
+          } catch {
+            // Path doesn't exist, continue
+          }
+        }
+        
+        if (!taskPath) {
+          throw new Error(`Task file ${ticketId}.md not found in any status folder`);
+        }
+        
+        // Handle status updates by moving files appropriately
+        if (status === 'in_progress') {
+          console.log(`📈 Moving task to in_progress status`);
+          // Use the backend API for proper task management
+          const response = await fetch(`http://localhost:3000/api/task-management/assign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              taskPath: taskPath,
+              memberId: this.sessionName,
+              sessionId: this.sessionName
+            })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            return {
+              content: [{ type: 'text', text: `✅ Task ${ticketId} moved to in_progress: ${result.message}` }]
+            };
+          } else {
+            throw new Error(`Failed to move task to in_progress: ${response.statusText}`);
+          }
+        } else if (status === 'done') {
+          console.log(`✅ Completing task`);
+          const response = await fetch(`http://localhost:3000/api/task-management/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskPath: taskPath })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            return {
+              content: [{ type: 'text', text: `✅ Task ${ticketId} completed: ${result.message}` }]
+            };
+          } else {
+            throw new Error(`Failed to complete task: ${response.statusText}`);
+          }
+        } else if (status === 'blocked') {
+          console.log(`🚫 Blocking task`);
+          const reason = notes || 'No reason provided';
+          const response = await fetch(`http://localhost:3000/api/task-management/block`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskPath: taskPath, reason: reason })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            return {
+              content: [{ type: 'text', text: `🚫 Task ${ticketId} blocked: ${result.message}` }]
+            };
+          } else {
+            throw new Error(`Failed to block task: ${response.statusText}`);
+          }
+        }
+        
+        // If just adding notes without status change, append to task file
+        if (notes && !status) {
+          console.log(`📝 Adding notes to task`);
+          const content = await fs.readFile(taskPath, 'utf-8');
+          const timestamp = new Date().toISOString();
+          const noteSection = `\n\n## Update - ${timestamp}\n\n**Author:** ${this.sessionName}\n\n${notes}`;
+          await fs.writeFile(taskPath, content + noteSection);
+          
+          return {
+            content: [{ type: 'text', text: `✅ Notes added to task ${ticketId}` }]
+          };
+        }
+        
+        return {
+          content: [{ type: 'text', text: `✅ Task ${ticketId} processed successfully` }]
+        };
+      }
+      
+      // Original ticket handling for YAML files
       const ticketPath = path.join(this.projectPath, '.agentmux', 'tickets', `${ticketId}.yaml`);
       
       let ticket = { id: ticketId, status: 'todo' };
@@ -280,7 +440,7 @@ class AgentMuxMCPServer {
       return {
         content: [{ 
           type: 'text', 
-          text: `❌ Failed to update ticket: ${error.message}` 
+          text: `❌ Failed to update ticket/task: ${error.message}` 
         }]
       };
     }
@@ -562,6 +722,62 @@ Please acknowledge and provide ETA.`;
     return yaml;
   }
 
+  async registerAgentStatus(args) {
+    console.log(`[MCP] 🚀 Starting agent registration process...`);
+    console.log(`[MCP] 📋 Arguments:`, JSON.stringify(args, null, 2));
+    
+    try {
+      const { role, sessionId, memberId } = args;
+      
+      // Register this agent as active with the backend API
+      const backendPort = process.env.BACKEND_PORT || '3000';
+      const endpoint = `http://localhost:${backendPort}/api/team-members/register-status`;
+      console.log(`[MCP] 📡 Calling endpoint: ${endpoint}`);
+      console.log(`[MCP] 🔧 Request method: POST`);
+      
+      const requestBody = {
+        sessionName: sessionId,
+        role: role,
+        status: 'active',
+        registeredAt: new Date().toISOString(),
+        memberId: memberId
+      };
+      console.log(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
+      
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      console.log(`[MCP] 📨 Response received - Status: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`[MCP] ❌ Error response body:`, errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const responseData = await response.json();
+      console.log(`[MCP] 🎉 Registration successful:`, responseData);
+
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `✅ Agent registered successfully. Role: ${role}, Session: ${sessionId}` 
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to register agent: ${error.message}`
+        }],
+        isError: true
+      };
+    }
+  }
+
   getToolDefinitions() {
     return [
       {
@@ -704,6 +920,19 @@ Please acknowledge and provide ETA.`;
           },
           required: ['session']
         }
+      },
+      {
+        name: 'register_agent_status',
+        description: 'Register agent as active and ready to receive instructions',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            role: { type: 'string', description: 'Agent role (orchestrator, tpm, dev, qa)' },
+            sessionId: { type: 'string', description: 'Tmux session identifier' },
+            memberId: { type: 'string', description: 'Team member ID for association' }
+          },
+          required: ['role', 'sessionId']
+        }
       }
     ];
   }
@@ -738,9 +967,15 @@ Please acknowledge and provide ETA.`;
             const result = await this.handleRequest(request);
             const response = {
               jsonrpc: '2.0',
-              id: request.id,
-              result
+              id: request.id
             };
+            
+            // Notifications don't have results
+            if (request.method && request.method.startsWith('notifications/')) {
+              // Notifications don't need a result field
+            } else {
+              response.result = result;
+            }
             
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(response));

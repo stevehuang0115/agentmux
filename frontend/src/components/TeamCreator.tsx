@@ -12,6 +12,8 @@ const roleOptions = [
   { value: 'orchestrator', label: 'Orchestrator', description: 'Coordinates all teams and manages high-level strategy' },
   { value: 'tpm', label: 'Technical Product Manager', description: 'Scopes projects and translates business logic to technical specs' },
   { value: 'pgm', label: 'Program Manager', description: 'Tracks progress and creates detailed tasks from specs' },
+  { value: 'frontend-developer', label: 'Frontend Developer', description: 'Specializes in UI/UX development and client-side code' },
+  { value: 'backend-developer', label: 'Backend Developer', description: 'Specializes in server-side development and system architecture' },
   { value: 'developer', label: 'Developer', description: 'Implements features and writes code' },
   { value: 'qa', label: 'QA Engineer', description: 'Tests features and ensures quality standards' },
   { value: 'tester', label: 'Tester', description: 'Performs manual and automated testing' },
@@ -22,6 +24,8 @@ const defaultPrompts = {
   orchestrator: `You are the Orchestrator Agent responsible for:\n- Overall project coordination and strategy\n- Creating and managing teams\n- Delegating high-level tasks\n- Monitoring project progress\n- Making architectural decisions`,
   tpm: `You are a Technical Product Manager (TPM) responsible for:\n- Scoping projects and analyzing technical complexity\n- Translating business requirements into technical specifications\n- Defining system architecture and technical design patterns\n- Acting as technical lead and providing implementation guidance\n- Creating detailed technical design documents\n- Assessing technical feasibility and risk analysis`,
   pgm: `You are a Program Manager (PgM) responsible for:\n- Tracking project progress and milestone completion\n- Creating detailed, actionable task tickets from technical specs\n- Breaking down complex designs into executable development tasks\n- Ensuring 100% clear requirements for developer success\n- Coordinating between team roles and managing dependencies\n- Enforcing 30-minute git commits and quality standards`,
+  'frontend-developer': `You are a Frontend Developer responsible for:\n- Creating responsive and accessible user interfaces\n- Building reusable and maintainable React/Vue/Angular components\n- Implementing CSS, SCSS, Tailwind, or styled-components\n- Handling client-side state management\n- Writing unit and integration tests for frontend components\n- Optimizing performance and user experience`,
+  'backend-developer': `You are a Backend Developer responsible for:\n- Designing and implementing RESTful APIs and GraphQL endpoints\n- Creating efficient database schemas and optimizing queries\n- Implementing secure authentication and authorization systems\n- Optimizing server performance, caching, and scalability\n- Ensuring secure coding practices and data protection\n- Working with cloud services, containers, and deployment pipelines`,
   developer: `You are a Software Developer responsible for:\n- Implementing features according to specifications\n- Writing clean, maintainable code\n- Committing every 30 minutes without fail\n- Working in feature branches\n- Reporting progress to PgM regularly`,
   qa: `You are a QA Engineer responsible for:\n- Testing all implemented features thoroughly\n- Verifying acceptance criteria are met\n- Documenting test results\n- Reporting issues immediately\n- Ensuring quality standards are maintained`,
   tester: `You are a Tester responsible for:\n- Performing manual testing of features\n- Creating and executing test cases\n- Identifying bugs and edge cases\n- Validating user experience flows\n- Documenting test results clearly`,
@@ -63,6 +67,8 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
         role,
         systemPrompt: systemPrompt.trim(),
         status: 'idle',
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
         currentTickets: []
       };
 

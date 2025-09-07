@@ -37,8 +37,8 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
   const handleSelectFolder = async () => {
     try {
       // Check if the File System Access API is supported
-      if ('showDirectoryPicker' in window && window.showDirectoryPicker) {
-        const directoryHandle = await window.showDirectoryPicker();
+      if ('showDirectoryPicker' in window && (window as any).showDirectoryPicker) {
+        const directoryHandle = await (window as any).showDirectoryPicker();
         setPath(directoryHandle.name);
       } else {
         // Fallback for browsers that don't support the File System Access API

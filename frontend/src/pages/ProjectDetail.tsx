@@ -45,6 +45,9 @@ export const ProjectDetail: React.FC = () => {
   const [isUserJourneyModalOpen, setIsUserJourneyModalOpen] = useState(false);
   const [goalContent, setGoalContent] = useState('');
   const [userJourneyContent, setUserJourneyContent] = useState('');
+  const [isTaskDetailModalOpen, setIsTaskDetailModalOpen] = useState(false);
+  const [selectedTaskForDetail, setSelectedTaskForDetail] = useState<any>(null);
+  const [taskAssignmentLoading, setTaskAssignmentLoading] = useState<string | null>(null);
   const [buildSpecsWorkflow, setBuildSpecsWorkflow] = useState<{
     isActive: boolean;
     steps: Array<{
@@ -302,6 +305,69 @@ export const ProjectDetail: React.FC = () => {
       );
     } finally {
       setState(prev => ({ ...prev, loading: false }));
+    }
+  };
+
+  // Task interaction handlers
+  const handleTaskClick = (task: any) => {
+    setSelectedTaskForDetail(task);
+    setIsTaskDetailModalOpen(true);
+  };
+
+  const handleTaskAssign = async (task: any) => {
+    if (!state.project) return;
+    
+    try {
+      setTaskAssignmentLoading(task.id);
+      
+      // Check if orchestrator session exists
+      const response = await fetch(`/api/teams/activity-check`);
+      if (!response.ok) {
+        throw new Error('Failed to check orchestrator status');
+      }
+      
+      const status = await response.json();
+      if (!status.success || !status.data || !status.data.orchestrator || !status.data.orchestrator.running) {
+        showError('Orchestrator session is not running. Please start the orchestrator first.', 'Assignment Failed');
+        return;
+      }
+
+      // Assign task to orchestrator
+      const assignResponse = await fetch(`/api/projects/${state.project.id}/assign-task`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          taskPriority: task.priority,
+          taskMilestone: task.milestoneId,
+          projectName: state.project.name,
+          projectPath: state.project.path
+        }),
+      });
+
+      if (assignResponse.ok) {
+        const result = await assignResponse.json();
+        showSuccess(
+          `Task "${task.title}" has been assigned to the orchestrator team.`,
+          'Task Assigned'
+        );
+      } else {
+        const error = await assignResponse.json();
+        throw new Error(error.error || 'Failed to assign task');
+      }
+
+    } catch (error) {
+      console.error('Failed to assign task:', error);
+      showError(
+        'Failed to assign task: ' + (error instanceof Error ? error.message : 'Unknown error'),
+        'Assignment Failed'
+      );
+    } finally {
+      setTaskAssignmentLoading(null);
     }
   };
 
@@ -1380,6 +1446,9 @@ export const ProjectDetail: React.FC = () => {
             onCreateDevTasks={handleCreateDevTasks}
             onCreateE2ETasks={handleCreateE2ETasks}
             loading={state.loading}
+            onTaskClick={handleTaskClick}
+            onTaskAssign={handleTaskAssign}
+            taskAssignmentLoading={taskAssignmentLoading}
           />
         ) : (
           <TeamsView 
@@ -1405,6 +1474,93 @@ export const ProjectDetail: React.FC = () => {
           projectPath={project.path}
           onClose={() => setIsMarkdownEditorOpen(false)}
         />
+      )}
+
+      {/* Task Detail Modal */}
+      {isTaskDetailModalOpen && selectedTaskForDetail && (
+        <FormPopup
+          isOpen={isTaskDetailModalOpen}
+          onClose={() => {
+            setIsTaskDetailModalOpen(false);
+            setSelectedTaskForDetail(null);
+          }}
+          title="Task Details"
+          subtitle={`${selectedTaskForDetail.title} - Full Information`}
+          onSubmit={(e) => { e.preventDefault(); }}
+          submitText={null}
+          cancelText="Close"
+          size="lg"
+        >
+          <div className="task-detail-content">
+            <FormGroup>
+              <FormLabel>Task Title</FormLabel>
+              <div className="task-detail-field">{selectedTaskForDetail.title}</div>
+            </FormGroup>
+
+            <FormGroup>
+              <FormLabel>Description</FormLabel>
+              <div className="task-detail-field task-detail-description">
+                {selectedTaskForDetail.description || 'No description provided'}
+              </div>
+            </FormGroup>
+
+            <FormRow>
+              <FormGroup>
+                <FormLabel>Priority</FormLabel>
+                <div className={`task-detail-badge priority-badge priority-${selectedTaskForDetail.priority || 'medium'}`}>
+                  {selectedTaskForDetail.priority || 'Medium'}
+                </div>
+              </FormGroup>
+              
+              <FormGroup>
+                <FormLabel>Milestone</FormLabel>
+                <div className="task-detail-badge milestone-badge">
+                  {selectedTaskForDetail.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '') || 'General'}
+                </div>
+              </FormGroup>
+            </FormRow>
+
+            {selectedTaskForDetail.assignee && (
+              <FormGroup>
+                <FormLabel>Assignee</FormLabel>
+                <div className="task-detail-badge assignee-badge">
+                  {selectedTaskForDetail.assignee}
+                </div>
+              </FormGroup>
+            )}
+
+            {selectedTaskForDetail.tasks && selectedTaskForDetail.tasks.length > 0 && (
+              <FormGroup>
+                <FormLabel>Subtasks ({selectedTaskForDetail.tasks.length})</FormLabel>
+                <div className="task-detail-subtasks">
+                  {selectedTaskForDetail.tasks.map((subtask: string, index: number) => (
+                    <div key={index} className="task-detail-subtask">
+                      <span className="subtask-text">
+                        {subtask.replace(/^\[x\]\s*|\[\s*\]\s*/i, '')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </FormGroup>
+            )}
+
+            <div className="task-detail-actions">
+              <Button
+                variant="primary"
+                icon={Play}
+                onClick={() => {
+                  handleTaskAssign(selectedTaskForDetail);
+                  setIsTaskDetailModalOpen(false);
+                  setSelectedTaskForDetail(null);
+                }}
+                disabled={taskAssignmentLoading === selectedTaskForDetail.id}
+                loading={taskAssignmentLoading === selectedTaskForDetail.id}
+              >
+                {taskAssignmentLoading === selectedTaskForDetail.id ? 'Assigning...' : 'Assign to Team'}
+              </Button>
+            </div>
+          </div>
+        </FormPopup>
       )}
 
       {/* Goal Modal */}
@@ -2419,7 +2575,10 @@ const TasksView: React.FC<{
   onCreateDevTasks: () => void;
   onCreateE2ETasks: () => void;
   loading: boolean;
-}> = ({ project, tickets, onTicketsUpdate, onCreateSpecsTasks, onCreateDevTasks, onCreateE2ETasks, loading }) => {
+  onTaskClick: (task: any) => void;
+  onTaskAssign: (task: any) => void;
+  taskAssignmentLoading: string | null;
+}> = ({ project, tickets, onTicketsUpdate, onCreateSpecsTasks, onCreateDevTasks, onCreateE2ETasks, loading, onTaskClick, onTaskAssign, taskAssignmentLoading }) => {
   
   // Group tasks by status for kanban board
   const tasksByStatus = {
@@ -2524,24 +2683,36 @@ const TasksView: React.FC<{
             count={tasksByStatus.open.length}
             tasks={tasksByStatus.open}
             status="open"
+            onTaskClick={onTaskClick}
+            onTaskAssign={onTaskAssign}
+            taskAssignmentLoading={taskAssignmentLoading}
           />
           <TaskColumn
             title="In Progress"
             count={tasksByStatus.in_progress.length}
             tasks={tasksByStatus.in_progress}
             status="in_progress"
+            onTaskClick={onTaskClick}
+            onTaskAssign={onTaskAssign}
+            taskAssignmentLoading={taskAssignmentLoading}
           />
           <TaskColumn
             title="Done"
             count={tasksByStatus.done.length}
             tasks={tasksByStatus.done}
             status="done"
+            onTaskClick={onTaskClick}
+            onTaskAssign={onTaskAssign}
+            taskAssignmentLoading={taskAssignmentLoading}
           />
           <TaskColumn
             title="Blocked"
             count={tasksByStatus.blocked.length}
             tasks={tasksByStatus.blocked}
             status="blocked"
+            onTaskClick={onTaskClick}
+            onTaskAssign={onTaskAssign}
+            taskAssignmentLoading={taskAssignmentLoading}
           />
         </div>
       </div>
@@ -2555,7 +2726,10 @@ const TaskColumn: React.FC<{
   count: number;
   tasks: any[];
   status: string;
-}> = ({ title, count, tasks, status }) => {
+  onTaskClick: (task: any) => void;
+  onTaskAssign: (task: any) => void;
+  taskAssignmentLoading: string | null;
+}> = ({ title, count, tasks, status, onTaskClick, onTaskAssign, taskAssignmentLoading }) => {
   return (
     <div className={`task-column task-column--${status}`}>
       <div className="column-header">
@@ -2564,15 +2738,36 @@ const TaskColumn: React.FC<{
       </div>
       <div className="column-content">
         {tasks.map(task => (
-          <div key={task.id} className="task-card">
+          <div 
+            key={task.id} 
+            className="task-card task-card-clickable" 
+            onClick={() => onTaskClick(task)}
+          >
             <div className="task-header">
               <h5 className="task-title">{task.title}</h5>
-              <div className="task-badges">
-                {task.priority && (
-                  <span className={`priority-badge priority-${task.priority}`}>
-                    {task.priority}
-                  </span>
-                )}
+              <div className="task-actions">
+                <button
+                  className={`task-play-btn ${taskAssignmentLoading === task.id ? 'loading' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTaskAssign(task);
+                  }}
+                  disabled={taskAssignmentLoading === task.id}
+                  title="Assign this task to the orchestrator team"
+                >
+                  {taskAssignmentLoading === task.id ? (
+                    <div className="task-spinner" />
+                  ) : (
+                    <Play className="task-play-icon" />
+                  )}
+                </button>
+                <div className="task-badges">
+                  {task.priority && (
+                    <span className={`priority-badge priority-${task.priority}`}>
+                      {task.priority}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <p className="task-description">{task.description}</p>

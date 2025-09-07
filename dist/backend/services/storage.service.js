@@ -34,10 +34,21 @@ export class StorageService {
     // Team management
     async getTeams() {
         try {
-            await this.ensureFile(this.teamsFile);
+            await this.ensureFile(this.teamsFile, { teams: [], orchestrator: { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
             const content = await fs.readFile(this.teamsFile, 'utf-8');
-            const teams = JSON.parse(content);
-            return teams.map(team => TeamModel.fromJSON(team).toJSON());
+            const data = JSON.parse(content);
+            // Handle both old array format and new object format
+            if (Array.isArray(data)) {
+                // Convert old format to new format
+                const newData = {
+                    teams: data,
+                    orchestrator: { sessionId: 'agentmux-orc', status: 'activating', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                };
+                await fs.writeFile(this.teamsFile, JSON.stringify(newData, null, 2));
+                return data.map((team) => TeamModel.fromJSON(team).toJSON());
+            }
+            const teams = data.teams || [];
+            return teams.map((team) => TeamModel.fromJSON(team).toJSON());
         }
         catch (error) {
             console.error('Error reading teams:', error);
@@ -46,15 +57,27 @@ export class StorageService {
     }
     async saveTeam(team) {
         try {
-            const teams = await this.getTeams();
-            const existingIndex = teams.findIndex(t => t.id === team.id);
+            await this.ensureFile(this.teamsFile, { teams: [], orchestrator: { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+            const content = await fs.readFile(this.teamsFile, 'utf-8');
+            const data = JSON.parse(content);
+            let teamsData = data;
+            if (!data.teams) {
+                // Convert old format or initialize
+                teamsData = {
+                    teams: Array.isArray(data) ? data : [],
+                    orchestrator: data.orchestrator || { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                };
+            }
+            const teams = teamsData.teams;
+            const existingIndex = teams.findIndex((t) => t.id === team.id);
             if (existingIndex >= 0) {
                 teams[existingIndex] = team;
             }
             else {
                 teams.push(team);
             }
-            await fs.writeFile(this.teamsFile, JSON.stringify(teams, null, 2));
+            teamsData.teams = teams;
+            await fs.writeFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
         }
         catch (error) {
             console.error('Error saving team:', error);
@@ -78,9 +101,19 @@ export class StorageService {
     }
     async deleteTeam(id) {
         try {
-            const teams = await this.getTeams();
-            const filteredTeams = teams.filter(t => t.id !== id);
-            await fs.writeFile(this.teamsFile, JSON.stringify(filteredTeams, null, 2));
+            await this.ensureFile(this.teamsFile, { teams: [], orchestrator: { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+            const content = await fs.readFile(this.teamsFile, 'utf-8');
+            const data = JSON.parse(content);
+            let teamsData = data;
+            if (!data.teams) {
+                teamsData = {
+                    teams: Array.isArray(data) ? data : [],
+                    orchestrator: data.orchestrator || { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                };
+            }
+            const filteredTeams = teamsData.teams.filter((t) => t.id !== id);
+            teamsData.teams = filteredTeams;
+            await fs.writeFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
         }
         catch (error) {
             console.error('Error deleting team:', error);
@@ -540,6 +573,50 @@ This is a foundational task that should be completed first before other developm
         }
         catch (error) {
             console.error('Error clearing delivery logs:', error);
+            throw error;
+        }
+    }
+    // Orchestrator management
+    async getOrchestratorStatus() {
+        try {
+            await this.ensureFile(this.teamsFile, { teams: [], orchestrator: { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+            const content = await fs.readFile(this.teamsFile, 'utf-8');
+            const data = JSON.parse(content);
+            if (data.orchestrator) {
+                return data.orchestrator;
+            }
+            // If no orchestrator in new format, create one
+            const orchestrator = { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+            await this.updateOrchestratorStatus('activating');
+            return orchestrator;
+        }
+        catch (error) {
+            console.error('Error reading orchestrator status:', error);
+            return null;
+        }
+    }
+    async updateOrchestratorStatus(status) {
+        try {
+            await this.ensureFile(this.teamsFile, { teams: [], orchestrator: { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } });
+            const content = await fs.readFile(this.teamsFile, 'utf-8');
+            const data = JSON.parse(content);
+            let teamsData = data;
+            if (!data.teams) {
+                // Convert old format
+                teamsData = {
+                    teams: Array.isArray(data) ? data : [],
+                    orchestrator: { sessionId: 'agentmux-orc', status: 'activating', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+                };
+            }
+            if (!teamsData.orchestrator) {
+                teamsData.orchestrator = { sessionId: 'agentmux-orc', status: 'activating', agentStatus: 'activating', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+            }
+            teamsData.orchestrator.status = status;
+            teamsData.orchestrator.updatedAt = new Date().toISOString();
+            await fs.writeFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
+        }
+        catch (error) {
+            console.error('Error updating orchestrator status:', error);
             throw error;
         }
     }

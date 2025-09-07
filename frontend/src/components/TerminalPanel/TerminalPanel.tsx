@@ -47,7 +47,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       if (!isUserScrolling) {
         fetchTerminalOutput();
       }
-    }, 2000);
+    }, 5000); // Reduced from 2s to 5s
 
     return () => clearInterval(interval);
   }, [selectedSession, isUserScrolling, isOpen]);

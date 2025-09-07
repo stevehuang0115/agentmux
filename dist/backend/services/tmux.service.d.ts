@@ -9,6 +9,8 @@ export declare class TmuxService extends EventEmitter {
     private sessions;
     private outputBuffers;
     private logger;
+    private detectionInProgress;
+    private detectionResults;
     constructor();
     /**
      * Initialize tmux server if not running
@@ -142,5 +144,41 @@ export declare class TmuxService extends EventEmitter {
      * Write system prompt to temporary file
      */
     private writePromptFile;
+    /**
+     * Initialize agent with progressive escalation until registration succeeds
+     */
+    initializeAgentWithRegistration(sessionName: string, role: string, projectPath?: string, timeout?: number, memberId?: string): Promise<{
+        success: boolean;
+        message?: string;
+        error?: string;
+    }>;
+    /**
+     * Step 1: Try direct registration prompt
+     */
+    private tryDirectRegistration;
+    /**
+     * Step 2: Cleanup with Ctrl+C and reinitialize
+     */
+    private tryCleanupAndReinit;
+    /**
+     * Step 3: Kill session and recreate completely
+     */
+    private tryFullRecreation;
+    /**
+     * Load registration prompt from config files
+     */
+    private loadRegistrationPrompt;
+    /**
+     * Wait for agent registration to complete
+     */
+    private waitForRegistration;
+    /**
+     * Check if agent is properly registered
+     */
+    private checkAgentRegistration;
+    /**
+     * Detect if Claude Code is running using the `/` command trick
+     */
+    private detectClaudeWithSlashCommand;
 }
 //# sourceMappingURL=tmux.service.d.ts.map

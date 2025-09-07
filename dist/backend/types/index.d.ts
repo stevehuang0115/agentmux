@@ -2,10 +2,15 @@ export interface TeamMember {
     id: string;
     name: string;
     sessionName: string;
-    role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'qa' | 'tester' | 'designer';
+    role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'qa' | 'tester' | 'designer';
     systemPrompt: string;
-    status: 'idle' | 'working' | 'blocked' | 'terminated';
+    status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active';
+    agentStatus: 'inactive' | 'activating' | 'active';
+    workingStatus: 'idle' | 'in_progress';
     currentTickets?: string[];
+    readyAt?: string;
+    capabilities?: string[];
+    lastActivityCheck?: string;
     createdAt: string;
     updatedAt: string;
 }
@@ -15,7 +20,7 @@ export interface Team {
     description?: string;
     members: TeamMember[];
     currentProject?: string;
-    status: 'idle' | 'working' | 'blocked' | 'terminated';
+    status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active';
     createdAt: string;
     updatedAt: string;
 }
@@ -109,6 +114,7 @@ export interface TeamMemberSessionConfig {
     role: TeamMember['role'];
     systemPrompt: string;
     projectPath?: string;
+    memberId?: string;
 }
 export interface MCPToolRequest {
     tool: string;

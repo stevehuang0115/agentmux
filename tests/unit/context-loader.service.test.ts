@@ -185,6 +185,8 @@ description: Fix the login issue
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a senior developer responsible for backend implementation.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -229,6 +231,8 @@ description: Fix the login issue
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -269,6 +273,8 @@ description: This needs someone
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -318,6 +324,8 @@ description: This needs someone
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -340,6 +348,8 @@ description: This needs someone
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -372,6 +382,8 @@ description: This needs someone
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
         status: 'working',
+        agentStatus: 'active',
+        workingStatus: 'in_progress',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };

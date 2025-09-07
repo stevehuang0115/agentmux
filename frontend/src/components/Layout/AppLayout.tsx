@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Terminal } from 'lucide-react';
 import { Navigation } from './Navigation';
 import { TerminalPanel } from '../TerminalPanel/TerminalPanel';
+import { OrchestratorStatusBanner } from '../OrchestratorStatusBanner';
 import { useTerminal } from '../../contexts/TerminalContext';
 import { IconButton } from '../UI';
 
@@ -23,6 +24,7 @@ export const AppLayout: React.FC = () => {
         <Navigation />
       </div>
       <main className="app-main">
+        <OrchestratorStatusBanner />
         <Outlet />
       </main>
       

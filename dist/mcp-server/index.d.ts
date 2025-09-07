@@ -5,6 +5,8 @@ declare class AgentMuxMCP {
     private apiBaseUrl;
     private projectPath;
     private agentRole;
+    private requestQueue;
+    private lastCleanup;
     constructor();
     private registerTools;
     /**
@@ -52,11 +54,20 @@ declare class AgentMuxMCP {
      * Task Management Tools
      */
     private assignTask;
+    private acceptTask;
     private completeTask;
     private blockTask;
     private takeNextTask;
     private syncTaskStatus;
     private checkTeamProgress;
+    private readTaskFile;
+    private reportReady;
+    private registerAgentStatus;
+    /**
+     * Resource Management
+     */
+    private cleanup;
+    private checkRateLimit;
     /**
      * Helper Functions
      */

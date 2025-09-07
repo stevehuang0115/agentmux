@@ -291,13 +291,145 @@
   flex-wrap: wrap;
 }
 
+/* Task interaction styles */
+.task-card-clickable {
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+}
+
+.task-card-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-color: var(--color-primary);
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.task-play-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--color-primary);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease-in-out;
+  color: white;
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.task-play-btn:hover:not(:disabled) {
+  opacity: 1;
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.task-play-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.task-play-btn.loading {
+  background: var(--color-secondary);
+  cursor: wait;
+}
+
+.task-play-icon {
+  width: 14px;
+  height: 14px;
+  margin-left: 1px; /* Visually center the play triangle */
+}
+
+.task-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+/* Task detail modal styles */
+.task-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.task-detail-field {
+  padding: 0.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.task-detail-description {
+  min-height: 4rem;
+  white-space: pre-wrap;
+}
+
+.task-detail-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.task-detail-subtasks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-detail-subtask {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.task-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--color-border);
+  margin-top: 1rem;
+}
+
 /* Animation performance improvements */
 @media (prefers-reduced-motion: reduce) {
   .loading-spinner,
   .skeleton,
   .skeleton-shimmer,
-  .btn {
+  .btn,
+  .task-card-clickable,
+  .task-play-btn,
+  .task-spinner {
     animation: none;
     transition: none;
+  }
+  
+  .task-card-clickable:hover,
+  .task-play-btn:hover {
+    transform: none;
   }
 }

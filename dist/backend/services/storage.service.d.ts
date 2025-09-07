@@ -36,5 +36,14 @@ export declare class StorageService {
     getDeliveryLogs(): Promise<MessageDeliveryLog[]>;
     saveDeliveryLog(log: MessageDeliveryLog): Promise<void>;
     clearDeliveryLogs(): Promise<void>;
+    getOrchestratorStatus(): Promise<{
+        sessionId: string;
+        status: string;
+        agentStatus: 'inactive' | 'activating' | 'active';
+        workingStatus: 'idle' | 'in_progress';
+        createdAt: string;
+        updatedAt: string;
+    } | null>;
+    updateOrchestratorStatus(status: string): Promise<void>;
 }
 //# sourceMappingURL=storage.service.d.ts.map

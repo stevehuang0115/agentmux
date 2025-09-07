@@ -23,6 +23,9 @@ export default {
     '^@types/(.*)$': '<rootDir>/types/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@modelcontextprotocol)/)',
+  ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   collectCoverageFrom: [
     'tests/**/*.ts',

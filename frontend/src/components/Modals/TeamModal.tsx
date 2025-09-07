@@ -86,6 +86,40 @@ Communication style:
 - Provide step-by-step implementation guidance
 - Focus on actionable deliverables and measurable outcomes`,
 
+  'frontend-developer': `You are an AI Frontend Developer specializing in user interface development and user experience.
+
+Your responsibilities:
+- Create responsive and accessible user interfaces
+- Build reusable and maintainable React/Vue/Angular components
+- Implement CSS, SCSS, Tailwind, or styled-components
+- Handle client-side state with Redux, Context API, or similar
+- Write unit and integration tests for frontend components
+- Optimize bundle size, rendering, and user experience
+
+Communication style:
+- Focus on user experience and interface design
+- Collaborate effectively with backend developers and designers
+- Write clean, maintainable, and well-documented code
+- Follow modern frontend development practices
+- Ensure accessibility and responsive design principles`,
+
+  'backend-developer': `You are an AI Backend Developer specializing in server-side development and system architecture.
+
+Your responsibilities:
+- Design and implement RESTful APIs and GraphQL endpoints
+- Create efficient database schemas and optimize queries
+- Implement secure authentication and authorization systems
+- Optimize server performance, caching, and scalability
+- Ensure secure coding practices and data protection
+- Work with cloud services, containers, and deployment pipelines
+
+Communication style:
+- Focus on system architecture and scalable solutions
+- Collaborate effectively with frontend developers and DevOps engineers
+- Write efficient, secure, and maintainable server-side code
+- Follow best practices for API design and database optimization
+- Consider performance, security, and maintainability in all decisions`,
+
   developer: `You are an AI Software Developer responsible for writing, testing, and maintaining code.
 
 Your responsibilities:
@@ -245,8 +279,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
 
     // Validate all members have required fields
     for (const member of members) {
-      if (!member.name.trim() || !member.systemPrompt.trim()) {
-        alert('All team members must have a name and system prompt');
+      if (!member.name.trim()) {
+        alert('All team members must have a name');
         return;
       }
     }
@@ -279,6 +313,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       orchestrator: 'Orchestrator',
       tpm: 'Technical Product Manager',
       pgm: 'Program Manager',
+      'frontend-developer': 'Frontend Developer',
+      'backend-developer': 'Backend Developer',
       developer: 'Developer',
       qa: 'QA Engineer',
       tester: 'Test Engineer',
@@ -293,7 +329,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       onClose={onClose}
       title={team ? 'Edit Team' : 'Create New Team'}
       subtitle={team ? 'Modify team configuration and members' : 'Set up a new collaborative team'}
-      size="lg"
+      size="xl"
       onSubmit={handleSubmit}
       submitText={team ? 'Update Team' : 'Create Team'}
       submitDisabled={!formData.name.trim() || members.length === 0}
@@ -385,6 +421,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                             { value: 'orchestrator', label: 'Orchestrator' },
                             { value: 'tpm', label: 'Technical Product Manager' },
                             { value: 'pgm', label: 'Program Manager' },
+                            { value: 'frontend-developer', label: 'Frontend Developer' },
+                            { value: 'backend-developer', label: 'Backend Developer' },
                             { value: 'developer', label: 'Developer' },
                             { value: 'qa', label: 'QA Engineer' },
                             { value: 'tester', label: 'Test Engineer' },
@@ -394,19 +432,6 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                       </div>
                     </div>
 
-                    <div className="form-group">
-                      <label>System Prompt *</label>
-                      <textarea
-                        value={member.systemPrompt}
-                        onChange={(e) => handleMemberChange(member.id, 'systemPrompt', e.target.value)}
-                        placeholder="System prompt for this team member..."
-                        rows={6}
-                        required
-                      />
-                      <small className="form-help">
-                        Default prompt for {getRoleDisplayName(member.role)} loaded. You can customize it as needed.
-                      </small>
-                    </div>
                   </div>
                 </div>
               ))}

@@ -1,11 +1,15 @@
 import { spawn } from 'child_process';
 import { EventEmitter } from 'events';
-import { writeFile } from 'fs/promises';
+import { readFile, writeFile, access } from 'fs/promises';
+import * as path from 'path';
 import { LoggerService } from './logger.service.js';
 export class TmuxService extends EventEmitter {
     sessions = new Map();
     outputBuffers = new Map();
     logger;
+    // State management for detection to prevent concurrent attempts
+    detectionInProgress = new Map();
+    detectionResults = new Map();
     constructor() {
         super();
         this.logger = LoggerService.getInstance().createComponentLogger('TmuxService');
@@ -85,57 +89,9 @@ export class TmuxService extends EventEmitter {
      * Initialize Claude in orchestrator session
      */
     async initializeOrchestrator(sessionName, timeout = 30000) {
-        try {
-            this.logger.info('Initializing orchestrator with Claude', { sessionName, timeout });
-            // Check if session exists
-            if (!(await this.sessionExists(sessionName))) {
-                return {
-                    success: false,
-                    error: `Session '${sessionName}' does not exist`
-                };
-            }
-            // Source bashrc to ensure proper environment
-            await this.executeTmuxCommand([
-                'send-keys',
-                '-t', sessionName,
-                'source ~/.bashrc',
-                'Enter'
-            ]);
-            // Wait a moment for bashrc to load
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            // Start Claude with dangerous skip permissions
-            await this.executeTmuxCommand([
-                'send-keys',
-                '-t', sessionName,
-                'claude --dangerously-skip-permissions',
-                'Enter'
-            ]);
-            this.logger.info('Claude initialization command sent', { sessionName });
-            // Wait for Claude to be ready
-            const isReady = await this.waitForClaudeReady(sessionName, timeout);
-            if (isReady) {
-                this.logger.info('Orchestrator Claude initialization complete', { sessionName });
-                return {
-                    success: true,
-                    message: 'Orchestrator initialized with Claude successfully'
-                };
-            }
-            else {
-                this.logger.error('Timeout waiting for Claude to initialize', { sessionName, timeout });
-                return {
-                    success: false,
-                    error: `Timeout waiting for Claude to initialize (${timeout}ms)`
-                };
-            }
-        }
-        catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            this.logger.error('Failed to initialize orchestrator', { sessionName, error: errorMessage });
-            return {
-                success: false,
-                error: errorMessage
-            };
-        }
+        // Use the new robust agent initialization system with orchestrator role
+        const projectPath = process.cwd(); // Orchestrator works from current project directory
+        return await this.initializeAgentWithRegistration(sessionName, 'orchestrator', projectPath, timeout);
     }
     /**
      * Send project start prompt to orchestrator
@@ -174,12 +130,12 @@ export class TmuxService extends EventEmitter {
      */
     async waitForClaudeReady(sessionName, timeout) {
         const startTime = Date.now();
-        const checkInterval = 2000; // Check every 2 seconds
+        const checkInterval = 3000; // Check every 3 seconds for Claude ready signal
         while (Date.now() - startTime < timeout) {
             try {
                 const output = await this.capturePane(sessionName, 20);
-                // Look for Claude ready indicators
-                if (output.includes('Claude Code') ||
+                // Look for Claude ready indicators - specifically the welcome message
+                if (output.includes('Welcome to Claude Code!') ||
                     output.includes('claude-code>') ||
                     output.includes('Ready to assist') ||
                     output.includes('How can I help')) {
@@ -343,17 +299,13 @@ Start all teams on Phase 1 simultaneously.`.trim();
     async createTeamMemberSession(config, sessionName) {
         try {
             this.logger.info('Creating team member session', { sessionName, role: config.role });
-            // Check if session already exists
+            // Kill existing session if it exists to ensure clean initialization  
             if (await this.sessionExists(sessionName)) {
-                this.logger.info('Team member session already exists', { sessionName });
-                return {
-                    success: true,
-                    sessionName,
-                    message: 'Session already exists'
-                };
+                this.logger.info('Team member session already exists, killing for clean restart', { sessionName });
             }
-            // Kill existing session if it exists (cleanup)
             await this.killSession(sessionName);
+            // Wait for cleanup
+            await new Promise(resolve => setTimeout(resolve, 1000));
             // Create new tmux session
             const createCommand = [
                 'new-session',
@@ -375,8 +327,16 @@ Start all teams on Phase 1 simultaneously.`.trim();
                 `export AGENTMUX_ROLE="${config.role}"`,
                 'Enter'
             ]);
-            // Read and execute initialize_claude.sh commands line by line
-            await this.executeClaudeInitScript(sessionName);
+            // Use the robust 4-step escalation system for agent initialization
+            const initResult = await this.initializeAgentWithRegistration(sessionName, config.role, config.projectPath, 90000, config.memberId);
+            if (!initResult.success) {
+                throw new Error(`Agent initialization failed: ${initResult.message}`);
+            }
+            this.logger.info('Agent initialized successfully with registration', {
+                sessionName,
+                role: config.role,
+                message: initResult.message
+            });
             // Start streaming output
             this.startOutputStreaming(sessionName);
             this.logger.info('Team member session created successfully', { sessionName, role: config.role });
@@ -430,7 +390,7 @@ Start all teams on Phase 1 simultaneously.`.trim();
                 'Enter'
             ]);
             // Read and execute initialize_claude.sh commands line by line
-            await this.executeClaudeInitScript(sessionName);
+            await this.executeClaudeInitScript(sessionName, config.projectPath);
             // Start streaming output
             this.startOutputStreaming(sessionName);
             return sessionName;
@@ -468,14 +428,13 @@ Start all teams on Phase 1 simultaneously.`.trim();
             const chunkSize = 1500; // Smaller, more conservative chunk size
             if (cleanMessage.length > chunkSize) {
                 console.log(`Sending large message (${cleanMessage.length} chars) to ${sessionName} in chunks`);
-                // Split message into chunks and send each one
+                // Split message into chunks and send each one (without literal flag to avoid paste behavior)
                 for (let i = 0; i < cleanMessage.length; i += chunkSize) {
                     const chunk = cleanMessage.slice(i, i + chunkSize);
                     try {
                         await this.executeTmuxCommand([
                             'send-keys',
                             '-t', sessionName,
-                            '-l', // Use literal flag to prevent flag interpretation
                             chunk
                         ]);
                     }
@@ -488,15 +447,24 @@ Start all teams on Phase 1 simultaneously.`.trim();
                 }
             }
             else {
-                // Send message directly with literal flag for smaller messages
+                // Send message without literal flag to avoid paste behavior in Claude Code
                 console.log(`Sending message (${cleanMessage.length} chars) to ${sessionName}`);
                 try {
-                    await this.executeTmuxCommand([
-                        'send-keys',
-                        '-t', sessionName,
-                        '-l', // Use literal flag to prevent flag interpretation
-                        cleanMessage
-                    ]);
+                    // Split into smaller chunks to avoid paste behavior
+                    const maxChunk = 200; // Much smaller chunks to avoid paste detection
+                    const chunks = [];
+                    for (let i = 0; i < cleanMessage.length; i += maxChunk) {
+                        chunks.push(cleanMessage.substring(i, i + maxChunk));
+                    }
+                    for (const chunk of chunks) {
+                        await this.executeTmuxCommand([
+                            'send-keys',
+                            '-t', sessionName,
+                            chunk
+                        ]);
+                        // Small delay between chunks to ensure proper input
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
                 }
                 catch (error) {
                     console.error(`Error sending message to ${sessionName}:`, error);
@@ -714,7 +682,7 @@ Start all teams on Phase 1 simultaneously.`.trim();
     /**
      * Execute Claude initialization script by reading commands line by line
      */
-    async executeClaudeInitScript(sessionName) {
+    async executeClaudeInitScript(sessionName, targetPath) {
         try {
             const { readFile } = await import('fs/promises');
             const initScriptPath = '/Users/yellowsunhy/Desktop/projects/justslash/agentmux/config/initialize_claude.sh';
@@ -723,8 +691,20 @@ Start all teams on Phase 1 simultaneously.`.trim();
             const commands = scriptContent.trim().split('\n');
             this.logger.info('Executing Claude initialization script', {
                 sessionName,
-                commandCount: commands.length
+                commandCount: commands.length,
+                targetPath: targetPath || process.cwd()
             });
+            // First, change to target directory to scope Claude access
+            const cdPath = targetPath || process.cwd();
+            this.logger.info('Changing directory before Claude init', { sessionName, cdPath });
+            await this.executeTmuxCommand([
+                'send-keys',
+                '-t', sessionName,
+                `cd "${cdPath}"`,
+                'Enter'
+            ]);
+            // Wait for cd command to execute
+            await new Promise(resolve => setTimeout(resolve, 1000));
             // Execute each command line by line with tmux send-keys
             for (const command of commands) {
                 const trimmedCommand = command.trim();
@@ -797,46 +777,440 @@ Start all teams on Phase 1 simultaneously.`.trim();
     /**
      * Build system prompt for Claude Code agent
      */
-    buildSystemPrompt(config) {
-        const basePrompt = `
+    async buildSystemPrompt(config) {
+        // Try to load role-specific prompt from config/prompts directory
+        const promptFileName = `${config.role.toLowerCase().replace(/\s+/g, '-')}-prompt.md`;
+        const promptPath = path.resolve(process.cwd(), 'config', 'prompts', promptFileName);
+        try {
+            await access(promptPath);
+            let promptContent = await readFile(promptPath, 'utf8');
+            // Replace template variables
+            promptContent = promptContent.replace(/\{\{SESSION_ID\}\}/g, config.name || 'unknown');
+            return promptContent.trim();
+        }
+        catch (error) {
+            // Fallback to generic prompt if specific role prompt not found
+            this.logger.warn(`Role-specific prompt not found: ${promptPath}, using fallback`, { role: config.role });
+            const fallbackPrompt = `
 # AgentMux Agent: ${config.role.toUpperCase()}
 
-You are a ${config.role} agent in the AgentMux system. You have access to MCP tools for team communication and project management.
+You are a ${config.role} agent in the AgentMux system.
 
-## Your Role
-${config.systemPrompt}
+## IMPORTANT: Registration Required
+Immediately call the 'register_agent_status' tool with your role to register as active, then await further instructions.
 
-## MCP Tools Available
-- send_message: Communicate with other agents
-- get_tickets: Retrieve project tickets
-- update_ticket: Modify ticket status and details
-- report_progress: Update progress on assigned tasks
-- get_team_status: Check status of other team members
+Example:
+register_agent_status({ "role": "${config.role}" })
 
-## Git Discipline
-- Commit changes every 30 minutes maximum
-- Write descriptive commit messages
-- Always check git status before major operations
-
-## Communication Protocol
-- Use send_message for inter-agent communication
-- Report progress regularly using report_progress
-- Check in with team leads when blocked
+After registration, respond with "Agent registered and awaiting instructions" and do nothing else until you receive explicit task assignments.
 
 ## Project Context
-Session: ${config.name}
-Role: ${config.role}
-Project Path: ${config.projectPath || 'Not specified'}
+- Session: ${config.name}
+- Role: ${config.role}
+- Project Path: ${config.projectPath || 'Not specified'}
 
-Work autonomously within your role boundaries and communicate effectively with your team.
+Do not take autonomous action. Wait for explicit instructions.
 `;
-        return basePrompt.trim();
+            return fallbackPrompt.trim();
+        }
     }
     /**
      * Write system prompt to temporary file
      */
     async writePromptFile(filePath, content) {
         await writeFile(filePath, content, 'utf8');
+    }
+    /**
+     * Initialize agent with progressive escalation until registration succeeds
+     */
+    async initializeAgentWithRegistration(sessionName, role, projectPath, timeout = 90000, memberId) {
+        const startTime = Date.now();
+        this.logger.info('Starting agent initialization with registration', {
+            sessionName,
+            role,
+            timeout
+        });
+        // Clear detection cache to ensure fresh Claude detection
+        this.detectionResults.delete(sessionName);
+        this.detectionInProgress.set(sessionName, false);
+        this.logger.debug('Cleared Claude detection cache', { sessionName });
+        // Step 1: Try direct prompt (10 seconds)
+        try {
+            this.logger.info('Step 1: Attempting direct registration prompt', { sessionName });
+            const step1Success = await this.tryDirectRegistration(sessionName, role, 15000, memberId);
+            if (step1Success) {
+                return { success: true, message: 'Agent registered successfully via direct prompt' };
+            }
+        }
+        catch (error) {
+            this.logger.warn('Step 1 failed', { sessionName, error: error instanceof Error ? error.message : String(error) });
+        }
+        // Step 2: Ctrl+C cleanup + reinit (30 seconds)
+        if (Date.now() - startTime < timeout - 35000) {
+            try {
+                this.logger.info('Step 2: Attempting cleanup and reinitialization', { sessionName });
+                const step2Success = await this.tryCleanupAndReinit(sessionName, role, 30000, projectPath, memberId);
+                if (step2Success) {
+                    return { success: true, message: 'Agent registered successfully after cleanup and reinit' };
+                }
+            }
+            catch (error) {
+                this.logger.warn('Step 2 failed', { sessionName, error: error instanceof Error ? error.message : String(error) });
+            }
+        }
+        // Step 3: Full session recreation (45 seconds)
+        if (Date.now() - startTime < timeout - 50000) {
+            try {
+                this.logger.info('Step 3: Attempting full session recreation', { sessionName });
+                const step3Success = await this.tryFullRecreation(sessionName, role, 45000, projectPath, memberId);
+                if (step3Success) {
+                    return { success: true, message: 'Agent registered successfully after full recreation' };
+                }
+            }
+            catch (error) {
+                this.logger.warn('Step 3 failed', { sessionName, error: error instanceof Error ? error.message : String(error) });
+            }
+        }
+        // Step 4: Give up
+        const errorMsg = `Failed to initialize agent after all escalation attempts (${Math.round((Date.now() - startTime) / 1000)}s)`;
+        this.logger.error(errorMsg, { sessionName, role });
+        return { success: false, error: errorMsg };
+    }
+    /**
+     * Step 1: Try direct registration prompt
+     */
+    async tryDirectRegistration(sessionName, role, timeout, memberId) {
+        // First check if Claude is running before sending the prompt
+        const claudeRunning = await this.detectClaudeWithSlashCommand(sessionName);
+        if (!claudeRunning) {
+            this.logger.debug('Claude not detected in Step 1, skipping direct registration', { sessionName });
+            return false;
+        }
+        this.logger.debug('Claude detected, sending registration prompt', { sessionName });
+        // Send Ctrl+C to cancel any pending slash command from detection
+        await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+        await this.sendMessage(sessionName, prompt);
+        return await this.waitForRegistration(sessionName, role, timeout);
+    }
+    /**
+     * Step 2: Cleanup with Ctrl+C and reinitialize
+     */
+    async tryCleanupAndReinit(sessionName, role, timeout, projectPath, memberId) {
+        // Send 3 Ctrl+C signals
+        for (let i = 0; i < 3; i++) {
+            await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        // Wait a moment for cleanup
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Reinitialize Claude using the initialization script
+        await this.executeClaudeInitScript(sessionName, projectPath);
+        // Wait for Claude to be ready (check for "Welcome to Claude Code!")
+        const isReady = await this.waitForClaudeReady(sessionName, 45000);
+        if (!isReady) {
+            throw new Error('Failed to reinitialize Claude within timeout');
+        }
+        // Additional verification: Use `/` detection to confirm Claude is responding
+        this.logger.debug('Claude welcome detected, verifying with slash command', { sessionName });
+        const claudeResponding = await this.detectClaudeWithSlashCommand(sessionName);
+        if (!claudeResponding) {
+            throw new Error('Claude not responding to commands after initialization');
+        }
+        this.logger.debug('Claude confirmed ready, sending registration prompt', { sessionName });
+        // Send Ctrl+C to cancel any pending slash command from detection
+        await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        // Send registration prompt
+        const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+        await this.sendMessage(sessionName, prompt);
+        return await this.waitForRegistration(sessionName, role, timeout);
+    }
+    /**
+     * Step 3: Kill session and recreate completely
+     */
+    async tryFullRecreation(sessionName, role, timeout, projectPath, memberId) {
+        // Kill existing session
+        await this.killSession(sessionName);
+        // Wait for cleanup
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Recreate session based on role
+        if (role === 'orchestrator') {
+            const config = {
+                sessionName,
+                projectPath: projectPath || process.cwd()
+            };
+            const createResult = await this.createOrchestratorSession(config);
+            if (!createResult.success) {
+                throw new Error(`Failed to recreate orchestrator session: ${createResult.error}`);
+            }
+            // Initialize Claude for orchestrator using script (stay in agentmux project)
+            await this.executeClaudeInitScript(sessionName, process.cwd());
+            // Wait for Claude to be ready
+            const isReady = await this.waitForClaudeReady(sessionName, 45000);
+            if (!isReady) {
+                throw new Error('Failed to initialize Claude in recreated orchestrator session within timeout');
+            }
+            // Additional verification: Use `/` detection to confirm Claude is responding
+            this.logger.debug('Claude ready detected for orchestrator, verifying with slash command', { sessionName });
+            const claudeResponding = await this.detectClaudeWithSlashCommand(sessionName);
+            if (!claudeResponding) {
+                throw new Error('Claude not responding to commands after orchestrator recreation');
+            }
+            this.logger.debug('Claude confirmed ready for orchestrator in Step 3, sending registration prompt', { sessionName });
+            // Send Ctrl+C to cancel any pending slash command from detection  
+            await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        else {
+            // For other roles, create basic session and initialize Claude
+            await this.executeTmuxCommand(['new-session', '-d', '-s', sessionName, '-c', projectPath || process.cwd()]);
+            // Initialize Claude using the initialization script
+            await this.executeClaudeInitScript(sessionName, projectPath);
+            // Wait for Claude to be ready
+            const isReady = await this.waitForClaudeReady(sessionName, 45000);
+            if (!isReady) {
+                throw new Error('Failed to initialize Claude in recreated session within timeout');
+            }
+            // Additional verification: Use `/` detection to confirm Claude is responding
+            this.logger.debug('Claude ready detected, verifying with slash command', { sessionName });
+            const claudeResponding = await this.detectClaudeWithSlashCommand(sessionName);
+            if (!claudeResponding) {
+                throw new Error('Claude not responding to commands after full recreation');
+            }
+            this.logger.debug('Claude confirmed ready in Step 3, sending registration prompt', { sessionName });
+            // Send Ctrl+C to cancel any pending slash command from detection
+            await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        // Send registration prompt
+        const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+        await this.sendMessage(sessionName, prompt);
+        return await this.waitForRegistration(sessionName, role, timeout);
+    }
+    /**
+     * Load registration prompt from config files
+     */
+    async loadRegistrationPrompt(role, sessionName, memberId) {
+        try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const promptPath = path.join(process.cwd(), 'config', 'prompts', `${role}-prompt.md`);
+            let prompt = await fs.readFile(promptPath, 'utf8');
+            // Replace session ID and member ID placeholders
+            prompt = prompt.replace(/\{\{SESSION_ID\}\}/g, sessionName);
+            if (memberId) {
+                prompt = prompt.replace(/\{\{MEMBER_ID\}\}/g, memberId);
+            }
+            else {
+                // For orchestrator or cases without member ID, remove the memberId parameter
+                prompt = prompt.replace(/,\s*"memberId":\s*"\{\{MEMBER_ID\}\}"/g, '');
+            }
+            return prompt;
+        }
+        catch (error) {
+            // Fallback to inline prompt if file doesn't exist
+            this.logger.warn('Could not load prompt from config, using fallback', { role, error: error instanceof Error ? error.message : String(error) });
+            return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionId": "${sessionName}"}`;
+        }
+    }
+    /**
+     * Wait for agent registration to complete
+     */
+    async waitForRegistration(sessionName, role, timeout) {
+        const startTime = Date.now();
+        const checkInterval = 5000; // Check every 5 seconds to prevent overlapping with `/` detection
+        while (Date.now() - startTime < timeout) {
+            try {
+                if (await this.checkAgentRegistration(sessionName, role)) {
+                    this.logger.info('Agent registration confirmed', { sessionName, role });
+                    return true;
+                }
+                await new Promise(resolve => setTimeout(resolve, checkInterval));
+            }
+            catch (error) {
+                this.logger.warn('Error checking registration', { sessionName, role, error: error instanceof Error ? error.message : String(error) });
+                await new Promise(resolve => setTimeout(resolve, checkInterval));
+            }
+        }
+        this.logger.warn('Timeout waiting for agent registration', { sessionName, role, timeout });
+        return false;
+    }
+    /**
+     * Check if agent is properly registered
+     */
+    async checkAgentRegistration(sessionName, role) {
+        try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const os = await import('os');
+            // Step 1: Check if tmux session exists
+            if (!(await this.sessionExists(sessionName))) {
+                this.logger.debug('Session does not exist', { sessionName });
+                return false;
+            }
+            // Step 2: Use `/` command to detect if Claude is running
+            const claudeRunning = await this.detectClaudeWithSlashCommand(sessionName);
+            if (!claudeRunning) {
+                this.logger.debug('Claude not detected in session', { sessionName });
+                return false;
+            }
+            // Step 3: Check registration status
+            if (role === 'orchestrator') {
+                // For orchestrator, check teams.json orchestrator status
+                try {
+                    const teamsPath = path.join(os.homedir(), '.agentmux', 'teams.json');
+                    const teamsData = await fs.readFile(teamsPath, 'utf8');
+                    const data = JSON.parse(teamsData);
+                    // Handle both new format and old format
+                    if (data.orchestrator) {
+                        return data.orchestrator.status === 'active';
+                    }
+                    // Also check terminal output for confirmation messages
+                    const output = await this.capturePane(sessionName, 15);
+                    const registrationIndicators = [
+                        'registered as the orchestrator',
+                        'Perfect! I\'m now registered',
+                        'I\'m now registered as the orchestrator',
+                        'registered successfully',
+                        'I\'m ready to coordinate',
+                        'ready to coordinate and manage',
+                        'registered as active',
+                        'registration complete'
+                    ];
+                    const outputLower = output.toLowerCase();
+                    for (const indicator of registrationIndicators) {
+                        if (outputLower.includes(indicator.toLowerCase())) {
+                            this.logger.info('Found orchestrator registration confirmation', {
+                                sessionName,
+                                indicator,
+                                output: output.slice(-200)
+                            });
+                            return true;
+                        }
+                    }
+                }
+                catch (error) {
+                    this.logger.debug('Could not check orchestrator status in teams.json', { error: error instanceof Error ? error.message : String(error) });
+                }
+                return false;
+            }
+            // For team members, check teams.json
+            const teamsPath = path.join(os.homedir(), '.agentmux', 'teams.json');
+            try {
+                const teamsData = await fs.readFile(teamsPath, 'utf8');
+                const data = JSON.parse(teamsData);
+                // Handle both new format (data.teams) and old format (array)
+                const teams = data.teams || (Array.isArray(data) ? data : []);
+                // Find team member with matching sessionName
+                for (const team of teams) {
+                    if (team.members) {
+                        for (const member of team.members) {
+                            if (member.sessionName === sessionName && member.role === role) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (error) {
+                this.logger.debug('Could not read teams.json', { error: error instanceof Error ? error.message : String(error) });
+            }
+            return false;
+        }
+        catch (error) {
+            this.logger.error('Error checking agent registration', { sessionName, role, error: error instanceof Error ? error.message : String(error) });
+            return false;
+        }
+    }
+    /**
+     * Detect if Claude Code is running using the `/` command trick
+     */
+    async detectClaudeWithSlashCommand(sessionName) {
+        try {
+            // First check if we have a recent cached result
+            const cached = this.detectionResults.get(sessionName);
+            if (cached && (Date.now() - cached.timestamp) < 30000) {
+                this.logger.debug('Using cached Claude detection result (immediate)', { sessionName, isClaudeRunning: cached.isClaudeRunning, age: Date.now() - cached.timestamp });
+                return cached.isClaudeRunning;
+            }
+            // Check if detection is already in progress
+            if (this.detectionInProgress.get(sessionName)) {
+                this.logger.debug('Claude detection already in progress, using cached result if available', { sessionName });
+                // Return cached result if recent (within last 30 seconds)
+                const cached = this.detectionResults.get(sessionName);
+                if (cached && (Date.now() - cached.timestamp) < 30000) {
+                    this.logger.debug('Using cached Claude detection result', { sessionName, isClaudeRunning: cached.isClaudeRunning, age: Date.now() - cached.timestamp });
+                    return cached.isClaudeRunning;
+                }
+                // Wait for ongoing detection to complete
+                let attempts = 0;
+                while (this.detectionInProgress.get(sessionName) && attempts < 20) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    attempts++;
+                }
+                // Return cached result if detection completed
+                const result = this.detectionResults.get(sessionName);
+                if (result && (Date.now() - result.timestamp) < 30000) {
+                    this.logger.debug('Using cached result after waiting', { sessionName, isClaudeRunning: result.isClaudeRunning });
+                    return result.isClaudeRunning;
+                }
+            }
+            // Set detection in progress
+            this.detectionInProgress.set(sessionName, true);
+            this.logger.debug('Starting Claude detection via slash command', { sessionName });
+            // Step 1: Capture current terminal content length
+            const beforeOutput = await this.capturePane(sessionName, 50);
+            const beforeLength = beforeOutput.length;
+            // Step 2: Send `/` command
+            await this.executeTmuxCommand(['send-keys', '-t', sessionName, '/']);
+            // Step 3: Wait for response
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            // Step 4: Capture terminal content after
+            const afterOutput = await this.capturePane(sessionName, 50);
+            const afterLength = afterOutput.length;
+            const lengthDifference = afterLength - beforeLength;
+            this.logger.debug('Claude detection via slash command completed', {
+                sessionName,
+                beforeLength,
+                afterLength,
+                lengthDifference
+            });
+            // Analyze the difference:
+            // 0 difference = unresponsive
+            // < 3 chars = regular terminal (just echoed `/`)
+            // > 3 chars = Claude Code (command palette appeared)
+            let isClaudeRunning = false;
+            if (lengthDifference === 0) {
+                this.logger.debug('Terminal appears unresponsive', { sessionName });
+                isClaudeRunning = false;
+            }
+            else if (lengthDifference < 3) {
+                this.logger.debug('Regular terminal detected (not Claude)', { sessionName, lengthDifference });
+                isClaudeRunning = false;
+            }
+            else {
+                this.logger.debug('Claude Code detected (command palette)', { sessionName, lengthDifference });
+                isClaudeRunning = true;
+                // Send Escape to close the command palette
+                await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'Escape']);
+            }
+            // Cache the result
+            this.detectionResults.set(sessionName, {
+                isClaudeRunning,
+                timestamp: Date.now()
+            });
+            return isClaudeRunning;
+        }
+        catch (error) {
+            this.logger.error('Error detecting Claude with slash command', { sessionName, error: error instanceof Error ? error.message : String(error) });
+            return false;
+        }
+        finally {
+            // Always clear the detection in progress flag
+            this.detectionInProgress.set(sessionName, false);
+        }
     }
 }
 //# sourceMappingURL=tmux.service.js.map

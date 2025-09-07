@@ -12,12 +12,14 @@ import { LoggerService } from '../services/logger.service.js';
 import { MonitoringService } from '../services/monitoring.service.js';
 import { WorkflowService } from '../services/workflow.service.js';
 import { ErrorTrackingService } from '../services/error-tracking.service.js';
-import { Team, Project, Ticket, TeamConfig, ApiResponse, ScheduledMessage } from '../types/index.js';
+import { PromptTemplateService } from '../services/prompt-template.service.js';
+import { Team, Project, Ticket, TeamConfig, TeamMember, ApiResponse, ScheduledMessage } from '../types/index.js';
 import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDeliveryLogModel } from '../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -28,6 +30,7 @@ export class ApiController {
   private taskTrackingService: TaskTrackingService;
   private taskFolderService: TaskFolderService;
   private activeProjectsService: ActiveProjectsService;
+  private promptTemplateService: PromptTemplateService;
 
   constructor(
     private storageService: StorageService,
@@ -39,6 +42,7 @@ export class ApiController {
     this.taskTrackingService = new TaskTrackingService();
     this.taskFolderService = new TaskFolderService();
     this.activeProjectsService = new ActiveProjectsService(this.storageService);
+    this.promptTemplateService = new PromptTemplateService();
   }
 
   // Team Management
@@ -91,6 +95,8 @@ export class ApiController {
           role: member.role,
           systemPrompt: member.systemPrompt,
           status: 'idle' as const,
+          agentStatus: 'inactive' as const,
+          workingStatus: 'idle' as const,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -145,7 +151,10 @@ export class ApiController {
     try {
       const teams = await this.storageService.getTeams();
       
-      // Create hardcoded Orchestrator team
+      // Get real orchestrator status
+      const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+      
+      // Create orchestrator team with real status
       const orchestratorTeam: Team = {
         id: 'orchestrator',
         name: 'Orchestrator Team',
@@ -157,22 +166,26 @@ export class ApiController {
             sessionName: 'agentmux-orc', // Hardcoded session ID
             role: 'orchestrator',
             systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-            status: 'idle',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            status: orchestratorStatus?.status === 'active' ? 'active' : 'idle',
+            agentStatus: orchestratorStatus?.agentStatus || (orchestratorStatus?.status === 'active' ? 'active' : 'inactive'),
+            workingStatus: orchestratorStatus?.workingStatus || 'idle',
+            createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+            updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
           }
         ],
-        status: 'idle',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        status: orchestratorStatus?.status === 'active' ? 'active' : 'idle',
+        createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+        updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
       };
       
       // Add orchestrator team at the beginning of the list
       const allTeams = [orchestratorTeam, ...teams];
       
+      // Include orchestrator status in response for banner
       res.json({
         success: true,
-        data: allTeams
+        data: allTeams,
+        orchestrator: orchestratorStatus
       } as ApiResponse<Team[]>);
 
     } catch (error) {
@@ -219,6 +232,7 @@ export class ApiController {
       
       // Handle orchestrator team specially
       if (id === 'orchestrator') {
+        const orchestratorStatus = await this.storageService.getOrchestratorStatus();
         const orchestratorTeam: Team = {
           id: 'orchestrator',
           name: 'Orchestrator Team',
@@ -230,14 +244,16 @@ export class ApiController {
               sessionName: 'agentmux-orc', // Hardcoded session ID
               role: 'orchestrator',
               systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-              status: 'idle',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
+              status: orchestratorStatus?.status === 'active' ? 'active' : 'idle',
+              agentStatus: orchestratorStatus?.agentStatus || (orchestratorStatus?.status === 'active' ? 'active' : 'inactive'),
+              workingStatus: orchestratorStatus?.workingStatus || 'idle',
+              createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+              updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
             }
           ],
-          status: 'idle',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
+          status: orchestratorStatus?.status === 'active' ? 'active' : 'idle',
+          createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+          updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
         };
         
         res.json({
@@ -428,7 +444,8 @@ export class ApiController {
                 name: member.name,
                 role: member.role,
                 systemPrompt: member.systemPrompt,
-                projectPath: assignedProject.path // Use the assigned project's path
+                projectPath: assignedProject.path, // Use the assigned project's path
+                memberId: member.id
               }, sessionName);
 
               if (createResult.success) {
@@ -870,6 +887,391 @@ The orchestrator should be aware that these team members are no longer available
       res.status(500).json({
         success: false,
         error: 'Failed to get team member session'
+      } as ApiResponse);
+    }
+  }
+
+  async addTeamMember(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const { name, role } = req.body;
+
+      if (!name || !role) {
+        res.status(400).json({
+          success: false,
+          error: 'Name and role are required'
+        } as ApiResponse);
+        return;
+      }
+
+      const teams = await this.storageService.getTeams();
+      const team = teams.find(t => t.id === id);
+
+      if (!team) {
+        res.status(404).json({
+          success: false,
+          error: 'Team not found'
+        } as ApiResponse);
+        return;
+      }
+
+      // Create new member
+      const newMember: TeamMember = {
+        id: `member-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        name: name.trim(),
+        sessionName: '', // Session name will be set when member is started
+        role: role as TeamMember['role'],
+        systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
+        status: 'idle',
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      // Add member to team
+      team.members.push(newMember);
+      team.updatedAt = new Date().toISOString();
+
+      await this.storageService.saveTeam(team);
+
+      res.json({
+        success: true,
+        data: newMember,
+        message: 'Team member added successfully'
+      } as ApiResponse<TeamMember>);
+
+    } catch (error) {
+      console.error('Error adding team member:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to add team member'
+      } as ApiResponse);
+    }
+  }
+
+  async updateTeamMember(req: Request, res: Response): Promise<void> {
+    try {
+      const { teamId, memberId } = req.params;
+      const updates = req.body;
+
+      const teams = await this.storageService.getTeams();
+      const team = teams.find(t => t.id === teamId);
+
+      if (!team) {
+        res.status(404).json({
+          success: false,
+          error: 'Team not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const memberIndex = team.members.findIndex(m => m.id === memberId);
+      if (memberIndex === -1) {
+        res.status(404).json({
+          success: false,
+          error: 'Team member not found'
+        } as ApiResponse);
+        return;
+      }
+
+      // Update member with provided fields
+      const updatedMember = {
+        ...team.members[memberIndex],
+        ...updates,
+        updatedAt: new Date().toISOString()
+      };
+
+      team.members[memberIndex] = updatedMember;
+      team.updatedAt = new Date().toISOString();
+
+      await this.storageService.saveTeam(team);
+
+      res.json({
+        success: true,
+        data: updatedMember,
+        message: 'Team member updated successfully'
+      } as ApiResponse<TeamMember>);
+
+    } catch (error) {
+      console.error('Error updating team member:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to update team member'
+      } as ApiResponse);
+    }
+  }
+
+  async deleteTeamMember(req: Request, res: Response): Promise<void> {
+    try {
+      const { teamId, memberId } = req.params;
+
+      const teams = await this.storageService.getTeams();
+      const team = teams.find(t => t.id === teamId);
+
+      if (!team) {
+        res.status(404).json({
+          success: false,
+          error: 'Team not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const memberIndex = team.members.findIndex(m => m.id === memberId);
+      if (memberIndex === -1) {
+        res.status(404).json({
+          success: false,
+          error: 'Team member not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const member = team.members[memberIndex];
+
+      // Stop member's tmux session if it exists
+      if (member.sessionName) {
+        try {
+          await this.tmuxService.killSession(member.sessionName);
+          console.log(`Killed tmux session for member ${member.name}: ${member.sessionName}`);
+        } catch (error) {
+          console.warn(`Failed to kill tmux session ${member.sessionName}:`, error);
+        }
+      }
+
+      // Remove member from team
+      team.members.splice(memberIndex, 1);
+      team.updatedAt = new Date().toISOString();
+
+      await this.storageService.saveTeam(team);
+
+      res.json({
+        success: true,
+        message: 'Team member removed successfully'
+      } as ApiResponse);
+
+    } catch (error) {
+      console.error('Error deleting team member:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to delete team member'
+      } as ApiResponse);
+    }
+  }
+
+  async startTeamMember(req: Request, res: Response): Promise<void> {
+    try {
+      const { teamId, memberId } = req.params;
+
+      const teams = await this.storageService.getTeams();
+      const team = teams.find(t => t.id === teamId);
+
+      if (!team) {
+        res.status(404).json({
+          success: false,
+          error: 'Team not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const memberIndex = team.members.findIndex(m => m.id === memberId);
+      if (memberIndex === -1) {
+        res.status(404).json({
+          success: false,
+          error: 'Team member not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const member = team.members[memberIndex];
+
+      // Check if member already has an active session
+      if (member.sessionName) {
+        const sessions = await this.tmuxService.listSessions();
+        const hasActiveSession = sessions.some(s => s.sessionName === member.sessionName);
+        
+        if (hasActiveSession) {
+          res.status(400).json({
+            success: false,
+            error: 'Team member already has an active session'
+          } as ApiResponse);
+          return;
+        }
+      }
+
+      // Check if member is already in activating or active state
+      if (member.status === 'activating' || member.status === 'active') {
+        res.status(400).json({
+          success: false,
+          error: `Team member is already ${member.status}`
+        } as ApiResponse);
+        return;
+      }
+
+      // Update member status to activating
+      team.members[memberIndex] = {
+        ...member,
+        status: 'activating', // Legacy field for backward compatibility
+        agentStatus: 'activating', // New agent connection status
+        workingStatus: member.workingStatus || 'idle', // Initialize working status if not set
+        updatedAt: new Date().toISOString()
+      };
+      
+      await this.storageService.saveTeam(team);
+
+      // Create tmux session for the member
+      try {
+        const sessionConfig = {
+          name: member.name,
+          role: member.role,
+          systemPrompt: member.systemPrompt,
+          projectPath: team.currentProject ? 
+            (await this.storageService.getProjects()).find(p => p.id === team.currentProject)?.path : 
+            undefined,
+          memberId: member.id
+        };
+
+        // Generate session name similar to how it's done in startTeam
+        const teamSlug = team.name.toLowerCase().replace(/\s+/g, '-');
+        const memberSlug = member.name.toLowerCase().replace(/\s+/g, '-');
+        const memberIdSlug = member.id.substring(0, 8);
+        const sessionName = `${teamSlug}-${memberSlug}-${memberIdSlug}`;
+
+        const createResult = await this.tmuxService.createTeamMemberSession(sessionConfig, sessionName);
+
+        if (createResult.success) {
+          // Update member with session information
+          team.members[memberIndex] = {
+            ...team.members[memberIndex],
+            sessionName: createResult.sessionName || sessionName,
+            status: 'activating', // Will be updated to 'active' once Claude reports ready
+            updatedAt: new Date().toISOString()
+          };
+
+          await this.storageService.saveTeam(team);
+
+          res.json({
+            success: true,
+            data: {
+              memberId: member.id,
+              sessionName: createResult.sessionName,
+              status: 'activating'
+            },
+            message: `Team member ${member.name} started successfully`
+          } as ApiResponse);
+
+        } else {
+          // Revert status on failure
+          team.members[memberIndex] = {
+            ...member,
+            status: (member.status as TeamMember['status']) === 'activating' ? 'idle' : member.status,
+            updatedAt: new Date().toISOString()
+          };
+          
+          await this.storageService.saveTeam(team);
+
+          res.status(500).json({
+            success: false,
+            error: createResult.error || 'Failed to create team member session'
+          } as ApiResponse);
+        }
+
+      } catch (error) {
+        // Revert status on failure
+        team.members[memberIndex] = {
+          ...member,
+          status: (member.status as TeamMember['status']) === 'activating' ? 'idle' : member.status,
+          updatedAt: new Date().toISOString()
+        };
+        
+        await this.storageService.saveTeam(team);
+
+        console.error('Error starting team member:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Failed to start team member'
+        } as ApiResponse);
+      }
+
+    } catch (error) {
+      console.error('Error starting team member:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to start team member'
+      } as ApiResponse);
+    }
+  }
+
+  async stopTeamMember(req: Request, res: Response): Promise<void> {
+    try {
+      const { teamId, memberId } = req.params;
+
+      const teams = await this.storageService.getTeams();
+      const team = teams.find(t => t.id === teamId);
+
+      if (!team) {
+        res.status(404).json({
+          success: false,
+          error: 'Team not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const memberIndex = team.members.findIndex(m => m.id === memberId);
+      if (memberIndex === -1) {
+        res.status(404).json({
+          success: false,
+          error: 'Team member not found'
+        } as ApiResponse);
+        return;
+      }
+
+      const member = team.members[memberIndex];
+
+      try {
+        // Kill the tmux session if it exists (ignore errors if session doesn't exist)
+        if (member.sessionName) {
+          try {
+            await this.tmuxService.killSession(member.sessionName);
+          } catch (error) {
+            // Log but don't fail - session might already be dead
+            console.log(`Session ${member.sessionName} could not be killed (might already be dead):`, error);
+          }
+        }
+
+        // Always update member status to inactive regardless of session existence
+        team.members[memberIndex] = {
+          ...member,
+          sessionName: '',
+          status: 'idle',
+          agentStatus: 'inactive',
+          workingStatus: 'idle',
+          updatedAt: new Date().toISOString()
+        };
+
+        await this.storageService.saveTeam(team);
+
+        res.json({
+          success: true,
+          data: {
+            memberId: member.id,
+            status: 'idle'
+          },
+          message: `Team member ${member.name} stopped successfully`
+        } as ApiResponse);
+
+      } catch (error) {
+        console.error('Error stopping team member session:', error);
+        res.status(500).json({
+          success: false,
+          error: 'Failed to stop team member session'
+        } as ApiResponse);
+      }
+
+    } catch (error) {
+      console.error('Error stopping team member:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to stop team member'
       } as ApiResponse);
     }
   }
@@ -3515,6 +3917,178 @@ help - Show this help message`;
     }
   }
 
+  async setupOrchestrator(req: Request, res: Response): Promise<void> {
+    try {
+      const orchestratorSession = 'agentmux-orc';
+      
+      console.log('Setting up orchestrator session:', orchestratorSession);
+
+      // Check if session already exists and is properly registered
+      const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
+      
+      if (sessionExists) {
+        console.log('Orchestrator tmux session already exists - checking registration status:', orchestratorSession);
+        
+        // Check if orchestrator is properly registered
+        const registrationStatus = await this.checkAgentRegistrationStatus('orchestrator');
+        
+        if (registrationStatus.registered) {
+          console.log('Orchestrator is already registered and active');
+          res.json({
+            success: true,
+            message: 'Orchestrator session already running and registered',
+            sessionName: orchestratorSession
+          });
+          return;
+        }
+      }
+
+      // Create orchestrator session if it doesn't exist
+      if (!sessionExists) {
+        console.log('Creating new orchestrator session');
+        const createResult = await this.tmuxService.createOrchestratorSession({
+          sessionName: orchestratorSession,
+          projectPath: process.cwd(),
+          windowName: 'Orchestrator'
+        });
+
+        if (!createResult.success) {
+          throw new Error(createResult.error || 'Failed to create orchestrator session');
+        }
+      }
+
+      // Use the new progressive escalation system
+      console.log('Initializing orchestrator with progressive escalation');
+      const initResult = await this.tmuxService.initializeAgentWithRegistration(
+        orchestratorSession,
+        'orchestrator',
+        process.cwd(),
+        90000 // 90 seconds total timeout
+      );
+      
+      if (!initResult.success) {
+        throw new Error(initResult.error || 'Failed to initialize and register orchestrator');
+      }
+
+      console.log('Orchestrator setup completed successfully:', initResult.message);
+
+      res.json({
+        success: true,
+        message: initResult.message || 'Orchestrator session created and registered successfully',
+        sessionName: orchestratorSession
+      });
+      
+    } catch (error) {
+      console.error('Error setting up orchestrator session:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to setup orchestrator session'
+      });
+    }
+  }
+
+  private buildOrchestratorSystemPrompt(sessionName: string): string {
+    return `# AgentMux Orchestrator
+
+You are the AgentMux orchestrator, responsible for managing and coordinating development teams.
+
+## IMPORTANT: MCP Tool Registration Required
+You must immediately use the AgentMux MCP tool called 'register_agent_status' to register yourself as active. This is NOT a shell command - it's an MCP tool available to you.
+
+Call the MCP tool like this:
+- Tool name: register_agent_status
+- Parameters: {"role": "orchestrator", "sessionId": "${sessionName}"}
+
+After successful registration, respond with "Orchestrator registered and awaiting tasks" and then wait for explicit project assignments or task instructions.
+
+## Your Responsibilities
+- Coordinate multiple development teams
+- Manage project workflows and timelines  
+- Ensure proper git commit practices (30-minute intervals)
+- Monitor team progress and resolve blockers
+- Assign and distribute tasks across team members
+
+## Available MCP Tools
+You have access to AgentMux MCP tools for:
+- Team management and coordination (register_agent_status, etc.)
+- Task assignment and tracking
+- Git operations and commit management
+- Project monitoring and status reporting
+
+Do NOT run shell commands like curl or bash scripts. Use only the MCP tools provided to you.
+
+Wait for explicit project assignments or task instructions from the user.`;
+  }
+
+  private async waitForOrchestratorRegistration(sessionName: string, timeout: number): Promise<boolean> {
+    const startTime = Date.now();
+    const checkInterval = 2000; // Check every 2 seconds
+    
+    console.log(`Waiting for orchestrator registration in session: ${sessionName} (timeout: ${timeout}ms)`);
+    
+    while (Date.now() - startTime < timeout) {
+      try {
+        // Check if the agent has registered by looking for the registration status
+        // This checks if the register_agent_status MCP tool was called successfully
+        const registrationStatus = await this.checkAgentRegistrationStatus('orchestrator');
+        
+        if (registrationStatus.registered) {
+          console.log('Orchestrator registration detected successfully');
+          return true;
+        }
+        
+        // Also check terminal output for registration messages
+        const terminalOutput = await this.tmuxService.capturePane(sessionName, 10);
+        
+        if (terminalOutput.includes('register_agent_status') || 
+            terminalOutput.includes('Orchestrator registered') ||
+            terminalOutput.includes('Agent registered')) {
+          console.log('Orchestrator registration activity detected in terminal output');
+          return true;
+        }
+        
+        // Wait before next check
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+        
+      } catch (error) {
+        console.warn('Error while waiting for orchestrator registration:', error);
+      }
+    }
+    
+    console.warn(`Timeout waiting for orchestrator registration in session: ${sessionName}`);
+    return false;
+  }
+
+  private async checkAgentRegistrationStatus(role: string): Promise<{registered: boolean, lastSeen?: string}> {
+    try {
+      // Check the runtime file for agent status tracking
+      // This would be populated by the /api/team-members/register-status endpoint
+      const runtimePath = path.join(process.env.AGENTMUX_HOME || path.join(os.homedir(), '.agentmux'), 'runtime.json');
+      
+      if (fsSync.existsSync(runtimePath)) {
+        const runtimeContent = await fs.readFile(runtimePath, 'utf-8');
+        const runtimeData = JSON.parse(runtimeContent);
+        
+        // Look for agent registration in runtime data
+        if (runtimeData.agentStatus && runtimeData.agentStatus[role]) {
+          const agentStatus = runtimeData.agentStatus[role];
+          const lastActivity = new Date(agentStatus.lastActivity || agentStatus.registeredAt).getTime();
+          const isRecent = Date.now() - lastActivity < 60000; // Active within last minute
+          
+          return {
+            registered: agentStatus.status === 'active' && isRecent,
+            lastSeen: agentStatus.lastActivity
+          };
+        }
+      }
+      
+      return { registered: false };
+    } catch (error) {
+      console.warn('Error checking agent registration status:', error);
+      return { registered: false };
+    }
+  }
+
   // Ticket Editor API endpoints
   async createTicket(req: Request, res: Response): Promise<void> {
     try {
@@ -5752,8 +6326,6 @@ help - Show this help message`;
    * Determine the next step for TPM based on current file state
    */
   private async determineTPMNextStep(project: any): Promise<any | null> {
-    const fs = require('fs').promises;
-    const path = require('path');
     
     const specsPath = path.join(project.path, '.agentmux', 'specs');
     const projectMdPath = path.join(specsPath, 'project.md');
@@ -5807,8 +6379,7 @@ help - Show this help message`;
     const configPath = '/Users/yellowsunhy/Desktop/projects/justslash/agentmux/config/build_spec_prompt.json';
     
     try {
-      const fs = require('fs');
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const config = JSON.parse(fsSync.readFileSync(configPath, 'utf8'));
       const step = config.steps.find((s: any) => s.id === nextStep.stepId);
       
       if (!step) {
@@ -5989,6 +6560,395 @@ help - Show this help message`;
       res.status(500).json({
         success: false,
         error: 'Failed to fetch tasks by milestone'
+      } as ApiResponse);
+    }
+  }
+
+  // Task assignment endpoints
+  async getOrchestratorStatus(req: Request, res: Response): Promise<void> {
+    try {
+      // Check if orchestrator session exists
+      const sessionExists = await this.tmuxService.sessionExists('agentmux-orc');
+      
+      res.json({
+        success: true,
+        running: sessionExists,
+        sessionName: sessionExists ? 'agentmux-orc' : null
+      } as ApiResponse);
+    } catch (error) {
+      console.error('Error checking orchestrator status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check orchestrator status'
+      } as ApiResponse);
+    }
+  }
+
+  async getTeamActivityStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const now = new Date().toISOString();
+      
+      // Check orchestrator status
+      const orchestratorRunning = await this.tmuxService.sessionExists('agentmux-orc');
+      
+      // Get all teams data
+      const teams = await this.storageService.getTeams();
+      const memberStatuses: any[] = [];
+      
+      // Process each team and ALL its members (not just active ones)
+      for (const team of teams) {
+        for (const member of team.members) {
+          // Check all members, but only do activity detection for active ones with sessions
+          if (member.agentStatus === 'active' && member.sessionName) {
+            try {
+              // Check if session still exists
+              const sessionExists = await this.tmuxService.sessionExists(member.sessionName);
+              if (!sessionExists) {
+                // Session no longer exists, update agentStatus to inactive
+                member.agentStatus = 'inactive';
+                member.workingStatus = 'idle';
+                member.lastActivityCheck = now;
+                memberStatuses.push({
+                  teamId: team.id,
+                  teamName: team.name,
+                  memberId: member.id,
+                  memberName: member.name,
+                  role: member.role,
+                  sessionName: member.sessionName,
+                  agentStatus: 'inactive',
+                  workingStatus: 'idle',
+                  lastActivityCheck: now,
+                  activityDetected: false
+                });
+                continue;
+              }
+
+              // Capture current terminal output
+              const currentOutput = await this.tmuxService.capturePane(member.sessionName, 50);
+              
+              // Get previous output from member's lastActivityCheck data
+              const previousOutput = (member as any).lastTerminalOutput || '';
+              
+              // Check for activity (delta in terminal output)
+              const activityDetected = currentOutput !== previousOutput && currentOutput.trim() !== '';
+              
+              // Update working status based on activity
+              const newWorkingStatus = activityDetected ? 'in_progress' : 'idle';
+              
+              // Update member data
+              member.workingStatus = newWorkingStatus;
+              member.lastActivityCheck = now;
+              (member as any).lastTerminalOutput = currentOutput;
+              
+              memberStatuses.push({
+                teamId: team.id,
+                teamName: team.name,
+                memberId: member.id,
+                memberName: member.name,
+                role: member.role,
+                sessionName: member.sessionName,
+                agentStatus: member.agentStatus,
+                workingStatus: newWorkingStatus,
+                lastActivityCheck: now,
+                activityDetected
+              });
+              
+            } catch (error) {
+              console.error(`Error checking activity for member ${member.id}:`, error);
+              memberStatuses.push({
+                teamId: team.id,
+                teamName: team.name,
+                memberId: member.id,
+                memberName: member.name,
+                role: member.role,
+                sessionName: member.sessionName,
+                agentStatus: member.agentStatus,
+                workingStatus: 'idle',
+                lastActivityCheck: now,
+                activityDetected: false,
+                error: error instanceof Error ? error.message : String(error)
+              });
+            }
+          } else {
+            // Include inactive members without activity checks
+            memberStatuses.push({
+              teamId: team.id,
+              teamName: team.name,
+              memberId: member.id,
+              memberName: member.name,
+              role: member.role,
+              sessionName: member.sessionName || '',
+              agentStatus: member.agentStatus || 'inactive',
+              workingStatus: member.workingStatus || 'idle',
+              lastActivityCheck: member.lastActivityCheck || now,
+              activityDetected: false
+            });
+          }
+        }
+      }
+      
+      // Save updated team data
+      for (const team of teams) {
+        await this.storageService.saveTeam(team);
+      }
+      
+      res.json({
+        success: true,
+        data: {
+          orchestrator: {
+            running: orchestratorRunning,
+            sessionName: orchestratorRunning ? 'agentmux-orc' : null
+          },
+          teams: teams, // Include full teams data
+          members: memberStatuses,
+          checkedAt: now,
+          totalMembers: memberStatuses.length,
+          totalActiveMembers: memberStatuses.filter(m => m.agentStatus === 'active').length
+        }
+      } as ApiResponse);
+      
+    } catch (error) {
+      console.error('Error checking team activity status:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to check team activity status'
+      } as ApiResponse);
+    }
+  }
+
+  async assignTaskToOrchestrator(req: Request, res: Response): Promise<void> {
+    try {
+      const { projectId } = req.params;
+      const { 
+        taskId, 
+        taskTitle, 
+        taskDescription, 
+        taskPriority, 
+        taskMilestone, 
+        projectName, 
+        projectPath 
+      } = req.body;
+
+      if (!taskId || !taskTitle) {
+        res.status(400).json({
+          success: false,
+          error: 'Task ID and title are required'
+        } as ApiResponse);
+        return;
+      }
+
+      // Check if orchestrator session exists
+      const sessionExists = await this.tmuxService.sessionExists('agentmux-orc');
+      if (!sessionExists) {
+        res.status(400).json({
+          success: false,
+          error: 'Orchestrator session is not running. Please start the orchestrator first.'
+        } as ApiResponse);
+        return;
+      }
+
+      // Build task assignment message for orchestrator using template
+      const assignmentMessage = await this.promptTemplateService.getOrchestratorTaskAssignmentPrompt({
+        projectName,
+        projectPath,
+        taskId,
+        taskTitle,
+        taskDescription,
+        taskPriority,
+        taskMilestone
+      });
+
+      // Send message to orchestrator
+      await this.tmuxService.sendMessage('agentmux-orc', assignmentMessage);
+
+      res.json({
+        success: true,
+        message: 'Task assigned to orchestrator successfully',
+        data: {
+          taskId,
+          taskTitle,
+          sessionName: 'agentmux-orc',
+          assignedAt: new Date().toISOString()
+        }
+      } as ApiResponse);
+
+    } catch (error) {
+      console.error('Error assigning task to orchestrator:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to assign task to orchestrator'
+      } as ApiResponse);
+    }
+  }
+
+  async reportMemberReady(req: Request, res: Response): Promise<void> {
+    try {
+      const { sessionName, role, capabilities, readyAt } = req.body;
+
+      if (!sessionName || !role) {
+        res.status(400).json({
+          success: false,
+          error: 'sessionName and role are required'
+        } as ApiResponse);
+        return;
+      }
+
+      // Find the team member by session name
+      const teams = await this.storageService.getTeams();
+      let memberFound = false;
+
+      for (const team of teams) {
+        for (const member of team.members) {
+          if (member.sessionName === sessionName) {
+            // Update member status to ready
+            member.status = 'ready';
+            member.readyAt = readyAt || new Date().toISOString();
+            member.capabilities = capabilities || [];
+            memberFound = true;
+            break;
+          }
+        }
+        if (memberFound) {
+          team.updatedAt = new Date().toISOString();
+          await this.storageService.saveTeam(team);
+          break;
+        }
+      }
+
+      if (!memberFound) {
+        console.warn(`Session ${sessionName} not found in any team, but reporting ready anyway`);
+      }
+
+      res.json({
+        success: true,
+        message: `Agent ${sessionName} reported ready with role ${role}`,
+        data: {
+          sessionName,
+          role,
+          capabilities,
+          readyAt
+        }
+      } as ApiResponse);
+
+    } catch (error) {
+      console.error('Error reporting member ready:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to report member ready'
+      } as ApiResponse);
+    }
+  }
+
+  /**
+   * Register member status (simple active registration)
+   */
+  async registerMemberStatus(req: Request, res: Response): Promise<void> {
+    console.log(`[API] 🚀 registerMemberStatus called`);
+    console.log(`[API] 📋 Request headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`[API] 📤 Request body:`, JSON.stringify(req.body, null, 2));
+    console.log(`[API] 🌐 Request URL:`, req.url);
+    console.log(`[API] 🔧 Request method:`, req.method);
+    
+    try {
+      const { sessionName, role, status, registeredAt, memberId } = req.body;
+      console.log(`[API] 📋 Extracted parameters:`, { sessionName, role, status, registeredAt, memberId });
+
+      if (!sessionName || !role) {
+        console.log(`[API] ❌ Missing required parameters - sessionName: ${sessionName}, role: ${role}`);
+        res.status(400).json({
+          success: false,
+          error: 'sessionName and role are required'
+        } as ApiResponse);
+        return;
+      }
+
+      // Handle orchestrator registration separately
+      if (role === 'orchestrator' && sessionName === 'agentmux-orc') {
+        console.log(`[API] 🎭 Handling orchestrator registration`);
+        try {
+          await this.storageService.updateOrchestratorStatus('active');
+          console.log(`[API] ✅ Orchestrator registered as active`);
+          
+          res.json({
+            success: true,
+            message: `Orchestrator ${sessionName} registered as active`,
+            sessionName: sessionName
+          } as ApiResponse);
+          return;
+        } catch (error) {
+          console.log(`[API] ❌ Error updating orchestrator status:`, error);
+          res.status(500).json({
+            success: false,
+            error: 'Failed to update orchestrator status'
+          } as ApiResponse);
+          return;
+        }
+      }
+
+      // Find the team member by memberId or session name and update to active
+      console.log(`[API] 🔍 Looking up team member with memberId: ${memberId}, sessionName: ${sessionName}`);
+      const teams = await this.storageService.getTeams();
+      console.log(`[API] 📋 Found ${teams.length} teams to search`);
+      let memberFound = false;
+
+      for (const team of teams) {
+        console.log(`[API] 🏗️ Searching team: ${team.name} (${team.members.length} members)`);
+        for (const member of team.members) {
+          const matchesId = memberId && member.id === memberId;
+          const matchesSession = member.sessionName === sessionName;
+          
+          if (matchesId || matchesSession) {
+            console.log(`[API] ✅ Found matching member: ${member.name} (${member.role})`);
+            console.log(`[API] 📋 Match type: ${matchesId ? 'memberId' : 'sessionName'}`);
+            
+            // Update member status to active (both legacy and new fields)
+            member.status = 'active'; // Legacy field for backward compatibility
+            member.agentStatus = 'active'; // New agent connection status
+            member.workingStatus = member.workingStatus || 'idle'; // Initialize working status if not set
+            member.readyAt = registeredAt || new Date().toISOString();
+            // Update session name if it's not set yet (when looked up by memberId)
+            if (memberId && member.id === memberId && !member.sessionName) {
+              member.sessionName = sessionName;
+              console.log(`[API] 📝 Updated member sessionName to: ${sessionName}`);
+            }
+            memberFound = true;
+            break;
+          }
+        }
+        if (memberFound) {
+          team.updatedAt = new Date().toISOString();
+          console.log(`[API] 💾 Saving updated team: ${team.name}`);
+          await this.storageService.saveTeam(team);
+          break;
+        }
+      }
+
+      if (!memberFound) {
+        console.log(`[API] ⚠️ Session ${sessionName}${memberId ? ` (member ID: ${memberId})` : ''} not found in any team, but registering status anyway`);
+      }
+
+      console.log(`[API] ✅ Registration successful, sending response`);
+      res.json({
+        success: true,
+        message: `Agent ${sessionName} registered as active with role ${role}`,
+        data: {
+          sessionName,
+          role,
+          status: 'active',
+          registeredAt: registeredAt || new Date().toISOString()
+        }
+      } as ApiResponse);
+
+    } catch (error) {
+      console.log(`[API] ❌ Exception in registerMemberStatus:`, error);
+      console.log(`[API] 📋 Error details:`, {
+        name: error instanceof Error ? error.name : 'Unknown',
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : 'No stack trace'
+      });
+      res.status(500).json({
+        success: false,
+        error: 'Failed to register member status'
       } as ApiResponse);
     }
   }

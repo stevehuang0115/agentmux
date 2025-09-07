@@ -9,6 +9,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from './services/index.js';
+import { ActivityMonitorService } from './services/activity-monitor.service.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { TerminalGateway } from './websocket/terminal.gateway.js';
@@ -23,6 +24,7 @@ export class AgentMuxServer {
     tmuxService;
     schedulerService;
     messageSchedulerService;
+    activityMonitorService;
     apiController;
     terminalGateway;
     constructor(config) {
@@ -62,6 +64,7 @@ export class AgentMuxServer {
         this.tmuxService = new TmuxService();
         this.schedulerService = new SchedulerService(this.tmuxService, this.storageService);
         this.messageSchedulerService = new MessageSchedulerService(this.tmuxService, this.storageService);
+        this.activityMonitorService = ActivityMonitorService.getInstance();
         this.apiController = new ApiController(this.storageService, this.tmuxService, this.schedulerService, this.messageSchedulerService);
         this.terminalGateway = new TerminalGateway(this.io, this.tmuxService);
     }
@@ -150,6 +153,8 @@ export class AgentMuxServer {
             await this.tmuxService.initialize();
             // Start message scheduler
             await this.messageSchedulerService.start();
+            // Start activity monitoring
+            this.activityMonitorService.startPolling();
             // Start HTTP server
             await new Promise((resolve, reject) => {
                 this.httpServer.listen(this.config.webPort, () => {
@@ -187,6 +192,8 @@ export class AgentMuxServer {
             // Clean up schedulers
             this.schedulerService.cleanup();
             this.messageSchedulerService.cleanup();
+            // Stop activity monitoring
+            this.activityMonitorService.stopPolling();
             // Kill all tmux sessions
             const sessions = await this.tmuxService.listSessions();
             for (const session of sessions) {
