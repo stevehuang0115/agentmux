@@ -1,21 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Plus, Terminal } from 'lucide-react';
 import { Team, TeamMember } from '../types/index';
-import { TeamMemberCard } from '../components/TeamMemberCard';
 import { useTerminal } from '../contexts/TerminalContext';
-import { Button } from '../components/UI/Button';
 import { StartTeamModal } from '../components/StartTeamModal';
-import { ScoreCard, ScoreCardGrid } from '../components/UI/ScoreCard';
+import { TeamHeader, TeamOverview, Terminal, TeamStatus } from '../components/TeamDetail';
 import { safeParseJSON } from '../utils/api';
-import '../components/UI/ScoreCard.css';
-
-interface Terminal {
-  id: string;
-  name: string;
-  status: 'active' | 'inactive';
-  lastOutput: string;
-}
 
 export const TeamDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -26,8 +15,6 @@ export const TeamDetail: React.FC = () => {
   const [selectedTerminal, setSelectedTerminal] = useState<string>('');
   const [terminalOutput, setTerminalOutput] = useState<string>('');
   const [loading, setLoading] = useState(true);
-  const [showAddMember, setShowAddMember] = useState(false);
-  const [newMember, setNewMember] = useState({ name: '', role: '' });
   const [orchestratorSessionActive, setOrchestratorSessionActive] = useState(false);
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
@@ -237,7 +224,7 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
-  const getTeamStatus = () => {
+  const getTeamStatus = (): TeamStatus => {
     // For Orchestrator Team, check tmux session status
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
       return orchestratorSessionActive ? 'active' : 'idle';
@@ -249,8 +236,8 @@ export const TeamDetail: React.FC = () => {
       return 'active';
     }
     
-    // Fall back to the team status from the API
-    return team?.status || 'idle';
+    // No active sessions, team is idle
+    return 'idle';
   };
 
   const handleViewTerminal = () => {
@@ -260,126 +247,8 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
-  const renderCombinedOverviewTab = () => (
-    <div className="tab-content">
-      {/* Team Stats Section */}
-      <ScoreCardGrid variant="horizontal">
-        <ScoreCard 
-          label="Team Status" 
-          variant="horizontal"
-        >
-          <span className={`status-badge status-${getTeamStatus()}`}>
-            {getTeamStatus()?.toUpperCase()}
-          </span>
-        </ScoreCard>
-        
-        <ScoreCard 
-          label="Active Members" 
-          variant="horizontal"
-        >
-          <span className="score-card__value--number">
-            {team?.members?.filter(m => m.sessionName).length || 0} / {team?.members?.length || 0}
-          </span>
-        </ScoreCard>
-        
-        <ScoreCard 
-          label="Project" 
-          value={projectName || 'None'}
-          variant="horizontal"
-        />
-        
-        <ScoreCard 
-          label="Created" 
-          value={team?.createdAt ? new Date(team.createdAt).toLocaleDateString() : 'N/A'}
-          variant="horizontal"
-        />
-      </ScoreCardGrid>
-
-      {/* Team Description Section */}
-      {team?.description && (
-        <div className="team-description">
-          <h3>Description</h3>
-          <p>{team.description}</p>
-        </div>
-      )}
-
-      {/* Team Members Section */}
-      <div className="members-section">
-        <div className="members-header">
-          <h3>Team Members</h3>
-          {/* Hide Add Member button for Orchestrator Team */}
-          {!(team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') && (
-            <Button 
-              variant="primary"
-              onClick={() => setShowAddMember(!showAddMember)}
-              icon={Plus}
-            >
-              Add Member
-            </Button>
-          )}
-        </div>
-
-        {showAddMember && (
-          <div className="add-member-form">
-            <div className="form-row">
-              <input
-                type="text"
-                placeholder="Member name"
-                value={newMember.name}
-                onChange={(e) => setNewMember({ ...newMember, name: e.target.value })}
-                className="form-input"
-              />
-              <input
-                type="text"
-                placeholder="Role (e.g., Developer, PM, QA)"
-                value={newMember.role}
-                onChange={(e) => setNewMember({ ...newMember, role: e.target.value })}
-                className="form-input"
-              />
-              <Button 
-                variant="success"
-                onClick={handleAddMember}
-              >
-                Add
-              </Button>
-              <Button 
-                variant="secondary"
-                onClick={() => {
-                  setShowAddMember(false);
-                  setNewMember({ name: '', role: '' });
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-
-        <div className="members-list">
-          {team?.members?.map((member) => (
-            <TeamMemberCard
-              key={member.id}
-              member={member}
-              onUpdate={handleUpdateMember}
-              onDelete={handleDeleteMember}
-              onStart={handleStartMember}
-              onStop={handleStopMember}
-              teamId={id}
-            />
-          ))}
-          
-          {!team?.members?.length && (
-            <div className="empty-state">
-              <p>No team members yet. Add members to get started.</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const handleAddMember = async () => {
-    if (!newMember.name.trim() || !newMember.role.trim()) {
+  const handleAddMember = async (member: { name: string; role: string }) => {
+    if (!member.name.trim() || !member.role.trim()) {
       alert('Please fill in both name and role');
       return;
     }
@@ -390,12 +259,10 @@ export const TeamDetail: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(newMember),
+        body: JSON.stringify(member),
       });
 
       if (response.ok) {
-        setNewMember({ name: '', role: '' });
-        setShowAddMember(false);
         fetchTeamData();
       } else {
         const error = await response.text();
@@ -518,40 +385,27 @@ export const TeamDetail: React.FC = () => {
 
   return (
     <div className="team-detail">
-      <div className="page-header">
-        <div className="header-info">
-          <h1 className="page-title">{team.name}</h1>
-        </div>
-        <div className="header-controls">
-          {/* Team action buttons in header */}
-          {getTeamStatus() === 'idle' ? (
-            <Button variant="success" onClick={handleStartTeam}>
-              Start Team
-            </Button>
-          ) : (
-            <Button variant="secondary" onClick={handleStopTeam}>
-              Stop Team
-            </Button>
-          )}
-          
-          {/* Show View Terminal button for Orchestrator Team */}
-          {(team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') && (
-            <Button variant="primary" onClick={handleViewTerminal} icon={Terminal}>
-              View Terminal
-            </Button>
-          )}
-          
-          {/* Delete Team button - hide for Orchestrator Team */}
-          {!(team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') && (
-            <Button variant="danger" onClick={handleDeleteTeam}>
-              Delete Team
-            </Button>
-          )}
-        </div>
-      </div>
+      <TeamHeader
+        team={team}
+        teamStatus={getTeamStatus()}
+        orchestratorSessionActive={orchestratorSessionActive}
+        onStartTeam={handleStartTeam}
+        onStopTeam={handleStopTeam}
+        onViewTerminal={handleViewTerminal}
+        onDeleteTeam={handleDeleteTeam}
+      />
 
-      {/* Overview Content */}
-      {renderCombinedOverviewTab()}
+      <TeamOverview
+        team={team}
+        teamId={id!}
+        teamStatus={getTeamStatus()}
+        projectName={projectName}
+        onAddMember={handleAddMember}
+        onUpdateMember={handleUpdateMember}
+        onDeleteMember={handleDeleteMember}
+        onStartMember={handleStartMember}
+        onStopMember={handleStopMember}
+      />
 
       {/* Start Team Modal */}
       <StartTeamModal

@@ -230,17 +230,21 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
     return roleColors[role] || '#6b7280';
   };
 
-  const getStatusColor = (status: string) => {
+  const getAgentStatusColor = (agentStatus: string) => {
     const statusColors: Record<string, string> = {
-      idle: '#6b7280',
-      working: '#10b981',
-      blocked: '#ef4444',
-      terminated: '#9ca3af',
-      ready: '#10b981',
+      inactive: '#6b7280',
       activating: '#f59e0b', // Orange for activating state
       active: '#059669' // Bright green for active state
     };
-    return statusColors[status] || '#6b7280';
+    return statusColors[agentStatus] || '#6b7280';
+  };
+
+  const getWorkingStatusColor = (workingStatus: string) => {
+    const statusColors: Record<string, string> = {
+      idle: '#6b7280',
+      in_progress: '#10b981'
+    };
+    return statusColors[workingStatus] || '#6b7280';
   };
 
   const formatTimestamp = (timestamp: string) => {
@@ -262,9 +266,15 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
               </span>
               <span 
                 className="status-badge"
-                style={{ backgroundColor: getStatusColor(member.status) }}
+                style={{ backgroundColor: getAgentStatusColor(member.agentStatus) }}
               >
-                {member.status}
+                Agent: {member.agentStatus}
+              </span>
+              <span 
+                className="status-badge"
+                style={{ backgroundColor: getWorkingStatusColor(member.workingStatus) }}
+              >
+                Work: {member.workingStatus}
               </span>
             </div>
           </div>

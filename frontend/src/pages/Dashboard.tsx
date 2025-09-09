@@ -97,8 +97,8 @@ export const Dashboard: React.FC = () => {
           />
           
           <ScoreCard 
-            label="Working" 
-            value={teams.filter(t => t.status === 'working').length}
+            label="Active" 
+            value={teams.filter(t => t.members.some(m => m.agentStatus === 'active')).length}
             variant="dashboard"
           />
           

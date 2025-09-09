@@ -3,7 +3,7 @@ import { UserGroupIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { Team, TeamMember } from '@/types';
 
 interface TeamCreatorProps {
-  onTeamCreate: (team: Omit<Team, 'id' | 'status' | 'createdAt' | 'updatedAt'>) => void;
+  onTeamCreate: (team: Omit<Team, 'id' | 'createdAt' | 'updatedAt'>) => void;
   projectPath?: string;
   className?: string;
 }
@@ -66,7 +66,6 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
         sessionName: `${teamName.toLowerCase().replace(/\s+/g, '-')}-${role}`,
         role,
         systemPrompt: systemPrompt.trim(),
-        status: 'idle',
         agentStatus: 'inactive',
         workingStatus: 'idle',
         currentTickets: []

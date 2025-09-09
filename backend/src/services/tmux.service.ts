@@ -19,10 +19,92 @@ export class TmuxService extends EventEmitter {
   // State management for detection to prevent concurrent attempts
   private detectionInProgress: Map<string, boolean> = new Map();
   private detectionResults: Map<string, { isClaudeRunning: boolean; timestamp: number }> = new Map();
+  
+  // Memory management
+  private cleanupInterval: NodeJS.Timeout;
+  private readonly MAX_BUFFER_SIZE = 100; // Max lines per session buffer
+  private readonly CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
   constructor() {
     super();
     this.logger = LoggerService.getInstance().createComponentLogger('TmuxService');
+    
+    // Start periodic cleanup to prevent memory leaks
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupMemory();
+    }, this.CLEANUP_INTERVAL);
+  }
+
+  /**
+   * Clean up memory to prevent accumulation of old data
+   */
+  private cleanupMemory(): void {
+    try {
+      const now = Date.now();
+      
+      // Clean up old detection results (older than 10 minutes)
+      const MAX_DETECTION_AGE = 10 * 60 * 1000;
+      for (const [sessionName, result] of this.detectionResults.entries()) {
+        if (now - result.timestamp > MAX_DETECTION_AGE) {
+          this.detectionResults.delete(sessionName);
+        }
+      }
+      
+      // Trim output buffers to prevent excessive memory usage
+      for (const [sessionName, buffer] of this.outputBuffers.entries()) {
+        if (buffer.length > this.MAX_BUFFER_SIZE) {
+          // Keep only the most recent lines
+          const trimmedBuffer = buffer.slice(-this.MAX_BUFFER_SIZE);
+          this.outputBuffers.set(sessionName, trimmedBuffer);
+        }
+      }
+      
+      // Clean up detection progress for sessions that no longer exist
+      const activeSessions = new Set(this.sessions.keys());
+      for (const sessionName of this.detectionInProgress.keys()) {
+        if (!activeSessions.has(sessionName)) {
+          this.detectionInProgress.delete(sessionName);
+        }
+      }
+      
+      this.logger.debug('Memory cleanup completed', {
+        outputBuffersCount: this.outputBuffers.size,
+        detectionsCount: this.detectionResults.size,
+        activeSessionsCount: this.sessions.size
+      });
+      
+    } catch (error) {
+      this.logger.error('Error during memory cleanup', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /**
+   * Destroy the service and clean up resources
+   */
+  public destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+    }
+    
+    // Clean up all buffers
+    this.outputBuffers.clear();
+    this.detectionResults.clear();
+    this.detectionInProgress.clear();
+    
+    this.logger.info('TmuxService destroyed and resources cleaned up');
+  }
+
+  /**
+   * Force immediate memory cleanup (for emergency situations)
+   */
+  public forceCleanup(): void {
+    this.cleanupMemory();
+    
+    // More aggressive cleanup if needed
+    if (global.gc) {
+      global.gc();
+      this.logger.info('Forced garbage collection completed');
+    }
   }
 
   /**
@@ -636,6 +718,16 @@ Start all teams on Phase 1 simultaneously.`.trim();
    */
   async capturePane(sessionName: string, lines: number = 100): Promise<string> {
     try {
+      // First check if session exists to avoid timing issues
+      const sessionExists = await this.sessionExists(sessionName);
+      if (!sessionExists) {
+        this.logger.debug('Session does not exist for capture', { sessionName });
+        return '';
+      }
+
+      // Small delay to ensure pane is ready after session creation
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       const output = await this.executeTmuxCommand([
         'capture-pane',
         '-t', sessionName,
@@ -645,7 +737,16 @@ Start all teams on Phase 1 simultaneously.`.trim();
 
       return output.trim();
     } catch (error) {
-      console.error('Error capturing pane:', error);
+      // Check if it's a "can't find pane" error - this is usually temporary
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes("can't find pane")) {
+        this.logger.debug('Pane not ready yet for capture', { sessionName, error: errorMessage });
+        // Return empty string without logging error - this is expected during session startup
+        return '';
+      }
+      
+      // Log other errors as they may be more serious
+      this.logger.warn('Error capturing pane', { sessionName, error: errorMessage });
       return '';
     }
   }
@@ -739,9 +840,13 @@ Start all teams on Phase 1 simultaneously.`.trim();
         const previousBuffer = this.outputBuffers.get(sessionName) || [];
         const currentLines = output.split('\n');
         
-        // Only emit new lines
+        // Only emit new lines and prevent excessive buffer growth
         if (JSON.stringify(currentLines) !== JSON.stringify(previousBuffer)) {
-          this.outputBuffers.set(sessionName, currentLines);
+          // Trim buffer to prevent memory accumulation
+          const trimmedLines = currentLines.length > this.MAX_BUFFER_SIZE 
+            ? currentLines.slice(-this.MAX_BUFFER_SIZE) 
+            : currentLines;
+          this.outputBuffers.set(sessionName, trimmedLines);
           
           const terminalOutput: TerminalOutput = {
             sessionName,

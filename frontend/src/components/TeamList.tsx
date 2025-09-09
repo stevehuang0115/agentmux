@@ -17,18 +17,21 @@ interface TeamListProps {
   className?: string;
 }
 
-const statusIcons = {
-  idle: PlayCircleIcon,
-  working: ComputerDesktopIcon,
-  blocked: ExclamationTriangleIcon,
-  terminated: XCircleIcon,
+const agentStatusIcons = {
+  inactive: XCircleIcon,
+  activating: PlayCircleIcon,
+  active: ComputerDesktopIcon,
 };
 
-const statusColors = {
+const agentStatusColors = {
+  inactive: 'text-gray-500 bg-gray-100',
+  activating: 'text-yellow-600 bg-yellow-100',
+  active: 'text-green-600 bg-green-100',
+};
+
+const workingStatusColors = {
   idle: 'text-gray-500 bg-gray-100',
-  working: 'text-green-600 bg-green-100',
-  blocked: 'text-yellow-600 bg-yellow-100', 
-  terminated: 'text-red-600 bg-red-100',
+  in_progress: 'text-green-600 bg-green-100',
 };
 
 const roleColors = {
@@ -75,17 +78,12 @@ export const TeamList: React.FC<TeamListProps> = ({
 
       <div className="divide-y divide-gray-200">
         {teams.map((team) => {
-          const TeamStatusIcon = statusIcons[team.status];
-          
           return (
             <div key={team.id} className="p-6">
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-start space-x-3">
-                  <div className={clsx(
-                    'flex items-center justify-center w-10 h-10 rounded-full',
-                    statusColors[team.status]
-                  )}>
-                    <TeamStatusIcon className="h-5 w-5" />
+                  <div className="flex items-center justify-center w-10 h-10 rounded-full text-blue-600 bg-blue-100">
+                    <UserGroupIcon className="h-5 w-5" />
                   </div>
                   
                   <div className="flex-1 min-w-0">
@@ -93,11 +91,8 @@ export const TeamList: React.FC<TeamListProps> = ({
                       <h4 className="text-lg font-medium text-gray-900 truncate">
                         {team.name}
                       </h4>
-                      <span className={clsx(
-                        'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium capitalize',
-                        statusColors[team.status]
-                      )}>
-                        {team.status}
+                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium text-gray-600 bg-gray-100">
+                        {team.members.length} member{team.members.length !== 1 ? 's' : ''}
                       </span>
                     </div>
                     
@@ -120,7 +115,7 @@ export const TeamList: React.FC<TeamListProps> = ({
                 </div>
                 
                 <div className="flex items-center space-x-2">
-                  {team.status !== 'terminated' && onTeamTerminate && (
+                  {onTeamTerminate && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -141,7 +136,7 @@ export const TeamList: React.FC<TeamListProps> = ({
                 </h5>
                 <div className="space-y-2">
                   {team.members.map((member) => {
-                    const MemberStatusIcon = statusIcons[member.status];
+                    const MemberStatusIcon = agentStatusIcons[member.agentStatus];
                     
                     return (
                       <div
@@ -152,7 +147,7 @@ export const TeamList: React.FC<TeamListProps> = ({
                         <div className="flex items-center space-x-3">
                           <div className={clsx(
                             'flex items-center justify-center w-8 h-8 rounded-full',
-                            statusColors[member.status]
+                            agentStatusColors[member.agentStatus]
                           )}>
                             <MemberStatusIcon className="h-4 w-4" />
                           </div>
@@ -182,12 +177,20 @@ export const TeamList: React.FC<TeamListProps> = ({
                           </div>
                         </div>
                         
-                        <span className={clsx(
-                          'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize',
-                          statusColors[member.status]
-                        )}>
-                          {member.status}
-                        </span>
+                        <div className="flex flex-col items-end space-y-1">
+                          <span className={clsx(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize',
+                            agentStatusColors[member.agentStatus]
+                          )}>
+                            {member.agentStatus}
+                          </span>
+                          <span className={clsx(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium capitalize',
+                            workingStatusColors[member.workingStatus]
+                          )}>
+                            {member.workingStatus}
+                          </span>
+                        </div>
                       </div>
                     );
                   })}

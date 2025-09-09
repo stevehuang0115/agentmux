@@ -140,7 +140,11 @@ async function startBackendServer(webPort: number, mcpPort: number): Promise<Chi
     NODE_ENV: process.env.NODE_ENV || 'development'
   };
 
-  const backendProcess = spawn('node', [path.join(projectRoot, 'dist/backend/index.js')], {
+  const backendProcess = spawn('node', [
+    '--expose-gc',
+    '--max-old-space-size=2048',
+    path.join(projectRoot, 'dist/backend/index.js')
+  ], {
     env,
     stdio: 'pipe',
     detached: false,
@@ -186,7 +190,7 @@ async function startMCPServer(mcpPort: number): Promise<ChildProcess> {
     AGENT_ROLE: 'orchestrator'
   };
 
-  const mcpProcess = spawn('node', [path.join(projectRoot, 'mcp-server/mcp-http-server.js')], {
+  const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/index.js')], {
     env,
     stdio: 'pipe',
     detached: false,

@@ -6,7 +6,6 @@ export class TeamModel implements Team {
   description?: string;
   members: TeamMember[];
   currentProject?: string;
-  status: Team['status'];
   createdAt: string;
   updatedAt: string;
 
@@ -15,15 +14,9 @@ export class TeamModel implements Team {
     this.name = data.name || '';
     this.description = data.description;
     this.members = data.members || [];
-    this.status = data.status || 'idle';
     this.currentProject = data.currentProject;
     this.createdAt = data.createdAt || new Date().toISOString();
     this.updatedAt = data.updatedAt || new Date().toISOString();
-  }
-
-  updateStatus(status: Team['status']): void {
-    this.status = status;
-    this.updatedAt = new Date().toISOString();
   }
 
   assignToProject(projectId: string): void {
@@ -69,13 +62,56 @@ export class TeamModel implements Team {
       description: this.description,
       members: this.members,
       currentProject: this.currentProject,
-      status: this.status,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
   }
 
   static fromJSON(data: Team): TeamModel {
-    return new TeamModel(data);
+    // Handle data migration from legacy format
+    const migratedData = { ...data };
+    
+    // Migrate legacy status fields for team members
+    if (migratedData.members) {
+      migratedData.members = migratedData.members.map((member: any) => {
+        const migratedMember = { ...member };
+        
+        // Migrate legacy 'status' field to 'agentStatus'
+        if (member.status && !member.agentStatus) {
+          // Map legacy status values to new agentStatus values
+          switch (member.status) {
+            case 'active':
+              migratedMember.agentStatus = 'active';
+              break;
+            case 'idle':
+            case 'inactive':
+              migratedMember.agentStatus = 'inactive';
+              break;
+            case 'activating':
+              migratedMember.agentStatus = 'activating';
+              break;
+            default:
+              migratedMember.agentStatus = 'inactive';
+          }
+          
+          // Remove legacy field
+          delete migratedMember.status;
+        }
+        
+        // Ensure workingStatus exists (default to 'idle')
+        if (!migratedMember.workingStatus) {
+          migratedMember.workingStatus = 'idle';
+        }
+        
+        // Ensure agentStatus exists (default to 'inactive')
+        if (!migratedMember.agentStatus) {
+          migratedMember.agentStatus = 'inactive';
+        }
+        
+        return migratedMember;
+      });
+    }
+    
+    return new TeamModel(migratedData);
   }
 }

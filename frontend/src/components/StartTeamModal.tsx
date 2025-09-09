@@ -66,6 +66,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
     
     const projectId = isAlreadyAssigned ? team.currentProject : selectedProject;
     onStartTeam(projectId, enableGitReminder);
+    onClose(); // Close popup after starting team
   };
 
   const getAssignedProjectName = () => {
@@ -80,7 +81,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
       onClose={onClose}
       title="Start Team"
       subtitle={`Configure settings for ${team?.name || 'team'}`}
-      size="md"
+      size="lg"
       onSubmit={handleSubmit}
       submitText={loading ? 'Starting...' : 'Proceed'}
       submitDisabled={loading || (!isAlreadyAssigned && !selectedProject)}

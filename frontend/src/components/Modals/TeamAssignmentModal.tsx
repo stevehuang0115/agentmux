@@ -91,14 +91,6 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
     return roleColors[role] || '#6b7280';
   };
 
-  const getStatusBadge = (status: string) => {
-    const statusConfig = {
-      active: { label: 'Active', color: '#10b981' },
-      inactive: { label: 'Inactive', color: '#6b7280' },
-      completed: { label: 'Completed', color: '#3b82f6' }
-    };
-    return statusConfig[status as keyof typeof statusConfig] || statusConfig.inactive;
-  };
 
   return (
     <div className="modal-overlay" onClick={handleOverlayClick}>
@@ -170,12 +162,9 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
                           )}
                         </div>
                         
-                        <div className="team-status">
-                          <span 
-                            className="status-badge"
-                            style={{ backgroundColor: getStatusBadge(team.status).color }}
-                          >
-                            {getStatusBadge(team.status).label}
+                        <div className="team-meta">
+                          <span className="team-meta-info">
+                            {new Date(team.updatedAt).toLocaleDateString()}
                           </span>
                         </div>
                       </div>

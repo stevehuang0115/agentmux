@@ -85,11 +85,10 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   };
 
   const getOverallStatus = () => {
-    // Use agentStatus if available, otherwise fall back to status
-    const agentStatus: string = member.agentStatus || member.status;
+    const agentStatus = member.agentStatus;
     const workingStatus = member.workingStatus;
     
-    // ACTIVATING - blue (prioritize agentStatus over sessionName)
+    // ACTIVATING - blue
     if (agentStatus === 'activating') {
       return {
         status: 'ACTIVATING', 
@@ -117,7 +116,7 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
     }
     
     // INACTIVE (inactive status or no session) - grey
-    if (agentStatus === 'inactive' || member.status === 'terminated' || (!member.sessionName && agentStatus !== 'activating')) {
+    if (agentStatus === 'inactive' || !member.sessionName) {
       return {
         status: 'INACTIVE',
         color: '#9ca3af',
@@ -157,8 +156,7 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   const shouldShowStopButton = 
     onStop && 
     teamId && 
-    (member.agentStatus === 'activating' || member.agentStatus === 'active' || 
-     member.status === 'activating' || member.status === 'active') && 
+    (member.agentStatus === 'activating' || member.agentStatus === 'active') && 
     !isEditing;
 
   // Show Start button for inactive agents (but not if stop button should show)
@@ -166,7 +164,7 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
     onStart && 
     teamId && 
     !shouldShowStopButton && 
-    (member.agentStatus === 'inactive' || member.status === 'idle' || member.status === 'terminated') && 
+    (member.agentStatus === 'inactive' || (!member.sessionName && member.agentStatus !== 'activating')) && 
     !isEditing;
 
   return (

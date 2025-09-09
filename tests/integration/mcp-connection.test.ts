@@ -14,7 +14,7 @@ describe('MCP Server Integration Tests', () => {
     backendProcess = spawn('node', ['dist/backend/index.js'], {
       env: {
         ...process.env,
-        PORT: backendTestPort.toString(),
+        WEB_PORT: backendTestPort.toString(),
         NODE_ENV: 'test'
       },
       stdio: 'pipe'
@@ -36,11 +36,11 @@ describe('MCP Server Integration Tests', () => {
     }
 
     // Start MCP server for testing
-    mcpProcess = spawn('node', ['mcp-server/mcp-http-server.js'], {
+    mcpProcess = spawn('node', ['dist/mcp-server/index.js'], {
       env: {
         ...process.env,
         MCP_PORT: testPort.toString(),
-        BACKEND_PORT: backendTestPort.toString(),
+        API_PORT: backendTestPort.toString(),
         TMUX_SESSION_NAME: 'test-session',
         PROJECT_PATH: '/tmp/test-project',
         AGENT_ROLE: 'test'

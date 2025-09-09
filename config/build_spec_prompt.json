@@ -1,6 +1,6 @@
 {
 	"name": "Build Project Specifications",
-	"description": "Step-by-step process to generate project specifications in three focused phases",
+	"description": "Step-by-step process to generate project specifications in three focused phases. These specifications will be used to create milestone-based tasks organized in open/in_progress/blocked/done folders.",
 	"steps": [
 		{
 			"id": 1,
@@ -83,7 +83,7 @@
 		{
 			"id": 2,
 			"name": "Create Technical Design Documentation",
-			"targetRole": "dev",
+			"targetRole": "architect",
 			"delayMinutes": 6,
 			"conditional": "only_if_project_md_exists",
 			"verification": {
@@ -94,6 +94,12 @@
 			},
 			"prompts": [
 				"TECHNICAL DESIGN DOCUMENTATION - STEP 2",
+				"",
+				"PROJECT GOAL:",
+				"{INITIAL_GOAL}",
+				"",
+				"USER JOURNEY:",
+				"{USER_JOURNEY}",
 				"",
 				"## Task: Create Technical Design Documentation",
 				"",
@@ -162,7 +168,7 @@
 		{
 			"id": 3,
 			"name": "Create Integration & E2E Testing Plan",
-			"targetRole": "qa",
+			"targetRole": "architect",
 			"delayMinutes": 4,
 			"conditional": "only_if_design_docs_exist",
 			"verification": {
@@ -171,6 +177,12 @@
 			},
 			"prompts": [
 				"INTEGRATION & E2E TESTING PLAN - STEP 3",
+				"",
+				"PROJECT GOAL:",
+				"{INITIAL_GOAL}",
+				"",
+				"USER JOURNEY:",
+				"{USER_JOURNEY}",
 				"",
 				"## Task: Create Comprehensive Integration & E2E Testing Plan",
 				"",
@@ -305,7 +317,9 @@
 			"Each step includes verification criteria to ensure quality and completeness",
 			"Steps are conditional - each depends on successful completion of the previous step",
 			"Selected team member analyzes project requirements and creates appropriate specifications",
-			"Workflow is streamlined into three focused phases for better organization and quality"
+			"Workflow is streamlined into three focused phases for better organization and quality",
+			"These specifications enable the subsequent creation of milestone-based development tasks",
+			"The task creation workflow will organize tasks in milestone folders with open/in_progress/blocked/done subfolders"
 		]
 	}
 }

@@ -69,9 +69,9 @@ export const TeamCard: React.FC<TeamCardProps> = ({
           </div>
           <div className="team-content">
             <h3 className="team-title">{team.name}</h3>
-            <div className="team-status-line">
-              <span className={`status-badge status-${team.status}`}>
-                {team.status}
+            <div className="team-meta-line">
+              <span className="team-member-count">
+                {members.length} member{members.length !== 1 ? 's' : ''}
               </span>
             </div>
           </div>

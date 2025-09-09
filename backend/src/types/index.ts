@@ -4,7 +4,6 @@ export interface TeamMember {
   sessionName: string; // tmux session name
   role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'qa' | 'tester' | 'designer';
   systemPrompt: string;
-  status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active'; // Legacy field for backward compatibility
   agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
   workingStatus: 'idle' | 'in_progress'; // Activity level status
   currentTickets?: string[];
@@ -21,7 +20,6 @@ export interface Team {
   description?: string;
   members: TeamMember[];
   currentProject?: string;
-  status: 'idle' | 'working' | 'blocked' | 'terminated' | 'ready' | 'activating' | 'active';
   createdAt: string;
   updatedAt: string;
 }

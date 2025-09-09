@@ -205,6 +205,139 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
       content: [{ type: 'text', text: `Task delegated to ${args.to}` }],
     };
   }
+
+  // Task Management Tools
+  async acceptTask(args: { taskPath: string; memberId?: string }) {
+    const memberId = args.memberId || this.sessionName;
+    
+    // Mock task acceptance - simulate moving from open to in_progress
+    // Create test directories if they don't exist
+    const testProjectPath = '/tmp/test-project';
+    const openDir = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'open');
+    const inProgressDir = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'in_progress');
+    const homeDir = process.env.HOME || '/tmp';
+    const trackingFile = path.join(homeDir, '.agentmux', 'in_progress_tasks.json');
+    
+    try {
+      // Create directories
+      await fs.mkdir(path.dirname(openDir), { recursive: true });
+      await fs.mkdir(inProgressDir, { recursive: true });
+      await fs.mkdir(path.dirname(trackingFile), { recursive: true });
+      
+      // Create a mock task file if it doesn't exist
+      let content: string;
+      if (!await this.fileExists(args.taskPath)) {
+        content = `# Test Task\n\nThis is a test task for MCP testing.\n\n## Status\n- [ ] Task item 1\n- [ ] Task item 2\n`;
+        await fs.mkdir(path.dirname(args.taskPath), { recursive: true });
+        await fs.writeFile(args.taskPath, content);
+      } else {
+        content = await fs.readFile(args.taskPath, 'utf-8');
+      }
+      
+      // Simulate moving file from open to in_progress
+      const fileName = path.basename(args.taskPath);
+      const newTaskPath = path.join(inProgressDir, fileName);
+      
+      // Write to new location and remove old
+      await fs.writeFile(newTaskPath, content);
+      await fs.unlink(args.taskPath);
+      
+      // Update tracking JSON
+      let inProgressTasks = [];
+      try {
+        const trackingContent = await fs.readFile(trackingFile, 'utf-8');
+        inProgressTasks = JSON.parse(trackingContent);
+      } catch {
+        // File doesn't exist yet
+      }
+      
+      const taskId = `task_${Date.now()}`;
+      inProgressTasks.push({
+        id: taskId,
+        taskPath: newTaskPath,
+        taskName: fileName,
+        memberId: memberId,
+        assignedAt: new Date().toISOString(),
+        status: 'in_progress'
+      });
+      
+      await fs.writeFile(trackingFile, JSON.stringify(inProgressTasks, null, 2));
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `✅ Task accepted successfully. New path: ${newTaskPath}` 
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `❌ Failed to accept task: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async completeTask(args: { taskPath: string }) {
+    // Mock task completion - simulate moving from in_progress to done
+    const testProjectPath = '/tmp/test-project';
+    const doneDir = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'done');
+    const homeDir = process.env.HOME || '/tmp';
+    const trackingFile = path.join(homeDir, '.agentmux', 'in_progress_tasks.json');
+    
+    try {
+      // Create done directory
+      await fs.mkdir(doneDir, { recursive: true });
+      
+      // Simulate moving file from in_progress to done
+      const fileName = path.basename(args.taskPath);
+      const newTaskPath = path.join(doneDir, fileName);
+      
+      // Read and move the file
+      const content = await fs.readFile(args.taskPath, 'utf-8');
+      await fs.writeFile(newTaskPath, content);
+      await fs.unlink(args.taskPath);
+      
+      // Update tracking JSON - remove from in_progress
+      let inProgressTasks = [];
+      try {
+        const trackingContent = await fs.readFile(trackingFile, 'utf-8');
+        inProgressTasks = JSON.parse(trackingContent);
+      } catch {
+        // File doesn't exist
+      }
+      
+      // Remove the completed task from tracking
+      const updatedTasks = inProgressTasks.filter((task: any) => task.taskPath !== args.taskPath);
+      await fs.writeFile(trackingFile, JSON.stringify(updatedTasks, null, 2));
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `✅ Task completed successfully. New path: ${newTaskPath}` 
+        }],
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `❌ Failed to complete task: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 describe('MCP Server Tools Integration Tests', () => {
@@ -441,6 +574,185 @@ describe('MCP Server Tools Integration Tests', () => {
         task: 'Some task',
         priority: 'medium'
       })).rejects.toThrow('Only orchestrator can delegate tasks');
+    });
+  });
+
+  describe('Task Management Tools', () => {
+    const testProjectPath = '/tmp/test-project';
+    const openTaskPath = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'open', 'test_task_001.md');
+    const inProgressTaskPath = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'in_progress', 'test_task_001.md');
+    const homeDir = process.env.HOME || '/tmp';
+    const trackingFile = path.join(homeDir, '.agentmux', 'in_progress_tasks.json');
+
+    beforeEach(async () => {
+      // Clean up test directories
+      try {
+        await fs.rm(path.join(testProjectPath, '.agentmux'), { recursive: true, force: true });
+        await fs.rm(path.join(homeDir, '.agentmux'), { recursive: true, force: true });
+      } catch {
+        // Directories might not exist
+      }
+    });
+
+    afterEach(async () => {
+      // Clean up after tests
+      try {
+        await fs.rm(path.join(testProjectPath, '.agentmux'), { recursive: true, force: true });
+        await fs.rm(path.join(homeDir, '.agentmux'), { recursive: true, force: true });
+      } catch {
+        // Directories might not exist
+      }
+    });
+
+    test('should accept task and move from open to in_progress', async () => {
+      // Setup: Create test directories and initial task file
+      await fs.mkdir(path.dirname(openTaskPath), { recursive: true });
+      const initialTaskContent = '# Test Task\n\nThis is a test task.\n\n- [ ] Step 1\n- [ ] Step 2\n';
+      await fs.writeFile(openTaskPath, initialTaskContent);
+
+      // Accept the task
+      const result = await mcpServer.acceptTask({
+        taskPath: openTaskPath,
+        memberId: 'test-member-123'
+      });
+
+      // Verify response
+      expect(result.content[0].text).toContain('✅ Task accepted successfully');
+      expect(result.content[0].text).toContain('in_progress');
+
+      // Verify file was moved
+      expect(await mcpServer['fileExists'](openTaskPath)).toBe(false);
+      expect(await mcpServer['fileExists'](inProgressTaskPath)).toBe(true);
+
+      // Verify content was preserved
+      const movedContent = await fs.readFile(inProgressTaskPath, 'utf-8');
+      expect(movedContent).toBe(initialTaskContent);
+
+      // Verify tracking file was updated
+      const trackingContent = await fs.readFile(trackingFile, 'utf-8');
+      const tracking = JSON.parse(trackingContent);
+      expect(Array.isArray(tracking)).toBe(true);
+      expect(tracking).toHaveLength(1);
+      expect(tracking[0]).toHaveProperty('taskPath', inProgressTaskPath);
+      expect(tracking[0]).toHaveProperty('memberId', 'test-member-123');
+      expect(tracking[0]).toHaveProperty('status', 'in_progress');
+    });
+
+    test('should use default member ID when not provided', async () => {
+      // Setup: Create test directories and initial task file
+      await fs.mkdir(path.dirname(openTaskPath), { recursive: true });
+      await fs.writeFile(openTaskPath, '# Test Task\n\nDefault member test.\n');
+
+      // Accept the task without memberId
+      const result = await mcpServer.acceptTask({
+        taskPath: openTaskPath
+      });
+
+      // Verify response
+      expect(result.content[0].text).toContain('✅ Task accepted successfully');
+
+      // Verify tracking file uses session name as member ID
+      const trackingContent = await fs.readFile(trackingFile, 'utf-8');
+      const tracking = JSON.parse(trackingContent);
+      expect(tracking[0]).toHaveProperty('memberId', 'test-session');
+    });
+
+    test('should complete task and move from in_progress to done', async () => {
+      // Setup: Create task in in_progress folder with tracking
+      await fs.mkdir(path.dirname(inProgressTaskPath), { recursive: true });
+      const taskContent = '# Test Task\n\nTask to be completed.\n\n- [x] Step 1\n- [x] Step 2\n';
+      await fs.writeFile(inProgressTaskPath, taskContent);
+
+      // Setup tracking file
+      await fs.mkdir(path.dirname(trackingFile), { recursive: true });
+      const trackingData = [{
+        id: 'task_123',
+        taskPath: inProgressTaskPath,
+        taskName: 'test_task_001.md',
+        memberId: 'test-member-123',
+        assignedAt: new Date().toISOString(),
+        status: 'in_progress'
+      }];
+      await fs.writeFile(trackingFile, JSON.stringify(trackingData, null, 2));
+
+      // Complete the task
+      const result = await mcpServer.completeTask({
+        taskPath: inProgressTaskPath
+      });
+
+      // Verify response
+      expect(result.content[0].text).toContain('✅ Task completed successfully');
+      expect(result.content[0].text).toContain('done');
+
+      // Verify file was moved
+      expect(await mcpServer['fileExists'](inProgressTaskPath)).toBe(false);
+      const doneTaskPath = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'done', 'test_task_001.md');
+      expect(await mcpServer['fileExists'](doneTaskPath)).toBe(true);
+
+      // Verify content was preserved
+      const movedContent = await fs.readFile(doneTaskPath, 'utf-8');
+      expect(movedContent).toBe(taskContent);
+
+      // Verify task was removed from tracking
+      const updatedTrackingContent = await fs.readFile(trackingFile, 'utf-8');
+      const updatedTracking = JSON.parse(updatedTrackingContent);
+      expect(updatedTracking).toHaveLength(0);
+    });
+
+    test('should handle missing task file gracefully in acceptTask', async () => {
+      const nonExistentPath = '/tmp/test-project/.agentmux/tasks/m0_build_spec_tasks/open/nonexistent.md';
+
+      const result = await mcpServer.acceptTask({
+        taskPath: nonExistentPath
+      });
+
+      // Should create the file and then process it
+      expect(result.content[0].text).toContain('✅ Task accepted successfully');
+    });
+
+    test('should handle missing task file gracefully in completeTask', async () => {
+      const nonExistentPath = '/tmp/test-project/.agentmux/tasks/m0_build_spec_tasks/in_progress/nonexistent.md';
+
+      const result = await mcpServer.completeTask({
+        taskPath: nonExistentPath
+      });
+
+      // Should fail gracefully
+      expect(result.content[0].text).toContain('❌ Failed to complete task');
+      expect(result).toHaveProperty('isError', true);
+    });
+
+    test('should handle task workflow: accept -> complete', async () => {
+      // Setup initial task
+      await fs.mkdir(path.dirname(openTaskPath), { recursive: true });
+      const taskContent = '# Workflow Test Task\n\nTest full workflow.\n\n- [ ] Step 1\n- [ ] Step 2\n';
+      await fs.writeFile(openTaskPath, taskContent);
+
+      // Step 1: Accept task
+      const acceptResult = await mcpServer.acceptTask({
+        taskPath: openTaskPath,
+        memberId: 'workflow-tester'
+      });
+      expect(acceptResult.content[0].text).toContain('✅ Task accepted successfully');
+
+      // Verify task is in progress
+      expect(await mcpServer['fileExists'](inProgressTaskPath)).toBe(true);
+
+      // Step 2: Complete task
+      const completeResult = await mcpServer.completeTask({
+        taskPath: inProgressTaskPath
+      });
+      expect(completeResult.content[0].text).toContain('✅ Task completed successfully');
+
+      // Verify task is done
+      const doneTaskPath = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'done', 'test_task_001.md');
+      expect(await mcpServer['fileExists'](doneTaskPath)).toBe(true);
+      expect(await mcpServer['fileExists'](inProgressTaskPath)).toBe(false);
+
+      // Verify tracking is clean
+      const finalTrackingContent = await fs.readFile(trackingFile, 'utf-8');
+      const finalTracking = JSON.parse(finalTrackingContent);
+      expect(finalTracking).toHaveLength(0);
     });
   });
 

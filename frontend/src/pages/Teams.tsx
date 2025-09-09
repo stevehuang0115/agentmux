@@ -60,7 +60,17 @@ export const Teams: React.FC = () => {
     }
 
     if (statusFilter !== 'all') {
-      filtered = filtered.filter(team => team.status === statusFilter);
+      filtered = filtered.filter(team => {
+        if (statusFilter === 'active') {
+          return team.members.some(member => member.agentStatus === 'active');
+        } else if (statusFilter === 'inactive') {
+          return team.members.every(member => member.agentStatus === 'inactive');
+        } else if (statusFilter === 'completed') {
+          // Teams don't have "completed" status anymore, return empty results
+          return false;
+        }
+        return true;
+      });
     }
 
     setFilteredTeams(filtered);
