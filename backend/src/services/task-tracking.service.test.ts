@@ -26,6 +26,7 @@ describe('TaskTrackingService', () => {
   const mockTask: InProgressTask = {
     id: 'task-123',
     projectId: 'project-456',
+    teamId: 'team-abc',
     taskFilePath: '/project/tasks/milestone1/open/task001.md',
     taskName: 'Test Task',
     targetRole: 'developer',
@@ -120,12 +121,13 @@ describe('TaskTrackingService', () => {
   });
 
   describe('assignTask', () => {
-    it('should create and save new task assignment', async () => {
+    it('should create and save new task assignment with teamId', async () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
       jest.spyOn(service, 'saveTaskData').mockResolvedValue();
       
       const result = await service.assignTask(
         'project-456',
+        'team-abc',
         '/project/tasks/milestone1/open/task001.md',
         'Test Task',
         'developer',
@@ -136,6 +138,37 @@ describe('TaskTrackingService', () => {
       expect(result).toMatchObject({
         id: expect.any(String),
         projectId: 'project-456',
+        teamId: 'team-abc',
+        taskFilePath: '/project/tasks/milestone1/open/task001.md',
+        taskName: 'Test Task',
+        targetRole: 'developer',
+        assignedTeamMemberId: 'member-789',
+        assignedSessionId: 'session-abc',
+        assignedAt: expect.any(String),
+        status: 'assigned'
+      });
+      
+      expect(service.saveTaskData).toHaveBeenCalled();
+    });
+
+    it('should handle assignment without teamId (backward compatibility)', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      
+      const result = await service.assignTask(
+        'project-456',
+        'team-test',
+        '/project/tasks/milestone1/open/task001.md',
+        'Test Task',
+        'developer',
+        'member-789',
+        'session-abc'
+      );
+      
+      expect(result).toMatchObject({
+        id: expect.any(String),
+        projectId: 'project-456',
+        teamId: 'team-test',
         taskFilePath: '/project/tasks/milestone1/open/task001.md',
         taskName: 'Test Task',
         targetRole: 'developer',
@@ -158,10 +191,10 @@ describe('TaskTrackingService', () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
       jest.spyOn(service, 'saveTaskData').mockResolvedValue();
       
-      await service.updateTaskStatus('task-123', 'in_progress');
+      await service.updateTaskStatus('task-123', 'active');
       
       const updatedTask = taskData.tasks[0];
-      expect(updatedTask.status).toBe('in_progress');
+      expect(updatedTask.status).toBe('active');
       expect(updatedTask.lastCheckedAt).toBeTruthy();
       expect(service.saveTaskData).toHaveBeenCalledWith(taskData);
     });
@@ -184,7 +217,7 @@ describe('TaskTrackingService', () => {
     it('should throw error if task not found', async () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
       
-      await expect(service.updateTaskStatus('nonexistent-task', 'completed'))
+      await expect(service.updateTaskStatus('nonexistent-task', 'active'))
         .rejects.toThrow('Task with ID nonexistent-task not found');
     });
   });
@@ -193,7 +226,7 @@ describe('TaskTrackingService', () => {
     it('should remove task from tracking', async () => {
       const taskData = {
         ...mockTaskData,
-        tasks: [mockTask, { ...mockTask, id: 'task-456' }]
+        tasks: [mockTask, { ...mockTask, id: 'task-456', teamId: 'team-def' }]
       };
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
       jest.spyOn(service, 'saveTaskData').mockResolvedValue();
@@ -207,12 +240,13 @@ describe('TaskTrackingService', () => {
   });
 
   describe('addTaskToQueue', () => {
-    it('should add task to queue with pending_assignment status', async () => {
+    it('should add task to queue with pending_assignment status and teamId', async () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
       jest.spyOn(service, 'saveTaskData').mockResolvedValue();
       
       const taskInfo = {
         projectId: 'project-456',
+        teamId: 'team-xyz',
         taskFilePath: '/project/tasks/milestone1/open/task001.md',
         taskName: 'Queued Task',
         targetRole: 'developer',
@@ -225,6 +259,40 @@ describe('TaskTrackingService', () => {
       expect(result).toMatchObject({
         id: expect.any(String),
         projectId: 'project-456',
+        teamId: 'team-xyz',
+        taskFilePath: '/project/tasks/milestone1/open/task001.md',
+        taskName: 'Queued Task',
+        targetRole: 'developer',
+        assignedTeamMemberId: 'orchestrator',
+        assignedSessionId: 'agentmux-orc',
+        assignedAt: '2023-01-01T12:00:00.000Z',
+        status: 'pending_assignment',
+        priority: 'high'
+      });
+      
+      expect(service.saveTaskData).toHaveBeenCalled();
+    });
+
+    it('should add task to queue without teamId (backward compatibility)', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      
+      const taskInfo = {
+        projectId: 'project-456',
+        teamId: 'team-test',
+        taskFilePath: '/project/tasks/milestone1/open/task001.md',
+        taskName: 'Queued Task',
+        targetRole: 'developer',
+        priority: 'high' as const,
+        createdAt: '2023-01-01T12:00:00.000Z'
+      };
+      
+      const result = await service.addTaskToQueue(taskInfo);
+      
+      expect(result).toMatchObject({
+        id: expect.any(String),
+        projectId: 'project-456',
+        teamId: 'team-test',
         taskFilePath: '/project/tasks/milestone1/open/task001.md',
         taskName: 'Queued Task',
         targetRole: 'developer',
@@ -245,8 +313,8 @@ describe('TaskTrackingService', () => {
         ...mockTaskData,
         tasks: [
           mockTask,
-          { ...mockTask, id: 'task-456', projectId: 'other-project' },
-          { ...mockTask, id: 'task-789', projectId: 'project-456' }
+          { ...mockTask, id: 'task-456', projectId: 'other-project', teamId: 'team-other' },
+          { ...mockTask, id: 'task-789', projectId: 'project-456', teamId: 'team-abc' }
         ]
       };
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
@@ -264,8 +332,8 @@ describe('TaskTrackingService', () => {
         ...mockTaskData,
         tasks: [
           mockTask,
-          { ...mockTask, id: 'task-456', assignedTeamMemberId: 'other-member' },
-          { ...mockTask, id: 'task-789', assignedTeamMemberId: 'member-789' }
+          { ...mockTask, id: 'task-456', assignedTeamMemberId: 'other-member', teamId: 'team-other' },
+          { ...mockTask, id: 'task-789', assignedTeamMemberId: 'member-789', teamId: 'team-abc' }
         ]
       };
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
@@ -281,7 +349,7 @@ describe('TaskTrackingService', () => {
     it('should return all tasks', async () => {
       const taskData = {
         ...mockTaskData,
-        tasks: [mockTask, { ...mockTask, id: 'task-456' }]
+        tasks: [mockTask, { ...mockTask, id: 'task-456', teamId: 'team-def' }]
       };
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
       
@@ -494,6 +562,61 @@ describe('TaskTrackingService', () => {
     it('should handle edge cases', () => {
       expect((service as any).extractTaskNameFromFile('task.md')).toBe('Task');
       expect((service as any).extractTaskNameFromFile('01_single_word.md')).toBe('Single Word');
+    });
+  });
+
+  describe('Team integration tests', () => {
+    it('should handle tasks with team assignments', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      
+      const result = await service.assignTask(
+        'project-123',
+        'team-456',
+        '/project/tasks/m1/open/task.md',
+        'Team Task',
+        'developer',
+        'member-789',
+        'session-abc'
+      );
+      
+      expect(result.teamId).toBe('team-456');
+      expect(result.projectId).toBe('project-123');
+      expect(result.assignedTeamMemberId).toBe('member-789');
+    });
+
+    it('should filter tasks by team when getting tasks for project', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'task-1', projectId: 'project-123', teamId: 'team-a' },
+          { ...mockTask, id: 'task-2', projectId: 'project-123', teamId: 'team-b' },
+          { ...mockTask, id: 'task-3', projectId: 'project-456', teamId: 'team-a' }
+        ]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      
+      const result = await service.getTasksForProject('project-123');
+      
+      expect(result).toHaveLength(2);
+      expect(result.every(task => task.projectId === 'project-123')).toBe(true);
+      expect(result.find(task => task.teamId === 'team-a')).toBeDefined();
+      expect(result.find(task => task.teamId === 'team-b')).toBeDefined();
+    });
+
+    it('should preserve team information when updating task status', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [{ ...mockTask, teamId: 'team-important' }]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      
+      await service.updateTaskStatus('task-123', 'active');
+      
+      const updatedTask = taskData.tasks[0];
+      expect(updatedTask.teamId).toBe('team-important');
+      expect(updatedTask.status).toBe('active');
     });
   });
 });

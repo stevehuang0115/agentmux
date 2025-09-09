@@ -30,6 +30,7 @@ export interface Project {
   path: string; // absolute filesystem path
   teams: Record<string, string[]>; // team assignments
   status: 'active' | 'paused' | 'completed' | 'stopped';
+  scheduledMessageId?: string; // ID of auto-assignment scheduled message
   createdAt: string;
   updatedAt: string;
 }

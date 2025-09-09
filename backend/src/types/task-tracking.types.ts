@@ -1,6 +1,7 @@
 export interface InProgressTask {
   id: string;
   projectId: string;
+  teamId: string;
   taskFilePath: string; // e.g. "/path/to/project/.agentmux/tasks/m1_foundation/open/01_setup_tpm.md"
   taskName: string;
   targetRole: string; // tpm, pgm, dev, qa

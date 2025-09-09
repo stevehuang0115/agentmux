@@ -48,6 +48,7 @@ export class TaskTrackingService {
 
   async assignTask(
     projectId: string,
+    teamId: string,
     taskFilePath: string,
     taskName: string,
     targetRole: string,
@@ -59,6 +60,7 @@ export class TaskTrackingService {
     const task: InProgressTask = {
       id: uuidv4(),
       projectId,
+      teamId,
       taskFilePath,
       taskName,
       targetRole,
@@ -100,6 +102,7 @@ export class TaskTrackingService {
 
   async addTaskToQueue(taskInfo: {
     projectId: string;
+    teamId: string;
     taskFilePath: string;
     taskName: string;
     targetRole: string;
@@ -111,6 +114,7 @@ export class TaskTrackingService {
     const task: InProgressTask = {
       id: uuidv4(),
       projectId: taskInfo.projectId,
+      teamId: taskInfo.teamId,
       taskFilePath: taskInfo.taskFilePath,
       taskName: taskInfo.taskName,
       targetRole: taskInfo.targetRole,

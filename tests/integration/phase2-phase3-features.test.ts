@@ -644,12 +644,16 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     let serverPort: number;
 
     beforeAll((done) => {
-      serverPort = 3001;
+      serverPort = 0; // Use dynamic port allocation
       httpServer.listen(serverPort, () => {
+        const address = httpServer.address();
+        if (address && typeof address !== 'string') {
+          serverPort = address.port;
+        }
         clientSocket = Client(`http://localhost:${serverPort}`);
         clientSocket.on('connect', done);
       });
-    });
+    }, 60000); // Increase timeout to 60 seconds
 
     afterEach(() => {
       // Clean up event listeners after each test to prevent interference

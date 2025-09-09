@@ -49,6 +49,8 @@ describe('Agent Status Workflow Integration', () => {
       schedulerService: {} as any,
       activeProjectsService: {} as any,
       promptTemplateService: {} as any,
+      taskAssignmentMonitor: {} as any,
+      taskTrackingService: {} as any,
     } as ApiContext;
 
     mockRequest = {

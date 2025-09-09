@@ -40,6 +40,40 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 			return;
 		}
 
+		// Parse task information
+		const taskContent = await readFile(taskPath, 'utf-8');
+		const taskInfo = parseTaskInfo(taskContent, basename(taskPath));
+		
+		// Extract project and team information from task path
+		const pathMatch = taskPath.match(/\/([^/]+)\.agentmux/);
+		if (!pathMatch) {
+			res.status(400).json({ success: false, error: 'Cannot determine project from task path' });
+			return;
+		}
+		const projectPath = taskPath.substring(0, taskPath.indexOf('.agentmux') + 9);
+		
+		// Find project by path
+		const projects = await this.storageService.getProjects();
+		const project = projects.find(p => p.path === dirname(projectPath));
+		if (!project) {
+			res.status(404).json({ success: false, error: 'Project not found' });
+			return;
+		}
+		
+		// Find team and member
+		const teams = await this.storageService.getTeams();
+		let teamId = '';
+		for (const team of teams) {
+			if (team.members.find(m => m.id === memberId)) {
+				teamId = team.id;
+				break;
+			}
+		}
+		if (!teamId) {
+			res.status(404).json({ success: false, error: 'Team not found for member' });
+			return;
+		}
+
 		// Create target path in in_progress/ folder
 		const fileName = basename(taskPath);
 		const targetPath = taskPath.replace('/open/', '/in_progress/');
@@ -49,11 +83,21 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 		await ensureDirectoryExists(targetDir);
 
 		// Read, update, and move task file
-		const taskContent = await readFile(taskPath, 'utf-8');
 		const updatedContent = addTaskAssignmentInfo(taskContent, memberId, sessionId);
 
 		await writeFile(targetPath, updatedContent, 'utf-8');
 		await unlinkFile(taskPath);
+		
+		// Add to task tracking
+		await this.taskTrackingService.assignTask(
+			project.id,
+			teamId,
+			targetPath,
+			taskInfo.title || taskInfo.fileName,
+			taskInfo.targetRole || 'unknown',
+			memberId,
+			sessionId || 'unknown'
+		);
 
 		res.json({
 			success: true,
@@ -118,6 +162,13 @@ export async function completeTask(
 
 		await writeFile(targetPath, updatedContent, 'utf-8');
 		await unlinkFile(taskPath);
+		
+		// Remove from task tracking (find task by file path and remove it)
+		const allTasks = await this.taskTrackingService.getAllInProgressTasks();
+		const taskToRemove = allTasks.find(t => t.taskFilePath === taskPath);
+		if (taskToRemove) {
+			await this.taskTrackingService.removeTask(taskToRemove.id);
+		}
 
 		res.json({
 			success: true,

@@ -2,6 +2,7 @@ import type { StorageService, TmuxService, SchedulerService, MessageSchedulerSer
 import type { ActiveProjectsService } from '../services/active-projects.service.js';
 import type { PromptTemplateService } from '../services/prompt-template.service.js';
 import type { TaskAssignmentMonitorService } from '../services/task-assignment-monitor.service.js';
+import type { TaskTrackingService } from '../services/task-tracking.service.js';
 
 export interface ApiContext {
   storageService: StorageService;
@@ -11,5 +12,6 @@ export interface ApiContext {
   activeProjectsService: ActiveProjectsService;
   promptTemplateService: PromptTemplateService;
   taskAssignmentMonitor: TaskAssignmentMonitorService;
+  taskTrackingService: TaskTrackingService;
 }
 

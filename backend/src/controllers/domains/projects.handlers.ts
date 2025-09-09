@@ -94,9 +94,96 @@ export async function startProject(this: ApiContext, req: Request, res: Response
     const result = await WorkflowService.getInstance().startProject({ projectId: id, teamId });
     if (!result.success) { res.status(500).json({ success: false, error: result.error || 'Failed to start project orchestration' } as ApiResponse); return; }
     project.status = 'active';
+
+    // Create auto-assignment scheduled message for 15-minute task assignments
+    let autoAssignmentScheduleId: string | undefined;
+    if (this.messageSchedulerService) {
+      try {
+        const { PromptTemplateService } = await import('../../services/prompt-template.service.js');
+        const promptService = new PromptTemplateService();
+        const autoAssignmentMessage = await promptService.getAutoAssignmentPrompt({
+          projectName: project.name,
+          projectPath: project.path,
+          currentTimestamp: new Date().toISOString()
+        });
+
+        const scheduledMessage = {
+          id: `auto-assign-${id}-${Date.now()}`,
+          name: `Auto Task Assignment - ${project.name}`,
+          targetTeam: 'agentmux-orc', // Send to orchestrator
+          targetProject: id,
+          message: autoAssignmentMessage,
+          delayAmount: 15,
+          delayUnit: 'minutes' as const,
+          isRecurring: true,
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        this.messageSchedulerService.scheduleMessage(scheduledMessage);
+        autoAssignmentScheduleId = scheduledMessage.id;
+        
+        // Create immediate orchestrator coordination message (5 second delay)
+        const immediateCoordinationMessage = {
+          id: `immediate-coord-${id}-${Date.now()}`,
+          name: `🚀 Project Started - Immediate Coordination - ${project.name}`,
+          targetTeam: 'agentmux-orc', // Send to orchestrator
+          targetProject: id,
+          message: `🚀 **NEW PROJECT STARTED - IMMEDIATE ACTION REQUIRED**
+
+**Project:** ${project.name}
+**Project Path:** ${project.path}
+**Teams Assigned:** ${team.name} (${team.members.length} members)
+**Status:** ACTIVE - Coordination needed NOW
+
+## 🎯 **IMMEDIATE TASKS FOR ORCHESTRATOR:**
+
+1. **Review Project Specifications**
+   - Check project files in: \`${project.path}\`
+   - Look for requirements, specs, and documentation
+
+2. **Create Initial Task Breakdown**
+   - Analyze project scope and requirements
+   - Break down into manageable tasks
+   - Identify priority tasks and dependencies
+
+3. **Assign Tasks to Team Members**
+   - Use MCP tools for task assignment
+   - Match tasks to team member roles and skills
+   - Create task files using appropriate MCP functions
+
+4. **Coordinate Team Activities**
+   - Monitor team progress
+   - Provide guidance and resolve blockers
+   - Facilitate communication between team members
+
+## 🛠️ **Available MCP Tools:**
+- \`accept_task\`: Accept task assignments
+- Task management and coordination tools
+- Team communication functions
+
+**⚡ START COORDINATION NOW - Project is active and waiting for your leadership!**`,
+          delayAmount: 5, // 5 seconds
+          delayUnit: 'seconds' as const,
+          isRecurring: false, // One-time immediate message
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        this.messageSchedulerService.scheduleMessage(immediateCoordinationMessage);
+        
+        // Save the scheduled message ID to the project for stop functionality
+        project.scheduledMessageId = autoAssignmentScheduleId;
+      } catch (e) {
+        console.warn('Failed to create auto-assignment scheduled message:', e);
+      }
+    }
+
     await this.storageService.saveProject(project);
     let scheduleInfo: any; try { scheduleInfo = await this.activeProjectsService.startProject(id, this.messageSchedulerService); } catch (e) { console.warn('Failed to start project lifecycle management:', e); }
-    res.json({ success: true, message: result.message || 'Project orchestration started successfully', data: { projectId: id, teamId, executionId: result.executionId, orchestrationStarted: true, checkInScheduleId: scheduleInfo?.checkInScheduleId, gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId } } as ApiResponse);
+    res.json({ success: true, message: result.message || 'Project orchestration started successfully', data: { projectId: id, teamId, executionId: result.executionId, orchestrationStarted: true, checkInScheduleId: scheduleInfo?.checkInScheduleId, gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId, autoAssignmentScheduleId } } as ApiResponse);
   } catch (error) {
     console.error('Error starting project:', error);
     res.status(500).json({ success: false, error: 'Failed to start project' } as ApiResponse);
@@ -109,10 +196,21 @@ export async function stopProject(this: ApiContext, req: Request, res: Response)
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === id);
     if (!project) { res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse); return; }
+    
+    // Cancel auto-assignment scheduled message if it exists
+    if (project.scheduledMessageId && this.messageSchedulerService) {
+      try {
+        this.messageSchedulerService.cancelMessage(project.scheduledMessageId);
+        project.scheduledMessageId = undefined; // Clear the schedule ID
+      } catch (e) {
+        console.warn('Failed to cancel auto-assignment scheduled message:', e);
+      }
+    }
+
     try { await this.activeProjectsService.stopProject(id, this.messageSchedulerService); } catch (e) { console.warn('Failed to stop project lifecycle management:', e); }
     project.status = 'stopped';
     await this.storageService.saveProject(project);
-    res.json({ success: true, message: 'Project stopped successfully', data: { projectId: id, status: 'stopped' } } as ApiResponse);
+    res.json({ success: true, message: 'Project stopped successfully. Auto-assignment scheduling has been cancelled.', data: { projectId: id, status: 'stopped' } } as ApiResponse);
   } catch (error) {
     console.error('Error stopping project:', error);
     res.status(500).json({ success: false, error: 'Failed to stop project' } as ApiResponse);

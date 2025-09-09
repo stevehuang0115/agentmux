@@ -7,18 +7,21 @@ import {
   ViewToggle, 
   AssignmentsList,
   Assignment,
-  OrchestratorCommand 
+  OrchestratorCommand,
+  EnhancedTeamMember 
 } from '../components/Assignments';
+import { EnhancedAssignmentsList } from '../components/Assignments/EnhancedAssignmentsList';
 
 export const Assignments: React.FC = () => {
   const { openTerminalWithSession } = useTerminal();
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [enhancedMembers, setEnhancedMembers] = useState<EnhancedTeamMember[]>([]);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTeam, setFilterTeam] = useState<string>('all');
-  const [viewMode, setViewMode] = useState<'projects' | 'teams'>('projects');
+  const [viewMode, setViewMode] = useState<'projects' | 'teams' | 'enhanced'>('enhanced');
 
   useEffect(() => {
     loadData();
@@ -29,7 +32,8 @@ export const Assignments: React.FC = () => {
     await Promise.all([
       fetchAssignments(),
       loadProjects(),
-      loadTeams()
+      loadTeams(),
+      fetchEnhancedTeamData()
     ]);
   };
 
@@ -60,6 +64,20 @@ export const Assignments: React.FC = () => {
       }
     } catch (error) {
       console.error('Error fetching assignments:', error);
+    }
+  };
+
+  const fetchEnhancedTeamData = async () => {
+    try {
+      const response = await fetch('/api/teams/activity-check');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data.members) {
+          setEnhancedMembers(data.data.members);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching enhanced team data:', error);
     }
   };
 
@@ -164,32 +182,51 @@ export const Assignments: React.FC = () => {
         <div className="assignments-panel">
           <div className="panel-header">
             <h2>Active Projects & Teams</h2>
-            <ViewToggle
+            <div className="header-controls">
+              <button 
+                className={`view-toggle ${viewMode === 'enhanced' ? 'active' : ''}`}
+                onClick={() => setViewMode('enhanced' as any)}
+              >
+                Task View
+              </button>
+              <ViewToggle
+                viewMode={viewMode === 'enhanced' ? 'projects' : viewMode}
+                assignedProjects={assignedProjects}
+                assignedTeams={assignedTeams}
+                onViewModeChange={(mode) => setViewMode(mode === 'projects' ? 'enhanced' as any : mode)}
+              />
+            </div>
+          </div>
+
+          {viewMode !== 'enhanced' && (
+            <AssignmentFilters
+              filterStatus={filterStatus}
+              filterTeam={filterTeam}
+              assignments={assignments}
+              onStatusChange={setFilterStatus}
+              onTeamChange={setFilterTeam}
+            />
+          )}
+
+          {viewMode === 'enhanced' ? (
+            <EnhancedAssignmentsList
+              projects={projects}
+              teams={teams}
+              enhancedMembers={enhancedMembers}
+              onMemberClick={handleMemberClick}
+            />
+          ) : (
+            <AssignmentsList
               viewMode={viewMode}
               assignedProjects={assignedProjects}
               assignedTeams={assignedTeams}
-              onViewModeChange={setViewMode}
+              teams={teams}
+              projects={projects}
+              onMemberClick={handleMemberClick}
+              onOrchestratorClick={handleOrchestratorClick}
+              onUnassignTeam={handleUnassignTeam}
             />
-          </div>
-
-          <AssignmentFilters
-            filterStatus={filterStatus}
-            filterTeam={filterTeam}
-            assignments={assignments}
-            onStatusChange={setFilterStatus}
-            onTeamChange={setFilterTeam}
-          />
-
-          <AssignmentsList
-            viewMode={viewMode}
-            assignedProjects={assignedProjects}
-            assignedTeams={assignedTeams}
-            teams={teams}
-            projects={projects}
-            onMemberClick={handleMemberClick}
-            onOrchestratorClick={handleOrchestratorClick}
-            onUnassignTeam={handleUnassignTeam}
-          />
+          )}
         </div>
       </div>
     </div>

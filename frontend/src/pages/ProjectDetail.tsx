@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
-import { UserPlus, Play, FolderOpen, CheckSquare, FileText, Plus, Trash2, UserMinus, Info, ExternalLink, Square, RotateCcw } from 'lucide-react';
+import { UserPlus, Play, FolderOpen, CheckSquare, FileText, Plus, Trash2, UserMinus, Info, ExternalLink, Square } from 'lucide-react';
 import { Project, Team, Ticket } from '../types';
 import { apiService } from '../services/api.service';
 import { TeamAssignmentModal } from '../components/Modals/TeamAssignmentModal';
@@ -395,58 +395,7 @@ export const ProjectDetail: React.FC = () => {
     }
   };
 
-  const handleRestartProject = async () => {
-    if (!state.project) return;
-    
-    showConfirm(
-      `Restart "${state.project.name}"?\n\nThis will:\n• Restart scheduled check-ins and git reminders\n• Set project status to 'active'\n• Create new automated scheduling\n\nThis is useful if scheduled messages stopped working.`,
-      async () => await executeRestartProject(),
-      {
-        title: 'Restart Project',
-        confirmText: 'Restart Project',
-        type: 'info'
-      }
-    );
-  };
 
-  const executeRestartProject = async () => {
-    if (!state.project) return;
-    
-    try {
-      setState(prev => ({ ...prev, loading: true }));
-      
-      const response = await fetch(`/api/projects/${state.project.id}/restart`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        
-        // Reload project data to reflect updated status
-        await loadProjectData(state.project.id);
-        
-        showSuccess(
-          result.message || 'Project restarted successfully with new scheduled messages.',
-          'Project Restarted'
-        );
-      } else {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to restart project');
-      }
-      
-    } catch (error) {
-      console.error('Failed to restart project:', error);
-      showError(
-        'Failed to restart project: ' + (error instanceof Error ? error.message : 'Unknown error'),
-        'Restart Project Failed'
-      );
-    } finally {
-      setState(prev => ({ ...prev, loading: false }));
-    }
-  };
 
   const handleCreateSpecsTasks = async () => {
     if (!state.project) return;
@@ -1355,41 +1304,27 @@ export const ProjectDetail: React.FC = () => {
           </Button>
           
           {/* Project Lifecycle Controls */}
-          {assignedTeams.length > 0 && (
-            <>
-              {project.status === 'active' ? (
-                <>
-                  <Button
-                    variant="warning"
-                    icon={Square}
-                    onClick={handleStopProject}
-                    disabled={state.loading}
-                    title="Stop project and cancel scheduled messages"
-                  >
-                    Stop Project
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    icon={RotateCcw}
-                    onClick={handleRestartProject}
-                    disabled={state.loading}
-                    title="Restart project scheduling"
-                  >
-                    Restart
-                  </Button>
-                </>
-              ) : (
-                <Button
-                  variant="primary"
-                  icon={Play}
-                  onClick={handleStartProject}
-                  disabled={state.loading}
-                  loading={state.loading}
-                >
-                  {state.loading ? 'Starting...' : 'Start Project'}
-                </Button>
-              )}
-            </>
+          {project.status === 'active' ? (
+            <Button
+              variant="warning"
+              icon={Square}
+              onClick={handleStopProject}
+              disabled={state.loading}
+              title="Stop project and cancel scheduled messages"
+            >
+              Stop Project
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              icon={Play}
+              onClick={handleStartProject}
+              disabled={state.loading || assignedTeams.length === 0}
+              loading={state.loading}
+              title={assignedTeams.length === 0 ? 'Assign a team before starting the project' : 'Start project with assigned teams'}
+            >
+              {state.loading ? 'Starting...' : 'Start Project'}
+            </Button>
           )}
           
           <Button

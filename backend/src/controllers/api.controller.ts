@@ -3,11 +3,13 @@ import { StorageService, TmuxService, SchedulerService, MessageSchedulerService 
 import { ActiveProjectsService } from '../services/active-projects.service.js';
 import { PromptTemplateService } from '../services/prompt-template.service.js';
 import { TaskAssignmentMonitorService } from '../services/task-assignment-monitor.service.js';
+import { TaskTrackingService } from '../services/task-tracking.service.js';
 
 export class ApiController {
   public activeProjectsService: ActiveProjectsService;
   public promptTemplateService: PromptTemplateService;
   public taskAssignmentMonitor: TaskAssignmentMonitorService;
+  public taskTrackingService: TaskTrackingService;
 
   constructor(
     public storageService: StorageService,
@@ -18,6 +20,7 @@ export class ApiController {
     this.activeProjectsService = new ActiveProjectsService(this.storageService);
     this.promptTemplateService = new PromptTemplateService();
     this.taskAssignmentMonitor = new TaskAssignmentMonitorService(this.tmuxService);
+    this.taskTrackingService = new TaskTrackingService();
   }
 
   // Task Management Methods

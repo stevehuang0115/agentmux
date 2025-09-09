@@ -153,7 +153,7 @@ export class StorageService {
         name: projectName,
         path: resolvedProjectPath,
         teams: {},
-        status: 'active',
+        status: 'stopped',
       });
 
       // Ensure project directory and .agentmux structure exists with template files

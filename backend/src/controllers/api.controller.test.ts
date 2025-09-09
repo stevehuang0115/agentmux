@@ -188,10 +188,10 @@ describe('ApiController', () => {
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
       mockGitHandlers = await import('./domains/git.handlers.js');
-      mockGitHandlers.getGitStatus = jest.fn().mockResolvedValue({ status: 'clean' });
-      mockGitHandlers.commitChanges = jest.fn().mockResolvedValue({ success: true });
-      mockGitHandlers.startAutoCommit = jest.fn().mockResolvedValue({ success: true });
-      mockGitHandlers.stopAutoCommit = jest.fn().mockResolvedValue({ success: true });
+      (mockGitHandlers as any).getGitStatus = jest.fn().mockResolvedValue({ status: 'clean' });
+      (mockGitHandlers as any).commitChanges = jest.fn().mockResolvedValue({ success: true });
+      (mockGitHandlers as any).startAutoCommit = jest.fn().mockResolvedValue({ success: true });
+      (mockGitHandlers as any).stopAutoCommit = jest.fn().mockResolvedValue({ success: true });
     });
 
     it('should delegate getGitStatus to git handler', async () => {
@@ -228,10 +228,10 @@ describe('ApiController', () => {
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
       mockTerminalHandlers = await import('./domains/terminal.handlers.js');
-      mockTerminalHandlers.listTerminalSessions = jest.fn().mockResolvedValue(['session1', 'session2']);
-      mockTerminalHandlers.captureTerminal = jest.fn().mockResolvedValue({ output: 'terminal output' });
-      mockTerminalHandlers.sendTerminalInput = jest.fn().mockResolvedValue({ success: true });
-      mockTerminalHandlers.sendTerminalKey = jest.fn().mockResolvedValue({ success: true });
+      (mockTerminalHandlers as any).listTerminalSessions = jest.fn().mockResolvedValue(['session1', 'session2']);
+      (mockTerminalHandlers as any).captureTerminal = jest.fn().mockResolvedValue({ output: 'terminal output' });
+      (mockTerminalHandlers as any).sendTerminalInput = jest.fn().mockResolvedValue({ success: true });
+      (mockTerminalHandlers as any).sendTerminalKey = jest.fn().mockResolvedValue({ success: true });
     });
 
     it('should delegate listTerminalSessions to terminal handler', async () => {
@@ -268,10 +268,10 @@ describe('ApiController', () => {
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
       mockOrchestratorHandlers = await import('./domains/orchestrator.handlers.js');
-      mockOrchestratorHandlers.getOrchestratorCommands = jest.fn().mockResolvedValue(['command1', 'command2']);
-      mockOrchestratorHandlers.executeOrchestratorCommand = jest.fn().mockResolvedValue({ success: true });
-      mockOrchestratorHandlers.sendOrchestratorMessage = jest.fn().mockResolvedValue({ success: true });
-      mockOrchestratorHandlers.setupOrchestrator = jest.fn().mockResolvedValue({ success: true });
+      (mockOrchestratorHandlers as any).getOrchestratorCommands = jest.fn().mockResolvedValue(['command1', 'command2']);
+      (mockOrchestratorHandlers as any).executeOrchestratorCommand = jest.fn().mockResolvedValue({ success: true });
+      (mockOrchestratorHandlers as any).sendOrchestratorMessage = jest.fn().mockResolvedValue({ success: true });
+      (mockOrchestratorHandlers as any).setupOrchestrator = jest.fn().mockResolvedValue({ success: true });
     });
 
     it('should delegate getOrchestratorCommands to orchestrator handler', async () => {
@@ -309,7 +309,7 @@ describe('ApiController', () => {
 
     it('should propagate errors from domain handlers', async () => {
       const testError = new Error('Handler error');
-      mockTeamsHandlers.getTeam = jest.fn().mockRejectedValue(testError);
+      (mockTeamsHandlers as any).getTeam = jest.fn().mockRejectedValue(testError);
 
       await expect(controller.getTeam(mockRequest, mockResponse)).rejects.toThrow('Handler error');
     });
@@ -396,15 +396,15 @@ describe('ApiController', () => {
 
   describe('Context binding', () => {
     it('should properly bind context to delegated methods', async () => {
-      const mockRequest = { params: { id: 'test' } };
-      const mockResponse = { json: jest.fn() };
+      const mockRequest = { params: { id: 'test' } } as any;
+      const mockResponse = { json: jest.fn() } as any;
       
-      const mockTeamsHandlers = await import('./domains/teams.handlers.js');
+      const mockTeamsHandlers = jest.mocked(await import('./domains/teams.handlers.js'));
       mockTeamsHandlers.getTeam = jest.fn().mockImplementation(function(this: any, req: any, res: any) {
         // The 'this' context should be the controller instance
         expect(this).toBe(controller);
         return { success: true };
-      });
+      }) as any;
 
       await controller.getTeam(mockRequest, mockResponse);
       expect(mockTeamsHandlers.getTeam).toHaveBeenCalled();

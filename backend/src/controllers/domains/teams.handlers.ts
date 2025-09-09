@@ -940,6 +940,13 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
     const teams = await this.storageService.getTeams();
     const memberStatuses: any[] = [];
     const teamsToUpdate: typeof teams = [];
+    
+    // Get current task assignments
+    const inProgressTasks = await this.taskTrackingService.getAllInProgressTasks();
+    const tasksByMember = new Map();
+    inProgressTasks.forEach((task: any) => {
+      tasksByMember.set(task.assignedTeamMemberId, task);
+    });
 
     // Process all teams with concurrency limit to prevent overwhelming the system
     const CONCURRENCY_LIMIT = 2; // Reduced to be more conservative
@@ -970,6 +977,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 delete (member as any).lastTerminalOutput;
                 teamUpdated = true;
 
+                const currentTask = tasksByMember.get(member.id);
                 memberStatuses.push({
                   teamId: team.id,
                   teamName: team.name,
@@ -980,7 +988,14 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                   agentStatus: 'inactive',
                   workingStatus: 'idle',
                   lastActivityCheck: now,
-                  activityDetected: false
+                  activityDetected: false,
+                  currentTask: currentTask ? {
+                    id: currentTask.id,
+                    taskName: currentTask.taskName,
+                    taskFilePath: currentTask.taskFilePath,
+                    assignedAt: currentTask.assignedAt,
+                    status: currentTask.status
+                  } : null
                 });
                 continue;
               }
@@ -1011,6 +1026,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               // Store only limited output to prevent memory leak
               (member as any).lastTerminalOutput = trimmedOutput;
 
+              const currentTask = tasksByMember.get(member.id);
               memberStatuses.push({
                 teamId: team.id,
                 teamName: team.name,
@@ -1021,7 +1037,14 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 agentStatus: member.agentStatus,
                 workingStatus: newWorkingStatus,
                 lastActivityCheck: now,
-                activityDetected
+                activityDetected,
+                currentTask: currentTask ? {
+                  id: currentTask.id,
+                  taskName: currentTask.taskName,
+                  taskFilePath: currentTask.taskFilePath,
+                  assignedAt: currentTask.assignedAt,
+                  status: currentTask.status
+                } : null
               });
 
             } catch (error) {
@@ -1029,6 +1052,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               // Clear terminal output on error to prevent memory leak
               delete (member as any).lastTerminalOutput;
               
+              const currentTask = tasksByMember.get(member.id);
               memberStatuses.push({
                 teamId: team.id,
                 teamName: team.name,
@@ -1040,10 +1064,18 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 workingStatus: 'idle',
                 lastActivityCheck: now,
                 activityDetected: false,
-                error: error instanceof Error ? error.message : String(error)
+                error: error instanceof Error ? error.message : String(error),
+                currentTask: currentTask ? {
+                  id: currentTask.id,
+                  taskName: currentTask.taskName,
+                  taskFilePath: currentTask.taskFilePath,
+                  assignedAt: currentTask.assignedAt,
+                  status: currentTask.status
+                } : null
               });
             }
           } else {
+            const currentTask = tasksByMember.get(member.id);
             memberStatuses.push({
               teamId: team.id,
               teamName: team.name,
@@ -1054,7 +1086,14 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               agentStatus: member.agentStatus || 'inactive',
               workingStatus: member.workingStatus || 'idle',
               lastActivityCheck: (member as any).lastActivityCheck || now,
-              activityDetected: false
+              activityDetected: false,
+              currentTask: currentTask ? {
+                id: currentTask.id,
+                taskName: currentTask.taskName,
+                taskFilePath: currentTask.taskFilePath,
+                assignedAt: currentTask.assignedAt,
+                status: currentTask.status
+              } : null
             });
           }
         }

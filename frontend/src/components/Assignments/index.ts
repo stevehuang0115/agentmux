@@ -4,6 +4,7 @@ export { EmptyState } from './EmptyState';
 export { ProjectCard } from './ProjectCard';
 export { TeamCard } from './TeamCard';
 export { AssignmentsList } from './AssignmentsList';
+export { EnhancedAssignmentsList } from './EnhancedAssignmentsList';
 
 export type {
   Assignment,
@@ -16,4 +17,5 @@ export type {
   AssignmentsListProps,
   AssignmentStatus,
   AssignmentPriority,
+  EnhancedTeamMember,
 } from './types';

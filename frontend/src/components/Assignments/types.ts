@@ -1,5 +1,26 @@
 import { Project, Team } from '../../types';
 
+export interface EnhancedTeamMember {
+  teamId: string;
+  teamName: string;
+  memberId: string;
+  memberName: string;
+  role: string;
+  sessionName: string;
+  agentStatus: 'inactive' | 'activating' | 'active';
+  workingStatus: 'idle' | 'in_progress';
+  lastActivityCheck: string;
+  activityDetected: boolean;
+  currentTask?: {
+    id: string;
+    taskName: string;
+    taskFilePath: string;
+    assignedAt: string;
+    status: string;
+  } | null;
+  error?: string;
+}
+
 export interface Assignment {
   id: string;
   title: string;

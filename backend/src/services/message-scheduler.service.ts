@@ -8,6 +8,8 @@ export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
   private tmuxService: TmuxService;
   private storageService: StorageService;
+  private messageQueue: Array<{ message: ScheduledMessage; resolve: () => void; reject: (error: Error) => void }> = [];
+  private isProcessingQueue = false;
 
   constructor(tmuxService: TmuxService, storageService: StorageService) {
     super();
@@ -37,7 +39,12 @@ export class MessageSchedulerService extends EventEmitter {
     const delayMs = this.getDelayInMilliseconds(message.delayAmount, message.delayUnit);
     
     const executeMessage = async () => {
-      await this.executeMessage(message);
+      // Use sequential queue for auto-assignment messages to prevent conflicts
+      if (message.name.includes('Auto Task Assignment') || message.id.includes('auto-assign')) {
+        await this.executeMessageSequentially(message);
+      } else {
+        await this.executeMessage(message);
+      }
       
       if (message.isRecurring && message.isActive) {
         // Schedule next execution for recurring messages
@@ -174,6 +181,58 @@ export class MessageSchedulerService extends EventEmitter {
       deliveryLog,
       success
     });
+  }
+
+  /**
+   * Execute message through sequential queue to prevent conflicts (for auto-assignment)
+   */
+  private async executeMessageSequentially(message: ScheduledMessage): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Add message to queue
+      this.messageQueue.push({ message, resolve, reject });
+      
+      // Start processing queue if not already processing
+      if (!this.isProcessingQueue) {
+        this.processMessageQueue();
+      }
+    });
+  }
+
+  /**
+   * Process the message queue sequentially
+   */
+  private async processMessageQueue(): Promise<void> {
+    if (this.isProcessingQueue) {
+      return; // Already processing
+    }
+
+    this.isProcessingQueue = true;
+
+    while (this.messageQueue.length > 0) {
+      const queueItem = this.messageQueue.shift();
+      if (!queueItem) continue;
+
+      const { message, resolve, reject } = queueItem;
+
+      try {
+        // Log queue processing for auto-assignment messages
+        console.log(`Processing auto-assignment message for project ${message.targetProject} (queue length: ${this.messageQueue.length})`);
+        
+        // Execute the message
+        await this.executeMessage(message);
+        
+        // Wait a short delay between auto-assignment executions to prevent overwhelming the system
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        resolve();
+      } catch (error) {
+        console.error(`Error processing queued message "${message.name}":`, error);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+
+    this.isProcessingQueue = false;
+    console.log('Finished processing message queue');
   }
 
   /**

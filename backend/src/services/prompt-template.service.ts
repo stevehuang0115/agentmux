@@ -11,6 +11,12 @@ export interface TaskAssignmentData {
   taskMilestone?: string;
 }
 
+export interface AutoAssignmentData extends Record<string, string> {
+  projectName: string;
+  projectPath: string;
+  currentTimestamp: string;
+}
+
 export class PromptTemplateService {
   private templatesPath: string;
 
@@ -58,6 +64,15 @@ Please:
 3. Follow exact deliverables and file locations specified in the task file
 
 CRITICAL: Read the actual task file, not this summary!`;
+  }
+
+  /**
+   * Load and process auto-assignment orchestrator template for 15-minute checks
+   */
+  async getAutoAssignmentPrompt(data: AutoAssignmentData): Promise<string> {
+    const templatePath = path.join(this.templatesPath, 'auto-assignment-orchestrator-prompt-template.md');
+    const template = await readFile(templatePath, 'utf-8');
+    return this.processTemplate(template, data);
   }
 
   /**

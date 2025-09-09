@@ -14,7 +14,7 @@ export class ProjectModel implements Project {
     this.name = data.name || '';
     this.path = data.path || '';
     this.teams = data.teams || {};
-    this.status = data.status || 'active';
+    this.status = data.status || 'stopped';
     this.createdAt = data.createdAt || new Date().toISOString();
     this.updatedAt = data.updatedAt || new Date().toISOString();
   }
