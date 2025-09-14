@@ -1227,7 +1227,7 @@ body {
 }
 
 .status-dot--activating {
-	background: var(--color-warning);
+	background: #3b82f6;
 	animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -6015,6 +6015,51 @@ body {
 	flex: 1;
 }
 
+/* Terminal Input Styles */
+.terminal-panel-input {
+	flex-shrink: 0;
+	border-top: 1px solid var(--color-border);
+	background: #000000;
+	padding: var(--spacing-sm) var(--spacing-base);
+}
+
+.terminal-input-container {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing-sm);
+}
+
+.terminal-prompt {
+	color: #00ff00;
+	font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', monospace;
+	font-size: 0.875rem;
+	font-weight: bold;
+	flex-shrink: 0;
+}
+
+.terminal-input-field {
+	flex: 1;
+	background: transparent;
+	border: none;
+	outline: none;
+	color: #00ff00;
+	font-family: ui-monospace, SFMono-Regular, 'Cascadia Code', monospace;
+	font-size: 0.875rem;
+	line-height: 1.4;
+	padding: 0;
+	caret-color: #00ff00;
+}
+
+.terminal-input-field::placeholder {
+	color: #006600;
+	opacity: 0.7;
+}
+
+.terminal-input-field:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
 .refresh-terminal-btn {
 	padding: var(--spacing-xs) var(--spacing-sm);
 	background: var(--color-surface);
@@ -6280,7 +6325,7 @@ body {
 }
 
 .assigned-team-card .status-dot--activating {
-	background: var(--color-warning);
+	background: #3b82f6;
 	animation: pulse 1.5s ease-in-out infinite;
 }
 

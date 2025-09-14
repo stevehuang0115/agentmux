@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as terminalHandlers from '../../controllers/domains/terminal.handlers.js';
+import * as terminalHandlers from '../../controllers/monitoring/terminal.controller.js';
 
 export function registerTerminalRoutes(router: Router, apiController: ApiController): void {
   // Terminal Routes

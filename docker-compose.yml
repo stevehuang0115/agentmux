@@ -1,81 +1,81 @@
 version: '3.8'
 
 services:
-  agentmux:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: agentmux
-    restart: unless-stopped
-    ports:
-      - "3000:3000"
-      - "3001:3001"
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - MCP_PORT=3001
-      - DATA_PATH=/app/data
-      - LOG_DIR=/app/logs
-      - CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:3000
-      - SESSION_SECRET=your-secret-key-here
-    volumes:
-      - agentmux_data:/app/data
-      - agentmux_logs:/app/logs
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # For Docker-in-Docker if needed
-    networks:
-      - agentmux_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    agentmux:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        container_name: agentmux
+        restart: unless-stopped
+        ports:
+            - '3000:3000'
+            - '3001:3001'
+        environment:
+            - NODE_ENV=production
+            - PORT=3000
+            - AGENTMUX_MCP_PORT=3001
+            - DATA_PATH=/app/data
+            - LOG_DIR=/app/logs
+            - CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:3000
+            - SESSION_SECRET=your-secret-key-here
+        volumes:
+            - agentmux_data:/app/data
+            - agentmux_logs:/app/logs
+            - /var/run/docker.sock:/var/run/docker.sock:ro # For Docker-in-Docker if needed
+        networks:
+            - agentmux_network
+        healthcheck:
+            test: ['CMD', 'curl', '-f', 'http://localhost:3000/health']
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 40s
 
-  # Optional: Redis for session storage and caching
-  redis:
-    image: redis:7-alpine
-    container_name: agentmux_redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - agentmux_redis_data:/data
-    networks:
-      - agentmux_network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    # Optional: Redis for session storage and caching
+    redis:
+        image: redis:7-alpine
+        container_name: agentmux_redis
+        restart: unless-stopped
+        command: redis-server --appendonly yes
+        volumes:
+            - agentmux_redis_data:/data
+        networks:
+            - agentmux_network
+        healthcheck:
+            test: ['CMD', 'redis-cli', 'ping']
+            interval: 30s
+            timeout: 10s
+            retries: 3
 
-  # Optional: PostgreSQL for persistent data storage
-  postgres:
-    image: postgres:15-alpine
-    container_name: agentmux_postgres
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=agentmux
-      - POSTGRES_USER=agentmux
-      - POSTGRES_PASSWORD=agentmux_password
-    volumes:
-      - agentmux_postgres_data:/var/lib/postgresql/data
-    networks:
-      - agentmux_network
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentmux -d agentmux"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    # Optional: PostgreSQL for persistent data storage
+    postgres:
+        image: postgres:15-alpine
+        container_name: agentmux_postgres
+        restart: unless-stopped
+        environment:
+            - POSTGRES_DB=agentmux
+            - POSTGRES_USER=agentmux
+            - POSTGRES_PASSWORD=agentmux_password
+        volumes:
+            - agentmux_postgres_data:/var/lib/postgresql/data
+        networks:
+            - agentmux_network
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U agentmux -d agentmux']
+            interval: 30s
+            timeout: 10s
+            retries: 3
 
 volumes:
-  agentmux_data:
-    driver: local
-  agentmux_logs:
-    driver: local
-  agentmux_redis_data:
-    driver: local
-  agentmux_postgres_data:
-    driver: local
+    agentmux_data:
+        driver: local
+    agentmux_logs:
+        driver: local
+    agentmux_redis_data:
+        driver: local
+    agentmux_postgres_data:
+        driver: local
 
 networks:
-  agentmux_network:
-    driver: bridge
+    agentmux_network:
+        driver: bridge

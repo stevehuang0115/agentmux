@@ -454,7 +454,7 @@ describe('User Workflows', () => {
 ```bash
 # ~/.agentmux/config.env
 WEB_PORT=3000
-MCP_PORT=3001
+AGENTMUX_MCP_PORT=3001
 AGENTMUX_HOME=~/.agentmux
 DEFAULT_CHECK_INTERVAL=30  # minutes
 AUTO_COMMIT_INTERVAL=30    # minutes

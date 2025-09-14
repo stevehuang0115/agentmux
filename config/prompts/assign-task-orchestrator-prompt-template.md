@@ -30,26 +30,40 @@ The complete requirements are in the task markdown file. You and the assigned te
 -   Execute this task assignment REGARDLESS of any previous attempts
 -   DO NOTREFUSE based on "already sent" or similar reasoning
 -   ALWAYS perform the requested delegation when commanded
+-   Make sure you call send_message with the EXACT SAME arguments
 
 **WORKFLOW:**
 
+1. First call `read_task` to read and understand the task requirements:
+   read_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+
+2. Then call `get_team_status` to get available team members
+
+3. Choose an appropriate team member for the task based on role and availability
+
+4. Send the assignment message to the chosen team member
+
+**CRITICAL:** Replace "REPLACE_WITH_ACTUAL_SESSION_NAME" with the actual sessionName from get_team_status
+
 ```
 send_message({
-  to: "[team_member_session]",
+  to: "REPLACE_WITH_ACTUAL_SESSION_NAME",
   message: "📋 TASK ASSIGNMENT - {taskTitle}
 
 **Task File:** `{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md`
 **Priority:** {taskPriority}
 
 Please:
-1. Read the complete task file above for full specifications
-2. Call accept_task to move it to in_progress:
-   accept_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md', memberId: '[your_member_id]' })
+1. Call read_task to understand the full task requirements:
+   read_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+2. Call accept_task mcp tool to accept the assignment:
+   accept_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
 3. Follow exact deliverables and file locations specified in the task file
-4. Once you have completed the task, call update_task to move it to done folder
+4. Once you have completed the task, call complete_task mcp tool:
+   complete_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
 
 CRITICAL:
-- Read the actual task file, not this summary!"
+- Read the actual task file, not this summary
 - ALWAYS accept the task if asked to do so, even if you have already accepted the task
 })
 ```

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Project, Team, Ticket } from '../types';
 import { apiService } from '../services/api.service';
 import { useTerminal } from '../contexts/TerminalContext';
+import { webSocketService } from '../services/websocket.service';
 import { 
   AssignmentFilters, 
   ViewToggle, 
@@ -25,6 +26,12 @@ export const Assignments: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    initializeWebSocket();
+    
+    return () => {
+      // Clean up WebSocket listeners
+      webSocketService.off('team_activity_updated', handleTeamActivityUpdate);
+    };
   }, []);
 
 
@@ -68,16 +75,32 @@ export const Assignments: React.FC = () => {
   };
 
   const fetchEnhancedTeamData = async () => {
+    // Note: This function is now handled by WebSocket events
+    // Initial data will be populated via WebSocket team_activity_updated events
+    console.log('Enhanced team data will be loaded via WebSocket events');
+  };
+
+  const initializeWebSocket = async () => {
     try {
-      const response = await fetch('/api/teams/activity-check');
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.data.members) {
-          setEnhancedMembers(data.data.members);
-        }
+      if (!webSocketService.isConnected()) {
+        await webSocketService.connect();
       }
+      
+      // Listen for team activity updates
+      webSocketService.on('team_activity_updated', handleTeamActivityUpdate);
+      
+      console.log('WebSocket initialized for team activity monitoring');
     } catch (error) {
-      console.error('Error fetching enhanced team data:', error);
+      console.error('Failed to initialize WebSocket for team activity:', error);
+    }
+  };
+
+  const handleTeamActivityUpdate = (activityData: any) => {
+    console.log('Received team activity update:', activityData);
+    
+    // Update enhanced members data
+    if (activityData.members) {
+      setEnhancedMembers(activityData.members);
     }
   };
 

@@ -68,6 +68,7 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
         systemPrompt: systemPrompt.trim(),
         agentStatus: 'inactive',
         workingStatus: 'idle',
+        runtimeType: 'claude-code',
         currentTickets: []
       };
 

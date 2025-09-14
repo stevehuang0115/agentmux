@@ -1,12 +1,19 @@
-import type { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from '../services/index.js';
-import type { ActiveProjectsService } from '../services/active-projects.service.js';
-import type { PromptTemplateService } from '../services/prompt-template.service.js';
-import type { TaskAssignmentMonitorService } from '../services/task-assignment-monitor.service.js';
-import type { TaskTrackingService } from '../services/task-tracking.service.js';
+import type { 
+  StorageService, 
+  TmuxService, 
+  SchedulerService, 
+  MessageSchedulerService,
+  ActiveProjectsService,
+  PromptTemplateService,
+  TaskAssignmentMonitorService,
+  TaskTrackingService,
+  AgentRegistrationService
+} from '../services/index.js';
 
 export interface ApiContext {
   storageService: StorageService;
   tmuxService: TmuxService;
+  agentRegistrationService: AgentRegistrationService;
   schedulerService: SchedulerService;
   messageSchedulerService?: MessageSchedulerService;
   activeProjectsService: ActiveProjectsService;

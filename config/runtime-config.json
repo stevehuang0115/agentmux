@@ -1,0 +1,26 @@
+{
+  "runtimes": {
+    "claude-code": {
+      "displayName": "Claude Code",
+      "initScript": "initialize_claude.sh",
+      "welcomeMessage": "Welcome to Claude Code",
+      "timeout": 120000,
+      "description": "Anthropic's Claude Code CLI with advanced coding capabilities"
+    },
+    "gemini-cli": {
+      "displayName": "Gemini CLI", 
+      "initScript": "initialize_gemini.sh",
+      "welcomeMessage": "GEMINI.md",
+      "timeout": 90000,
+      "description": "Google's Gemini AI CLI for code generation and analysis"
+    },
+    "codex-cli": {
+      "displayName": "OpenAI Codex",
+      "initScript": "initialize_codex.sh", 
+      "welcomeMessage": "OpenAI Codex",
+      "timeout": 90000,
+      "description": "OpenAI's Codex CLI for advanced code understanding"
+    }
+  },
+  "defaultRuntime": "claude-code"
+}

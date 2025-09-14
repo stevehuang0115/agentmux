@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { exec } from 'child_process';
 import * as fs from 'fs/promises';
 
+// Mock fetch globally
+global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
+
 // Mock dependencies
 jest.mock('child_process');
 jest.mock('fs/promises', () => ({
@@ -116,7 +119,10 @@ class MockAgentMuxMCP {
       };
     }
 
-    // Mock backend API call
+    // Mock backend API call to test the correct endpoint
+    const apiBaseUrl = 'http://localhost:3000';
+    const endpoint = `${apiBaseUrl}/api/teams/members/register`;
+    
     const requestBody = {
       sessionName: sessionId,
       role: role,
@@ -125,13 +131,43 @@ class MockAgentMuxMCP {
       memberId: memberId
     };
 
-    // Simulate successful registration
-    return {
-      content: [{
-        type: 'text' as const,
-        text: `Agent registered successfully. Role: ${role}, Session: ${sessionId}${memberId ? `, Member ID: ${memberId}` : ''}`
-      }]
-    };
+    // Mock fetch call to verify correct endpoint is called
+    const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true })
+    } as Response);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'User-Agent': 'AgentMux-MCP/1.0.0'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (response.ok) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `Agent registered successfully. Role: ${role}, Session: ${sessionId}${memberId ? `, Member ID: ${memberId}` : ''}`
+          }]
+        };
+      } else {
+        throw new Error(`API call failed with status ${response.status}`);
+      }
+    } catch (error) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Registration failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
   }
 
   async getAgentLogs(params: any): Promise<any> {
@@ -516,6 +552,40 @@ describe('AgentMuxMCP', () => {
   });
 
   describe('registerAgentStatus', () => {
+    it('should use correct endpoint URL for registration', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockClear(); // Clear any previous calls
+      
+      // Make a registration call
+      await mcpServer.registerAgentStatus({
+        role: 'tpm',
+        sessionId: 'test-session-123'
+      });
+      
+      // Verify fetch was called with the correct endpoint
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:3000/api/teams/members/register',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Content-Type': 'application/json',
+            'User-Agent': 'AgentMux-MCP/1.0.0'
+          }),
+          body: expect.any(String)
+        })
+      );
+      
+      // Verify the endpoint URL is NOT the old incorrect one
+      expect(mockFetch).not.toHaveBeenCalledWith(
+        expect.stringContaining('/api/team-members/register-status'),
+        expect.any(Object)
+      );
+      
+      // Verify the endpoint URL IS the correct one
+      const callArgs = mockFetch.mock.calls[0];
+      expect(callArgs[0]).toBe('http://localhost:3000/api/teams/members/register');
+    });
+
     it('should register agent with role and sessionId only', async () => {
       const result = await mcpServer.registerAgentStatus({
         role: 'tpm',

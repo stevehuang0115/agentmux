@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as errorHandlers from '../../controllers/domains/errors.handlers.js';
+import * as errorHandlers from '../../controllers/system/errors.controller.js';
 
 export function registerErrorRoutes(router: Router, apiController: ApiController): void {
   // Error Tracking Routes

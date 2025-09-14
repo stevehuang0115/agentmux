@@ -1,5 +1,5 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { TmuxService } from '../services/tmux.service.js';
+import { TmuxService } from '../services/index.js';
 import { TerminalOutput, WebSocketMessage } from '../types/index.js';
 
 export class TerminalGateway {
@@ -319,6 +319,39 @@ export class TerminalGateway {
     this.io.emit('system_notification', {
       type: 'system_notification',
       payload: { message, notificationType: type },
+      timestamp: new Date().toISOString()
+    } as WebSocketMessage);
+  }
+
+  /**
+   * Broadcast orchestrator status changes
+   */
+  broadcastOrchestratorStatus(orchestratorData: any): void {
+    this.io.emit('orchestrator_status_changed', {
+      type: 'orchestrator_status_changed',
+      payload: orchestratorData,
+      timestamp: new Date().toISOString()
+    } as WebSocketMessage);
+  }
+
+  /**
+   * Broadcast team member status changes
+   */
+  broadcastTeamMemberStatus(memberData: any): void {
+    this.io.emit('team_member_status_changed', {
+      type: 'team_member_status_changed',
+      payload: memberData,
+      timestamp: new Date().toISOString()
+    } as WebSocketMessage);
+  }
+
+  /**
+   * Broadcast comprehensive team activity updates
+   */
+  broadcastTeamActivity(activityData: any): void {
+    this.io.emit('team_activity_updated', {
+      type: 'team_activity_updated',
+      payload: activityData,
       timestamp: new Date().toISOString()
     } as WebSocketMessage);
   }

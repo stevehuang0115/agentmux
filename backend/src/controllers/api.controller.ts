@@ -1,15 +1,22 @@
 import { Request, Response } from 'express';
-import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from '../services/index.js';
-import { ActiveProjectsService } from '../services/active-projects.service.js';
-import { PromptTemplateService } from '../services/prompt-template.service.js';
-import { TaskAssignmentMonitorService } from '../services/task-assignment-monitor.service.js';
-import { TaskTrackingService } from '../services/task-tracking.service.js';
+import { 
+  StorageService, 
+  TmuxService, 
+  SchedulerService, 
+  MessageSchedulerService,
+  AgentRegistrationService
+} from '../services/index.js';
+import { ActiveProjectsService } from '../services/index.js';
+import { PromptTemplateService } from '../services/index.js';
+import { TaskAssignmentMonitorService } from '../services/index.js';
+import { TaskTrackingService } from '../services/index.js';
 
 export class ApiController {
   public activeProjectsService: ActiveProjectsService;
   public promptTemplateService: PromptTemplateService;
   public taskAssignmentMonitor: TaskAssignmentMonitorService;
   public taskTrackingService: TaskTrackingService;
+  public agentRegistrationService: AgentRegistrationService;
 
   constructor(
     public storageService: StorageService,
@@ -21,514 +28,523 @@ export class ApiController {
     this.promptTemplateService = new PromptTemplateService();
     this.taskAssignmentMonitor = new TaskAssignmentMonitorService(this.tmuxService);
     this.taskTrackingService = new TaskTrackingService();
+    
+    // Create AgentRegistrationService - it needs access to the internal services from TmuxService
+    // We'll access the internal services through the TmuxService properties
+    const tmuxCommand = (this.tmuxService as any).tmuxCommand;
+    this.agentRegistrationService = new AgentRegistrationService(
+      tmuxCommand,
+      process.cwd(),
+      this.storageService
+    );
   }
 
   // Task Management Methods
   public async assignTask(req: Request, res: Response): Promise<void> {
-    const { assignTask } = await import('./domains/task-management.handlers.js');
+    const { assignTask } = await import('./task-management/task-management.controller.js');
     return assignTask.call(this, req, res);
   }
 
   public async completeTask(req: Request, res: Response): Promise<void> {
-    const { completeTask } = await import('./domains/task-management.handlers.js');
+    const { completeTask } = await import('./task-management/task-management.controller.js');
     return completeTask.call(this, req, res);
   }
 
   public async blockTask(req: Request, res: Response): Promise<void> {
-    const { blockTask } = await import('./domains/task-management.handlers.js');
+    const { blockTask } = await import('./task-management/task-management.controller.js');
     return blockTask.call(this, req, res);
   }
 
   public async takeNextTask(req: Request, res: Response): Promise<void> {
-    const { takeNextTask } = await import('./domains/task-management.handlers.js');
+    const { takeNextTask } = await import('./task-management/task-management.controller.js');
     return takeNextTask.call(this, req, res);
   }
 
   public async syncTaskStatus(req: Request, res: Response): Promise<void> {
-    const { syncTaskStatus } = await import('./domains/task-management.handlers.js');
+    const { syncTaskStatus } = await import('./task-management/task-management.controller.js');
     return syncTaskStatus.call(this, req, res);
   }
 
   public async getTeamProgress(req: Request, res: Response): Promise<void> {
-    const { getTeamProgress } = await import('./domains/task-management.handlers.js');
+    const { getTeamProgress } = await import('./task-management/task-management.controller.js');
     return getTeamProgress.call(this, req, res);
   }
 
   public async createTasksFromConfig(req: Request, res: Response): Promise<void> {
-    const { createTasksFromConfig } = await import('./domains/task-management.handlers.js');
+    const { createTasksFromConfig } = await import('./task-management/task-management.controller.js');
     return createTasksFromConfig.call(this, req, res);
   }
 
   // Teams Methods
   public async createTeam(req: Request, res: Response): Promise<void> {
-    const { createTeam } = await import('./domains/teams.handlers.js');
+    const { createTeam } = await import('./team/team.controller.js');
     return createTeam.call(this, req, res);
   }
 
   public async getTeams(req: Request, res: Response): Promise<void> {
-    const { getTeams } = await import('./domains/teams.handlers.js');
+    const { getTeams } = await import('./team/team.controller.js');
     return getTeams.call(this, req, res);
   }
 
   public async getTeam(req: Request, res: Response): Promise<void> {
-    const { getTeam } = await import('./domains/teams.handlers.js');
+    const { getTeam } = await import('./team/team.controller.js');
     return getTeam.call(this, req, res);
   }
 
   public async startTeam(req: Request, res: Response): Promise<void> {
-    const { startTeam } = await import('./domains/teams.handlers.js');
+    const { startTeam } = await import('./team/team.controller.js');
     return startTeam.call(this, req, res);
   }
 
   public async stopTeam(req: Request, res: Response): Promise<void> {
-    const { stopTeam } = await import('./domains/teams.handlers.js');
+    const { stopTeam } = await import('./team/team.controller.js');
     return stopTeam.call(this, req, res);
   }
 
   public async getTeamWorkload(req: Request, res: Response): Promise<void> {
-    const { getTeamWorkload } = await import('./domains/teams.handlers.js');
+    const { getTeamWorkload } = await import('./team/team.controller.js');
     return getTeamWorkload.call(this, req, res);
   }
 
   public async deleteTeam(req: Request, res: Response): Promise<void> {
-    const { deleteTeam } = await import('./domains/teams.handlers.js');
+    const { deleteTeam } = await import('./team/team.controller.js');
     return deleteTeam.call(this, req, res);
   }
 
   public async getTeamMemberSession(req: Request, res: Response): Promise<void> {
-    const { getTeamMemberSession } = await import('./domains/teams.handlers.js');
+    const { getTeamMemberSession } = await import('./team/team.controller.js');
     return getTeamMemberSession.call(this, req, res);
   }
 
   public async addTeamMember(req: Request, res: Response): Promise<void> {
-    const { addTeamMember } = await import('./domains/teams.handlers.js');
+    const { addTeamMember } = await import('./team/team.controller.js');
     return addTeamMember.call(this, req, res);
   }
 
   public async updateTeamMember(req: Request, res: Response): Promise<void> {
-    const { updateTeamMember } = await import('./domains/teams.handlers.js');
+    const { updateTeamMember } = await import('./team/team.controller.js');
     return updateTeamMember.call(this, req, res);
   }
 
   public async deleteTeamMember(req: Request, res: Response): Promise<void> {
-    const { deleteTeamMember } = await import('./domains/teams.handlers.js');
+    const { deleteTeamMember } = await import('./team/team.controller.js');
     return deleteTeamMember.call(this, req, res);
   }
 
   public async startTeamMember(req: Request, res: Response): Promise<void> {
-    const { startTeamMember } = await import('./domains/teams.handlers.js');
+    const { startTeamMember } = await import('./team/team.controller.js');
     return startTeamMember.call(this, req, res);
   }
 
   public async stopTeamMember(req: Request, res: Response): Promise<void> {
-    const { stopTeamMember } = await import('./domains/teams.handlers.js');
+    const { stopTeamMember } = await import('./team/team.controller.js');
     return stopTeamMember.call(this, req, res);
   }
 
   public async reportMemberReady(req: Request, res: Response): Promise<void> {
-    const { reportMemberReady } = await import('./domains/teams.handlers.js');
+    const { reportMemberReady } = await import('./team/team.controller.js');
     return reportMemberReady.call(this, req, res);
   }
 
   public async registerMemberStatus(req: Request, res: Response): Promise<void> {
-    const { registerMemberStatus } = await import('./domains/teams.handlers.js');
+    const { registerMemberStatus } = await import('./team/team.controller.js');
     return registerMemberStatus.call(this, req, res);
   }
 
   public async generateMemberContext(req: Request, res: Response): Promise<void> {
-    const { generateMemberContext } = await import('./domains/teams.handlers.js');
+    const { generateMemberContext } = await import('./team/team.controller.js');
     return generateMemberContext.call(this, req, res);
   }
 
   public async injectContextIntoSession(req: Request, res: Response): Promise<void> {
-    const { injectContextIntoSession } = await import('./domains/teams.handlers.js');
+    const { injectContextIntoSession } = await import('./team/team.controller.js');
     return injectContextIntoSession.call(this, req, res);
   }
 
   public async refreshMemberContext(req: Request, res: Response): Promise<void> {
-    const { refreshMemberContext } = await import('./domains/teams.handlers.js');
+    const { refreshMemberContext } = await import('./team/team.controller.js');
     return refreshMemberContext.call(this, req, res);
   }
 
   public async getTeamActivityStatus(req: Request, res: Response): Promise<void> {
-    const { getTeamActivityStatus } = await import('./domains/teams.handlers.js');
+    const { getTeamActivityStatus } = await import('./team/team.controller.js');
     return getTeamActivityStatus.call(this, req, res);
   }
 
   // Projects Methods
   public async createProject(req: Request, res: Response): Promise<void> {
-    const { createProject } = await import('./domains/projects.handlers.js');
+    const { createProject } = await import('./project/project.controller.js');
     return createProject.call(this, req, res);
   }
 
   public async getProjects(req: Request, res: Response): Promise<void> {
-    const { getProjects } = await import('./domains/projects.handlers.js');
+    const { getProjects } = await import('./project/project.controller.js');
     return getProjects.call(this, req, res);
   }
 
   public async getProject(req: Request, res: Response): Promise<void> {
-    const { getProject } = await import('./domains/projects.handlers.js');
+    const { getProject } = await import('./project/project.controller.js');
     return getProject.call(this, req, res);
   }
 
   public async getProjectStatus(req: Request, res: Response): Promise<void> {
-    const { getProjectStatus } = await import('./domains/projects.handlers.js');
+    const { getProjectStatus } = await import('./project/project.controller.js');
     return getProjectStatus.call(this, req, res);
   }
 
   public async getProjectFiles(req: Request, res: Response): Promise<void> {
-    const { getProjectFiles } = await import('./domains/projects.handlers.js');
+    const { getProjectFiles } = await import('./project/project.controller.js');
     return getProjectFiles.call(this, req, res);
   }
 
   public async getFileContent(req: Request, res: Response): Promise<void> {
-    const { getFileContent } = await import('./domains/projects.handlers.js');
+    const { getFileContent } = await import('./project/project.controller.js');
     return getFileContent.call(this, req, res);
   }
 
   public async getProjectCompletion(req: Request, res: Response): Promise<void> {
-    const { getProjectCompletion } = await import('./domains/projects.handlers.js');
+    const { getProjectCompletion } = await import('./project/project.controller.js');
     return getProjectCompletion.call(this, req, res);
   }
 
   public async deleteProject(req: Request, res: Response): Promise<void> {
-    const { deleteProject } = await import('./domains/projects.handlers.js');
+    const { deleteProject } = await import('./project/project.controller.js');
     return deleteProject.call(this, req, res);
   }
 
   public async getProjectContext(req: Request, res: Response): Promise<void> {
-    const { getProjectContext } = await import('./domains/projects.handlers.js');
+    const { getProjectContext } = await import('./project/project.controller.js');
     return getProjectContext.call(this, req, res);
   }
 
   public async openProjectInFinder(req: Request, res: Response): Promise<void> {
-    const { openProjectInFinder } = await import('./domains/projects.handlers.js');
+    const { openProjectInFinder } = await import('./project/project.controller.js');
     return openProjectInFinder.call(this, req, res);
   }
 
   public async createSpecFile(req: Request, res: Response): Promise<void> {
-    const { createSpecFile } = await import('./domains/projects.handlers.js');
+    const { createSpecFile } = await import('./project/project.controller.js');
     return createSpecFile.call(this, req, res);
   }
 
   public async getSpecFileContent(req: Request, res: Response): Promise<void> {
-    const { getSpecFileContent } = await import('./domains/projects.handlers.js');
+    const { getSpecFileContent } = await import('./project/project.controller.js');
     return getSpecFileContent.call(this, req, res);
   }
 
   public async getAgentmuxMarkdownFiles(req: Request, res: Response): Promise<void> {
-    const { getAgentmuxMarkdownFiles } = await import('./domains/projects.handlers.js');
+    const { getAgentmuxMarkdownFiles } = await import('./project/project.controller.js');
     return getAgentmuxMarkdownFiles.call(this, req, res);
   }
 
   public async saveMarkdownFile(req: Request, res: Response): Promise<void> {
-    const { saveMarkdownFile } = await import('./domains/projects.handlers.js');
+    const { saveMarkdownFile } = await import('./project/project.controller.js');
     return saveMarkdownFile.call(this, req, res);
   }
 
   public async startProject(req: Request, res: Response): Promise<void> {
-    const { startProject } = await import('./domains/projects.handlers.js');
+    const { startProject } = await import('./project/project.controller.js');
     return startProject.call(this, req, res);
   }
 
   public async stopProject(req: Request, res: Response): Promise<void> {
-    const { stopProject } = await import('./domains/projects.handlers.js');
+    const { stopProject } = await import('./project/project.controller.js');
     return stopProject.call(this, req, res);
   }
 
   public async restartProject(req: Request, res: Response): Promise<void> {
-    const { restartProject } = await import('./domains/projects.handlers.js');
+    const { restartProject } = await import('./project/project.controller.js');
     return restartProject.call(this, req, res);
   }
 
   public async assignTeamsToProject(req: Request, res: Response): Promise<void> {
-    const { assignTeamsToProject } = await import('./domains/projects.handlers.js');
+    const { assignTeamsToProject } = await import('./project/project.controller.js');
     return assignTeamsToProject.call(this, req, res);
   }
 
   public async unassignTeamFromProject(req: Request, res: Response): Promise<void> {
-    const { unassignTeamFromProject } = await import('./domains/projects.handlers.js');
+    const { unassignTeamFromProject } = await import('./project/project.controller.js');
     return unassignTeamFromProject.call(this, req, res);
   }
 
   // Tickets Methods
   public async createTicket(req: Request, res: Response): Promise<void> {
-    const { createTicket } = await import('./domains/tickets.handlers.js');
+    const { createTicket } = await import('./task-management/tickets.controller.js');
     return createTicket.call(this, req, res);
   }
 
   public async getTickets(req: Request, res: Response): Promise<void> {
-    const { getTickets } = await import('./domains/tickets.handlers.js');
+    const { getTickets } = await import('./task-management/tickets.controller.js');
     return getTickets.call(this, req, res);
   }
 
   public async getTicket(req: Request, res: Response): Promise<void> {
-    const { getTicket } = await import('./domains/tickets.handlers.js');
+    const { getTicket } = await import('./task-management/tickets.controller.js');
     return getTicket.call(this, req, res);
   }
 
   public async updateTicket(req: Request, res: Response): Promise<void> {
-    const { updateTicket } = await import('./domains/tickets.handlers.js');
+    const { updateTicket } = await import('./task-management/tickets.controller.js');
     return updateTicket.call(this, req, res);
   }
 
   public async deleteTicket(req: Request, res: Response): Promise<void> {
-    const { deleteTicket } = await import('./domains/tickets.handlers.js');
+    const { deleteTicket } = await import('./task-management/tickets.controller.js');
     return deleteTicket.call(this, req, res);
   }
 
   public async addSubtask(req: Request, res: Response): Promise<void> {
-    const { addSubtask } = await import('./domains/tickets.handlers.js');
+    const { addSubtask } = await import('./task-management/tickets.controller.js');
     return addSubtask.call(this, req, res);
   }
 
   public async toggleSubtask(req: Request, res: Response): Promise<void> {
-    const { toggleSubtask } = await import('./domains/tickets.handlers.js');
+    const { toggleSubtask } = await import('./task-management/tickets.controller.js');
     return toggleSubtask.call(this, req, res);
   }
 
   public async createTicketTemplate(req: Request, res: Response): Promise<void> {
-    const { createTicketTemplate } = await import('./domains/tickets.handlers.js');
+    const { createTicketTemplate } = await import('./task-management/tickets.controller.js');
     return createTicketTemplate.call(this, req, res);
   }
 
   public async getTicketTemplates(req: Request, res: Response): Promise<void> {
-    const { getTicketTemplates } = await import('./domains/tickets.handlers.js');
+    const { getTicketTemplates } = await import('./task-management/tickets.controller.js');
     return getTicketTemplates.call(this, req, res);
   }
 
   public async getTicketTemplate(req: Request, res: Response): Promise<void> {
-    const { getTicketTemplate } = await import('./domains/tickets.handlers.js');
+    const { getTicketTemplate } = await import('./task-management/tickets.controller.js');
     return getTicketTemplate.call(this, req, res);
   }
 
   // Git Methods
   public async getGitStatus(req: Request, res: Response): Promise<void> {
-    const { getGitStatus } = await import('./domains/git.handlers.js');
+    const { getGitStatus } = await import('./project/git.controller.js');
     return getGitStatus.call(this, req, res);
   }
 
   public async commitChanges(req: Request, res: Response): Promise<void> {
-    const { commitChanges } = await import('./domains/git.handlers.js');
+    const { commitChanges } = await import('./project/git.controller.js');
     return commitChanges.call(this, req, res);
   }
 
   public async startAutoCommit(req: Request, res: Response): Promise<void> {
-    const { startAutoCommit } = await import('./domains/git.handlers.js');
+    const { startAutoCommit } = await import('./project/git.controller.js');
     return startAutoCommit.call(this, req, res);
   }
 
   public async stopAutoCommit(req: Request, res: Response): Promise<void> {
-    const { stopAutoCommit } = await import('./domains/git.handlers.js');
+    const { stopAutoCommit } = await import('./project/git.controller.js');
     return stopAutoCommit.call(this, req, res);
   }
 
   public async getCommitHistory(req: Request, res: Response): Promise<void> {
-    const { getCommitHistory } = await import('./domains/git.handlers.js');
+    const { getCommitHistory } = await import('./project/git.controller.js');
     return getCommitHistory.call(this, req, res);
   }
 
   public async createBranch(req: Request, res: Response): Promise<void> {
-    const { createBranch } = await import('./domains/git.handlers.js');
+    const { createBranch } = await import('./project/git.controller.js');
     return createBranch.call(this, req, res);
   }
 
   public async createPullRequest(req: Request, res: Response): Promise<void> {
-    const { createPullRequest } = await import('./domains/git.handlers.js');
+    const { createPullRequest } = await import('./project/git.controller.js');
     return createPullRequest.call(this, req, res);
   }
 
   // Orchestrator Methods
   public async getOrchestratorCommands(req: Request, res: Response): Promise<void> {
-    const { getOrchestratorCommands } = await import('./domains/orchestrator.handlers.js');
+    const { getOrchestratorCommands } = await import('./orchestrator/orchestrator.controller.js');
     return getOrchestratorCommands.call(this, req, res);
   }
 
   public async executeOrchestratorCommand(req: Request, res: Response): Promise<void> {
-    const { executeOrchestratorCommand } = await import('./domains/orchestrator.handlers.js');
+    const { executeOrchestratorCommand } = await import('./orchestrator/orchestrator.controller.js');
     return executeOrchestratorCommand.call(this, req, res);
   }
 
   public async sendOrchestratorMessage(req: Request, res: Response): Promise<void> {
-    const { sendOrchestratorMessage } = await import('./domains/orchestrator.handlers.js');
+    const { sendOrchestratorMessage } = await import('./orchestrator/orchestrator.controller.js');
     return sendOrchestratorMessage.call(this, req, res);
   }
 
   public async sendOrchestratorEnter(req: Request, res: Response): Promise<void> {
-    const { sendOrchestratorEnter } = await import('./domains/orchestrator.handlers.js');
+    const { sendOrchestratorEnter } = await import('./orchestrator/orchestrator.controller.js');
     return sendOrchestratorEnter.call(this, req, res);
   }
 
   public async setupOrchestrator(req: Request, res: Response): Promise<void> {
-    const { setupOrchestrator } = await import('./domains/orchestrator.handlers.js');
+    const { setupOrchestrator } = await import('./orchestrator/orchestrator.controller.js');
     return setupOrchestrator.call(this, req, res);
   }
 
   public async getOrchestratorHealth(req: Request, res: Response): Promise<void> {
-    const { getOrchestratorHealth } = await import('./domains/orchestrator.handlers.js');
+    const { getOrchestratorHealth } = await import('./orchestrator/orchestrator.controller.js');
     return getOrchestratorHealth.call(this, req, res);
   }
 
   public async assignTaskToOrchestrator(req: Request, res: Response): Promise<void> {
-    const { assignTaskToOrchestrator } = await import('./domains/orchestrator.handlers.js');
+    const { assignTaskToOrchestrator } = await import('./orchestrator/orchestrator.controller.js');
     return assignTaskToOrchestrator.call(this, req, res);
   }
 
   // Scheduler Methods
   public async scheduleCheck(req: Request, res: Response): Promise<void> {
-    const { scheduleCheck } = await import('./domains/scheduler.handlers.js');
+    const { scheduleCheck } = await import('./system/scheduler.controller.js');
     return scheduleCheck.call(this, req, res);
   }
 
   public async getScheduledChecks(req: Request, res: Response): Promise<void> {
-    const { getScheduledChecks } = await import('./domains/scheduler.handlers.js');
+    const { getScheduledChecks } = await import('./system/scheduler.controller.js');
     return getScheduledChecks.call(this, req, res);
   }
 
   public async cancelScheduledCheck(req: Request, res: Response): Promise<void> {
-    const { cancelScheduledCheck } = await import('./domains/scheduler.handlers.js');
+    const { cancelScheduledCheck } = await import('./system/scheduler.controller.js');
     return cancelScheduledCheck.call(this, req, res);
   }
 
   // Terminal Methods
   public async listTerminalSessions(req: Request, res: Response): Promise<void> {
-    const { listTerminalSessions } = await import('./domains/terminal.handlers.js');
+    const { listTerminalSessions } = await import('./monitoring/terminal.controller.js');
     return listTerminalSessions.call(this, req, res);
   }
 
   public async captureTerminal(req: Request, res: Response): Promise<void> {
-    const { captureTerminal } = await import('./domains/terminal.handlers.js');
+    const { captureTerminal } = await import('./monitoring/terminal.controller.js');
     return captureTerminal.call(this, req, res);
   }
 
   public async sendTerminalInput(req: Request, res: Response): Promise<void> {
-    const { sendTerminalInput } = await import('./domains/terminal.handlers.js');
+    const { sendTerminalInput } = await import('./monitoring/terminal.controller.js');
     return sendTerminalInput.call(this, req, res);
   }
 
   public async sendTerminalKey(req: Request, res: Response): Promise<void> {
-    const { sendTerminalKey } = await import('./domains/terminal.handlers.js');
+    const { sendTerminalKey } = await import('./monitoring/terminal.controller.js');
     return sendTerminalKey.call(this, req, res);
   }
 
   // Errors Methods
   public async trackError(req: Request, res: Response): Promise<void> {
-    const { trackError } = await import('./domains/errors.handlers.js');
+    const { trackError } = await import('./system/errors.controller.js');
     return trackError.call(this, req, res);
   }
 
   public async getErrorStats(req: Request, res: Response): Promise<void> {
-    const { getErrorStats } = await import('./domains/errors.handlers.js');
+    const { getErrorStats } = await import('./system/errors.controller.js');
     return getErrorStats.call(this, req, res);
   }
 
   public async getErrors(req: Request, res: Response): Promise<void> {
-    const { getErrors } = await import('./domains/errors.handlers.js');
+    const { getErrors } = await import('./system/errors.controller.js');
     return getErrors.call(this, req, res);
   }
 
   public async getError(req: Request, res: Response): Promise<void> {
-    const { getError } = await import('./domains/errors.handlers.js');
+    const { getError } = await import('./system/errors.controller.js');
     return getError.call(this, req, res);
   }
 
   public async clearErrors(req: Request, res: Response): Promise<void> {
-    const { clearErrors } = await import('./domains/errors.handlers.js');
+    const { clearErrors } = await import('./system/errors.controller.js');
     return clearErrors.call(this, req, res);
   }
 
   // Scheduled Messages Methods
   public async createScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { createScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { createScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return createScheduledMessage.call(this, req, res);
   }
 
   public async getScheduledMessages(req: Request, res: Response): Promise<void> {
-    const { getScheduledMessages } = await import('./domains/scheduled-messages.handlers.js');
+    const { getScheduledMessages } = await import('./messaging/scheduled-messages.controller.js');
     return getScheduledMessages.call(this, req, res);
   }
 
   public async getScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { getScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { getScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return getScheduledMessage.call(this, req, res);
   }
 
   public async updateScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { updateScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { updateScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return updateScheduledMessage.call(this, req, res);
   }
 
   public async deleteScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { deleteScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { deleteScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return deleteScheduledMessage.call(this, req, res);
   }
 
   public async toggleScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { toggleScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { toggleScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return toggleScheduledMessage.call(this, req, res);
   }
 
   public async runScheduledMessage(req: Request, res: Response): Promise<void> {
-    const { runScheduledMessage } = await import('./domains/scheduled-messages.handlers.js');
+    const { runScheduledMessage } = await import('./messaging/scheduled-messages.controller.js');
     return runScheduledMessage.call(this, req, res);
   }
 
   // Delivery Logs Methods
   public async getDeliveryLogs(req: Request, res: Response): Promise<void> {
-    const { getDeliveryLogs } = await import('./domains/delivery-logs.handlers.js');
+    const { getDeliveryLogs } = await import('./messaging/delivery-logs.controller.js');
     return getDeliveryLogs.call(this, req, res);
   }
 
   public async clearDeliveryLogs(req: Request, res: Response): Promise<void> {
-    const { clearDeliveryLogs } = await import('./domains/delivery-logs.handlers.js');
+    const { clearDeliveryLogs } = await import('./messaging/delivery-logs.controller.js');
     return clearDeliveryLogs.call(this, req, res);
   }
 
   // Workflows Methods
   public async getWorkflowExecution(req: Request, res: Response): Promise<void> {
-    const { getWorkflowExecution } = await import('./domains/workflows.handlers.js');
+    const { getWorkflowExecution } = await import('./workflow/workflow.controller.js');
     return getWorkflowExecution.call(this, req, res);
   }
 
   public async getActiveWorkflows(req: Request, res: Response): Promise<void> {
-    const { getActiveWorkflows } = await import('./domains/workflows.handlers.js');
+    const { getActiveWorkflows } = await import('./workflow/workflow.controller.js');
     return getActiveWorkflows.call(this, req, res);
   }
 
   public async cancelWorkflowExecution(req: Request, res: Response): Promise<void> {
-    const { cancelWorkflowExecution } = await import('./domains/workflows.handlers.js');
+    const { cancelWorkflowExecution } = await import('./workflow/workflow.controller.js');
     return cancelWorkflowExecution.call(this, req, res);
   }
 
   // Config Files Methods
   public async getConfigFile(req: Request, res: Response): Promise<void> {
-    const { getConfigFile } = await import('./domains/config.handlers.js');
+    const { getConfigFile } = await import('./system/config.controller.js');
     return getConfigFile.call(this, req, res);
   }
 
   // Project Tasks Methods
   public async getAllTasks(req: Request, res: Response): Promise<void> {
-    const { getAllTasks } = await import('./domains/tasks.handlers.js');
+    const { getAllTasks } = await import('./task-management/tasks.controller.js');
     return getAllTasks.call(this, req, res);
   }
 
   public async getMilestones(req: Request, res: Response): Promise<void> {
-    const { getMilestones } = await import('./domains/tasks.handlers.js');
+    const { getMilestones } = await import('./task-management/tasks.controller.js');
     return getMilestones.call(this, req, res);
   }
 
   public async getTasksByStatus(req: Request, res: Response): Promise<void> {
-    const { getTasksByStatus } = await import('./domains/tasks.handlers.js');
+    const { getTasksByStatus } = await import('./task-management/tasks.controller.js');
     return getTasksByStatus.call(this, req, res);
   }
 
   public async getTasksByMilestone(req: Request, res: Response): Promise<void> {
-    const { getTasksByMilestone } = await import('./domains/tasks.handlers.js');
+    const { getTasksByMilestone } = await import('./task-management/tasks.controller.js');
     return getTasksByMilestone.call(this, req, res);
   }
 
   public async getProjectTasksStatus(req: Request, res: Response): Promise<void> {
-    const { getProjectTasksStatus } = await import('./domains/tasks.handlers.js');
+    const { getProjectTasksStatus } = await import('./task-management/tasks.controller.js');
     return getProjectTasksStatus.call(this, req, res);
   }
 }

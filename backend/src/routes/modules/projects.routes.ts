@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as projectHandlers from '../../controllers/domains/projects.handlers.js';
-import * as ticketHandlers from '../../controllers/domains/tickets.handlers.js';
-import * as gitHandlers from '../../controllers/domains/git.handlers.js';
-import * as taskHandlers from '../../controllers/domains/tasks.handlers.js';
-import * as orchestratorHandlers from '../../controllers/domains/orchestrator.handlers.js';
+import * as projectHandlers from '../../controllers/project/project.controller.js';
+import * as ticketHandlers from '../../controllers/task-management/tickets.controller.js';
+import * as gitHandlers from '../../controllers/project/git.controller.js';
+import * as taskHandlers from '../../controllers/task-management/tasks.controller.js';
+import * as orchestratorHandlers from '../../controllers/orchestrator/orchestrator.controller.js';
 
 export function registerProjectRoutes(router: Router, apiController: ApiController): void {
   // Project Management Routes

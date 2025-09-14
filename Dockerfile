@@ -73,7 +73,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV MCP_PORT=3001
+ENV AGENTMUX_MCP_PORT=3001
 ENV DATA_PATH=/app/data
 ENV LOG_DIR=/app/logs
 

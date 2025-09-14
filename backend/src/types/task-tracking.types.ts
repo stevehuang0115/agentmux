@@ -8,7 +8,7 @@ export interface InProgressTask {
   assignedTeamMemberId: string;
   assignedSessionId: string;
   assignedAt: string; // ISO timestamp
-  status: 'assigned' | 'active' | 'blocked' | 'pending_assignment';
+  status: 'assigned' | 'active' | 'blocked' | 'pending_assignment' | 'completed';
   lastCheckedAt?: string;
   blockReason?: string;
   priority?: 'low' | 'medium' | 'high';

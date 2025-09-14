@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { IconButton } from './UI';
+import { webSocketService } from '../services/websocket.service';
 
 interface OrchestratorStatus {
   sessionId: string;
@@ -15,23 +16,9 @@ export const OrchestratorStatusBanner: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchOrchestratorStatus = async () => {
-    try {
-      const response = await fetch('/api/teams/activity-check');
-      const data = await response.json();
-      
-      if (data.success && data.data && data.data.orchestrator) {
-        // Map the new response format to the old format for backward compatibility
-        const orchestratorData: OrchestratorStatus = {
-          sessionId: data.data.orchestrator.sessionName || 'agentmux-orc',
-          status: data.data.orchestrator.running ? 'active' : 'inactive',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        setOrchestratorStatus(orchestratorData);
-      }
-    } catch (error) {
-      console.error('Error fetching orchestrator status:', error);
-    }
+    // Note: Initial orchestrator status is now provided via WebSocket events
+    // The WebSocket listener will handle all status updates
+    console.log('Orchestrator status will be loaded via WebSocket events');
   };
 
   const handleRefresh = async () => {
@@ -40,13 +27,43 @@ export const OrchestratorStatusBanner: React.FC = () => {
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
+  const initializeWebSocket = async () => {
+    try {
+      if (!webSocketService.isConnected()) {
+        await webSocketService.connect();
+      }
+      
+      // Listen for orchestrator status updates
+      webSocketService.on('orchestrator_status_changed', handleOrchestratorStatusUpdate);
+      
+      console.log('WebSocket initialized for orchestrator status monitoring');
+    } catch (error) {
+      console.error('Failed to initialize WebSocket for orchestrator status:', error);
+    }
+  };
+
+  const handleOrchestratorStatusUpdate = (orchestratorData: any) => {
+    console.log('Received orchestrator status update:', orchestratorData);
+    
+    // Convert the new format to the expected format
+    const orchestratorStatus: OrchestratorStatus = {
+      sessionId: orchestratorData.sessionName || 'agentmux-orc',
+      status: orchestratorData.running ? 'active' : 'inactive',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    setOrchestratorStatus(orchestratorStatus);
+  };
+
   useEffect(() => {
     fetchOrchestratorStatus();
+    initializeWebSocket();
     
-    // Poll every 30 seconds for status updates (reduced frequency)
-    const interval = setInterval(fetchOrchestratorStatus, 30000);
-    
-    return () => clearInterval(interval);
+    return () => {
+      // Clean up WebSocket listeners
+      webSocketService.off('orchestrator_status_changed', handleOrchestratorStatusUpdate);
+    };
   }, []);
 
   // Reset dismissed state when status changes to show banner again

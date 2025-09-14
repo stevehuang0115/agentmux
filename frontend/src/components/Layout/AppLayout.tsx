@@ -37,11 +37,14 @@ export const AppLayout: React.FC = () => {
         aria-label={isTerminalOpen ? 'Close Terminal' : 'Open Terminal'}
       />
 
-      {/* Terminal Side Panel */}
-      <TerminalPanel
-        isOpen={isTerminalOpen}
-        onClose={closeTerminal}
-      />
+      {/* Terminal Side Panel with Overlay */}
+      <>
+        {isTerminalOpen && <div className="terminal-panel-overlay" onClick={closeTerminal} />}
+        <TerminalPanel
+          isOpen={isTerminalOpen}
+          onClose={closeTerminal}
+        />
+      </>
     </div>
   );
 };

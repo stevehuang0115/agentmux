@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as systemHandlers from '../../controllers/domains/system.handlers.js';
+import * as systemHandlers from '../../controllers/system/system.controller.js';
 
 export function registerSystemRoutes(router: Router, apiController: ApiController): void {
   // System Administration Routes

@@ -10,8 +10,16 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 
-import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from './services/index.js';
-import { ActivityMonitorService } from './services/activity-monitor.service.js';
+import {
+	StorageService,
+	TmuxService,
+	SchedulerService,
+	MessageSchedulerService,
+	ActivityMonitorService,
+	TaskTrackingService,
+	TeamActivityWebSocketService,
+	TeamsJsonWatcherService,
+} from './services/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { TerminalGateway } from './websocket/terminal.gateway.js';
@@ -21,256 +29,309 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export class AgentMuxServer {
-  private app: express.Application;
-  private httpServer: ReturnType<typeof createServer>;
-  private io: SocketIOServer;
-  private config: StartupConfig;
-  
-  private storageService!: StorageService;
-  private tmuxService!: TmuxService;
-  private schedulerService!: SchedulerService;
-  private messageSchedulerService!: MessageSchedulerService;
-  private activityMonitorService!: ActivityMonitorService;
-  private apiController!: ApiController;
-  private terminalGateway!: TerminalGateway;
+	private app: express.Application;
+	private httpServer: ReturnType<typeof createServer>;
+	private io: SocketIOServer;
+	private config: StartupConfig;
 
-  constructor(config?: Partial<StartupConfig>) {
-    // Resolve ~ to actual home directory
-    const resolveHomePath = (inputPath: string) => {
-      if (inputPath.startsWith('~/')) {
-        return path.join(os.homedir(), inputPath.slice(2));
-      }
-      if (inputPath === '~') {
-        return os.homedir();
-      }
-      return inputPath;
-    };
+	private storageService!: StorageService;
+	private tmuxService!: TmuxService;
+	private schedulerService!: SchedulerService;
+	private messageSchedulerService!: MessageSchedulerService;
+	private activityMonitorService!: ActivityMonitorService;
+	private taskTrackingService!: TaskTrackingService;
+	private teamActivityWebSocketService!: TeamActivityWebSocketService;
+	private teamsJsonWatcherService!: TeamsJsonWatcherService;
+	private apiController!: ApiController;
+	private terminalGateway!: TerminalGateway;
 
-    const defaultAgentmuxHome = config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
+	constructor(config?: Partial<StartupConfig>) {
+		// Resolve ~ to actual home directory
+		const resolveHomePath = (inputPath: string) => {
+			if (inputPath.startsWith('~/')) {
+				return path.join(os.homedir(), inputPath.slice(2));
+			}
+			if (inputPath === '~') {
+				return os.homedir();
+			}
+			return inputPath;
+		};
 
-    this.config = {
-      webPort: config?.webPort || parseInt(process.env.WEB_PORT || '3000'),
-      mcpPort: config?.mcpPort || parseInt(process.env.MCP_PORT || '3001'),
-      agentmuxHome: resolveHomePath(defaultAgentmuxHome),
-      defaultCheckInterval: config?.defaultCheckInterval || parseInt(process.env.DEFAULT_CHECK_INTERVAL || '30'),
-      autoCommitInterval: config?.autoCommitInterval || parseInt(process.env.AUTO_COMMIT_INTERVAL || '30'),
-    };
+		const defaultAgentmuxHome =
+			config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
 
-    this.app = express();
-    this.httpServer = createServer(this.app);
-    this.io = new SocketIOServer(this.httpServer, {
-      cors: {
-        origin: process.env.NODE_ENV === 'production' ? false : '*',
-        methods: ['GET', 'POST']
-      }
-    });
+		this.config = {
+			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '3000'),
+			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '3001'),
+			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
+			defaultCheckInterval:
+				config?.defaultCheckInterval ||
+				parseInt(process.env.DEFAULT_CHECK_INTERVAL || '30'),
+			autoCommitInterval:
+				config?.autoCommitInterval || parseInt(process.env.AUTO_COMMIT_INTERVAL || '30'),
+		};
 
-    this.initializeServices();
-    this.configureMiddleware();
-    this.configureRoutes();
-    this.configureWebSocket();
-  }
+		this.app = express();
+		this.httpServer = createServer(this.app);
+		this.io = new SocketIOServer(this.httpServer, {
+			cors: {
+				origin: process.env.NODE_ENV === 'production' ? false : '*',
+				methods: ['GET', 'POST'],
+			},
+		});
 
-  private initializeServices(): void {
-    this.storageService = new StorageService(this.config.agentmuxHome);
-    this.tmuxService = new TmuxService();
-    this.schedulerService = new SchedulerService(this.tmuxService, this.storageService);
-    this.messageSchedulerService = new MessageSchedulerService(this.tmuxService, this.storageService);
-    this.activityMonitorService = ActivityMonitorService.getInstance();
-    this.apiController = new ApiController(
-      this.storageService,
-      this.tmuxService,
-      this.schedulerService,
-      this.messageSchedulerService
-    );
-    this.terminalGateway = new TerminalGateway(this.io, this.tmuxService);
-  }
+		this.initializeServices();
+		this.configureMiddleware();
+		this.configureRoutes();
+		this.configureWebSocket();
+	}
 
-  private configureMiddleware(): void {
-    // Security middleware
-    this.app.use(helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          scriptSrc: ["'self'"],
-          imgSrc: ["'self'", "data:", "https:"],
-          connectSrc: ["'self'", "ws:", "wss:"],
-        },
-      },
-    }));
+	private initializeServices(): void {
+		this.storageService = StorageService.getInstance(this.config.agentmuxHome);
+		this.tmuxService = new TmuxService();
+		this.schedulerService = new SchedulerService(this.tmuxService, this.storageService);
+		this.messageSchedulerService = new MessageSchedulerService(
+			this.tmuxService,
+			this.storageService
+		);
+		this.activityMonitorService = ActivityMonitorService.getInstance();
+		this.taskTrackingService = new TaskTrackingService();
+		this.teamActivityWebSocketService = new TeamActivityWebSocketService(
+			this.storageService,
+			this.tmuxService,
+			this.taskTrackingService
+		);
+		this.teamsJsonWatcherService = new TeamsJsonWatcherService();
+		this.apiController = new ApiController(
+			this.storageService,
+			this.tmuxService,
+			this.schedulerService,
+			this.messageSchedulerService
+		);
+		this.terminalGateway = new TerminalGateway(this.io, this.tmuxService);
+		
+		// Connect WebSocket service to terminal gateway for broadcasting
+		this.teamActivityWebSocketService.setTerminalGateway(this.terminalGateway);
+		
+		// Connect teams.json watcher to team activity service for real-time updates
+		this.teamsJsonWatcherService.setTeamActivityService(this.teamActivityWebSocketService);
+	}
 
-    // CORS
-    this.app.use(cors({
-      origin: process.env.NODE_ENV === 'production' ? false : '*',
-      credentials: true
-    }));
+	private configureMiddleware(): void {
+		// Security middleware
+		this.app.use(
+			helmet({
+				contentSecurityPolicy: {
+					directives: {
+						defaultSrc: ["'self'"],
+						styleSrc: ["'self'", "'unsafe-inline'"],
+						scriptSrc: ["'self'"],
+						imgSrc: ["'self'", 'data:', 'https:'],
+						connectSrc: ["'self'", 'ws:', 'wss:'],
+					},
+				},
+			})
+		);
 
-    // Logging
-    this.app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+		// CORS
+		this.app.use(
+			cors({
+				origin: process.env.NODE_ENV === 'production' ? false : '*',
+				credentials: true,
+			})
+		);
 
-    // Body parsing
-    this.app.use(express.json({ limit: '10mb' }));
-    this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+		// Logging
+		this.app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-    // Static files for frontend
-    const frontendPath = path.join(__dirname, '../../frontend/dist');
-    this.app.use(express.static(frontendPath));
-  }
+		// Body parsing
+		this.app.use(express.json({ limit: '10mb' }));
+		this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-  private configureRoutes(): void {
-    // API routes
-    this.app.use('/api', createApiRoutes(this.apiController));
+		// Note: Static files are configured in configureRoutes() after API routes
+	}
 
-    // Health check
-    this.app.get('/health', (req, res) => {
-      res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        version: process.env.npm_package_version || '1.0.0'
-      });
-    });
+	private configureRoutes(): void {
+		// API routes
+		this.app.use('/api', createApiRoutes(this.apiController));
 
-    // Serve frontend for all other routes (SPA)
-    this.app.get('*', (req, res) => {
-      const frontendPath = path.join(__dirname, '../../frontend/dist/index.html');
-      res.sendFile(frontendPath);
-    });
+		// Health check
+		this.app.get('/health', (req, res) => {
+			res.json({
+				status: 'healthy',
+				timestamp: new Date().toISOString(),
+				uptime: process.uptime(),
+				version: process.env.npm_package_version || '1.0.0',
+			});
+		});
 
-    // Error handling middleware
-    this.app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
-      console.error('Error:', err);
-      res.status(500).json({
-        success: false,
-        error: process.env.NODE_ENV === 'production' ? 'Internal server error' : err.message
-      });
-    });
+		// Static files for frontend (after API routes)
+		// When compiled, __dirname is dist/backend, so we need to go up to project root
+		const projectRoot = path.resolve(__dirname, '../..');
+		const frontendPath = path.join(projectRoot, 'frontend/dist');
+		this.app.use(express.static(frontendPath));
 
-    // 404 handler
-    this.app.use((req, res) => {
-      res.status(404).json({
-        success: false,
-        error: 'Endpoint not found'
-      });
-    });
-  }
+		// Serve frontend for all other routes (SPA)
+		this.app.get('*', (req, res) => {
+			const frontendIndexPath = path.join(projectRoot, 'frontend/dist/index.html');
+			res.sendFile(frontendIndexPath);
+		});
 
-  private configureWebSocket(): void {
-    this.io.on('connection', (socket) => {
-      console.log(`Client connected: ${socket.id}`);
-      
-      socket.on('disconnect', () => {
-        console.log(`Client disconnected: ${socket.id}`);
-      });
-    });
+		// Error handling middleware
+		this.app.use(
+			(
+				err: Error,
+				req: express.Request,
+				res: express.Response,
+				next: express.NextFunction
+			) => {
+				console.error('Error:', err);
+				res.status(500).json({
+					success: false,
+					error:
+						process.env.NODE_ENV === 'production'
+							? 'Internal server error'
+							: err.message,
+				});
+			}
+		);
 
-    // Connect terminal output to WebSocket
-    this.tmuxService.on('output', (output) => {
-      this.io.emit('terminal_output', output);
-    });
+		// 404 handler
+		this.app.use((req, res) => {
+			res.status(404).json({
+				success: false,
+				error: 'Endpoint not found',
+			});
+		});
+	}
 
-    // Forward scheduler events
-    this.schedulerService.on('check_executed', (data) => {
-      this.io.emit('check_executed', data);
-    });
+	private configureWebSocket(): void {
+		this.io.on('connection', (socket) => {
+			console.log(`Client connected: ${socket.id}`);
 
-    this.schedulerService.on('check_scheduled', (data) => {
-      this.io.emit('check_scheduled', data);
-    });
-  }
+			socket.on('disconnect', () => {
+				console.log(`Client disconnected: ${socket.id}`);
+			});
+		});
 
-  async start(): Promise<void> {
-    try {
-      // Initialize tmux server
-      await this.tmuxService.initialize();
+		// Connect terminal output to WebSocket
+		this.tmuxService.on('output', (output) => {
+			this.io.emit('terminal_output', output);
+		});
 
-      // Start message scheduler
-      await this.messageSchedulerService.start();
+		// Forward scheduler events
+		this.schedulerService.on('check_executed', (data) => {
+			this.io.emit('check_executed', data);
+		});
 
-      // Start activity monitoring
-      this.activityMonitorService.startPolling();
+		this.schedulerService.on('check_scheduled', (data) => {
+			this.io.emit('check_scheduled', data);
+		});
+	}
 
-      // Start HTTP server
-      await new Promise<void>((resolve, reject) => {
-        this.httpServer.listen(this.config.webPort, () => {
-          console.log(`🚀 AgentMux server started on port ${this.config.webPort}`);
-          console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
-          console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
-          console.log(`🏠 Home: ${this.config.agentmuxHome}`);
-          resolve();
-        });
+	async start(): Promise<void> {
+		try {
+			// Initialize tmux server
+			await this.tmuxService.initialize();
 
-        this.httpServer.on('error', (error) => {
-          console.error('Server error:', error);
-          reject(error);
-        });
-      });
+			// Start message scheduler
+			await this.messageSchedulerService.start();
 
-      // Register cleanup handlers
-      process.on('SIGTERM', this.shutdown.bind(this));
-      process.on('SIGINT', this.shutdown.bind(this));
-      process.on('uncaughtException', (error) => {
-        console.error('Uncaught exception:', error);
-        this.shutdown();
-      });
+			// Start activity monitoring
+			this.activityMonitorService.startPolling();
 
-      process.on('unhandledRejection', (reason, promise) => {
-        console.error('Unhandled rejection at:', promise, 'reason:', reason);
-        this.shutdown();
-      });
+			// Start team activity WebSocket service
+			this.teamActivityWebSocketService.start();
 
-    } catch (error) {
-      console.error('Failed to start server:', error);
-      throw error;
-    }
-  }
+			// Start teams.json file watcher for real-time updates
+			this.teamsJsonWatcherService.start();
+			console.log('📁 Teams.json file watcher started for real-time updates');
 
-  async shutdown(): Promise<void> {
-    console.log('\n🛑 Shutting down AgentMux server...');
+			// Start HTTP server
+			await new Promise<void>((resolve, reject) => {
+				this.httpServer.listen(this.config.webPort, () => {
+					console.log(`🚀 AgentMux server started on port ${this.config.webPort}`);
+					console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
+					console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
+					console.log(`🏠 Home: ${this.config.agentmuxHome}`);
+					resolve();
+				});
 
-    try {
-      // Clean up schedulers
-      this.schedulerService.cleanup();
-      this.messageSchedulerService.cleanup();
-      // Stop activity monitoring
-      this.activityMonitorService.stopPolling();
+				this.httpServer.on('error', (error) => {
+					console.error('Server error:', error);
+					reject(error);
+				});
+			});
 
-      // Kill all tmux sessions
-      const sessions = await this.tmuxService.listSessions();
-      for (const session of sessions) {
-        if (session.sessionName.startsWith('agentmux_')) {
-          await this.tmuxService.killSession(session.sessionName);
-        }
-      }
+			// Register cleanup handlers
+			process.on('SIGTERM', this.shutdown.bind(this));
+			process.on('SIGINT', this.shutdown.bind(this));
+			process.on('uncaughtException', (error) => {
+				console.error('Uncaught exception:', error);
+				this.shutdown();
+			});
 
-      // Close HTTP server
-      await new Promise<void>((resolve) => {
-        this.httpServer.close(() => {
-          console.log('✅ Server shut down gracefully');
-          resolve();
-        });
-      });
+			process.on('unhandledRejection', (reason, promise) => {
+				console.error('Unhandled rejection at:', promise, 'reason:', reason);
+				this.shutdown();
+			});
+		} catch (error) {
+			console.error('Failed to start server:', error);
+			throw error;
+		}
+	}
 
-      process.exit(0);
-    } catch (error) {
-      console.error('Error during shutdown:', error);
-      process.exit(1);
-    }
-  }
+	async shutdown(): Promise<void> {
+		console.log('\n🛑 Shutting down AgentMux server...');
 
-  getConfig(): StartupConfig {
-    return { ...this.config };
-  }
+		try {
+			// Clean up schedulers
+			this.schedulerService.cleanup();
+			this.messageSchedulerService.cleanup();
+			// Stop activity monitoring
+			this.activityMonitorService.stopPolling();
+			
+			// Stop team activity WebSocket service
+			this.teamActivityWebSocketService.stop();
+			
+			// Stop teams.json file watcher
+			this.teamsJsonWatcherService.stop();
+
+			// Kill all tmux sessions
+			const sessions = await this.tmuxService.listSessions();
+			for (const session of sessions) {
+				if (session.sessionName.startsWith('agentmux_')) {
+					await this.tmuxService.killSession(session.sessionName);
+				}
+			}
+
+			// Close HTTP server
+			await new Promise<void>((resolve) => {
+				this.httpServer.close(() => {
+					console.log('✅ Server shut down gracefully');
+					resolve();
+				});
+			});
+
+			process.exit(0);
+		} catch (error) {
+			console.error('Error during shutdown:', error);
+			process.exit(1);
+		}
+	}
+
+	getConfig(): StartupConfig {
+		return { ...this.config };
+	}
 }
 
 // Start server if this file is run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const server = new AgentMuxServer();
-  server.start().catch((error) => {
-    console.error('Failed to start AgentMux server:', error);
-    process.exit(1);
-  });
+	const server = new AgentMuxServer();
+	server.start().catch((error) => {
+		console.error('Failed to start AgentMux server:', error);
+		process.exit(1);
+	});
 }
 
 export default AgentMuxServer;

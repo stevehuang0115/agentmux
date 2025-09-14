@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Team, TeamMember } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
-import { TeamHeader, TeamOverview, Terminal, TeamStatus } from '../components/TeamDetail';
+import { TeamHeader, TeamOverview, TeamStatus } from '../components/TeamDetail';
 import { safeParseJSON } from '../utils/api';
 
 export const TeamDetail: React.FC = () => {
@@ -11,9 +11,7 @@ export const TeamDetail: React.FC = () => {
   const navigate = useNavigate();
   const { openTerminalWithSession } = useTerminal();
   const [team, setTeam] = useState<Team | null>(null);
-  const [terminals, setTerminals] = useState<Terminal[]>([]);
-  const [selectedTerminal, setSelectedTerminal] = useState<string>('');
-  const [terminalOutput, setTerminalOutput] = useState<string>('');
+  // Terminal functionality moved to centralized TerminalPanel
   const [loading, setLoading] = useState(true);
   const [orchestratorSessionActive, setOrchestratorSessionActive] = useState(false);
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
@@ -23,7 +21,6 @@ export const TeamDetail: React.FC = () => {
   useEffect(() => {
     if (id) {
       fetchTeamData();
-      fetchTerminals();
       // Check orchestrator session status if this is the orchestrator team
       if (id === 'orchestrator' || (team?.name === 'Orchestrator Team')) {
         checkOrchestratorSession();
@@ -39,11 +36,7 @@ export const TeamDetail: React.FC = () => {
     }
   }, [team?.currentProject]);
 
-  useEffect(() => {
-    if (selectedTerminal) {
-      fetchTerminalOutput();
-    }
-  }, [selectedTerminal]);
+  // Terminal output handled by centralized WebSocket system
 
   const fetchTeamData = async () => {
     try {
@@ -61,41 +54,7 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
-  const fetchTerminals = async () => {
-    try {
-      const response = await fetch(`/api/teams/${id}/terminals`);
-      if (response.ok) {
-        const result = await safeParseJSON(response);
-        if (result.success && result.data) {
-          setTerminals(result.data);
-          if (result.data.length > 0 && !selectedTerminal) {
-            setSelectedTerminal(result.data[0].id);
-          }
-        }
-      } else {
-        // Endpoint might not exist, set empty array
-        setTerminals([]);
-      }
-    } catch (error) {
-      // Set empty array on error to prevent crashes
-      setTerminals([]);
-    }
-  };
-
-  const fetchTerminalOutput = async () => {
-    try {
-      const response = await fetch(`/api/terminals/${selectedTerminal}/output`);
-      if (response.ok) {
-        const output = await response.text();
-        setTerminalOutput(output);
-      } else {
-        setTerminalOutput('Terminal output not available');
-      }
-    } catch (error) {
-      console.error('Error fetching terminal output:', error);
-      setTerminalOutput('Error loading terminal output');
-    }
-  };
+  // Terminal fetching logic removed - using centralized WebSocket system
 
   const checkOrchestratorSession = async () => {
     try {
@@ -155,7 +114,7 @@ export const TeamDetail: React.FC = () => {
       if (response.ok) {
         setShowStartTeamModal(false);
         fetchTeamData();
-        fetchTerminals();
+        // Terminal functionality moved to centralized WebSocket system
         // Show success message
         alert(result.message || 'Team started successfully!');
       } else {
@@ -171,11 +130,30 @@ export const TeamDetail: React.FC = () => {
 
   const handleStopTeam = async () => {
     try {
-      const response = await fetch(`/api/teams/${id}/stop`, {
-        method: 'POST',
-      });
-      if (response.ok) {
-        fetchTeamData();
+      // Special handling for orchestrator team
+      if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
+        const response = await fetch('/api/orchestrator/stop', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          fetchTeamData();
+          checkOrchestratorSession();
+        } else {
+          const result = await response.json();
+          alert(result.error || 'Failed to stop orchestrator');
+        }
+      } else {
+        // Regular team stop
+        const response = await fetch(`/api/teams/${id}/stop`, {
+          method: 'POST',
+        });
+        if (response.ok) {
+          fetchTeamData();
+        }
       }
     } catch (error) {
       console.error('Error stopping team:', error);
@@ -276,8 +254,29 @@ export const TeamDetail: React.FC = () => {
 
   const handleUpdateMember = async (memberId: string, updates: Partial<TeamMember>) => {
     try {
+      // If updating runtime type, use the specific runtime endpoint
+      if ('runtimeType' in updates && updates.runtimeType) {
+        const response = await fetch(`/api/teams/${id}/members/${memberId}/runtime`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ runtimeType: updates.runtimeType }),
+        });
+
+        if (response.ok) {
+          fetchTeamData();
+          return;
+        } else {
+          const result = await response.json();
+          alert('Failed to update member runtime: ' + (result.error || 'Unknown error'));
+          return;
+        }
+      }
+
+      // For other updates, use the general member update endpoint
       const response = await fetch(`/api/teams/${id}/members/${memberId}`, {
-        method: 'PATCH',
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
@@ -316,21 +315,43 @@ export const TeamDetail: React.FC = () => {
 
   const handleStartMember = async (memberId: string) => {
     try {
-      const response = await fetch(`/api/teams/${id}/members/${memberId}/start`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      // Special handling for orchestrator team
+      if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
+        const response = await fetch('/api/orchestrator/setup', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
-      const result = await response.json();
+        const result = await response.json();
 
-      if (response.ok) {
-        // Refresh team data to show updated status
-        fetchTeamData();
-        console.log(`Member ${memberId} started successfully`);
+        if (response.ok) {
+          // Refresh team data and orchestrator session status
+          fetchTeamData();
+          checkOrchestratorSession();
+          console.log('Orchestrator setup successfully');
+        } else {
+          alert(result.error || 'Failed to setup orchestrator');
+        }
       } else {
-        alert(result.error || 'Failed to start team member');
+        // Regular team member start
+        const response = await fetch(`/api/teams/${id}/members/${memberId}/start`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          // Refresh team data to show updated status
+          fetchTeamData();
+          console.log(`Member ${memberId} started successfully`);
+        } else {
+          alert(result.error || 'Failed to start team member');
+        }
       }
     } catch (error) {
       console.error('Error starting team member:', error);
@@ -340,21 +361,43 @@ export const TeamDetail: React.FC = () => {
 
   const handleStopMember = async (memberId: string) => {
     try {
-      const response = await fetch(`/api/teams/${id}/members/${memberId}/stop`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      // Special handling for orchestrator team
+      if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
+        const response = await fetch('/api/orchestrator/stop', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
 
-      const result = await response.json();
+        const result = await response.json();
 
-      if (response.ok) {
-        // Refresh team data to show updated status
-        fetchTeamData();
-        console.log(`Member ${memberId} stopped successfully`);
+        if (response.ok) {
+          // Refresh team data and orchestrator session status
+          fetchTeamData();
+          checkOrchestratorSession();
+          console.log('Orchestrator stopped successfully');
+        } else {
+          alert(result.error || 'Failed to stop orchestrator');
+        }
       } else {
-        alert(result.error || 'Failed to stop team member');
+        // Regular team member stop
+        const response = await fetch(`/api/teams/${id}/members/${memberId}/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          // Refresh team data to show updated status
+          fetchTeamData();
+          console.log(`Member ${memberId} stopped successfully`);
+        } else {
+          alert(result.error || 'Failed to stop team member');
+        }
       }
     } catch (error) {
       console.error('Error stopping team member:', error);

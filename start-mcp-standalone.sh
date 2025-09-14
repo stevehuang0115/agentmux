@@ -11,7 +11,7 @@ lsof -ti:3001 | xargs kill -9 2>/dev/null || true
 export PROJECT_PATH="${PROJECT_PATH:-$(pwd)}"
 export TMUX_SESSION_NAME="${TMUX_SESSION_NAME:-mcp-server}"
 export AGENT_ROLE="${AGENT_ROLE:-orchestrator}"
-export MCP_PORT="${MCP_PORT:-3001}"
+export AGENTMUX_MCP_PORT="${AGENTMUX_MCP_PORT:-3001}"
 
 # Start the HTTP MCP server
 cd "$(dirname "$0")"

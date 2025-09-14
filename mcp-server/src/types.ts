@@ -101,10 +101,15 @@ export interface AssignTaskParams {
 
 export interface AcceptTaskParams {
   taskPath: string;
-  memberId: string;
+  sessionName: string;
 }
 
 export interface CompleteTaskParams {
+  taskPath: string;
+  sessionName: string;
+}
+
+export interface ReadTaskParams {
   taskPath: string;
 }
 
@@ -152,6 +157,23 @@ export interface GetAgentLogsParams {
 export interface GetAgentStatusParams {
   agentName?: string;
   sessionName?: string;
+}
+
+export interface ShutdownAgentParams {
+  session: string;
+}
+
+export interface TicketInfo {
+  id: string;
+  title: string;
+  status: string;
+  assignedTo?: string;
+  priority?: string;
+  description?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  path?: string;
+  milestone?: string;
 }
 
 export interface ToolSchema {

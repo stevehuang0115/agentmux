@@ -93,7 +93,7 @@ Configuration is stored in `~/.agentmux/config.env`:
 
 ```bash
 WEB_PORT=3000
-MCP_PORT=3001
+AGENTMUX_MCP_PORT=3001
 AGENTMUX_HOME=~/.agentmux
 DEFAULT_CHECK_INTERVAL=30  # minutes
 AUTO_COMMIT_INTERVAL=30    # minutes
@@ -176,12 +176,6 @@ Create or update your Claude Code configuration file (`~/.claude-code/config.jso
 }
 ```
 
-4. **Start Claude Code with MCP:**
-
-```bash
-claude-code --mcp-server agentmux
-```
-
 #### For Gemini CLI
 
 1. **Install and configure Gemini CLI with MCP support:**
@@ -194,17 +188,9 @@ npm install -g @google-ai/generativelanguage-cli
 
 ```json
 {
-	"servers": {
+	"mcpServers": {
 		"agentmux": {
-			"transport": {
-				"type": "http",
-				"url": "http://localhost:3001"
-			},
-			"env": {
-				"TMUX_SESSION_NAME": "gemini-agent",
-				"PROJECT_PATH": "/path/to/your/project",
-				"AGENT_ROLE": "qa"
-			}
+			"httpUrl": "http://localhost:3001/mcp"
 		}
 	}
 }
@@ -228,7 +214,7 @@ AGENT_ROLE="developer"                    # Agent role: orchestrator, pm, develo
 
 # Optional
 API_PORT="3000"                          # AgentMux backend API port
-MCP_PORT="3001"                          # MCP server HTTP port
+AGENTMUX_MCP_PORT="3001"                          # MCP server HTTP port
 ```
 
 ### Testing MCP Connection
@@ -365,6 +351,26 @@ Project Files & Agent Sessions
 -   `npx agentmux stop` - Stop all services and agent sessions
 -   `npx agentmux status` - Show status of running services
 -   `npx agentmux logs` - View aggregated logs from all components
+
+## Debug
+
+1. Terminal 1 - Start MCP Server:
+
+cd agentmux
+npm run build:mcp
+node dist/mcp-server/index.js
+
+2. Terminal 2 - Start Frontend:
+
+cd agentmux/frontend
+npm run dev
+
+3. VS Code Debugger - Start Backend:
+
+1. Set breakpoints in your backend TypeScript files
+1. Go to Run and Debug (Ctrl+Shift+D)
+1. Select "Debug Backend (External MCP/Frontend)"
+1. Press F5 or click the play button
 
 ## License
 

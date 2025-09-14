@@ -1,1 +1,34 @@
-module.exports = {\n  parser: '@typescript-eslint/parser',\n  parserOptions: {\n    ecmaVersion: 2020,\n    sourceType: 'module',\n    ecmaFeatures: {\n      jsx: true,\n    },\n  },\n  plugins: ['@typescript-eslint'],\n  extends: [\n    'eslint:recommended',\n    '@typescript-eslint/recommended',\n  ],\n  rules: {\n    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],\n    '@typescript-eslint/no-explicit-any': 'warn',\n    '@typescript-eslint/no-non-null-assertion': 'warn',\n    'prefer-const': 'error',\n    'no-console': process.env.NODE_ENV === 'production' ? 'warn' : 'off',\n  },\n  env: {\n    node: true,\n    es6: true,\n    jest: true,\n  },\n  ignorePatterns: [\n    'node_modules/',\n    'dist/',\n    'coverage/',\n    'frontend/dist/',\n    '*.js',\n  ],\n};"}
+export default {
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    ecmaVersion: 2020,
+    sourceType: 'module',
+    ecmaFeatures: {
+      jsx: true,
+    },
+  },
+  plugins: ['@typescript-eslint'],
+  extends: [
+    'eslint:recommended',
+    '@typescript-eslint/recommended',
+  ],
+  rules: {
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-non-null-assertion': 'warn',
+    'prefer-const': 'error',
+    'no-console': process.env.NODE_ENV === 'production' ? 'warn' : 'off',
+  },
+  env: {
+    node: true,
+    es6: true,
+    jest: true,
+  },
+  ignorePatterns: [
+    'node_modules/',
+    'dist/',
+    'coverage/',
+    'frontend/dist/',
+    '*.js',
+  ],
+};

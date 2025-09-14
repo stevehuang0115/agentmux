@@ -1,6 +1,5 @@
 import { Server, Socket } from 'socket.io';
-import { LoggerService } from '../services/logger.service.js';
-import { FileWatcherService, FileChangeEvent } from '../services/file-watcher.service.js';
+import { LoggerService, FileWatcherService, FileChangeEvent } from '../services/index.js';
 
 export class FileWatcherGateway {
   private server: Server;

@@ -6,6 +6,7 @@ export interface TeamMember {
   systemPrompt: string;
   agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
   workingStatus: 'idle' | 'in_progress'; // Activity level status
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli'; // AI runtime to use
   currentTickets?: string[];
   readyAt?: string; // ISO timestamp when agent reported ready
   capabilities?: string[]; // Agent-reported capabilities
@@ -127,6 +128,7 @@ export interface TeamMemberSessionConfig {
   systemPrompt: string;
   projectPath?: string;
   memberId?: string;
+  runtimeType?: TeamMember['runtimeType'];
 }
 
 export interface MCPToolRequest {
@@ -152,7 +154,8 @@ export interface WebSocketMessage {
   type: 'terminal_output' | 'file_change' | 'team_status' | 'schedule_update'
        | 'connection_established' | 'subscription_confirmed' | 'unsubscription_confirmed'
        | 'session_not_found' | 'input_error' | 'initial_terminal_state' 
-       | 'terminal_state_error' | 'system_notification';
+       | 'terminal_state_error' | 'system_notification' | 'orchestrator_status_changed'
+       | 'team_member_status_changed' | 'team_activity_updated';
   payload: any;
   timestamp: string;
 }

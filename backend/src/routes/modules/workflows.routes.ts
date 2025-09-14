@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as workflowsHandlers from '../../controllers/domains/workflows.handlers.js';
+import * as workflowsHandlers from '../../controllers/workflow/workflow.controller.js';
 
 export function registerWorkflowRoutes(router: Router, apiController: ApiController): void {
   // Workflow Management Routes

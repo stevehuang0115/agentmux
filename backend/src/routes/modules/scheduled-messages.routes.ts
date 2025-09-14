@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as scheduledHandlers from '../../controllers/domains/scheduled-messages.handlers.js';
+import * as scheduledHandlers from '../../controllers/messaging/scheduled-messages.controller.js';
 
 export function registerScheduledMessageRoutes(router: Router, apiController: ApiController): void {
   // Scheduled Messages Routes

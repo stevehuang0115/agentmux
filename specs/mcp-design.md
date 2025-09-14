@@ -142,7 +142,7 @@ async create_team(args: {
   // Start Claude Code with MCP integration
   const envVars = [
     `export TMUX_SESSION_NAME="${args.name}"`,
-    `export MCP_SERVER_URL="http://localhost:${process.env.MCP_PORT}"`,
+    `export MCP_SERVER_URL="http://localhost:${process.env.AGENTMUX_MCP_PORT}"`,
     `export PROJECT_PATH="${args.projectPath}"`,
     `export AGENT_ROLE="${args.role}"`
   ];
@@ -434,18 +434,18 @@ async enforce_commit(args: { message?: string }) {
 async initialize_claude(args: { session: string }) {
   // Initialize bash environment and start Claude Code in target session
   const session = args.session;
-  
+
   // Source bashrc to ensure proper environment
   await execAsync(`tmux send-keys -t "${session}:0" "source ~/.bashrc" Enter`);
   await new Promise(resolve => setTimeout(resolve, 1000));
-  
+
   // Start Claude Code with danger mode to skip permissions
   const claudeCmd = `claude --dangerously-skip-permissions`;
   await execAsync(`tmux send-keys -t "${session}:0" "${claudeCmd}" Enter`);
-  
+
   // Wait for initialization
   await new Promise(resolve => setTimeout(resolve, 2000));
-  
+
   return { success: true, message: `Claude Code initialized in session ${session}` };
 }
 ```
@@ -455,26 +455,26 @@ async initialize_claude(args: { session: string }) {
 #### 9.1 get_team_logs - Display current terminal logs from team member
 
 ```typescript
-async get_team_logs(args: { 
-  session: string, 
+async get_team_logs(args: {
+  session: string,
   lines?: number,
-  window?: number 
+  window?: number
 }) {
   const { session, lines = 20, window = 0 } = args;
-  
+
   // Get session information
   const sessionInfoCmd = `tmux display-message -p -t "${session}:${window}" "#{session_name}:#{window_index}:#{window_name}"`;
   const sessionInfo = await execAsync(sessionInfoCmd);
-  
+
   // Capture pane content
   const captureCmd = `tmux capture-pane -t "${session}:${window}" -p -S -${lines}`;
   const output = await execAsync(captureCmd);
-  
+
   // Get additional session metadata
   const metadataCmd = `tmux display-message -p -t "${session}" "#{session_attached}:#{session_created}:#{session_last_attached}"`;
   const metadata = await execAsync(metadataCmd);
   const [attached, created, lastAttached] = metadata.stdout.trim().split(':');
-  
+
   return {
     session: session,
     window: window,
@@ -494,22 +494,22 @@ async get_team_logs(args: {
 ```typescript
 async ping_team_member(args: { session: string }) {
   const session = args.session;
-  
+
   // Check if session exists
   const sessions = await this.getActiveSessions();
   if (!sessions.includes(session)) {
     throw new Error(`Session "${session}" not found`);
   }
-  
+
   // Get comprehensive session info
   const infoCmd = `tmux display-message -p -t "${session}" "#{session_name}:#{window_index}:#{window_name}:#{session_attached}:#{session_created}"`;
   const info = await execAsync(infoCmd);
   const [name, windowIndex, windowName, attached, created] = info.stdout.trim().split(':');
-  
+
   // Capture current screen
   const captureCmd = `tmux capture-pane -t "${session}:${windowIndex}" -p -S -10`;
   const currentScreen = await execAsync(captureCmd);
-  
+
   // Get window list
   const windowsCmd = `tmux list-windows -t "${session}" -F "#{window_index}:#{window_name}:#{window_active}"`;
   const windowsResult = await execAsync(windowsCmd);
@@ -519,7 +519,7 @@ async ping_team_member(args: { session: string }) {
       const [index, name, active] = w.split(':');
       return { index: parseInt(index), name, active: active === '1' };
     });
-  
+
   return {
     session: name,
     currentWindow: {

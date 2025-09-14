@@ -22,6 +22,7 @@ interface TeamMember {
   name: string;
   role: string;
   systemPrompt: string;
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli';
 }
 
 interface TeamModalProps {
@@ -54,7 +55,12 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         projectPath: team.projectPath || '',
       });
       if (team.members && Array.isArray(team.members)) {
-        setMembers(team.members);
+        // Ensure all members have runtimeType (for backward compatibility)
+        const migratedMembers = team.members.map(member => ({
+          ...member,
+          runtimeType: member.runtimeType || 'claude-code'
+        }));
+        setMembers(migratedMembers);
       }
     }
   }, [team]);
@@ -68,7 +74,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         id: (index + 1).toString(),
         name: role.displayName,
         role: role.key,
-        systemPrompt: `Load from ${role.promptFile}`
+        systemPrompt: `Load from ${role.promptFile}`,
+        runtimeType: 'claude-code'
       }));
       
       if (defaultMembers.length > 0) {
@@ -140,7 +147,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       id: newId,
       name: 'Fullstack Developer',
       role: 'fullstack-dev',
-      systemPrompt: fullstackDevRole ? `Load from ${fullstackDevRole.promptFile}` : 'Default fullstack developer prompt'
+      systemPrompt: fullstackDevRole ? `Load from ${fullstackDevRole.promptFile}` : 'Default fullstack developer prompt',
+      runtimeType: 'claude-code'
     };
     setMembers(prev => [...prev, newMember]);
   };
@@ -172,7 +180,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         members: members.map(member => ({
           name: member.name,
           role: member.role,
-          systemPrompt: member.systemPrompt
+          systemPrompt: member.systemPrompt,
+          runtimeType: member.runtimeType
         })),
         currentProject: formData.projectPath || undefined, // Send project ID, not path
         projectPath: selectedProject ? selectedProject.path : undefined, // Keep path for backend processing
@@ -193,7 +202,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       onClose={onClose}
       title={team ? 'Edit Team' : 'Create New Team'}
       subtitle={team ? 'Modify team configuration and members' : 'Set up a new collaborative team'}
-      size="lg"
+      size="xl"
       onSubmit={handleSubmit}
       submitText={team ? 'Update Team' : 'Create Team'}
       submitDisabled={!formData.name.trim() || members.length === 0}
@@ -287,6 +296,19 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                               value: role.key,
                               label: role.displayName
                             }))}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Runtime Type *</label>
+                        <Dropdown
+                          value={member.runtimeType}
+                          onChange={(value) => handleMemberChange(member.id, 'runtimeType', value)}
+                          required
+                          options={[
+                            { value: 'claude-code', label: 'Claude Code' },
+                            { value: 'gemini-cli', label: 'Gemini CLI' },
+                            { value: 'codex-cli', label: 'Codex CLI' }
+                          ]}
                         />
                       </div>
                     </div>

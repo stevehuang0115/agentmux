@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as configHandlers from '../../controllers/domains/config.handlers.js';
+import * as configHandlers from '../../controllers/system/config.controller.js';
 
 export function registerConfigRoutes(router: Router, apiController: ApiController): void {
   // Config Files Routes

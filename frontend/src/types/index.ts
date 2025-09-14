@@ -7,6 +7,7 @@ export interface TeamMember {
   systemPrompt: string;
   agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
   workingStatus: 'idle' | 'in_progress'; // Activity level status
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli'; // AI runtime to use
   currentTickets?: string[];
   readyAt?: string; // ISO timestamp when agent reported ready
   capabilities?: string[]; // Agent-reported capabilities

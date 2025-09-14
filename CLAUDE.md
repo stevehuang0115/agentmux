@@ -15,6 +15,13 @@ This document outlines the technical preferences and workflow standards for main
 - Frontend builds to `/frontend/dist/`
 - Each component has its own `tsconfig.json`
 
+### System Design Documentation
+- **Specifications Directory** (`/specs/`) - Contains authoritative system design documents
+- **Technical Architecture** - Documented in `specs/project.md` 
+- **MCP Implementation** - Detailed in `specs/mcp-design.md`
+- **UI/UX Guidelines** - Defined in `specs/frontend-design.md`
+- **User Workflows** - Mapped in `specs/user-journey.md`
+
 ## 📝 Code Standards
 
 ### TypeScript Requirements
@@ -66,6 +73,96 @@ __tests__/api.service.test.ts
 - **Absolute imports** for packages: `express`, `react`
 - Always include `.js` extension in imports for Node.js compatibility
 
+### Constants and Configuration Management
+**CRITICAL: No hardcoded values in source code**
+
+#### Constants Organization
+- **Cross-domain constants** → `/config/constants.ts` (shared across backend, frontend, CLI, MCP)
+- **Backend-specific constants** → `/config/backend-constants.ts` (backend-only values)
+- **Frontend-specific constants** → `/config/frontend-constants.ts` (UI-related constants)
+- **CLI-specific constants** → `/config/cli-constants.ts` (CLI command configurations)
+- **Centralized exports** → `/config/index.ts` (single import point for all constants)
+
+#### Centralized Constants Structure
+```typescript
+// /config/constants.ts - Cross-domain shared constants
+export const AGENTMUX_CONSTANTS = {
+  SESSIONS: {
+    ORCHESTRATOR_NAME: 'agentmux-orc',
+    DEFAULT_TIMEOUT: 120000,
+    REGISTRATION_CHECK_INTERVAL: 5000,
+  },
+  PATHS: {
+    AGENTMUX_HOME: '.agentmux',
+    TEAMS_FILE: 'teams.json',
+    PROJECTS_FILE: 'projects.json',
+    CONFIG_DIR: 'config',
+    PROMPTS_DIR: 'prompts',
+  },
+  AGENT_STATUSES: {
+    INACTIVE: 'inactive',
+    ACTIVATING: 'activating', 
+    ACTIVE: 'active',
+  },
+  WORKING_STATUSES: {
+    IDLE: 'idle',
+    IN_PROGRESS: 'in_progress',
+  },
+} as const;
+
+export const MCP_CONSTANTS = {
+  PORTS: {
+    DEFAULT: 3001,
+    HEALTH_CHECK: '/health',
+  },
+  TIMEOUTS: {
+    RESPONSE: 30000,
+    CONNECTION: 10000,
+  },
+} as const;
+```
+
+#### Import Patterns
+```typescript
+// ✅ Import cross-domain constants
+import { AGENTMUX_CONSTANTS, MCP_CONSTANTS } from '../config';
+
+// ✅ Import specific backend constants  
+import { ORCHESTRATOR_SESSION_NAME, DEFAULT_WEB_PORT } from '../config';
+
+// ✅ Import domain-specific constants
+import * as BackendConstants from '../config/backend-constants.js';
+
+// ✅ Import grouped constants for convenience
+import { BACKEND_CONSTANTS, CROSS_DOMAIN_CONSTANTS } from '../config';
+
+// ❌ Don't import from individual domain files directly
+import { ORCHESTRATOR_SESSION_NAME } from '../config/backend-constants.js'; // Avoid
+
+// ❌ Don't use hardcoded values
+const sessionName = 'agentmux-orc'; // Use ORCHESTRATOR_SESSION_NAME instead
+```
+
+#### Constants Best Practices
+1. **Use const assertions** (`as const`) for immutable objects
+2. **Group related constants** into logical namespaces  
+3. **Use SCREAMING_SNAKE_CASE** for constant names
+4. **Import from `/config`** - Use centralized config directory for all constants
+5. **Document constant purposes** with JSDoc comments
+6. **Never inline magic numbers** - always extract to named constants
+7. **Use enums for related string/number values** that form a closed set
+8. **Maintain 1:1 source-to-test ratio** - Every constants file needs a test file
+
+#### Prohibited Hardcoded Values
+- **Port numbers** (3000, 3001, 8080, etc.)
+- **Timeout values** (30000, 120000, etc.)
+- **File paths** ('.agentmux', 'config/prompts', etc.)
+- **Status strings** ('active', 'inactive', 'pending', etc.)
+- **Session names** ('agentmux-orc', default session patterns)
+- **API endpoints** ('/health', '/api/teams', etc.)
+- **Magic numbers** (retry counts, buffer sizes, etc.)
+- **Default configurations** (check intervals, batch sizes, etc.)
+
 ## 🧪 Testing Standards
 
 ### Test File Placement
@@ -112,9 +209,15 @@ tests/user.service.test.ts
 ## 🔄 Development Workflow
 
 ### Before Starting Development
-1. **Read existing code** to understand patterns and conventions
-2. **Check for existing tests** to understand expected behavior
-3. **Run the build** to ensure starting from a clean state:
+1. **Read system specifications** - Always review `/specs/` directory to understand system design:
+   - `specs/project.md` - Core architecture and technical specifications
+   - `specs/mcp-design.md` - MCP server implementation details
+   - `specs/frontend-design.md` - UI/UX design patterns
+   - `specs/user-journey.md` - User workflows and interactions
+   - Task-specific specs in `specs/tasks/` subdirectories
+2. **Read existing code** to understand patterns and conventions
+3. **Check for existing tests** to understand expected behavior
+4. **Run the build** to ensure starting from a clean state:
    ```bash
    npm run build
    ```
@@ -124,6 +227,11 @@ tests/user.service.test.ts
 2. **Write tests** immediately after implementing features
 3. **Use existing patterns** found in the codebase
 4. **Update types** when modifying data structures
+5. **Update specifications** when making significant architectural changes:
+   - Modify existing spec files in `/specs/` when changing system behavior
+   - Create new spec files for new features or components
+   - Ensure specs accurately reflect implemented functionality
+   - Update technical diagrams and workflow descriptions
 
 ### Before Completing Work
 **MANDATORY:** Always perform this checklist before marking work as complete:
@@ -284,13 +392,15 @@ refactor: migrate MCP server from JavaScript to TypeScript
 ## 🚨 Critical Rules
 
 ### Never Skip These Steps
-1. **Always write tests** alongside code - One source file = One test file
-2. **Always document functions** with proper JSDoc comments
-3. **Always run the full build** before completion
-4. **Always verify tests pass** before marking work complete
-5. **Never commit untested code** to main branch
-6. **Never leave TypeScript errors** unresolved
-7. **Never create source files without corresponding test files**
+1. **Always read system specifications** before starting implementation - Review `/specs/` directory
+2. **Always write tests** alongside code - One source file = One test file
+3. **Always document functions** with proper JSDoc comments
+4. **Always run the full build** before completion
+5. **Always verify tests pass** before marking work complete
+6. **Always update specifications** when making significant architectural changes
+7. **Never commit untested code** to main branch
+8. **Never leave TypeScript errors** unresolved
+9. **Never create source files without corresponding test files**
 
 ### Error Prevention
 - **Type check** before every commit
@@ -335,6 +445,13 @@ Use this checklist for every development task:
 - [ ] Type definitions documented
 - [ ] Error handling documented for functions that throw
 
+### Specifications
+- [ ] Reviewed relevant specs in `/specs/` directory before implementation
+- [ ] Updated system specs when making architectural changes
+- [ ] Created new spec files for new features or major components
+- [ ] Verified implementation matches specification requirements
+- [ ] Updated technical diagrams and workflow descriptions if affected
+
 ### Final Verification
 - [ ] Clean build from scratch works
 - [ ] No console errors in browser/terminal
@@ -371,10 +488,19 @@ Work is considered **complete** only when:
 3. **Functions that throw errors must document when and what they throw**
 4. **No undocumented public functions or methods allowed**
 
+### Specification Compliance Policy  
+**CRITICAL:** When working on AgentMux:
+1. **Read specifications first** - Review `/specs/` directory before any implementation
+2. **Update specifications during development** - Modify or create spec files when making architectural changes
+3. **Verify implementation matches specs** - Ensure code aligns with documented system design
+4. **Keep specifications current** - Specs must accurately reflect the implemented system
+
 ### Violations Are Blocking Issues
+- **Ignoring system specifications** → Implementation review failure, must align with specs first
 - **Missing test files** → Code review failure, must fix before merge
 - **Missing function documentation** → Build failure, must fix before deploy  
 - **Test files in wrong location** → Immediate refactoring required
 - **Incomplete JSDoc** → Documentation review failure
+- **Outdated specifications** → Architecture review failure, must update specs with changes
 
-These policies ensure code quality, maintainability, and team consistency across the entire AgentMux project.
+These policies ensure code quality, maintainability, team consistency, and architectural alignment across the entire AgentMux project.

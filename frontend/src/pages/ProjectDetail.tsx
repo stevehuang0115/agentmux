@@ -158,7 +158,7 @@ export const ProjectDetail: React.FC = () => {
     if (!state.project) return;
     
     try {
-      const response = await fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=alignment_comparison.md`);
+      const response = await fetch(`/api/projects/${state.project.id}/specs?fileName=alignment_comparison.md`);
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
@@ -696,7 +696,7 @@ export const ProjectDetail: React.FC = () => {
     if (!state.project) return;
     
     try {
-      const response = await fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_goal.md`);
+      const response = await fetch(`/api/projects/${state.project.id}/specs?fileName=initial_goal.md`);
       if (response.ok) {
         const result = await response.json();
         if (result.success) {
@@ -765,7 +765,7 @@ export const ProjectDetail: React.FC = () => {
     if (!state.project) return;
     
     try {
-      const response = await fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_user_journey.md`);
+      const response = await fetch(`/api/projects/${state.project.id}/specs?fileName=initial_user_journey.md`);
       if (response.ok) {
         const result = await response.json();
         if (result.success) {
@@ -901,8 +901,8 @@ export const ProjectDetail: React.FC = () => {
 
       // Get the initial goal and user journey content
       const [goalResponse, journeyResponse] = await Promise.all([
-        fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_goal.md`),
-        fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_user_journey.md`)
+        fetch(`/api/projects/${state.project.id}/specs?fileName=initial_goal.md`),
+        fetch(`/api/projects/${state.project.id}/specs?fileName=initial_user_journey.md`)
       ]);
 
       if (!goalResponse.ok || !journeyResponse.ok) {
@@ -1039,8 +1039,8 @@ export const ProjectDetail: React.FC = () => {
 
       // Get the initial goal and user journey content
       const [goalResponse, journeyResponse] = await Promise.all([
-        fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_goal.md`),
-        fetch(`/api/projects/${state.project.id}/spec-file-content?fileName=initial_user_journey.md`)
+        fetch(`/api/projects/${state.project.id}/specs?fileName=initial_goal.md`),
+        fetch(`/api/projects/${state.project.id}/specs?fileName=initial_user_journey.md`)
       ]);
 
       if (!goalResponse.ok || !journeyResponse.ok) {

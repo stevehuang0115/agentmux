@@ -24,9 +24,10 @@ npm run docker:compose:down
 ```
 
 Services will be available at:
-- **AgentMux Web UI**: http://localhost:3000
-- **MCP Server**: http://localhost:3001
-- **Health Check**: http://localhost:3000/health
+
+-   **AgentMux Web UI**: http://localhost:3000
+-   **MCP Server**: http://localhost:3001
+-   **Health Check**: http://localhost:3000/health
 
 ### 2. Docker Only
 
@@ -69,7 +70,7 @@ npm run logs:pm2
 ```bash
 NODE_ENV=production
 PORT=3000
-MCP_PORT=3001
+AGENTMUX_MCP_PORT=3001
 SESSION_SECRET=your-secure-secret-key-here
 ```
 
@@ -111,16 +112,18 @@ HEALTH_CHECK_INTERVAL=30000
 ### 1. Server Requirements
 
 **Minimum Requirements:**
-- CPU: 2 cores
-- RAM: 4GB
-- Storage: 20GB
-- Node.js: 18.x or higher
-- Git, tmux, bash
+
+-   CPU: 2 cores
+-   RAM: 4GB
+-   Storage: 20GB
+-   Node.js: 18.x or higher
+-   Git, tmux, bash
 
 **Recommended:**
-- CPU: 4 cores
-- RAM: 8GB
-- Storage: 50GB SSD
+
+-   CPU: 4 cores
+-   RAM: 8GB
+-   Storage: 50GB SSD
 
 ### 2. Docker Compose Production Setup
 
@@ -130,59 +133,60 @@ Create a production `docker-compose.prod.yml`:
 version: '3.8'
 
 services:
-  agentmux:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "80:3000"
-      - "3001:3001"
-    environment:
-      - NODE_ENV=production
-      - SESSION_SECRET=${SESSION_SECRET}
-      - CORS_ORIGIN=${CORS_ORIGIN}
-    volumes:
-      - agentmux_data:/app/data
-      - agentmux_logs:/app/logs
-    depends_on:
-      - redis
-      - postgres
+    agentmux:
+        build: .
+        restart: unless-stopped
+        ports:
+            - '80:3000'
+            - '3001:3001'
+        environment:
+            - NODE_ENV=production
+            - SESSION_SECRET=${SESSION_SECRET}
+            - CORS_ORIGIN=${CORS_ORIGIN}
+        volumes:
+            - agentmux_data:/app/data
+            - agentmux_logs:/app/logs
+        depends_on:
+            - redis
+            - postgres
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    command: redis-server --requirepass ${REDIS_PASSWORD}
+    redis:
+        image: redis:7-alpine
+        restart: unless-stopped
+        volumes:
+            - redis_data:/data
+        command: redis-server --requirepass ${REDIS_PASSWORD}
 
-  postgres:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+    postgres:
+        image: postgres:15-alpine
+        restart: unless-stopped
+        environment:
+            - POSTGRES_DB=${POSTGRES_DB}
+            - POSTGRES_USER=${POSTGRES_USER}
+            - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+        volumes:
+            - postgres_data:/var/lib/postgresql/data
 
-  nginx:
-    image: nginx:alpine
-    restart: unless-stopped
-    ports:
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
-      - ./ssl:/etc/nginx/ssl
-    depends_on:
-      - agentmux
+    nginx:
+        image: nginx:alpine
+        restart: unless-stopped
+        ports:
+            - '443:443'
+        volumes:
+            - ./nginx.conf:/etc/nginx/nginx.conf
+            - ./ssl:/etc/nginx/ssl
+        depends_on:
+            - agentmux
 
 volumes:
-  agentmux_data:
-  agentmux_logs:
-  redis_data:
-  postgres_data:
+    agentmux_data:
+    agentmux_logs:
+    redis_data:
+    postgres_data:
 ```
 
 Deploy with:
+
 ```bash
 docker-compose -f docker-compose.prod.yml up -d
 ```
@@ -194,21 +198,24 @@ For high-availability deployment:
 ```javascript
 // ecosystem.prod.js
 module.exports = {
-  apps: [{
-    name: 'agentmux-cluster',
-    script: 'backend/dist/server.js',
-    instances: 'max', // Use all CPU cores
-    exec_mode: 'cluster',
-    env_production: {
-      NODE_ENV: 'production',
-      PORT: 3000,
-      // ... other environment variables
-    }
-  }]
+	apps: [
+		{
+			name: 'agentmux-cluster',
+			script: 'backend/dist/server.js',
+			instances: 'max', // Use all CPU cores
+			exec_mode: 'cluster',
+			env_production: {
+				NODE_ENV: 'production',
+				PORT: 3000,
+				// ... other environment variables
+			},
+		},
+	],
 };
 ```
 
 Deploy:
+
 ```bash
 pm2 start ecosystem.prod.js --env production
 pm2 save
@@ -221,18 +228,20 @@ pm2 startup
 
 AgentMux provides built-in health endpoints:
 
-- **Basic Health**: `GET /health`
-- **Detailed Health**: `GET /api/system/health`
-- **Metrics**: `GET /api/system/metrics`
+-   **Basic Health**: `GET /health`
+-   **Detailed Health**: `GET /api/system/health`
+-   **Metrics**: `GET /api/system/metrics`
 
 ### Log Management
 
 Logs are written to:
-- **Application**: `/app/logs/agentmux-combined.log`
-- **Errors**: `/app/logs/agentmux-error.log`
-- **MCP Server**: `/app/logs/mcp-combined.log`
+
+-   **Application**: `/app/logs/agentmux-combined.log`
+-   **Errors**: `/app/logs/agentmux-error.log`
+-   **MCP Server**: `/app/logs/mcp-combined.log`
 
 Configure log rotation:
+
 ```bash
 # PM2 log rotation
 pm2 install pm2-logrotate
@@ -243,24 +252,26 @@ pm2 set pm2-logrotate:retain 7
 ### Monitoring Integration
 
 #### Prometheus Metrics
+
 ```yaml
 # Add to docker-compose.yml
-  prometheus:
+prometheus:
     image: prom/prometheus
     ports:
-      - "9090:9090"
+        - '9090:9090'
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+        - ./prometheus.yml:/etc/prometheus/prometheus.yml
 
-  grafana:
+grafana:
     image: grafana/grafana
     ports:
-      - "3001:3000"
+        - '3001:3000'
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+        - GF_SECURITY_ADMIN_PASSWORD=admin
 ```
 
 #### Health Check Monitoring
+
 ```bash
 # Simple health check script
 #!/bin/bash
@@ -276,23 +287,27 @@ done
 ## Security Considerations
 
 ### 1. Environment Variables
-- Use `.env` files or container secrets
-- Never commit secrets to version control
-- Rotate secrets regularly
+
+-   Use `.env` files or container secrets
+-   Never commit secrets to version control
+-   Rotate secrets regularly
 
 ### 2. Network Security
-- Use HTTPS in production
-- Configure firewall rules
-- Limit container privileges
+
+-   Use HTTPS in production
+-   Configure firewall rules
+-   Limit container privileges
 
 ### 3. Data Protection
-- Backup data volumes regularly
-- Encrypt data at rest
-- Use secure communication
+
+-   Backup data volumes regularly
+-   Encrypt data at rest
+-   Use secure communication
 
 ## Backup & Recovery
 
 ### Data Backup
+
 ```bash
 # Docker volume backup
 docker run --rm -v agentmux_data:/data -v $(pwd):/backup alpine \
@@ -303,6 +318,7 @@ docker exec agentmux_postgres pg_dump -U agentmux agentmux > backup.sql
 ```
 
 ### Recovery
+
 ```bash
 # Restore data volume
 docker run --rm -v agentmux_data:/data -v $(pwd):/backup alpine \
@@ -317,44 +333,49 @@ docker exec -i agentmux_postgres psql -U agentmux agentmux < backup.sql
 ### Common Issues
 
 1. **Container fails to start**
-   ```bash
-   docker logs agentmux
-   # Check for port conflicts or missing environment variables
-   ```
+
+    ```bash
+    docker logs agentmux
+    # Check for port conflicts or missing environment variables
+    ```
 
 2. **High memory usage**
-   ```bash
-   # Check PM2 memory usage
-   pm2 monit
-   
-   # Restart if needed
-   pm2 restart all
-   ```
+
+    ```bash
+    # Check PM2 memory usage
+    pm2 monit
+
+    # Restart if needed
+    pm2 restart all
+    ```
 
 3. **Database connection issues**
-   ```bash
-   # Check database logs
-   docker logs agentmux_postgres
-   
-   # Verify connection settings
-   docker exec -it agentmux_postgres psql -U agentmux agentmux
-   ```
+
+    ```bash
+    # Check database logs
+    docker logs agentmux_postgres
+
+    # Verify connection settings
+    docker exec -it agentmux_postgres psql -U agentmux agentmux
+    ```
 
 ### Performance Tuning
 
-- **Adjust PM2 instances** based on CPU cores
-- **Configure heap size** for Node.js: `--max-old-space-size=4096`
-- **Enable clustering** for better performance
-- **Use Redis** for session storage in multi-instance deployments
+-   **Adjust PM2 instances** based on CPU cores
+-   **Configure heap size** for Node.js: `--max-old-space-size=4096`
+-   **Enable clustering** for better performance
+-   **Use Redis** for session storage in multi-instance deployments
 
 ## Scaling
 
 ### Horizontal Scaling
-- Deploy multiple AgentMux instances behind a load balancer
-- Use shared Redis for session storage
-- Configure database clustering
+
+-   Deploy multiple AgentMux instances behind a load balancer
+-   Use shared Redis for session storage
+-   Configure database clustering
 
 ### Load Balancing
+
 ```nginx
 upstream agentmux_backend {
     server agentmux1:3000;
@@ -374,6 +395,7 @@ server {
 ## Support
 
 For deployment issues:
+
 1. Check the health endpoints
 2. Review application logs
 3. Verify environment configuration

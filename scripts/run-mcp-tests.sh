@@ -39,7 +39,7 @@ cleanup() {
     log_info "Cleaning up test processes..."
     
     # Kill any test MCP server processes
-    pkill -f "MCP_PORT=${TEST_PORT}" 2>/dev/null || true
+    pkill -f "AGENTMUX_MCP_PORT=${TEST_PORT}" 2>/dev/null || true
     pkill -f "mcp-server.*${TEST_PORT}" 2>/dev/null || true
     
     # Clean up temp files
@@ -93,7 +93,7 @@ start_test_server() {
     cd "$PROJECT_ROOT"
     
     MCP_HTTP=true \
-    MCP_PORT="$TEST_PORT" \
+    AGENTMUX_MCP_PORT="$TEST_PORT" \
     TMUX_SESSION_NAME="test-session" \
     PROJECT_PATH="/tmp/test-project" \
     AGENT_ROLE="test" \

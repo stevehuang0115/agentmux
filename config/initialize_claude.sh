@@ -2,24 +2,13 @@
 # AgentMux Claude Initialization Script
 # Safely initialize Claude Code environment if available
 
-# Enable alias expansion in bash
-# shopt -s expand_aliases
+# First try to source shell configuration to load aliases
+# if [ -n "$ZSH_VERSION" ] && [ -f ~/.zshrc ]; then
+#     source ~/.zshrc 2>/dev/null || true
+# elif [ -n "$BASH_VERSION" ] && [ -f ~/.bashrc ]; then
+#     source ~/.bashrc 2>/dev/null || true
+# fi
 
-# First, source shell configuration to ensure PATH and aliases are loaded
-if [ -f ~/.bashrc ]; then
-    source ~/.bashrc 2>/dev/null || true
-fi
-
-# Also source .zshrc if it exists (for zsh users)
-if [ -f ~/.zshrc ]; then
-    source ~/.zshrc 2>/dev/null || true
-fi
-
-# Check if Claude Code CLI is available (as command, alias, or function)
-if command -v claude >/dev/null 2>&1 || type claude >/dev/null 2>&1; then
-    echo "🚀 Initializing Claude Code..."
-    claude --dangerously-skip-permissions
-else
-    echo "⚠️  Claude Code CLI not found - skipping initialization"
-    echo "💡 This is normal if you're running the MCP server standalone"
-fi
+# Check Claude Code CLI availability with improved detection
+# Priority order: direct path -> alias/function -> command in PATH
+{ [ -f ~/.claude/local/claude ] && [ -x ~/.claude/local/claude ] && echo "🚀 Initializing Claude Code (found at ~/.claude/local/claude)..." && ~/.claude/local/claude --dangerously-skip-permissions; } || { type claude >/dev/null 2>&1 && echo "🚀 Initializing Claude Code (found via type)..." && claude --dangerously-skip-permissions; } || { command -v claude >/dev/null 2>&1 && echo "🚀 Initializing Claude Code (found via command)..." && claude --dangerously-skip-permissions; } || { [ "$NODE_ENV" = "development" ] && echo "🔧 Running in development mode - Claude CLI integration skipped" || { echo "⚠️  Claude Code CLI not found - skipping initialization"; echo "💡 This is normal if you're running the MCP server standalone"; }; }

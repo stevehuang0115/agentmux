@@ -126,6 +126,19 @@ export class WebSocketService {
         console.log('WebSocket connection confirmed:', message.payload);
         this.emit('connected', message.payload);
       });
+
+      // Team activity events
+      this.socket.on('orchestrator_status_changed', (message: WebSocketMessage) => {
+        this.emit('orchestrator_status_changed', message.payload);
+      });
+
+      this.socket.on('team_member_status_changed', (message: WebSocketMessage) => {
+        this.emit('team_member_status_changed', message.payload);
+      });
+
+      this.socket.on('team_activity_updated', (message: WebSocketMessage) => {
+        this.emit('team_activity_updated', message.payload);
+      });
     });
   }
 

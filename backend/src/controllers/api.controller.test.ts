@@ -1,29 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { ApiController } from './api.controller.js';
 import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from '../services/index.js';
-import { ActiveProjectsService } from '../services/active-projects.service.js';
-import { PromptTemplateService } from '../services/prompt-template.service.js';
+import { ActiveProjectsService } from '../services/project/active-projects.service.js';
+import { PromptTemplateService } from '../services/ai/prompt-template.service.js';
 
 // Mock all services
 jest.mock('../services/index.js');
-jest.mock('../services/active-projects.service.js');
-jest.mock('../services/prompt-template.service.js');
+jest.mock('../services/project/active-projects.service.js');
+jest.mock('../services/ai/prompt-template.service.js');
 
 // Mock domain handlers
-jest.mock('./domains/teams.handlers.js');
-jest.mock('./domains/projects.handlers.js');
-jest.mock('./domains/tickets.handlers.js');
-jest.mock('./domains/git.handlers.js');
-jest.mock('./domains/orchestrator.handlers.js');
-jest.mock('./domains/scheduler.handlers.js');
-jest.mock('./domains/terminal.handlers.js');
-jest.mock('./domains/errors.handlers.js');
-jest.mock('./domains/scheduled-messages.handlers.js');
-jest.mock('./domains/delivery-logs.handlers.js');
-jest.mock('./domains/workflows.handlers.js');
-jest.mock('./domains/config.handlers.js');
-jest.mock('./domains/tasks.handlers.js');
-jest.mock('./domains/task-management.handlers.js');
+jest.mock('./team/team.controller.js');
+jest.mock('./project/project.controller.js');
+jest.mock('./orchestrator/orchestrator.controller.js');
+jest.mock('./system/terminal.controller.js');
+jest.mock('./workflow/scheduler.controller.js');
+jest.mock('./workflow/workflow.controller.js');
+jest.mock('./task-management/task-management.controller.js');
 
 describe('ApiController', () => {
   let controller: ApiController;
@@ -101,7 +94,7 @@ describe('ApiController', () => {
       mockRequest = { params: { id: 'team-123' }, body: { name: 'Test Team' } };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockTeamsHandlers = await import('./domains/teams.handlers.js');
+      mockTeamsHandlers = await import('./domains/team.controller.js');
       mockTeamsHandlers.createTeam = jest.fn().mockResolvedValue({ success: true });
       mockTeamsHandlers.getTeams = jest.fn().mockResolvedValue([]);
       mockTeamsHandlers.getTeam = jest.fn().mockResolvedValue({ id: 'team-123' });
@@ -150,7 +143,7 @@ describe('ApiController', () => {
       mockRequest = { params: { id: 'project-123' }, body: { name: 'Test Project' } };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockProjectsHandlers = await import('./domains/projects.handlers.js');
+      mockProjectsHandlers = await import('./domains/project.controller.js');
       mockProjectsHandlers.createProject = jest.fn().mockResolvedValue({ success: true });
       mockProjectsHandlers.getProjects = jest.fn().mockResolvedValue([]);
       mockProjectsHandlers.startProject = jest.fn().mockResolvedValue({ success: true });
@@ -187,7 +180,7 @@ describe('ApiController', () => {
       mockRequest = { body: { message: 'test commit' }, params: { project: 'test-project' } };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockGitHandlers = await import('./domains/git.handlers.js');
+      mockGitHandlers = await import('./domains/git.controller.js');
       (mockGitHandlers as any).getGitStatus = jest.fn().mockResolvedValue({ status: 'clean' });
       (mockGitHandlers as any).commitChanges = jest.fn().mockResolvedValue({ success: true });
       (mockGitHandlers as any).startAutoCommit = jest.fn().mockResolvedValue({ success: true });
@@ -227,7 +220,7 @@ describe('ApiController', () => {
       };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockTerminalHandlers = await import('./domains/terminal.handlers.js');
+      mockTerminalHandlers = await import('./domains/terminal.controller.js');
       (mockTerminalHandlers as any).listTerminalSessions = jest.fn().mockResolvedValue(['session1', 'session2']);
       (mockTerminalHandlers as any).captureTerminal = jest.fn().mockResolvedValue({ output: 'terminal output' });
       (mockTerminalHandlers as any).sendTerminalInput = jest.fn().mockResolvedValue({ success: true });
@@ -267,7 +260,7 @@ describe('ApiController', () => {
       };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockOrchestratorHandlers = await import('./domains/orchestrator.handlers.js');
+      mockOrchestratorHandlers = await import('./domains/orchestrator.controller.js');
       (mockOrchestratorHandlers as any).getOrchestratorCommands = jest.fn().mockResolvedValue(['command1', 'command2']);
       (mockOrchestratorHandlers as any).executeOrchestratorCommand = jest.fn().mockResolvedValue({ success: true });
       (mockOrchestratorHandlers as any).sendOrchestratorMessage = jest.fn().mockResolvedValue({ success: true });
@@ -304,7 +297,7 @@ describe('ApiController', () => {
       mockRequest = { params: { id: 'team-123' } };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       
-      mockTeamsHandlers = await import('./domains/teams.handlers.js');
+      mockTeamsHandlers = await import('./domains/team.controller.js');
     });
 
     it('should propagate errors from domain handlers', async () => {
@@ -399,7 +392,7 @@ describe('ApiController', () => {
       const mockRequest = { params: { id: 'test' } } as any;
       const mockResponse = { json: jest.fn() } as any;
       
-      const mockTeamsHandlers = jest.mocked(await import('./domains/teams.handlers.js'));
+      const mockTeamsHandlers = jest.mocked(await import('./domains/team.controller.js'));
       mockTeamsHandlers.getTeam = jest.fn().mockImplementation(function(this: any, req: any, res: any) {
         // The 'this' context should be the controller instance
         expect(this).toBe(controller);

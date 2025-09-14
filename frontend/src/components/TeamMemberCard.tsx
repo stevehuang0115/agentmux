@@ -26,13 +26,15 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   const [isStopping, setIsStopping] = useState(false);
   const [editForm, setEditForm] = useState({
     name: member.name,
-    role: member.role
+    role: member.role,
+    runtimeType: member.runtimeType || 'claude-code'
   });
 
   const handleEdit = () => {
     setEditForm({
       name: member.name,
-      role: member.role
+      role: member.role,
+      runtimeType: member.runtimeType || 'claude-code'
     });
     setIsEditing(true);
   };
@@ -45,7 +47,8 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   const handleCancel = () => {
     setEditForm({
       name: member.name,
-      role: member.role
+      role: member.role,
+      runtimeType: member.runtimeType || 'claude-code'
     });
     setIsEditing(false);
   };
@@ -207,6 +210,16 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
                 <option value="tester">Test Engineer</option>
                 <option value="designer">Designer</option>
               </select>
+              <select
+                value={editForm.runtimeType}
+                onChange={(e) => setEditForm({ ...editForm, runtimeType: e.target.value as TeamMember['runtimeType'] })}
+                className="member-runtime-input"
+                title="Select the AI runtime for this team member"
+              >
+                <option value="claude-code">Claude Code</option>
+                <option value="gemini-cli">Gemini CLI</option>
+                <option value="codex-cli">Codex CLI</option>
+              </select>
             </div>
           ) : (
             <>
@@ -317,6 +330,12 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
               <code className="session-name">{member.sessionName}</code>
             </div>
           )}
+          <div className="meta-item">
+            <span className="meta-label">Runtime:</span>
+            <span className="meta-value runtime-type">
+              {member.runtimeType ? member.runtimeType.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Claude Code'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

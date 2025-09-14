@@ -18,6 +18,15 @@ mcp-server/dist/
 
 # TypeScript build outputs
 *.tsbuildinfo
+*.d.ts
+*.d.ts.map
+*.js.map
+# But keep the main dist directories and intentionally committed JS files
+!dist/
+!frontend/dist/
+!backend/dist/
+!cli/dist/
+!mcp-server/dist/
 
 # Environment variables
 .env

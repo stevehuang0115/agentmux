@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as schedulerHandlers from '../../controllers/domains/scheduler.handlers.js';
+import * as schedulerHandlers from '../../controllers/system/scheduler.controller.js';
 
 export function registerSchedulerRoutes(router: Router, apiController: ApiController): void {
   // Scheduler Routes

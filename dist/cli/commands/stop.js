@@ -1,0 +1,136 @@
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import chalk from 'chalk';
+import axios from 'axios';
+const execAsync = promisify(exec);
+export async function stopCommand(options) {
+    console.log(chalk.yellow('🛑 Stopping AgentMux...'));
+    try {
+        // 1. Try graceful shutdown via API
+        if (!options.force) {
+            await attemptGracefulShutdown();
+        }
+        // 2. Kill AgentMux tmux sessions
+        await killAgentMuxSessions();
+        // 3. Kill backend processes
+        await killBackendProcesses(options.force);
+        console.log(chalk.green('✅ AgentMux stopped successfully'));
+    }
+    catch (error) {
+        console.error(chalk.red('❌ Error stopping AgentMux:'), error instanceof Error ? error.message : error);
+        if (!options.force) {
+            console.log(chalk.yellow('💡 Try running with --force flag for forceful shutdown'));
+        }
+        process.exit(1);
+    }
+}
+async function attemptGracefulShutdown() {
+    try {
+        console.log(chalk.blue('📡 Attempting graceful shutdown...'));
+        // Check if server is running
+        const response = await axios.get('http://localhost:3000/health', { timeout: 2000 });
+        if (response.status === 200) {
+            // Server is running, attempt graceful shutdown
+            // Note: In a real implementation, you'd have a shutdown endpoint
+            console.log(chalk.green('Server is running, proceeding with shutdown'));
+        }
+    }
+    catch (error) {
+        console.log(chalk.gray('Server not responding, proceeding with force shutdown'));
+    }
+}
+async function killAgentMuxSessions() {
+    try {
+        console.log(chalk.blue('🖥️  Terminating AgentMux sessions...'));
+        // List all tmux sessions
+        const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""');
+        const sessions = stdout.split('\n').filter(s => s.trim());
+        // Kill AgentMux sessions
+        const agentMuxSessions = sessions.filter(s => s.startsWith('agentmux_'));
+        if (agentMuxSessions.length > 0) {
+            console.log(chalk.gray(`Found ${agentMuxSessions.length} AgentMux sessions`));
+            for (const session of agentMuxSessions) {
+                try {
+                    await execAsync(`tmux kill-session -t "${session}"`);
+                    console.log(chalk.gray(`✓ Killed session: ${session}`));
+                }
+                catch (error) {
+                    console.log(chalk.yellow(`⚠️  Session ${session} was already terminated`));
+                }
+            }
+        }
+        else {
+            console.log(chalk.gray('No AgentMux sessions found'));
+        }
+    }
+    catch (error) {
+        console.log(chalk.yellow('⚠️  tmux not available or no sessions running'));
+    }
+}
+async function killBackendProcesses(force = false) {
+    try {
+        console.log(chalk.blue('🔧 Stopping backend processes...'));
+        // Find Node.js processes running AgentMux
+        const { stdout } = await execAsync('ps aux | grep -E "(agentmux|backend|mcp-server)" | grep -v grep || echo ""');
+        if (stdout.trim()) {
+            const lines = stdout.trim().split('\n');
+            const pids = [];
+            for (const line of lines) {
+                const parts = line.trim().split(/\s+/);
+                if (parts.length > 1) {
+                    const pid = parts[1];
+                    pids.push(pid);
+                }
+            }
+            if (pids.length > 0) {
+                console.log(chalk.gray(`Found ${pids.length} backend processes`));
+                for (const pid of pids) {
+                    try {
+                        const signal = force ? 'SIGKILL' : 'SIGTERM';
+                        await execAsync(`kill -${signal} ${pid}`);
+                        console.log(chalk.gray(`✓ Killed process: ${pid}`));
+                    }
+                    catch (error) {
+                        console.log(chalk.yellow(`⚠️  Process ${pid} was already terminated`));
+                    }
+                }
+                // Wait a moment for graceful shutdown
+                if (!force) {
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        }
+        else {
+            console.log(chalk.gray('No backend processes found'));
+        }
+    }
+    catch (error) {
+        console.error(chalk.red('Error killing backend processes:'), error);
+        throw error;
+    }
+}
+// Alternative approach: Kill processes by port
+async function killProcessesByPort(port) {
+    try {
+        // Find processes using the port
+        const { stdout } = await execAsync(`lsof -ti :${port} || echo ""`);
+        const pids = stdout.trim().split('\n').filter(pid => pid.trim());
+        if (pids.length > 0) {
+            console.log(chalk.gray(`Killing ${pids.length} processes using port ${port}`));
+            for (const pid of pids) {
+                try {
+                    await execAsync(`kill -TERM ${pid}`);
+                    console.log(chalk.gray(`✓ Killed process: ${pid}`));
+                }
+                catch (error) {
+                    console.log(chalk.yellow(`⚠️  Process ${pid} was already terminated`));
+                }
+            }
+        }
+    }
+    catch (error) {
+        // lsof might not be available on all systems
+        console.log(chalk.gray(`Could not check port ${port} usage`));
+    }
+}
+//# sourceMappingURL=stop.js.map

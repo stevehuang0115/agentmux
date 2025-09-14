@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
-import * as teamsHandlers from './domains/teams.handlers.js';
+import * as teamsHandlers from './team/team.controller.js';
 import type { ApiContext } from './types.js';
 import { StorageService, TmuxService, SchedulerService } from '../services/index.js';
 import { Team, TeamMember } from '../types/index.js';
@@ -46,6 +46,7 @@ describe('Agent Status Workflow Integration', () => {
     mockApiContext = {
       storageService: mockStorageService,
       tmuxService: mockTmuxService,
+      agentRegistrationService: {} as any,
       schedulerService: {} as any,
       activeProjectsService: {} as any,
       promptTemplateService: {} as any,
@@ -75,6 +76,7 @@ describe('Agent Status Workflow Integration', () => {
           systemPrompt: 'Test prompt',
           agentStatus: 'inactive',
           workingStatus: 'idle',
+          runtimeType: 'claude-code',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -209,6 +211,7 @@ describe('Agent Status Workflow Integration', () => {
           systemPrompt: 'Test prompt',
           agentStatus: 'inactive',
           workingStatus: 'idle',
+          runtimeType: 'claude-code',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
@@ -287,6 +290,7 @@ describe('Agent Status Workflow Integration', () => {
           systemPrompt: 'Test prompt',
           agentStatus: 'inactive',
           workingStatus: 'idle',
+          runtimeType: 'claude-code',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }

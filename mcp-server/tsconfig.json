@@ -1,10 +1,21 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "outDir": "../dist/mcp-server",
-    "rootDir": "./src"
+    "outDir": "../dist/mcp-server"
   },
   "include": [
-    "src/**/*"
+    "src/**/*",
+    "../backend/src/**/*",
+    "../config/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "../backend/src/**/*.test.ts",
+    "../config/*.d.ts",
+    "../config/*.js",
+    "../config/*.js.map",
+    "../config/*.test.ts"
   ]
 }

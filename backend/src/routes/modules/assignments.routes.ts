@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as assignmentsHandlers from '../../controllers/domains/assignments.handlers.js';
+import * as assignmentsHandlers from '../../controllers/task-management/assignments.controller.js';
 
 export function registerAssignmentsRoutes(router: Router, apiController: ApiController): void {
   // Assignments Routes

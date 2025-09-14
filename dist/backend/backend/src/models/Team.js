@@ -1,0 +1,114 @@
+import { RUNTIME_TYPES } from '../constants.js';
+export class TeamModel {
+    id;
+    name;
+    description;
+    members;
+    currentProject;
+    createdAt;
+    updatedAt;
+    constructor(data) {
+        this.id = data.id || '';
+        this.name = data.name || '';
+        this.description = data.description;
+        this.members = data.members || [];
+        this.currentProject = data.currentProject;
+        this.createdAt = data.createdAt || new Date().toISOString();
+        this.updatedAt = data.updatedAt || new Date().toISOString();
+    }
+    assignToProject(projectId) {
+        this.currentProject = projectId;
+        this.updatedAt = new Date().toISOString();
+    }
+    addMember(member) {
+        this.members.push(member);
+        this.updatedAt = new Date().toISOString();
+    }
+    removeMember(memberId) {
+        this.members = this.members.filter(member => member.id !== memberId);
+        this.updatedAt = new Date().toISOString();
+    }
+    updateMember(memberId, updates) {
+        const memberIndex = this.members.findIndex(member => member.id === memberId);
+        if (memberIndex !== -1) {
+            this.members[memberIndex] = {
+                ...this.members[memberIndex],
+                ...updates,
+                updatedAt: new Date().toISOString()
+            };
+            this.updatedAt = new Date().toISOString();
+        }
+    }
+    assignTicketsToMember(memberId, ticketIds) {
+        const memberIndex = this.members.findIndex(member => member.id === memberId);
+        if (memberIndex !== -1) {
+            this.members[memberIndex].currentTickets = ticketIds;
+            this.members[memberIndex].updatedAt = new Date().toISOString();
+            this.updatedAt = new Date().toISOString();
+        }
+    }
+    toJSON() {
+        return {
+            id: this.id,
+            name: this.name,
+            description: this.description,
+            members: this.members,
+            currentProject: this.currentProject,
+            createdAt: this.createdAt,
+            updatedAt: this.updatedAt,
+        };
+    }
+    static fromJSON(data) {
+        // Handle data migration from legacy format
+        const migratedData = { ...data };
+        // Migrate legacy status fields for team members
+        if (migratedData.members) {
+            migratedData.members = migratedData.members.map((member) => {
+                const migratedMember = { ...member };
+                console.log(`[TEAM-MODEL-DEBUG-TS] Processing member: ${member.name}, original agentStatus: ${member.agentStatus}`);
+                // Migrate legacy 'status' field to 'agentStatus'
+                if (member.status && !member.agentStatus) {
+                    console.log(`[TEAM-MODEL-DEBUG-TS] Migrating legacy status ${member.status} for ${member.name}`);
+                    // Map legacy status values to new agentStatus values
+                    switch (member.status) {
+                        case 'active':
+                            migratedMember.agentStatus = 'active';
+                            break;
+                        case 'idle':
+                        case 'inactive':
+                            migratedMember.agentStatus = 'inactive';
+                            break;
+                        case 'activating':
+                            migratedMember.agentStatus = 'activating';
+                            break;
+                        default:
+                            migratedMember.agentStatus = 'inactive';
+                    }
+                    // Remove legacy field
+                    delete migratedMember.status;
+                }
+                // Ensure workingStatus exists (default to 'idle')
+                if (!migratedMember.workingStatus) {
+                    migratedMember.workingStatus = 'idle';
+                }
+                // Ensure agentStatus exists (default to 'inactive')
+                // CRITICAL: Only set default for truly missing fields, preserve 'activating'/'active' states
+                if (migratedMember.agentStatus === undefined || migratedMember.agentStatus === null) {
+                    console.log(`[TEAM-MODEL-DEBUG-TS] Setting default agentStatus=inactive for ${member.name} (was undefined/null)`);
+                    migratedMember.agentStatus = 'inactive';
+                }
+                else {
+                    console.log(`[TEAM-MODEL-DEBUG-TS] Preserving agentStatus=${migratedMember.agentStatus} for ${member.name}`);
+                }
+                // Ensure runtimeType exists (default to 'claude-code')
+                if (!migratedMember.runtimeType) {
+                    migratedMember.runtimeType = RUNTIME_TYPES.CLAUDE_CODE;
+                }
+                console.log(`[TEAM-MODEL-DEBUG-TS] Final agentStatus=${migratedMember.agentStatus} for ${member.name}`);
+                return migratedMember;
+            });
+        }
+        return new TeamModel(migratedData);
+    }
+}
+//# sourceMappingURL=Team.js.map

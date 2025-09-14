@@ -230,8 +230,8 @@ Describe the main objective and purpose of this project.
 
       // Get the initial goal and user journey content
       const [goalResponse, journeyResponse] = await Promise.all([
-        fetch(`/api/projects/${project.id}/spec-file-content?fileName=initial_goal.md`),
-        fetch(`/api/projects/${project.id}/spec-file-content?fileName=initial_user_journey.md`)
+        fetch(`/api/projects/${project.id}/specs?fileName=initial_goal.md`),
+        fetch(`/api/projects/${project.id}/specs?fileName=initial_user_journey.md`)
       ]);
 
       if (!goalResponse.ok || !journeyResponse.ok) {
@@ -348,8 +348,8 @@ Describe the main objective and purpose of this project.
 
       // Get the initial goal and user journey content
       const [goalResponse, journeyResponse] = await Promise.all([
-        fetch(`/api/projects/${project.id}/spec-file-content?fileName=initial_goal.md`),
-        fetch(`/api/projects/${project.id}/spec-file-content?fileName=initial_user_journey.md`)
+        fetch(`/api/projects/${project.id}/specs?fileName=initial_goal.md`),
+        fetch(`/api/projects/${project.id}/specs?fileName=initial_user_journey.md`)
       ]);
 
       if (!goalResponse.ok || !journeyResponse.ok) {
