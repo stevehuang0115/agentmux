@@ -25,7 +25,7 @@ export { TeamActivityWebSocketService } from './monitoring/team-activity-websock
 export { TeamsJsonWatcherService } from './monitoring/teams-json-watcher.service.js';
 
 // Workflow Services
-export { WorkflowService } from './workflow/workflow.service.js';
+// WorkflowService removed - project orchestration now handled via scheduled messages
 export { SchedulerService } from './workflow/scheduler.service.js';
 export { MessageSchedulerService } from './workflow/message-scheduler.service.js';
 

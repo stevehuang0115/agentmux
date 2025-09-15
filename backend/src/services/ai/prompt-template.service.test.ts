@@ -33,7 +33,7 @@ describe('PromptTemplateService', () => {
 
   describe('constructor', () => {
     it('should use default templates path if none provided', () => {
-      expect(path.join).toHaveBeenCalledWith('/app', 'config', 'prompts');
+      expect(path.join).toHaveBeenCalledWith('/app', 'config', 'orchestrator_tasks', 'prompts');
     });
 
     it('should use custom templates path if provided', () => {
@@ -62,7 +62,7 @@ Milestone: {taskMilestone}
     it('should load and process orchestrator template', async () => {
       const result = await service.getOrchestratorTaskAssignmentPrompt(mockTaskData);
 
-      expect(readFile).toHaveBeenCalledWith('/app/config/prompts/assign-task-orchestrator-prompt-template.md', 'utf-8');
+      expect(readFile).toHaveBeenCalledWith('/app/config/orchestrator_tasks/prompts/assign-task-orchestrator-prompt-template.md', 'utf-8');
       expect(result).toBe(`Project: Test Project
 Path: /test/project
 Task ID: task-001
@@ -300,7 +300,7 @@ Your task is to check team progress and assign available tasks to idle team memb
     it('should load and process auto-assignment template', async () => {
       const result = await service.getAutoAssignmentPrompt(mockAutoAssignmentData);
 
-      expect(readFile).toHaveBeenCalledWith('/app/config/prompts/auto-assignment-orchestrator-prompt-template.md', 'utf-8');
+      expect(readFile).toHaveBeenCalledWith('/app/config/orchestrator_tasks/prompts/auto-assignment-orchestrator-prompt-template.md', 'utf-8');
       expect(result).toContain('**Project:** Test Project');
       expect(result).toContain('**Path:** /test/project');
       expect(result).toContain('**Check Time:** 2023-01-01T12:00:00Z');

@@ -7,7 +7,7 @@ export interface PopupProps {
   onClose: () => void;
   title?: string;
   subtitle?: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'xxl';
   closable?: boolean;
   className?: string;
   children: React.ReactNode;

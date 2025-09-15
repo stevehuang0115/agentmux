@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
 import * as taskMgmtHandlers from '../../controllers/task-management/task-management.controller.js';
+import * as inProgressHandlers from '../../controllers/task-management/in-progress-tasks.controller.js';
 
 export function registerTaskManagementRoutes(router: Router, apiController: ApiController): void {
   // Task Management Routes (for MCP tools)
@@ -17,4 +18,7 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
 
   // Task Creation Routes
   router.post('/tasks/create-from-config', (req, res) => taskMgmtHandlers.createTasksFromConfig.call(apiController, req, res));
+
+  // In-Progress Tasks Routes
+  router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }

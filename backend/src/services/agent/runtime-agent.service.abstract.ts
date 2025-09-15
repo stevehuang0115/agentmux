@@ -258,7 +258,7 @@ export abstract class RuntimeAgentService {
 	 */
 	private async initializeRuntimeConfig(): Promise<void> {
 		try {
-			const configPath = path.join(this.projectRoot, 'config', 'runtime-config.json');
+			const configPath = path.join(this.projectRoot, 'config', 'runtime_scripts', 'runtime-config.json');
 			const configContent = await readFile(configPath, 'utf8');
 			const config = JSON.parse(configContent);
 
@@ -307,7 +307,7 @@ export abstract class RuntimeAgentService {
 	 * Load initialization script commands from file
 	 */
 	protected async loadInitScript(scriptName: string): Promise<string[]> {
-		const scriptPath = path.join(this.projectRoot, 'config', scriptName);
+		const scriptPath = path.join(this.projectRoot, 'config', 'runtime_scripts', scriptName);
 		const scriptContent = await readFile(scriptPath, 'utf8');
 		return scriptContent
 			.trim()

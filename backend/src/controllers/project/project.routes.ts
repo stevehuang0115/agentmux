@@ -25,10 +25,26 @@ import {
   continueWithMisalignment
 } from './project.controller.js';
 
+// Import additional controllers for consolidated routes
+import * as ticketHandlers from '../task-management/tickets.controller.js';
+import * as gitHandlers from './git.controller.js';
+import * as taskHandlers from '../task-management/tasks.controller.js';
+import * as orchestratorHandlers from '../orchestrator/orchestrator.controller.js';
+
 /**
- * Creates project router with all project-related endpoints
+ * Creates consolidated project router with all project-related endpoints
+ *
+ * This router includes:
+ * - Core project CRUD operations and lifecycle management
+ * - File and spec management
+ * - Team assignment and project statistics
+ * - Ticket management (CRUD, templates, subtasks)
+ * - Task management from markdown files (milestones, status filtering)
+ * - Git integration (status, commits, branches, pull requests)
+ * - Legacy endpoint compatibility
+ *
  * @param context - API context with services
- * @returns Express router configured with project routes
+ * @returns Express router configured with all consolidated project routes
  */
 export function createProjectRouter(context: ApiContext): Router {
   const router = Router();
@@ -68,6 +84,99 @@ export function createProjectRouter(context: ApiContext): Router {
   // Markdown file operations
   router.get('/markdown-files', getAgentmuxMarkdownFiles.bind(context));
   router.post('/markdown-files', saveMarkdownFile.bind(context));
+
+  // ============================================================
+  // CONSOLIDATED ROUTES - Migrated from legacy projects.routes.ts
+  // ============================================================
+
+  // Project lifecycle with different endpoint patterns (legacy compatibility)
+  router.post('/:id/assign-teams', assignTeamsToProject.bind(context));
+  router.post('/:id/unassign-team', unassignTeamFromProject.bind(context));
+  router.post('/:id/create-spec-file', createSpecFile.bind(context));
+  router.get('/:id/spec-file-content', getSpecFileContent.bind(context));
+
+  // Task assignment to orchestrator
+  router.post('/:projectId/assign-task', (req, res) => {
+    return orchestratorHandlers.assignTaskToOrchestrator.call(context, req, res);
+  });
+
+  // Ticket management routes
+  router.post('/:projectId/tickets', (req, res) => {
+    return ticketHandlers.createTicket.call(context, req, res);
+  });
+  router.get('/:projectId/tickets', (req, res) => {
+    return ticketHandlers.getTickets.call(context, req, res);
+  });
+  router.get('/:projectId/tickets/:ticketId', (req, res) => {
+    return ticketHandlers.getTicket.call(context, req, res);
+  });
+  router.put('/:projectId/tickets/:ticketId', (req, res) => {
+    return ticketHandlers.updateTicket.call(context, req, res);
+  });
+  router.delete('/:projectId/tickets/:ticketId', (req, res) => {
+    return ticketHandlers.deleteTicket.call(context, req, res);
+  });
+  router.post('/:projectId/tickets/:ticketId/subtasks', (req, res) => {
+    return ticketHandlers.addSubtask.call(context, req, res);
+  });
+  router.patch('/:projectId/tickets/:ticketId/subtasks/:subtaskId/toggle', (req, res) => {
+    return ticketHandlers.toggleSubtask.call(context, req, res);
+  });
+
+  // Task management routes (from markdown files)
+  router.get('/:projectId/tasks', (req, res) => {
+    return taskHandlers.getAllTasks.call(context, req, res);
+  });
+  router.get('/:projectId/milestones', (req, res) => {
+    return taskHandlers.getMilestones.call(context, req, res);
+  });
+  router.get('/:projectId/tasks/status/:status', (req, res) => {
+    return taskHandlers.getTasksByStatus.call(context, req, res);
+  });
+  router.get('/:projectId/tasks/milestone/:milestoneId', (req, res) => {
+    return taskHandlers.getTasksByMilestone.call(context, req, res);
+  });
+  router.get('/:projectId/tasks-status', (req, res) => {
+    return taskHandlers.getProjectTasksStatus.call(context, req, res);
+  });
+
+  // Ticket template routes
+  router.post('/:projectId/ticket-templates/:templateName', (req, res) => {
+    return ticketHandlers.createTicketTemplate.call(context, req, res);
+  });
+  router.get('/:projectId/ticket-templates', (req, res) => {
+    return ticketHandlers.getTicketTemplates.call(context, req, res);
+  });
+  router.get('/:projectId/ticket-templates/:templateName', (req, res) => {
+    return ticketHandlers.getTicketTemplate.call(context, req, res);
+  });
+
+  // Git integration routes
+  router.get('/:projectId/git/status', (req, res) => {
+    return gitHandlers.getGitStatus.call(context, req, res);
+  });
+  router.post('/:projectId/git/commit', (req, res) => {
+    return gitHandlers.commitChanges.call(context, req, res);
+  });
+  router.post('/:projectId/git/auto-commit/start', (req, res) => {
+    return gitHandlers.startAutoCommit.call(context, req, res);
+  });
+  router.post('/:projectId/git/auto-commit/stop', (req, res) => {
+    return gitHandlers.stopAutoCommit.call(context, req, res);
+  });
+  router.get('/:projectId/git/history', (req, res) => {
+    return gitHandlers.getCommitHistory.call(context, req, res);
+  });
+  router.post('/:projectId/git/branch', (req, res) => {
+    return gitHandlers.createBranch.call(context, req, res);
+  });
+  router.post('/:projectId/git/pull-request', (req, res) => {
+    return gitHandlers.createPullRequest.call(context, req, res);
+  });
+
+  // Legacy endpoint compatibility (files -> save-file)
+  router.post('/save-file', saveMarkdownFile.bind(context));
+  router.get('/files', getAgentmuxMarkdownFiles.bind(context));
 
   return router;
 }

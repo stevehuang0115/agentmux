@@ -13,7 +13,7 @@ export class PromptBuilderService {
 
 	constructor(projectRoot: string = process.cwd()) {
 		this.logger = LoggerService.getInstance().createComponentLogger('PromptBuilderService');
-		this.promptsDirectory = path.join(projectRoot, 'config', 'prompts');
+		this.promptsDirectory = path.join(projectRoot, 'config', 'teams', 'prompts');
 	}
 
 	/**

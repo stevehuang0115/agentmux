@@ -292,4 +292,290 @@ describe('TmuxCommandService', () => {
 			).resolves.not.toThrow();
 		});
 	});
+
+	describe('validateSessionReady', () => {
+		beforeEach(() => {
+			// Set NODE_ENV to test for faster execution
+			process.env.NODE_ENV = 'test';
+		});
+
+		afterEach(() => {
+			delete process.env.NODE_ENV;
+		});
+
+		it('should return true when session is ready', async () => {
+			mockSpawn.mockImplementation((command, args) => {
+				if (args.includes('list-sessions')) {
+					return {
+						stdout: {
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'data') {
+									callback('test-session\n');
+								}
+							})
+						},
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0);
+							}
+						}),
+					};
+				} else if (args.includes('capture-pane')) {
+					return {
+						stdout: {
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'data') {
+									callback('pane content\n');
+								}
+							})
+						},
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0);
+							}
+						}),
+					};
+				}
+				return {
+					stdout: { on: jest.fn() },
+					stderr: { on: jest.fn() },
+					on: jest.fn().mockImplementation((event, callback) => {
+						if (event === 'close') {
+							callback(0);
+						}
+					}),
+				};
+			});
+
+			const result = await service.validateSessionReady('test-session');
+			expect(result).toBe(true);
+		});
+
+		it('should return false when session is not found', async () => {
+			mockSpawn.mockImplementation((command, args) => {
+				if (args.includes('list-sessions')) {
+					return {
+						stdout: {
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'data') {
+									callback('other-session\n');
+								}
+							})
+						},
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0);
+							}
+						}),
+					};
+				}
+				return {
+					stdout: { on: jest.fn() },
+					stderr: { on: jest.fn() },
+					on: jest.fn().mockImplementation((event, callback) => {
+						if (event === 'close') {
+							callback(0);
+						}
+					}),
+				};
+			});
+
+			const result = await service.validateSessionReady('test-session');
+			expect(result).toBe(false);
+		});
+
+		it('should retry on failure and eventually return false', async () => {
+			let callCount = 0;
+			mockSpawn.mockImplementation(() => {
+				callCount++;
+				return {
+					stdout: { on: jest.fn() },
+					stderr: { on: jest.fn() },
+					on: jest.fn().mockImplementation((event, callback) => {
+						if (event === 'close') {
+							callback(1); // Error exit code
+						}
+					}),
+				};
+			});
+
+			const result = await service.validateSessionReady('test-session');
+			expect(result).toBe(false);
+			expect(callCount).toBeGreaterThan(1); // Should have retried
+		});
+
+		it('should succeed on retry after initial failure', async () => {
+			let callCount = 0;
+			mockSpawn.mockImplementation((command, args) => {
+				callCount++;
+				if (callCount === 1) {
+					// First call fails
+					return {
+						stdout: { on: jest.fn() },
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(1); // Error exit code
+							}
+						}),
+					};
+				} else {
+					// Subsequent calls succeed
+					if (args.includes('list-sessions')) {
+						return {
+							stdout: {
+								on: jest.fn().mockImplementation((event, callback) => {
+									if (event === 'data') {
+										callback('test-session\n');
+									}
+								})
+							},
+							stderr: { on: jest.fn() },
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'close') {
+									callback(0);
+								}
+							}),
+						};
+					} else if (args.includes('capture-pane')) {
+						return {
+							stdout: {
+								on: jest.fn().mockImplementation((event, callback) => {
+									if (event === 'data') {
+										callback('pane content\n');
+									}
+								})
+							},
+							stderr: { on: jest.fn() },
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'close') {
+									callback(0);
+								}
+							}),
+						};
+					}
+				}
+				return {
+					stdout: { on: jest.fn() },
+					stderr: { on: jest.fn() },
+					on: jest.fn().mockImplementation((event, callback) => {
+						if (event === 'close') {
+							callback(0);
+						}
+					}),
+				};
+			});
+
+			const result = await service.validateSessionReady('test-session');
+			expect(result).toBe(true);
+			expect(callCount).toBeGreaterThan(1);
+		});
+	});
+
+	describe('createSession with race condition fixes', () => {
+		beforeEach(() => {
+			// Set NODE_ENV to test for faster execution
+			process.env.NODE_ENV = 'test';
+		});
+
+		afterEach(() => {
+			delete process.env.NODE_ENV;
+		});
+
+		it('should include timing delay and validation in session creation', async () => {
+			const startTime = Date.now();
+			let validationCalled = false;
+
+			mockSpawn.mockImplementation((command, args) => {
+				if (args.includes('list-sessions')) {
+					validationCalled = true;
+					return {
+						stdout: {
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'data') {
+									callback('test-session\n');
+								}
+							})
+						},
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0);
+							}
+						}),
+					};
+				} else if (args.includes('capture-pane')) {
+					return {
+						stdout: {
+							on: jest.fn().mockImplementation((event, callback) => {
+								if (event === 'data') {
+									callback('pane content\n');
+								}
+							})
+						},
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0);
+							}
+						}),
+					};
+				}
+				return {
+					stdout: { on: jest.fn() },
+					stderr: { on: jest.fn() },
+					on: jest.fn().mockImplementation((event, callback) => {
+						if (event === 'close') {
+							callback(0);
+						}
+					}),
+				};
+			});
+
+			await service.createSession('test-session', '/tmp');
+
+			const endTime = Date.now();
+			const duration = endTime - startTime;
+
+			// Should take at least 500ms due to initialization delay in test mode
+			expect(duration).toBeGreaterThanOrEqual(500);
+			// Should have called session validation
+			expect(validationCalled).toBe(true);
+		});
+
+		it('should handle validation failure gracefully', async () => {
+			mockSpawn.mockImplementation((command, args) => {
+				if (args.includes('new-session')) {
+					return {
+						stdout: { on: jest.fn() },
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(0); // Session creation succeeds
+							}
+						}),
+					};
+				} else {
+					// Validation fails
+					return {
+						stdout: { on: jest.fn() },
+						stderr: { on: jest.fn() },
+						on: jest.fn().mockImplementation((event, callback) => {
+							if (event === 'close') {
+								callback(1); // Validation fails
+							}
+						}),
+					};
+				}
+			});
+
+			// Should not throw even if validation fails
+			await expect(
+				service.createSession('test-session', '/tmp')
+			).resolves.not.toThrow();
+		});
+	});
 });

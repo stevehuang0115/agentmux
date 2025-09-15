@@ -1,10 +1,15 @@
 import { Router } from 'express';
 import { ApiController } from '../../controllers/api.controller.js';
-import * as workflowsHandlers from '../../controllers/workflow/workflow.controller.js';
 
 export function registerWorkflowRoutes(router: Router, apiController: ApiController): void {
-  // Workflow Management Routes
-  router.get('/workflows/executions/:executionId', (req, res) => workflowsHandlers.getWorkflowExecution.call(apiController, req, res));
-  router.get('/workflows/active', (req, res) => workflowsHandlers.getActiveWorkflows.call(apiController, req, res));
-  router.delete('/workflows/executions/:executionId', (req, res) => workflowsHandlers.cancelWorkflowExecution.call(apiController, req, res));
+  // Legacy workflow routes removed - project orchestration now handled via scheduled messages
+  router.get('/workflows/executions/:executionId', (req, res) => {
+    res.status(410).json({ success: false, error: 'Workflow execution API deprecated - orchestration now handled via scheduled messages' });
+  });
+  router.get('/workflows/active', (req, res) => {
+    res.status(410).json({ success: false, error: 'Active workflows API deprecated - orchestration now handled via scheduled messages' });
+  });
+  router.delete('/workflows/executions/:executionId', (req, res) => {
+    res.status(410).json({ success: false, error: 'Workflow cancellation API deprecated - orchestration now handled via scheduled messages' });
+  });
 }

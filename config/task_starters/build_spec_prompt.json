@@ -1,0 +1,79 @@
+{
+	"name": "Build Project Specifications",
+	"description": "Step-by-step process to generate project specifications in three focused phases. These specifications will be used to create milestone-based tasks organized in open/in_progress/blocked/done folders.",
+	"steps": [
+		{
+			"id": 1,
+			"name": "Create Project Requirements Document",
+			"targetRole": "tpm",
+			"delayMinutes": 3,
+			"verification": {
+				"type": "files_exist",
+				"paths": [
+					"{PROJECT_PATH}/.agentmux/specs",
+					"{PROJECT_PATH}/.agentmux/specs/project.md"
+				]
+			},
+			"prompt_file": "config/task_starters/prompts/build_spec_step1_project_requirements.md"
+		},
+		{
+			"id": 2,
+			"name": "Create Technical Design Documentation",
+			"targetRole": "architect",
+			"delayMinutes": 6,
+			"conditional": "only_if_project_md_exists",
+			"verification": {
+				"type": "directory_contains_files",
+				"path": "{PROJECT_PATH}/.agentmux/specs",
+				"min_files": 2,
+				"file_pattern": "*_design.md"
+			},
+			"prompt_file": "config/task_starters/prompts/build_spec_step2_technical_design.md"
+		},
+		{
+			"id": 3,
+			"name": "Create Integration & E2E Testing Plan",
+			"targetRole": "architect",
+			"delayMinutes": 4,
+			"conditional": "only_if_design_docs_exist",
+			"verification": {
+				"type": "files_exist",
+				"paths": ["{PROJECT_PATH}/.agentmux/specs/integration_tests.md"]
+			},
+			"prompt_file": "config/task_starters/prompts/build_spec_step3_integration_testing.md"
+		}
+	],
+	"workflow": {
+		"step1": "Create comprehensive project requirements document (PRD)",
+		"step2": "Analyze requirements and create necessary technical design documents",
+		"step3": "Design comprehensive integration and E2E testing plan based on user journey, requirements and technical architecture"
+	},
+	"expectedDeliverables": {
+		"prerequisites": ["Team member must be selected before starting workflow"],
+		"step1": [
+			"project.md - Comprehensive Product Requirements Document (PRD)",
+			"Includes business requirements, functional specs, technical constraints, and success metrics"
+		],
+		"step2": [
+			"2-4 technical design documents based on project needs",
+			"Examples: frontend_design.md, backend_design.md, api_design.md, database_design.md",
+			"Each document includes architecture, implementation strategy, security, and performance considerations"
+		],
+		"step3": [
+			"integration_tests.md - Comprehensive integration and E2E testing plan",
+			"Covers user journey-based E2E tests, system integration, API, database, external system, performance, and security tests",
+			"Includes specific testing technology recommendations (Playwright, Cypress, etc.) and test automation strategy",
+			"TPM tmux session will evaluate and execute the testing plan"
+		],
+		"notes": [
+			"User selects appropriate team member before starting workflow",
+			"All steps send messages directly to selected team member's tmux session",
+			"Each step includes verification criteria to ensure quality and completeness",
+			"Steps are conditional - each depends on successful completion of the previous step",
+			"Selected team member analyzes project requirements and creates appropriate specifications",
+			"Workflow is streamlined into three focused phases for better organization and quality",
+			"These specifications enable the subsequent creation of milestone-based development tasks",
+			"The task creation workflow will organize tasks in milestone folders with open/in_progress/blocked/done subfolders"
+		]
+	}
+}

@@ -14,6 +14,20 @@ import {
 	RuntimeType,
 } from '../../constants.js';
 
+export interface TeamRole {
+	key: string;
+	displayName: string;
+	promptFile: string;
+	description: string;
+	category: string;
+	hidden?: boolean;
+	isDefault?: boolean;
+}
+
+export interface TeamRolesConfig {
+	roles: TeamRole[];
+}
+
 export interface OrchestratorConfig {
 	sessionName: string;
 	projectPath: string;
@@ -33,6 +47,9 @@ export class AgentRegistrationService {
 	// Prompt file caching to eliminate file I/O contention during concurrent session creation
 	private promptCache = new Map<string, string>();
 
+	// Team roles configuration cache
+	private teamRolesConfig: TeamRolesConfig | null = null;
+
 	constructor(
 		tmuxCommandService: TmuxCommandService,
 		projectRoot: string | null,
@@ -50,6 +67,49 @@ export class AgentRegistrationService {
 	private findProjectRoot(): string {
 		// Simple fallback - could be improved to walk up directories
 		return process.cwd();
+	}
+
+	/**
+	 * Load team roles configuration from available_team_roles.json
+	 */
+	private async loadTeamRolesConfig(): Promise<TeamRolesConfig> {
+		if (this.teamRolesConfig) {
+			return this.teamRolesConfig;
+		}
+
+		try {
+			const configPath = path.join(process.cwd(), 'config', 'teams', 'available_team_roles.json');
+			const configContent = await readFile(configPath, 'utf8');
+			this.teamRolesConfig = JSON.parse(configContent) as TeamRolesConfig;
+			this.logger.debug('Team roles configuration loaded', {
+				rolesCount: this.teamRolesConfig.roles.length
+			});
+			return this.teamRolesConfig;
+		} catch (error) {
+			this.logger.error('Failed to load team roles configuration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			throw new Error('Could not load team roles configuration');
+		}
+	}
+
+	/**
+	 * Get prompt file path for a specific role using the team roles configuration
+	 */
+	private async getPromptFileForRole(role: string): Promise<string> {
+		const config = await this.loadTeamRolesConfig();
+		const roleConfig = config.roles.find(r => r.key === role);
+
+		if (!roleConfig) {
+			throw new Error(`Role '${role}' not found in team roles configuration`);
+		}
+
+		// Determine the correct directory based on role
+		if (role === 'orchestrator') {
+			return path.join(process.cwd(), 'config', 'orchestrator_tasks', 'prompts', roleConfig.promptFile);
+		} else {
+			return path.join(process.cwd(), 'config', 'teams', 'prompts', roleConfig.promptFile);
+		}
 	}
 
 	/**
@@ -390,15 +450,12 @@ export class AgentRegistrationService {
 			// Check cache first to avoid file I/O during concurrent operations
 			if (!this.promptCache.has(cacheKey)) {
 				this.logger.debug('Loading prompt template from file', { role, cacheKey });
-				const promptPath = path.join(
-					process.cwd(),
-					'config',
-					'prompts',
-					`${role}-prompt.md`
-				);
+
+				// Get the prompt file path from team roles configuration
+				const promptPath = await this.getPromptFileForRole(role);
 				const promptTemplate = await readFile(promptPath, 'utf8');
 				this.promptCache.set(cacheKey, promptTemplate);
-				this.logger.debug('Prompt template cached', { role, cacheKey });
+				this.logger.debug('Prompt template cached', { role, cacheKey, promptPath });
 			} else {
 				this.logger.debug('Using cached prompt template', { role, cacheKey });
 			}
@@ -418,9 +475,21 @@ export class AgentRegistrationService {
 			return prompt;
 		} catch (error) {
 			// Fallback to inline prompt if file doesn't exist
-			this.logger.warn('Could not load prompt from config, using fallback', {
+			console.error(`ERROR: Could not load prompt from config for role '${role}':`, error);
+
+			// Try to get the attempted path for error logging
+			let attemptedPath: string = 'unknown';
+			try {
+				attemptedPath = await this.getPromptFileForRole(role);
+			} catch {
+				attemptedPath = `config/${role === 'orchestrator' ? 'orchestrator_tasks' : 'teams'}/prompts/${role}-prompt.md`;
+			}
+
+			this.logger.error('Could not load prompt from config, using fallback', {
 				role,
+				promptPath: attemptedPath,
 				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
 			});
 
 			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionId": "${sessionName}"}`;
@@ -789,7 +858,12 @@ export class AgentRegistrationService {
 			});
 
 			// Check if session already exists
-			if (await this.tmuxCommand.sessionExists(sessionName)) {
+			const sessionExists = await this.tmuxCommand.sessionExists(sessionName);
+
+			if (!sessionExists) {
+				// Session doesn't exist, go directly to creating a new session
+				this.logger.info('Session does not exist, creating new session', { sessionName });
+			} else {
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
 					{

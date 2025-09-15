@@ -13,8 +13,9 @@ jest.mock('fs', () => ({
 }));
 jest.mock('path');
 jest.mock('os');
-jest.mock('./storage.service');
-jest.mock('../models/ScheduledMessage');
+jest.mock('../core/storage.service');
+jest.mock('../ai/prompt-template.service');
+jest.mock('../../models/ScheduledMessage');
 
 describe('ActiveProjectsService', () => {
   let service: ActiveProjectsService;

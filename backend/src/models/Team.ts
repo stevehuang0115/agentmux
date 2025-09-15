@@ -76,11 +76,8 @@ export class TeamModel implements Team {
     if (migratedData.members) {
       migratedData.members = migratedData.members.map((member: any) => {
         const migratedMember = { ...member };
-        console.log(`[TEAM-MODEL-DEBUG-TS] Processing member: ${member.name}, original agentStatus: ${member.agentStatus}`);
-
         // Migrate legacy 'status' field to 'agentStatus'
         if (member.status && !member.agentStatus) {
-          console.log(`[TEAM-MODEL-DEBUG-TS] Migrating legacy status ${member.status} for ${member.name}`);
           // Map legacy status values to new agentStatus values
           switch (member.status) {
             case 'active':
@@ -109,18 +106,13 @@ export class TeamModel implements Team {
         // Ensure agentStatus exists (default to 'inactive')
         // CRITICAL: Only set default for truly missing fields, preserve 'activating'/'active' states
         if (migratedMember.agentStatus === undefined || migratedMember.agentStatus === null) {
-          console.log(`[TEAM-MODEL-DEBUG-TS] Setting default agentStatus=inactive for ${member.name} (was undefined/null)`);
           migratedMember.agentStatus = 'inactive';
-        } else {
-          console.log(`[TEAM-MODEL-DEBUG-TS] Preserving agentStatus=${migratedMember.agentStatus} for ${member.name}`);
         }
 
         // Ensure runtimeType exists (default to 'claude-code')
         if (!migratedMember.runtimeType) {
           migratedMember.runtimeType = RUNTIME_TYPES.CLAUDE_CODE;
         }
-
-        console.log(`[TEAM-MODEL-DEBUG-TS] Final agentStatus=${migratedMember.agentStatus} for ${member.name}`);
         return migratedMember;
       });
     }

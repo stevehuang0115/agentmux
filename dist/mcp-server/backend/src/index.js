@@ -117,7 +117,7 @@ export class AgentMuxServer {
         });
         // Static files for frontend (after API routes)
         // When compiled, __dirname is dist/backend, so we need to go up to project root
-        const projectRoot = path.resolve(__dirname, '../..');
+        const projectRoot = path.resolve(__dirname, '../../../..');
         const frontendPath = path.join(projectRoot, 'frontend/dist');
         this.app.use(express.static(frontendPath));
         // Serve frontend for all other routes (SPA)
@@ -164,46 +164,142 @@ export class AgentMuxServer {
     }
     async start() {
         try {
+            console.log('🚀 Starting AgentMux server...');
+            console.log(`📍 Process ID: ${process.pid}`);
+            console.log(`📊 Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
+            console.log(`🎯 Target port: ${this.config.webPort}`);
+            // Check if port is already in use
+            await this.checkPortAvailability();
             // Initialize tmux server
+            console.log('🔧 Initializing tmux server...');
             await this.tmuxService.initialize();
             // Start message scheduler
+            console.log('📅 Starting message scheduler...');
             await this.messageSchedulerService.start();
             // Start activity monitoring
+            console.log('📊 Starting activity monitoring...');
             this.activityMonitorService.startPolling();
             // Start team activity WebSocket service
+            console.log('🌐 Starting team activity WebSocket service...');
             this.teamActivityWebSocketService.start();
             // Start teams.json file watcher for real-time updates
+            console.log('👁️ Starting teams.json file watcher...');
             this.teamsJsonWatcherService.start();
             console.log('📁 Teams.json file watcher started for real-time updates');
-            // Start HTTP server
-            await new Promise((resolve, reject) => {
-                this.httpServer.listen(this.config.webPort, () => {
-                    console.log(`🚀 AgentMux server started on port ${this.config.webPort}`);
-                    console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
-                    console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
-                    console.log(`🏠 Home: ${this.config.agentmuxHome}`);
-                    resolve();
-                });
-                this.httpServer.on('error', (error) => {
-                    console.error('Server error:', error);
-                    reject(error);
-                });
-            });
+            // Start HTTP server with enhanced error handling
+            await this.startHttpServer();
             // Register cleanup handlers
-            process.on('SIGTERM', this.shutdown.bind(this));
-            process.on('SIGINT', this.shutdown.bind(this));
-            process.on('uncaughtException', (error) => {
-                console.error('Uncaught exception:', error);
-                this.shutdown();
-            });
-            process.on('unhandledRejection', (reason, promise) => {
-                console.error('Unhandled rejection at:', promise, 'reason:', reason);
-                this.shutdown();
-            });
+            this.registerSignalHandlers();
+            // Start health monitoring
+            this.startHealthMonitoring();
         }
         catch (error) {
-            console.error('Failed to start server:', error);
+            console.error('❌ Failed to start server:', error);
+            if (error instanceof Error && error.message.includes('EADDRINUSE')) {
+                console.error(`🚨 Port ${this.config.webPort} is already in use!`);
+                console.error('💡 Try killing existing processes or use a different port');
+                await this.handlePortConflict();
+            }
             throw error;
+        }
+    }
+    async checkPortAvailability() {
+        return new Promise(async (resolve, reject) => {
+            const { createServer } = await import('net');
+            const testServer = createServer();
+            testServer.listen(this.config.webPort, () => {
+                testServer.close(() => {
+                    console.log(`✅ Port ${this.config.webPort} is available`);
+                    resolve();
+                });
+            });
+            testServer.on('error', (error) => {
+                if (error.code === 'EADDRINUSE') {
+                    reject(new Error(`Port ${this.config.webPort} is already in use`));
+                }
+                else {
+                    reject(error);
+                }
+            });
+        });
+    }
+    async startHttpServer() {
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+            this.httpServer.listen(this.config.webPort, () => {
+                const duration = Date.now() - startTime;
+                console.log(`🚀 AgentMux server started on port ${this.config.webPort} (${duration}ms)`);
+                console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
+                console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
+                console.log(`🏠 Home: ${this.config.agentmuxHome}`);
+                resolve();
+            });
+            this.httpServer.on('error', (error) => {
+                console.error('🚨 HTTP Server error:', error);
+                if (error.code === 'EADDRINUSE') {
+                    console.error(`❌ Port ${this.config.webPort} is already in use by another process`);
+                    console.error(`💡 Suggestion: Kill the existing process or change the port`);
+                }
+                else if (error.code === 'EACCES') {
+                    console.error(`❌ Permission denied for port ${this.config.webPort}`);
+                    console.error(`💡 Suggestion: Try a port above 1024 or run with appropriate permissions`);
+                }
+                reject(error);
+            });
+        });
+    }
+    async handlePortConflict() {
+        console.log('🔍 Attempting to identify conflicting process...');
+        try {
+            const { execSync } = await import('child_process');
+            const result = execSync(`lsof -ti :${this.config.webPort}`, { encoding: 'utf8' }).trim();
+            if (result) {
+                console.log(`📍 Process using port ${this.config.webPort}: PID ${result}`);
+                console.log(`💡 To kill it manually: kill -9 ${result}`);
+            }
+        }
+        catch (error) {
+            console.log('ℹ️ Could not identify the conflicting process');
+        }
+    }
+    registerSignalHandlers() {
+        console.log('🛡️ Registering signal handlers...');
+        process.on('SIGTERM', () => {
+            console.log('📡 Received SIGTERM signal');
+            this.shutdown();
+        });
+        process.on('SIGINT', () => {
+            console.log('📡 Received SIGINT signal (Ctrl+C)');
+            this.shutdown();
+        });
+        process.on('uncaughtException', (error) => {
+            console.error('🚨 Uncaught exception:', error);
+            console.error('📍 Stack trace:', error.stack);
+            this.logMemoryUsage();
+            this.shutdown();
+        });
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error('🚨 Unhandled rejection at:', promise, 'reason:', reason);
+            this.logMemoryUsage();
+            this.shutdown();
+        });
+    }
+    startHealthMonitoring() {
+        console.log('💓 Starting health monitoring...');
+        // Monitor memory usage every 30 seconds
+        setInterval(() => {
+            this.logMemoryUsage();
+        }, 30000);
+    }
+    logMemoryUsage() {
+        const usage = process.memoryUsage();
+        const heapUsed = Math.round(usage.heapUsed / 1024 / 1024);
+        const heapTotal = Math.round(usage.heapTotal / 1024 / 1024);
+        const external = Math.round(usage.external / 1024 / 1024);
+        console.log(`💾 Memory - Heap: ${heapUsed}/${heapTotal}MB, External: ${external}MB`);
+        // Warn if memory usage is high
+        if (heapUsed > 500) {
+            console.warn(`⚠️ High memory usage detected: ${heapUsed}MB`);
         }
     }
     async shutdown() {

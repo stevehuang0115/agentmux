@@ -87,6 +87,9 @@ describe('TasksView Component', () => {
       json: () => Promise.resolve({ success: true }),
       text: () => Promise.resolve('Success')
     });
+
+    // Mock scrollTo function for auto-scroll tests
+    Element.prototype.scrollTo = vi.fn();
   });
 
   it('renders tasks view with correct task counts', () => {
@@ -319,20 +322,52 @@ describe('TasksView Component', () => {
 
   it('displays task progress stats in milestones correctly', () => {
     render(<TasksView {...defaultProps} />);
-    
+
     // Check foundation milestone stats (has 1 open, 1 in_progress)
+    // Order: Open, In Progress, Done
     const foundationCard = screen.getByText('Foundation').closest('.milestone-card');
     const foundationStats = foundationCard!.querySelectorAll('.stat-value');
-    expect(foundationStats[0]).toHaveTextContent('0'); // done
-    expect(foundationStats[1]).toHaveTextContent('1'); // in progress  
-    expect(foundationStats[2]).toHaveTextContent('1'); // open
-    
+    expect(foundationStats[0]).toHaveTextContent('1'); // open
+    expect(foundationStats[1]).toHaveTextContent('1'); // in progress
+    expect(foundationStats[2]).toHaveTextContent('0'); // done
+
     // Check development milestone stats (has 1 done, 1 blocked)
+    // Order: Open, In Progress, Done
     const developmentCard = screen.getByText('Development').closest('.milestone-card');
     const devStats = developmentCard!.querySelectorAll('.stat-value');
-    expect(devStats[0]).toHaveTextContent('1'); // done
+    expect(devStats[0]).toHaveTextContent('0'); // open (blocked tasks don't count as open)
     expect(devStats[1]).toHaveTextContent('0'); // in progress
-    expect(devStats[2]).toHaveTextContent('0'); // open (blocked tasks don't count as open)
+    expect(devStats[2]).toHaveTextContent('1'); // done
+  });
+
+  it('auto-scrolls to first milestone with in-progress tasks', async () => {
+    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
+
+    render(<TasksView {...defaultProps} />);
+
+    // Wait for the auto-scroll effect to trigger
+    await waitFor(() => {
+      expect(scrollToSpy).toHaveBeenCalledWith({
+        left: expect.any(Number),
+        behavior: 'smooth'
+      });
+    }, { timeout: 200 });
+  });
+
+  it('does not auto-scroll when no milestones have in-progress tasks', async () => {
+    const tasksWithoutInProgress = mockTasks.map(task => ({
+      ...task,
+      status: task.status === 'in_progress' ? 'open' : task.status
+    }));
+
+    const scrollToSpy = vi.spyOn(Element.prototype, 'scrollTo');
+
+    render(<TasksView {...defaultProps} tickets={tasksWithoutInProgress} />);
+
+    // Wait a bit to ensure effect doesn't trigger
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    expect(scrollToSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -3,7 +3,7 @@ import { ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -40,13 +40,9 @@ export class MessageSchedulerService extends EventEmitter {
     const delayMs = this.getDelayInMilliseconds(message.delayAmount, message.delayUnit);
     
     const executeMessage = async () => {
-      // Use sequential queue for auto-assignment messages to prevent conflicts
-      if (message.name.includes('Auto Task Assignment') || message.id.includes('auto-assign')) {
-        await this.executeMessageSequentially(message);
-      } else {
-        await this.executeMessage(message);
-      }
-      
+      // Route ALL messages through sequential queue to prevent race conditions
+      await this.executeMessageSequentially(message);
+
       if (message.isRecurring && message.isActive) {
         // Schedule next execution for recurring messages
         const timer = setTimeout(executeMessage, delayMs);
@@ -185,7 +181,7 @@ export class MessageSchedulerService extends EventEmitter {
   }
 
   /**
-   * Execute message through sequential queue to prevent conflicts (for auto-assignment)
+   * Execute message through sequential queue to prevent race conditions between simultaneous messages
    */
   private async executeMessageSequentially(message: ScheduledMessage): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -216,15 +212,16 @@ export class MessageSchedulerService extends EventEmitter {
       const { message, resolve, reject } = queueItem;
 
       try {
-        // Log queue processing for auto-assignment messages
-        console.log(`Processing auto-assignment message for project ${message.targetProject} (queue length: ${this.messageQueue.length})`);
-        
+        // Log queue processing for all scheduled messages
+        const projectInfo = message.targetProject ? ` for project ${message.targetProject}` : '';
+        console.log(`Processing scheduled message "${message.name}"${projectInfo} (queue length: ${this.messageQueue.length})`);
+
         // Execute the message
         await this.executeMessage(message);
-        
-        // Wait a short delay between auto-assignment executions to prevent overwhelming the system
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
+
+        // Wait a short delay between executions to prevent overwhelming the system and race conditions
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         resolve();
       } catch (error) {
         console.error(`Error processing queued message "${message.name}":`, error);

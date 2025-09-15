@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { Request, Response } from 'express';
 import * as orchestratorHandlers from './orchestrator.controller.js';
 import type { ApiContext } from '../types.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 describe('Orchestrator Handlers', () => {
   let mockApiContext: Partial<ApiContext>;

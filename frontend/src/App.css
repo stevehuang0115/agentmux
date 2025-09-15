@@ -3224,9 +3224,11 @@ body {
 }
 
 .milestones-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	display: flex;
 	gap: 12px;
+	overflow-x: auto;
+	padding-bottom: 8px;
+	scrollbar-width: thin;
 }
 
 .milestone-card {
@@ -3238,9 +3240,12 @@ body {
 }
 
 .milestone-card-compact {
-	padding: 12px;
+	padding: 8px;
 	cursor: pointer;
 	border: 2px solid transparent;
+	min-width: 150px;
+	flex-shrink: 0;
+	height: fit-content;
 }
 
 .milestone-card-compact:hover {
@@ -3255,15 +3260,35 @@ body {
 	box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
 }
 
+.milestone-card--completed {
+	background: #f3f4f6;
+	border-color: #d1d5db;
+}
+
+.milestone-card--completed:hover {
+	border-color: #9ca3af;
+	background: #e5e7eb;
+}
+
+.milestone-card--active-work {
+	background: #dbeafe;
+	border-color: #93c5fd;
+}
+
+.milestone-card--active-work:hover {
+	border-color: var(--color-primary);
+	background: #bfdbfe;
+}
+
 .milestone-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	margin-bottom: var(--spacing-base);
+	margin-bottom: 6px;
 }
 
 .milestone-title {
-	font-size: 1rem;
+	font-size: 0.875rem;
 	font-weight: 600;
 	color: var(--color-text-primary);
 	margin: 0;
@@ -3272,19 +3297,19 @@ body {
 .milestone-count {
 	background: var(--color-primary-light);
 	color: var(--color-primary);
-	padding: 0.25rem 0.5rem;
+	padding: 0.125rem 0.375rem;
 	border-radius: var(--radius-sm);
-	font-size: 0.75rem;
+	font-size: 0.625rem;
 	font-weight: 600;
 }
 
 .milestone-progress {
-	margin-top: var(--spacing-sm);
+	margin-top: 4px;
 }
 
 .progress-stats {
 	display: flex;
-	gap: var(--spacing-base);
+	gap: 8px;
 }
 
 .stat {
@@ -3295,7 +3320,7 @@ body {
 }
 
 .stat-value {
-	font-size: 1.25rem;
+	font-size: 1rem;
 	font-weight: 700;
 	color: var(--color-text-primary);
 	margin-bottom: 0.125rem;
@@ -3591,15 +3616,15 @@ body {
 
 .scheduled-messages-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-	gap: var(--spacing-lg);
+	grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+	gap: var(--spacing-base);
 }
 
 .scheduled-message-card {
 	background: var(--color-surface);
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-lg);
-	padding: var(--spacing-lg);
+	padding: var(--spacing-base);
 	box-shadow: var(--shadow-sm);
 	transition: all 0.2s ease;
 }
@@ -3608,31 +3633,48 @@ body {
 	box-shadow: var(--shadow-md);
 	border-color: var(--color-primary-light);
 }
+.scheduled-message-card.clickable {
+	cursor: pointer;
+}
+.scheduled-message-card.clickable:hover {
+	transform: translateY(-2px);
+}
 
 .message-header {
 	display: flex;
 	justify-content: space-between;
 	align-items: flex-start;
-	margin-bottom: var(--spacing-base);
+	margin-bottom: var(--spacing-sm);
+}
+
+.message-info {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing-sm);
 }
 
 .message-info h3.message-name {
-	font-size: 1.125rem;
+	font-size: 1rem;
 	font-weight: 600;
 	color: var(--color-text-primary);
-	margin: 0 0 var(--spacing-xs) 0;
+	margin: 0;
 }
 
-.message-status .status-indicator {
+.status-indicator {
 	display: flex;
 	align-items: center;
 	gap: var(--spacing-xs);
-	font-size: 0.875rem;
+	font-size: 0.75rem;
 	font-weight: 500;
+	padding: 2px 8px;
+	border-radius: var(--radius-base);
+	border: 1px solid transparent;
 }
 
 .status-indicator.active {
+	background: #dcfce7;
 	color: var(--color-success);
+	border-color: #bbf7d0;
 }
 
 .status-indicator.inactive {
@@ -3687,6 +3729,47 @@ body {
 
 .message-content {
 	margin-bottom: var(--spacing-base);
+}
+
+/* Compact message card styles */
+.message-content-compact {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+}
+
+.message-details-row,
+.schedule-row {
+	display: flex;
+	gap: var(--spacing-base);
+	flex-wrap: wrap;
+	align-items: center;
+}
+
+.detail-item {
+	display: flex;
+	align-items: center;
+	gap: var(--spacing-xs);
+	font-size: 0.875rem;
+}
+
+.detail-label {
+	color: var(--color-text-secondary);
+	font-weight: 500;
+}
+
+.detail-value {
+	color: var(--color-text-primary);
+	font-weight: 600;
+}
+
+.detail-value.next-run {
+	color: var(--color-primary);
+	font-weight: 500;
+}
+
+.schedule-icon {
+	color: var(--color-primary);
 }
 
 .message-description {

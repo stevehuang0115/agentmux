@@ -261,27 +261,10 @@ Describe the main objective and purpose of this project.
 
       // Get the actual session name for the selected member
       const targetSessionName = selectedMember.sessionName || selectedMember.name;
-      
+
       console.log(`Retrying Build Spec Step ${stepId}: ${stepConfig.name} for ${selectedMember.name}`);
 
-      // Template substitution function (same as in executeBuildSpecs)
-      const substituteTemplate = (prompts: string[]) => {
-        return prompts.map(prompt => 
-          prompt
-            .replace(/\{PROJECT_NAME\}/g, project.name)
-            .replace(/\{PROJECT_PATH\}/g, project.path)
-            .replace(/\{PROJECT_ID\}/g, project.id)
-            .replace(/\{INITIAL_GOAL\}/g, initialGoal)
-            .replace(/\{USER_JOURNEY\}/g, userJourney)
-        ).join('\n');
-      };
-
-      // Process the single step using the same approach as executeBuildSpecs
-      const processedPrompts = substituteTemplate(stepConfig.prompts);
-      
-      console.log(`Sending step ${stepId} prompts to ${targetSessionName}:`, processedPrompts.substring(0, 100) + '...');
-
-      // Send the specific step to the selected team member using the same mechanism
+      // Send the specific step to the selected team member - backend will handle prompt resolution
       const promise = fetch('/api/build-specs/retry-step', {
         method: 'POST',
         headers: {
@@ -291,7 +274,10 @@ Describe the main objective and purpose of this project.
           projectId: project.id,
           stepId: stepId,
           targetSession: targetSessionName,
-          projectName: project.name
+          projectName: project.name,
+          projectPath: project.path,
+          initialGoal,
+          userJourney
         })
       });
       
@@ -379,27 +365,10 @@ Describe the main objective and purpose of this project.
 
       // Get the actual session name for the selected member
       const targetSessionName = selectedMember.sessionName || selectedMember.name;
-      
+
       console.log(`Retrying Build Tasks Step ${stepId}: ${stepConfig.name} for ${selectedMember.name}`);
 
-      // Template substitution function (same as in executeBuildTasks)
-      const substituteTemplate = (prompts: string[]) => {
-        return prompts.map(prompt => 
-          prompt
-            .replace(/\{PROJECT_NAME\}/g, project.name)
-            .replace(/\{PROJECT_PATH\}/g, project.path)
-            .replace(/\{PROJECT_ID\}/g, project.id)
-            .replace(/\{INITIAL_GOAL\}/g, initialGoal)
-            .replace(/\{USER_JOURNEY\}/g, userJourney)
-        ).join('\n');
-      };
-
-      // Process the single step using the same approach as executeBuildTasks
-      const processedPrompts = substituteTemplate(stepConfig.prompts);
-      
-      console.log(`Sending Build Tasks step ${stepId} prompts to ${targetSessionName}:`, processedPrompts.substring(0, 100) + '...');
-
-      // Send the specific step to the selected team member using the same mechanism
+      // Send the specific step to the selected team member - backend will handle prompt resolution
       const promise = fetch('/api/build-tasks/retry-step', {
         method: 'POST',
         headers: {

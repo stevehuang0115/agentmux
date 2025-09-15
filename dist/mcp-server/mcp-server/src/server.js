@@ -162,6 +162,14 @@ export class AgentMuxMCPServer {
             for (const sessionInfo of sessions) {
                 const output = await this.tmuxService.capturePane(sessionInfo.sessionName, 20);
                 const status = this.analyzeAgentStatus(output);
+                // Debug logging for status detection
+                if (process.env.NODE_ENV !== 'production') {
+                    console.log(`[DEBUG] Status analysis for ${sessionInfo.sessionName}:`, {
+                        status,
+                        outputSnippet: output.slice(-100), // Last 100 chars
+                        sessionName: sessionInfo.sessionName
+                    });
+                }
                 // Find matching team member data
                 let memberData = null;
                 if (teamData?.data?.teams) {
@@ -242,8 +250,12 @@ export class AgentMuxMCPServer {
     }
     async getAgentStatus(params) {
         const { agentName, sessionName } = params;
+        const startTime = Date.now();
+        // Enhanced logging for debugging
+        console.log(`[MCP-STATUS] 🔍 Starting agent status check for: ${agentName || sessionName}`);
         // Validate required parameters
         if (!agentName && !sessionName) {
+            console.log('[MCP-STATUS] ❌ Missing required parameters');
             return {
                 content: [{
                         type: 'text',
@@ -252,67 +264,265 @@ export class AgentMuxMCPServer {
                 isError: true
             };
         }
-        const targetSession = (sessionName || agentName); // Already validated above
-        try {
-            // Try to get status from backend API
-            const response = await fetch(`${this.apiBaseUrl}/api/teams`);
-            if (!response.ok) {
-                throw new Error(`API response: ${response.status}`);
+        const targetSession = (sessionName || agentName);
+        console.log(`[MCP-STATUS] 🎯 Target session: ${targetSession}`);
+        // Initialize status tracking
+        let agentFound = false;
+        let agentData = null;
+        let teamData = null;
+        let sessionExists = false;
+        let paneOutput = '';
+        // Step 1: Try to get status from backend API with retry logic
+        let backendData = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                console.log(`[MCP-STATUS] 🌐 Backend API attempt ${attempt}/3...`);
+                // Increased timeout from default
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+                const response = await fetch(`${this.apiBaseUrl}/api/teams`, {
+                    signal: controller.signal,
+                    headers: {
+                        'Accept': 'application/json',
+                        'User-Agent': 'AgentMux-MCP-Server'
+                    }
+                });
+                clearTimeout(timeoutId);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                backendData = await response.json();
+                console.log(`[MCP-STATUS] ✅ Backend API success on attempt ${attempt}`);
+                break;
             }
-            const data = await response.json();
-            // Try to find the agent in teams data
-            let agentFound = false;
-            let agentStatus = {
-                agentStatus: 'unknown',
-                workingStatus: 'unknown',
-                lastActivityCheck: new Date().toISOString(),
-                sessionActive: false
-            };
-            // Search through teams to find the agent
-            if (data.teams) {
-                for (const team of data.teams) {
-                    if (team.members) {
-                        const member = team.members.find((m) => m.sessionName === targetSession || m.name === targetSession);
-                        if (member) {
-                            agentFound = true;
-                            agentStatus = {
-                                agentStatus: member.agentStatus || 'inactive',
-                                workingStatus: member.workingStatus || 'idle',
-                                lastActivityCheck: member.lastActivityCheck || new Date().toISOString(),
-                                sessionActive: member.agentStatus === 'active'
-                            };
-                            break;
-                        }
+            catch (error) {
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                console.log(`[MCP-STATUS] ❌ Backend API attempt ${attempt} failed: ${errorMsg}`);
+                if (attempt === 3) {
+                    console.log('[MCP-STATUS] 🚨 All backend API attempts failed, using fallback');
+                }
+                else {
+                    // Wait before retry (exponential backoff)
+                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+                }
+            }
+        }
+        // Step 2: Search for agent in backend data
+        if (backendData?.success && backendData?.data?.teams) {
+            console.log(`[MCP-STATUS] 🔎 Searching through ${backendData.data.teams.length} teams...`);
+            for (const team of backendData.data.teams) {
+                if (team.members) {
+                    const member = team.members.find((m) => m.sessionName === targetSession ||
+                        m.name === targetSession ||
+                        m.id === targetSession);
+                    if (member) {
+                        agentFound = true;
+                        agentData = member;
+                        teamData = team;
+                        console.log(`[MCP-STATUS] ✅ Agent found in team: ${team.name}`);
+                        break;
                     }
                 }
             }
-            // Check if tmux session exists using TmuxService
-            const sessionExists = await this.tmuxService.sessionExists(targetSession);
-            return {
-                content: [{
-                        type: 'text',
-                        text: `🔍 Status for ${targetSession}:\n\n` +
-                            `✅ Agent Status: ${agentStatus.agentStatus}\n` +
-                            `⚡ Working Status: ${agentStatus.workingStatus}\n` +
-                            `📡 Session: ${targetSession} (${sessionExists ? 'active' : 'inactive'})\n` +
-                            `🕐 Last Activity: ${agentStatus.lastActivityCheck}\n` +
-                            `📊 Activity Monitor: Running (30s intervals)`
-                    }]
-            };
         }
-        catch (error) {
-            // Fallback when API is unavailable - check session existence using TmuxService
-            const sessionExists = await this.tmuxService.sessionExists(targetSession);
-            return {
-                content: [{
-                        type: 'text',
-                        text: `🔍 Status for ${targetSession}:\n\n` +
-                            `❌ Unable to fetch status from backend API\n` +
-                            `📡 Session: ${targetSession} (${sessionExists ? 'active' : 'inactive'})\n` +
-                            `🕐 Timestamp: ${new Date().toISOString()}`
-                    }]
-            };
+        // Step 3: Check tmux session existence with retry
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                console.log(`[MCP-STATUS] 🖥️ Checking tmux session (attempt ${attempt}/2)...`);
+                sessionExists = await this.tmuxService.sessionExists(targetSession);
+                console.log(`[MCP-STATUS] 📡 Session exists: ${sessionExists}`);
+                break;
+            }
+            catch (error) {
+                console.log(`[MCP-STATUS] ⚠️ Session check attempt ${attempt} failed:`, error);
+                if (attempt === 2) {
+                    sessionExists = false; // Default to false if all attempts fail
+                }
+            }
         }
+        // Step 4: Get pane output for progress indication (only if session exists)
+        if (sessionExists) {
+            try {
+                console.log('[MCP-STATUS] 📋 Capturing pane output...');
+                paneOutput = await this.tmuxService.capturePane(targetSession, 10);
+                console.log(`[MCP-STATUS] ✅ Captured ${paneOutput.length} chars of output`);
+            }
+            catch (error) {
+                console.log('[MCP-STATUS] ⚠️ Failed to capture pane output:', error);
+                paneOutput = 'Unable to capture terminal output';
+            }
+        }
+        // Step 5: Determine final agent status with better mapping
+        let finalAgentStatus;
+        let finalWorkingStatus;
+        let statusIcon;
+        let statusColor;
+        if (agentFound && agentData) {
+            // Use backend data as primary source
+            finalAgentStatus = this.mapAgentStatus(agentData.agentStatus, sessionExists);
+            finalWorkingStatus = agentData.workingStatus || 'idle';
+            // Determine status presentation
+            if (finalAgentStatus === 'active' && sessionExists) {
+                statusIcon = '✅';
+                statusColor = 'ACTIVE';
+            }
+            else if (finalAgentStatus === 'activating') {
+                statusIcon = '🔄';
+                statusColor = 'ACTIVATING';
+            }
+            else if (sessionExists) {
+                statusIcon = '⚠️';
+                statusColor = 'CONNECTED (inactive in backend)';
+            }
+            else {
+                statusIcon = '❌';
+                statusColor = 'INACTIVE';
+            }
+        }
+        else if (sessionExists) {
+            // Session exists but not in backend - likely a manual session
+            finalAgentStatus = 'session-only';
+            finalWorkingStatus = 'unknown';
+            statusIcon = '🔗';
+            statusColor = 'SESSION ONLY (not registered)';
+        }
+        else {
+            // No backend data and no session
+            finalAgentStatus = 'unavailable';
+            finalWorkingStatus = 'offline';
+            statusIcon = '💀';
+            statusColor = 'UNAVAILABLE';
+        }
+        // Step 6: Analyze pane output for progress indication
+        const progressIndicator = this.analyzeAgentProgress(paneOutput);
+        // Step 7: Build comprehensive status report
+        const elapsedMs = Date.now() - startTime;
+        console.log(`[MCP-STATUS] ✅ Status check completed in ${elapsedMs}ms`);
+        let statusReport = `🔍 Status for ${targetSession}:\n\n`;
+        // Agent Status Section
+        statusReport += `${statusIcon} Agent Status: ${statusColor}\n`;
+        statusReport += `⚡ Working Status: ${finalWorkingStatus.toUpperCase()}\n`;
+        statusReport += `📡 Session: ${targetSession} (${sessionExists ? 'running' : 'not found'})\n`;
+        if (agentFound && teamData) {
+            statusReport += `👥 Team: ${teamData.name}\n`;
+            statusReport += `🎭 Role: ${agentData.role || 'unknown'}\n`;
+            statusReport += `🕐 Last Activity: ${agentData.lastActivityCheck || 'unknown'}\n`;
+        }
+        statusReport += `⏱️ Check Duration: ${elapsedMs}ms\n`;
+        statusReport += `🔄 Backend API: ${backendData ? 'connected' : 'failed'}\n\n`;
+        // Progress Indicator Section
+        statusReport += `📊 Progress Indicator:\n${progressIndicator}\n\n`;
+        // Recent Terminal Output Section (if available)
+        if (sessionExists && paneOutput) {
+            const outputLines = paneOutput.trim().split('\n').slice(-5); // Last 5 lines
+            statusReport += `📋 Recent Terminal Activity (last 5 lines):\n`;
+            statusReport += '```\n';
+            if (outputLines.length > 0) {
+                outputLines.forEach(line => {
+                    statusReport += `${line}\n`;
+                });
+            }
+            else {
+                statusReport += '(no recent output)\n';
+            }
+            statusReport += '```\n\n';
+        }
+        else if (sessionExists) {
+            statusReport += `📋 Terminal Output: Unable to capture\n\n`;
+        }
+        else {
+            statusReport += `📋 Terminal Output: Session not running\n\n`;
+        }
+        // Troubleshooting Section (if there are issues)
+        if (!sessionExists || !agentFound) {
+            statusReport += `🔧 Troubleshooting:\n`;
+            if (!sessionExists) {
+                statusReport += `• Session '${targetSession}' is not running in tmux\n`;
+                statusReport += `• Try: tmux list-sessions to see active sessions\n`;
+            }
+            if (!agentFound) {
+                statusReport += `• Agent not found in backend teams database\n`;
+                statusReport += `• Agent may not be properly registered\n`;
+            }
+        }
+        return {
+            content: [{
+                    type: 'text',
+                    text: statusReport
+                }],
+            isError: finalAgentStatus === 'unavailable'
+        };
+    }
+    /**
+     * Map backend agent status to display status with session existence context
+     */
+    mapAgentStatus(backendStatus, sessionExists) {
+        if (!backendStatus) {
+            return sessionExists ? 'session-only' : 'unavailable';
+        }
+        // Normalize status values
+        switch (backendStatus.toLowerCase()) {
+            case 'active':
+                return sessionExists ? 'active' : 'inactive';
+            case 'activating':
+                return 'activating';
+            case 'inactive':
+            case 'idle':
+                return sessionExists ? 'inactive' : 'unavailable';
+            default:
+                return sessionExists ? 'unknown' : 'unavailable';
+        }
+    }
+    /**
+     * Analyze terminal output to determine agent progress
+     */
+    analyzeAgentProgress(output) {
+        if (!output || output.trim().length === 0) {
+            return '🔇 No terminal activity detected';
+        }
+        const lowerOutput = output.toLowerCase();
+        const lines = output.trim().split('\n');
+        const lastFewLines = lines.slice(-3).join(' ').toLowerCase();
+        // Check for completion indicators
+        if (lowerOutput.includes('✅ completed') ||
+            lowerOutput.includes('task completed') ||
+            lowerOutput.includes('✅ done') ||
+            lowerOutput.includes('finished successfully')) {
+            return '✅ Recently completed task/work';
+        }
+        // Check for error/stuck indicators
+        if (lowerOutput.includes('error') ||
+            lowerOutput.includes('failed') ||
+            lowerOutput.includes('timeout') ||
+            lowerOutput.includes('stuck')) {
+            return '❌ May be encountering errors or stuck';
+        }
+        // Check for active work indicators
+        if (lowerOutput.includes('processing') ||
+            lowerOutput.includes('working on') ||
+            lowerOutput.includes('analyzing') ||
+            lowerOutput.includes('building') ||
+            lowerOutput.includes('creating') ||
+            lowerOutput.includes('implementing')) {
+            return '⚡ Actively working';
+        }
+        // Check for waiting/idle indicators
+        if (lastFewLines.includes('$') ||
+            lastFewLines.includes('waiting') ||
+            lastFewLines.includes('ready') ||
+            output.trim().endsWith('$') ||
+            output.trim().endsWith('> ')) {
+            return '⏳ Ready/waiting for input';
+        }
+        // Check for prompts or questions
+        if (lowerOutput.includes('?') ||
+            lowerOutput.includes('select') ||
+            lowerOutput.includes('choose') ||
+            lowerOutput.includes('enter')) {
+            return '❓ Waiting for user input/decision';
+        }
+        // Default - show recent activity
+        return '🔄 Active (see recent terminal output below)';
     }
     /**
      * Register Agent Status
@@ -420,10 +630,24 @@ export class AgentMuxMCPServer {
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+            const result = await response.json();
+            // Check if the operation was successful
+            if (!result.success) {
+                // Return detailed error information without throwing
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Task assignment failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+                        }],
+                    isError: true
+                };
+            }
+            // Add task to in_progress_tasks.json
+            await this.addTaskToInProgressTracking(params.taskPath, params.sessionName, result);
             return {
                 content: [{
                         type: 'text',
-                        text: `Task accepted successfully: Task moved from open to in_progress folder`
+                        text: `Task accepted successfully: Task moved from open to in_progress folder and added to tracking`
                     }]
             };
         }
@@ -450,6 +674,17 @@ export class AgentMuxMCPServer {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
             const result = await response.json();
+            // Check if the operation was successful
+            if (!result.success) {
+                // Return detailed error information without throwing
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Task read failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}`
+                        }],
+                    isError: true
+                };
+            }
             return {
                 content: [{
                         type: 'text',
@@ -481,10 +716,23 @@ export class AgentMuxMCPServer {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
             const result = await response.json();
+            // Check if the operation was successful
+            if (!result.success) {
+                // Return detailed error information without throwing
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Task completion failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+                        }],
+                    isError: true
+                };
+            }
+            // Success case - remove task from in_progress_tasks.json
+            await this.removeTaskFromInProgressTracking(params.taskPath);
             return {
                 content: [{
                         type: 'text',
-                        text: `Task completed successfully: ${result.message || 'Task moved to done folder'}`
+                        text: `✅ Task completed successfully: ${result.message || 'Task moved to done folder and removed from tracking'}`
                     }]
             };
         }
@@ -493,6 +741,135 @@ export class AgentMuxMCPServer {
                 content: [{
                         type: 'text',
                         text: `Error completing task: ${error instanceof Error ? error.message : 'Unknown error'}`
+                    }],
+                isError: true
+            };
+        }
+    }
+    async assignTask(params) {
+        try {
+            const { taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
+            console.log(`📋 Assigning task to ${targetSessionName} via delegation`);
+            // Prevent delegation loops
+            const currentChain = delegationChain || [];
+            if (currentChain.includes(targetSessionName)) {
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Delegation loop detected: ${targetSessionName} is already in the delegation chain: ${currentChain.join(' → ')}`
+                        }],
+                    isError: true
+                };
+            }
+            // Limit delegation chain length
+            if (currentChain.length >= 5) {
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Delegation chain too long (${currentChain.length}). Maximum allowed: 5. Current chain: ${currentChain.join(' → ')}`
+                        }],
+                    isError: true
+                };
+            }
+            // Check if target session exists
+            if (!(await this.tmuxService.sessionExists(targetSessionName))) {
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Target session '${targetSessionName}' not found or not accessible`
+                        }],
+                    isError: true
+                };
+            }
+            // Read the task file to get details
+            let taskDetails = {};
+            try {
+                const taskReadResult = await this.readTask({ taskPath });
+                if (!taskReadResult.isError) {
+                    const content = taskReadResult.content[0]?.text || '';
+                    taskDetails = this.parseTaskContent(content, taskPath);
+                }
+            }
+            catch (error) {
+                console.warn('Could not read task details for assignment:', error);
+            }
+            // Load the assignment prompt template
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const promptPath = path.join(this.projectPath, 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
+            let promptTemplate = '';
+            try {
+                promptTemplate = await fs.readFile(promptPath, 'utf-8');
+            }
+            catch (error) {
+                // Fallback message if prompt template not found
+                promptTemplate = `📋 **TASK ASSIGNMENT** - {taskTitle}
+
+**Task File:** \`{taskPath}\`
+**Priority:** {taskPriority}
+
+You are being assigned this task. You have two options:
+
+1. **Accept and work on it:** Call \`accept_task\` and \`read_task\` to get started
+2. **Delegate to another agent:** Call \`assign_task\` to delegate to someone more suitable
+
+**Delegation chain:** {delegationChain}
+**Delegated by:** {delegatedBy}
+**Reason:** {reason}
+
+Please respond promptly with either acceptance or delegation.`;
+            }
+            // Build updated delegation chain
+            const newChain = [...currentChain];
+            if (delegatedBy && !newChain.includes(delegatedBy)) {
+                newChain.push(delegatedBy);
+            }
+            // Replace template variables
+            const assignmentMessage = promptTemplate
+                .replace(/{taskPath}/g, taskPath)
+                .replace(/{taskTitle}/g, taskDetails.title || 'Task Assignment')
+                .replace(/{taskId}/g, taskDetails.id || path.basename(taskPath, '.md'))
+                .replace(/{taskDescription}/g, taskDetails.description || 'See task file for details')
+                .replace(/{taskPriority}/g, taskDetails.priority || 'normal')
+                .replace(/{taskMilestone}/g, taskDetails.milestone || 'current')
+                .replace(/{projectName}/g, taskDetails.projectName || 'Current Project')
+                .replace(/{projectPath}/g, this.projectPath)
+                .replace(/{yourSessionName}/g, targetSessionName)
+                .replace(/{assignedBy}/g, delegatedBy || this.sessionName)
+                .replace(/{assignmentTimestamp}/g, new Date().toISOString())
+                .replace(/{delegationChain}/g, newChain.length > 0 ? newChain.join(' → ') : 'Direct assignment')
+                .replace(/{delegatedBy}/g, delegatedBy || this.sessionName)
+                .replace(/{reason}/g, reason || 'Task assignment');
+            // Send assignment message directly to target session
+            console.log(`[MCP] 📤 Sending assignment message to ${targetSessionName}...`);
+            console.log(`[MCP] 📝 Assignment details: ${taskDetails.title || taskPath}`);
+            try {
+                // Use the existing sendMessage method to send the assignment
+                await this.sendMessage({
+                    to: targetSessionName,
+                    message: assignmentMessage
+                });
+                console.log(`[MCP] ✅ Assignment message sent to ${targetSessionName}`);
+            }
+            catch (messageError) {
+                console.error(`[MCP] ❌ Failed to send assignment message:`, messageError);
+                throw new Error(`Failed to send assignment message to ${targetSessionName}: ${messageError instanceof Error ? messageError.message : 'Unknown error'}`);
+            }
+            // Log the delegation
+            await this.logTaskDelegation(taskPath, this.sessionName, targetSessionName, reason, newChain);
+            console.log(`[MCP] ✅ Task delegation completed successfully for ${targetSessionName}`);
+            return {
+                content: [{
+                        type: 'text',
+                        text: `✅ Task assigned to ${targetSessionName}${reason ? ` (${reason})` : ''}\n📋 Task: ${taskDetails.title || taskPath}\n🔗 Delegation chain: ${newChain.length > 0 ? newChain.join(' → ') + ' → ' + targetSessionName : targetSessionName}\n📤 Assignment message sent directly to target session\n💬 Target agent should see the assignment message in their chat`
+                    }]
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `❌ Failed to assign task: ${error instanceof Error ? error.message : 'Unknown error'}`
                     }],
                 isError: true
             };
@@ -1246,6 +1623,75 @@ export class AgentMuxMCPServer {
             console.error('Failed to log delegation:', error);
         }
     }
+    async logTaskDelegation(taskPath, from, to, reason, delegationChain) {
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const logPath = path.join(this.projectPath, '.agentmux', 'memory', 'task-delegations.log');
+        const logEntry = `${new Date().toISOString()} [TASK DELEGATION]\n` +
+            `Task: ${taskPath}\n` +
+            `From: ${from}\n` +
+            `To: ${to}\n` +
+            `Reason: ${reason || 'Not specified'}\n` +
+            `Delegation Chain: ${delegationChain && delegationChain.length > 0 ? delegationChain.join(' → ') + ' → ' + to : to}\n` +
+            `---\n\n`;
+        try {
+            await fs.mkdir(path.dirname(logPath), { recursive: true });
+            await fs.appendFile(logPath, logEntry);
+        }
+        catch (error) {
+            console.error('Failed to log task delegation:', error);
+        }
+    }
+    parseTaskContent(content, taskPath) {
+        // Extract basic info from path using built-in path operations
+        const pathParts = taskPath.split('/');
+        const fileName = taskPath.split('/').pop()?.replace('.md', '') || 'unknown';
+        const milestone = pathParts.find(part => !['open', 'in_progress', 'blocked', 'done', '.agentmux', 'tasks'].includes(part)) || 'current';
+        // Parse frontmatter if exists
+        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+        let title = fileName.replace(/-/g, ' ').replace(/_/g, ' ');
+        let description = '';
+        let priority = 'normal';
+        let projectName = 'Current Project';
+        if (frontmatterMatch) {
+            const frontmatter = frontmatterMatch[1];
+            const body = frontmatterMatch[2];
+            // Parse YAML-like frontmatter
+            const lines = frontmatter.split('\n');
+            for (const line of lines) {
+                const [key, ...valueParts] = line.split(':');
+                const value = valueParts.join(':').trim();
+                switch (key.trim()) {
+                    case 'title':
+                        title = value;
+                        break;
+                    case 'priority':
+                        priority = value;
+                        break;
+                    case 'project':
+                        projectName = value;
+                        break;
+                }
+            }
+            description = body.trim();
+        }
+        else {
+            // Extract title from first header
+            const firstLine = content.split('\n')[0];
+            if (firstLine.startsWith('#')) {
+                title = firstLine.replace(/^#+\s*/, '');
+            }
+            description = content;
+        }
+        return {
+            id: fileName,
+            title: title,
+            description: description.substring(0, 200) + (description.length > 200 ? '...' : ''),
+            priority: priority,
+            milestone: milestone,
+            projectName: projectName
+        };
+    }
     /**
      * HTTP Server Management
      */
@@ -1350,6 +1796,9 @@ export class AgentMuxMCPServer {
                                     break;
                                 case 'read_task':
                                     result = await this.readTask(toolArgs);
+                                    break;
+                                case 'assign_task':
+                                    result = await this.assignTask(toolArgs);
                                     break;
                                 case 'get_tickets':
                                     result = await this.getTickets(toolArgs);
@@ -1549,6 +1998,21 @@ export class AgentMuxMCPServer {
                     required: ['taskPath']
                 }
             },
+            {
+                name: 'assign_task',
+                description: 'Assign a task to another team member with delegation support and loop prevention',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        taskPath: { type: 'string', description: 'Path to task file to assign' },
+                        targetSessionName: { type: 'string', description: 'Session name of the target team member' },
+                        delegatedBy: { type: 'string', description: 'Session name of the delegating agent (optional)' },
+                        reason: { type: 'string', description: 'Reason for delegation (optional)' },
+                        delegationChain: { type: 'array', items: { type: 'string' }, description: 'Current delegation chain to prevent loops (optional)' }
+                    },
+                    required: ['taskPath', 'targetSessionName']
+                }
+            },
             // Restored Ticket Management Tools
             {
                 name: 'get_tickets',
@@ -1673,14 +2137,38 @@ export class AgentMuxMCPServer {
         ];
     }
     analyzeAgentStatus(output) {
+        // Check for idle patterns first (highest priority)
+        const idlePatterns = [
+            /Type your message or @path\/to\/file/i,
+            />\s*$/,
+            /Task completed successfully/i,
+            /✓.*completed/i,
+            /✓.*done/i,
+            /finished/i,
+            /ready for next/i,
+            /waiting for input/i
+        ];
+        if (idlePatterns.some(pattern => output.match(pattern)))
+            return 'idle';
+        // Check for error patterns
         if (output.includes('error') || output.includes('Error'))
             return 'error';
+        // Check for active operations (not just text presence)
+        const activeGitPatterns = [
+            /git commit.*\[running\]/i,
+            /git add.*\[in progress\]/i,
+            /Committing changes\.\.\./i,
+            /staging.*files/i,
+            /preparing commit/i
+        ];
+        if (activeGitPatterns.some(pattern => output.match(pattern)))
+            return 'committing';
+        // Check for waiting patterns
         if (output.includes('waiting') || output.includes('Waiting'))
             return 'waiting';
         if (output.includes('STATUS UPDATE'))
             return 'reporting';
-        if (output.includes('git commit') || output.includes('git add'))
-            return 'committing';
+        // Default to working only if none of the above patterns match
         return 'working';
     }
     extractLastActivity(output) {
@@ -1725,6 +2213,91 @@ export class AgentMuxMCPServer {
         }
         this.requestQueue.set(identifier, now);
         return true;
+    }
+    /**
+     * Add task to in_progress_tasks.json for tracking
+     */
+    async addTaskToInProgressTracking(taskPath, sessionName, assignmentResult) {
+        try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const os = await import('os');
+            const trackingFilePath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
+            const trackingDir = path.dirname(trackingFilePath);
+            // Ensure directory exists
+            await fs.mkdir(trackingDir, { recursive: true });
+            // Load existing data
+            let trackingData = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
+            try {
+                if (await fs.access(trackingFilePath).then(() => true).catch(() => false)) {
+                    const content = await fs.readFile(trackingFilePath, 'utf-8');
+                    trackingData = JSON.parse(content);
+                }
+            }
+            catch (error) {
+                console.warn('Could not load existing in_progress_tasks.json, creating new one');
+            }
+            // Extract task information
+            const taskName = path.basename(taskPath, '.md');
+            const taskContent = await fs.readFile(taskPath.replace('/open/', '/in_progress/'), 'utf-8').catch(() => '');
+            // Parse team information from assignment result
+            const newTask = {
+                id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                taskPath: assignmentResult.newPath || taskPath.replace('/open/', '/in_progress/'),
+                taskName: taskName,
+                assignedSessionName: sessionName,
+                assignedMemberId: assignmentResult.memberId || 'unknown',
+                assignedAt: new Date().toISOString(),
+                status: 'in_progress',
+                originalPath: taskPath
+            };
+            // Add to tracking data
+            trackingData.tasks = trackingData.tasks || [];
+            trackingData.tasks.push(newTask);
+            trackingData.lastUpdated = new Date().toISOString();
+            // Save updated data
+            await fs.writeFile(trackingFilePath, JSON.stringify(trackingData, null, 2), 'utf-8');
+            console.log(`Added task to in_progress tracking: ${taskName} -> ${sessionName}`);
+        }
+        catch (error) {
+            console.error('Error adding task to in_progress tracking:', error);
+        }
+    }
+    /**
+     * Remove task from in_progress_tasks.json when completed
+     */
+    async removeTaskFromInProgressTracking(taskPath) {
+        try {
+            const fs = await import('fs/promises');
+            const path = await import('path');
+            const os = await import('os');
+            const trackingFilePath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
+            // Load existing data
+            let trackingData = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
+            try {
+                if (await fs.access(trackingFilePath).then(() => true).catch(() => false)) {
+                    const content = await fs.readFile(trackingFilePath, 'utf-8');
+                    trackingData = JSON.parse(content);
+                }
+            }
+            catch (error) {
+                console.warn('Could not load in_progress_tasks.json for removal');
+                return;
+            }
+            // Remove task by original path or current path
+            const originalTaskCount = trackingData.tasks.length;
+            trackingData.tasks = trackingData.tasks.filter((task) => task.taskPath !== taskPath &&
+                task.originalPath !== taskPath &&
+                task.taskPath !== taskPath.replace('/in_progress/', '/done/'));
+            trackingData.lastUpdated = new Date().toISOString();
+            // Save updated data
+            await fs.writeFile(trackingFilePath, JSON.stringify(trackingData, null, 2), 'utf-8');
+            const removedCount = originalTaskCount - trackingData.tasks.length;
+            console.log(`Removed ${removedCount} task(s) from in_progress tracking for path: ${taskPath}`);
+        }
+        catch (error) {
+            console.error('Error removing task from in_progress tracking:', error);
+        }
     }
     async cleanup() {
         try {

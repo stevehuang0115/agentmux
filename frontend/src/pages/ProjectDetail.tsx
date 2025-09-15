@@ -12,6 +12,7 @@ import { TasksView } from '../components/ProjectDetail/TasksView';
 import { EditorView } from '../components/ProjectDetail/EditorView';
 import { TeamsView } from '../components/ProjectDetail/TeamsView';
 import { TaskCreateModal } from '../components/ProjectDetail/TaskCreateModal';
+import { inProgressTasksService } from '../services/in-progress-tasks.service';
 
 interface ProjectDetailState {
   project: Project | null;
@@ -53,6 +54,11 @@ export const ProjectDetail: React.FC = () => {
   const [isTaskDetailModalOpen, setIsTaskDetailModalOpen] = useState(false);
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState<any>(null);
   const [taskAssignmentLoading, setTaskAssignmentLoading] = useState<string | null>(null);
+  const [taskAssignedMemberDetails, setTaskAssignedMemberDetails] = useState<{
+    memberName?: string;
+    sessionName?: string;
+    teamName?: string;
+  }>({});
   const [buildSpecsWorkflow, setBuildSpecsWorkflow] = useState<{
     isActive: boolean;
     steps: Array<{
@@ -333,9 +339,24 @@ export const ProjectDetail: React.FC = () => {
   };
 
   // Task interaction handlers
-  const handleTaskClick = (task: any) => {
+  const handleTaskClick = async (task: any) => {
     setSelectedTaskForDetail(task);
     setIsTaskDetailModalOpen(true);
+
+    // Load assigned member details if task is in progress
+    if (task.status === 'in_progress' || task.path?.includes('/in_progress/')) {
+      try {
+        const memberDetails = await inProgressTasksService.getTaskAssignedMemberDetails(
+          task.path || task.filePath || ''
+        );
+        setTaskAssignedMemberDetails(memberDetails);
+      } catch (error) {
+        console.error('Failed to load task assigned member details:', error);
+        setTaskAssignedMemberDetails({});
+      }
+    } else {
+      setTaskAssignedMemberDetails({});
+    }
   };
 
   const handleTaskAssign = async (task: any) => {
@@ -1453,10 +1474,17 @@ export const ProjectDetail: React.FC = () => {
           }}
           title="Task Details"
           subtitle={`${selectedTaskForDetail.title} - Full Information`}
-          onSubmit={(e) => { e.preventDefault(); }}
-          submitText={null}
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleTaskAssign(selectedTaskForDetail);
+            setIsTaskDetailModalOpen(false);
+            setSelectedTaskForDetail(null);
+          }}
+          submitText={taskAssignmentLoading === selectedTaskForDetail.id ? 'Starting...' : 'Start'}
+          submitDisabled={taskAssignmentLoading === selectedTaskForDetail.id}
+          loading={taskAssignmentLoading === selectedTaskForDetail.id}
           cancelText="Close"
-          size="lg"
+          size="xxl"
         >
           <div className="task-detail-content">
             <FormGroup>
@@ -1467,9 +1495,39 @@ export const ProjectDetail: React.FC = () => {
             <FormGroup>
               <FormLabel>Description</FormLabel>
               <div className="task-detail-field task-detail-description">
-                {selectedTaskForDetail.description || 'No description provided'}
+                {selectedTaskForDetail.description ? (
+                  <div className="task-content">
+                    {selectedTaskForDetail.description.split('\n').map((line: string, index: number) => (
+                      <p key={index} className="task-description-line">{line}</p>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="task-no-description">
+                    <span className="no-description-text">No description provided</span>
+                    {(selectedTaskForDetail.tasks && selectedTaskForDetail.tasks.length > 0) ||
+                     (selectedTaskForDetail.acceptanceCriteria && selectedTaskForDetail.acceptanceCriteria.length > 0) ? (
+                      <p className="no-description-help">Task details are available in the sections below.</p>
+                    ) : (
+                      <p className="no-description-help">This task may need additional details to be added.</p>
+                    )}
+                  </div>
+                )}
               </div>
             </FormGroup>
+
+            {selectedTaskForDetail.acceptanceCriteria && selectedTaskForDetail.acceptanceCriteria.length > 0 && (
+              <FormGroup>
+                <FormLabel>Acceptance Criteria ({selectedTaskForDetail.acceptanceCriteria.length})</FormLabel>
+                <div className="task-detail-acceptance-criteria">
+                  {selectedTaskForDetail.acceptanceCriteria.map((criteria: string, index: number) => (
+                    <div key={index} className="task-detail-criteria">
+                      <span className="criteria-bullet">✓</span>
+                      <span className="criteria-text">{criteria}</span>
+                    </div>
+                  ))}
+                </div>
+              </FormGroup>
+            )}
 
             <FormRow>
               <FormGroup>
@@ -1496,6 +1554,35 @@ export const ProjectDetail: React.FC = () => {
               </FormGroup>
             )}
 
+            {/* Show assigned team member for in-progress tasks */}
+            {(taskAssignedMemberDetails.memberName || taskAssignedMemberDetails.sessionName) && (
+              <FormGroup>
+                <FormLabel>Currently Assigned To</FormLabel>
+                <div className="task-detail-assigned-member">
+                  <div className="assigned-member-info">
+                    {taskAssignedMemberDetails.memberName && (
+                      <div className="task-detail-badge assignee-badge active-assignee">
+                        👤 {taskAssignedMemberDetails.memberName}
+                      </div>
+                    )}
+                    {taskAssignedMemberDetails.sessionName && (
+                      <div className="task-detail-badge session-badge">
+                        🖥️ {taskAssignedMemberDetails.sessionName}
+                      </div>
+                    )}
+                    {taskAssignedMemberDetails.teamName && (
+                      <div className="task-detail-badge team-badge">
+                        👥 {taskAssignedMemberDetails.teamName}
+                      </div>
+                    )}
+                  </div>
+                  <div className="assigned-member-status">
+                    <span className="status-indicator in-progress">● In Progress</span>
+                  </div>
+                </div>
+              </FormGroup>
+            )}
+
             {selectedTaskForDetail.tasks && selectedTaskForDetail.tasks.length > 0 && (
               <FormGroup>
                 <FormLabel>Subtasks ({selectedTaskForDetail.tasks.length})</FormLabel>
@@ -1511,21 +1598,6 @@ export const ProjectDetail: React.FC = () => {
               </FormGroup>
             )}
 
-            <div className="task-detail-actions">
-              <Button
-                variant="primary"
-                icon={Play}
-                onClick={() => {
-                  handleTaskAssign(selectedTaskForDetail);
-                  setIsTaskDetailModalOpen(false);
-                  setSelectedTaskForDetail(null);
-                }}
-                disabled={taskAssignmentLoading === selectedTaskForDetail.id}
-                loading={taskAssignmentLoading === selectedTaskForDetail.id}
-              >
-                {taskAssignmentLoading === selectedTaskForDetail.id ? 'Assigning...' : 'Assign to Team'}
-              </Button>
-            </div>
           </div>
         </FormPopup>
       )}

@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { createApiRouter } from '../controllers/index.js';
-import { registerProjectRoutes } from './modules/projects.routes.js';
 import { registerTaskManagementRoutes } from './modules/task-management.routes.js';
 import { registerSchedulerRoutes } from './modules/scheduler.routes.js';
 import { registerTerminalRoutes } from './modules/terminal.routes.js';
@@ -32,7 +31,7 @@ export function createApiRoutes(apiController) {
     // Use the new organized controller structure
     router.use('/', createApiRouter(context));
     // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
-    registerProjectRoutes(router, apiController);
+    // Note: Project routes consolidated into new architecture - no longer needed here
     registerTaskManagementRoutes(router, apiController);
     registerSchedulerRoutes(router, apiController);
     registerTerminalRoutes(router, apiController);

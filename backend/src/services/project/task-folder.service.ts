@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 
 export class TaskFolderService {
   
@@ -149,29 +150,36 @@ export class TaskFolderService {
   /**
    * Creates a task file from a JSON step configuration
    */
-  generateTaskFileContent(
+  async generateTaskFileContent(
     step: any,
     projectName: string,
     projectPath: string,
     projectId: string,
     initialGoal?: string,
     userJourney?: string
-  ): string {
-    const processedPrompts = step.prompts.map((prompt: string) =>
-      prompt
-        .replace(/\{PROJECT_NAME\}/g, projectName)
-        .replace(/\{PROJECT_ID\}/g, projectId)
-        .replace(/\{PROJECT_PATH\}/g, projectPath)
-        .replace(/\{INITIAL_GOAL\}/g, initialGoal || 'See project specifications')
-        .replace(/\{USER_JOURNEY\}/g, userJourney || 'See project specifications')
-    );
+  ): Promise<string> {
+    // Resolve prompts using the prompt resolver utility
+    const templateVars = {
+      PROJECT_NAME: projectName,
+      PROJECT_ID: projectId,
+      PROJECT_PATH: projectPath,
+      INITIAL_GOAL: initialGoal || 'See project specifications',
+      USER_JOURNEY: userJourney || 'See project specifications'
+    };
+
+    // Use prompt resolver to handle both prompt_file and legacy prompts array
+    const resolvedStep = await resolveStepConfig(step, templateVars);
+    const processedPrompts = resolvedStep.prompts;
+
+    // Process template variables in verification object
+    const processedVerification = this.processTemplateVariablesInObject(step.verification, templateVars);
 
     const taskContent = `---
 targetRole: ${step.targetRole}
 stepId: ${step.id}
 delayMinutes: ${step.delayMinutes}
 conditional: ${step.conditional || 'none'}
-verification: ${JSON.stringify(step.verification, null, 2)}
+verification: ${JSON.stringify(processedVerification, null, 2)}
 ---
 
 # ${step.name}
@@ -192,7 +200,7 @@ ${step.conditional !== 'none' ? `- Previous step must be completed: ${step.condi
 
 ## Verification
 \`\`\`json
-${JSON.stringify(step.verification, null, 2)}
+${JSON.stringify(processedVerification, null, 2)}
 \`\`\`
 
 ## Notes
@@ -202,5 +210,35 @@ ${JSON.stringify(step.verification, null, 2)}
 `;
 
     return taskContent;
+  }
+
+  /**
+   * Recursively processes template variables in an object
+   */
+  private processTemplateVariablesInObject(obj: any, templateVars: Record<string, string>): any {
+    if (typeof obj === 'string') {
+      return this.replaceTemplateVariables(obj, templateVars);
+    } else if (Array.isArray(obj)) {
+      return obj.map(item => this.processTemplateVariablesInObject(item, templateVars));
+    } else if (obj && typeof obj === 'object') {
+      const result: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        result[key] = this.processTemplateVariablesInObject(value, templateVars);
+      }
+      return result;
+    }
+    return obj;
+  }
+
+  /**
+   * Replaces template variables in a string
+   */
+  private replaceTemplateVariables(text: string, templateVars: Record<string, string>): string {
+    let result = text;
+    Object.entries(templateVars).forEach(([key, value]) => {
+      const pattern = new RegExp(`\\{${key}\\}`, 'g');
+      result = result.replace(pattern, value);
+    });
+    return result;
   }
 }

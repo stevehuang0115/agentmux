@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StorageService } from './storage.service.js';
 import { Team, Project } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock filesystem
 jest.mock('fs', () => ({

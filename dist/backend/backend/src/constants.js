@@ -10,6 +10,13 @@ export const AGENT_INITIALIZATION_TIMEOUT = 90000;
 export const CLAUDE_INITIALIZATION_TIMEOUT = 45000;
 // Agent and Working Status Constants (duplicated from config/constants.ts for backend use)
 export const AGENTMUX_CONSTANTS = {
+    SESSIONS: {
+        ORCHESTRATOR_NAME: 'agentmux-orc',
+        DEFAULT_TIMEOUT: 120000,
+        REGISTRATION_CHECK_INTERVAL: 5000,
+        CLAUDE_DETECTION_CACHE_TIMEOUT: 30000,
+        DEFAULT_SHELL: '/bin/bash',
+    },
     AGENT_STATUSES: {
         INACTIVE: 'inactive',
         ACTIVATING: 'activating',

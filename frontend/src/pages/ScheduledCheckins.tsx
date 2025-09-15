@@ -87,6 +87,7 @@ export const ScheduledCheckins: React.FC = () => {
                   onToggleActive={handleToggleActive}
                   onRunNow={handleRunNow}
                   formatDate={formatDate}
+                  onCardClick={handleEdit}
                 />
               ))}
             </div>
@@ -105,6 +106,7 @@ export const ScheduledCheckins: React.FC = () => {
                   onToggleActive={handleToggleActive}
                   onRunNow={handleRunNow}
                   formatDate={formatDate}
+                  onCardClick={handleEdit}
                 />
               ))}
             </div>

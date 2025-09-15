@@ -103,6 +103,7 @@ describe('TaskFolderService', () => {
       (path.dirname as jest.Mock).mockImplementation((p) => {
         if (p === '/project/tasks/milestone1/open/task001.md') return '/project/tasks/milestone1/open';
         if (p === '/project/tasks/milestone1/open') return '/project/tasks/milestone1';
+        if (p === '/project/tasks/milestone1/in_progress/task001.md') return '/project/tasks/milestone1/in_progress';
         return p;
       });
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
@@ -271,8 +272,8 @@ describe('TaskFolderService', () => {
       ]
     };
 
-    it('should generate task file content with all placeholders replaced', () => {
-      const result = service.generateTaskFileContent(
+    it('should generate task file content with all placeholders replaced', async () => {
+      const result = await service.generateTaskFileContent(
         mockStep,
         'Test Project',
         '/test/project',
@@ -292,19 +293,28 @@ describe('TaskFolderService', () => {
       expect(result).toContain('"path": "/test/project/setup.js"');
     });
 
-    it('should handle missing optional parameters with defaults', () => {
-      const result = service.generateTaskFileContent(
-        mockStep,
+    it('should handle missing optional parameters with defaults', async () => {
+      const stepWithGoalVar = {
+        ...mockStep,
+        prompts: [
+          'Create the initial setup for {PROJECT_NAME}',
+          'Goal: {INITIAL_GOAL}',
+          'Journey: {USER_JOURNEY}'
+        ]
+      };
+
+      const result = await service.generateTaskFileContent(
+        stepWithGoalVar,
         'Test Project',
         '/test/project',
         'test-project-id'
       );
-      
+
       expect(result).toContain('See project specifications');
     });
 
-    it('should include verification JSON', () => {
-      const result = service.generateTaskFileContent(
+    it('should include verification JSON', async () => {
+      const result = await service.generateTaskFileContent(
         mockStep,
         'Test Project',
         '/test/project',
@@ -316,13 +326,13 @@ describe('TaskFolderService', () => {
       expect(result).toContain('"path": "/test/project/setup.js"');
     });
 
-    it('should handle conditional dependencies', () => {
+    it('should handle conditional dependencies', async () => {
       const stepWithDependency = {
         ...mockStep,
         conditional: 'previous-step-completed'
       };
-      
-      const result = service.generateTaskFileContent(
+
+      const result = await service.generateTaskFileContent(
         stepWithDependency,
         'Test Project',
         '/test/project',
@@ -332,8 +342,8 @@ describe('TaskFolderService', () => {
       expect(result).toContain('Previous step must be completed: previous-step-completed');
     });
 
-    it('should include file movement instructions', () => {
-      const result = service.generateTaskFileContent(
+    it('should include file movement instructions', async () => {
+      const result = await service.generateTaskFileContent(
         mockStep,
         'Test Project',
         '/test/project',
@@ -345,8 +355,8 @@ describe('TaskFolderService', () => {
       expect(result).toContain("Move to 'blocked/' folder if unable to proceed");
     });
 
-    it('should include acceptance criteria checklist', () => {
-      const result = service.generateTaskFileContent(
+    it('should include acceptance criteria checklist', async () => {
+      const result = await service.generateTaskFileContent(
         mockStep,
         'Test Project',
         '/test/project',
@@ -358,8 +368,8 @@ describe('TaskFolderService', () => {
       expect(result).toContain("- [ ] Task moved to 'done' folder upon completion");
     });
 
-    it('should handle multiple prompts correctly', () => {
-      const result = service.generateTaskFileContent(
+    it('should handle multiple prompts correctly', async () => {
+      const result = await service.generateTaskFileContent(
         mockStep,
         'Test Project',
         '/test/project',
@@ -375,13 +385,13 @@ describe('TaskFolderService', () => {
       expect(detailedIndex).toBeGreaterThan(objectiveIndex);
     });
 
-    it('should handle step with no prompts', () => {
+    it('should handle step with no prompts', async () => {
       const stepWithoutPrompts = {
         ...mockStep,
         prompts: []
       };
-      
-      const result = service.generateTaskFileContent(
+
+      const result = await service.generateTaskFileContent(
         stepWithoutPrompts,
         'Test Project',
         '/test/project',

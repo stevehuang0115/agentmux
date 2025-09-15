@@ -135,7 +135,7 @@ async function startBackendServer(webPort, mcpPort) {
     const backendProcess = spawn('node', [
         '--expose-gc',
         '--max-old-space-size=2048',
-        path.join(projectRoot, 'dist/backend/index.js'),
+        path.join(projectRoot, 'dist/backend/backend/src/index.js'),
     ], {
         env,
         stdio: 'pipe',
@@ -174,7 +174,7 @@ async function startMCPServer(mcpPort) {
         TMUX_SESSION_NAME: 'mcp-server',
         AGENT_ROLE: 'orchestrator',
     };
-    const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/index.js')], {
+    const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/mcp-server/src/index.js')], {
         env,
         stdio: 'pipe',
         detached: false,

@@ -3,16 +3,19 @@ import * as path from 'path';
 import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
 import { ProjectModel } from '../../models/index.js';
-import { ContextLoaderService, WorkflowService } from '../../services/index.js';
+import { ContextLoaderService, } from '../../services/index.js';
 import { getFileIcon, countFiles } from '../utils/file-utils.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 const execAsync = promisify(exec);
 // Project Management
 export async function createProject(req, res) {
     try {
         const { path: projectPath, name, description } = req.body;
         if (!projectPath) {
-            res.status(400).json({ success: false, error: 'Project path is required' });
+            res.status(400).json({
+                success: false,
+                error: 'Project path is required',
+            });
             return;
         }
         const project = await this.storageService.addProject(projectPath);
@@ -36,7 +39,7 @@ export async function createProject(req, res) {
             if (isGeminiOrchestrator && isOrchestratorActive) {
                 console.log('Orchestrator is running with Gemini CLI, adding new project to allowlist...', {
                     projectPath: finalProject.path,
-                    projectName: finalProject.name
+                    projectName: finalProject.name,
                 });
                 // Import RuntimeServiceFactory dynamically to avoid circular dependency
                 const { RuntimeServiceFactory } = await import('../../services/agent/runtime-service.factory.js');
@@ -48,7 +51,7 @@ export async function createProject(req, res) {
                 console.log('Gemini CLI allowlist update result for new project:', {
                     projectPath: finalProject.path,
                     success: allowlistResult.success,
-                    message: allowlistResult.message
+                    message: allowlistResult.message,
                 });
             }
             else if (isGeminiOrchestrator && !isOrchestratorActive) {
@@ -62,7 +65,11 @@ export async function createProject(req, res) {
                 error: error instanceof Error ? error.message : String(error),
             });
         }
-        res.status(201).json({ success: true, data: finalProject, message: 'Project added successfully' });
+        res.status(201).json({
+            success: true,
+            data: finalProject,
+            message: 'Project added successfully',
+        });
     }
     catch (error) {
         console.error('Error creating project:', error);
@@ -76,14 +83,17 @@ export async function getProjects(req, res) {
     }
     catch (error) {
         console.error('Error getting projects:', error);
-        res.status(500).json({ success: false, error: 'Failed to retrieve projects' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to retrieve projects',
+        });
     }
 }
 export async function getProject(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -92,25 +102,39 @@ export async function getProject(req, res) {
     }
     catch (error) {
         console.error('Error getting project:', error);
-        res.status(500).json({ success: false, error: 'Failed to retrieve project' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to retrieve project',
+        });
     }
 }
 export async function getProjectStatus(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
         const tickets = await this.storageService.getTickets(project.path);
-        const activeTickets = tickets.filter(t => t.status !== 'done');
-        res.json({ success: true, data: { project, activeTickets: activeTickets.length, totalTickets: tickets.length, teams: project.teams || {} } });
+        const activeTickets = tickets.filter((t) => t.status !== 'done');
+        res.json({
+            success: true,
+            data: {
+                project,
+                activeTickets: activeTickets.length,
+                totalTickets: tickets.length,
+                teams: project.teams || {},
+            },
+        });
     }
     catch (error) {
         console.error('Error getting project status:', error);
-        res.status(500).json({ success: false, error: 'Failed to get project status' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get project status',
+        });
     }
 }
 // Delegated complex project lifecycle operations (keep behavior intact)
@@ -119,61 +143,61 @@ export async function startProject(req, res) {
         const { id } = req.params;
         const { teamIds } = req.body;
         if (!teamIds || !Array.isArray(teamIds) || teamIds.length === 0) {
-            res.status(400).json({ success: false, error: 'Team IDs array is required' });
+            res.status(400).json({
+                success: false,
+                error: 'Team IDs array is required',
+            });
             return;
         }
         const teamId = teamIds[0];
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
         const teams = await this.storageService.getTeams();
-        const team = teams.find(t => t.id === teamId);
+        const team = teams.find((t) => t.id === teamId);
         if (!team) {
             res.status(404).json({ success: false, error: 'Team not found' });
             return;
         }
-        const result = await WorkflowService.getInstance().startProject({ projectId: id, teamId });
-        if (!result.success) {
-            res.status(500).json({ success: false, error: result.error || 'Failed to start project orchestration' });
-            return;
-        }
+        // Project orchestration now handled via scheduled messages to orchestrator
         project.status = 'active';
-        // Create auto-assignment scheduled message for 15-minute task assignments
-        let autoAssignmentScheduleId;
+        // Create check-in scheduled message for 15-minute cycles (includes auto-assignment)
+        let checkinScheduleId;
         if (this.messageSchedulerService) {
             try {
                 const { PromptTemplateService } = await import('../../services/index.js');
                 const promptService = new PromptTemplateService();
-                const autoAssignmentMessage = await promptService.getAutoAssignmentPrompt({
+                const checkinMessage = await promptService.getCheckinPrompt({
                     projectName: project.name,
+                    projectId: id,
                     projectPath: project.path,
-                    currentTimestamp: new Date().toISOString()
+                    currentTimestamp: new Date().toISOString(),
                 });
                 const scheduledMessage = {
-                    id: `auto-assign-${id}-${Date.now()}`,
-                    name: `Auto Task Assignment - ${project.name}`,
+                    id: `checkin-${id}-${Date.now()}`,
+                    name: `Check-in for Project ${project.name}`,
                     targetTeam: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
                     targetProject: id,
-                    message: autoAssignmentMessage,
+                    message: checkinMessage,
                     delayAmount: 15,
                     delayUnit: 'minutes',
                     isRecurring: true,
                     isActive: true,
                     createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
+                    updatedAt: new Date().toISOString(),
                 };
                 this.messageSchedulerService.scheduleMessage(scheduledMessage);
-                autoAssignmentScheduleId = scheduledMessage.id;
+                checkinScheduleId = scheduledMessage.id;
                 // Create immediate orchestrator coordination message (5 second delay)
                 // Load the project start prompt from template
                 const projectStartMessage = await promptService.getProjectStartPrompt({
                     projectName: project.name,
                     projectPath: project.path,
                     teamName: team.name,
-                    teamMemberCount: team.members.length.toString()
+                    teamMemberCount: team.members.length.toString(),
                 });
                 const immediateCoordinationMessage = {
                     id: `immediate-coord-${id}-${Date.now()}`,
@@ -186,14 +210,14 @@ export async function startProject(req, res) {
                     isRecurring: false, // One-time immediate message
                     isActive: true,
                     createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
+                    updatedAt: new Date().toISOString(),
                 };
                 this.messageSchedulerService.scheduleMessage(immediateCoordinationMessage);
                 // Save the scheduled message ID to the project for stop functionality
-                project.scheduledMessageId = autoAssignmentScheduleId;
+                project.scheduledMessageId = checkinScheduleId;
             }
             catch (e) {
-                console.warn('Failed to create auto-assignment scheduled message:', e);
+                console.warn('Failed to create check-in scheduled message:', e);
             }
         }
         await this.storageService.saveProject(project);
@@ -204,7 +228,18 @@ export async function startProject(req, res) {
         catch (e) {
             console.warn('Failed to start project lifecycle management:', e);
         }
-        res.json({ success: true, message: result.message || 'Project orchestration started successfully', data: { projectId: id, teamId, executionId: result.executionId, orchestrationStarted: true, checkInScheduleId: scheduleInfo?.checkInScheduleId, gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId, autoAssignmentScheduleId } });
+        res.json({
+            success: true,
+            message: 'Project started successfully with scheduled orchestration',
+            data: {
+                projectId: id,
+                teamId,
+                orchestrationStarted: true,
+                checkInScheduleId: scheduleInfo?.checkInScheduleId,
+                gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId,
+                checkinScheduleId,
+            },
+        });
     }
     catch (error) {
         console.error('Error starting project:', error);
@@ -215,7 +250,7 @@ export async function stopProject(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -225,16 +260,17 @@ export async function stopProject(req, res) {
             try {
                 // Get all scheduled messages and find ones targeting this project
                 const allMessages = await this.storageService.getScheduledMessages();
-                const projectMessages = allMessages.filter(msg => msg.targetProject === id);
+                const projectMessages = allMessages.filter((msg) => msg.targetProject === id);
                 console.log(`Found ${projectMessages.length} scheduled messages to cancel for project ${id}`);
-                // Cancel each message
+                // Cancel each message and delete from storage
                 for (const message of projectMessages) {
                     try {
                         this.messageSchedulerService.cancelMessage(message.id);
-                        console.log(`Cancelled scheduled message: ${message.name} (${message.id})`);
+                        await this.storageService.deleteScheduledMessage(message.id);
+                        console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
                     }
                     catch (msgError) {
-                        console.warn(`Failed to cancel message ${message.id}:`, msgError);
+                        console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
                     }
                 }
                 project.scheduledMessageId = undefined; // Clear the schedule ID
@@ -251,7 +287,11 @@ export async function stopProject(req, res) {
         }
         project.status = 'stopped';
         await this.storageService.saveProject(project);
-        res.json({ success: true, message: 'Project stopped successfully. Auto-assignment scheduling has been cancelled.', data: { projectId: id, status: 'stopped' } });
+        res.json({
+            success: true,
+            message: 'Project stopped successfully. Auto-assignment scheduling has been cancelled.',
+            data: { projectId: id, status: 'stopped' },
+        });
     }
     catch (error) {
         console.error('Error stopping project:', error);
@@ -262,7 +302,7 @@ export async function restartProject(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -276,7 +316,16 @@ export async function restartProject(req, res) {
         }
         project.status = 'active';
         await this.storageService.saveProject(project);
-        res.json({ success: true, message: 'Project restarted successfully', data: { projectId: id, status: 'active', checkInScheduleId: scheduleInfo?.checkInScheduleId, gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId } });
+        res.json({
+            success: true,
+            message: 'Project restarted successfully',
+            data: {
+                projectId: id,
+                status: 'active',
+                checkInScheduleId: scheduleInfo?.checkInScheduleId,
+                gitCommitScheduleId: scheduleInfo?.gitCommitScheduleId,
+            },
+        });
     }
     catch (error) {
         console.error('Error restarting project:', error);
@@ -288,7 +337,7 @@ export async function assignTeamsToProject(req, res) {
         const { id } = req.params;
         const { teamAssignments } = req.body;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -307,7 +356,7 @@ export async function assignTeamsToProject(req, res) {
             const teams = await this.storageService.getTeams();
             for (const [role, teamIds] of Object.entries(teamAssignments)) {
                 for (const teamId of teamIds) {
-                    const team = teams.find(t => t.id === teamId);
+                    const team = teams.find((t) => t.id === teamId);
                     if (team) {
                         team.currentProject = id;
                         team.updatedAt = new Date().toISOString();
@@ -322,17 +371,30 @@ export async function assignTeamsToProject(req, res) {
                 const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
                 const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
                 if (sessionExists) {
-                    const teamsInfo = assignedTeamDetails.map(({ team, role }) => {
-                        const memberList = (team.members || []).map((m) => `  - ${m.name} (${m.role}) - ${m.sessionName || 'N/A'}`).join('\\n') || '  No members found';
-                        const sessions = (team.members || []).map((m) => m.sessionName || 'N/A').join(', ') || 'No sessions';
+                    const teamsInfo = assignedTeamDetails
+                        .map(({ team, role }) => {
+                        const memberList = (team.members || [])
+                            .map((m) => `  - ${m.name} (${m.role}) - ${m.sessionName || 'N/A'}`)
+                            .join('\\n') || '  No members found';
+                        const sessions = (team.members || [])
+                            .map((m) => m.sessionName || 'N/A')
+                            .join(', ') || 'No sessions';
                         return `### ${team.name} (${role})\n- **Team ID**: ${team.id}\n- **Members**: ${(team.members || []).length} members\n- **Session Names**: ${sessions}\n- **Member Details**:\n${memberList}`;
-                    }).join('\\n\\n');
+                    })
+                        .join('\\n\\n');
                     const orchestratorPrompt = `## Team Assignment Notification\n\nNew team(s) have been assigned to project **${project.name}**!\n\n${teamsInfo}\n\n### Action Required:\nPlease use the MCP tooling to create and initialize the assigned team sessions. You should:\n\n1. **Create tmux sessions** for each team member using their designated session names\n2. **Initialize the project environment** in each session with the project path: \`${project.path}\`\n3. **Set up the development context** for each team member based on their role\n4. **Verify all sessions are active** and ready for collaboration\n\n### Project Details:\n- **Project Path**: ${project.path}\n- **Project ID**: ${project.id}\n- **Total Teams Assigned**: ${assignedTeamDetails.length}\n\n---\n*Please confirm when all team sessions have been created and initialized successfully.*`;
                     await this.tmuxService.sendMessage(orchestratorSession, orchestratorPrompt);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    const tmuxProcess = spawn('tmux', ['send-keys', '-t', orchestratorSession, 'Enter']);
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                    const tmuxProcess = spawn('tmux', [
+                        'send-keys',
+                        '-t',
+                        orchestratorSession,
+                        'Enter',
+                    ]);
                     await new Promise((resolve, reject) => {
-                        tmuxProcess.on('close', code => code === 0 ? resolve(code) : reject(new Error(`tmux send-keys failed with exit code ${code}`)));
+                        tmuxProcess.on('close', (code) => code === 0
+                            ? resolve(code)
+                            : reject(new Error(`tmux send-keys failed with exit code ${code}`)));
                         tmuxProcess.on('error', reject);
                     });
                 }
@@ -341,11 +403,18 @@ export async function assignTeamsToProject(req, res) {
                 console.warn('Failed to notify orchestrator about team assignment:', notificationError);
             }
         }
-        res.json({ success: true, data: projectModel.toJSON(), message: 'Teams assigned to project successfully' });
+        res.json({
+            success: true,
+            data: projectModel.toJSON(),
+            message: 'Teams assigned to project successfully',
+        });
     }
     catch (error) {
         console.error('Error assigning teams to project:', error);
-        res.status(500).json({ success: false, error: 'Failed to assign teams to project' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to assign teams to project',
+        });
     }
 }
 export async function unassignTeamFromProject(req, res) {
@@ -353,23 +422,29 @@ export async function unassignTeamFromProject(req, res) {
         const { id: projectId } = req.params;
         const { teamId } = req.body;
         if (!teamId) {
-            res.status(400).json({ success: false, error: 'Missing required field: teamId' });
+            res.status(400).json({
+                success: false,
+                error: 'Missing required field: teamId',
+            });
             return;
         }
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === projectId);
+        const project = projects.find((p) => p.id === projectId);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
         const teams = await this.storageService.getTeams();
-        const team = teams.find(t => t.id === teamId);
+        const team = teams.find((t) => t.id === teamId);
         if (!team) {
             res.status(404).json({ success: false, error: 'Team not found' });
             return;
         }
         if (team.currentProject !== projectId) {
-            res.status(400).json({ success: false, error: 'Team is not assigned to this project' });
+            res.status(400).json({
+                success: false,
+                error: 'Team is not assigned to this project',
+            });
             return;
         }
         const projectModel = ProjectModel.fromJSON(project);
@@ -382,13 +457,22 @@ export async function unassignTeamFromProject(req, res) {
             const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
             const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
             if (sessionExists) {
-                const memberLines = (team.members || []).map(m => `- ${m.name} (${m.role}) - Session: ${m.sessionName || 'N/A'}`).join('\\n') || 'No members found';
+                const memberLines = (team.members || [])
+                    .map((m) => `- ${m.name} (${m.role}) - Session: ${m.sessionName || 'N/A'}`)
+                    .join('\\n') || 'No members found';
                 const notificationMessage = `## Team Unassignment Notification\n\nTeam **${team.name}** has been unassigned from project **${project.name}**.\n\n### Team Details:\n- **Team ID**: ${team.id}\n- **Team Name**: ${team.name}  \n- **Members**: ${(team.members || []).length} members\n- **Previous Project**: ${project.name}\n\n### Action Required:\nPlease coordinate the cleanup of team member sessions and update any active workflows accordingly.\n\n### Team Members to Clean Up:\n${memberLines}\n\n---\n*This notification was sent automatically when the team was unassigned from the project.*`;
                 await this.tmuxService.sendMessage(orchestratorSession, notificationMessage);
-                await new Promise(resolve => setTimeout(resolve, 500));
-                const tmuxProcess = spawn('tmux', ['send-keys', '-t', orchestratorSession, 'Enter']);
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                const tmuxProcess = spawn('tmux', [
+                    'send-keys',
+                    '-t',
+                    orchestratorSession,
+                    'Enter',
+                ]);
                 await new Promise((resolve, reject) => {
-                    tmuxProcess.on('close', code => code === 0 ? resolve(code) : reject(new Error(`tmux send-keys failed with exit code ${code}`)));
+                    tmuxProcess.on('close', (code) => code === 0
+                        ? resolve(code)
+                        : reject(new Error(`tmux send-keys failed with exit code ${code}`)));
                     tmuxProcess.on('error', reject);
                 });
             }
@@ -396,11 +480,18 @@ export async function unassignTeamFromProject(req, res) {
         catch (notificationError) {
             console.warn('Failed to notify orchestrator about team unassignment:', notificationError);
         }
-        res.json({ success: true, data: projectModel.toJSON(), message: `Team "${team.name}" unassigned from project "${project.name}" successfully` });
+        res.json({
+            success: true,
+            data: projectModel.toJSON(),
+            message: `Team "${team.name}" unassigned from project "${project.name}" successfully`,
+        });
     }
     catch (error) {
         console.error('Error unassigning team from project:', error);
-        res.status(500).json({ success: false, error: 'Failed to unassign team from project' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to unassign team from project',
+        });
     }
 }
 export async function getProjectFiles(req, res) {
@@ -408,7 +499,7 @@ export async function getProjectFiles(req, res) {
         const { id } = req.params;
         const { depth = '3', includeDotFiles = 'true' } = req.query;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -434,7 +525,7 @@ export async function getProjectFiles(req, res) {
                             type: stats.isDirectory() ? 'folder' : 'file',
                             size: stats.size,
                             modified: stats.mtime.toISOString(),
-                            icon: getFileIcon(item, stats.isDirectory())
+                            icon: getFileIcon(item, stats.isDirectory()),
                         };
                         if (stats.isDirectory()) {
                             node.children = await buildFileTree(fullPath, relativeItemPath, currentDepth + 1, maxDepth);
@@ -479,16 +570,30 @@ export async function getProjectFiles(req, res) {
             await fs.stat(resolvedPath);
         }
         catch (pathError) {
-            res.status(400).json({ success: false, error: `Project path "${resolvedPath}" is not accessible: ${pathError?.message || 'Unknown error'}` });
+            res.status(400).json({
+                success: false,
+                error: `Project path "${resolvedPath}" is not accessible: ${pathError?.message || 'Unknown error'}`,
+            });
             return;
         }
         const fileTree = await buildFileTree(resolvedPath);
         const totalFiles = countFiles(fileTree);
-        res.json({ success: true, data: { project: { id: project.id, name: project.name, path: project.path }, files: fileTree, totalFiles, generatedAt: new Date().toISOString() } });
+        res.json({
+            success: true,
+            data: {
+                project: { id: project.id, name: project.name, path: project.path },
+                files: fileTree,
+                totalFiles,
+                generatedAt: new Date().toISOString(),
+            },
+        });
     }
     catch (error) {
         console.error('Error getting project files:', error);
-        res.status(500).json({ success: false, error: 'Failed to get project files' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get project files',
+        });
     }
 }
 export async function getFileContent(req, res) {
@@ -500,23 +605,31 @@ export async function getFileContent(req, res) {
             return;
         }
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === projectId);
+        const project = projects.find((p) => p.id === projectId);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
-        const resolvedProjectPath = path.isAbsolute(project.path) ? project.path : path.resolve(process.cwd(), project.path);
+        const resolvedProjectPath = path.isAbsolute(project.path)
+            ? project.path
+            : path.resolve(process.cwd(), project.path);
         try {
             await fs.access(resolvedProjectPath);
         }
         catch {
-            res.status(404).json({ success: false, error: 'Project directory does not exist' });
+            res.status(404).json({
+                success: false,
+                error: 'Project directory does not exist',
+            });
             return;
         }
         const fullFilePath = path.join(resolvedProjectPath, filePath);
         const resolvedFilePath = path.resolve(fullFilePath);
         if (!resolvedFilePath.startsWith(resolvedProjectPath)) {
-            res.status(403).json({ success: false, error: 'Access denied: File outside project directory' });
+            res.status(403).json({
+                success: false,
+                error: 'Access denied: File outside project directory',
+            });
             return;
         }
         try {
@@ -527,21 +640,30 @@ export async function getFileContent(req, res) {
             if (fileError.code === 'ENOENT')
                 res.status(404).json({ success: false, error: 'File not found' });
             else if (fileError.code === 'EISDIR')
-                res.status(400).json({ success: false, error: 'Path is a directory, not a file' });
+                res.status(400).json({
+                    success: false,
+                    error: 'Path is a directory, not a file',
+                });
             else
                 throw fileError;
         }
     }
     catch (error) {
         console.error('Error reading file content:', error);
-        res.status(500).json({ success: false, error: 'Failed to read file content' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to read file content',
+        });
     }
 }
 export async function getAgentmuxMarkdownFiles(req, res) {
     try {
         const { projectPath } = req.query;
         if (!projectPath || typeof projectPath !== 'string') {
-            res.status(400).json({ success: false, error: 'Project path is required' });
+            res.status(400).json({
+                success: false,
+                error: 'Project path is required',
+            });
             return;
         }
         const agentmuxPath = path.join(projectPath, '.agentmux');
@@ -572,21 +694,30 @@ export async function getAgentmuxMarkdownFiles(req, res) {
     }
     catch (error) {
         console.error('Error scanning .agentmux files:', error);
-        res.status(500).json({ success: false, error: 'Failed to scan .agentmux files' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to scan .agentmux files',
+        });
     }
 }
 export async function saveMarkdownFile(req, res) {
     try {
         const { projectPath, filePath, content } = req.body;
         if (!projectPath || !filePath || content === undefined) {
-            res.status(400).json({ success: false, error: 'Project path, file path, and content are required' });
+            res.status(400).json({
+                success: false,
+                error: 'Project path, file path, and content are required',
+            });
             return;
         }
         const fullFilePath = path.join(projectPath, filePath);
         const resolvedProjectPath = path.resolve(projectPath);
         const resolvedFilePath = path.resolve(fullFilePath);
         if (!resolvedFilePath.startsWith(resolvedProjectPath)) {
-            res.status(403).json({ success: false, error: 'Access denied: File outside project directory' });
+            res.status(403).json({
+                success: false,
+                error: 'Access denied: File outside project directory',
+            });
             return;
         }
         await fs.mkdir(path.dirname(fullFilePath), { recursive: true });
@@ -608,13 +739,24 @@ export async function getProjectCompletion(req, res) {
             return;
         }
         const tickets = await this.storageService.getTickets(project.path);
-        const completedTickets = tickets.filter(t => t.status === 'done');
+        const completedTickets = tickets.filter((t) => t.status === 'done');
         const completionRate = tickets.length > 0 ? Math.round((completedTickets.length / tickets.length) * 100) : 0;
-        res.json({ success: true, data: { totalTickets: tickets.length, completedTickets: completedTickets.length, completionRate, isCompleted: completionRate === 100 } });
+        res.json({
+            success: true,
+            data: {
+                totalTickets: tickets.length,
+                completedTickets: completedTickets.length,
+                completionRate,
+                isCompleted: completionRate === 100,
+            },
+        });
     }
     catch (error) {
         console.error('Error getting project completion:', error);
-        res.status(500).json({ success: false, error: 'Failed to get project completion' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get project completion',
+        });
     }
 }
 export async function deleteProject(req, res) {
@@ -626,6 +768,29 @@ export async function deleteProject(req, res) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
+        // Cancel ALL scheduled messages for this project BEFORE deletion
+        if (this.messageSchedulerService) {
+            try {
+                // Get all scheduled messages and find ones targeting this project
+                const allMessages = await this.storageService.getScheduledMessages();
+                const projectMessages = allMessages.filter((msg) => msg.targetProject === id);
+                console.log(`Found ${projectMessages.length} scheduled messages to cancel for project ${id} before deletion`);
+                // Cancel each message and delete from storage
+                for (const message of projectMessages) {
+                    try {
+                        this.messageSchedulerService.cancelMessage(message.id);
+                        await this.storageService.deleteScheduledMessage(message.id);
+                        console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
+                    }
+                    catch (msgError) {
+                        console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
+                    }
+                }
+            }
+            catch (e) {
+                console.warn('Failed to cancel scheduled messages during project deletion:', e);
+            }
+        }
         const teams = await this.storageService.getTeams();
         const activeTeams = teams.filter((t) => t.currentProject === id);
         if (activeTeams.length > 0) {
@@ -636,7 +801,10 @@ export async function deleteProject(req, res) {
             }
         }
         await this.storageService.deleteProject(id);
-        res.json({ success: true, message: `Project deleted successfully. ${activeTeams.length} teams were unassigned.` });
+        res.json({
+            success: true,
+            message: `Project deleted successfully. ${activeTeams.length} teams were unassigned and all scheduled messages cancelled.`,
+        });
     }
     catch (error) {
         console.error('Error deleting project:', error);
@@ -647,7 +815,7 @@ export async function getProjectStats(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -687,7 +855,9 @@ export async function getProjectStats(req, res) {
         catch {
             // specs folder missing; keep defaults
         }
-        const tickets = await this.storageService.getTickets(resolvedProjectPath, { projectId: id });
+        const tickets = await this.storageService.getTickets(resolvedProjectPath, {
+            projectId: id,
+        });
         const taskCount = tickets.length;
         const stats = {
             mdFileCount,
@@ -695,30 +865,42 @@ export async function getProjectStats(req, res) {
             hasProjectMd,
             hasUserJourneyMd,
             hasInitialGoalMd,
-            hasInitialUserJourneyMd
+            hasInitialUserJourneyMd,
         };
-        res.json({ success: true, data: stats, message: 'Project stats retrieved successfully' });
+        res.json({
+            success: true,
+            data: stats,
+            message: 'Project stats retrieved successfully',
+        });
     }
     catch (error) {
         console.error('Error getting project stats:', error);
-        res.status(500).json({ success: false, error: 'Failed to get project stats' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get project stats',
+        });
     }
 }
 export async function openProjectInFinder(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
-        const resolvedProjectPath = path.isAbsolute(project.path) ? project.path : path.resolve(process.cwd(), project.path);
+        const resolvedProjectPath = path.isAbsolute(project.path)
+            ? project.path
+            : path.resolve(process.cwd(), project.path);
         try {
             await fs.access(resolvedProjectPath);
         }
         catch {
-            res.status(404).json({ success: false, error: 'Project directory does not exist' });
+            res.status(404).json({
+                success: false,
+                error: 'Project directory does not exist',
+            });
             return;
         }
         try {
@@ -732,7 +914,10 @@ export async function openProjectInFinder(req, res) {
     }
     catch (error) {
         console.error('Error opening project in Finder:', error);
-        res.status(500).json({ success: false, error: 'Failed to open project in Finder' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to open project in Finder',
+        });
     }
 }
 export async function createSpecFile(req, res) {
@@ -740,39 +925,10 @@ export async function createSpecFile(req, res) {
         const { id } = req.params;
         const { fileName, content } = req.body;
         if (!fileName || !content) {
-            res.status(400).json({ success: false, error: 'Missing fileName or content' });
-            return;
-        }
-        const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
-        if (!project) {
-            res.status(404).json({ success: false, error: 'Project not found' });
-            return;
-        }
-        const resolvedProjectPath = path.isAbsolute(project.path) ? project.path : path.resolve(process.cwd(), project.path);
-        const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
-        const filePath = path.join(specsPath, fileName);
-        try {
-            await fs.mkdir(specsPath, { recursive: true });
-            await fs.writeFile(filePath, content, 'utf-8');
-            res.json({ success: true, data: { fileName, filePath, specsPath }, message: `${fileName} saved successfully` });
-        }
-        catch (error) {
-            console.error('Error creating spec file:', error);
-            res.status(500).json({ success: false, error: 'Failed to create spec file' });
-        }
-    }
-    catch (error) {
-        console.error('Error creating spec file:', error);
-        res.status(500).json({ success: false, error: 'Failed to create spec file' });
-    }
-}
-export async function getSpecFileContent(req, res) {
-    try {
-        const { id } = req.params;
-        const { fileName } = req.query;
-        if (!fileName) {
-            res.status(400).json({ success: false, error: 'Missing fileName parameter' });
+            res.status(400).json({
+                success: false,
+                error: 'Missing fileName or content',
+            });
             return;
         }
         const projects = await this.storageService.getProjects();
@@ -781,20 +937,79 @@ export async function getSpecFileContent(req, res) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
-        const resolvedProjectPath = path.isAbsolute(project.path) ? project.path : path.resolve(process.cwd(), project.path);
+        const resolvedProjectPath = path.isAbsolute(project.path)
+            ? project.path
+            : path.resolve(process.cwd(), project.path);
+        const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
+        const filePath = path.join(specsPath, fileName);
+        try {
+            await fs.mkdir(specsPath, { recursive: true });
+            await fs.writeFile(filePath, content, 'utf-8');
+            res.json({
+                success: true,
+                data: { fileName, filePath, specsPath },
+                message: `${fileName} saved successfully`,
+            });
+        }
+        catch (error) {
+            console.error('Error creating spec file:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to create spec file',
+            });
+        }
+    }
+    catch (error) {
+        console.error('Error creating spec file:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to create spec file',
+        });
+    }
+}
+export async function getSpecFileContent(req, res) {
+    try {
+        const { id } = req.params;
+        const { fileName } = req.query;
+        if (!fileName) {
+            res.status(400).json({
+                success: false,
+                error: 'Missing fileName parameter',
+            });
+            return;
+        }
+        const projects = await this.storageService.getProjects();
+        const project = projects.find((p) => p.id === id);
+        if (!project) {
+            res.status(404).json({ success: false, error: 'Project not found' });
+            return;
+        }
+        const resolvedProjectPath = path.isAbsolute(project.path)
+            ? project.path
+            : path.resolve(process.cwd(), project.path);
         const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
         const filePath = path.join(specsPath, String(fileName));
         try {
             const content = await fs.readFile(filePath, 'utf-8');
-            res.json({ success: true, data: { fileName, content, filePath }, message: `${fileName} content retrieved successfully` });
+            res.json({
+                success: true,
+                data: { fileName, content, filePath },
+                message: `${fileName} content retrieved successfully`,
+            });
         }
         catch {
-            res.status(404).json({ success: false, error: `File ${fileName} not found` });
+            res.status(404).json({
+                success: false,
+                error: `File ${fileName} not found`,
+            });
         }
     }
     catch (error) {
         console.error('Error getting spec file content:', error);
-        res.status(500).json({ success: false, error: 'Failed to get spec file content' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get spec file content',
+        });
     }
 }
 export async function getProjectContext(req, res) {
@@ -813,13 +1028,18 @@ export async function getProjectContext(req, res) {
             includeGitHistory: options.includeGitHistory !== 'false',
             includeTickets: options.includeTickets !== 'false',
             maxFileSize: options.maxFileSize ? parseInt(options.maxFileSize) : undefined,
-            fileExtensions: options.fileExtensions ? String(options.fileExtensions).split(',') : undefined
+            fileExtensions: options.fileExtensions
+                ? String(options.fileExtensions).split(',')
+                : undefined,
         });
         res.json({ success: true, data: context });
     }
     catch (error) {
         console.error('Error loading project context:', error);
-        res.status(500).json({ success: false, error: 'Failed to load project context' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to load project context',
+        });
     }
 }
 /**
@@ -830,7 +1050,7 @@ export async function getAlignmentStatus(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
@@ -838,13 +1058,16 @@ export async function getAlignmentStatus(req, res) {
         // Return default alignment status (no issues)
         const alignmentStatus = {
             hasIssues: false,
-            alignmentFilePath: null
+            alignmentFilePath: null,
         };
         res.json({ success: true, data: alignmentStatus });
     }
     catch (error) {
         console.error('Error getting alignment status:', error);
-        res.status(500).json({ success: false, error: 'Failed to get alignment status' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get alignment status',
+        });
     }
 }
 /**
@@ -855,18 +1078,24 @@ export async function continueWithMisalignment(req, res) {
     try {
         const { id } = req.params;
         const projects = await this.storageService.getProjects();
-        const project = projects.find(p => p.id === id);
+        const project = projects.find((p) => p.id === id);
         if (!project) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
         // Log the decision to continue with misalignment
         console.log(`User chose to continue with misalignment for project: ${project.name} (${id})`);
-        res.json({ success: true, message: 'Continuing with misalignment acknowledged' });
+        res.json({
+            success: true,
+            message: 'Continuing with misalignment acknowledged',
+        });
     }
     catch (error) {
         console.error('Error handling continue with misalignment:', error);
-        res.status(500).json({ success: false, error: 'Failed to handle continue with misalignment' });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to handle continue with misalignment',
+        });
     }
 }
 //# sourceMappingURL=project.controller.js.map

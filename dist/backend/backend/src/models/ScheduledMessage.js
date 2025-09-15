@@ -13,14 +13,14 @@ export class ScheduledMessageModel {
             isRecurring: data.isRecurring,
             isActive: data.isActive !== false,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
         };
     }
     static update(existing, updates) {
         return {
             ...existing,
             ...updates,
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
         };
     }
     static updateLastRun(existing, lastRun, nextRun) {
@@ -28,7 +28,7 @@ export class ScheduledMessageModel {
             ...existing,
             lastRun,
             nextRun,
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
         };
     }
 }
@@ -43,7 +43,7 @@ export class MessageDeliveryLogModel {
             message: data.message,
             sentAt: new Date().toISOString(),
             success: data.success,
-            error: data.error
+            error: data.error,
         };
     }
 }

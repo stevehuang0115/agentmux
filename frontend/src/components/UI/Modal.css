@@ -48,6 +48,11 @@
   max-width: 1200px;
 }
 
+.modal-xxl {
+  width: 100%;
+  max-width: 1400px;
+}
+
 /* Modal Header */
 .modal-header {
   display: flex;

@@ -5,7 +5,7 @@ import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('./storage.service');

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Plus, FolderOpen, Play } from 'lucide-react';
 import { Project } from '../../types';
 import { 
@@ -40,6 +40,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
     name: '',
     description: ''
   });
+  const milestonesGridRef = useRef<HTMLDivElement>(null);
   
   // Filter tickets based on selected milestone
   const filteredTickets = selectedMilestoneFilter 
@@ -77,6 +78,41 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   // Get available milestones for form dropdown
   const availableMilestones = Object.keys(tasksByMilestone);
+
+  // Auto-scroll to first in-progress milestone when tasks load
+  useEffect(() => {
+    if (!milestonesGridRef.current || sortedMilestones.length === 0) return;
+
+    // Find the first milestone with in-progress tasks
+    const firstInProgressMilestoneIndex = sortedMilestones.findIndex(([_, tasks]) => {
+      return (tasks as any[]).some((task: any) => task.status === 'in_progress');
+    });
+
+    if (firstInProgressMilestoneIndex !== -1) {
+      // Wait a bit for the component to fully render
+      setTimeout(() => {
+        const milestonesGrid = milestonesGridRef.current;
+        if (milestonesGrid) {
+          const milestoneCards = milestonesGrid.querySelectorAll('.milestone-card');
+          const targetCard = milestoneCards[firstInProgressMilestoneIndex] as HTMLElement;
+
+          if (targetCard) {
+            // Calculate scroll position to center the target card
+            const containerWidth = milestonesGrid.clientWidth;
+            const cardLeft = targetCard.offsetLeft;
+            const cardWidth = targetCard.clientWidth;
+            const scrollPosition = cardLeft - (containerWidth / 2) + (cardWidth / 2);
+
+            // Smooth scroll to the target position
+            milestonesGrid.scrollTo({
+              left: Math.max(0, scrollPosition),
+              behavior: 'smooth'
+            });
+          }
+        }
+      }, 100);
+    }
+  }, [sortedMilestones, tickets]);
 
   // Handle Create Task
   const handleCreateTask = async () => {
@@ -184,15 +220,23 @@ export const TasksView: React.FC<TasksViewProps> = ({
             </Button>
           )}
         </div>
-        <div className="milestones-grid">
+        <div className="milestones-grid" ref={milestonesGridRef}>
           {sortedMilestones.map(([milestone, tasks]: [string, any[]], index) => {
             const sequenceNumber = getMilestoneSequence(milestone);
             const displayNumber = sequenceNumber !== 999 ? sequenceNumber : null;
-            
+
+            // Calculate task counts
+            const openCount = tasks.filter(t => t.status === 'open' || t.status === 'pending').length;
+            const inProgressCount = tasks.filter(t => t.status === 'in_progress').length;
+            const doneCount = tasks.filter(t => t.status === 'done').length;
+
+            // Determine if milestone is completed (no open or in progress tasks)
+            const isCompleted = openCount === 0 && inProgressCount === 0;
+
             return (
-              <div 
-                key={milestone} 
-                className={`milestone-card milestone-card-compact ${selectedMilestoneFilter === milestone ? 'milestone-card--active' : ''}`}
+              <div
+                key={milestone}
+                className={`milestone-card milestone-card-compact ${selectedMilestoneFilter === milestone ? 'milestone-card--active' : ''} ${isCompleted ? 'milestone-card--completed' : 'milestone-card--active-work'}`}
                 onClick={() => setSelectedMilestoneFilter(selectedMilestoneFilter === milestone ? null : milestone)}
               >
                 <div className="milestone-header">
@@ -205,16 +249,16 @@ export const TasksView: React.FC<TasksViewProps> = ({
                 <div className="milestone-progress">
                   <div className="progress-stats">
                     <span className="stat">
-                      <span className="stat-value">{tasks.filter(t => t.status === 'done').length}</span>
-                      <span className="stat-label">Done</span>
+                      <span className="stat-value">{openCount}</span>
+                      <span className="stat-label">Open</span>
                     </span>
                     <span className="stat">
-                      <span className="stat-value">{tasks.filter(t => t.status === 'in_progress').length}</span>
+                      <span className="stat-value">{inProgressCount}</span>
                       <span className="stat-label">In Progress</span>
                     </span>
                     <span className="stat">
-                      <span className="stat-value">{tasks.filter(t => t.status === 'open' || t.status === 'pending').length}</span>
-                      <span className="stat-label">Open</span>
+                      <span className="stat-value">{doneCount}</span>
+                      <span className="stat-label">Done</span>
                     </span>
                   </div>
                 </div>

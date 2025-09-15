@@ -415,6 +415,121 @@
   margin-top: 1rem;
 }
 
+/* Enhanced task detail content styles */
+.task-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-description-line {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.task-no-description {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--color-text-secondary);
+}
+
+.no-description-text {
+  font-weight: 500;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.no-description-help {
+  font-size: var(--text-sm);
+  margin: 0;
+  opacity: 0.8;
+}
+
+.task-detail-acceptance-criteria {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.task-detail-criteria {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--color-success-light);
+  border: 1px solid var(--color-success-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.criteria-bullet {
+  color: var(--color-success);
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-top: 0.125rem;
+}
+
+.criteria-text {
+  line-height: 1.5;
+}
+
+/* Assigned member styles for task detail modal */
+.task-detail-assigned-member {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #0ea5e9;
+  border-radius: var(--radius-md);
+}
+
+.assigned-member-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.task-detail-badge.active-assignee {
+  background: #059669;
+  color: white;
+  font-weight: 600;
+}
+
+.task-detail-badge.session-badge {
+  background: #1e40af;
+  color: white;
+}
+
+.task-detail-badge.team-badge {
+  background: #7c3aed;
+  color: white;
+}
+
+.assigned-member-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.status-indicator.in-progress {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+}
+
 /* Animation performance improvements */
 @media (prefers-reduced-motion: reduce) {
   .loading-spinner,

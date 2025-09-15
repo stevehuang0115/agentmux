@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 export class TeamActivityWebSocketService extends EventEmitter {
     storageService;
     tmuxService;
@@ -9,7 +9,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
     cachedActivityData = null;
     BACKGROUND_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
     MAX_OUTPUT_SIZE = 1024; // 1KB max per output
-    SESSION_CHECK_TIMEOUT = 3000; // 3 second timeout
+    SESSION_CHECK_TIMEOUT = 8000; // 8 second timeout (increased for reliability)
     constructor(storageService, tmuxService, taskTrackingService) {
         super();
         this.storageService = storageService;

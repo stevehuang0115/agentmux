@@ -212,7 +212,7 @@ class MockAgentMuxMCP {
 
   async getAgentStatus(params: any): Promise<any> {
     const { agentName, sessionName } = params;
-    
+
     // Validate required parameters
     if (!agentName && !sessionName) {
       return {
@@ -244,7 +244,7 @@ class MockAgentMuxMCP {
             lastActivityCheck: new Date().toISOString(),
             sessionActive: true
           };
-          
+
           resolve({
             content: [{
               type: 'text' as const,
@@ -253,6 +253,113 @@ class MockAgentMuxMCP {
           });
         }
       });
+    });
+  }
+
+  async assignTask(params: any): Promise<any> {
+    const { taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
+
+    // Validate required parameters
+    if (!taskPath || !targetSessionName) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: '❌ taskPath and targetSessionName are required'
+        }],
+        isError: true
+      };
+    }
+
+    // Prevent delegation loops
+    if (delegationChain.includes(targetSessionName)) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `❌ Delegation loop detected: ${targetSessionName} is already in the delegation chain: ${delegationChain.join(' → ')}`
+        }],
+        isError: true
+      };
+    }
+
+    // Limit delegation chain length
+    if (delegationChain.length >= 5) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `❌ Delegation chain too long (${delegationChain.length}). Maximum allowed: 5. Current chain: ${delegationChain.join(' → ')}`
+        }],
+        isError: true
+      };
+    }
+
+    return new Promise((resolve) => {
+      // Mock session existence check
+      mockExec(`tmux has-session -t "${targetSessionName}"`, (error: any) => {
+        if (error) {
+          resolve({
+            content: [{
+              type: 'text' as const,
+              text: `❌ Target session '${targetSessionName}' not found or not accessible`
+            }],
+            isError: true
+          });
+        } else {
+          // Mock successful assignment
+          const newChain = [...delegationChain];
+          if (delegatedBy && !newChain.includes(delegatedBy)) {
+            newChain.push(delegatedBy);
+          }
+
+          resolve({
+            content: [{
+              type: 'text' as const,
+              text: `✅ Task assigned to ${targetSessionName}${reason ? ` (${reason})` : ''}\n📋 Task: ${taskPath}\n🔗 Delegation chain: ${newChain.length > 0 ? newChain.join(' → ') + ' → ' + targetSessionName : targetSessionName}`
+            }]
+          });
+        }
+      });
+    });
+  }
+
+  async readTask(params: any): Promise<any> {
+    const { taskPath } = params;
+
+    if (!taskPath) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: '❌ taskPath is required'
+        }],
+        isError: true
+      };
+    }
+
+    // Mock reading task file
+    const mockTaskContent = `---
+title: Example Task
+priority: high
+assignedTo: backend-dev
+---
+
+# Example Task
+
+This is a mock task for testing purposes.
+
+## Requirements
+- Implement feature X
+- Add tests
+- Update documentation
+
+## Acceptance Criteria
+- [ ] Feature works as expected
+- [ ] Tests pass
+- [ ] Documentation updated`;
+
+    return Promise.resolve({
+      content: [{
+        type: 'text' as const,
+        text: `📋 Task File Content (${mockTaskContent.length} chars):\n\n${mockTaskContent}`
+      }]
     });
   }
   
@@ -842,6 +949,221 @@ describe('AgentMuxMCP', () => {
 
       expect(result.content[0].text).toContain('🔍 Status for preferred-agent:');
       expect(result.content[0].text).not.toContain('backup-session');
+    });
+  });
+
+  describe('assignTask', () => {
+    it('should assign task successfully to existing session', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/.agentmux/tasks/sprint1/open/task-123.md',
+        targetSessionName: 'backend-dev-session',
+        delegatedBy: 'orchestrator',
+        reason: 'Backend expertise required'
+      });
+
+      expect(result.content[0].text).toContain('✅ Task assigned to backend-dev-session (Backend expertise required)');
+      expect(result.content[0].text).toContain('📋 Task: /project/.agentmux/tasks/sprint1/open/task-123.md');
+      expect(result.content[0].text).toContain('🔗 Delegation chain: orchestrator → backend-dev-session');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require taskPath parameter', async () => {
+      const result = await mcpServer.assignTask({
+        targetSessionName: 'test-session'
+      });
+
+      expect(result.content[0].text).toBe('❌ taskPath and targetSessionName are required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should require targetSessionName parameter', async () => {
+      const result = await mcpServer.assignTask({
+        taskPath: '/path/to/task.md'
+      });
+
+      expect(result.content[0].text).toBe('❌ taskPath and targetSessionName are required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should handle session not found', async () => {
+      // Mock session doesn't exist
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(new Error('Session not found'), '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/.agentmux/tasks/sprint1/open/task-456.md',
+        targetSessionName: 'nonexistent-session'
+      });
+
+      expect(result.content[0].text).toBe("❌ Target session 'nonexistent-session' not found or not accessible");
+      expect(result.isError).toBe(true);
+    });
+
+    it('should prevent delegation loops', async () => {
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'agent-b',
+        delegationChain: ['orchestrator', 'agent-a', 'agent-b', 'agent-c']
+      });
+
+      expect(result.content[0].text).toContain('❌ Delegation loop detected: agent-b is already in the delegation chain');
+      expect(result.content[0].text).toContain('orchestrator → agent-a → agent-b → agent-c');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should limit delegation chain length', async () => {
+      const longChain = ['agent1', 'agent2', 'agent3', 'agent4', 'agent5'];
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'agent6',
+        delegationChain: longChain
+      });
+
+      expect(result.content[0].text).toContain('❌ Delegation chain too long (5). Maximum allowed: 5');
+      expect(result.content[0].text).toContain('agent1 → agent2 → agent3 → agent4 → agent5');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should handle delegation without reason', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'dev-session'
+      });
+
+      expect(result.content[0].text).toContain('✅ Task assigned to dev-session');
+      expect(result.content[0].text).not.toContain('('); // No reason in parentheses
+      expect(result.content[0].text).toContain('🔗 Delegation chain: dev-session');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should build delegation chain correctly', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'frontend-dev',
+        delegatedBy: 'tpm',
+        reason: 'UI changes needed',
+        delegationChain: ['orchestrator', 'backend-dev']
+      });
+
+      expect(result.content[0].text).toContain('✅ Task assigned to frontend-dev (UI changes needed)');
+      expect(result.content[0].text).toContain('🔗 Delegation chain: orchestrator → backend-dev → tpm → frontend-dev');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should not duplicate delegatedBy in chain', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'qa-engineer',
+        delegatedBy: 'orchestrator',
+        delegationChain: ['orchestrator', 'dev-lead'] // orchestrator already in chain
+      });
+
+      expect(result.content[0].text).toContain('🔗 Delegation chain: orchestrator → dev-lead → qa-engineer');
+      // Should not have orchestrator duplicated
+      expect(result.content[0].text).not.toContain('orchestrator → dev-lead → orchestrator → qa-engineer');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should handle edge case of maximum allowed chain length', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const exactMaxChain = ['agent1', 'agent2', 'agent3', 'agent4']; // 4 items, under limit
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'final-agent',
+        delegationChain: exactMaxChain
+      });
+
+      expect(result.content[0].text).toContain('✅ Task assigned to final-agent');
+      expect(result.content[0].text).toContain('🔗 Delegation chain: agent1 → agent2 → agent3 → agent4 → final-agent');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should handle empty delegation chain', async () => {
+      // Mock session exists
+      mockExec.mockImplementationOnce((cmd: string, callback?: any) => {
+        if (cmd.includes('has-session')) {
+          if (typeof callback === 'function') callback(null, '', '');
+        }
+      });
+
+      const result = await mcpServer.assignTask({
+        taskPath: '/project/task.md',
+        targetSessionName: 'initial-agent',
+        delegationChain: []
+      });
+
+      expect(result.content[0].text).toContain('✅ Task assigned to initial-agent');
+      expect(result.content[0].text).toContain('🔗 Delegation chain: initial-agent');
+      expect(result.isError).toBeUndefined();
+    });
+  });
+
+  describe('readTask', () => {
+    it('should read task file successfully', async () => {
+      const result = await mcpServer.readTask({
+        taskPath: '/project/.agentmux/tasks/sprint1/open/example-task.md'
+      });
+
+      expect(result.content[0].text).toContain('📋 Task File Content');
+      expect(result.content[0].text).toContain('Example Task');
+      expect(result.content[0].text).toContain('Implement feature X');
+      expect(result.content[0].text).toContain('priority: high');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require taskPath parameter', async () => {
+      const result = await mcpServer.readTask({});
+
+      expect(result.content[0].text).toBe('❌ taskPath is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should show file size in response', async () => {
+      const result = await mcpServer.readTask({
+        taskPath: '/project/task.md'
+      });
+
+      expect(result.content[0].text).toMatch(/📋 Task File Content \(\d+ chars\):/);
+      expect(result.isError).toBeUndefined();
     });
   });
 });

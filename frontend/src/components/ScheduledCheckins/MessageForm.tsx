@@ -26,7 +26,7 @@ export const MessageForm: React.FC<MessageFormProps> = ({
       title={editingMessage ? 'Edit Scheduled Message' : 'Create Scheduled Message'}
       onSubmit={onSubmit}
       submitText={editingMessage ? 'Update' : 'Create'}
-      size="lg"
+      size="xxl"
     >
       <FormGroup>
         <FormLabel htmlFor="name" required>Name</FormLabel>
@@ -67,7 +67,7 @@ export const MessageForm: React.FC<MessageFormProps> = ({
           value={formData.message}
           onChange={(e) => setFormData({...formData, message: e.target.value})}
           placeholder="Please provide a status update on the current tasks"
-          rows={4}
+          rows={8}
           required
         />
         <FormHelp>

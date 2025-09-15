@@ -185,7 +185,7 @@ async function startBackendServer(webPort: number, mcpPort: number): Promise<Chi
 		[
 			'--expose-gc',
 			'--max-old-space-size=2048',
-			path.join(projectRoot, 'dist/backend/index.js'),
+			path.join(projectRoot, 'dist/backend/backend/src/index.js'),
 		],
 		{
 			env,
@@ -236,7 +236,7 @@ async function startMCPServer(mcpPort: number): Promise<ChildProcess> {
 		AGENT_ROLE: 'orchestrator',
 	};
 
-	const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/index.js')], {
+	const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/mcp-server/src/index.js')], {
 		env,
 		stdio: 'pipe',
 		detached: false,

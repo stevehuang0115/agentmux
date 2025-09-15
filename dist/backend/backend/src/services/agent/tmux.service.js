@@ -464,19 +464,91 @@ export class TmuxService extends EventEmitter {
         }
     }
     /**
+     * Check if a tmux session is attached
+     */
+    async isSessionAttached(sessionName) {
+        try {
+            const result = await this.tmuxCommand.executeTmuxCommand([
+                'display-message',
+                '-p',
+                '-t',
+                sessionName,
+                '#{?session_attached,attached,detached}'
+            ]);
+            const status = result.trim();
+            this.logger.debug('Session attachment status checked', {
+                sessionName,
+                status,
+                isAttached: status === 'attached'
+            });
+            return status === 'attached';
+        }
+        catch (error) {
+            this.logger.warn('Failed to check session attachment status', {
+                sessionName,
+                error: error.message
+            });
+            // Default to detached if we can't determine status
+            return false;
+        }
+    }
+    /**
+     * Send message directly using send-keys (for attached sessions)
+     */
+    async sendMessageDirectly(sessionName, message) {
+        try {
+            // Clear current command line first
+            await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+            // Send message using direct send-keys approach
+            await this.tmuxCommand.executeTmuxCommand([
+                'send-keys',
+                '-t',
+                sessionName,
+                message,
+                'C-m'
+            ]);
+            this.emit('message_sent', { sessionName, message, method: 'direct' });
+            this.logger.debug('Message sent directly via send-keys', {
+                sessionName,
+                messageLength: message.length,
+            });
+        }
+        catch (error) {
+            this.logger.error('Error sending message directly to tmux session:', error);
+            throw error;
+        }
+    }
+    /**
      * Send a message to a specific tmux session
+     * Uses dual approach: direct send-keys for attached sessions, shadow client for detached
      */
     async sendMessage(sessionName, message) {
         try {
-            // Clear current command line first (important for sessions running interactive programs like Gemini CLI)
-            await this.tmuxCommand.clearCurrentCommandLine(sessionName);
-            await this.tmuxCommand.sendMessage(sessionName, message);
-            // Send Enter key separately to execute the message
-            await this.tmuxCommand.sendEnter(sessionName);
-            this.emit('message_sent', { sessionName, message });
+            // Check if session is attached
+            const isAttached = await this.isSessionAttached(sessionName);
+            if (isAttached) {
+                this.logger.debug('Session is attached, using direct send-keys approach', {
+                    sessionName,
+                    messageLength: message.length,
+                });
+                // Use direct send-keys for attached sessions
+                await this.sendMessageDirectly(sessionName, message);
+            }
+            else {
+                this.logger.debug('Session is detached, using shadow client approach', {
+                    sessionName,
+                    messageLength: message.length,
+                });
+                // Use shadow client for detached sessions (original approach)
+                await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+                await this.tmuxCommand.sendMessage(sessionName, message);
+                await this.tmuxCommand.sendEnter(sessionName);
+                this.emit('message_sent', { sessionName, message, method: 'shadow_client' });
+            }
             this.logger.debug('Message sent successfully', {
                 sessionName,
                 messageLength: message.length,
+                method: isAttached ? 'direct' : 'shadow_client',
             });
         }
         catch (error) {
@@ -585,7 +657,7 @@ export class TmuxService extends EventEmitter {
     async executeTmuxInitScript() {
         try {
             const { readFile } = await import('fs/promises');
-            const initScriptPath = path.join(this.projectRoot, 'config', 'initialize_tmux.sh');
+            const initScriptPath = path.join(this.projectRoot, 'config', 'runtime_scripts', 'initialize_tmux.sh');
             // Read the script file
             const scriptContent = await readFile(initScriptPath, 'utf8');
             this.logger.info('Executing tmux initialization script', {

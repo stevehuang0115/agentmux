@@ -3,7 +3,7 @@ import { TmuxService } from '../agent/tmux.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { ScheduledMessage, MessageDeliveryLog } from '../../types/index';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../agent/tmux.service.js');

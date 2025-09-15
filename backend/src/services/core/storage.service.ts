@@ -9,7 +9,7 @@ import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDel
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
-import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
@@ -168,7 +168,6 @@ export class StorageService {
   // Team management
   async getTeams(): Promise<Team[]> {
     try {
-      console.log(`[STORAGE-DEBUG-TS] 📖 getTeams called at ${new Date().toISOString()}`);
       await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
       const content = await fs.readFile(this.teamsFile, 'utf-8');
       const data = JSON.parse(content);
@@ -182,26 +181,15 @@ export class StorageService {
         };
         await this.atomicWriteFile(this.teamsFile, JSON.stringify(newData, null, 2));
         const processedTeams = data.map((team: Team) => {
-          console.log(`[STORAGE-DEBUG-TS] 🔄 Processing team: ${team.name} via TeamModel.fromJSON (old format)`);
           return TeamModel.fromJSON(team).toJSON();
         });
         return processedTeams;
       }
 
       const teams = data.teams || [];
-      console.log(`[STORAGE-DEBUG-TS] 📋 Found ${teams.length} teams in new format`);
 
       const processedTeams = teams.map((team: Team) => {
-        console.log(`[STORAGE-DEBUG-TS] 🔄 Processing team: ${team.name} via TeamModel.fromJSON`);
         const processedTeam = TeamModel.fromJSON(team).toJSON();
-
-        // Log member statuses after processing
-        if (processedTeam.members) {
-          processedTeam.members.forEach(member => {
-            console.log(`[STORAGE-DEBUG-TS] 📤 Loaded member ${member.name}: agentStatus=${member.agentStatus}, workingStatus=${member.workingStatus}, readyAt=${(member as any).readyAt}`);
-          });
-        }
-
         return processedTeam;
       });
 

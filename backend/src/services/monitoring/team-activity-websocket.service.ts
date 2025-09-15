@@ -3,7 +3,7 @@ import { StorageService } from '../core/storage.service.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { TerminalGateway } from '../../websocket/terminal.gateway.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 export interface TeamActivityData {
   orchestrator: {
@@ -41,7 +41,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
   private cachedActivityData: TeamActivityData | null = null;
   private readonly BACKGROUND_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_OUTPUT_SIZE = 1024; // 1KB max per output
-  private readonly SESSION_CHECK_TIMEOUT = 3000; // 3 second timeout
+  private readonly SESSION_CHECK_TIMEOUT = 8000; // 8 second timeout (increased for reliability)
 
   constructor(
     storageService: StorageService,

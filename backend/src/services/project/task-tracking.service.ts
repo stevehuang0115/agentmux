@@ -5,7 +5,7 @@ import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
 import { InProgressTask, TaskTrackingData, TaskFileInfo } from '../../types/task-tracking.types.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 export class TaskTrackingService extends EventEmitter {
   private readonly taskTrackingPath: string;

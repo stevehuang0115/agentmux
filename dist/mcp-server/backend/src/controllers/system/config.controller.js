@@ -7,7 +7,21 @@ export async function getConfigFile(req, res) {
             res.status(400).json({ success: false, error: 'Invalid file name' });
             return;
         }
-        const configPath = path.join(process.cwd(), 'config', fileName);
+        // Map specific files to their new subdirectories
+        let configPath;
+        if (fileName === 'available_team_roles.json') {
+            configPath = path.join(process.cwd(), 'config', 'teams', fileName);
+        }
+        else if (fileName.startsWith('build_') && fileName.endsWith('_prompt.json')) {
+            configPath = path.join(process.cwd(), 'config', 'task_starters', fileName);
+        }
+        else if (fileName === 'runtime-config.json') {
+            configPath = path.join(process.cwd(), 'config', 'runtime_scripts', fileName);
+        }
+        else {
+            // For other files, check in the root config directory first
+            configPath = path.join(process.cwd(), 'config', fileName);
+        }
         if (!fsSync.existsSync(configPath)) {
             res.status(404).json({ success: false, error: `Config file ${fileName} not found` });
             return;

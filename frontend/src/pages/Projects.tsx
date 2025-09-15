@@ -5,7 +5,7 @@ import { CreateCard } from '@/components/Cards/CreateCard';
 import { ProjectCreator } from '@/components/Modals/ProjectCreator';
 import { Project, ApiResponse } from '@/types';
 import axios from 'axios';
-import { Plus, Search, Filter } from 'lucide-react';
+import { Plus, Search, Filter, Folder } from 'lucide-react';
 
 const API_BASE = '/api';
 
@@ -150,21 +150,24 @@ export const Projects: React.FC = () => {
             />
           </div>
         ) : (
-          <div className="empty-state">
-            <div className="empty-icon">📁</div>
+          <div className="empty-state" style={{ padding: '4rem 2rem' }}>
+            <div className="empty-icon">
+              <Folder size={48} strokeWidth={1.5} style={{ color: '#6B7280' }} />
+            </div>
             <h3 className="empty-title">
               {searchTerm || filterStatus !== 'all' ? 'No projects found' : 'No projects yet'}
             </h3>
             <p className="empty-description">
-              {searchTerm || filterStatus !== 'all' 
+              {searchTerm || filterStatus !== 'all'
                 ? 'Try adjusting your search or filter criteria'
                 : 'Create your first project to get started with AgentMux'
               }
             </p>
             {!searchTerm && filterStatus === 'all' && (
-              <button 
+              <button
                 className="primary-button"
                 onClick={() => setShowCreator(true)}
+                style={{ padding: '0.75rem 1.5rem', marginTop: '1rem' }}
               >
                 <Plus className="button-icon" />
                 Create Project

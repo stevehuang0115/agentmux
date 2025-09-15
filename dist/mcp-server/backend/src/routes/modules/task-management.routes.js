@@ -1,4 +1,5 @@
 import * as taskMgmtHandlers from '../../controllers/task-management/task-management.controller.js';
+import * as inProgressHandlers from '../../controllers/task-management/in-progress-tasks.controller.js';
 export function registerTaskManagementRoutes(router, apiController) {
     // Task Management Routes (for MCP tools)
     router.post('/task-management/assign', (req, res) => taskMgmtHandlers.assignTask.call(apiController, req, res));
@@ -12,5 +13,7 @@ export function registerTaskManagementRoutes(router, apiController) {
     router.post('/task-management/start-execution', (req, res) => taskMgmtHandlers.startTaskExecution.call(apiController, req, res));
     // Task Creation Routes
     router.post('/tasks/create-from-config', (req, res) => taskMgmtHandlers.createTasksFromConfig.call(apiController, req, res));
+    // In-Progress Tasks Routes
+    router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }
 //# sourceMappingURL=task-management.routes.js.map

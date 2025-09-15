@@ -15,7 +15,7 @@ jest.mock('./project/project.controller.js');
 jest.mock('./orchestrator/orchestrator.controller.js');
 jest.mock('./system/terminal.controller.js');
 jest.mock('./workflow/scheduler.controller.js');
-jest.mock('./workflow/workflow.controller.js');
+// jest.mock('./workflow/workflow.controller.js'); // Removed - workflow system deprecated
 jest.mock('./task-management/task-management.controller.js');
 
 describe('ApiController', () => {

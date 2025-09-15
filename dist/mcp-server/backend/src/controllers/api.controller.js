@@ -398,18 +398,15 @@ export class ApiController {
         const { clearDeliveryLogs } = await import('./messaging/delivery-logs.controller.js');
         return clearDeliveryLogs.call(this, req, res);
     }
-    // Workflows Methods
+    // Workflows Methods - Deprecated (orchestration now handled via scheduled messages)
     async getWorkflowExecution(req, res) {
-        const { getWorkflowExecution } = await import('./workflow/workflow.controller.js');
-        return getWorkflowExecution.call(this, req, res);
+        res.status(410).json({ success: false, error: 'Workflow execution API deprecated - orchestration now handled via scheduled messages' });
     }
     async getActiveWorkflows(req, res) {
-        const { getActiveWorkflows } = await import('./workflow/workflow.controller.js');
-        return getActiveWorkflows.call(this, req, res);
+        res.status(410).json({ success: false, error: 'Active workflows API deprecated - orchestration now handled via scheduled messages' });
     }
     async cancelWorkflowExecution(req, res) {
-        const { cancelWorkflowExecution } = await import('./workflow/workflow.controller.js');
-        return cancelWorkflowExecution.call(this, req, res);
+        res.status(410).json({ success: false, error: 'Workflow cancellation API deprecated - orchestration now handled via scheduled messages' });
     }
     // Config Files Methods
     async getConfigFile(req, res) {

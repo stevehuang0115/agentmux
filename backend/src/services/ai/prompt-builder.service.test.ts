@@ -93,6 +93,8 @@ describe('PromptBuilderService', () => {
 			role: 'developer',
 			projectPath: '/test/project',
 			memberId: 'member-123',
+			systemPrompt: 'test prompt',
+			runtimeType: 'claude-code' as any
 		};
 
 		it('should load role-specific prompt when available', async () => {
@@ -104,10 +106,10 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toContain('Role-specific prompt for developer with session test-session');
 			expect(mockAccess).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/developer-prompt.md')
+				expect.stringContaining('/config/teams/prompts/developer-prompt.md')
 			);
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/developer-prompt.md'),
+				expect.stringContaining('/config/teams/prompts/developer-prompt.md'),
 				'utf8'
 			);
 		});
@@ -143,7 +145,7 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toBe('Register as dev with session test-session and member member-123');
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/dev-prompt.md'),
+				expect.stringContaining('/config/teams/prompts/dev-prompt.md'),
 				'utf8'
 			);
 		});
@@ -188,7 +190,7 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toBe(templateContent);
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/test-template.md'),
+				expect.stringContaining('/config/teams/prompts/test-template.md'),
 				'utf8'
 			);
 		});
@@ -210,7 +212,7 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toBe(true);
 			expect(mockAccess).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/existing-template.md')
+				expect.stringContaining('/config/teams/prompts/existing-template.md')
 			);
 		});
 
@@ -236,11 +238,11 @@ describe('PromptBuilderService', () => {
 
 			const result = service.buildTaskAssignmentPrompt(task);
 
-			expect(result).toContain('Task ID: task-123');
-			expect(result).toContain('Title: Implement user authentication');
-			expect(result).toContain('Assigned to: backend-developer');
-			expect(result).toContain('Priority: HIGH');
-			expect(result).toContain('Estimated Hours: 8');
+			expect(result).toContain('**Task ID**: task-123');
+			expect(result).toContain('**Title**: Implement user authentication');
+			expect(result).toContain('**Assigned to**: backend-developer');
+			expect(result).toContain('**Priority**: HIGH');
+			expect(result).toContain('**Estimated Hours**: 8');
 			expect(result).toContain('Add login and registration functionality');
 		});
 
@@ -255,8 +257,8 @@ describe('PromptBuilderService', () => {
 
 			const result = service.buildTaskAssignmentPrompt(task);
 
-			expect(result).toContain('Task ID: task-456');
-			expect(result).toContain('Priority: MEDIUM');
+			expect(result).toContain('**Task ID**: task-456');
+			expect(result).toContain('**Priority**: MEDIUM');
 			expect(result).not.toContain('Estimated Hours');
 		});
 	});
@@ -278,7 +280,80 @@ describe('PromptBuilderService', () => {
 		it('should return prompts directory path', () => {
 			const result = service.getPromptsDirectory();
 
-			expect(result).toContain('/config/prompts');
+			expect(result).toContain('/config/teams/prompts');
+		});
+	});
+
+	describe('config path resolution', () => {
+		it('should construct correct path for team prompts directory', () => {
+			const testService = new PromptBuilderService('/test/project');
+			const promptsDir = testService.getPromptsDirectory();
+
+			expect(promptsDir).toBe('/test/project/config/teams/prompts');
+		});
+
+		it('should use correct path structure when loading prompts', async () => {
+			const mockPromptContent = 'Test prompt content';
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(mockPromptContent);
+
+			const testService = new PromptBuilderService('/custom/project/root');
+
+			await testService.loadPromptTemplate('developer-prompt.md');
+
+			expect(mockReadFile).toHaveBeenCalledWith(
+				'/custom/project/root/config/teams/prompts/developer-prompt.md',
+				'utf8'
+			);
+		});
+
+		it('should check existence with correct path structure', async () => {
+			mockAccess.mockResolvedValue(undefined);
+
+			const testService = new PromptBuilderService('/test/root');
+
+			await testService.promptTemplateExists('tpm-prompt.md');
+
+			expect(mockAccess).toHaveBeenCalledWith(
+				'/test/root/config/teams/prompts/tpm-prompt.md'
+			);
+		});
+
+		it('should handle path resolution for different role prompt files', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue('Prompt content');
+
+			const roles = ['fullstack-dev', 'designer', 'qa', 'architect'];
+
+			for (const role of roles) {
+				await service.loadPromptTemplate(`${role}-prompt.md`);
+
+				expect(mockReadFile).toHaveBeenCalledWith(
+					expect.stringContaining(`/config/teams/prompts/${role}-prompt.md`),
+					'utf8'
+				);
+			}
+		});
+
+		it('should build system prompt with correct path lookup', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue('Role-specific prompt for {{ROLE}}');
+
+			const config: TeamMemberSessionConfig = {
+				name: 'test-session',
+				role: 'tpm',
+				projectPath: '/test/project',
+				memberId: 'member-123',
+				systemPrompt: 'test prompt',
+				runtimeType: 'claude-code' as any
+			};
+
+			await service.buildSystemPrompt(config);
+
+			// Should attempt to load prompt from teams prompts directory
+			expect(mockAccess).toHaveBeenCalledWith(
+				expect.stringContaining('/config/teams/prompts/tpm-prompt.md')
+			);
 		});
 	});
 });

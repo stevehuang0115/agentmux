@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { Request, Response } from 'express';
 import * as scheduledMessagesHandlers from './scheduled-messages.controller.js';
 import type { ApiContext } from '../types.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 jest.mock('../../models/index.js', () => ({
   ScheduledMessageModel: {

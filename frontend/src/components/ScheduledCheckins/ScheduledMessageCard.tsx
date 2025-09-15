@@ -9,6 +9,7 @@ interface ScheduledMessageCardProps {
   onToggleActive: (id: string, isActive: boolean) => void;
   onRunNow: (id: string, name: string) => void;
   formatDate: (dateString: string) => string;
+  onCardClick?: (message: ScheduledMessage) => void;
 }
 
 export const ScheduledMessageCard: React.FC<ScheduledMessageCardProps> = ({
@@ -17,33 +18,39 @@ export const ScheduledMessageCard: React.FC<ScheduledMessageCardProps> = ({
   onDelete,
   onToggleActive,
   onRunNow,
-  formatDate
+  formatDate,
+  onCardClick
 }) => {
   const isActive = message.isActive;
-  const cardClass = `scheduled-message-card ${!isActive ? 'completed' : ''}`;
+  const cardClass = `scheduled-message-card ${!isActive ? 'completed' : ''} ${onCardClick ? 'clickable' : ''}`;
+
+  const handleCardClick = (e: React.MouseEvent) => {
+    // Don't trigger card click if action button was clicked
+    if ((e.target as Element).closest('.message-actions')) {
+      return;
+    }
+    onCardClick?.(message);
+  };
 
   return (
-    <div className={cardClass}>
+    <div className={cardClass} onClick={handleCardClick}>
+      {/* Compact Header */}
       <div className="message-header">
         <div className="message-info">
           <h3 className="message-name">{message.name}</h3>
-          <div className="message-status">
-            <div className={`status-indicator ${isActive ? 'active' : 'completed'}`}>
-              <CheckCircle className="status-icon" />
-              {isActive ? 'Active' : 'Completed'}
-            </div>
-            {!isActive && (
-              <div className="message-type">
-                {message.isRecurring ? 'Recurring (Deactivated)' : 'One-time (Executed)'}
-              </div>
-            )}
+          <div className={`status-indicator ${isActive ? 'active' : 'completed'}`}>
+            <CheckCircle className="status-icon" />
+            {isActive ? 'Active' : 'Completed'}
           </div>
         </div>
-        
+
         <div className="message-actions">
           <button
             className="action-btn toggle-btn"
-            onClick={() => onToggleActive(message.id, message.isActive)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleActive(message.id, message.isActive);
+            }}
             title={isActive ? "Disable" : "Re-activate"}
           >
             {isActive ? <Pause size={16} /> : <Play size={16} />}
@@ -52,14 +59,20 @@ export const ScheduledMessageCard: React.FC<ScheduledMessageCardProps> = ({
             <>
               <button
                 className="action-btn edit-btn"
-                onClick={() => onEdit(message)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEdit(message);
+                }}
                 title="Edit"
               >
                 <Edit size={16} />
               </button>
               <button
                 className="action-btn run-btn"
-                onClick={() => onRunNow(message.id, message.name)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRunNow(message.id, message.name);
+                }}
                 title="Run now"
               >
                 <Play size={16} />
@@ -68,7 +81,10 @@ export const ScheduledMessageCard: React.FC<ScheduledMessageCardProps> = ({
           )}
           <button
             className="action-btn delete-btn"
-            onClick={() => onDelete(message.id, message.name)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(message.id, message.name);
+            }}
             title="Delete"
           >
             <Trash2 size={16} />
@@ -76,46 +92,35 @@ export const ScheduledMessageCard: React.FC<ScheduledMessageCardProps> = ({
         </div>
       </div>
 
-      <div className="message-content">
-        <div className="message-target">
-          <strong>Target Team:</strong> {message.targetTeam}
+      {/* Compact Content */}
+      <div className="message-content-compact">
+        <div className="message-details-row">
+          <div className="detail-item">
+            <span className="detail-label">Target:</span>
+            <span className="detail-value">{message.targetTeam}</span>
+          </div>
           {message.targetProject && (
-            <><br/><strong>Target Project:</strong> {message.targetProject}</>
+            <div className="detail-item">
+              <span className="detail-label">Project:</span>
+              <span className="detail-value">{message.targetProject}</span>
+            </div>
           )}
         </div>
-        
-        <div className="message-text">
-          <strong>Message:</strong>
-          <div className="message-preview">{message.message}</div>
-        </div>
-        
-        <div className="message-schedule">
-          <strong>{isActive ? 'Schedule:' : 'Original Schedule:'}</strong>
-          {message.isRecurring ? 'Recurring' : 'One-time'} - 
-          Every {message.delayAmount} {message.delayUnit}
-        </div>
-      </div>
 
-      <div className="message-meta">
-        {message.lastRun && (
-          <div className="meta-item">
-            <Clock size={14} />
-            <span>
-              {isActive ? 'Last run:' : 'Last executed:'} {formatDate(message.lastRun)}
+        <div className="schedule-row">
+          <div className="detail-item">
+            <span className="detail-label">Schedule:</span>
+            <span className="detail-value">
+              {message.isRecurring ? 'Every' : 'Once after'} {message.delayAmount} {message.delayUnit}
             </span>
           </div>
-        )}
-        {message.nextRun && isActive && (
-          <div className="meta-item">
-            <Clock size={14} />
-            <span>Next run: {formatDate(message.nextRun)}</span>
-          </div>
-        )}
-        {!isActive && (
-          <div className="meta-item">
-            <span>Status: {message.isRecurring ? 'Recurring message was deactivated' : 'One-time message completed'}</span>
-          </div>
-        )}
+          {message.nextRun && isActive && (
+            <div className="detail-item">
+              <Clock size={14} className="schedule-icon" />
+              <span className="detail-value next-run">Next: {formatDate(message.nextRun)}</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -22,7 +22,7 @@ export { TaskAssignmentMonitorService } from './monitoring/task-assignment-monit
 export { TeamActivityWebSocketService } from './monitoring/team-activity-websocket.service.js';
 export { TeamsJsonWatcherService } from './monitoring/teams-json-watcher.service.js';
 // Workflow Services
-export { WorkflowService } from './workflow/workflow.service.js';
+// WorkflowService removed - project orchestration now handled via scheduled messages
 export { SchedulerService } from './workflow/scheduler.service.js';
 export { MessageSchedulerService } from './workflow/message-scheduler.service.js';
 // AI Services

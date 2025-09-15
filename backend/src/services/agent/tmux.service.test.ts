@@ -53,6 +53,8 @@ describe('TmuxService', () => {
 			capturePane: jest.fn(),
 			listSessions: jest.fn(),
 			setEnvironmentVariable: jest.fn(),
+			executeTmuxCommand: jest.fn(),
+			clearCurrentCommandLine: jest.fn(),
 		} as any;
 
 		mockClaudeAgent = {
@@ -276,7 +278,56 @@ describe('TmuxService', () => {
 	});
 
 	describe('sendMessage', () => {
-		it('should send message and enter key', async () => {
+		it('should use direct send-keys for attached sessions', async () => {
+			mockTmuxCommand.executeTmuxCommand
+				.mockResolvedValueOnce('attached')
+				.mockResolvedValueOnce('');
+			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
+
+			const eventSpy = jest.fn();
+			service.on('message_sent', eventSpy);
+
+			await service.sendMessage('test-session', 'Hello Claude');
+
+			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
+				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
+			]);
+			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
+				'send-keys', '-t', 'test-session', 'Hello Claude', 'C-m'
+			]);
+			expect(eventSpy).toHaveBeenCalledWith({
+				sessionName: 'test-session',
+				message: 'Hello Claude',
+				method: 'direct'
+			});
+		});
+
+		it('should use shadow client for detached sessions', async () => {
+			mockTmuxCommand.executeTmuxCommand.mockResolvedValueOnce('detached');
+			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
+			mockTmuxCommand.sendMessage.mockResolvedValue();
+			mockTmuxCommand.sendEnter.mockResolvedValue();
+
+			const eventSpy = jest.fn();
+			service.on('message_sent', eventSpy);
+
+			await service.sendMessage('test-session', 'Hello Claude');
+
+			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
+				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
+			]);
+			expect(mockTmuxCommand.sendMessage).toHaveBeenCalledWith('test-session', 'Hello Claude');
+			expect(mockTmuxCommand.sendEnter).toHaveBeenCalledWith('test-session');
+			expect(eventSpy).toHaveBeenCalledWith({
+				sessionName: 'test-session',
+				message: 'Hello Claude',
+				method: 'shadow_client'
+			});
+		});
+
+		it('should default to detached when attachment status check fails', async () => {
+			mockTmuxCommand.executeTmuxCommand.mockRejectedValueOnce(new Error('Session not found'));
+			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
 			mockTmuxCommand.sendMessage.mockResolvedValue();
 			mockTmuxCommand.sendEnter.mockResolvedValue();
 
@@ -285,20 +336,63 @@ describe('TmuxService', () => {
 			expect(mockTmuxCommand.sendMessage).toHaveBeenCalledWith('test-session', 'Hello Claude');
 			expect(mockTmuxCommand.sendEnter).toHaveBeenCalledWith('test-session');
 		});
+	});
 
-		it('should emit message_sent event', async () => {
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sendEnter.mockResolvedValue();
+	describe('isSessionAttached', () => {
+		it('should return true for attached sessions', async () => {
+			mockTmuxCommand.executeTmuxCommand.mockResolvedValue('attached');
+
+			const result = await service.isSessionAttached('test-session');
+
+			expect(result).toBe(true);
+			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
+				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
+			]);
+		});
+
+		it('should return false for detached sessions', async () => {
+			mockTmuxCommand.executeTmuxCommand.mockResolvedValue('detached');
+
+			const result = await service.isSessionAttached('test-session');
+
+			expect(result).toBe(false);
+		});
+
+		it('should return false when session status check fails', async () => {
+			mockTmuxCommand.executeTmuxCommand.mockRejectedValue(new Error('Session not found'));
+
+			const result = await service.isSessionAttached('test-session');
+
+			expect(result).toBe(false);
+		});
+	});
+
+	describe('sendMessageDirectly', () => {
+		it('should send message using direct send-keys approach', async () => {
+			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
+			mockTmuxCommand.executeTmuxCommand.mockResolvedValue('');
 
 			const eventSpy = jest.fn();
 			service.on('message_sent', eventSpy);
 
-			await service.sendMessage('test-session', 'Hello');
+			await service.sendMessageDirectly('test-session', 'Direct message');
 
+			expect(mockTmuxCommand.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
+			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
+				'send-keys', '-t', 'test-session', 'Direct message', 'C-m'
+			]);
 			expect(eventSpy).toHaveBeenCalledWith({
 				sessionName: 'test-session',
-				message: 'Hello',
+				message: 'Direct message',
+				method: 'direct'
 			});
+		});
+
+		it('should throw error when direct send fails', async () => {
+			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
+			mockTmuxCommand.executeTmuxCommand.mockRejectedValue(new Error('Send failed'));
+
+			await expect(service.sendMessageDirectly('test-session', 'message')).rejects.toThrow('Send failed');
 		});
 	});
 

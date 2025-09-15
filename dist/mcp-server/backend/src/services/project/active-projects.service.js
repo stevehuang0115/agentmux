@@ -3,12 +3,15 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { ScheduledMessageModel } from '../../models/ScheduledMessage.js';
+import { PromptTemplateService } from '../ai/prompt-template.service.js';
 export class ActiveProjectsService {
     activeProjectsPath;
     storageService;
+    promptTemplateService;
     constructor(storageService) {
         this.activeProjectsPath = path.join(os.homedir(), '.agentmux', 'active_projects.json');
         this.storageService = storageService;
+        this.promptTemplateService = new PromptTemplateService();
     }
     async loadActiveProjectsData() {
         try {
@@ -149,24 +152,82 @@ export class ActiveProjectsService {
         return project?.status === 'running';
     }
     async createProjectCheckInSchedule(projectId, messageSchedulerService) {
-        const checkInMessage = `🔄 **15-Minute Project Check-in**
+        let checkInMessage;
+        try {
+            // Get project information from storage service
+            if (this.storageService) {
+                const projects = await this.storageService.getProjects();
+                const project = projects.find(p => p.id === projectId);
+                if (project) {
+                    // Use the check-in template (includes auto-assignment)
+                    const templateData = {
+                        projectName: project.name,
+                        projectId: projectId,
+                        projectPath: project.path,
+                        currentTimestamp: new Date().toISOString()
+                    };
+                    checkInMessage = await this.promptTemplateService.getCheckinPrompt(templateData);
+                }
+                else {
+                    // Fallback to simplified version if project not found
+                    checkInMessage = `🔄 **15-Minute Project Check-in & Auto-Assignment**
 
 **Project ID**: ${projectId}
 
-**Orchestrator Tasks:**
+**PHASE 1: PROJECT STATUS CHECK-IN**
 1. Use the \`check_team_progress\` MCP tool with projectId: "${projectId}"
 2. Review the team progress report and current task status
 3. Identify any blockers, delays, or issues
 4. Provide guidance and next steps to team members
-5. If needed, reassign tasks or adjust priorities
 
-**Focus Areas:**
-- Are team members actively working on their assigned tasks?
-- Are there any blocked tasks that need attention?
-- Is the team making good progress toward project goals?
-- Do any team members need additional context or support?
+**PHASE 2: AUTO-ASSIGNMENT**
+1. Use \`get_team_status\` to find idle team members
+2. Look for open tasks to assign to available members
+3. Follow milestone-first assignment logic
 
 Use: \`check_team_progress { "projectId": "${projectId}" }\``;
+                }
+            }
+            else {
+                // Fallback when no storage service
+                checkInMessage = `🔄 **15-Minute Project Check-in & Auto-Assignment**
+
+**Project ID**: ${projectId}
+
+**PHASE 1: PROJECT STATUS CHECK-IN**
+1. Use the \`check_team_progress\` MCP tool with projectId: "${projectId}"
+2. Review the team progress report and current task status
+3. Identify any blockers, delays, or issues
+4. Provide guidance and next steps to team members
+
+**PHASE 2: AUTO-ASSIGNMENT**
+1. Use \`get_team_status\` to find idle team members
+2. Look for open tasks to assign to available members
+3. Follow milestone-first assignment logic
+
+Use: \`check_team_progress { "projectId": "${projectId}" }\``;
+            }
+        }
+        catch (error) {
+            console.warn('Failed to load unified check-in template, using fallback:', error);
+            // Fallback message
+            checkInMessage = `🔄 **15-Minute Project Check-in & Auto-Assignment**
+
+**Project ID**: ${projectId}
+
+**PHASE 1: PROJECT STATUS CHECK-IN**
+1. Use the \`check_team_progress\` MCP tool with projectId: "${projectId}"
+2. Review the team progress report and current task status
+3. Identify any blockers, delays, or issues
+4. Provide guidance and next steps to team members
+
+**PHASE 2: AUTO-ASSIGNMENT**
+1. Use \`get_team_status\` to find idle team members
+2. Look for open tasks to assign to available members
+3. Follow milestone-first assignment logic
+
+Use: \`check_team_progress { "projectId": "${projectId}" }\``;
+        }
         const scheduledMessage = ScheduledMessageModel.create({
             name: `Check-in for Project ${projectId}`,
             targetTeam: 'orchestrator',

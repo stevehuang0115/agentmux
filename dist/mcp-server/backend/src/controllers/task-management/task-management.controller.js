@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname, resolve } from 'path';
 import { existsSync } from 'fs';
+import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 /**
  * Assigns a task to a team member by moving it from open/ to in_progress/ folder
  *
@@ -20,14 +21,24 @@ export async function assignTask(req, res) {
         }
         // Verify source task file exists
         if (!existsSync(taskPath)) {
-            res.status(404).json({ success: false, error: 'Task file not found' });
+            res.status(200).json({
+                success: false,
+                error: 'Task file does not exist at the specified path',
+                details: `No task file found at: ${taskPath}. Make sure the task file exists in the open/ folder.`,
+                taskPath,
+                suggestion: 'Verify the task file path is correct and the file exists'
+            });
             return;
         }
         // Ensure task is in open/ folder
         if (!taskPath.includes('/open/')) {
-            res.status(400).json({
+            res.status(200).json({
                 success: false,
-                error: 'Task must be in open/ folder to be assigned',
+                error: 'Task is not in the correct folder for assignment',
+                details: `Task must be in open/ folder to be assigned. Current path: ${taskPath}`,
+                taskPath,
+                expectedFolder: 'open',
+                currentFolder: taskPath.includes('/in_progress/') ? 'in_progress' : taskPath.includes('/done/') ? 'done' : taskPath.includes('/blocked/') ? 'blocked' : 'unknown'
             });
             return;
         }
@@ -106,14 +117,25 @@ export async function completeTask(req, res) {
         }
         // Verify source task file exists
         if (!existsSync(taskPath)) {
-            res.status(404).json({ success: false, error: 'Task file not found' });
+            res.status(200).json({
+                success: false,
+                error: 'Task file does not exist at the specified path',
+                details: `No task file found at: ${taskPath}. Make sure the task has been properly assigned and is in the in_progress folder.`,
+                taskPath,
+                suggestion: 'Check if the task file exists and use accept_task first to move it from open/ to in_progress/'
+            });
             return;
         }
         // Ensure task is in in_progress/ folder
         if (!taskPath.includes('/in_progress/')) {
-            res.status(400).json({
+            res.status(200).json({
                 success: false,
-                error: 'Task must be in in_progress/ folder to be completed',
+                error: 'Task is not in the correct folder for completion',
+                details: `Task must be in in_progress/ folder to be completed. Current path: ${taskPath}. Use accept_task first to move the task from open/ to in_progress/.`,
+                taskPath,
+                expectedFolder: 'in_progress',
+                currentFolder: taskPath.includes('/open/') ? 'open' : taskPath.includes('/done/') ? 'done' : taskPath.includes('/blocked/') ? 'blocked' : 'unknown',
+                action: 'Use accept_task tool first to assign the task'
             });
             return;
         }
@@ -163,14 +185,25 @@ export async function blockTask(req, res) {
         }
         // Verify source task file exists
         if (!existsSync(taskPath)) {
-            res.status(404).json({ success: false, error: 'Task file not found' });
+            res.status(200).json({
+                success: false,
+                error: 'Task file does not exist at the specified path',
+                details: `No task file found at: ${taskPath}. Make sure the task has been properly assigned and is in the in_progress folder.`,
+                taskPath,
+                suggestion: 'Check if the task file exists and use accept_task first to move it from open/ to in_progress/'
+            });
             return;
         }
         // Ensure task is in in_progress/ folder
         if (!taskPath.includes('/in_progress/')) {
-            res.status(400).json({
+            res.status(200).json({
                 success: false,
-                error: 'Task must be in in_progress/ folder to be blocked',
+                error: 'Task is not in the correct folder for blocking',
+                details: `Task must be in in_progress/ folder to be blocked. Current path: ${taskPath}. Use accept_task first to assign the task.`,
+                taskPath,
+                expectedFolder: 'in_progress',
+                currentFolder: taskPath.includes('/open/') ? 'open' : taskPath.includes('/done/') ? 'done' : taskPath.includes('/blocked/') ? 'blocked' : 'unknown',
+                action: 'Use accept_task tool first to assign the task'
             });
             return;
         }
@@ -428,7 +461,7 @@ export async function startTaskExecution(req, res) {
             return;
         }
         // Load assignment prompt template
-        const promptTemplate = await readFile(join(process.cwd(), 'config', 'prompts', 'assign-task-orchestrator-prompt-template.md'), 'utf-8');
+        const promptTemplate = await readFile(join(process.cwd(), 'config', 'orchestrator_tasks', 'prompts', 'assign-task-orchestrator-prompt-template.md'), 'utf-8');
         // Replace template variables
         const assignmentPrompt = promptTemplate
             .replace(/\{projectName\}/g, projectName)
@@ -526,7 +559,7 @@ export async function createTasksFromConfig(req, res) {
             console.warn(`Failed to read initial user journey file: ${error instanceof Error ? error.message : error}`);
         }
         // Load the configuration based on configType
-        const configPath = join(process.cwd(), 'config', `${configType}.json`);
+        const configPath = join(process.cwd(), 'config', 'task_starters', `${configType}.json`);
         let configContent;
         try {
             configContent = JSON.parse(await readFile(configPath, 'utf-8'));
@@ -567,7 +600,7 @@ export async function createTasksFromConfig(req, res) {
                 .replace(/[^a-z0-9]+/g, '_')}.md`;
             const filePath = join(tasksDir, fileName);
             // Generate task markdown content using loaded values from .md files
-            const taskContent = generateTaskMarkdown(step, {
+            const taskContent = await generateTaskMarkdown(step, {
                 projectId,
                 projectName,
                 projectPath,
@@ -616,14 +649,19 @@ async function ensureDirectoryExists(dirPath) {
     }
 }
 // Helper function to generate task markdown content
-function generateTaskMarkdown(step, projectVars) {
+async function generateTaskMarkdown(step, projectVars) {
     const { projectId, projectName, projectPath, initialGoal, userJourney } = projectVars;
-    // Process prompts with variable replacements
-    const processedPrompts = step.prompts.map((prompt) => prompt
-        .replace(/\{PROJECT_NAME\}/g, projectName)
-        .replace(/\{PROJECT_PATH\}/g, projectPath)
-        .replace(/\{INITIAL_GOAL\}/g, initialGoal)
-        .replace(/\{USER_JOURNEY\}/g, userJourney));
+    // Resolve prompts using the prompt resolver utility
+    const templateVars = {
+        PROJECT_NAME: projectName,
+        PROJECT_PATH: projectPath,
+        INITIAL_GOAL: initialGoal,
+        USER_JOURNEY: userJourney,
+        PROJECT_ID: projectId
+    };
+    // Use prompt resolver to handle both prompt_file and legacy prompts array
+    const resolvedStep = await resolveStepConfig(step, templateVars);
+    const processedPrompts = resolvedStep.prompts;
     // Generate markdown content
     const markdown = `# ${step.name}
 
@@ -659,7 +697,7 @@ ${step.conditional
         : 'No conditional requirements.'}
 
 ---
-*Generated from build_spec_prompt.json configuration*
+*Generated from configuration with prompt resolution*
 *Task can be assigned to orchestrator for execution when ready*
 `;
     return markdown;
@@ -731,7 +769,13 @@ export async function readTask(req, res) {
         }
         // Verify file exists
         if (!existsSync(taskPath)) {
-            res.status(404).json({ success: false, error: 'Task file not found' });
+            res.status(200).json({
+                success: false,
+                error: 'Task file does not exist at the specified path',
+                details: `No task file found at: ${taskPath}. Verify the path is correct and the file exists.`,
+                taskPath,
+                suggestion: 'Check that the file path is correct and the file exists in the filesystem'
+            });
             return;
         }
         // Read file content

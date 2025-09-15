@@ -6,7 +6,7 @@ import { StorageService, TmuxService, SchedulerService, MessageSchedulerService 
 import { ActiveProjectsService } from '../../services/index.js';
 import { PromptTemplateService } from '../../services/index.js';
 import { Team, TeamMember } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../../services/index.js');
@@ -1153,6 +1153,206 @@ describe('Teams Handlers', () => {
       expect(savedTeam!.members[0]).not.toHaveProperty('status');
       expect(savedTeam!.members[0]).toHaveProperty('agentStatus');
       expect(savedTeam!.members[0]).toHaveProperty('workingStatus');
+    });
+  });
+
+  describe('startTeamMember with retry logic', () => {
+    beforeEach(() => {
+      mockRequest = {
+        params: { teamId: 'team-1', memberId: 'member-1' },
+        body: {}
+      };
+      mockResponse = responseMock;
+
+      const mockTeam: Team = {
+        id: 'team-1',
+        name: 'Test Team',
+        description: 'Test Description',
+        members: [{
+          id: 'member-1',
+          name: 'Test Member',
+          sessionName: '',
+          role: 'tpm',
+          systemPrompt: 'Test prompt',
+          agentStatus: 'inactive',
+          workingStatus: 'idle',
+          runtimeType: 'claude-code',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([mockTeam]);
+      mockStorageService.getProjects.mockResolvedValue([]);
+    });
+
+    it('should succeed on first attempt', async () => {
+      const mockCreateResult = {
+        success: true,
+        sessionName: 'test-session',
+        message: 'Session created successfully'
+      };
+
+      // Mock agentRegistrationService
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn().mockResolvedValue(mockCreateResult)
+      } as any;
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockApiContext.agentRegistrationService.createAgentSession).toHaveBeenCalledTimes(1);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            memberId: 'member-1',
+            sessionName: 'test-session'
+          })
+        })
+      );
+    });
+
+    it('should retry on failure and succeed on second attempt', async () => {
+      const mockFailResult = {
+        success: false,
+        error: 'can\'t find pane: test-session'
+      };
+      const mockSuccessResult = {
+        success: true,
+        sessionName: 'test-session',
+        message: 'Session created successfully'
+      };
+
+      // Mock agentRegistrationService to fail first, succeed second
+      let callCount = 0;
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.resolve(mockFailResult);
+          } else {
+            return Promise.resolve(mockSuccessResult);
+          }
+        })
+      } as any;
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockApiContext.agentRegistrationService.createAgentSession).toHaveBeenCalledTimes(2);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            memberId: 'member-1',
+            sessionName: 'test-session'
+          })
+        })
+      );
+    });
+
+    it('should fail after all retry attempts', async () => {
+      const mockFailResult = {
+        success: false,
+        error: 'can\'t find pane: test-session'
+      };
+
+      // Mock agentRegistrationService to always fail
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn().mockResolvedValue(mockFailResult)
+      } as any;
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Should retry 3 times total
+      expect(mockApiContext.agentRegistrationService.createAgentSession).toHaveBeenCalledTimes(3);
+      expect(responseMock.status).toHaveBeenCalledWith(500);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('after 3 attempts')
+        })
+      );
+    });
+
+    it('should reset member status to inactive after failure', async () => {
+      const mockFailResult = {
+        success: false,
+        error: 'Session creation failed'
+      };
+
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn().mockResolvedValue(mockFailResult)
+      } as any;
+
+      let savedTeam: Team;
+      mockStorageService.saveTeam.mockImplementation((team: Team) => {
+        savedTeam = team;
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Verify member status was reset to inactive
+      expect(savedTeam!.members[0].agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+      expect(savedTeam!.members[0].sessionName).toBe('');
+    });
+
+    it('should handle race condition timing properly', async () => {
+      jest.useFakeTimers();
+      const startTime = Date.now();
+
+      const mockFailResult = {
+        success: false,
+        error: 'can\'t find pane: test-session'
+      };
+      const mockSuccessResult = {
+        success: true,
+        sessionName: 'test-session',
+        message: 'Session created successfully'
+      };
+
+      let callCount = 0;
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.resolve(mockFailResult);
+          } else {
+            return Promise.resolve(mockSuccessResult);
+          }
+        })
+      } as any;
+
+      const startPromise = teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Fast-forward through the retry delay
+      jest.advanceTimersByTime(1000); // Should wait 1000ms before retry
+      await startPromise;
+
+      expect(mockApiContext.agentRegistrationService.createAgentSession).toHaveBeenCalledTimes(2);
+      jest.useRealTimers();
     });
   });
 });

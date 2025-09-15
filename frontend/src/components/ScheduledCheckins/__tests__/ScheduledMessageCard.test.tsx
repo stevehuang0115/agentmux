@@ -36,12 +36,13 @@ describe('ScheduledMessageCard', () => {
 
   it('renders message information correctly', () => {
     render(<ScheduledMessageCard {...mockProps} />);
-    
+
     expect(screen.getByText('Test Message')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
-    expect(screen.getByText(/orchestrator/)).toBeInTheDocument();
-    expect(screen.getByText(/test-project/)).toBeInTheDocument();
-    expect(screen.getByText('This is a test message')).toBeInTheDocument();
+    expect(screen.getByText('orchestrator')).toBeInTheDocument();
+    expect(screen.getByText('test-project')).toBeInTheDocument();
+    // Message text is not shown in compact view - it's only in the popup
+    expect(screen.getByText('Once after 5 minutes')).toBeInTheDocument();
   });
 
   it('calls onEdit when edit button is clicked', () => {
@@ -83,23 +84,25 @@ describe('ScheduledMessageCard', () => {
   it('renders completed message with different styling', () => {
     const completedMessage = { ...mockMessage, isActive: false };
     const props = { ...mockProps, message: completedMessage };
-    
+
     render(<ScheduledMessageCard {...props} />);
-    
+
     expect(screen.getByText('Completed')).toBeInTheDocument();
-    expect(screen.getByText('One-time (Executed)')).toBeInTheDocument();
+    // Status messaging is not shown in compact view
+    expect(screen.getByText('Once after 5 minutes')).toBeInTheDocument();
   });
 
   it('shows recurring message status when deactivated', () => {
-    const completedRecurringMessage = { 
-      ...mockMessage, 
-      isActive: false, 
-      isRecurring: true 
+    const completedRecurringMessage = {
+      ...mockMessage,
+      isActive: false,
+      isRecurring: true
     };
     const props = { ...mockProps, message: completedRecurringMessage };
-    
+
     render(<ScheduledMessageCard {...props} />);
-    
-    expect(screen.getByText('Recurring (Deactivated)')).toBeInTheDocument();
+
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(screen.getByText('Every 5 minutes')).toBeInTheDocument();
   });
 });

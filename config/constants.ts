@@ -28,7 +28,7 @@ export const AGENTMUX_CONSTANTS = {
 		REGISTRATION_CHECK_INTERVAL: 5000,
 		/** Cache timeout for Claude detection (30 seconds) */
 		CLAUDE_DETECTION_CACHE_TIMEOUT: 30000,
-		/** Default shell for tmux sessions */
+		/** Default shell for tmux sessions, /bin/bash, /bin/zsh */
 		DEFAULT_SHELL: '/bin/bash',
 	},
 
@@ -110,6 +110,18 @@ export const AGENTMUX_CONSTANTS = {
 		developer: 'Developer',
 		qa: 'Quality Assurance',
 		devops: 'DevOps Engineer',
+	},
+
+	/**
+	 * Orchestrator-specific configuration
+	 */
+	ORCHESTRATOR: {
+		/** Display name for the orchestrator role */
+		DISPLAY_NAME: 'Orchestrator',
+		/** Default orchestrator window name in tmux */
+		WINDOW_NAME: 'AgentMux Orchestrator',
+		/** AgentMux session name prefix pattern */
+		SESSION_PREFIX: 'agentmux_',
 	},
 } as const;
 
@@ -243,6 +255,28 @@ export const TIMING_CONSTANTS = {
 		TASK_COMPLETION: 5 * 60 * 1000,
 		/** WebSocket connection timeout (30 seconds) */
 		WEBSOCKET: 30000,
+		/** Orchestrator setup timeout (30 seconds) */
+		ORCHESTRATOR_SETUP: 30000,
+		/** Task monitoring and polling intervals (2 seconds) */
+		TASK_MONITOR_POLL: 2000,
+		/** Health check timeout for individual checks (1 second) */
+		HEALTH_CHECK_TIMEOUT: 1000,
+		/** Agent default timeout for operations (5 minutes) */
+		AGENT_DEFAULT: 300000,
+		/** Context refresh interval (30 minutes) */
+		CONTEXT_REFRESH: 1800000,
+		/** WebSocket ping timeout (60 seconds) */
+		WS_PING: 60000,
+		/** WebSocket ping interval (25 seconds) */
+		WS_PING_INTERVAL: 25000,
+		/** Backup interval (1 hour) */
+		BACKUP: 3600000,
+		/** Rate limit window (15 minutes) */
+		RATE_LIMIT_WINDOW: 900000,
+		/** Command timestamp offset (5 minutes) */
+		COMMAND_TIMESTAMP_OFFSET: 300000,
+		/** Command timestamp offset long (10 minutes) */
+		COMMAND_TIMESTAMP_OFFSET_LONG: 600000,
 	},
 } as const;
 
@@ -305,6 +339,152 @@ export const ENV_CONSTANTS = {
 	DEV_MODE: 'DEV_MODE',
 } as const;
 
+// ========================= BACKEND-SPECIFIC CONSTANTS =========================
+
+/**
+ * Backend-specific configuration constants
+ * These constants are primarily used by the Express.js backend server
+ */
+export const BACKEND_CONSTANTS = {
+	/**
+	 * File names and configurations
+	 */
+	FILES: {
+		/** Active projects tracking file name */
+		ACTIVE_PROJECTS_FILE: 'active_projects.json',
+		/** Task tracking file name */
+		TASK_TRACKING_FILE: 'in_progress_tasks.json',
+		/** Communication log file name */
+		COMMUNICATION_LOG_FILE: 'communication.log',
+		/** Configuration file names */
+		CONFIG_FILE_NAMES: {
+			CONFIG_JSON: 'config.json',
+			APP_JSON: 'app.json',
+		},
+		/** Log file naming patterns */
+		LOG_FILE_PREFIX: 'agentmux-',
+		LOG_FILE_EXTENSION: '.log',
+	},
+
+	/**
+	 * Additional directory names not covered in AGENTMUX_CONSTANTS.PATHS
+	 */
+	ADDITIONAL_DIRS: {
+		LOGS: 'logs',
+		DATA: 'data',
+	},
+
+	/**
+	 * HTTP and network configuration
+	 */
+	NETWORK: {
+		/** Default CORS origin */
+		DEFAULT_CORS_ORIGIN: 'http://localhost:3000',
+		/** Allowed HTTP methods */
+		ALLOWED_HTTP_METHODS: ['GET', 'POST'],
+		/** HTTP status codes used in the application */
+		HTTP_STATUS_CODES: {
+			OK: 200,
+			CREATED: 201,
+			BAD_REQUEST: 400,
+			NOT_FOUND: 404,
+			INTERNAL_SERVER_ERROR: 500,
+			SERVICE_UNAVAILABLE: 503,
+		},
+		/** Maximum request body size (10MB) */
+		MAX_REQUEST_BODY_SIZE: '10mb',
+	},
+
+	/**
+	 * API endpoint paths
+	 */
+	API_ENDPOINTS: {
+		ORCHESTRATOR_SETUP: '/api/orchestrator/setup',
+		TEAMS: '/api/teams',
+		TEAM_START: '/api/teams/:id/start',
+		HEALTH: '/health',
+		API_BASE: '/api',
+		PROJECTS: '/projects',
+		MONITORING: '/monitoring',
+		SYSTEM: '/system',
+	},
+
+	/**
+	 * Orchestrator command identifiers
+	 */
+	ORCHESTRATOR_COMMANDS: {
+		GET_TEAM_STATUS: 'get_team_status',
+		LIST_PROJECTS: 'list_projects',
+		LIST_SESSIONS: 'list_sessions',
+		BROADCAST: 'broadcast',
+		HELP: 'help',
+	},
+
+	/**
+	 * Tmux command templates
+	 */
+	TMUX_COMMANDS: {
+		LIST_SESSIONS: 'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo "No sessions"',
+	},
+
+	/**
+	 * Special key names
+	 */
+	SPECIAL_KEYS: {
+		ENTER: 'Enter',
+		CTRL_C: 'C-c',
+	},
+
+	/**
+	 * Initialization script file names
+	 */
+	INIT_SCRIPTS: {
+		TMUX: 'initialize_tmux.sh',
+		CLAUDE: 'initialize_claude.sh',
+	},
+
+	/**
+	 * Size and limit constants
+	 */
+	LIMITS: {
+		/** Maximum file size for context loading (1MB) */
+		MAX_CONTEXT_FILE_SIZE_BYTES: 1048576,
+		/** Default log entry limit */
+		DEFAULT_LOG_LIMIT: 100,
+		/** Maximum concurrent monitoring jobs */
+		MAX_CONCURRENT_MONITORING_JOBS: 10,
+		/** Default log file size limit */
+		DEFAULT_LOG_FILE_SIZE: '10m',
+	},
+
+	/**
+	 * Frontend build directory path (relative to backend)
+	 */
+	FRONTEND_DIST_PATH: '../../frontend/dist',
+
+	/**
+	 * Additional environment variable names
+	 */
+	ADDITIONAL_ENV_VARS: {
+		WEB_PORT: 'WEB_PORT',
+		DEFAULT_CHECK_INTERVAL: 'DEFAULT_CHECK_INTERVAL',
+		AUTO_COMMIT_INTERVAL: 'AUTO_COMMIT_INTERVAL',
+		AGENTMUX_HOME: 'AGENTMUX_HOME',
+	},
+
+	/**
+	 * Orchestrator help text
+	 */
+	ORCHESTRATOR_HELP_TEXT: `
+Available commands:
+- get_team_status: Get current status of all team members
+- list_projects: List all available projects
+- list_sessions: List all tmux sessions
+- broadcast [message]: Send message to all active agents
+- help: Show this help message
+`.trim(),
+} as const;
+
 // ========================= TYPE HELPERS =========================
 
 /**
@@ -317,3 +497,7 @@ export type WorkingStatus =
 export type AgentRole = (typeof AGENTMUX_CONSTANTS.ROLES)[keyof typeof AGENTMUX_CONSTANTS.ROLES];
 export type MCPTool = (typeof MCP_CONSTANTS.TOOLS)[keyof typeof MCP_CONSTANTS.TOOLS];
 export type MessageType = (typeof MESSAGE_CONSTANTS.TYPES)[keyof typeof MESSAGE_CONSTANTS.TYPES];
+export type OrchestratorCommand =
+	(typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS)[keyof typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS];
+export type HTTPStatusCode =
+	(typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES)[keyof typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES];

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserGroupIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { Team, TeamMember } from '@/types';
 
@@ -8,29 +8,15 @@ interface TeamCreatorProps {
   className?: string;
 }
 
-const roleOptions = [
-  { value: 'orchestrator', label: 'Orchestrator', description: 'Coordinates all teams and manages high-level strategy' },
-  { value: 'tpm', label: 'Technical Product Manager', description: 'Scopes projects and translates business logic to technical specs' },
-  { value: 'pgm', label: 'Program Manager', description: 'Tracks progress and creates detailed tasks from specs' },
-  { value: 'frontend-developer', label: 'Frontend Developer', description: 'Specializes in UI/UX development and client-side code' },
-  { value: 'backend-developer', label: 'Backend Developer', description: 'Specializes in server-side development and system architecture' },
-  { value: 'developer', label: 'Developer', description: 'Implements features and writes code' },
-  { value: 'qa', label: 'QA Engineer', description: 'Tests features and ensures quality standards' },
-  { value: 'tester', label: 'Tester', description: 'Performs manual and automated testing' },
-  { value: 'designer', label: 'Designer', description: 'Creates UI/UX designs and prototypes' },
-];
-
-const defaultPrompts = {
-  orchestrator: `You are the Orchestrator Agent responsible for:\n- Overall project coordination and strategy\n- Creating and managing teams\n- Delegating high-level tasks\n- Monitoring project progress\n- Making architectural decisions`,
-  tpm: `You are a Technical Product Manager (TPM) responsible for:\n- Scoping projects and analyzing technical complexity\n- Translating business requirements into technical specifications\n- Defining system architecture and technical design patterns\n- Acting as technical lead and providing implementation guidance\n- Creating detailed technical design documents\n- Assessing technical feasibility and risk analysis`,
-  pgm: `You are a Program Manager (PgM) responsible for:\n- Tracking project progress and milestone completion\n- Creating detailed, actionable task tickets from technical specs\n- Breaking down complex designs into executable development tasks\n- Ensuring 100% clear requirements for developer success\n- Coordinating between team roles and managing dependencies\n- Enforcing 30-minute git commits and quality standards`,
-  'frontend-developer': `You are a Frontend Developer responsible for:\n- Creating responsive and accessible user interfaces\n- Building reusable and maintainable React/Vue/Angular components\n- Implementing CSS, SCSS, Tailwind, or styled-components\n- Handling client-side state management\n- Writing unit and integration tests for frontend components\n- Optimizing performance and user experience`,
-  'backend-developer': `You are a Backend Developer responsible for:\n- Designing and implementing RESTful APIs and GraphQL endpoints\n- Creating efficient database schemas and optimizing queries\n- Implementing secure authentication and authorization systems\n- Optimizing server performance, caching, and scalability\n- Ensuring secure coding practices and data protection\n- Working with cloud services, containers, and deployment pipelines`,
-  developer: `You are a Software Developer responsible for:\n- Implementing features according to specifications\n- Writing clean, maintainable code\n- Committing every 30 minutes without fail\n- Working in feature branches\n- Reporting progress to PgM regularly`,
-  qa: `You are a QA Engineer responsible for:\n- Testing all implemented features thoroughly\n- Verifying acceptance criteria are met\n- Documenting test results\n- Reporting issues immediately\n- Ensuring quality standards are maintained`,
-  tester: `You are a Tester responsible for:\n- Performing manual testing of features\n- Creating and executing test cases\n- Identifying bugs and edge cases\n- Validating user experience flows\n- Documenting test results clearly`,
-  designer: `You are a Designer responsible for:\n- Creating user-centered design solutions\n- Developing wireframes and prototypes\n- Ensuring consistent visual design\n- Collaborating with developers on implementation\n- Validating design against user needs`
-};
+interface TeamRole {
+  key: string;
+  displayName: string;
+  promptFile: string;
+  description: string;
+  category: string;
+  hidden?: boolean;
+  isDefault?: boolean;
+}
 
 export const TeamCreator: React.FC<TeamCreatorProps> = ({
   onTeamCreate,
@@ -40,13 +26,54 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
   const [teamName, setTeamName] = useState('');
   const [description, setDescription] = useState('');
   const [memberName, setMemberName] = useState('');
-  const [role, setRole] = useState<TeamMember['role']>('developer');
-  const [systemPrompt, setSystemPrompt] = useState(defaultPrompts.developer);
+  const [role, setRole] = useState<TeamMember['role']>('tpm');
+  const [systemPrompt, setSystemPrompt] = useState('Load from tpm-prompt.md');
   const [isCreating, setIsCreating] = useState(false);
+  const [availableRoles, setAvailableRoles] = useState<TeamRole[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load available roles from configuration
+  useEffect(() => {
+    const fetchAvailableRoles = async () => {
+      try {
+        const response = await fetch('/api/config/available_team_roles.json');
+        if (response.ok) {
+          const result = await response.json();
+          if (result.roles && Array.isArray(result.roles)) {
+            // Filter out hidden roles for the dropdown
+            const visibleRoles = result.roles.filter(role => !role.hidden);
+            setAvailableRoles(visibleRoles);
+
+            // Set default role to first available role or first default role
+            const defaultRole = visibleRoles.find(r => r.isDefault) || visibleRoles[0];
+            if (defaultRole) {
+              setRole(defaultRole.key);
+              setSystemPrompt(`Load from ${defaultRole.promptFile}`);
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching available roles:', error);
+        // Fallback to a basic set if loading fails
+        setAvailableRoles([
+          { key: 'tpm', displayName: 'Technical Product Manager', promptFile: 'tpm-prompt.md', description: 'Technical product manager', category: 'management' },
+          { key: 'architect', displayName: 'System Architect', promptFile: 'architect-prompt.md', description: 'System architect', category: 'development' },
+          { key: 'fullstack-dev', displayName: 'Fullstack Developer', promptFile: 'fullstack-dev-prompt.md', description: 'Full-stack developer', category: 'development' }
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAvailableRoles();
+  }, []);
 
   const handleRoleChange = (newRole: TeamMember['role']) => {
     setRole(newRole);
-    setSystemPrompt(defaultPrompts[newRole]);
+    const roleConfig = availableRoles.find(r => r.key === newRole);
+    if (roleConfig) {
+      setSystemPrompt(`Load from ${roleConfig.promptFile}`);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -83,8 +110,16 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
       setTeamName('');
       setDescription('');
       setMemberName('');
-      setRole('developer');
-      setSystemPrompt(defaultPrompts.developer);
+
+      // Reset to default role
+      const defaultRole = availableRoles.find(r => r.isDefault) || availableRoles[0];
+      if (defaultRole) {
+        setRole(defaultRole.key);
+        setSystemPrompt(`Load from ${defaultRole.promptFile}`);
+      } else {
+        setRole('tpm');
+        setSystemPrompt('Load from tpm-prompt.md');
+      }
     } catch (error) {
       console.error('Error creating team:', error);
       alert('Failed to create team. Please try again.');
@@ -154,16 +189,21 @@ export const TeamCreator: React.FC<TeamCreatorProps> = ({
             value={role}
             onChange={(e) => handleRoleChange(e.target.value as TeamMember['role'])}
             className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            disabled={loading}
           >
-            {roleOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
+            {loading ? (
+              <option value="">Loading roles...</option>
+            ) : (
+              availableRoles.map((roleOption) => (
+                <option key={roleOption.key} value={roleOption.key}>
+                  {roleOption.displayName}
+                </option>
+              ))
+            )}
           </select>
-          {roleOptions.find(opt => opt.value === role) && (
+          {!loading && availableRoles.find(opt => opt.key === role) && (
             <p className="mt-1 text-xs text-gray-500">
-              {roleOptions.find(opt => opt.value === role)?.description}
+              {availableRoles.find(opt => opt.key === role)?.description}
             </p>
           )}
         </div>

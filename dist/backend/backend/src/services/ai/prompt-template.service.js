@@ -3,7 +3,7 @@ import path from 'path';
 export class PromptTemplateService {
     templatesPath;
     constructor(templatesPath) {
-        this.templatesPath = templatesPath || path.join(process.cwd(), 'config', 'prompts');
+        this.templatesPath = templatesPath || path.join(process.cwd(), 'config', 'orchestrator_tasks', 'prompts');
     }
     /**
      * Load and process orchestrator task assignment template
@@ -44,18 +44,18 @@ Please:
 CRITICAL: Read the actual task file, not this summary!`;
     }
     /**
-     * Load and process auto-assignment orchestrator template for 15-minute checks
-     */
-    async getAutoAssignmentPrompt(data) {
-        const templatePath = path.join(this.templatesPath, 'auto-assignment-orchestrator-prompt-template.md');
-        const template = await readFile(templatePath, 'utf-8');
-        return this.processTemplate(template, data);
-    }
-    /**
      * Load and process project start orchestrator template for immediate coordination
      */
     async getProjectStartPrompt(data) {
         const templatePath = path.join(this.templatesPath, 'project-start-orchestrator-prompt-template.md');
+        const template = await readFile(templatePath, 'utf-8');
+        return this.processTemplate(template, data);
+    }
+    /**
+     * Load and process check-in prompt for 15-minute cycles (includes auto-assignment)
+     */
+    async getCheckinPrompt(data) {
+        const templatePath = path.join(this.templatesPath, 'checkin-orchestrator-prompt-template.md');
         const template = await readFile(templatePath, 'utf-8');
         return this.processTemplate(template, data);
     }

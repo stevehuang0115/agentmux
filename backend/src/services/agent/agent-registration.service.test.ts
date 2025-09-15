@@ -183,7 +183,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(result).toBe('Register as dev with session test-session and member member-123');
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/prompts/dev-prompt.md'),
+				expect.stringContaining('/config/teams/prompts/dev-prompt.md'),
 				'utf8'
 			);
 		});

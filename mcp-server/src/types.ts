@@ -87,6 +87,14 @@ export interface DelegateTaskParams {
   ticketId?: string;
 }
 
+export interface AssignTaskDelegationParams {
+  taskPath: string;
+  targetSessionName: string;
+  delegatedBy?: string;
+  reason?: string;
+  delegationChain?: string[];
+}
+
 export interface LoadProjectContextParams {
   includeFiles?: boolean;
   includeGitHistory?: boolean;

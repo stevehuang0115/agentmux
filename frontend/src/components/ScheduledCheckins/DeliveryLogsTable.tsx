@@ -23,9 +23,10 @@ export const DeliveryLogsTable: React.FC<DeliveryLogsTableProps> = ({
     <div className="delivery-logs-section">
       <div className="section-header">
         <h2>Message Delivery Logs</h2>
-        <button 
+        <button
           className="btn btn-secondary"
           onClick={handleClearLogs}
+          style={{ padding: '0.75rem 1.5rem' }}
         >
           Clear Logs
         </button>

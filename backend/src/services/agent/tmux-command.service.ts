@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SessionInfo } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 /**
  * Service responsible for all direct, low-level interactions with the tmux command-line tool.
@@ -13,7 +13,7 @@ export class TmuxCommandService {
 
 	// Cache for session existence checks - expires in 5 seconds
 	private sessionCache: Map<string, { exists: boolean; timestamp: number }> = new Map();
-	private readonly SESSION_CACHE_TTL = 5000; // 5 seconds
+	private readonly SESSION_CACHE_TTL = 10000; // 10 seconds (increased for better reliability)
 
 	// Cache for pane captures - expires in 2 seconds for frequent captures
 	private paneCache: Map<string, { content: string; timestamp: number }> = new Map();
@@ -587,7 +587,7 @@ export class TmuxCommandService {
 
 			// Add small delay to let the message be processed before Enter
 			// This prevents truncation in TUI applications like Gemini CLI
-			await new Promise((resolve) => setTimeout(resolve, 200));
+			await new Promise((resolve) => setTimeout(resolve, 1000));
 
 			// Second: send Enter to execute
 			await this.executeTmuxCommand(['send-keys', '-t', paneId, 'Enter']);
@@ -653,6 +653,7 @@ export class TmuxCommandService {
 		await this.sendEnter(sessionName);
 		await this.sendEscape(sessionName);
 		await this.sendEscape(sessionName);
+		await this.sendEscape(sessionName);
 	}
 
 	/**
@@ -660,7 +661,7 @@ export class TmuxCommandService {
 	 */
 	async sendEnter(sessionName: string): Promise<void> {
 		await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'Enter']);
-		await new Promise((resolve) => setTimeout(resolve, 200));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 
 	/**
@@ -668,7 +669,7 @@ export class TmuxCommandService {
 	 */
 	async sendCtrlC(sessionName: string): Promise<void> {
 		await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
-		await new Promise((resolve) => setTimeout(resolve, 200));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 
 	/**
@@ -676,7 +677,7 @@ export class TmuxCommandService {
 	 */
 	async sendEscape(sessionName: string): Promise<void> {
 		await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'Escape']);
-		await new Promise((resolve) => setTimeout(resolve, 200));
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
 
 	/**
@@ -855,11 +856,68 @@ export class TmuxCommandService {
 		await this.executeTmuxCommand(createCommand);
 		this.logger.info('Session created', { sessionName, workingDirectory, shell });
 
+		// Wait for session to fully initialize to prevent race conditions
+		// tmux session creation is asynchronous internally, so we need to ensure
+		// the session is ready before executing subsequent commands
+		const initializationDelay = process.env.NODE_ENV === 'test' ? 500 : 2000; // Shorter delay in tests
+		await new Promise((resolve) => setTimeout(resolve, initializationDelay));
+
+		// Validate session is ready for commands
+		await this.validateSessionReady(sessionName);
+
 		// Rename the window if specified
 		if (windowName) {
 			await this.executeTmuxCommand(['rename-window', '-t', `${sessionName}:0`, windowName]);
 			this.logger.info('Window renamed', { sessionName, windowName });
 		}
+	}
+
+	/**
+	 * Validate that a session is ready for commands
+	 * This helps prevent race conditions after session creation
+	 */
+	async validateSessionReady(sessionName: string): Promise<boolean> {
+		const maxAttempts = 5;
+		const retryDelay = process.env.NODE_ENV === 'test' ? 200 : 500; // Shorter delay in tests
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				// Try to list the specific session to verify it's responsive
+				const output = await this.executeTmuxCommand([
+					'list-sessions',
+					'-F',
+					'#{session_name}',
+					'-f',
+					`#{==:${sessionName},#{session_name}}`,
+				]);
+
+				// Check if session is listed and responsive
+				if (output.trim() === sessionName) {
+					// Additional check: try to capture pane to ensure it's fully ready
+					await this.executeTmuxCommand(['capture-pane', '-t', sessionName, '-p']);
+					this.logger.debug('Session validation successful', { sessionName, attempt });
+					return true;
+				}
+			} catch (error) {
+				this.logger.debug('Session validation attempt failed', {
+					sessionName,
+					attempt,
+					maxAttempts,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wait before next attempt
+			if (attempt < maxAttempts) {
+				await new Promise((resolve) => setTimeout(resolve, retryDelay));
+			}
+		}
+
+		this.logger.warn('Session validation failed after all attempts', {
+			sessionName,
+			maxAttempts,
+		});
+		return false;
 	}
 
 	/**

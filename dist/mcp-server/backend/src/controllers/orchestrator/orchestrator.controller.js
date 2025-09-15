@@ -222,6 +222,22 @@ export async function setupOrchestrator(req, res) {
                 });
             }
         }
+        // PHASE 2: Immediately set ALL members to 'activating' for instant UI feedback
+        try {
+            const teams = await this.storageService.getTeams();
+            for (const team of teams) {
+                for (const member of team.members) {
+                    member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
+                    member.updatedAt = new Date().toISOString();
+                }
+                await this.storageService.saveTeam(team);
+            }
+        }
+        catch (error) {
+            console.warn('Failed to set team members to activating status (continuing anyway):', {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
         res.json({
             success: true,
             message: result.message || 'Orchestrator session created and registered successfully',
