@@ -5244,6 +5244,10 @@ body {
 	font-size: 0.875rem;
 	color: var(--color-text-secondary);
 	margin: var(--spacing-xs) 0 var(--spacing-sm) 0;
+	padding: 1.5rem;
+	background: var(--color-surface);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--color-border-light);
 	line-height: 1.4;
 }
 
@@ -6420,8 +6424,8 @@ body {
 	background: white;
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-md);
-	padding: 1.5rem;
-	margin-bottom: 1rem;
+	padding: 2rem;
+	margin-bottom: 1.5rem;
 	box-shadow: var(--shadow-sm);
 	transition: all 0.2s ease;
 }
@@ -6434,8 +6438,8 @@ body {
 .team-member-card .member-header {
 	display: flex;
 	align-items: flex-start;
-	gap: 1rem;
-	margin-bottom: 1rem;
+	gap: 1.25rem;
+	margin-bottom: 1.5rem;
 }
 
 .team-member-card .member-avatar {
@@ -6474,11 +6478,14 @@ body {
 }
 
 .team-member-card .member-name-input,
-.team-member-card .member-role-input {
+.team-member-card .member-role-input,
+.team-member-card .member-runtime-input {
 	padding: 0.5rem;
 	border: 1px solid var(--color-border);
 	border-radius: var(--radius-base);
 	font-size: 0.875rem;
+	width: 100%;
+	background: white;
 }
 
 .team-member-card .member-actions {
@@ -6543,13 +6550,15 @@ body {
 
 .team-member-card .member-details {
 	border-top: 1px solid var(--color-border-light);
-	padding-top: 1rem;
+	padding-top: 1.5rem;
+	margin-top: 0.5rem;
 }
 
 .team-member-card .member-status-row {
 	display: flex;
 	gap: 2rem;
-	margin-bottom: 1rem;
+	margin-bottom: 1.5rem;
+	padding: 0.75rem 0;
 }
 
 .team-member-card .status-item {
@@ -6694,6 +6703,7 @@ body {
 	display: flex;
 	flex-direction: column;
 	gap: 1.5rem;
+	margin-top: 2rem;
 }
 
 .members-header {

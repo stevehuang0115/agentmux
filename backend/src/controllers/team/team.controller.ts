@@ -12,7 +12,7 @@ import {
   RUNTIME_TYPES
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
-import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../../../config/constants.js';
+import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 
 // Internal helper function types
 interface StartTeamMemberResult {
@@ -174,13 +174,37 @@ async function _startTeamMemberCore(
     console.log(`[TEAM-CONTROLLER-DEBUG] About to save team before session creation - member ${currentMember.name} agentStatus: ${currentMember.agentStatus}`);
     await context.storageService.saveTeam(currentTeam);
 
-    // Use the unified agent registration service for team member creation
-    const createResult = await context.agentRegistrationService.createAgentSession({
-      sessionName,
-      role: currentMember.role,
-      projectPath: projectPath,
-      memberId: currentMember.id
-    });
+    // Use the unified agent registration service for team member creation with retry logic
+    // This helps handle race conditions in tmux session creation
+    const MAX_CREATION_RETRIES = 3;
+    let createResult: any;
+    let lastError: string | undefined;
+
+    for (let attempt = 1; attempt <= MAX_CREATION_RETRIES; attempt++) {
+      console.log(`[TEAM-CONTROLLER-DEBUG] Attempting session creation for ${currentMember.name}, attempt ${attempt}/${MAX_CREATION_RETRIES}`);
+
+      createResult = await context.agentRegistrationService.createAgentSession({
+        sessionName,
+        role: currentMember.role,
+        projectPath: projectPath,
+        memberId: currentMember.id
+      });
+
+      if (createResult.success) {
+        console.log(`[TEAM-CONTROLLER-DEBUG] Session creation succeeded for ${currentMember.name} on attempt ${attempt}`);
+        break;
+      }
+
+      lastError = createResult.error;
+      console.log(`[TEAM-CONTROLLER-DEBUG] Session creation failed for ${currentMember.name} on attempt ${attempt}: ${lastError}`);
+
+      // If this isn't the last attempt, wait before retrying with exponential backoff
+      if (attempt < MAX_CREATION_RETRIES) {
+        const retryDelay = 1000 * attempt; // 1s, 2s exponential backoff
+        console.log(`[TEAM-CONTROLLER-DEBUG] Waiting ${retryDelay}ms before retry attempt ${attempt + 1}`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      }
+    }
 
     if (createResult.success) {
       // CRITICAL: Load fresh data again after session creation to preserve MCP registration updates
@@ -232,13 +256,14 @@ async function _startTeamMemberCore(
         await context.storageService.saveTeam(failureTeam);
       }
 
+      console.log(`[TEAM-CONTROLLER-DEBUG] All ${MAX_CREATION_RETRIES} session creation attempts failed for ${member.name}`);
       return {
         success: false,
         memberName: member.name,
         memberId: member.id,
         sessionName: null,
         status: 'failed',
-        error: createResult.error || 'Failed to create team member session'
+        error: lastError || createResult?.error || `Failed to create team member session after ${MAX_CREATION_RETRIES} attempts`
       };
     }
   } catch (error) {
@@ -433,6 +458,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
           systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
           agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
           workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+          runtimeType: (orchestratorStatus as any)?.runtimeType || 'claude-code',
           createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
           updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
         } as any
@@ -474,6 +500,7 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
             systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
             agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
             workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+            runtimeType: (orchestratorStatus as any)?.runtimeType || 'claude-code',
             createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
             updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
           } as any
@@ -1367,6 +1394,34 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
         success: false,
         error: `Invalid runtime type. Must be one of: ${validRuntimeTypes.join(', ')}`
       } as ApiResponse);
+      return;
+    }
+
+    // Special handling for orchestrator team
+    if (teamId === 'orchestrator') {
+      // Use the orchestrator-specific runtime update function
+      await this.storageService.updateOrchestratorRuntimeType(runtimeType as any);
+
+      // Get the updated orchestrator status to return
+      const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+      const updatedMember = {
+        id: 'orchestrator-member',
+        name: 'Agentmux Orchestrator',
+        sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        role: 'orchestrator',
+        systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
+        agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+        runtimeType: runtimeType as any,
+        createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      res.json({
+        success: true,
+        data: updatedMember,
+        message: `Orchestrator runtime updated to ${runtimeType}`
+      } as ApiResponse<TeamMember>);
       return;
     }
 

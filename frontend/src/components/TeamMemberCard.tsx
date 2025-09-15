@@ -103,8 +103,8 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
     // ACTIVE and IN_PROGRESS - green flashing
     if (agentStatus === 'active' && workingStatus === 'in_progress') {
       return {
-        status: 'IN_PROGRESS',
-        color: '#10b981', 
+        status: 'RUNNING',
+        color: '#10b981',
         shouldAnimate: true
       };
     }
