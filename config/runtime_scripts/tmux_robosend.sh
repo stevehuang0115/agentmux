@@ -145,6 +145,7 @@ fi
 # Send literally, then Enter
 # -----------------------------
 tmuxx send-keys -t "$PANE_ID" -l -- "$LINE"
+sleep 1
 tmuxx send-keys -t "$PANE_ID" C-m
 
 # Confirmation

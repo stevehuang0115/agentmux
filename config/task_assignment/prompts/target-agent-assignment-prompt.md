@@ -12,7 +12,7 @@
 - **Priority:** {taskPriority}
 - **Milestone:** {taskMilestone}
 
-**Task File:** `{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md`
+**Task File:** `{taskPath}`
 
 ---
 
@@ -25,13 +25,13 @@ If you can handle this task, follow these steps:
 
 1. **Read the complete task requirements:**
    ```
-   read_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+   read_task({ taskPath: '{taskPath}' })
    ```
 
 2. **Accept the task assignment:**
    ```
    accept_task({
-     taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md',
+     taskPath: '{taskPath}',
      sessionName: '{yourSessionName}'
    })
    ```
@@ -41,7 +41,7 @@ If you can handle this task, follow these steps:
 4. **Mark task as complete:**
    ```
    complete_task({
-     taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md',
+     taskPath: '{taskPath}',
      sessionName: '{yourSessionName}'
    })
    ```
@@ -51,7 +51,7 @@ If you cannot handle this task (wrong skillset, overloaded, etc.), delegate it:
 
 1. **Read the task requirements first** to understand delegation needs:
    ```
-   read_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+   read_task({ taskPath: '{taskPath}' })
    ```
 
 2. **Check available team members:**
@@ -62,7 +62,7 @@ If you cannot handle this task (wrong skillset, overloaded, etc.), delegate it:
 3. **Delegate to appropriate team member:**
    ```
    assign_task({
-     taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md',
+     taskPath: '{taskPath}',
      targetSessionName: 'CHOSEN_TARGET_SESSION_NAME',
      delegatedBy: '{yourSessionName}',
      reason: 'Brief reason for delegation (e.g., "Backend task requires backend expertise")'

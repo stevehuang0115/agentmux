@@ -405,6 +405,31 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
+  const handleProjectChange = async (projectId: string | null) => {
+    try {
+      const response = await fetch(`/api/teams/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          currentProject: projectId
+        }),
+      });
+
+      if (response.ok) {
+        // Refresh team data to reflect the change
+        await fetchTeamData();
+      } else {
+        const result = await response.json();
+        alert(result.error || 'Failed to update team project');
+      }
+    } catch (error) {
+      console.error('Error updating team project:', error);
+      alert('Error updating team project. Please try again.');
+    }
+  };
+
 
 
   if (loading) {

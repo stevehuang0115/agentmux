@@ -15,6 +15,7 @@ interface TeamOverviewProps {
   onDeleteMember: (memberId: string) => void;
   onStartMember: (memberId: string) => Promise<void>;
   onStopMember: (memberId: string) => Promise<void>;
+  onProjectChange?: (projectId: string | null) => void;
 }
 
 export const TeamOverview: React.FC<TeamOverviewProps> = ({
@@ -27,6 +28,7 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   onDeleteMember,
   onStartMember,
   onStopMember,
+  onProjectChange,
 }) => {
   const [showAddMember, setShowAddMember] = useState(false);
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
@@ -47,10 +49,11 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   return (
     <div className="tab-content">
       {/* Team Stats Section */}
-      <TeamStats 
+      <TeamStats
         team={team}
         teamStatus={teamStatus}
         projectName={projectName}
+        onProjectChange={onProjectChange}
       />
 
       {/* Team Description Section */}

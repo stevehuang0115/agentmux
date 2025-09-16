@@ -153,7 +153,15 @@ npx agentmux start
 3. **Configure Claude Code MCP settings:**
 
 ```bash
-claude mcp add --transport http agentmux http://localhost:3001/mcp --scope user
+## List existing
+claude mcp list
+
+## Add
+claude mcp add --transport http agentmux http://localhost:8789/mcp --scope user
+
+## Remove
+claude mcp remove "agentmux" -s local
+claude mcp remove "agentmux" -s user
 ```
 
 Create or update your Claude Code configuration file (`~/.claude-code/config.json`):
@@ -182,6 +190,17 @@ Create or update your Claude Code configuration file (`~/.claude-code/config.jso
 
 ```bash
 npm install -g @google-ai/generativelanguage-cli
+```
+
+```bash
+## List existing
+gemini mcp list
+
+## Add
+gemini mcp add --transport http agentmux http://localhost:8789/mcp --scope user
+
+## Remove
+gemini mcp remove "agentmux" --scope user
 ```
 
 2. **Create MCP configuration file** (`~/.gemini-cli/mcp.json`):

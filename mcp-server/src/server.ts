@@ -980,17 +980,17 @@ export class AgentMuxMCPServer {
         console.warn('Could not read task details for assignment:', error);
       }
 
-      // Load the assignment prompt template
+      // Load the assignment prompt template from agentmux config directory
       const fs = await import('fs/promises');
       const path = await import('path');
 
-      const promptPath = path.join(taskProjectPath, 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
+      const promptPath = path.join(process.cwd(), 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
       let promptTemplate = '';
 
       try {
         promptTemplate = await fs.readFile(promptPath, 'utf-8');
       } catch (error) {
-        // Fallback message if prompt template not found
+        // Final fallback message if template not found
         promptTemplate = `📋 **TASK ASSIGNMENT** - {taskTitle}
 
 **Task File:** \`{taskPath}\`
@@ -1014,9 +1014,15 @@ Please respond promptly with either acceptance or delegation.`;
         newChain.push(delegatedBy);
       }
 
+      // Debug logging for template variables
+      console.log(`[MCP] 🔍 Template replacement debug:`);
+      console.log(`[MCP]   taskPath: "${taskPath}"`);
+      console.log(`[MCP]   taskProjectPath: "${taskProjectPath}"`);
+      console.log(`[MCP]   targetSessionName: "${targetSessionName}"`);
+
       // Replace template variables
       const assignmentMessage = promptTemplate
-        .replace(/{taskPath}/g, taskPath)
+        .replace(/{taskPath}/g, taskPath || 'ERROR: taskPath is empty')
         .replace(/{taskTitle}/g, taskDetails.title || 'Task Assignment')
         .replace(/{taskId}/g, taskDetails.id || path.basename(taskPath, '.md'))
         .replace(/{taskDescription}/g, taskDetails.description || 'See task file for details')
