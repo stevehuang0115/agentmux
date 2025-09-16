@@ -124,6 +124,8 @@ export interface ReadTaskParams {
 export interface BlockTaskParams {
   taskPath: string;
   reason: string;
+  questions?: string[];
+  urgency?: 'low' | 'medium' | 'high';
 }
 
 export interface TakeNextTaskParams {

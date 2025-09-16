@@ -54,6 +54,7 @@ export const ProjectDetail: React.FC = () => {
   const [isTaskDetailModalOpen, setIsTaskDetailModalOpen] = useState(false);
   const [selectedTaskForDetail, setSelectedTaskForDetail] = useState<any>(null);
   const [taskAssignmentLoading, setTaskAssignmentLoading] = useState<string | null>(null);
+  const [taskUnblockLoading, setTaskUnblockLoading] = useState<string | null>(null);
   const [taskAssignedMemberDetails, setTaskAssignedMemberDetails] = useState<{
     memberName?: string;
     sessionName?: string;
@@ -416,7 +417,47 @@ export const ProjectDetail: React.FC = () => {
     }
   };
 
+  const handleTaskUnblock = async (task: any) => {
+    if (!state.project) return;
 
+    try {
+      setTaskUnblockLoading(task.id);
+
+      // Call unblock API
+      const unblockResponse = await fetch(`/api/task-management/unblock`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          taskPath: task.path,
+          unblockNote: 'Unblocked via UI for reassignment'
+        }),
+      });
+
+      if (unblockResponse.ok) {
+        const result = await unblockResponse.json();
+        showSuccess(
+          `Task "${task.title}" has been unblocked and moved to open for reassignment.`,
+          'Task Unblocked'
+        );
+        // Refresh the tasks list
+        await loadProjectData(state.project.id);
+      } else {
+        const error = await unblockResponse.json();
+        throw new Error(error.error || 'Failed to unblock task');
+      }
+
+    } catch (error) {
+      console.error('Failed to unblock task:', error);
+      showError(
+        'Failed to unblock task: ' + (error instanceof Error ? error.message : 'Unknown error'),
+        'Unblock Failed'
+      );
+    } finally {
+      setTaskUnblockLoading(null);
+    }
+  };
 
   const handleCreateSpecsTasks = async () => {
     if (!state.project) return;
@@ -1426,9 +1467,9 @@ export const ProjectDetail: React.FC = () => {
             setIsMarkdownEditorOpen={setIsMarkdownEditorOpen}
           />
         ) : activeTab === 'tasks' ? (
-          <TasksView 
-            project={project} 
-            tickets={tickets} 
+          <TasksView
+            project={project}
+            tickets={tickets}
             onTicketsUpdate={() => loadProjectData(project.id)}
             onCreateSpecsTasks={handleCreateSpecsTasks}
             onCreateDevTasks={handleCreateDevTasks}
@@ -1436,7 +1477,9 @@ export const ProjectDetail: React.FC = () => {
             loading={state.loading}
             onTaskClick={handleTaskClick}
             onTaskAssign={handleTaskAssign}
+            onTaskUnblock={handleTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
+            taskUnblockLoading={taskUnblockLoading}
           />
         ) : (
           <TeamsView 

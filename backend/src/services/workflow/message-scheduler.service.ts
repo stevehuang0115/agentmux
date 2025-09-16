@@ -111,11 +111,12 @@ export class MessageSchedulerService extends EventEmitter {
   private async executeMessage(message: ScheduledMessage): Promise<void> {
     let success = false;
     let error: string | undefined;
+    let enhancedMessage = message.message;
 
     try {
       // Determine target session name
-      const sessionName = message.targetTeam === 'orchestrator' 
-        ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME 
+      const sessionName = message.targetTeam === 'orchestrator'
+        ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
         : message.targetTeam;
 
       // Check if session exists
@@ -123,13 +124,16 @@ export class MessageSchedulerService extends EventEmitter {
         throw new Error(`Target session "${sessionName}" does not exist`);
       }
 
+      // Enhance message with continuation instructions to handle interruptions gracefully
+      enhancedMessage = this.addContinuationInstructions(message.message);
+
       // Send message to session (sendMessage already includes Enter key)
-      await this.tmuxService.sendMessage(sessionName, message.message);
+      await this.tmuxService.sendMessage(sessionName, enhancedMessage);
       success = true;
 
       const contextInfo = message.targetProject ? ` (Project: ${message.targetProject})` : '';
       console.log(`Executed scheduled message "${message.name}" for ${message.targetTeam}${contextInfo}`);
-      
+
     } catch (sendError) {
       success = false;
       error = sendError instanceof Error ? sendError.message : 'Failed to send message';
@@ -142,7 +146,7 @@ export class MessageSchedulerService extends EventEmitter {
       messageName: message.name,
       targetTeam: message.targetTeam,
       targetProject: message.targetProject,
-      message: message.message,
+      message: enhancedMessage,
       success,
       error
     });
@@ -265,6 +269,17 @@ export class MessageSchedulerService extends EventEmitter {
       default:
         throw new Error(`Invalid delay unit: ${unit}`);
     }
+  }
+
+  /**
+   * Add continuation instructions to scheduled messages to handle interruptions gracefully
+   */
+  private addContinuationInstructions(originalMessage: string): string {
+    return `🔄 [SCHEDULED CHECK-IN - Please continue previous work after this]
+
+${originalMessage}
+
+[CONTINUE] If you were working on something when this arrived, please resume that work now.`;
   }
 
   /**

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, FolderOpen, Play } from 'lucide-react';
+import { Plus, FolderOpen, Play, Unlock } from 'lucide-react';
 import { Project } from '../../types';
 import { 
   Button, 
@@ -13,17 +13,19 @@ import {
 } from '../UI';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
 
-export const TasksView: React.FC<TasksViewProps> = ({ 
-  project, 
-  tickets, 
-  onTicketsUpdate, 
-  onCreateSpecsTasks, 
-  onCreateDevTasks, 
-  onCreateE2ETasks, 
-  loading, 
-  onTaskClick, 
-  onTaskAssign, 
-  taskAssignmentLoading 
+export const TasksView: React.FC<TasksViewProps> = ({
+  project,
+  tickets,
+  onTicketsUpdate,
+  onCreateSpecsTasks,
+  onCreateDevTasks,
+  onCreateE2ETasks,
+  loading,
+  onTaskClick,
+  onTaskAssign,
+  onTaskUnblock,
+  taskAssignmentLoading,
+  taskUnblockLoading
 }) => {
   const [selectedMilestoneFilter, setSelectedMilestoneFilter] = useState<string | null>(null);
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
@@ -279,7 +281,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
             status="open"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
+            onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
+            taskUnblockLoading={taskUnblockLoading}
           />
           <TaskColumn
             title="In Progress"
@@ -288,7 +292,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
             status="in_progress"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
+            onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
+            taskUnblockLoading={taskUnblockLoading}
           />
           <TaskColumn
             title="Done"
@@ -297,7 +303,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
             status="done"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
+            onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
+            taskUnblockLoading={taskUnblockLoading}
           />
           <TaskColumn
             title="Blocked"
@@ -306,7 +314,9 @@ export const TasksView: React.FC<TasksViewProps> = ({
             status="blocked"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
+            onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
+            taskUnblockLoading={taskUnblockLoading}
           />
         </div>
       </div>
@@ -440,14 +450,16 @@ export const TasksView: React.FC<TasksViewProps> = ({
 };
 
 // Task Column Component for the new task system
-export const TaskColumn: React.FC<TaskColumnProps> = ({ 
-  title, 
-  count, 
-  tasks, 
-  status, 
-  onTaskClick, 
-  onTaskAssign, 
-  taskAssignmentLoading 
+export const TaskColumn: React.FC<TaskColumnProps> = ({
+  title,
+  count,
+  tasks,
+  status,
+  onTaskClick,
+  onTaskAssign,
+  onTaskUnblock,
+  taskAssignmentLoading,
+  taskUnblockLoading
 }) => {
   return (
     <div className={`task-column task-column--${status}`}>
@@ -480,6 +492,23 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
                     <Play className="task-play-icon" />
                   )}
                 </button>
+                {status === 'blocked' && (
+                  <button
+                    className={`task-unblock-btn ${taskUnblockLoading === task.id ? 'loading' : ''}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTaskUnblock(task);
+                    }}
+                    disabled={taskUnblockLoading === task.id}
+                    title="Unblock this task and move it to open for reassignment"
+                  >
+                    {taskUnblockLoading === task.id ? (
+                      <div className="task-spinner" />
+                    ) : (
+                      <Unlock className="task-unblock-icon" />
+                    )}
+                  </button>
+                )}
                 <div className="task-badges">
                   {task.priority && (
                     <span className={`priority-badge priority-${task.priority}`}>

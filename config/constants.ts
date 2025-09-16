@@ -136,7 +136,7 @@ export const MCP_CONSTANTS = {
 	 */
 	PORTS: {
 		/** Default MCP server port */
-		DEFAULT: 3001,
+		DEFAULT: 8789,
 		/** Health check endpoint path */
 		HEALTH_CHECK: '/health',
 	},
@@ -185,7 +185,7 @@ export const WEB_CONSTANTS = {
 	 */
 	PORTS: {
 		/** Backend API server default port */
-		BACKEND: 3000,
+		BACKEND: 8788,
 		/** Frontend development server default port */
 		FRONTEND: 3002,
 	},
@@ -379,7 +379,7 @@ export const BACKEND_CONSTANTS = {
 	 */
 	NETWORK: {
 		/** Default CORS origin */
-		DEFAULT_CORS_ORIGIN: 'http://localhost:3000',
+		DEFAULT_CORS_ORIGIN: 'http://localhost:8788',
 		/** Allowed HTTP methods */
 		ALLOWED_HTTP_METHODS: ['GET', 'POST'],
 		/** HTTP status codes used in the application */
@@ -441,6 +441,7 @@ export const BACKEND_CONSTANTS = {
 	INIT_SCRIPTS: {
 		TMUX: 'initialize_tmux.sh',
 		CLAUDE: 'initialize_claude.sh',
+		TMUX_ROBOSEND: 'tmux_robosend.sh',
 	},
 
 	/**

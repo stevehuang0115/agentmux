@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import type { ApiController } from '../api.controller.js';
 import type { ApiContext } from '../types.js';
-import { readFile, writeFile, mkdir, rename, readdir, stat } from 'fs/promises';
+import { readFile, writeFile, mkdir, rename, readdir, stat, unlink } from 'fs/promises';
 import { join, basename, dirname, resolve, relative } from 'path';
 import { existsSync } from 'fs';
 import { resolveStepConfig } from '../../utils/prompt-resolver.js';
@@ -281,6 +281,74 @@ export async function blockTask(this: ApiController, req: Request, res: Response
 }
 
 /**
+ * Unblocks a task by moving it from blocked/ to open/ folder for reassignment
+ *
+ * @param req - Request containing taskPath and optional unblockNote
+ * @param res - Response with success status and unblock information
+ */
+export async function unblockTask(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { taskPath, unblockNote } = req.body;
+
+		if (!taskPath) {
+			res.status(400).json({ success: false, error: 'taskPath is required' });
+			return;
+		}
+
+		// Verify task file exists
+		if (!existsSync(taskPath)) {
+			res.status(404).json({
+				success: false,
+				error: 'Task file not found',
+				path: taskPath,
+			});
+			return;
+		}
+
+		// Verify task is in blocked/ folder
+		if (!taskPath.includes('/blocked/')) {
+			res.status(400).json({
+				success: false,
+				error: 'Task is not in the blocked folder',
+				details: `Task must be in blocked/ folder to be unblocked. Current path: ${taskPath}`,
+				currentFolder: taskPath.includes('/open/') ? 'open' : taskPath.includes('/in_progress/') ? 'in_progress' : taskPath.includes('/done/') ? 'done' : 'unknown',
+			});
+			return;
+		}
+
+		// Read current task content
+		const taskContent = await readFile(taskPath, 'utf-8');
+		const fileName = basename(taskPath);
+
+		// Create target path in open/ folder
+		const targetPath = taskPath.replace('/blocked/', '/open/');
+
+		// Ensure open directory exists
+		await mkdir(dirname(targetPath), { recursive: true });
+
+		// Add unblock information to task content
+		const updatedContent = addTaskUnblockInfo(taskContent, unblockNote);
+
+		// Move file and update content
+		await writeFile(targetPath, updatedContent, 'utf-8');
+		await unlink(taskPath);
+
+		res.json({
+			success: true,
+			message: `Task ${fileName} unblocked and moved to open folder for reassignment`,
+			taskPath: targetPath,
+			fileName,
+			status: 'open',
+			unblockNote: unblockNote || 'No note provided',
+			unblockedAt: new Date().toISOString(),
+		});
+	} catch (error) {
+		console.error('Error unblocking task:', error);
+		res.status(500).json({ success: false, error: 'Failed to unblock task' });
+	}
+}
+
+/**
  * Gets the next available task from the open/ folder
  *
  * @param req - Request containing optional taskGroup filter
@@ -550,7 +618,7 @@ export async function startTaskExecution(
 			taskTitle,
 			taskDescription,
 			taskPriority = 'medium',
-			taskMilestone = 'm0_build_spec_tasks',
+			taskMilestone = 'm0_initial_tasks',
 			retryCount = 3,
 			timeoutSeconds = 30,
 		} = req.body;
@@ -893,6 +961,14 @@ function addTaskBlockInfo(content: string, blockReason?: string): string {
 		blockReason || 'No reason provided'
 	}\n- **Blocked at**: ${new Date().toISOString()}\n`;
 	return content + blockInfo;
+}
+
+// Helper function to add unblock information to task content
+function addTaskUnblockInfo(content: string, unblockNote?: string): string {
+	const unblockInfo = `\n\n## Unblock Information\n- **Status**: Unblocked (moved to open for reassignment)\n- **Unblock note**: ${
+		unblockNote || 'No note provided'
+	}\n- **Unblocked at**: ${new Date().toISOString()}\n`;
+	return content + unblockInfo;
 }
 
 // Helper function to parse basic task information from markdown content

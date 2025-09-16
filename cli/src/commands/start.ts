@@ -24,8 +24,8 @@ interface StartOptions {
 }
 
 export async function startCommand(options: StartOptions) {
-	const webPort = parseInt(options.port || '3000');
-	const mcpPort = parseInt(options.mcpPort || '3001');
+	const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
+	const mcpPort = parseInt(options.mcpPort || DEFAULT_MCP_PORT.toString());
 	const openBrowser = options.browser !== false;
 
 	console.log(chalk.blue('🚀 Starting AgentMux...'));
@@ -150,8 +150,8 @@ async function ensureAgentMuxHome(): Promise<void> {
 	// Create default config if it doesn't exist
 	const configPath = path.join(agentmuxHome, 'config.env');
 	if (!fs.existsSync(configPath)) {
-		const defaultConfig = `WEB_PORT=3000
-AGENTMUX_MCP_PORT=3001
+		const defaultConfig = `WEB_PORT=${DEFAULT_WEB_PORT}
+AGENTMUX_MCP_PORT=${DEFAULT_MCP_PORT}
 AGENTMUX_HOME=${agentmuxHome}
 DEFAULT_CHECK_INTERVAL=30
 AUTO_COMMIT_INTERVAL=30`;

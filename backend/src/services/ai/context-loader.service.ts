@@ -329,27 +329,44 @@ export class ContextLoaderService {
     return prompt;
   }
 
-  async injectContextIntoSession(sessionName: string, teamMember: TeamMember): Promise<boolean> {
+  async injectContextIntoSession(
+    sessionName: string,
+    teamMember: TeamMember,
+    tmuxService?: any
+  ): Promise<boolean> {
     try {
       const contextPrompt = await this.generateContextPrompt(teamMember);
-      
+
       // Save context to a file that can be referenced by the agent
       const contextPath = path.join(this.agentmuxPath, 'context', `${teamMember.id}-context.md`);
       const contextDir = path.dirname(contextPath);
-      
+
       if (!existsSync(contextDir)) {
         await fs.mkdir(contextDir, { recursive: true });
       }
 
       await fs.writeFile(contextPath, contextPrompt, 'utf-8');
 
-      // Send context loading command to tmux session
-      const { exec } = await import('child_process');
-      const { promisify } = await import('util');
-      const execAsync = promisify(exec);
+      // Send context loading command to tmux session using service layer if available
+      if (tmuxService && typeof tmuxService.sendMessage === 'function') {
+        // Use robust tmux service approach
+        const message = `echo 'Project context loaded at ${contextPath}'`;
+        await tmuxService.sendMessage(sessionName, message);
+      } else {
+        // Fallback to robust script approach
+        const { spawn } = await import('child_process');
+        const { promisify } = await import('util');
+        const scriptPath = path.resolve(__dirname, '../../../config/runtime_scripts/tmux_robosend.sh');
 
-      const command = `tmux send-keys -t "${sessionName}" "echo 'Project context loaded at ${contextPath}'" Enter`;
-      await execAsync(command);
+        await new Promise<void>((resolve, reject) => {
+          const process = spawn('bash', [scriptPath, sessionName, `echo 'Project context loaded at ${contextPath}'`]);
+          process.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`tmux_robosend.sh exited with code ${code}`));
+          });
+          process.on('error', reject);
+        });
+      }
 
       return true;
     } catch (error) {

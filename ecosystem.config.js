@@ -41,7 +41,7 @@ module.exports = {
 		},
 		{
 			name: 'agentmux-mcp',
-			script: 'mcp-server/dist/index.js',
+			script: 'mcp-server/dist/mcp-process-recovery.js',
 			cwd: '/app',
 			instances: 1,
 			exec_mode: 'fork',

@@ -8,7 +8,7 @@ import { AGENTMUX_CONSTANTS } from '../../constants.js';
 // Mock dependencies
 jest.mock('../agent/tmux.service.js');
 jest.mock('../core/storage.service.js');
-jest.mock('../models/ScheduledMessage');
+jest.mock('../../models/ScheduledMessage');
 
 describe('MessageSchedulerService', () => {
   let service: MessageSchedulerService;
@@ -151,7 +151,10 @@ describe('MessageSchedulerService', () => {
       // Wait for async operations
       await jest.runAllTimersAsync();
       
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', 'Hello World');
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('Hello World'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('SCHEDULED CHECK-IN'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('CONTINUE'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that work now'));
       expect(mockStorageService.saveDeliveryLog).toHaveBeenCalled();
       expect(mockStorageService.saveScheduledMessage).toHaveBeenCalled();
     });
@@ -264,14 +267,18 @@ describe('MessageSchedulerService', () => {
       await (service as any).executeMessage(orchestratorMessage);
       
       expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Hello World');
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, expect.stringContaining('Hello World'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, expect.stringContaining('SCHEDULED CHECK-IN'));
     });
 
     it('should execute message for regular team', async () => {
       await (service as any).executeMessage(mockScheduledMessage);
       
       expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-team');
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', 'Hello World');
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('Hello World'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('SCHEDULED CHECK-IN'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('CONTINUE'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that work now'));
     });
 
     it('should handle session not existing', async () => {
@@ -309,7 +316,7 @@ describe('MessageSchedulerService', () => {
         messageName: 'Test Message',
         targetTeam: 'test-team',
         targetProject: 'test-project',
-        message: 'Hello World',
+        message: expect.stringContaining('Hello World'),
         success: true,
         error: undefined
       });
@@ -481,10 +488,10 @@ describe('MessageSchedulerService', () => {
       expect(executeMessageSpy).not.toHaveBeenCalledWith(mockAutoAssignmentMessage);
     });
 
-    it('should process regular messages normally (not through queue)', async () => {
+    it('should process regular messages through queue (all messages go through queue now)', async () => {
       const regularMessage = { ...mockScheduledMessage, delayAmount: 1, delayUnit: 'seconds' as const };
       const executeMessageSpy = jest.spyOn(service as any, 'executeMessage');
-      const executeMessageSequentiallySpy = jest.spyOn(service as any, 'executeMessageSequentially');
+      const executeMessageSequentiallySpy = jest.spyOn(service as any, 'executeMessageSequentially').mockResolvedValue(undefined);
 
       // Schedule regular message
       service.scheduleMessage(regularMessage);
@@ -493,8 +500,8 @@ describe('MessageSchedulerService', () => {
       jest.advanceTimersByTime(1000);
       await Promise.resolve();
 
-      expect(executeMessageSpy).toHaveBeenCalledWith(regularMessage);
-      expect(executeMessageSequentiallySpy).not.toHaveBeenCalled();
+      expect(executeMessageSequentiallySpy).toHaveBeenCalledWith(regularMessage);
+      expect(executeMessageSpy).not.toHaveBeenCalledWith(regularMessage);
     });
 
     it.skip('should process multiple auto-assignment messages sequentially', async () => {

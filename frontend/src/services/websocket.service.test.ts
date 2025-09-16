@@ -24,7 +24,7 @@ const consoleSpy = {
 Object.defineProperty(window, 'location', {
   value: {
     protocol: 'http:',
-    host: 'localhost:3000',
+    host: 'localhost:8788',
   },
   writable: true,
 });

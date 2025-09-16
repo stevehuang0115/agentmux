@@ -6,11 +6,7 @@ import * as path from 'path';
 import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
 import { ProjectModel, TeamModel } from '../../models/index.js';
-import {
-	ContextLoaderService,
-	TicketEditorService,
-	TaskService,
-} from '../../services/index.js';
+import { ContextLoaderService, TicketEditorService, TaskService } from '../../services/index.js';
 import { ApiResponse, Project } from '../../types/index.js';
 import { getFileIcon, countFiles } from '../utils/file-utils.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
@@ -316,7 +312,9 @@ export async function stopProject(this: ApiContext, req: Request, res: Response)
 					try {
 						this.messageSchedulerService.cancelMessage(message.id);
 						await this.storageService.deleteScheduledMessage(message.id);
-						console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
+						console.log(
+							`Cancelled and deleted scheduled message: ${message.name} (${message.id})`
+						);
 					} catch (msgError) {
 						console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
 					}
@@ -446,22 +444,8 @@ export async function assignTeamsToProject(
 						})
 						.join('\\n\\n');
 					const orchestratorPrompt = `## Team Assignment Notification\n\nNew team(s) have been assigned to project **${project.name}**!\n\n${teamsInfo}\n\n### Action Required:\nPlease use the MCP tooling to create and initialize the assigned team sessions. You should:\n\n1. **Create tmux sessions** for each team member using their designated session names\n2. **Initialize the project environment** in each session with the project path: \`${project.path}\`\n3. **Set up the development context** for each team member based on their role\n4. **Verify all sessions are active** and ready for collaboration\n\n### Project Details:\n- **Project Path**: ${project.path}\n- **Project ID**: ${project.id}\n- **Total Teams Assigned**: ${assignedTeamDetails.length}\n\n---\n*Please confirm when all team sessions have been created and initialized successfully.*`;
+					// Send message using robust tmux_robosend.sh script (includes Enter key automatically)
 					await this.tmuxService.sendMessage(orchestratorSession, orchestratorPrompt);
-					await new Promise((resolve) => setTimeout(resolve, 500));
-					const tmuxProcess = spawn('tmux', [
-						'send-keys',
-						'-t',
-						orchestratorSession,
-						'Enter',
-					]);
-					await new Promise((resolve, reject) => {
-						tmuxProcess.on('close', (code) =>
-							code === 0
-								? resolve(code)
-								: reject(new Error(`tmux send-keys failed with exit code ${code}`))
-						);
-						tmuxProcess.on('error', reject);
-					});
 				}
 			} catch (notificationError) {
 				console.warn(
@@ -543,22 +527,8 @@ export async function unassignTeamFromProject(
 				} members\n- **Previous Project**: ${
 					project.name
 				}\n\n### Action Required:\nPlease coordinate the cleanup of team member sessions and update any active workflows accordingly.\n\n### Team Members to Clean Up:\n${memberLines}\n\n---\n*This notification was sent automatically when the team was unassigned from the project.*`;
+				// Send message using robust tmux_robosend.sh script (includes Enter key automatically)
 				await this.tmuxService.sendMessage(orchestratorSession, notificationMessage);
-				await new Promise((resolve) => setTimeout(resolve, 500));
-				const tmuxProcess = spawn('tmux', [
-					'send-keys',
-					'-t',
-					orchestratorSession,
-					'Enter',
-				]);
-				await new Promise((resolve, reject) => {
-					tmuxProcess.on('close', (code) =>
-						code === 0
-							? resolve(code)
-							: reject(new Error(`tmux send-keys failed with exit code ${code}`))
-					);
-					tmuxProcess.on('error', reject);
-				});
 			}
 		} catch (notificationError) {
 			console.warn(
@@ -887,7 +857,9 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 					try {
 						this.messageSchedulerService.cancelMessage(message.id);
 						await this.storageService.deleteScheduledMessage(message.id);
-						console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
+						console.log(
+							`Cancelled and deleted scheduled message: ${message.name} (${message.id})`
+						);
 					} catch (msgError) {
 						console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
 					}

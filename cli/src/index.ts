@@ -6,6 +6,7 @@ import { startCommand } from './commands/start.js';
 import { stopCommand } from './commands/stop.js';
 import { statusCommand } from './commands/status.js';
 import { logsCommand } from './commands/logs.js';
+import { DEFAULT_WEB_PORT, DEFAULT_MCP_PORT } from './constants.js';
 
 const program = new Command();
 
@@ -17,8 +18,8 @@ program
 program
   .command('start')
   .description('Start AgentMux backend and open dashboard')
-  .option('-p, --port <port>', 'Web server port', '3000')
-  .option('-m, --mcp-port <port>', 'MCP server port', '3001')
+  .option('-p, --port <port>', 'Web server port', DEFAULT_WEB_PORT.toString())
+  .option('-m, --mcp-port <port>', 'MCP server port', DEFAULT_MCP_PORT.toString())
   .option('--no-browser', 'Don\'t open browser automatically')
   .action(startCommand);
 

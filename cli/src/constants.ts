@@ -108,12 +108,12 @@ export const COMMUNICATION_LOG_FILE = 'communication.log';
 /**
  * Default web server port
  */
-export const DEFAULT_WEB_PORT = 3000;
+export const DEFAULT_WEB_PORT = 8788;
 
 /**
  * Default MCP server port
  */
-export const DEFAULT_MCP_PORT = 3001;
+export const DEFAULT_MCP_PORT = 8789;
 
 // ========================= ROLE CONSTANTS =========================
 

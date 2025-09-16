@@ -2783,14 +2783,9 @@ body {
 .tasks-view {
 	overflow-x: auto;
 	padding-bottom: var(--spacing-base);
+	width: 100%;
 }
 
-.kanban-board {
-	display: grid;
-	grid-template-columns: repeat(4, 280px);
-	gap: var(--spacing-lg);
-	min-width: 1200px;
-}
 
 .kanban-column {
 	background: var(--color-surface-hover);
@@ -2875,6 +2870,7 @@ body {
 /* Task Board Specific Styles */
 .kanban-section {
 	margin-top: var(--spacing-xl);
+	width: 100%;
 }
 
 .kanban-section h4 {
@@ -2892,6 +2888,8 @@ body {
 	padding: 24px;
 	border-radius: 16px;
 	border: 1px solid #e2e8f0;
+	width: 100%;
+	max-width: none;
 }
 
 .task-column {
@@ -3207,6 +3205,7 @@ body {
 /* Milestones Overview Styles */
 .milestones-section {
 	margin-bottom: var(--spacing-xl);
+	width: 100%;
 }
 
 .milestones-section h4 {

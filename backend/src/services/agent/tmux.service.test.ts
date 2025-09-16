@@ -292,8 +292,9 @@ describe('TmuxService', () => {
 			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
 				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
 			]);
+			// Updated to match new implementation with literal mode and separate Enter
 			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
-				'send-keys', '-t', 'test-session', 'Hello Claude', 'C-m'
+				'send-keys', '-t', 'test-session', '-l', '--', 'Hello Claude'
 			]);
 			expect(eventSpy).toHaveBeenCalledWith({
 				sessionName: 'test-session',
@@ -378,8 +379,9 @@ describe('TmuxService', () => {
 			await service.sendMessageDirectly('test-session', 'Direct message');
 
 			expect(mockTmuxCommand.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
+			// Updated to match new implementation with literal mode and separate Enter
 			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
-				'send-keys', '-t', 'test-session', 'Direct message', 'C-m'
+				'send-keys', '-t', 'test-session', '-l', '--', 'Direct message'
 			]);
 			expect(eventSpy).toHaveBeenCalledWith({
 				sessionName: 'test-session',

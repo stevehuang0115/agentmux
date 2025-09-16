@@ -8,6 +8,7 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   router.post('/task-management/assign', (req, res) => taskMgmtHandlers.assignTask.call(apiController, req, res));
   router.post('/task-management/complete', (req, res) => taskMgmtHandlers.completeTask.call(apiController, req, res));
   router.post('/task-management/block', (req, res) => taskMgmtHandlers.blockTask.call(apiController, req, res));
+  router.post('/task-management/unblock', (req, res) => taskMgmtHandlers.unblockTask.call(apiController, req, res));
   router.post('/task-management/read-task', (req, res) => taskMgmtHandlers.readTask.call(apiController, req, res));
   router.post('/task-management/take-next', (req, res) => taskMgmtHandlers.takeNextTask.call(apiController, req, res));
   router.post('/task-management/sync', (req, res) => taskMgmtHandlers.syncTaskStatus.call(apiController, req, res));

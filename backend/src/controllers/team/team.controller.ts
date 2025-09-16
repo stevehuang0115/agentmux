@@ -1142,7 +1142,7 @@ export async function injectContextIntoSession(this: ApiContext, req: Request, r
     if (!project) { res.status(404).json({ success: false, error: 'No project found for this team' } as ApiResponse); return; }
     const { ContextLoaderService } = await import('../../services/index.js');
     const contextLoader = new ContextLoaderService(project.path);
-    const success = await contextLoader.injectContextIntoSession(member.sessionName, member);
+    const success = await contextLoader.injectContextIntoSession(member.sessionName, member, this.tmuxService);
     if (!success) { res.status(500).json({ success: false, error: 'Failed to inject context into session' } as ApiResponse); return; }
     res.json({ success: true, data: { teamId, memberId, memberName: member.name, sessionName: member.sessionName, contextInjected: true, injectedAt: new Date().toISOString() } } as ApiResponse);
   } catch (error) {

@@ -91,7 +91,9 @@ export interface TasksViewProps {
   loading: boolean;
   onTaskClick: (task: any) => void;
   onTaskAssign: (task: any) => void;
+  onTaskUnblock: (task: any) => void;
   taskAssignmentLoading: string | null;
+  taskUnblockLoading: string | null;
 }
 
 export interface TaskColumnProps {
@@ -101,7 +103,9 @@ export interface TaskColumnProps {
   status: string;
   onTaskClick: (task: any) => void;
   onTaskAssign: (task: any) => void;
+  onTaskUnblock: (task: any) => void;
   taskAssignmentLoading: string | null;
+  taskUnblockLoading: string | null;
 }
 
 // EditorView specific types
