@@ -6,10 +6,11 @@ import {
 	Users,
 	ClipboardList,
 	Clock,
-	UserCircle,
-	Settings,
+	ChevronLeft,
+	ChevronRight,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { useSidebar } from '../../contexts/SidebarContext';
 
 const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
@@ -21,16 +22,17 @@ const navigationItems = [
 
 export const Navigation: React.FC = () => {
 	const location = useLocation();
+	const { isCollapsed, toggleSidebar } = useSidebar();
 
 	return (
-		<div className="navigation">
+		<div className={clsx('navigation', isCollapsed && 'navigation--collapsed')}>
 			{/* Logo Section */}
 			<div className="nav-header">
 				<div className="nav-logo">
 					<div className="logo-icon">
 						<div className="triangle"></div>
 					</div>
-					<span className="logo-text">AgentMux</span>
+					{!isCollapsed && <span className="logo-text">AgentMux</span>}
 				</div>
 			</div>
 
@@ -47,29 +49,30 @@ export const Navigation: React.FC = () => {
 								key={item.name}
 								to={item.href}
 								className={clsx('nav-item', isActive && 'nav-item--active')}
+								title={isCollapsed ? item.name : undefined}
 							>
 								<item.icon className="nav-icon" />
-								<span className="nav-label">{item.name}</span>
+								{!isCollapsed && <span className="nav-label">{item.name}</span>}
 							</NavLink>
 						);
 					})}
 				</div>
 			</nav>
 
-			{/* Bottom Section */}
-			<div className="nav-footer">
-				<div className="nav-user">
-					<UserCircle className="user-avatar" />
-					<div className="user-info">
-						<div className="user-name">AgentMux</div>
-						<div className="user-status">System</div>
-					</div>
+			{/* Bottom Section - Toggle button only */}
+			<button
+				className="nav-footer nav-footer--toggle"
+				onClick={toggleSidebar}
+				aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+			>
+				<div className="nav-toggle-icon">
+					{isCollapsed ? (
+						<ChevronRight className="toggle-icon" />
+					) : (
+						<ChevronLeft className="toggle-icon" />
+					)}
 				</div>
-
-				<button className="nav-settings">
-					<Settings className="settings-icon" />
-				</button>
-			</div>
+			</button>
 		</div>
 	);
 };

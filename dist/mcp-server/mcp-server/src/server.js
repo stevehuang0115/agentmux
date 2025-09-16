@@ -16,7 +16,7 @@ export class AgentMuxMCPServer {
         // Try to get session name from environment variable first
         // If not available, try to get from tmux directly
         this.sessionName = process.env.TMUX_SESSION_NAME || this.getCurrentTmuxSession() || 'mcp-server';
-        this.apiBaseUrl = `http://localhost:${process.env.API_PORT || 3000}`;
+        this.apiBaseUrl = `http://localhost:${process.env.API_PORT || 8788}`;
         this.projectPath = process.env.PROJECT_PATH || process.cwd();
         this.agentRole = process.env.AGENT_ROLE || 'developer';
         // Initialize TmuxService
@@ -746,6 +746,58 @@ export class AgentMuxMCPServer {
             };
         }
     }
+    async blockTask(params) {
+        try {
+            const response = await fetch(`${this.apiBaseUrl}/api/task-management/block`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    taskPath: params.taskPath,
+                    sessionName: this.sessionName,
+                    reason: params.reason,
+                    questions: params.questions || [],
+                    urgency: params.urgency || 'medium'
+                })
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const result = await response.json();
+            // Check if the operation was successful
+            if (!result.success) {
+                // Return detailed error information without throwing
+                return {
+                    content: [{
+                            type: 'text',
+                            text: `❌ Task blocking failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+                        }],
+                    isError: true
+                };
+            }
+            // Success case - broadcast notification to team
+            if (result.broadcast) {
+                await this.broadcast({
+                    message: result.broadcast,
+                    excludeSelf: false
+                });
+            }
+            return {
+                content: [{
+                        type: 'text',
+                        text: `🚫 Task blocked successfully: ${result.message || 'Task moved to blocked folder with questions for human review'}\n\n📋 Blocked Reason: ${params.reason}\n\n❓ Questions: ${params.questions?.length ? params.questions.join('\n- ') : 'None specified'}\n\n📢 Team has been notified via broadcast`
+                    }]
+            };
+        }
+        catch (error) {
+            return {
+                content: [{
+                        type: 'text',
+                        text: `Error blocking task: ${error instanceof Error ? error.message : 'Unknown error'}`
+                    }],
+                isError: true
+            };
+        }
+    }
     async assignTask(params) {
         try {
             const { taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
@@ -783,26 +835,33 @@ export class AgentMuxMCPServer {
             }
             // Read the task file to get details
             let taskDetails = {};
+            let taskProjectPath = this.projectPath; // Default fallback
             try {
                 const taskReadResult = await this.readTask({ taskPath });
                 if (!taskReadResult.isError) {
                     const content = taskReadResult.content[0]?.text || '';
                     taskDetails = this.parseTaskContent(content, taskPath);
                 }
+                // Extract the actual project path from the task path
+                // Task path format: /path/to/project/.agentmux/tasks/...
+                const agentmuxIndex = taskPath.indexOf('/.agentmux/');
+                if (agentmuxIndex !== -1) {
+                    taskProjectPath = taskPath.substring(0, agentmuxIndex);
+                }
             }
             catch (error) {
                 console.warn('Could not read task details for assignment:', error);
             }
-            // Load the assignment prompt template
+            // Load the assignment prompt template from agentmux config directory
             const fs = await import('fs/promises');
             const path = await import('path');
-            const promptPath = path.join(this.projectPath, 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
+            const promptPath = path.join(process.cwd(), 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
             let promptTemplate = '';
             try {
                 promptTemplate = await fs.readFile(promptPath, 'utf-8');
             }
             catch (error) {
-                // Fallback message if prompt template not found
+                // Final fallback message if template not found
                 promptTemplate = `📋 **TASK ASSIGNMENT** - {taskTitle}
 
 **Task File:** \`{taskPath}\`
@@ -824,16 +883,21 @@ Please respond promptly with either acceptance or delegation.`;
             if (delegatedBy && !newChain.includes(delegatedBy)) {
                 newChain.push(delegatedBy);
             }
+            // Debug logging for template variables
+            console.log(`[MCP] 🔍 Template replacement debug:`);
+            console.log(`[MCP]   taskPath: "${taskPath}"`);
+            console.log(`[MCP]   taskProjectPath: "${taskProjectPath}"`);
+            console.log(`[MCP]   targetSessionName: "${targetSessionName}"`);
             // Replace template variables
             const assignmentMessage = promptTemplate
-                .replace(/{taskPath}/g, taskPath)
+                .replace(/{taskPath}/g, taskPath || 'ERROR: taskPath is empty')
                 .replace(/{taskTitle}/g, taskDetails.title || 'Task Assignment')
                 .replace(/{taskId}/g, taskDetails.id || path.basename(taskPath, '.md'))
                 .replace(/{taskDescription}/g, taskDetails.description || 'See task file for details')
                 .replace(/{taskPriority}/g, taskDetails.priority || 'normal')
                 .replace(/{taskMilestone}/g, taskDetails.milestone || 'current')
                 .replace(/{projectName}/g, taskDetails.projectName || 'Current Project')
-                .replace(/{projectPath}/g, this.projectPath)
+                .replace(/{projectPath}/g, taskProjectPath)
                 .replace(/{yourSessionName}/g, targetSessionName)
                 .replace(/{assignedBy}/g, delegatedBy || this.sessionName)
                 .replace(/{assignmentTimestamp}/g, new Date().toISOString())
@@ -1646,7 +1710,16 @@ Please respond promptly with either acceptance or delegation.`;
         // Extract basic info from path using built-in path operations
         const pathParts = taskPath.split('/');
         const fileName = taskPath.split('/').pop()?.replace('.md', '') || 'unknown';
-        const milestone = pathParts.find(part => !['open', 'in_progress', 'blocked', 'done', '.agentmux', 'tasks'].includes(part)) || 'current';
+        // Better milestone extraction: look for task group patterns after .agentmux/tasks/
+        let milestone = 'current';
+        const tasksIndex = pathParts.findIndex(part => part === 'tasks');
+        if (tasksIndex !== -1 && tasksIndex + 1 < pathParts.length) {
+            const candidateMilestone = pathParts[tasksIndex + 1];
+            // Check if it's a valid milestone (not a status folder)
+            if (!['open', 'in_progress', 'blocked', 'done'].includes(candidateMilestone)) {
+                milestone = candidateMilestone;
+            }
+        }
         // Parse frontmatter if exists
         const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
         let title = fileName.replace(/-/g, ' ').replace(/_/g, ' ');
@@ -1796,6 +1869,9 @@ Please respond promptly with either acceptance or delegation.`;
                                     break;
                                 case 'read_task':
                                     result = await this.readTask(toolArgs);
+                                    break;
+                                case 'block_task':
+                                    result = await this.blockTask(toolArgs);
                                     break;
                                 case 'assign_task':
                                     result = await this.assignTask(toolArgs);
@@ -1996,6 +2072,20 @@ Please respond promptly with either acceptance or delegation.`;
                         taskPath: { type: 'string', description: 'Path to task file to read' }
                     },
                     required: ['taskPath']
+                }
+            },
+            {
+                name: 'block_task',
+                description: 'Block a task with questions for human review and move to blocked folder',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        taskPath: { type: 'string', description: 'Path to task file in in_progress folder' },
+                        reason: { type: 'string', description: 'Reason for blocking the task' },
+                        questions: { type: 'array', items: { type: 'string' }, description: 'Questions requiring human answers' },
+                        urgency: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Urgency level of the blocker' }
+                    },
+                    required: ['taskPath', 'reason']
                 }
             },
             {

@@ -38,7 +38,7 @@ export class RuntimeAgentService {
             });
             // Clear the commandline before execute
             await this.tmuxCommand.clearCurrentCommandLine(sessionName);
-            await this.executeCommands(sessionName, commands, targetPath);
+            await this.sendShellCommandsToSession(sessionName, commands, targetPath);
             this.logger.info('Runtime initialization script completed', {
                 sessionName,
                 runtimeType: this.getRuntimeType(),
@@ -263,28 +263,28 @@ export class RuntimeAgentService {
         });
     }
     /**
-     * Execute commands in tmux session with proper timing
+     * Send shell commands to tmux session with robust script approach
      */
-    async executeCommands(sessionName, commands, targetPath) {
-        // Change to target directory first
+    async sendShellCommandsToSession(sessionName, commands, targetPath) {
+        // Change to target directory first using robust script approach
         const cdPath = targetPath || process.cwd();
         this.logger.info('Changing directory before runtime init', {
             sessionName,
             runtimeType: this.getRuntimeType(),
             cdPath,
         });
-        await this.tmuxCommand.sendKey(sessionName, `cd "${cdPath}"`);
-        await this.tmuxCommand.sendEnter(sessionName);
+        // Use robust script approach for cd command (includes Enter automatically)
+        await this.tmuxCommand.sendMessage(sessionName, `cd "${cdPath}"`);
         await new Promise((resolve) => setTimeout(resolve, 500));
-        // Execute each command
+        // Send each command using robust script approach
         for (const command of commands) {
             this.logger.info('Sending command to session', {
                 sessionName,
                 runtimeType: this.getRuntimeType(),
                 command,
             });
-            await this.tmuxCommand.sendKey(sessionName, command);
-            await this.tmuxCommand.sendEnter(sessionName);
+            // Use robust script approach (includes Enter automatically)
+            await this.tmuxCommand.sendMessage(sessionName, command);
             await new Promise((resolve) => setTimeout(resolve, 500));
         }
     }

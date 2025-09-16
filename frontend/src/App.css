@@ -616,6 +616,83 @@ body {
 	color: var(--color-text-muted);
 }
 
+/* Collapsed Sidebar Styles */
+.navigation--collapsed {
+	width: 64px;
+	padding: var(--spacing-md) var(--spacing-sm);
+}
+
+.navigation--collapsed .nav-logo {
+	justify-content: center;
+}
+
+.navigation--collapsed .nav-item {
+	justify-content: center;
+	padding: var(--spacing-sm);
+}
+
+.navigation--collapsed .nav-label {
+	display: none;
+}
+
+.navigation--collapsed .nav-user {
+	justify-content: center;
+}
+
+/* Navigation Footer Toggle Button */
+.nav-footer--toggle {
+	background: none;
+	border: none;
+	width: 100%;
+	padding: var(--spacing-md) 0;
+	border-top: 1px solid var(--color-border-light);
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.nav-footer--toggle:hover {
+	background-color: var(--color-surface-hover);
+}
+
+.nav-toggle-icon {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: var(--spacing-xs);
+	border-radius: var(--radius-base);
+	transition: background-color 0.2s ease;
+}
+
+.nav-footer--toggle:hover .nav-toggle-icon {
+	background-color: var(--color-surface);
+}
+
+.toggle-icon {
+	width: 16px;
+	height: 16px;
+	color: var(--color-text-muted);
+}
+
+/* Sidebar Width Transitions */
+.app-sidebar {
+	transition: width 0.3s ease;
+}
+
+.app-sidebar.collapsed {
+	width: 64px;
+}
+
+.app-main {
+	transition: margin-left 0.3s ease;
+}
+
+.app-main.sidebar-collapsed {
+	margin-left: 64px;
+}
+
 /* Dashboard Styles */
 .dashboard {
 	max-width: 1400px;
@@ -2881,8 +2958,7 @@ body {
 }
 
 .kanban-board {
-	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	display: flex;
 	gap: 20px;
 	background: #f8fafc;
 	padding: 24px;
@@ -2890,6 +2966,27 @@ body {
 	border: 1px solid #e2e8f0;
 	width: 100%;
 	max-width: none;
+	overflow-x: auto;
+	min-height: 400px;
+}
+
+/* Horizontal scrolling for kanban board when content overflows */
+.kanban-board::-webkit-scrollbar {
+	height: 8px;
+}
+
+.kanban-board::-webkit-scrollbar-track {
+	background: #f1f5f9;
+	border-radius: 4px;
+}
+
+.kanban-board::-webkit-scrollbar-thumb {
+	background: #cbd5e1;
+	border-radius: 4px;
+}
+
+.kanban-board::-webkit-scrollbar-thumb:hover {
+	background: #94a3b8;
 }
 
 .task-column {
@@ -2897,6 +2994,9 @@ body {
 	border-radius: 12px;
 	padding: 0;
 	min-height: 600px;
+	width: 300px;
+	min-width: 300px;
+	flex-shrink: 0;
 	display: flex;
 	flex-direction: column;
 	box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);

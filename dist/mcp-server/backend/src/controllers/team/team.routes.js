@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createTeam, getTeams, getTeam, startTeam, stopTeam, getTeamWorkload, deleteTeam, getTeamMemberSession, addTeamMember, updateTeamMember, deleteTeamMember, startTeamMember, stopTeamMember, reportMemberReady, registerMemberStatus, generateMemberContext, injectContextIntoSession, refreshMemberContext, getTeamActivityStatus, updateTeamMemberRuntime } from './team.controller.js';
+import { createTeam, getTeams, getTeam, updateTeam, startTeam, stopTeam, getTeamWorkload, deleteTeam, getTeamMemberSession, addTeamMember, updateTeamMember, deleteTeamMember, startTeamMember, stopTeamMember, reportMemberReady, registerMemberStatus, generateMemberContext, injectContextIntoSession, refreshMemberContext, getTeamActivityStatus, updateTeamMemberRuntime } from './team.controller.js';
 /**
  * Creates team router with all team-related endpoints
  * @param context - API context with services
@@ -11,6 +11,7 @@ export function createTeamRouter(context) {
     router.post('/', createTeam.bind(context));
     router.get('/', getTeams.bind(context));
     router.get('/:id', getTeam.bind(context));
+    router.put('/:id', updateTeam.bind(context));
     router.delete('/:id', deleteTeam.bind(context));
     // Team lifecycle management
     router.post('/:id/start', startTeam.bind(context));

@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import * as path from 'path';
 import { LoggerService } from '../core/logger.service.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 /**
@@ -8,6 +10,7 @@ import { AGENTMUX_CONSTANTS } from '../../constants.js';
  */
 export class TmuxCommandService {
     logger;
+    projectRoot;
     // Cache for session existence checks - expires in 5 seconds
     sessionCache = new Map();
     SESSION_CACHE_TTL = 10000; // 10 seconds (increased for better reliability)
@@ -18,17 +21,64 @@ export class TmuxCommandService {
     lastListSessions = 0;
     LIST_SESSIONS_THROTTLE = 3000; // 3 seconds between list-sessions calls
     cachedSessionList = null;
-    // Shadow client tracking for TUI input workaround
+    // Shadow client tracking for TUI input workaround (kept for compatibility but simplified)
     shadowClients = new Set(); // Sessions with shadow clients
     shadowClientProcesses = new Map(); // Track PIDs for cleanup
     shadowClientLocks = new Map(); // Prevent race conditions
     focusEventsEnabled = false; // Track if we've enabled focus events
     constructor() {
         this.logger = LoggerService.getInstance().createComponentLogger('TmuxCommandService');
+        // Resolve project root - go up from current file to find package.json
+        this.projectRoot = this.findProjectRoot();
         // Enable focus events for shadow client support (done asynchronously)
         this.enableFocusEvents().catch((error) => {
             this.logger.warn('Failed to enable focus events for shadow clients', { error });
         });
+    }
+    /**
+     * Find the project root by looking for package.json
+     */
+    findProjectRoot() {
+        // Get current file directory
+        const currentDir = path.dirname(fileURLToPath(import.meta.url));
+        // Walk up directories to find package.json
+        let dir = currentDir;
+        while (dir !== path.dirname(dir)) {
+            try {
+                const packagePath = path.join(dir, 'package.json');
+                // Synchronously check if package.json exists
+                require('fs').accessSync(packagePath);
+                return dir;
+            }
+            catch {
+                dir = path.dirname(dir);
+            }
+        }
+        // Fallback to current working directory
+        return process.cwd();
+    }
+    /**
+     * Get path to the tmux_robosend.sh script
+     */
+    getTmuxRobosendScriptPath() {
+        return path.join(this.projectRoot, 'config', 'runtime_scripts', AGENTMUX_CONSTANTS.INIT_SCRIPTS.TMUX_ROBOSEND);
+    }
+    /**
+     * Get tmux socket name (default socket)
+     */
+    async getTmuxSocketName() {
+        try {
+            const output = await this.executeTmuxCommand(['display', '-p', '#{socket_path}']);
+            const socketPath = output.trim();
+            // Extract socket name from path (e.g., '/tmp/tmux-501/default' -> 'default')
+            const socketName = path.basename(socketPath);
+            this.logger.debug('Detected tmux socket', { socketPath, socketName });
+            return socketName;
+        }
+        catch (error) {
+            this.logger.warn('Failed to detect tmux socket, using default', { error });
+            return 'default';
+        }
     }
     /**
      * Execute a tmux command with bashrc sourced first
@@ -458,7 +508,7 @@ export class TmuxCommandService {
         }
     }
     /**
-     * Send a message to a specific tmux session
+     * Send a message to a specific tmux session using the robust tmux_robosend.sh script
      */
     async sendMessage(sessionName, message) {
         let cleanMessage = message
@@ -474,59 +524,49 @@ export class TmuxCommandService {
                 sessionName,
                 originalLength,
                 newLength: cleanMessage.length,
-                exclamationMarksEscaped: (cleanMessage.length - originalLength) / 1, // Each ! becomes \!
             });
         }
-        // Ensure shadow client is attached for TUI input reliability
-        await this.ensureShadowClient(sessionName);
         // Debug logging for message sending
-        this.logger.debug('🔍 Sending message to tmux session:', {
+        this.logger.debug('🔍 Sending message to tmux session using robosend script:', {
             sessionName,
             messageLength: cleanMessage.length,
             preview: cleanMessage.slice(0, 100) + (cleanMessage.length > 100 ? '...' : ''),
         });
-        // Send the entire message as one piece to avoid corrupting structured content
-        this.logger.debug('Sending complete message without chunking', {
-            sessionName,
-            messageLength: cleanMessage.length,
-        });
         try {
-            // Get pane ID for the session (since we only have one window per session)
-            const paneId = await this.findSessionPaneId(sessionName);
-            this.logger.debug('Using pane ID for message sending', {
+            // Get script path and socket name
+            const scriptPath = this.getTmuxRobosendScriptPath();
+            const socketName = await this.getTmuxSocketName();
+            // Build command arguments for the script
+            // Format: bash tmux_robosend.sh --shadow -L socketName sessionName "message"
+            const scriptArgs = [
+                scriptPath,
+                '--shadow', // Use shadow client for detached sessions
+                '-L',
+                socketName,
                 sessionName,
-                paneId,
+                cleanMessage
+            ];
+            this.logger.debug('🔍 Executing tmux_robosend script:', {
+                scriptPath,
+                socketName,
+                sessionName,
+                messageLength: cleanMessage.length,
+                command: `bash ${scriptArgs.join(' ')}`
+            });
+            // Execute the script using bash
+            await this.executeShellCommand(`bash "${scriptPath}" --shadow -L "${socketName}" "${sessionName}" "${cleanMessage.replace(/"/g, '\\"')}"`);
+            this.logger.debug('✅ Message sent successfully via robosend script', {
+                sessionName,
                 messageLength: cleanMessage.length,
             });
-            // Use proper shadow client approach: split into two separate tmux commands
-            // This is cleaner than chaining and avoids escaping issues
-            // 1. Send the message: tmux send-keys -t %0 -l -- 'message'
-            // 2. Send Enter: tmux send-keys -t %0 C-m
-            this.logger.debug('🔍 SENDMESSAGE: About to send message using pane ID with two commands', {
-                sessionName,
-                paneId,
-                messageLength: cleanMessage.length,
-                messagePreview: cleanMessage.slice(0, 100) + (cleanMessage.length > 100 ? '...' : ''),
-            });
-            // Execute as two separate tmux commands - avoids escaping complexity
-            // First: send the literal message content
-            await this.executeTmuxCommand(['send-keys', '-t', paneId, '-l', '--', cleanMessage]);
-            // Add small delay to let the message be processed before Enter
-            // This prevents truncation in TUI applications like Gemini CLI
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-            // Second: send Enter to execute
-            await this.executeTmuxCommand(['send-keys', '-t', paneId, 'Enter']);
         }
         catch (error) {
-            this.logger.error('Error sending complete message', {
+            this.logger.error('Error sending message via robosend script', {
                 sessionName,
                 error: error instanceof Error ? error.message : String(error),
             });
             throw error;
         }
-        // CRITICAL: Wait for terminal/Claude to process the message before sending Enter
-        // This delay allows the UI to register the text input properly
-        await new Promise((resolve) => setTimeout(resolve, 500));
     }
     /**
      * Send individual key to a specific tmux session
@@ -572,27 +612,45 @@ export class TmuxCommandService {
         await this.sendEscape(sessionName);
         await this.sendEscape(sessionName);
         await this.sendEscape(sessionName);
+        await this.sendEnter(sessionName);
+    }
+    /**
+     * Send control keys to a session using enhanced approach with session focusing
+     * Leverages some benefits of the robust script approach
+     */
+    async sendControlKey(sessionName, key) {
+        try {
+            // Get script path and socket name for consistent session handling
+            const socketName = await this.getTmuxSocketName();
+            // Use enhanced tmux command with socket consistency
+            const args = ['-L', socketName, 'send-keys', '-t', sessionName, key];
+            await this.executeTmuxCommand(args);
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        catch (error) {
+            // Fallback to basic approach if enhanced method fails
+            this.logger.debug('Enhanced control key method failed, using fallback', { sessionName, key, error });
+            await this.executeTmuxCommand(['send-keys', '-t', sessionName, key]);
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
     }
     /**
      * Send Enter key to a session
      */
     async sendEnter(sessionName) {
-        await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'Enter']);
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.sendControlKey(sessionName, 'Enter');
     }
     /**
      * Send Ctrl+C to a session
      */
     async sendCtrlC(sessionName) {
-        await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'C-c']);
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.sendControlKey(sessionName, 'C-c');
     }
     /**
      * Send Escape key to a session
      */
     async sendEscape(sessionName) {
-        await this.executeTmuxCommand(['send-keys', '-t', sessionName, 'Escape']);
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await this.sendControlKey(sessionName, 'Escape');
     }
     /**
      * Capture terminal output from a session (cached for 2 seconds to reduce frequent calls)
@@ -806,10 +864,8 @@ export class TmuxCommandService {
      */
     async setEnvironmentVariable(sessionName, key, value) {
         this.logger.debug('🔍 Setting environment variable:', { sessionName, key, value });
-        await this.clearCurrentCommandLine(sessionName);
-        // Send the export command without any special flags to avoid truncation
-        await this.executeTmuxCommand(['send-keys', '-t', sessionName, `export ${key}="${value}"`]);
-        await this.sendEnter(sessionName);
+        // Use robust script approach for reliable message sending (includes Enter key automatically)
+        await this.sendMessage(sessionName, `export ${key}="${value}"`);
         this.logger.info('✅ Environment variable set successfully', { sessionName, key });
     }
     /**

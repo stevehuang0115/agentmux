@@ -499,16 +499,27 @@ export class TmuxService extends EventEmitter {
         try {
             // Clear current command line first
             await this.tmuxCommand.clearCurrentCommandLine(sessionName);
-            // Send message using direct send-keys approach
+            // Send message using direct send-keys approach with consistent 1000ms timing
+            // First: send the message content
             await this.tmuxCommand.executeTmuxCommand([
                 'send-keys',
                 '-t',
                 sessionName,
-                message,
-                'C-m'
+                '-l',
+                '--',
+                message
+            ]);
+            // Wait 1000ms for consistent timing with detached sessions
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            // Second: send Enter to execute
+            await this.tmuxCommand.executeTmuxCommand([
+                'send-keys',
+                '-t',
+                sessionName,
+                'Enter'
             ]);
             this.emit('message_sent', { sessionName, message, method: 'direct' });
-            this.logger.debug('Message sent directly via send-keys', {
+            this.logger.debug('Message sent directly via send-keys with 1000ms delay', {
                 sessionName,
                 messageLength: message.length,
             });
@@ -520,35 +531,24 @@ export class TmuxService extends EventEmitter {
     }
     /**
      * Send a message to a specific tmux session
-     * Uses dual approach: direct send-keys for attached sessions, shadow client for detached
+     * Uses robust tmux_robosend.sh script for all sessions (attached and detached)
      */
     async sendMessage(sessionName, message) {
         try {
-            // Check if session is attached
-            const isAttached = await this.isSessionAttached(sessionName);
-            if (isAttached) {
-                this.logger.debug('Session is attached, using direct send-keys approach', {
-                    sessionName,
-                    messageLength: message.length,
-                });
-                // Use direct send-keys for attached sessions
-                await this.sendMessageDirectly(sessionName, message);
-            }
-            else {
-                this.logger.debug('Session is detached, using shadow client approach', {
-                    sessionName,
-                    messageLength: message.length,
-                });
-                // Use shadow client for detached sessions (original approach)
-                await this.tmuxCommand.clearCurrentCommandLine(sessionName);
-                await this.tmuxCommand.sendMessage(sessionName, message);
-                await this.tmuxCommand.sendEnter(sessionName);
-                this.emit('message_sent', { sessionName, message, method: 'shadow_client' });
-            }
+            this.logger.debug('Sending message using robust tmux_robosend.sh script', {
+                sessionName,
+                messageLength: message.length,
+            });
+            // Always use the robust script approach for consistency and reliability
+            // The script handles both attached and detached sessions with shadow clients
+            await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+            await this.tmuxCommand.sendMessage(sessionName, message);
+            // Note: sendMessage already includes Enter key with proper timing, no need for duplicate sendEnter
+            this.emit('message_sent', { sessionName, message, method: 'robust_script' });
             this.logger.debug('Message sent successfully', {
                 sessionName,
                 messageLength: message.length,
-                method: isAttached ? 'direct' : 'shadow_client',
+                method: 'robust_script',
             });
         }
         catch (error) {

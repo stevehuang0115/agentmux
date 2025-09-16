@@ -5,10 +5,13 @@ import { Navigation } from './Navigation';
 import { TerminalPanel } from '../TerminalPanel/TerminalPanel';
 import { OrchestratorStatusBanner } from '../OrchestratorStatusBanner';
 import { useTerminal } from '../../contexts/TerminalContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { IconButton } from '../UI';
+import clsx from 'clsx';
 
 export const AppLayout: React.FC = () => {
   const { isTerminalOpen, openTerminal, closeTerminal } = useTerminal();
+  const { isCollapsed } = useSidebar();
 
   const toggleTerminal = () => {
     if (isTerminalOpen) {
@@ -20,10 +23,10 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="app-layout">
-      <div className="app-sidebar">
+      <div className={clsx('app-sidebar', isCollapsed && 'collapsed')}>
         <Navigation />
       </div>
-      <main className="app-main">
+      <main className={clsx('app-main', isCollapsed && 'sidebar-collapsed')}>
         <OrchestratorStatusBanner />
         <Outlet />
       </main>

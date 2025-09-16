@@ -6,12 +6,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
-import { ORCHESTRATOR_SETUP_TIMEOUT, API_ENDPOINTS, AGENTMUX_HOME_DIR } from '../constants.js';
+import { ORCHESTRATOR_SETUP_TIMEOUT, DEFAULT_WEB_PORT, DEFAULT_MCP_PORT, API_ENDPOINTS, AGENTMUX_HOME_DIR } from '../constants.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export async function startCommand(options) {
-    const webPort = parseInt(options.port || '3000');
-    const mcpPort = parseInt(options.mcpPort || '3001');
+    const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
+    const mcpPort = parseInt(options.mcpPort || DEFAULT_MCP_PORT.toString());
     const openBrowser = options.browser !== false;
     console.log(chalk.blue('🚀 Starting AgentMux...'));
     console.log(chalk.gray(`Web Port: ${webPort}`));
@@ -105,8 +105,8 @@ async function ensureAgentMuxHome() {
     // Create default config if it doesn't exist
     const configPath = path.join(agentmuxHome, 'config.env');
     if (!fs.existsSync(configPath)) {
-        const defaultConfig = `WEB_PORT=3000
-AGENTMUX_MCP_PORT=3001
+        const defaultConfig = `WEB_PORT=${DEFAULT_WEB_PORT}
+AGENTMUX_MCP_PORT=${DEFAULT_MCP_PORT}
 AGENTMUX_HOME=${agentmuxHome}
 DEFAULT_CHECK_INTERVAL=30
 AUTO_COMMIT_INTERVAL=30`;

@@ -153,8 +153,8 @@ describe('MessageSchedulerService', () => {
       
       expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('Hello World'));
       expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('SCHEDULED CHECK-IN'));
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('CONTINUE'));
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that work now'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('IMMEDIATELY CONTINUE'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that exact work now'));
       expect(mockStorageService.saveDeliveryLog).toHaveBeenCalled();
       expect(mockStorageService.saveScheduledMessage).toHaveBeenCalled();
     });
@@ -277,8 +277,8 @@ describe('MessageSchedulerService', () => {
       expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-team');
       expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('Hello World'));
       expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('SCHEDULED CHECK-IN'));
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('CONTINUE'));
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that work now'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('IMMEDIATELY CONTINUE'));
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith('test-team', expect.stringContaining('resume that exact work now'));
     });
 
     it('should handle session not existing', async () => {

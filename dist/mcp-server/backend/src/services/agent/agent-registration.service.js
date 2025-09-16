@@ -761,8 +761,7 @@ export class AgentRegistrationService {
             await this.tmuxCommand.clearCurrentCommandLine(sessionName);
             // Send message using tmux command service
             await this.tmuxCommand.sendMessage(sessionName, message);
-            // Send Enter
-            await this.tmuxCommand.sendEnter(sessionName);
+            // Note: sendMessage already includes Enter key with 1000ms delay
             this.logger.info('Message sent to agent successfully', {
                 sessionName,
                 messageLength: message.length,
@@ -888,10 +887,9 @@ export class AgentRegistrationService {
                 await this.tmuxCommand.sendCtrlC(sessionName);
                 // Send the prompt with proper timing
                 await this.tmuxCommand.sendMessage(sessionName, prompt);
-                // Critical delay to prevent tmux race condition
-                await new Promise((resolve) => setTimeout(resolve, 3000));
-                // Send Enter key
-                await this.tmuxCommand.sendEnter(sessionName);
+                // Note: sendMessage already includes Enter key with 1000ms delay
+                // Additional delay for processing to begin
+                await new Promise((resolve) => setTimeout(resolve, 2000));
                 // Wait for processing to begin
                 await new Promise((resolve) => setTimeout(resolve, 2000));
                 // Verify prompt was delivered and processed

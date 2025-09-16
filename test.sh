@@ -145,19 +145,9 @@ fi
 # Send literally, then Enter
 # -----------------------------
 tmuxx send-keys -t "$PANE_ID" -l -- "$LINE"
-
-# Dynamic sleep based on line length
-LINE_LENGTH=${#LINE}
-if [[ $LINE_LENGTH -lt 50 ]]; then
-  sleep 0.5  # Short lines
-elif [[ $LINE_LENGTH -lt 500 ]]; then
-  sleep 2    # Regular long lines
-else
-  sleep 5    # Very long lines
-fi
-
 tmuxx send-keys -t "$PANE_ID" C-m
 
 # Confirmation
 tmuxx display -p -t "$PANE_ID" \
   '✅ sent to #{session_name}:#{window_name}.#{pane_index} (#{pane_id}) on #{socket_path}; cmd=#{pane_current_command}, in_mode=#{pane_in_mode}'
+

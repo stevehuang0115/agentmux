@@ -13,6 +13,7 @@
 - **Milestone:** {taskMilestone}
 
 **Task File:** `{taskPath}`
+**DEBUG - Full Task Path:** `{taskPath}`
 
 ---
 

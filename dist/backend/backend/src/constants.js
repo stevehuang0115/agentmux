@@ -26,6 +26,11 @@ export const AGENTMUX_CONSTANTS = {
         IDLE: 'idle',
         IN_PROGRESS: 'in_progress',
     },
+    INIT_SCRIPTS: {
+        TMUX: 'initialize_tmux.sh',
+        CLAUDE: 'initialize_claude.sh',
+        TMUX_ROBOSEND: 'tmux_robosend.sh',
+    },
 };
 // Environment variable names (duplicated from config/constants.ts for backend use)
 export const ENV_CONSTANTS = {

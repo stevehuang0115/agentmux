@@ -279,7 +279,7 @@ export class MessageSchedulerService extends EventEmitter {
 
 ${originalMessage}
 
-[CONTINUE] If you were working on something when this arrived, please resume that work now.`;
+⚡ IMPORTANT: After responding to this check-in, IMMEDIATELY CONTINUE your previous work without waiting for further instructions. If you were implementing, coding, testing, or working on any task when this message arrived, resume that exact work now. Do not stop your development workflow - this is just a quick status update. Continue where you left off.`;
   }
 
   /**

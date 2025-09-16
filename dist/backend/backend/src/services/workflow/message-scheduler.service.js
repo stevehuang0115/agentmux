@@ -91,6 +91,7 @@ export class MessageSchedulerService extends EventEmitter {
     async executeMessage(message) {
         let success = false;
         let error;
+        let enhancedMessage = message.message;
         try {
             // Determine target session name
             const sessionName = message.targetTeam === 'orchestrator'
@@ -100,8 +101,10 @@ export class MessageSchedulerService extends EventEmitter {
             if (!await this.tmuxService.sessionExists(sessionName)) {
                 throw new Error(`Target session "${sessionName}" does not exist`);
             }
+            // Enhance message with continuation instructions to handle interruptions gracefully
+            enhancedMessage = this.addContinuationInstructions(message.message);
             // Send message to session (sendMessage already includes Enter key)
-            await this.tmuxService.sendMessage(sessionName, message.message);
+            await this.tmuxService.sendMessage(sessionName, enhancedMessage);
             success = true;
             const contextInfo = message.targetProject ? ` (Project: ${message.targetProject})` : '';
             console.log(`Executed scheduled message "${message.name}" for ${message.targetTeam}${contextInfo}`);
@@ -117,7 +120,7 @@ export class MessageSchedulerService extends EventEmitter {
             messageName: message.name,
             targetTeam: message.targetTeam,
             targetProject: message.targetProject,
-            message: message.message,
+            message: enhancedMessage,
             success,
             error
         });
@@ -226,6 +229,16 @@ export class MessageSchedulerService extends EventEmitter {
             default:
                 throw new Error(`Invalid delay unit: ${unit}`);
         }
+    }
+    /**
+     * Add continuation instructions to scheduled messages to handle interruptions gracefully
+     */
+    addContinuationInstructions(originalMessage) {
+        return `🔄 [SCHEDULED CHECK-IN - Please continue previous work after this]
+
+${originalMessage}
+
+⚡ IMPORTANT: After responding to this check-in, IMMEDIATELY CONTINUE your previous work without waiting for further instructions. If you were implementing, coding, testing, or working on any task when this message arrived, resume that exact work now. Do not stop your development workflow - this is just a quick status update. Continue where you left off.`;
     }
     /**
      * Clean up all timers

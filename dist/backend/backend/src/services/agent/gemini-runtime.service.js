@@ -119,7 +119,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
             // Send the directory add command
             const addCommand = `/directory add ${projectPath}`;
             await this.tmuxCommand.sendMessage(sessionName, addCommand);
-            await this.tmuxCommand.sendEnter(sessionName);
+            // Note: sendMessage already includes Enter key with 1000ms delay
             // Wait for command to complete
             await new Promise((resolve) => setTimeout(resolve, 2000));
             this.logger.info('Project added to Gemini CLI allowlist', {
