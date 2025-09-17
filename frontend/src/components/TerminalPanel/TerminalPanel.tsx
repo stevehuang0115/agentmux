@@ -36,13 +36,27 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const terminalOutputRef = useRef<HTMLPreElement>(null);
   const terminalPanelRef = useRef<HTMLDivElement>(null);
   const currentSubscription = useRef<string | null>(null);
+  const sessionSwitchTimeout = useRef<NodeJS.Timeout | null>(null);
 
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
     // WebSocket message structure: data is the payload containing TerminalOutput
-    if (data && data.sessionName === selectedSession) {
-      setTerminalOutput(data.content || '');
-      
+    // Check both direct and nested data structures
+    const dataSessionName = data?.sessionName || data?.payload?.sessionName;
+    const dataContent = data?.content || data?.payload?.content;
+
+    if (data && dataSessionName === selectedSession) {
+      setTerminalOutput(dataContent || '');
+
+      // Clear loading state when we receive terminal output
+      setLoading(false);
+
+      // Clear session switch timeout since we got content
+      if (sessionSwitchTimeout.current) {
+        clearTimeout(sessionSwitchTimeout.current);
+        sessionSwitchTimeout.current = null;
+      }
+
       // Auto-scroll to bottom if user hasn't manually scrolled up
       if (!isUserScrolling) {
         setTimeout(() => {
@@ -55,9 +69,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   }, [selectedSession, isUserScrolling]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
-    if (data && data.sessionName === selectedSession) {
-      setTerminalOutput(data.content || '');
+    console.log('handleInitialTerminalState received data:', data);
+    console.log('Expected sessionName:', selectedSession);
+
+    // Check both direct sessionName and nested structure
+    const dataSessionName = data?.sessionName || data?.payload?.sessionName;
+    const dataContent = data?.content || data?.payload?.content;
+
+    if (data && dataSessionName === selectedSession) {
+      console.log('Session name matches, setting terminal output:', dataContent?.substring(0, 100));
+      setTerminalOutput(dataContent || '');
       setLoading(false);
+
+      // Clear session switch timeout since we got the response
+      if (sessionSwitchTimeout.current) {
+        clearTimeout(sessionSwitchTimeout.current);
+        sessionSwitchTimeout.current = null;
+      }
+    } else {
+      console.log('Session name mismatch or no data. Data sessionName:', dataSessionName, 'Expected:', selectedSession);
     }
   }, [selectedSession]);
 
@@ -89,8 +119,28 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
   // Handle session switching
   useEffect(() => {
-    if (isOpen && selectedSession && webSocketService.isConnected()) {
-      switchSession(selectedSession);
+    if (isOpen && selectedSession) {
+      // Check if WebSocket is connected, if not, wait for connection
+      if (webSocketService.isConnected()) {
+        switchSession(selectedSession);
+      } else {
+        // Wait for connection with timeout
+        const connectionCheckInterval = setInterval(() => {
+          if (webSocketService.isConnected()) {
+            clearInterval(connectionCheckInterval);
+            switchSession(selectedSession);
+          }
+        }, 100);
+
+        // Clear interval after 5 seconds if still not connected
+        setTimeout(() => {
+          clearInterval(connectionCheckInterval);
+          if (!webSocketService.isConnected()) {
+            console.error('WebSocket not connected after 5 seconds, cannot switch session');
+            setError('Connection lost. Please refresh the page.');
+          }
+        }, 5000);
+      }
     }
   }, [selectedSession, isOpen]);
 
@@ -127,6 +177,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   };
 
   const cleanupWebSocket = () => {
+    // Clear session switch timeout
+    if (sessionSwitchTimeout.current) {
+      clearTimeout(sessionSwitchTimeout.current);
+      sessionSwitchTimeout.current = null;
+    }
+
     // Unsubscribe from current session
     if (currentSubscription.current) {
       webSocketService.unsubscribeFromSession(currentSubscription.current);
@@ -145,19 +201,58 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     setConnectionStatus('disconnected');
     setTerminalOutput('');
     setError(null);
+    setLoading(false);
   };
 
   const switchSession = (sessionName: string) => {
+    console.log(`switchSession called with: ${sessionName}`);
+
+    // Clear any existing session switch timeout
+    if (sessionSwitchTimeout.current) {
+      clearTimeout(sessionSwitchTimeout.current);
+      sessionSwitchTimeout.current = null;
+    }
+
     // Unsubscribe from previous session
     if (currentSubscription.current && currentSubscription.current !== sessionName) {
+      console.log(`Unsubscribing from previous session: ${currentSubscription.current}`);
       webSocketService.unsubscribeFromSession(currentSubscription.current);
+    }
+
+    // Check WebSocket connection status
+    if (!webSocketService.isConnected()) {
+      console.warn('WebSocket not connected, attempting to reconnect...');
+      setError('WebSocket disconnected. Attempting to reconnect...');
+      setConnectionStatus('reconnecting');
+
+      // Try to reconnect
+      webSocketService.connect().then(() => {
+        console.log('Reconnected, retrying session switch');
+        switchSession(sessionName); // Retry after connection
+      }).catch((error) => {
+        console.error('Failed to reconnect:', error);
+        setError('Failed to connect to terminal service. Please refresh the page.');
+        setLoading(false);
+      });
+      return;
     }
 
     // Subscribe to new session
     setLoading(true);
+    setError(null);
     setTerminalOutput('# Connecting to terminal session...\n# Fetching live tmux session output...\n');
+
+    console.log(`Subscribing to session: ${sessionName}, WebSocket connected: ${webSocketService.isConnected()}`);
     webSocketService.subscribeToSession(sessionName);
     currentSubscription.current = sessionName;
+
+    // Set timeout fallback to clear loading state if no response comes within 10 seconds
+    sessionSwitchTimeout.current = setTimeout(() => {
+      console.warn(`Session switch timeout for ${sessionName}, clearing loading state`);
+      setLoading(false);
+      setTerminalOutput(`# Connection timeout for session: ${sessionName}\n# No response from server after 10 seconds.\n# Try refreshing the page or selecting a different session.\n`);
+      sessionSwitchTimeout.current = null;
+    }, 10000);
 
     console.log(`Switched to terminal session: ${sessionName}`);
   };
