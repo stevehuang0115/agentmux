@@ -61,7 +61,9 @@ This is a critical step to ensure accountability and prevent task stagnation. Yo
        - Why are you no longer working on this?
        - Should this task be reassigned?
 
-    CRITICAL: A response is mandatory. Failure to respond or act will result in task reassignment in the next cycle."
+    CRITICAL: A response is mandatory. Failure to respond or act will result in task reassignment in the next cycle.
+
+    After the response, you can resume to your previous work."
     })
     ```
 

@@ -980,39 +980,8 @@ export class AgentMuxMCPServer {
         console.warn('Could not read task details for assignment:', error);
       }
 
-      // Load the assignment prompt template from agentmux config directory
-      const fs = await import('fs/promises');
-      const path = await import('path');
-
-      const promptPath = path.join(process.cwd(), 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
-      let promptTemplate = '';
-
-      try {
-        promptTemplate = await fs.readFile(promptPath, 'utf-8');
-      } catch (error) {
-        // Final fallback message if template not found
-        promptTemplate = `📋 **TASK ASSIGNMENT** - {taskTitle}
-
-**Task File:** \`{taskPath}\`
-**Priority:** {taskPriority}
-
-You are being assigned this task. You have two options:
-
-1. **Accept and work on it:** Call \`accept_task\` and \`read_task\` to get started
-2. **Delegate to another agent:** Call \`assign_task\` to delegate to someone more suitable
-
-**Delegation chain:** {delegationChain}
-**Delegated by:** {delegatedBy}
-**Reason:** {reason}
-
-Please respond promptly with either acceptance or delegation.`;
-      }
-
-      // Build updated delegation chain
-      const newChain = [...currentChain];
-      if (delegatedBy && !newChain.includes(delegatedBy)) {
-        newChain.push(delegatedBy);
-      }
+      // Load assignment template using shared method
+      const promptTemplate = await this.loadAssignmentTemplate();
 
       // Debug logging for template variables
       console.log(`[MCP] 🔍 Template replacement debug:`);
@@ -1020,22 +989,23 @@ Please respond promptly with either acceptance or delegation.`;
       console.log(`[MCP]   taskProjectPath: "${taskProjectPath}"`);
       console.log(`[MCP]   targetSessionName: "${targetSessionName}"`);
 
-      // Replace template variables
-      const assignmentMessage = promptTemplate
-        .replace(/{taskPath}/g, taskPath || 'ERROR: taskPath is empty')
-        .replace(/{taskTitle}/g, taskDetails.title || 'Task Assignment')
-        .replace(/{taskId}/g, taskDetails.id || path.basename(taskPath, '.md'))
-        .replace(/{taskDescription}/g, taskDetails.description || 'See task file for details')
-        .replace(/{taskPriority}/g, taskDetails.priority || 'normal')
-        .replace(/{taskMilestone}/g, taskDetails.milestone || 'current')
-        .replace(/{projectName}/g, taskDetails.projectName || 'Current Project')
-        .replace(/{projectPath}/g, taskProjectPath)
-        .replace(/{yourSessionName}/g, targetSessionName)
-        .replace(/{assignedBy}/g, delegatedBy || this.sessionName)
-        .replace(/{assignmentTimestamp}/g, new Date().toISOString())
-        .replace(/{delegationChain}/g, newChain.length > 0 ? newChain.join(' → ') : 'Direct assignment')
-        .replace(/{delegatedBy}/g, delegatedBy || this.sessionName)
-        .replace(/{reason}/g, reason || 'Task assignment');
+      // Build delegation chain
+      const newChain = [...currentChain];
+      if (delegatedBy && !newChain.includes(delegatedBy)) {
+        newChain.push(delegatedBy);
+      }
+
+      // Build assignment message using shared method
+      const assignmentMessage = await this.buildAssignmentMessage({
+        template: promptTemplate,
+        taskPath,
+        taskDetails,
+        taskProjectPath,
+        targetSessionName,
+        delegatedBy,
+        reason,
+        delegationChain: currentChain
+      });
 
       // Send assignment message directly to target session
       console.log(`[MCP] 📤 Sending assignment message to ${targetSessionName}...`);
@@ -1601,12 +1571,19 @@ Please respond promptly with either acceptance or delegation.`;
       const { to, task, priority, ticketId } = params;
       console.log(`📋 Delegating task to ${to}`);
 
-      const taskMessage = `TASK DELEGATION\n` +
-        `From: ${this.sessionName}\n` +
-        `Priority: ${priority || 'normal'}\n` +
-        `${ticketId ? `Ticket ID: ${ticketId}\n` : ''}` +
-        `Task: ${task}\n\n` +
-        `Please acknowledge and provide ETA.`;
+      // Load assignment template using shared method
+      const promptTemplate = await this.loadAssignmentTemplate();
+
+      // Build assignment message using shared method
+      const taskMessage = await this.buildAssignmentMessage({
+        template: promptTemplate,
+        targetSessionName: to,
+        delegatedBy: this.sessionName,
+        reason: `Task delegation from ${this.sessionName}`,
+        task,
+        priority,
+        ticketId
+      });
 
       if (await this.tmuxService.sessionExists(to)) {
         await this.tmuxService.sendMessage(to, taskMessage);
@@ -1950,6 +1927,91 @@ Please respond promptly with either acceptance or delegation.`;
       milestone: milestone,
       projectName: projectName
     };
+  }
+
+  /**
+   * Shared Template Methods for Assignment Messages
+   */
+  private async loadAssignmentTemplate(): Promise<string> {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    const promptPath = path.join(process.cwd(), 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
+
+    try {
+      return await fs.readFile(promptPath, 'utf-8');
+    } catch (error) {
+      // Fallback template if file not found
+      return `📋 **TASK ASSIGNMENT** - {taskTitle}
+
+**Task File:** \`{taskPath}\`
+**Priority:** {taskPriority}
+
+You are being assigned this task. You have two options:
+
+1. **Accept and work on it:** Call \`accept_task\` and \`read_task\` to get started
+2. **Delegate to another agent:** Call \`assign_task\` to delegate to someone more suitable
+
+**Delegation chain:** {delegationChain}
+**Delegated by:** {delegatedBy}
+**Reason:** {reason}
+
+Please respond promptly with either acceptance or delegation.`;
+    }
+  }
+
+  private async buildAssignmentMessage(params: {
+    template: string;
+    taskPath?: string;
+    taskDetails?: any;
+    taskProjectPath?: string;
+    targetSessionName: string;
+    delegatedBy?: string;
+    reason?: string;
+    delegationChain?: string[];
+    task?: string;
+    priority?: string;
+    ticketId?: string;
+  }): Promise<string> {
+    const {
+      template,
+      taskPath = '',
+      taskDetails = {},
+      taskProjectPath = '',
+      targetSessionName,
+      delegatedBy = this.sessionName,
+      reason = '',
+      delegationChain = [],
+      task = '',
+      priority = 'normal',
+      ticketId = ''
+    } = params;
+
+    const path = await import('path');
+
+    // Build delegation chain
+    const newChain = [...delegationChain];
+    if (delegatedBy && !newChain.includes(delegatedBy)) {
+      newChain.push(delegatedBy);
+    }
+
+    // Replace template variables
+    return template
+      .replace(/{taskPath}/g, taskPath || 'Direct delegation (no file)')
+      .replace(/{taskTitle}/g, taskDetails.title || task || 'Task Assignment')
+      .replace(/{taskId}/g, taskDetails.id || (taskPath ? path.basename(taskPath, '.md') : 'direct-task'))
+      .replace(/{taskDescription}/g, taskDetails.description || task || 'See task details')
+      .replace(/{taskPriority}/g, taskDetails.priority || priority)
+      .replace(/{taskMilestone}/g, taskDetails.milestone || 'current')
+      .replace(/{projectName}/g, taskDetails.projectName || 'Current Project')
+      .replace(/{projectPath}/g, taskProjectPath)
+      .replace(/{yourSessionName}/g, targetSessionName)
+      .replace(/{assignedBy}/g, delegatedBy)
+      .replace(/{assignmentTimestamp}/g, new Date().toISOString())
+      .replace(/{delegationChain}/g, newChain.length > 0 ? newChain.join(' → ') : 'Direct assignment')
+      .replace(/{delegatedBy}/g, delegatedBy)
+      .replace(/{reason}/g, reason || 'Task assignment')
+      .replace(/{ticketId}/g, ticketId || 'N/A');
   }
 
   /**
