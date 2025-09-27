@@ -10,27 +10,29 @@ export type { ModalProps, ModalFooterProps, ModalBodyProps } from './Modal';
 export { AlertDialog, ConfirmDialog, useAlert, useConfirm } from './Dialog';
 export type { AlertDialogProps, ConfirmDialogProps, AlertType } from './Dialog';
 
-export { 
-  Form, 
-  FormGroup, 
-  FormRow, 
-  FormLabel, 
-  FormHelp, 
-  FormError, 
-  FormInput, 
-  FormTextarea, 
-  FormSection 
+export {
+  Form,
+  FormGroup,
+  FormRow,
+  FormLabel,
+  FormHelp,
+  FormError,
+  FormInput,
+  FormTextarea,
+  FormSelect,
+  FormSection
 } from './Form';
-export type { 
-  FormProps, 
-  FormGroupProps, 
-  FormRowProps, 
-  FormLabelProps, 
-  FormHelpProps, 
-  FormErrorProps, 
-  FormInputProps, 
-  FormTextareaProps, 
-  FormSectionProps 
+export type {
+  FormProps,
+  FormGroupProps,
+  FormRowProps,
+  FormLabelProps,
+  FormHelpProps,
+  FormErrorProps,
+  FormInputProps,
+  FormTextareaProps,
+  FormSelectProps,
+  FormSectionProps
 } from './Form';
 
 export { Dropdown } from './Dropdown';

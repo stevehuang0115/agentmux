@@ -53,71 +53,76 @@ export const TeamCard: React.FC<TeamCardProps> = ({
     }
   };
 
-  const isActive = members.some(m => m.agentStatus === 'active' || m.sessionName);
-  const statusBadge = (
-    <span className={`text-xs font-medium px-2 py-1 rounded-full ${isActive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-500/10 text-gray-400'}`}>
-      {isActive ? 'active' : 'inactive'}
-    </span>
-  );
 
   return (
     <div
-      className={`bg-surface-dark p-5 rounded-xl border border-border-dark transition-all hover:shadow-lg hover:border-primary/50 flex flex-col h-full ${onClick ? 'cursor-pointer' : ''}`}
+      className={`bg-surface-dark p-6 rounded-xl border border-border-dark transition-all hover:shadow-lg hover:border-primary/50 flex flex-col h-full ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center">
-          <Users className="h-5 w-5 mr-3 text-text-secondary-dark" />
-          <h3 className="font-semibold text-lg">{team.name}</h3>
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex-1">
+          <h3 className="font-bold text-xl text-white mb-2">{team.name}</h3>
         </div>
-        {statusBadge}
       </div>
 
-      <p className="text-sm text-text-secondary-dark mb-4">
-        {members.length} member{members.length !== 1 ? 's' : ''}
-      </p>
+      {team.description && (
+        <p className="text-sm text-text-secondary-dark mb-4">
+          {team.description}
+        </p>
+      )}
+
 
       {team.currentProject && (
-        <div className="flex items-center mb-4 p-2 bg-background-dark rounded">
-          <FolderOpen className="h-4 w-4 mr-2 text-text-secondary-dark" />
-          <span className="text-xs text-text-secondary-dark" title={team.currentProject}>
-            {team.currentProject.length > 25 ?
-              `${team.currentProject.substring(0, 25)}...` :
-              team.currentProject}
+        <div className="flex items-center gap-2 mb-4 text-sm text-text-secondary-dark">
+          <FolderOpen className="h-4 w-4" />
+          <span title={team.currentProject}>
+            {team.currentProject}
           </span>
         </div>
       )}
 
       {members.length > 0 && (
-        <div className="mt-4">
-          <div className="flex items-center gap-1">
-            {members.slice(0, 4).map((member) => {
-              // Get initials from member name
-              const initials = member.name
-                .split(' ')
-                .map(word => word.charAt(0).toUpperCase())
-                .join('')
-                .slice(0, 2);
+        <div className="mt-auto pt-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center -space-x-2">
+              {members.slice(0, 3).map((member) => {
+                // Get initials from member name as fallback
+                const initials = member.name
+                  .split(' ')
+                  .map(word => word.charAt(0).toUpperCase())
+                  .join('')
+                  .slice(0, 2);
 
-              return (
-                <div
-                  key={member.id}
-                  className={`w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-primary-dark ${member.sessionName ? 'cursor-pointer' : ''}`}
-                  onClick={(e) => handleMemberClick(e, member)}
-                  title={member.sessionName ?
-                    `${member.name} (${member.role}) - Active session: ${member.sessionName} (Click to open terminal)` :
-                    `${member.name} (${member.role}) - No active session`
-                  }
-                >
-                  {initials}
+                return (
+                  <div
+                    key={member.id}
+                    className={`w-10 h-10 rounded-full border-2 border-surface-dark flex items-center justify-center text-sm font-bold text-white shadow-lg overflow-hidden transition-colors ${member.sessionName ? 'cursor-pointer hover:bg-primary/20 hover:text-primary' : ''}`}
+                    onClick={(e) => handleMemberClick(e, member)}
+                    title={member.sessionName ?
+                      `${member.name} (${member.role}) - Active session: ${member.sessionName} (Click to open terminal)` :
+                      `${member.name} (${member.role}) - No active session`
+                    }
+                  >
+                    {member.avatar ? (
+                      member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+                        <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-sm">{member.avatar}</span>
+                      )
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center">
+                        {initials}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {members.length > 3 && (
+                <div className="w-10 h-10 rounded-full bg-background-dark border-2 border-surface-dark flex items-center justify-center text-sm font-medium text-text-secondary-dark shadow-lg">
+                  +{members.length - 3}
                 </div>
-              );
-            })}
-            {members.length > 4 && (
-              <div className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-secondary-dark">
-                +{members.length - 4}
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       )}

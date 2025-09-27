@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FormPopup, Dropdown, Button } from '../UI';
+import { FormLabel, FormInput, FormSelect, Button } from '../UI';
 import { useAlert } from '../UI/Dialog';
 
 interface Project {
@@ -56,10 +56,11 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         projectPath: team.currentProject || team.projectPath || '',
       });
       if (team.members && Array.isArray(team.members)) {
-        // Ensure all members have runtimeType (for backward compatibility)
-        const migratedMembers = team.members.map(member => ({
+        // Ensure all members have runtimeType and avatar (for backward compatibility)
+        const migratedMembers = team.members.map((member, index) => ({
           ...member,
-          runtimeType: member.runtimeType || 'claude-code'
+          runtimeType: member.runtimeType || 'claude-code',
+          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
         }));
         setMembers(migratedMembers);
       }
@@ -76,7 +77,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         name: role.displayName,
         role: role.key,
         systemPrompt: `Load from ${role.promptFile}`,
-        runtimeType: 'claude-code'
+        runtimeType: 'claude-code',
+        avatar: avatarChoices[index % avatarChoices.length]
       }));
       
       if (defaultMembers.length > 0) {
@@ -158,7 +160,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       name: 'Fullstack Developer',
       role: 'fullstack-dev',
       systemPrompt: fullstackDevRole ? `Load from ${fullstackDevRole.promptFile}` : 'Default fullstack developer prompt',
-      runtimeType: 'claude-code'
+      runtimeType: 'claude-code',
+      avatar: avatarChoices[members.length % avatarChoices.length]
     };
     setMembers(prev => [...prev, newMember]);
   };
@@ -207,116 +210,169 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
 
 
 
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleSubmit(e);
+  };
+
+  if (!isOpen) return null;
+
   return (
     <>
-    <FormPopup
-      isOpen={isOpen}
-      onClose={onClose}
-      title={team ? 'Edit Team' : 'Create New Team'}
-      subtitle={team ? 'Modify team configuration and members' : 'Set up a new collaborative team'}
-      size="xl"
-      onSubmit={handleSubmit}
-      submitText={team ? 'Save Changes' : 'Create Team'}
-      submitDisabled={!formData.name.trim() || members.length === 0}
-      loading={loading}
-    >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="form-group">
-              <label htmlFor="name">Team Name *</label>
-              <input
-                type="text"
-                id="name"
-                name="name"
-                value={formData.name}
-                onChange={handleInputChange}
-                placeholder="Enter team name (e.g., Frontend Team)"
-                required
-              />
+      <div className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+        <div className="bg-surface-dark border border-border-dark rounded-xl shadow-lg w-full max-w-2xl m-4" onClick={(e) => e.stopPropagation()}>
+          <div className="p-6">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-xl font-semibold text-text-primary-dark">
+                  {team ? 'Edit Team' : 'Create New Team'}
+                </h3>
+                <p className="text-sm text-text-secondary-dark mt-1">
+                  {team ? 'Modify team configuration and members' : 'Configure the details for your new AI agent team.'}
+                </p>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-8 h-8 -mt-1 -mr-1 rounded-lg hover:bg-background-dark flex items-center justify-center text-text-secondary-dark hover:text-text-primary-dark"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
-            <div className="form-group">
-              <label htmlFor="projectPath">Assigned Project</label>
-              <Dropdown
-                id="projectPath"
-                name="projectPath"
-                value={formData.projectPath}
-                onChange={(value) => setFormData(prev => ({ ...prev, projectPath: value }))}
-                placeholder="No project assigned"
-                options={projects.map(project => ({
-                  value: project.id,
-                  label: project.name
-                }))}
-              />
-            </div>
-          </div>
+            <form onSubmit={handleFormSubmit} className="mt-6 space-y-6 max-h-[60vh] overflow-y-auto pr-2">
+              <div>
+                <FormLabel htmlFor="team-name">Team Name</FormLabel>
+                <FormInput
+                  id="team-name"
+                  type="text"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  name="name"
+                  placeholder="e.g., Frontend Wizards"
+                  required
+                />
+              </div>
 
-          <div className="team-members-section">
-            <div className="flex items-center justify-between p-5 border-b border-border-dark">
-              <h3 className="text-xl font-semibold">Team Members ({members.length})</h3>
-              <Button type="button" variant="primary" size="sm" onClick={addMember}>
-                Add Member
-              </Button>
-            </div>
-
-            <div className="team-members-list">
-              {members.map((member, index) => (
-                <div key={member.id} className="team-member-card">
-                  <div className="member-form space-y-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-2">Avatar</label>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {avatarChoices.map((url) => (
-                          <button key={url} type="button" className={`w-8 h-8 rounded-full border ${member.avatar === url ? 'border-primary ring-2 ring-primary/40' : 'border-border-dark'} overflow-hidden`}
-                            onClick={() => handleMemberChange(member.id, 'avatar', url)}
-                          >
-                            <img src={url} className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="form-group">
-                        <label>Agent Name</label>
-                        <input type="text" value={member.name} onChange={(e) => handleMemberChange(member.id, 'name', e.target.value)} placeholder="Member name" required />
-                      </div>
-                      <div className="form-group">
-                        <label>Role</label>
-                        <Dropdown
-                          value={member.role}
-                          onChange={(value) => handleMemberChange(member.id, 'role', value)}
-                          required
-                          options={availableRoles.filter(r => !r.hidden).map(r => ({ value: r.key, label: r.displayName }))}
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
-                      <div className="form-group">
-                        <label>Runtime Type</label>
-                        <Dropdown
-                          value={member.runtimeType}
-                          onChange={(value) => handleMemberChange(member.id, 'runtimeType', value)}
-                          required
-                          options={[
-                            { value: 'claude-code', label: 'Claude CLI' },
-                            { value: 'gemini-cli', label: 'Gemini CLI' },
-                            { value: 'codex-cli', label: 'Codex CLI' }
-                          ]}
-                        />
-                      </div>
-                      {members.length > 1 && (
-                        <div className="flex justify-end">
-                          <button type="button" className="text-sm text-text-secondary-dark hover:text-red-400" onClick={() => removeMember(member.id)}>
-                            Delete Member
-                          </button>
+              <div>
+                <FormLabel>Team Members</FormLabel>
+                <div className="space-y-4">
+                  {members.map((member, index) => (
+                    <div key={member.id} className="p-4 border border-border-dark rounded-lg space-y-4 bg-background-dark/50">
+                      <div>
+                        <FormLabel>Avatar</FormLabel>
+                        <div className="flex items-center gap-4">
+                          <img
+                            src={member.avatar || avatarChoices[0]}
+                            alt="Selected Avatar"
+                            className="w-12 h-12 rounded-full ring-2 ring-primary/50"
+                          />
+                          <div className="flex flex-wrap gap-2 flex-1">
+                            {avatarChoices.map((url) => (
+                              <img
+                                key={url}
+                                src={url}
+                                alt="Avatar option"
+                                onClick={() => handleMemberChange(member.id, 'avatar', url)}
+                                className={`w-9 h-9 rounded-full cursor-pointer transition-all ${member.avatar === url ? 'ring-2 ring-primary' : 'ring-2 ring-transparent hover:ring-primary/50'}`}
+                              />
+                            ))}
+                          </div>
                         </div>
-                      )}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <FormLabel htmlFor={`member-name-${index}`}>Agent Name</FormLabel>
+                          <FormInput
+                            id={`member-name-${index}`}
+                            type="text"
+                            value={member.name}
+                            onChange={(e) => handleMemberChange(member.id, 'name', e.target.value)}
+                            placeholder="e.g., Agent Smith"
+                            required
+                          />
+                        </div>
+                        <div>
+                          <FormLabel htmlFor={`member-role-${index}`}>Role</FormLabel>
+                          <FormSelect
+                            id={`member-role-${index}`}
+                            value={member.role}
+                            onChange={(e) => handleMemberChange(member.id, 'role', e.target.value)}
+                            required
+                          >
+                            <option value="">Select role</option>
+                            {availableRoles.filter(r => !r.hidden).map(r => (
+                              <option key={r.key} value={r.key}>{r.displayName}</option>
+                            ))}
+                          </FormSelect>
+                        </div>
+                      </div>
+                      <div>
+                        <FormLabel htmlFor={`runtime-type-${index}`}>Runtime Type</FormLabel>
+                        <FormSelect
+                          id={`runtime-type-${index}`}
+                          value={member.runtimeType}
+                          onChange={(e) => handleMemberChange(member.id, 'runtimeType', e.target.value)}
+                          required
+                        >
+                          <option value="claude-code">Claude CLI</option>
+                          <option value="gemini-cli">Gemini CLI</option>
+                          <option value="codex-cli">Codex CLI</option>
+                        </FormSelect>
+                      </div>
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => removeMember(member.id)}
+                          className="text-text-secondary-dark hover:text-red-500 h-auto p-0 text-sm flex items-center gap-1"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          Delete Member
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={addMember}
+                    className="w-full flex items-center justify-center gap-2 py-2 border-2 border-dashed border-border-dark rounded-lg text-text-secondary-dark hover:text-primary hover:border-primary transition-colors"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    <span>Add Team Member</span>
+                  </button>
                 </div>
-              ))}
-            </div>
+              </div>
+            </form>
           </div>
-    </FormPopup>
-    <AlertComponent />
-  </>
+          <div className="bg-background-dark px-6 py-4 rounded-b-xl border-t border-border-dark flex justify-end gap-3">
+            <Button variant="secondary" onClick={onClose} type="button">
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              type="submit"
+              onClick={handleFormSubmit}
+              disabled={!formData.name.trim() || members.length === 0 || loading}
+            >
+              {loading ? (
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={team ? "M5 13l4 4L19 7" : "M12 6v6m0 0v6m0-6h6m-6 0H6"} />
+                  </svg>
+                  {team ? 'Save Changes' : 'Create Team'}
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+      <AlertComponent />
+    </>
   );
 };

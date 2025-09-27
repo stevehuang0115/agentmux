@@ -49,9 +49,30 @@ export const Teams: React.FC = () => {
       if (response.ok) {
         const result = await response.json();
         // Handle API response structure that includes success/data fields
-        const teamsData = result.success ? (result.data || []) : (result || []);
+        let teamsData = result.success ? (result.data || []) : (result || []);
         // Ensure teamsData is an array
-        setTeams(Array.isArray(teamsData) ? teamsData : []);
+        teamsData = Array.isArray(teamsData) ? teamsData : [];
+
+        // Avatar choices for migration
+        const avatarChoices = [
+          'https://picsum.photos/seed/1/64',
+          'https://picsum.photos/seed/2/64',
+          'https://picsum.photos/seed/3/64',
+          'https://picsum.photos/seed/4/64',
+          'https://picsum.photos/seed/5/64',
+          'https://picsum.photos/seed/6/64',
+        ];
+
+        // Migrate teams without avatars for backward compatibility
+        const migratedTeams = teamsData.map(team => ({
+          ...team,
+          members: team.members.map((member: any, index: number) => ({
+            ...member,
+            avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+          }))
+        }));
+
+        setTeams(migratedTeams);
       }
     } catch (error) {
       console.error('Error fetching teams:', error);
@@ -236,7 +257,20 @@ export const Teams: React.FC = () => {
       ) : (
         <div className="space-y-4">
           {Array.isArray(filteredTeams) && filteredTeams.map(team => (
-            <TeamListItem key={team.id} team={team} onClick={() => handleTeamClick(team)} />
+            <TeamListItem
+              key={team.id}
+              team={team}
+              projectName={projectMap[team.currentProject || '']}
+              onClick={() => handleTeamClick(team)}
+              onViewTeam={(id) => navigate(`/teams/${id}`)}
+              onEditTeam={(id) => navigate(`/teams/${id}?edit=true`)}
+              onDeleteTeam={(id) => {
+                if (window.confirm('Are you sure you want to delete this team?')) {
+                  // Add delete functionality here
+                  console.log('Delete team:', id);
+                }
+              }}
+            />
           ))}
           <div 
             onClick={() => setIsModalOpen(true)}

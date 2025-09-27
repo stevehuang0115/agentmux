@@ -38,11 +38,22 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
           {projectTeams.map(team => (
             <div key={team.id} className="team-with-members">
               <div className="team-header-item">
-                <span 
+                <span
                   className="team-chip clickable"
                   onClick={() => onOrchestratorClick()}
                   title="Click to view orchestrator terminal"
                 >
+                  <div className="team-avatar-small">
+                    {team.members.length > 0 && team.members[0].avatar ? (
+                      team.members[0].avatar.startsWith('http') || team.members[0].avatar.startsWith('data:') ? (
+                        <img src={team.members[0].avatar} alt={team.name} className="w-4 h-4 rounded-full object-cover" />
+                      ) : (
+                        <span className="text-xs">{team.members[0].avatar}</span>
+                      )
+                    ) : (
+                      <span className="text-xs">{team.name.charAt(0).toUpperCase()}</span>
+                    )}
+                  </div>
                   <span className={`status-dot status-${team.members.some(m => m.agentStatus === 'active') ? 'active' : 'inactive'}`}></span>
                   {team.name} ({team.members.length} members)
                 </span>
@@ -60,12 +71,23 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
               {team.members.length > 0 && (
                 <div className="team-members-tree">
                   {team.members.map(member => (
-                    <div 
-                      key={member.id} 
+                    <div
+                      key={member.id}
                       className="member-tree-item clickable"
                       onClick={() => onMemberClick(member.id, member.name, team.id)}
                       title={`Click to view ${member.name}'s terminal`}
                     >
+                      <div className="member-avatar-tiny">
+                        {member.avatar ? (
+                          member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+                            <img src={member.avatar} alt={member.name} className="w-3 h-3 rounded-full object-cover" />
+                          ) : (
+                            <span className="text-xs">{member.avatar}</span>
+                          )
+                        ) : (
+                          <span className="text-xs">{member.name.charAt(0).toUpperCase()}</span>
+                        )}
+                      </div>
                       <span className={`member-status-dot status-${member.agentStatus}`}></span>
                       <span className="member-name">{member.name}</span>
                       <span className="member-role">({member.role})</span>

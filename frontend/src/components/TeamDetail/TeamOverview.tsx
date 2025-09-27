@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { FolderOpen } from 'lucide-react';
 import { TeamStats } from './TeamStats';
 import { TeamDescription } from './TeamDescription';
 import { AddMemberForm } from './AddMemberForm';
@@ -16,6 +17,7 @@ interface TeamOverviewProps {
   onStartMember: (memberId: string) => Promise<void>;
   onStopMember: (memberId: string) => Promise<void>;
   onProjectChange?: (projectId: string | null) => void;
+  onViewTerminal?: (member: TeamMember) => void;
 }
 
 export const TeamOverview: React.FC<TeamOverviewProps> = ({
@@ -29,6 +31,7 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   onStartMember,
   onStopMember,
   onProjectChange,
+  onViewTerminal,
 }) => {
   const [showAddMember, setShowAddMember] = useState(false);
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
@@ -51,13 +54,6 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
       <div className="lg:col-span-2">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-xl font-semibold">Team Members ({team.members?.length || 0})</h3>
-          <AddMemberForm
-            isVisible={showAddMember}
-            onToggle={handleToggleAddMember}
-            onAdd={handleAddMember}
-            onCancel={handleCancelAddMember}
-            isOrchestratorTeam={isOrchestratorTeam}
-          />
         </div>
         <MembersList
           team={team}
@@ -66,12 +62,19 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
           onDeleteMember={onDeleteMember}
           onStartMember={onStartMember}
           onStopMember={onStopMember}
+          onViewTerminal={onViewTerminal}
         />
       </div>
       <div className="space-y-6">
-        <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
-          <h4 className="text-lg font-semibold mb-3">Assigned Project</h4>
-          <p className="text-sm text-text-secondary-dark">{projectName || 'None'}</p>
+        <div className="bg-surface-dark border border-border-dark rounded-xl p-6">
+          <h4 className="text-lg font-semibold mb-4">Assigned Project</h4>
+          <div className="flex items-center gap-3">
+            <FolderOpen className="h-5 w-5 text-primary" />
+            <div>
+              <div className="font-semibold text-white">{projectName || 'No Project Assigned'}</div>
+              {projectName && <div className="text-sm text-text-secondary-dark">Web App Redesign</div>}
+            </div>
+          </div>
         </div>
         <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
           <h4 className="text-lg font-semibold mb-3">Recent Activity</h4>

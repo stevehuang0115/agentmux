@@ -59,10 +59,10 @@ export const ScheduledCheckins: React.FC = () => {
           <p className="text-sm text-text-secondary-dark mt-1">Create and manage scheduled messages for teams and projects</p>
         </div>
         <button
-          className="bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+          className="bg-primary text-white hover:bg-primary/90 font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed h-10 px-4 rounded-lg text-sm"
           onClick={handleCreate}
         >
-          <Plus className="w-5 h-5" />
+          <Plus className="w-4 h-4" />
           New Scheduled Message
         </button>
       </div>

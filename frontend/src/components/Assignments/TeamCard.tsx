@@ -47,6 +47,17 @@ export const TeamCard: React.FC<TeamCardProps> = ({
         <div className="team-members-preview">
           {team.members.slice(0, 4).map(member => (
             <span key={member.id} className="member-chip">
+              <div className="member-avatar-small">
+                {member.avatar ? (
+                  member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+                    <img src={member.avatar} alt={member.name} className="w-5 h-5 rounded-full object-cover" />
+                  ) : (
+                    <span className="text-xs">{member.avatar}</span>
+                  )
+                ) : (
+                  <span className="text-xs">{member.name.charAt(0).toUpperCase()}</span>
+                )}
+              </div>
               <span className={`status-dot status-${member.agentStatus}`}></span>
               {member.name} ({member.role})
             </span>

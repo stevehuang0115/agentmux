@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
-import { TeamCard } from '@/components/Cards/TeamCard';
+import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
 import { Team, Project, ApiResponse } from '@/types';
 import axios from 'axios';
@@ -9,15 +9,79 @@ import { FolderOpen, Users, ArrowRight } from 'lucide-react';
 
 const API_BASE = '/api';
 
+interface ProjectProgress {
+  projectId: string;
+  progressPercent: number;
+  progressLabel: string;
+  progressBreakdown: {
+    open: number;
+    inProgress: number;
+    pending: number;
+    done: number;
+    blocked: number;
+    total: number;
+  };
+}
+
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsMap, setTeamsMap] = useState<Record<string, Team[]>>({});
+  const [projectProgress, setProjectProgress] = useState<Record<string, ProjectProgress>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const calculateProjectProgress = async (projectId: string): Promise<ProjectProgress> => {
+    try {
+      const tasksResponse = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks`);
+      const tasks = tasksResponse.data.data || [];
+
+      // Count tasks by status
+      const breakdown = {
+        open: 0,
+        inProgress: 0,
+        pending: 0,
+        done: 0,
+        blocked: 0,
+        total: tasks.length
+      };
+
+      tasks.forEach(task => {
+        const status = task.status?.toLowerCase() || 'pending';
+        if (status === 'open') breakdown.open++;
+        else if (status === 'in_progress' || status === 'in-progress') breakdown.inProgress++;
+        else if (status === 'done' || status === 'completed') breakdown.done++;
+        else if (status === 'blocked') breakdown.blocked++;
+        else breakdown.pending++;
+      });
+
+      // Calculate progress percentage (done tasks / total tasks)
+      const progressPercent = breakdown.total > 0
+        ? Math.round((breakdown.done / breakdown.total) * 100)
+        : 0;
+
+      const progressLabel = `${breakdown.done} of ${breakdown.total} completed`;
+
+      return {
+        projectId,
+        progressPercent,
+        progressLabel,
+        progressBreakdown: breakdown
+      };
+    } catch (error) {
+      console.error(`Error calculating progress for project ${projectId}:`, error);
+      return {
+        projectId,
+        progressPercent: 0,
+        progressLabel: 'No tasks',
+        progressBreakdown: { open: 0, inProgress: 0, pending: 0, done: 0, blocked: 0, total: 0 }
+      };
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -28,11 +92,59 @@ export const Dashboard: React.FC = () => {
       ]);
 
       if (projectsResponse.data.success) {
-        setProjects(projectsResponse.data.data || []);
+        const projectList = projectsResponse.data.data || [];
+        setProjects(projectList);
+
+        // Calculate progress for each project
+        const progressPromises = projectList.map(project => calculateProjectProgress(project.id));
+        const progressResults = await Promise.all(progressPromises);
+
+        const progressMap = progressResults.reduce((acc, progress) => {
+          acc[progress.projectId] = progress;
+          return acc;
+        }, {} as Record<string, ProjectProgress>);
+
+        setProjectProgress(progressMap);
       }
-      
+
       if (teamsResponse.data.success) {
-        setTeams(teamsResponse.data.data || []);
+        let teamList = teamsResponse.data.data || [];
+
+        // Avatar choices for migration
+        const avatarChoices = [
+          'https://picsum.photos/seed/1/64',
+          'https://picsum.photos/seed/2/64',
+          'https://picsum.photos/seed/3/64',
+          'https://picsum.photos/seed/4/64',
+          'https://picsum.photos/seed/5/64',
+          'https://picsum.photos/seed/6/64',
+        ];
+
+        // Migrate teams without avatars for backward compatibility
+        const migratedTeams = teamList.map(team => ({
+          ...team,
+          members: team.members.map((member: any, index: number) => ({
+            ...member,
+            avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+          }))
+        }));
+
+        setTeams(migratedTeams);
+
+        // Create teams map for projects
+        if (projectsResponse.data.success) {
+          const projectList = projectsResponse.data.data || [];
+          const teamsMapping = projectList.reduce((acc, project) => {
+            const assignedTeams = migratedTeams.filter(team => {
+              const matchesById = team.currentProject === project.id;
+              const matchesByName = team.currentProject === project.name;
+              return matchesById || matchesByName;
+            });
+            acc[project.id] = assignedTeams;
+            return acc;
+          }, {} as Record<string, Team[]>);
+          setTeamsMap(teamsMapping);
+        }
       }
     } catch (error) {
       console.error('Error loading dashboard data:', error);
@@ -64,9 +176,9 @@ export const Dashboard: React.FC = () => {
     );
   }
 
-  // Show top 2 projects and teams on dashboard like prototype
+  // Show top 2 projects and more teams on dashboard like prototype
   const topProjects = projects.slice(0, 2);
-  const topTeams = teams.slice(0, 2);
+  const topTeams = teams.slice(0, 6); // Show up to 6 teams instead of 2
 
   const StatCard: React.FC<{title: string, value: string | number}> = ({title, value}) => (
     <div className="bg-surface-dark p-6 rounded-lg border border-border-dark transition-all hover:shadow-lg hover:border-primary/50">
@@ -98,15 +210,22 @@ export const Dashboard: React.FC = () => {
             <Link to="/projects" className="text-sm font-semibold text-primary hover:underline">View All</Link>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {topProjects.map(project => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                showStatus
-                showTeams
-                onClick={() => navigateToProject(project.id)}
-              />
-            ))}
+            {topProjects.map(project => {
+              const progress = projectProgress[project.id];
+              return (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  showStatus
+                  showTeams
+                  assignedTeams={teamsMap[project.id] || []}
+                  onClick={() => navigateToProject(project.id)}
+                  progressPercent={progress?.progressPercent}
+                  progressLabel={progress?.progressLabel}
+                  progressBreakdown={progress?.progressBreakdown}
+                />
+              );
+            })}
             <CreateCard
               title="Create New Project"
               onClick={openProjectCreator}
@@ -119,9 +238,9 @@ export const Dashboard: React.FC = () => {
             <h3 className="text-xl font-semibold">Teams</h3>
             <Link to="/teams" className="text-sm font-semibold text-primary hover:underline">View All</Link>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
             {topTeams.map(team => (
-              <TeamCard
+              <TeamsGridCard
                 key={team.id}
                 team={team}
                 onClick={() => navigateToTeam(team.id)}

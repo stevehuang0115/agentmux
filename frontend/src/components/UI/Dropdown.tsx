@@ -35,7 +35,7 @@ export const Dropdown: React.FC<DropdownProps> = ({
   return (
     <div className={`relative ${className}`}>
       <select
-        className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 pr-10 text-sm text-text-primary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors appearance-none cursor-pointer ${
+        className={`w-full appearance-none bg-background-dark border border-border-dark rounded-lg shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 pl-3 pr-8 text-sm cursor-pointer ${
           error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''
         } ${loading || disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
         value={value || ''}
@@ -57,8 +57,8 @@ export const Dropdown: React.FC<DropdownProps> = ({
           </option>
         ))}
       </select>
-      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-        <ChevronDown className={`h-4 w-4 ${error ? 'text-red-500' : 'text-text-secondary-dark'}`} />
+      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-text-secondary-dark">
+        <ChevronDown className={`h-4 w-4 ${error ? 'text-red-500' : ''}`} />
       </div>
     </div>
   );

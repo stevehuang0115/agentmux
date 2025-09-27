@@ -7,6 +7,7 @@ import { TeamAssignmentModal } from '../components/Modals/TeamAssignmentModal';
 import { MarkdownEditor } from '../components/MarkdownEditor/MarkdownEditor';
 import { useTerminal } from '../contexts/TerminalContext';
 import { Button, useAlert, useConfirm, Dropdown, FormPopup, FormGroup, FormRow, FormLabel, FormInput, FormTextarea, FormHelp } from '../components/UI';
+import { OverflowMenu } from '../components/UI/OverflowMenu';
 import { DetailView } from '../components/ProjectDetail/DetailView';
 import { TasksView } from '../components/ProjectDetail/TasksView';
 import { EditorView } from '../components/ProjectDetail/EditorView';
@@ -1340,9 +1341,6 @@ export const ProjectDetail: React.FC = () => {
             <span className="text-text-primary-dark">{project.name}</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight mb-2">{project.name}</h1>
-          <p className="text-sm text-text-secondary-dark mb-2">
-            {project.description || 'AgentMux project for collaborative development'}
-          </p>
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1 text-sm text-text-secondary-dark">
               <FolderOpen className="w-4 h-4" />
@@ -1361,21 +1359,6 @@ export const ProjectDetail: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-            project.status === 'active' ? 'bg-green-500/10 text-green-400' :
-            project.status === 'completed' ? 'bg-blue-500/10 text-blue-400' :
-            'bg-yellow-500/10 text-yellow-400'
-          }`}>
-            {project.status}
-          </span>
-          <Button
-            variant="secondary"
-            icon={UserPlus}
-            onClick={handleAssignTeams}
-          >
-            Assign Team
-          </Button>
-          
           {/* Project Lifecycle Controls */}
           {project.status === 'active' ? (
             <Button
@@ -1399,16 +1382,21 @@ export const ProjectDetail: React.FC = () => {
               {state.loading ? 'Starting...' : 'Start Project'}
             </Button>
           )}
-          
-          <Button
-            variant="danger"
-            icon={Trash2}
-            onClick={handleDeleteProject}
-            disabled={state.loading}
-            title="Delete project from AgentMux (files will be kept)"
-          >
-            Delete
-          </Button>
+
+          <OverflowMenu
+            align="bottom-right"
+            items={[
+              {
+                label: 'Assign Team',
+                onClick: handleAssignTeams
+              },
+              {
+                label: 'Delete Project',
+                onClick: handleDeleteProject,
+                danger: true
+              }
+            ]}
+          />
         </div>
       </div>
 

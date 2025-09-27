@@ -44,11 +44,9 @@ export const DeliveryLogsTable: React.FC<DeliveryLogsTableProps> = ({
                     <td className="whitespace-nowrap py-2 pl-3 pr-2 text-xs font-medium text-text-secondary-dark">{formatDate(log.sentAt)}</td>
                     <td className="px-3 py-2 text-sm text-text-primary-dark max-w-[520px]">
                       <div className="font-medium truncate" title={log.messageName}>{log.messageName}</div>
-                      <div className="text-xs text-text-secondary-dark truncate" title={log.message}>{log.message}</div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-sm text-text-secondary-dark">
                       <div className="truncate" title={log.targetTeam}>{log.targetTeam}</div>
-                      {log.targetProject && <div className="text-xs text-text-secondary-dark truncate" title={log.targetProject}>{log.targetProject}</div>}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-sm">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium ${log.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>

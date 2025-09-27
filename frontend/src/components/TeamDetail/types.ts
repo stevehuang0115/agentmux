@@ -48,6 +48,7 @@ export interface MembersListProps {
   onDeleteMember: (memberId: string) => void;
   onStartMember: (memberId: string) => Promise<void>;
   onStopMember: (memberId: string) => Promise<void>;
+  onViewTerminal?: (member: TeamMember) => void;
 }
 
 export interface NewMember {

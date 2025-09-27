@@ -265,33 +265,35 @@ export const TasksView: React.FC<TasksViewProps> = ({
       
       {/* Milestone filter chips (prototype style) */}
       <div className="mb-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm text-text-secondary-dark">Milestones:</span>
-          <button
-            className={`chip ${!selectedMilestoneFilter ? 'chip--active' : ''}`}
-            onClick={() => setSelectedMilestoneFilter(null)}
-          >
-            All
-          </button>
-          {sortedMilestones.map(([milestone, tasks]: [string, any[]]) => {
-            const displayName = milestone.replace(/_/g, ' ').replace(/^m\d+\s*/, '').replace(/^\w/, c => c.toUpperCase());
-            return (
-              <button
-                key={milestone}
-                className={`chip ${selectedMilestoneFilter === milestone ? 'chip--active' : ''}`}
-                onClick={() => setSelectedMilestoneFilter(milestone)}
-              >
-                {displayName}
-                <span className="chip-count">{tasks.length}</span>
-              </button>
-            );
-          })}
-          <button
-            className={`chip ${selectedMilestoneFilter === 'Completed' ? 'chip--active' : ''}`}
-            onClick={() => setSelectedMilestoneFilter('Completed')}
-          >
-            Completed
-          </button>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-text-secondary-dark flex-shrink-0">Milestones:</span>
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide pb-1">
+            <button
+              className={`chip flex-shrink-0 ${!selectedMilestoneFilter ? 'chip--active' : ''}`}
+              onClick={() => setSelectedMilestoneFilter(null)}
+            >
+              All
+            </button>
+            {sortedMilestones.map(([milestone, tasks]: [string, any[]]) => {
+              const displayName = milestone.replace(/_/g, ' ').replace(/^m\d+\s*/, '').replace(/^\w/, c => c.toUpperCase());
+              return (
+                <button
+                  key={milestone}
+                  className={`chip flex-shrink-0 ${selectedMilestoneFilter === milestone ? 'chip--active' : ''}`}
+                  onClick={() => setSelectedMilestoneFilter(milestone)}
+                >
+                  {displayName}
+                  <span className="chip-count">{tasks.length}</span>
+                </button>
+              );
+            })}
+            <button
+              className={`chip flex-shrink-0 ${selectedMilestoneFilter === 'Completed' ? 'chip--active' : ''}`}
+              onClick={() => setSelectedMilestoneFilter('Completed')}
+            >
+              Completed
+            </button>
+          </div>
         </div>
       </div>
 

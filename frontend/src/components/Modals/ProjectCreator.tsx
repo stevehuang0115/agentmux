@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { FolderOpen, AlertCircle } from 'lucide-react';
-import { FormPopup, FormGroup, FormLabel, FormError, Button } from '../UI';
+import { FolderOpen, X } from 'lucide-react';
 
 interface ProjectCreatorProps {
   onSave: (path: string) => Promise<void>;
@@ -17,7 +16,7 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!path.trim()) {
       setError('Please enter a project path');
       return;
@@ -46,7 +45,7 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
         input.type = 'file';
         input.webkitdirectory = true;
         input.multiple = true;
-        
+
         input.addEventListener('change', (e) => {
           const files = (e.target as HTMLInputElement).files;
           if (files && files.length > 0) {
@@ -57,7 +56,7 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
             setPath(folderName);
           }
         });
-        
+
         input.click();
       }
     } catch (err) {
@@ -67,54 +66,84 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
   };
 
   return (
-    <FormPopup
-      isOpen={true}
-      onClose={onClose}
-      title="Create New Project"
-      onSubmit={handleSubmit}
-      submitText={loading ? 'Creating...' : 'Create Project'}
-      submitDisabled={loading || !path.trim()}
-      loading={loading}
-      size="md"
-    >
-      <FormGroup>
-        <FormLabel htmlFor="project-path" required>
-          Project Path
-        </FormLabel>
-        <div className="field-input-group">
-          <input
-            id="project-path"
-            type="text"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="/Users/name/my-project"
-            className="field-input"
-            disabled={loading}
-            required
-            style={{ flex: 1 }}
-          />
-          <Button
-            type="button"
-            onClick={handleSelectFolder}
-            variant="outline"
-            size="sm"
-            disabled={loading}
-            icon={FolderOpen}
-          >
-            Browse
-          </Button>
+    <div className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div className="bg-surface-dark border border-border-dark rounded-xl shadow-lg w-full max-w-md">
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-semibold">Create New Project</h3>
+            <button
+              className="text-text-secondary-dark hover:text-text-primary-dark transition-colors"
+              onClick={onClose}
+              disabled={loading}
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <form onSubmit={handleSubmit}>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-text-secondary-dark mb-2" htmlFor="project-path">
+                  Project Path <span className="text-red-400">*</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="w-full bg-background-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary focus:border-primary placeholder-text-secondary-dark/50"
+                    id="project-path"
+                    placeholder="/Users/name/my-project"
+                    type="text"
+                    value={path}
+                    onChange={(e) => setPath(e.target.value)}
+                    disabled={loading}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="bg-background-dark border border-border-dark text-text-secondary-dark font-semibold py-2 px-4 rounded-lg flex items-center gap-2 hover:bg-border-dark/50 hover:text-text-primary-dark transition-colors text-sm whitespace-nowrap"
+                    onClick={handleSelectFolder}
+                    disabled={loading}
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span>Browse</span>
+                  </button>
+                </div>
+                <p className="text-xs text-text-secondary-dark mt-2">
+                  Enter the absolute path to your project directory.
+                  AgentMux will create a <code className="bg-background-dark px-1 rounded text-xs">.agentmux</code> subdirectory
+                  for configuration and tickets.
+                </p>
+                {error && (
+                  <p className="text-red-400 text-sm mt-2">{error}</p>
+                )}
+              </div>
+            </div>
+          </form>
         </div>
-        <p className="field-help">
-          Enter the absolute path to your project directory. AgentMux will create a 
-          <code>.agentmux</code> subdirectory for configuration and tickets.
-        </p>
-        {error && (
-          <FormError>
-            <AlertCircle className="error-icon" />
-            {error}
-          </FormError>
-        )}
-      </FormGroup>
-    </FormPopup>
+        <div className="bg-background-dark/50 px-6 py-4 border-t border-border-dark flex justify-end gap-3 rounded-b-xl">
+          <button
+            type="button"
+            className="bg-transparent border border-border-dark text-text-primary-dark font-semibold py-2 px-4 rounded-lg hover:bg-border-dark/50 transition-colors"
+            onClick={onClose}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="bg-primary text-white font-semibold py-2 px-4 rounded-lg flex items-center gap-2 hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={handleSubmit}
+            disabled={loading || !path.trim()}
+          >
+            {loading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                <span>Creating...</span>
+              </>
+            ) : (
+              <span>Create Project</span>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };

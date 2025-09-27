@@ -49,7 +49,25 @@ export const TeamDetail: React.FC = () => {
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
-          setTeam(result.data);
+          // Migrate team members to include default avatars if missing
+          const avatarChoices = [
+            'https://picsum.photos/seed/1/64',
+            'https://picsum.photos/seed/2/64',
+            'https://picsum.photos/seed/3/64',
+            'https://picsum.photos/seed/4/64',
+            'https://picsum.photos/seed/5/64',
+            'https://picsum.photos/seed/6/64',
+          ];
+
+          const migratedTeam = {
+            ...result.data,
+            members: result.data.members.map((member: any, index: number) => ({
+              ...member,
+              avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+            }))
+          };
+
+          setTeam(migratedTeam);
         }
       }
     } catch (error) {
@@ -254,6 +272,14 @@ export const TeamDetail: React.FC = () => {
     // For Orchestrator Team, open terminal with agentmux-orc session
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
       openTerminalWithSession('agentmux-orc');
+    }
+  };
+
+  const handleViewMemberTerminal = (member: TeamMember) => {
+    // Open terminal for specific team member session
+    if (member.sessionName) {
+      console.log('Opening terminal for member session:', member.sessionName);
+      openTerminalWithSession(member.sessionName);
     }
   };
 
@@ -514,6 +540,7 @@ export const TeamDetail: React.FC = () => {
         onDeleteMember={handleDeleteMember}
         onStartMember={handleStartMember}
         onStopMember={handleStopMember}
+        onViewTerminal={handleViewMemberTerminal}
       />
 
       {/* Start Team Modal */}

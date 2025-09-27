@@ -421,7 +421,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       ref={terminalPanelRef}
       className={`fixed top-0 right-0 h-full bg-surface-dark border-l border-border-dark flex flex-col z-50 transition-transform duration-300 ${
         isOpen ? 'translate-x-0' : 'translate-x-full'
-      } w-96`}
+      } w-[600px]`}
       tabIndex={0}
       style={{ outline: 'none' }}
     >
@@ -488,8 +488,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         <div className="flex-1 overflow-hidden">
           <pre
             ref={terminalOutputRef}
-            className="h-full w-full p-4 bg-background-dark font-mono text-sm text-text-primary-dark overflow-auto whitespace-pre-wrap break-words"
+            className="h-full w-full p-4 bg-background-dark font-mono text-sm text-text-primary-dark overflow-y-scroll overflow-x-auto whitespace-pre-wrap break-words"
             onScroll={handleScroll}
+            style={{ maxHeight: '100%', minHeight: '100%' }}
           >
             {connectionStatus === 'connected' ? terminalOutput :
              connectionStatus === 'connecting' ? '# Connecting to terminal session...\n# Please wait...' :

@@ -1,5 +1,5 @@
 import React from 'react';
-import { FormPopup, FormGroup, FormLabel, FormInput, FormTextarea, FormHelp, Dropdown } from '../UI';
+import { FormLabel, FormInput, FormTextarea, FormSelect } from '../UI';
 import { ScheduledMessage, ScheduledMessageFormData, TEAM_OPTIONS } from './types';
 
 interface MessageFormProps {
@@ -19,142 +19,172 @@ export const MessageForm: React.FC<MessageFormProps> = ({
   onClose,
   onSubmit
 }) => {
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(e);
+  };
+
+  if (!isOpen) return null;
+
   return (
-    <FormPopup
-      isOpen={isOpen}
-      onClose={onClose}
-      title={editingMessage ? 'Edit Scheduled Message' : 'Create Scheduled Message'}
-      onSubmit={onSubmit}
-      submitText={editingMessage ? 'Update' : 'Create'}
-      size="xxl"
-    >
-      <FormGroup>
-        <FormLabel htmlFor="name" required>Name</FormLabel>
-        <FormInput
-          id="name"
-          value={formData.name}
-          onChange={(e) => setFormData({...formData, name: e.target.value})}
-          placeholder="Daily status check"
-          required
-        />
-      </FormGroup>
-
-      <FormGroup>
-        <FormLabel htmlFor="targetTeam" required>Target Team</FormLabel>
-        <Dropdown
-          id="targetTeam"
-          value={formData.targetTeam}
-          onChange={(value) => setFormData({...formData, targetTeam: value})}
-          required
-          options={TEAM_OPTIONS}
-        />
-      </FormGroup>
-
-      <FormGroup>
-        <FormLabel htmlFor="targetProject">Target Project (Optional)</FormLabel>
-        <FormInput
-          id="targetProject"
-          value={formData.targetProject}
-          onChange={(e) => setFormData({...formData, targetProject: e.target.value})}
-          placeholder="Project ID or name"
-        />
-      </FormGroup>
-
-      <FormGroup>
-        <FormLabel htmlFor="message" required>Message</FormLabel>
-        <FormTextarea
-          id="message"
-          value={formData.message}
-          onChange={(e) => setFormData({...formData, message: e.target.value})}
-          placeholder="Please provide a status update on the current tasks"
-          rows={8}
-          required
-        />
-        <FormHelp>
-          This message will be sent to the target team's tmux session
-        </FormHelp>
-      </FormGroup>
-
-      <FormGroup>
-        <FormLabel>Schedule</FormLabel>
-        <div className="grid gap-4">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <label className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
-              !formData.isRecurring
-                ? 'border-primary bg-primary/10 text-text-primary-dark'
-                : 'border-border-dark hover:border-primary/50 text-text-primary-dark'
-            }`}>
-              <input
-                type="radio"
-                name="scheduleType"
-                className="mt-1 w-4 h-4 text-primary border-border-dark focus:ring-primary focus:ring-2"
-                checked={!formData.isRecurring}
-                onChange={() => setFormData({ ...formData, isRecurring: false })}
-              />
-              <div className="flex-1">
-                <div className="font-medium text-sm">One-time</div>
-                <div className="text-xs text-text-secondary-dark mt-1">Send a single message after a delay.</div>
-              </div>
-              {!formData.isRecurring && (
-                <div className="ml-auto">
-                  <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </label>
-            <label className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
-              formData.isRecurring
-                ? 'border-primary bg-primary/10 text-text-primary-dark'
-                : 'border-border-dark hover:border-primary/50 text-text-primary-dark'
-            }`}>
-              <input
-                type="radio"
-                name="scheduleType"
-                className="mt-1 w-4 h-4 text-primary border-border-dark focus:ring-primary focus:ring-2"
-                checked={formData.isRecurring}
-                onChange={() => setFormData({ ...formData, isRecurring: true })}
-              />
-              <div className="flex-1">
-                <div className="font-medium text-sm">Recurring</div>
-                <div className="text-xs text-text-secondary-dark mt-1">Send a message on a recurring basis.</div>
-              </div>
-              {formData.isRecurring && (
-                <div className="ml-auto">
-                  <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                </div>
-              )}
-            </label>
+    <div className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-surface-dark border border-border-dark rounded-xl shadow-lg w-full max-w-2xl m-4" onClick={(e) => e.stopPropagation()}>
+        <div className="p-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="text-xl font-semibold text-text-primary-dark">
+                {editingMessage ? 'Edit Scheduled Message' : 'Create New Scheduled Message'}
+              </h3>
+              <p className="text-sm text-text-secondary-dark mt-1">Configure and schedule a new automated message.</p>
+            </div>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 -mt-1 -mr-1 rounded-lg hover:bg-background-dark flex items-center justify-center text-text-secondary-dark hover:text-text-primary-dark"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
-          <div className="grid gap-3">
-            <label className="text-sm font-medium text-text-primary-dark">
-              {formData.isRecurring ? 'Send Every' : 'Send After'}
-            </label>
-            <div className="flex items-center gap-3">
-              <input
-                type="number"
-                min="1"
-                value={formData.delayAmount}
-                onChange={(e) => setFormData({ ...formData, delayAmount: e.target.value })}
+          <form onSubmit={handleSubmit} className="space-y-6 mt-6 max-h-[60vh] overflow-y-auto pr-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <FormLabel htmlFor="message-name">Name</FormLabel>
+                <FormInput
+                  id="message-name"
+                  type="text"
+                  value={formData.name}
+                  onChange={(e) => setFormData({...formData, name: e.target.value})}
+                  placeholder="e.g., 'Daily Standup Reminder'"
+                  required
+                />
+              </div>
+              <div>
+                <FormLabel htmlFor="target-member">Target Team Member</FormLabel>
+                <FormSelect
+                  id="target-member"
+                  value={formData.targetTeam}
+                  onChange={(e) => setFormData({...formData, targetTeam: e.target.value})}
+                  required
+                >
+                  <option value="">Select a target</option>
+                  {TEAM_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </FormSelect>
+              </div>
+            </div>
+            <div>
+              <FormLabel htmlFor="message-content">Message</FormLabel>
+              <FormTextarea
+                id="message-content"
+                value={formData.message}
+                onChange={(e) => setFormData({...formData, message: e.target.value})}
+                placeholder="Enter your message content here..."
+                rows={4}
                 required
-                className="w-20 bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              />
-              <Dropdown
-                value={formData.delayUnit}
-                onChange={(value) => setFormData({ ...formData, delayUnit: value as 'seconds' | 'minutes' | 'hours' })}
-                options={[
-                  { value: 'seconds', label: 'seconds' },
-                  { value: 'minutes', label: 'minutes' },
-                  { value: 'hours', label: 'hours' }
-                ]}
-                className="min-w-[120px]"
               />
             </div>
-          </div>
+            <div>
+              <FormLabel>Schedule</FormLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="relative">
+                  <input
+                    className="peer sr-only"
+                    id="modal-one-time"
+                    name="modal-schedule-type"
+                    type="radio"
+                    value="one-time"
+                    checked={!formData.isRecurring}
+                    onChange={() => setFormData({ ...formData, isRecurring: false })}
+                  />
+                  <label className="block p-4 rounded-lg border border-border-dark bg-background-dark cursor-pointer peer-checked:border-primary peer-checked:ring-1 peer-checked:ring-primary" htmlFor="modal-one-time">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">One-time</span>
+                      {!formData.isRecurring && (
+                        <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                        </svg>
+                      )}
+                    </div>
+                    <p className="text-sm text-text-secondary-dark mt-1">Send a single message after a delay.</p>
+                  </label>
+                </div>
+                <div className="relative">
+                  <input
+                    className="peer sr-only"
+                    id="modal-recurring"
+                    name="modal-schedule-type"
+                    type="radio"
+                    value="recurring"
+                    checked={formData.isRecurring}
+                    onChange={() => setFormData({ ...formData, isRecurring: true })}
+                  />
+                  <label className="block p-4 rounded-lg border border-border-dark bg-background-dark cursor-pointer peer-checked:border-primary peer-checked:ring-1 peer-checked:ring-primary" htmlFor="modal-recurring">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">Recurring</span>
+                      {formData.isRecurring && (
+                        <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                        </svg>
+                      )}
+                    </div>
+                    <p className="text-sm text-text-secondary-dark mt-1">Send a message on a recurring basis.</p>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <FormLabel htmlFor="delay-value">
+                  {formData.isRecurring ? 'Send Every' : 'Send After'}
+                </FormLabel>
+                <div className="flex gap-4">
+                  <div className="flex-grow">
+                    <FormInput
+                      id="delay-value"
+                      type="number"
+                      min="1"
+                      value={formData.delayAmount}
+                      onChange={(e) => setFormData({ ...formData, delayAmount: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="flex-shrink-0">
+                    <FormSelect
+                      value={formData.delayUnit}
+                      onChange={(e) => setFormData({ ...formData, delayUnit: e.target.value as 'seconds' | 'minutes' | 'hours' })}
+                    >
+                      <option value="seconds">seconds</option>
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
+                    </FormSelect>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </form>
         </div>
-      </FormGroup>
-    </FormPopup>
+        <div className="bg-background-dark px-6 py-4 rounded-b-xl border-t border-border-dark flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="bg-surface-dark border border-border-dark hover:bg-border-dark font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed h-10 px-4 rounded-lg text-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            onClick={handleSubmit}
+            className="bg-primary text-white hover:bg-primary/90 font-semibold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed h-10 px-4 rounded-lg text-sm"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            {editingMessage ? 'Update Schedule' : 'Create Schedule'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 };

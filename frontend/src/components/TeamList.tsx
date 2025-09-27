@@ -149,11 +149,24 @@ export const TeamList: React.FC<TeamListProps> = ({
                         onClick={() => onMemberSelect?.(member)}
                       >
                         <div className="flex items-center space-x-3">
-                          <div className={clsx(
-                            'flex items-center justify-center w-8 h-8 rounded-full',
-                            agentStatusColors[member.agentStatus]
-                          )}>
-                            <MemberStatusIcon className="h-4 w-4" />
+                          <div className="relative">
+                            <div className="w-8 h-8 rounded-full bg-background-dark border border-border-dark flex items-center justify-center overflow-hidden">
+                              {member.avatar ? (
+                                member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+                                  <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  <span className="text-xs">{member.avatar}</span>
+                                )
+                              ) : (
+                                <span className="text-xs">{member.name.charAt(0).toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className={clsx(
+                              'absolute -bottom-1 -right-1 flex items-center justify-center w-4 h-4 rounded-full border border-white',
+                              agentStatusColors[member.agentStatus]
+                            )}>
+                              <MemberStatusIcon className="h-2.5 w-2.5" />
+                            </div>
                           </div>
                           
                           <div className="flex-1 min-w-0">

@@ -24,18 +24,12 @@ export const TeamsGridCard: React.FC<TeamsGridCardProps> = ({ team, projectName,
     >
       <div className="text-lg font-semibold mb-3">{team.name}</div>
 
-      <div className="space-y-2 text-sm">
-        <div className="flex items-center gap-2 text-text-secondary-dark">
-          <Users className="w-4 h-4" />
-          <span>{members.length} Members</span>
+      {projectName && (
+        <div className="flex items-center gap-2 text-text-secondary-dark text-sm mb-4">
+          <FolderOpen className="w-4 h-4" />
+          <span>Project {projectName}</span>
         </div>
-        {projectName && (
-          <div className="flex items-center gap-2 text-text-secondary-dark">
-            <FolderOpen className="w-4 h-4" />
-            <span>Project {projectName}</span>
-          </div>
-        )}
-      </div>
+      )}
 
       <div className="mt-auto flex items-center justify-between">
         <div className="flex items-center">

@@ -41,15 +41,15 @@ export interface FormLabelProps extends React.LabelHTMLAttributes<HTMLLabelEleme
   required?: boolean;
 }
 
-export const FormLabel: React.FC<FormLabelProps> = ({ 
-  children, 
-  required = false, 
-  className = '', 
-  ...props 
+export const FormLabel: React.FC<FormLabelProps> = ({
+  children,
+  required = false,
+  className = '',
+  ...props
 }) => (
-  <label className={`form-label ${className}`} {...props}>
+  <label className={`block text-sm font-medium text-text-primary-dark mb-2 ${className}`} {...props}>
     {children}
-    {required && <span className="form-required">*</span>}
+    {required && <span className="text-red-500 ml-1">*</span>}
   </label>
 );
 
@@ -88,7 +88,7 @@ export const FormInput: React.FC<FormInputProps> = ({
   ...props
 }) => (
   <input
-    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark placeholder:text-text-secondary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-background-dark border border-border-dark rounded-lg shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 px-3 text-sm ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
     {...props}
   />
 );
@@ -104,9 +104,35 @@ export const FormTextarea: React.FC<FormTextareaProps> = ({
   ...props
 }) => (
   <textarea
-    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark placeholder:text-text-secondary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-background-dark border border-border-dark rounded-lg shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 px-3 text-sm resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
     {...props}
   />
+);
+
+// Form Select
+export interface FormSelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+  error?: boolean;
+}
+
+export const FormSelect: React.FC<FormSelectProps> = ({
+  error = false,
+  className = '',
+  children,
+  ...props
+}) => (
+  <div className="relative w-full">
+    <select
+      className={`w-full appearance-none bg-background-dark border border-border-dark rounded-lg shadow-sm focus:ring-1 focus:ring-primary focus:border-primary py-2 pl-3 pr-8 text-sm ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+      {...props}
+    >
+      {children}
+    </select>
+    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-text-secondary-dark">
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </div>
+  </div>
 );
 
 // Form Section (for grouping related form elements)

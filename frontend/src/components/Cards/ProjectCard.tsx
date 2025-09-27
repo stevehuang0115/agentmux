@@ -1,5 +1,5 @@
 import React from 'react';
-import { FolderOpen, Users, Clock } from 'lucide-react';
+import { FolderOpen } from 'lucide-react';
 import { Project, Team } from '@/types';
 
 interface ProjectCardProps {
@@ -75,60 +75,55 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         {pathLabel}
       </p>
 
-      <div className="space-y-3 mb-4">
-        {showTeams && assignedTeams.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex items-center text-xs text-text-secondary-dark">
-              <Users className="h-3 w-3 mr-1" />
-              <span>{assignedTeams.length} team{assignedTeams.length !== 1 ? 's' : ''} assigned</span>
-            </div>
-            <div className="flex items-center gap-1">
-              {assignedTeams.slice(0, 4).map((team) => {
-                // Get initials from team name
-                const initials = team.name
-                  .split(' ')
-                  .map(word => word.charAt(0).toUpperCase())
-                  .join('')
-                  .slice(0, 2);
+      {/* Progress Section */}
+      {typeof progressPercent === 'number' && (
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-xs text-text-secondary-dark">Progress</p>
+            <p className="text-xs font-semibold">{progressPercent}%</p>
+          </div>
+          <div className="w-full bg-background-dark rounded-full h-2">
+            <div
+              className="bg-primary h-2 rounded-full"
+              style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }}
+              title={progressBreakdown ? `Open: ${progressBreakdown.open}, In progress: ${progressBreakdown.inProgress}, Pending: ${progressBreakdown.pending}, Done: ${progressBreakdown.done}, Blocked: ${progressBreakdown.blocked}` : undefined}
+            />
+          </div>
+        </div>
+      )}
 
-                return (
-                  <div
-                    key={team.id}
-                    className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-primary-dark"
-                    title={team.name}
-                  >
-                    {initials}
+      {/* Bottom Section with Avatars and Date */}
+      <div className="mt-auto flex items-center justify-between">
+        {/* Member Avatars */}
+        <div className="flex -space-x-3">
+          {assignedTeams.flatMap(team => team.members || []).slice(0, 3).map((member, index) => (
+            <div
+              key={`${member.id}-${index}`}
+              className="w-8 h-8 rounded-full border-2 border-surface-dark bg-cover bg-center overflow-hidden"
+              title={member.name}
+            >
+              {member.avatar ? (
+                member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+                  <img src={member.avatar} alt={member.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-xs font-bold text-white">
+                    {member.avatar}
                   </div>
-                );
-              })}
-              {assignedTeams.length > 4 && (
-                <div className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-secondary-dark">
-                  +{assignedTeams.length - 4}
+                )
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-primary/20 to-primary/40 flex items-center justify-center text-xs font-bold text-white">
+                  {member.name.charAt(0).toUpperCase()}
                 </div>
               )}
             </div>
-          </div>
-        )}
-
-        <div className="flex items-center text-xs text-text-secondary-dark">
-          <Clock className="h-3 w-3 mr-1" />
-          <span>Updated {lastUpdated}</span>
+          ))}
         </div>
+
+        {/* Updated Date */}
+        <p className="text-sm text-text-secondary-dark">
+          Updated {lastUpdated}
+        </p>
       </div>
-
-      {typeof progressPercent === 'number' && (
-        <div className="mt-auto">
-          <div className="h-2 bg-background-dark rounded-full overflow-hidden" title={progressBreakdown ? `Open: ${progressBreakdown.open}, In progress: ${progressBreakdown.inProgress}, Pending: ${progressBreakdown.pending}, Done: ${progressBreakdown.done}, Blocked: ${progressBreakdown.blocked}` : undefined}>
-            <div
-              className="h-2 bg-primary"
-              style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }}
-            />
-          </div>
-          {progressLabel && (
-            <div className="mt-1 text-xs text-text-secondary-dark">{progressLabel}</div>
-          )}
-        </div>
-      )}
     </div>
   );
 };

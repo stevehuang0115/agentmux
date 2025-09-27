@@ -1,15 +1,17 @@
 import React from 'react';
-import { Play, Square, MoreVertical } from 'lucide-react';
+import { Play, Square, Terminal } from 'lucide-react';
 import { TeamMember } from '@/types';
+import { OverflowMenu } from '@/components/UI/OverflowMenu';
 
 interface TeamMemberRowProps {
   member: TeamMember;
   teamId: string;
   onStart?: (memberId: string) => Promise<void>;
   onStop?: (memberId: string) => Promise<void>;
+  onViewTerminal?: (member: TeamMember) => void;
 }
 
-export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, onStart, onStop }) => {
+export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, onStart, onStop, onViewTerminal }) => {
   const isActive = member.agentStatus === 'active';
   const isActivating = member.agentStatus === 'activating';
   const statusColor = isActive ? 'bg-emerald-500/10 text-emerald-400' : isActivating ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-500/10 text-gray-300';
@@ -24,6 +26,7 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
   };
 
   const avatar = member.avatar;
+
   return (
     <div className="member-row">
       <div className="flex items-center gap-3">
@@ -44,13 +47,38 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColor}`}>{isActive ? 'Started' : isActivating ? 'Activating' : 'Stopped'}</span>
-        {isActive ? (
-          <button className="icon-btn" title="Stop" onClick={handleStop}><Square className="w-4 h-4" /></button>
-        ) : (
-          <button className="icon-btn" title="Start" onClick={handleStart}><Play className="w-4 h-4" /></button>
-        )}
-        <button className="icon-btn" title="More"><MoreVertical className="w-4 h-4" /></button>
+        <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColor}`}>{isActive ? 'Started' : isActivating ? 'Activating' : 'Stopped'}</span>
+        <div className="flex items-center gap-2">
+          {isActive ? (
+            <button
+              className="w-9 h-9 rounded-full hover:bg-red-500/20 hover:text-red-400 flex items-center justify-center transition-colors"
+              title="Stop"
+              onClick={handleStop}
+            >
+              <Square className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              className="w-9 h-9 rounded-full hover:bg-green-500/20 hover:text-green-400 flex items-center justify-center transition-colors"
+              title="Start"
+              onClick={handleStart}
+            >
+              <Play className="w-4 h-4" />
+            </button>
+          )}
+          <OverflowMenu
+            align="bottom-right"
+            buttonClassName="w-9 h-9 rounded-full hover:bg-primary/20 hover:text-primary flex items-center justify-center transition-colors"
+            items={[
+              ...(member.sessionName && onViewTerminal ? [
+                {
+                  label: 'View Terminal',
+                  onClick: () => onViewTerminal(member)
+                }
+              ] : [])
+            ]}
+          />
+        </div>
       </div>
     </div>
   );

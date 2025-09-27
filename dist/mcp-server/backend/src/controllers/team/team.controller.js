@@ -726,7 +726,7 @@ export async function getTeamMemberSession(req, res) {
 export async function addTeamMember(req, res) {
     try {
         const { id } = req.params;
-        const { name, role } = req.body;
+        const { name, role, avatar } = req.body;
         if (!name || !role) {
             res.status(400).json({ success: false, error: 'Name and role are required' });
             return;
@@ -742,6 +742,7 @@ export async function addTeamMember(req, res) {
             name: String(name).trim(),
             sessionName: '',
             role: role,
+            avatar: avatar,
             systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
             agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
             workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,

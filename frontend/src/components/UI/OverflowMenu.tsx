@@ -18,7 +18,7 @@ interface OverflowMenuProps {
 export const OverflowMenu: React.FC<OverflowMenuProps> = ({
   items,
   align = 'bottom-right',
-  buttonClassName = 'icon-btn',
+  buttonClassName = 'text-text-secondary-dark hover:text-primary transition-colors',
   menuClassName = '',
   icon: Icon = MoreVertical,
 }) => {
@@ -41,7 +41,7 @@ export const OverflowMenu: React.FC<OverflowMenuProps> = ({
       {open && (
         <div
           className={`absolute z-10 w-44 bg-surface-dark border border-border-dark rounded-lg shadow-lg p-1 ${
-            align === 'bottom-right' ? 'right-0 bottom-8' : 'right-0 top-8'
+            align === 'bottom-right' ? 'right-0 top-8' : 'right-0 bottom-8'
           } ${menuClassName}`}
         >
           {items.map((item, idx) => (

@@ -73,7 +73,7 @@ export const Projects: React.FC = () => {
         const done = tasks.filter((t: any) => t.status === 'done' || t.status === 'completed').length;
         const blocked = tasks.filter((t: any) => t.status === 'blocked').length;
         const active = open + inProgress + pending;
-        const percent = Math.round((active / total) * 100);
+        const percent = Math.round((done / total) * 100);
         return [p.id, { percent, active, total, open, inProgress, pending, done, blocked }] as const;
       } catch (e) {
         console.warn('Failed to load tasks for project', p.id, e);
@@ -88,9 +88,28 @@ export const Projects: React.FC = () => {
       // Get all teams
       const allTeams = await apiService.getTeams();
 
+      // Avatar choices for migration
+      const avatarChoices = [
+        'https://picsum.photos/seed/1/64',
+        'https://picsum.photos/seed/2/64',
+        'https://picsum.photos/seed/3/64',
+        'https://picsum.photos/seed/4/64',
+        'https://picsum.photos/seed/5/64',
+        'https://picsum.photos/seed/6/64',
+      ];
+
+      // Migrate teams without avatars for backward compatibility
+      const migratedTeams = allTeams.map(team => ({
+        ...team,
+        members: team.members.map((member: any, index: number) => ({
+          ...member,
+          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+        }))
+      }));
+
       // Create a map of project ID to assigned teams
       const entries = list.map(project => {
-        const assignedTeams = allTeams.filter(team => {
+        const assignedTeams = migratedTeams.filter(team => {
           // Match by project ID or project name
           const matchesById = team.currentProject === project.id;
           const matchesByName = team.currentProject === project.name;
@@ -202,7 +221,7 @@ export const Projects: React.FC = () => {
                 assignedTeams={teamsMap[project.id] || []}
                 onClick={() => navigateToProject(project.id)}
                 progressPercent={progressMap[project.id]?.percent}
-                progressLabel={typeof progressMap[project.id]?.total === 'number' ? `${progressMap[project.id]?.active || 0} active of ${progressMap[project.id]?.total || 0}` : undefined}
+                progressLabel={typeof progressMap[project.id]?.total === 'number' ? `${progressMap[project.id]?.done || 0} of ${progressMap[project.id]?.total || 0} completed` : undefined}
                 progressBreakdown={progressMap[project.id] ? {
                   open: progressMap[project.id].open,
                   inProgress: progressMap[project.id].inProgress,
