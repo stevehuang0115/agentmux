@@ -1,4 +1,5 @@
 import React from 'react';
+import { Button } from './UI';
 
 interface LoadingSpinnerProps {
   size?: 'small' | 'medium' | 'large';
@@ -155,12 +156,9 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
             <div className="error-icon">❌</div>
             <h3>Error Loading Data</h3>
             <p>{error}</p>
-            <button 
-              onClick={() => window.location.reload()} 
-              className="btn btn-primary"
-            >
+            <Button onClick={() => window.location.reload()} variant="primary">
               Retry
-            </button>
+            </Button>
           </div>
         )}
       </>

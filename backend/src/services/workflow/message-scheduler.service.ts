@@ -112,8 +112,18 @@ export class MessageSchedulerService extends EventEmitter {
     let success = false;
     let error: string | undefined;
     let enhancedMessage = message.message;
+    let shouldDeactivateMessage = false;
 
     try {
+      // Validate project exists if message targets a specific project
+      if (message.targetProject) {
+        const projectExists = await this.validateProjectExists(message.targetProject);
+        if (!projectExists) {
+          shouldDeactivateMessage = true;
+          throw new Error(`Target project "${message.targetProject}" no longer exists - deactivating message`);
+        }
+      }
+
       // Determine target session name
       const sessionName = message.targetTeam === 'orchestrator'
         ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
@@ -137,7 +147,12 @@ export class MessageSchedulerService extends EventEmitter {
     } catch (sendError) {
       success = false;
       error = sendError instanceof Error ? sendError.message : 'Failed to send message';
-      console.error(`Error executing scheduled message "${message.name}":`, sendError);
+
+      if (shouldDeactivateMessage) {
+        console.warn(`Deactivating orphaned scheduled message "${message.name}": ${error}`);
+      } else {
+        console.error(`Error executing scheduled message "${message.name}":`, sendError);
+      }
     }
 
     // Create delivery log
@@ -157,20 +172,26 @@ export class MessageSchedulerService extends EventEmitter {
       console.error('Error saving delivery log:', logError);
     }
 
-    // Update last run time and deactivate if one-off message
+    // Update last run time and deactivate if one-off message or orphaned
     try {
       const updatedMessage = {
         ...message,
         lastRun: new Date().toISOString(),
-        // Deactivate one-off messages after execution
-        isActive: message.isRecurring ? message.isActive : false,
+        // Deactivate one-off messages after execution OR orphaned messages
+        isActive: message.isRecurring && !shouldDeactivateMessage ? message.isActive : false,
         updatedAt: new Date().toISOString()
       };
       await this.storageService.saveScheduledMessage(updatedMessage);
-      
-      // If it's a one-off message, log that it has been deactivated
-      if (!message.isRecurring) {
-        console.log(`One-off message "${message.name}" has been deactivated after execution`);
+
+      // If message was deactivated, cancel its timer
+      if (!updatedMessage.isActive) {
+        this.cancelMessage(message.id);
+
+        if (shouldDeactivateMessage) {
+          console.log(`Orphaned message "${message.name}" has been deactivated and removed from scheduler`);
+        } else if (!message.isRecurring) {
+          console.log(`One-off message "${message.name}" has been deactivated after execution`);
+        }
       }
     } catch (updateError) {
       console.error('Error updating message last run time:', updateError);
@@ -272,6 +293,19 @@ export class MessageSchedulerService extends EventEmitter {
   }
 
   /**
+   * Validate that a project still exists in the system
+   */
+  private async validateProjectExists(projectId: string): Promise<boolean> {
+    try {
+      const projects = await this.storageService.getProjects();
+      return projects.some(project => project.id === projectId);
+    } catch (error) {
+      console.error('Error validating project existence:', error);
+      return false; // Assume project doesn't exist if we can't verify
+    }
+  }
+
+  /**
    * Add continuation instructions to scheduled messages to handle interruptions gracefully
    */
   private addContinuationInstructions(originalMessage: string): string {
@@ -280,6 +314,77 @@ export class MessageSchedulerService extends EventEmitter {
 ${originalMessage}
 
 ⚡ IMPORTANT: After responding to this check-in, IMMEDIATELY CONTINUE your previous work without waiting for further instructions. If you were implementing, coding, testing, or working on any task when this message arrived, resume that exact work now. Do not stop your development workflow - this is just a quick status update. Continue where you left off.`;
+  }
+
+  /**
+   * Clean up orphaned scheduled messages for non-existent projects
+   */
+  async cleanupOrphanedMessages(): Promise<{
+    found: number;
+    deactivated: number;
+    errors: string[];
+  }> {
+    const result = {
+      found: 0,
+      deactivated: 0,
+      errors: [] as string[]
+    };
+
+    try {
+      console.log('🧹 Starting orphaned message cleanup...');
+
+      const messages = await this.storageService.getScheduledMessages();
+      const projectMessages = messages.filter(msg => msg.targetProject && msg.isActive);
+
+      result.found = projectMessages.length;
+      console.log(`Found ${result.found} project-targeted messages to validate`);
+
+      if (result.found === 0) {
+        console.log('✅ No project-targeted messages found');
+        return result;
+      }
+
+      // Get all existing projects for validation
+      const projects = await this.storageService.getProjects();
+      const projectIds = new Set(projects.map(p => p.id));
+
+      for (const message of projectMessages) {
+        try {
+          if (!projectIds.has(message.targetProject!)) {
+            console.log(`🗑️ Deactivating orphaned message "${message.name}" for non-existent project ${message.targetProject}`);
+
+            // Deactivate the message
+            const updatedMessage = {
+              ...message,
+              isActive: false,
+              updatedAt: new Date().toISOString()
+            };
+
+            await this.storageService.saveScheduledMessage(updatedMessage);
+            this.cancelMessage(message.id);
+
+            result.deactivated++;
+          }
+        } catch (error) {
+          const errorMsg = `Failed to process message ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+          result.errors.push(errorMsg);
+          console.error(errorMsg);
+        }
+      }
+
+      console.log(`✅ Orphaned message cleanup complete: ${result.deactivated}/${result.found} messages deactivated`);
+
+      if (result.errors.length > 0) {
+        console.warn(`⚠️ ${result.errors.length} errors occurred during cleanup`);
+      }
+
+    } catch (error) {
+      const errorMsg = `Failed to cleanup orphaned messages: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      result.errors.push(errorMsg);
+      console.error(errorMsg);
+    }
+
+    return result;
   }
 
   /**

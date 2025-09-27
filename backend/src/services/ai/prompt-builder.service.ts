@@ -152,7 +152,7 @@ Start all teams on Phase 1 simultaneously.`.trim();
 			});
 
 			const memberIdParam = memberId ? `, "memberId": "${memberId}"` : '';
-			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionId": "${sessionName}"${memberIdParam}}`;
+			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionName": "${sessionName}"${memberIdParam}}`;
 		}
 	}
 

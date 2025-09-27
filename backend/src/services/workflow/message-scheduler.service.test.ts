@@ -588,7 +588,7 @@ describe('MessageSchedulerService', () => {
       const queueMessage = { ...mockAutoAssignmentMessage, targetProject: 'test-project-queue' };
 
       const executionPromise = (service as any).executeMessageSequentially(queueMessage);
-      
+
       // Advance timers to allow the delay in queue processing
       jest.advanceTimersByTime(2000);
       await executionPromise;
@@ -597,6 +597,176 @@ describe('MessageSchedulerService', () => {
         'Processing auto-assignment message for project test-project-queue (queue length: 0)'
       );
       expect(consoleSpy).toHaveBeenCalledWith('Finished processing message queue');
+    });
+  });
+
+  describe('validateProjectExists', () => {
+    it('should return true for existing project', async () => {
+      const mockProject = { id: 'test-project', name: 'Test Project' };
+      mockStorageService.getProjects = jest.fn().mockResolvedValue([mockProject]);
+
+      const result = await (service as any).validateProjectExists('test-project');
+
+      expect(result).toBe(true);
+      expect(mockStorageService.getProjects).toHaveBeenCalled();
+    });
+
+    it('should return false for non-existent project', async () => {
+      mockStorageService.getProjects = jest.fn().mockResolvedValue([]);
+
+      const result = await (service as any).validateProjectExists('non-existent-project');
+
+      expect(result).toBe(false);
+      expect(mockStorageService.getProjects).toHaveBeenCalled();
+    });
+
+    it('should return false when storage service throws error', async () => {
+      mockStorageService.getProjects = jest.fn().mockRejectedValue(new Error('Storage error'));
+
+      const result = await (service as any).validateProjectExists('test-project');
+
+      expect(result).toBe(false);
+      expect(console.error).toHaveBeenCalledWith('Error validating project existence:', expect.any(Error));
+    });
+  });
+
+  describe('executeMessage with project validation', () => {
+    beforeEach(() => {
+      mockTmuxService.sessionExists.mockResolvedValue(true);
+      mockTmuxService.sendMessage.mockResolvedValue();
+      mockStorageService.saveScheduledMessage.mockResolvedValue();
+      mockStorageService.saveDeliveryLog.mockResolvedValue();
+    });
+
+    it('should execute message when project exists', async () => {
+      const mockProject = {
+        id: 'test-project',
+        name: 'Test Project',
+        path: '/test/path',
+        teams: {},
+        status: 'active',
+        createdAt: '2023-01-01T00:00:00.000Z',
+        updatedAt: '2023-01-01T00:00:00.000Z'
+      };
+      mockStorageService.getProjects = jest.fn().mockResolvedValue([mockProject]);
+
+      await (service as any).executeMessage(mockScheduledMessage);
+
+      expect(mockStorageService.getProjects).toHaveBeenCalled();
+      expect(mockTmuxService.sendMessage).toHaveBeenCalled();
+      expect(mockStorageService.saveScheduledMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isActive: false, // Should be deactivated since it's non-recurring
+        })
+      );
+    });
+
+    it('should deactivate message when project does not exist', async () => {
+      mockStorageService.getProjects = jest.fn().mockResolvedValue([]); // No projects
+
+      await (service as any).executeMessage(mockScheduledMessage);
+
+      expect(mockStorageService.getProjects).toHaveBeenCalled();
+      expect(mockTmuxService.sendMessage).not.toHaveBeenCalled();
+      expect(mockStorageService.saveScheduledMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isActive: false, // Should be deactivated for orphaned message
+        })
+      );
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Deactivating orphaned scheduled message')
+      );
+    });
+
+    it('should cancel message timer when deactivating orphaned message', async () => {
+      mockStorageService.getProjects = jest.fn().mockResolvedValue([]);
+      const cancelMessageSpy = jest.spyOn(service, 'cancelMessage');
+
+      await (service as any).executeMessage(mockScheduledMessage);
+
+      expect(cancelMessageSpy).toHaveBeenCalledWith(mockScheduledMessage.id);
+    });
+
+    it('should not validate project for messages without targetProject', async () => {
+      const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
+      mockStorageService.getProjects = jest.fn();
+
+      await (service as any).executeMessage(messageWithoutProject);
+
+      expect(mockStorageService.getProjects).not.toHaveBeenCalled();
+      expect(mockTmuxService.sendMessage).toHaveBeenCalled();
+    });
+  });
+
+  describe('cleanupOrphanedMessages', () => {
+    beforeEach(() => {
+      jest.spyOn(console, 'warn').mockImplementation();
+    });
+
+    it('should find and deactivate orphaned messages', async () => {
+      const orphanedMessage = { ...mockScheduledMessage, targetProject: 'orphaned-project' };
+      const validMessage = { ...mockScheduledMessage, id: 'valid-msg', targetProject: 'valid-project' };
+
+      mockStorageService.getScheduledMessages.mockResolvedValue([orphanedMessage, validMessage]);
+      mockStorageService.getProjects.mockResolvedValue([{
+        id: 'valid-project',
+        name: 'Valid Project',
+        path: '/valid/path',
+        teams: {},
+        status: 'active',
+        createdAt: '2023-01-01T00:00:00.000Z',
+        updatedAt: '2023-01-01T00:00:00.000Z'
+      }]);
+      mockStorageService.saveScheduledMessage.mockResolvedValue();
+
+      const result = await service.cleanupOrphanedMessages();
+
+      expect(result.found).toBe(2);
+      expect(result.deactivated).toBe(1);
+      expect(result.errors).toHaveLength(0);
+      expect(mockStorageService.saveScheduledMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: orphanedMessage.id,
+          isActive: false
+        })
+      );
+    });
+
+    it('should return early when no project-targeted messages found', async () => {
+      const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
+      mockStorageService.getScheduledMessages.mockResolvedValue([messageWithoutProject]);
+
+      const result = await service.cleanupOrphanedMessages();
+
+      expect(result.found).toBe(0);
+      expect(result.deactivated).toBe(0);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should handle errors when deactivating individual messages', async () => {
+      const orphanedMessage = { ...mockScheduledMessage, targetProject: 'orphaned-project' };
+
+      mockStorageService.getScheduledMessages.mockResolvedValue([orphanedMessage]);
+      mockStorageService.getProjects.mockResolvedValue([]);
+      mockStorageService.saveScheduledMessage.mockRejectedValue(new Error('Save failed'));
+
+      const result = await service.cleanupOrphanedMessages();
+
+      expect(result.found).toBe(1);
+      expect(result.deactivated).toBe(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('Failed to process message');
+    });
+
+    it('should handle storage service errors gracefully', async () => {
+      mockStorageService.getScheduledMessages.mockRejectedValue(new Error('Storage error'));
+
+      const result = await service.cleanupOrphanedMessages();
+
+      expect(result.found).toBe(0);
+      expect(result.deactivated).toBe(0);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('Failed to cleanup orphaned messages');
     });
   });
 });

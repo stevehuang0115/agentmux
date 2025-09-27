@@ -20,5 +20,10 @@ export interface ApiContext {
   promptTemplateService: PromptTemplateService;
   taskAssignmentMonitor: TaskAssignmentMonitorService;
   taskTrackingService: TaskTrackingService;
+  cleanupProjectScheduledMessages?: (projectId: string) => Promise<{
+    found: number;
+    cancelled: number;
+    errors: string[];
+  }>;
 }
 

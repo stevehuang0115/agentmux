@@ -106,6 +106,11 @@ export interface TaskColumnProps {
   onTaskUnblock: (task: any) => void;
   taskAssignmentLoading: string | null;
   taskUnblockLoading: string | null;
+  taskAssignments: Map<string, any>;
+  onCreateTaskClick?: () => void;
+  totalCount?: number;
+  onLoadMore?: () => void;
+  avatarMap?: Record<string, string>;
 }
 
 // EditorView specific types
@@ -141,6 +146,10 @@ export interface TeamsViewProps {
   assignedTeams: Team[];
   onUnassignTeam: (teamId: string, teamName: string) => void;
   openTerminalWithSession: (sessionName: string) => void;
+  onAssignTeam?: () => void;
+  projectName?: string;
+  onViewTeam?: (teamId: string) => void;
+  onEditTeam?: (teamId: string) => void;
 }
 
 // TaskCreateModal specific types

@@ -1,27 +1,48 @@
 import { StorageService } from '../core/storage.service.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { LoggerService } from '../core/logger.service.js';
-import { readFile, writeFile } from 'fs/promises';
+import { AgentHeartbeatService } from '../agent/agent-heartbeat.service.js';
+import { writeFile, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { existsSync } from 'fs';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
+/**
+ * Activity Monitor Service - NEW ARCHITECTURE
+ *
+ * Responsibilities:
+ * - Track ONLY workingStatus (idle vs in_progress) based on terminal activity
+ * - Create and manage teamWorkingStatus.json file
+ * - Integrate with AgentHeartbeatService for stale agent detection
+ * - Remove ALL agentStatus management (now owned by AgentHeartbeatService)
+ *
+ * Key Changes:
+ * - No more agentStatus updates to teams.json
+ * - Simple activity detection: output changed = in_progress, else = idle
+ * - Integration with stale detection (30-minute threshold)
+ * - Separate teamWorkingStatus.json file for working statuses
+ */
 export class ActivityMonitorService {
     static instance;
     logger;
     storageService;
     tmuxService;
+    agentHeartbeatService;
     intervalId = null;
-    POLLING_INTERVAL = 120000; // 2 minutes (reduced frequency to prevent memory issues)
-    running = false;
+    POLLING_INTERVAL = 120000; // 2 minutes
     lastTerminalOutputs = new Map();
-    MAX_CACHED_OUTPUTS = 5; // Reduced cached terminal outputs
-    MAX_OUTPUT_SIZE = 512; // 512 bytes max per output (reduced from 1KB)
-    ACTIVITY_CHECK_TIMEOUT = 6000; // 6 second timeout per check (increased for reliability)
+    MAX_OUTPUT_SIZE = 512; // 512 bytes max per output
+    ACTIVITY_CHECK_TIMEOUT = 6000; // 6 second timeout per check
     lastCleanup = Date.now();
+    agentmuxHome;
+    teamWorkingStatusFile;
     constructor() {
         this.logger = LoggerService.getInstance().createComponentLogger('ActivityMonitor');
         this.storageService = StorageService.getInstance();
         this.tmuxService = new TmuxService();
+        this.agentHeartbeatService = AgentHeartbeatService.getInstance();
+        this.agentmuxHome = join(homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+        this.teamWorkingStatusFile = join(this.agentmuxHome, 'teamWorkingStatus.json');
     }
     static getInstance() {
         if (!ActivityMonitorService.instance) {
@@ -34,7 +55,7 @@ export class ActivityMonitorService {
             this.logger.warn('Activity monitoring already running');
             return;
         }
-        this.logger.info('Starting activity monitoring with 2-minute intervals');
+        this.logger.info('Starting activity monitoring with 2-minute intervals (NEW ARCHITECTURE: workingStatus only)');
         // Run immediately first
         this.performActivityCheck();
         // Set up recurring polling
@@ -65,189 +86,244 @@ export class ActivityMonitorService {
             });
         }
     }
+    /**
+     * NEW ARCHITECTURE: Simplified activity checking
+     *
+     * This method now:
+     * 1. Detects stale agents via AgentHeartbeatService (30-minute threshold)
+     * 2. Checks terminal activity for working status (ONLY)
+     * 3. Updates teamWorkingStatus.json (separate from teams.json)
+     * 4. Removes ALL agentStatus logic (handled by AgentHeartbeatService)
+     */
     async performActivityCheckInternal() {
         const now = new Date().toISOString();
-        // Check orchestrator status with timeout
-        const orchestratorRunning = await Promise.race([
-            this.tmuxService.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Orchestrator check timeout')), 1000))
-        ]).catch(() => false);
-        // Update orchestrator status if needed - read directly from teams.json
-        const orchestratorStatus = await this.storageService.getOrchestratorStatus();
-        if (orchestratorStatus) {
-            // Don't override "activating" status during registration process
-            const currentAgentStatus = orchestratorStatus.agentStatus;
-            const shouldBeActive = orchestratorRunning ? 'active' : 'inactive';
-            const finalAgentStatus = currentAgentStatus === 'activating' ? 'activating' : shouldBeActive;
-            // Only update if the current status differs from what it should be
-            if (orchestratorStatus.agentStatus !== finalAgentStatus || !orchestratorStatus.agentStatus) {
-                await this.updateOrchestratorWithStatuses(finalAgentStatus, finalAgentStatus, 'idle');
-                this.logger.info('Updated orchestrator status in teams.json', {
-                    agentStatus: finalAgentStatus,
-                    workingStatus: 'idle'
+        try {
+            // Step 1: Detect stale agents and mark as potentialInactive
+            const staleAgents = await this.agentHeartbeatService.detectStaleAgents(30);
+            if (staleAgents.length > 0) {
+                this.logger.info('Detected stale agents for potential inactivity', {
+                    staleAgents,
+                    thresholdMinutes: 30
                 });
+                // Note: AgentHeartbeatService will handle marking them as potentialInactive
             }
-        }
-        // Get all teams and process members with memory-efficient approach
-        const teams = await this.storageService.getTeams();
-        const teamsToUpdate = new Set();
-        for (const team of teams) {
-            for (const member of team.members) {
-                // Only check members that are marked as active and have sessions
-                if (member.agentStatus === 'active' && member.sessionName) {
-                    try {
-                        // Check if session still exists with timeout
-                        const sessionExists = await Promise.race([
-                            this.tmuxService.sessionExists(member.sessionName),
-                            new Promise((_, reject) => setTimeout(() => reject(new Error('Session check timeout')), 500))
-                        ]).catch(() => false);
-                        if (!sessionExists) {
-                            // Session no longer exists - only update workingStatus, NOT agentStatus
-                            // NOTE: agentStatus should only be managed by registration/termination processes
-                            member.workingStatus = 'idle';
-                            member.lastActivityCheck = now;
-                            member.updatedAt = now;
-                            teamsToUpdate.add(team.id);
-                            // Clean up stored output
-                            delete member.lastTerminalOutput;
-                            this.logger.info('Member session not found, setting workingStatus to idle', {
+            // Step 2: Load current working status file
+            const workingStatusData = await this.loadTeamWorkingStatusFile();
+            let hasChanges = false;
+            // Step 3: Check orchestrator working status
+            const orchestratorRunning = await Promise.race([
+                this.tmuxService.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Orchestrator check timeout')), 1000))
+            ]).catch(() => false);
+            if (orchestratorRunning) {
+                const orchestratorOutput = await this.getTerminalOutput(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+                const previousOutput = this.lastTerminalOutputs.get('orchestrator') || '';
+                const outputChanged = orchestratorOutput !== previousOutput && orchestratorOutput.trim() !== '';
+                const newWorkingStatus = outputChanged ? 'in_progress' : 'idle';
+                if (workingStatusData.orchestrator.workingStatus !== newWorkingStatus) {
+                    workingStatusData.orchestrator.workingStatus = newWorkingStatus;
+                    workingStatusData.orchestrator.lastActivityCheck = now;
+                    workingStatusData.orchestrator.updatedAt = now;
+                    hasChanges = true;
+                    this.logger.info('Orchestrator working status updated', {
+                        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+                        newWorkingStatus,
+                        outputChanged
+                    });
+                }
+                this.lastTerminalOutputs.set('orchestrator', orchestratorOutput);
+            }
+            else {
+                // Orchestrator not running, set to idle
+                if (workingStatusData.orchestrator.workingStatus !== 'idle') {
+                    workingStatusData.orchestrator.workingStatus = 'idle';
+                    workingStatusData.orchestrator.lastActivityCheck = now;
+                    workingStatusData.orchestrator.updatedAt = now;
+                    hasChanges = true;
+                }
+            }
+            // Step 4: Check team member working statuses
+            const teams = await this.storageService.getTeams();
+            for (const team of teams) {
+                for (const member of team.members) {
+                    if (member.sessionName) {
+                        try {
+                            // Check if session exists
+                            const sessionExists = await Promise.race([
+                                this.tmuxService.sessionExists(member.sessionName),
+                                new Promise((_, reject) => setTimeout(() => reject(new Error('Session check timeout')), 500))
+                            ]).catch(() => false);
+                            if (!sessionExists) {
+                                // Session doesn't exist, set to idle
+                                const memberKey = member.sessionName;
+                                if (!workingStatusData.teamMembers[memberKey]) {
+                                    workingStatusData.teamMembers[memberKey] = {
+                                        sessionName: member.sessionName,
+                                        teamMemberId: member.id,
+                                        workingStatus: 'idle',
+                                        lastActivityCheck: now,
+                                        updatedAt: now
+                                    };
+                                    hasChanges = true;
+                                }
+                                else if (workingStatusData.teamMembers[memberKey].workingStatus !== 'idle') {
+                                    workingStatusData.teamMembers[memberKey].workingStatus = 'idle';
+                                    workingStatusData.teamMembers[memberKey].lastActivityCheck = now;
+                                    workingStatusData.teamMembers[memberKey].updatedAt = now;
+                                    hasChanges = true;
+                                }
+                                this.lastTerminalOutputs.delete(memberKey);
+                                continue;
+                            }
+                            // Get terminal output and check for activity
+                            const currentOutput = await this.getTerminalOutput(member.sessionName);
+                            const previousOutput = this.lastTerminalOutputs.get(member.sessionName) || '';
+                            const outputChanged = currentOutput !== previousOutput && currentOutput.trim() !== '';
+                            const newWorkingStatus = outputChanged ? 'in_progress' : 'idle';
+                            // Update working status if changed
+                            const memberKey = member.sessionName;
+                            if (!workingStatusData.teamMembers[memberKey]) {
+                                workingStatusData.teamMembers[memberKey] = {
+                                    sessionName: member.sessionName,
+                                    teamMemberId: member.id,
+                                    workingStatus: newWorkingStatus,
+                                    lastActivityCheck: now,
+                                    updatedAt: now
+                                };
+                                hasChanges = true;
+                            }
+                            else if (workingStatusData.teamMembers[memberKey].workingStatus !== newWorkingStatus) {
+                                workingStatusData.teamMembers[memberKey].workingStatus = newWorkingStatus;
+                                workingStatusData.teamMembers[memberKey].lastActivityCheck = now;
+                                workingStatusData.teamMembers[memberKey].updatedAt = now;
+                                hasChanges = true;
+                                this.logger.info('Team member working status updated', {
+                                    teamId: team.id,
+                                    memberId: member.id,
+                                    memberName: member.name,
+                                    sessionName: member.sessionName,
+                                    newWorkingStatus,
+                                    outputChanged
+                                });
+                            }
+                            this.lastTerminalOutputs.set(member.sessionName, currentOutput);
+                        }
+                        catch (error) {
+                            this.logger.error('Error checking member working status', {
                                 teamId: team.id,
                                 memberId: member.id,
                                 memberName: member.name,
                                 sessionName: member.sessionName,
-                                agentStatus: member.agentStatus // Log current agentStatus but don't change it
-                            });
-                            continue;
-                        }
-                        // Capture current terminal output with strict limits
-                        const currentOutput = await Promise.race([
-                            this.tmuxService.capturePane(member.sessionName, 5), // Further reduced from 10 to 5 lines
-                            new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout')), 500))
-                        ]).catch(() => '');
-                        // Limit output size to prevent memory issues
-                        const truncatedOutput = currentOutput.length > this.MAX_OUTPUT_SIZE
-                            ? currentOutput.substring(currentOutput.length - this.MAX_OUTPUT_SIZE)
-                            : currentOutput;
-                        // Get previous output from member's stored data
-                        const previousOutput = member.lastTerminalOutput || '';
-                        // Smart idle pattern recognition
-                        const idlePatterns = [
-                            /Type your message or @path\/to\/file/i,
-                            />\s*$/, // Command prompt ending
-                            /Task completed successfully/i,
-                            /✓.*completed/i,
-                            /✓.*done/i,
-                            /finished/i,
-                            /ready for next/i,
-                            /waiting for input/i,
-                            /press any key to continue/i,
-                            /\[y\/n\]/i // Waiting for user confirmation
-                        ];
-                        const outputChanged = truncatedOutput !== previousOutput && truncatedOutput.trim() !== '';
-                        const isIdle = idlePatterns.some(pattern => truncatedOutput.match(pattern));
-                        // Activity detected only if output changed AND not showing idle patterns
-                        const activityDetected = outputChanged && !isIdle;
-                        // Update working status based on intelligent activity detection
-                        const newWorkingStatus = isIdle ? 'idle' : (activityDetected ? 'in_progress' : 'idle');
-                        // Update member if working status changed
-                        if (member.workingStatus !== newWorkingStatus) {
-                            member.workingStatus = newWorkingStatus;
-                            member.lastActivityCheck = now;
-                            member.updatedAt = now;
-                            teamsToUpdate.add(team.id);
-                            this.logger.info('Member activity status updated', {
-                                teamId: team.id,
-                                memberId: member.id,
-                                memberName: member.name,
-                                previousStatus: member.workingStatus,
-                                newWorkingStatus: newWorkingStatus,
-                                activityDetected,
-                                isIdle,
-                                outputChanged,
-                                terminalSnippet: truncatedOutput.slice(-100) // Last 100 chars for debugging
+                                error: error instanceof Error ? error.message : String(error)
                             });
                         }
-                        // Store current output for next comparison (with size limit)
-                        member.lastTerminalOutput = truncatedOutput;
-                    }
-                    catch (error) {
-                        this.logger.error('Error checking member activity', {
-                            teamId: team.id,
-                            memberId: member.id,
-                            memberName: member.name,
-                            sessionName: member.sessionName,
-                            error: error instanceof Error ? error.message : String(error)
-                        });
                     }
                 }
             }
-        }
-        // Save only teams that were actually updated
-        // CRITICAL: Load fresh team data to prevent overwriting concurrent MCP registration updates
-        for (const teamId of teamsToUpdate) {
-            try {
-                // Get fresh team data to avoid stale data race conditions
-                const freshTeams = await this.storageService.getTeams();
-                const freshTeam = freshTeams.find(t => t.id === teamId);
-                if (freshTeam) {
-                    // Find the corresponding stale team to get our activity updates
-                    const staleTeam = teams.find(t => t.id === teamId);
-                    if (staleTeam) {
-                        // Apply only workingStatus and activity-related changes to fresh team
-                        for (const staleMember of staleTeam.members) {
-                            const freshMember = freshTeam.members.find(m => m.id === staleMember.id);
-                            if (freshMember) {
-                                // Only update activity-related fields, preserve agentStatus from fresh data
-                                if (staleMember.lastActivityCheck) {
-                                    freshMember.lastActivityCheck = staleMember.lastActivityCheck;
-                                }
-                                if (staleMember.workingStatus !== undefined) {
-                                    freshMember.workingStatus = staleMember.workingStatus;
-                                }
-                                if (staleMember.lastTerminalOutput !== undefined) {
-                                    freshMember.lastTerminalOutput = staleMember.lastTerminalOutput;
-                                }
-                                else if ('lastTerminalOutput' in staleMember && staleMember.lastTerminalOutput === undefined) {
-                                    // Handle explicit deletion of lastTerminalOutput
-                                    delete freshMember.lastTerminalOutput;
-                                }
-                                // Update timestamp for activity changes only
-                                freshMember.updatedAt = staleMember.updatedAt;
-                            }
-                        }
-                        // Save the fresh team with our activity updates applied
-                        await this.storageService.saveTeam(freshTeam);
-                    }
-                }
+            // Step 5: Save changes if any
+            if (hasChanges) {
+                workingStatusData.metadata.lastUpdated = now;
+                await this.saveTeamWorkingStatusFile(workingStatusData);
+                this.logger.debug('Updated teamWorkingStatus.json with activity changes');
             }
-            catch (error) {
-                this.logger.error('Error saving updated team with fresh data', {
-                    teamId,
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            }
+            // Perform periodic cleanup
+            this.performPeriodicCleanup();
         }
-        // Force garbage collection if available
-        if (global.gc) {
-            global.gc();
+        catch (error) {
+            this.logger.error('Error during activity check', {
+                error: error instanceof Error ? error.message : String(error)
+            });
         }
     }
+    /**
+     * Load teamWorkingStatus.json file with proper initialization
+     */
+    async loadTeamWorkingStatusFile() {
+        try {
+            if (!existsSync(this.teamWorkingStatusFile)) {
+                const defaultData = this.createDefaultTeamWorkingStatusFile();
+                await this.saveTeamWorkingStatusFile(defaultData);
+                this.logger.info('Created new teamWorkingStatus.json file');
+                return defaultData;
+            }
+            const content = await readFile(this.teamWorkingStatusFile, 'utf-8');
+            const data = JSON.parse(content);
+            // Validate structure
+            if (!data.orchestrator || !data.teamMembers || !data.metadata) {
+                this.logger.warn('Invalid teamWorkingStatus.json structure, reinitializing');
+                const defaultData = this.createDefaultTeamWorkingStatusFile();
+                await this.saveTeamWorkingStatusFile(defaultData);
+                return defaultData;
+            }
+            return data;
+        }
+        catch (error) {
+            this.logger.error('Failed to load teamWorkingStatus.json, creating new file', {
+                error: error instanceof Error ? error.message : String(error)
+            });
+            const defaultData = this.createDefaultTeamWorkingStatusFile();
+            await this.saveTeamWorkingStatusFile(defaultData);
+            return defaultData;
+        }
+    }
+    /**
+     * Save teamWorkingStatus.json file with atomic write
+     */
+    async saveTeamWorkingStatusFile(data) {
+        const content = JSON.stringify(data, null, 2);
+        const tempFile = `${this.teamWorkingStatusFile}.tmp`;
+        try {
+            // Write to temp file first, then rename (atomic operation)
+            await writeFile(tempFile, content, 'utf-8');
+            await rename(tempFile, this.teamWorkingStatusFile);
+        }
+        catch (error) {
+            // Clean up temp file if something went wrong
+            try {
+                await unlink(tempFile);
+            }
+            catch { }
+            throw error;
+        }
+    }
+    /**
+     * Create default teamWorkingStatus.json structure
+     */
+    createDefaultTeamWorkingStatusFile() {
+        const now = new Date().toISOString();
+        return {
+            orchestrator: {
+                sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+                workingStatus: 'idle',
+                lastActivityCheck: now,
+                updatedAt: now
+            },
+            teamMembers: {},
+            metadata: {
+                lastUpdated: now,
+                version: '1.0.0'
+            }
+        };
+    }
+    /**
+     * Cleanup old terminal outputs and perform garbage collection
+     */
     performPeriodicCleanup() {
         const now = Date.now();
-        // Clean up every 2 minutes (more frequent cleanup)
+        // Clean up every 2 minutes
         if (now - this.lastCleanup > 2 * 60 * 1000) {
-            // Limit the size of lastTerminalOutputs Map
-            if (this.lastTerminalOutputs.size > this.MAX_CACHED_OUTPUTS) {
+            // Limit the size of lastTerminalOutputs Map to prevent memory leaks
+            if (this.lastTerminalOutputs.size > 50) {
                 const entries = Array.from(this.lastTerminalOutputs.entries());
                 this.lastTerminalOutputs.clear();
-                // Keep only the most recent entries
-                const recentEntries = entries.slice(-this.MAX_CACHED_OUTPUTS);
+                // Keep only the most recent 25 entries
+                const recentEntries = entries.slice(-25);
                 for (const [key, value] of recentEntries) {
                     this.lastTerminalOutputs.set(key, value);
                 }
             }
             this.lastCleanup = now;
-            // Force garbage collection after cleanup if available
+            // Force garbage collection if available
             if (global.gc) {
                 global.gc();
                 this.logger.debug('Performed periodic cleanup with garbage collection', {
@@ -261,32 +337,22 @@ export class ActivityMonitorService {
             }
         }
     }
-    async updateOrchestratorWithStatuses(status, agentStatus, workingStatus) {
+    /**
+     * Get terminal output with size limits for activity detection
+     */
+    async getTerminalOutput(sessionName) {
         try {
-            const teamsFilePath = join(homedir(), '.agentmux', 'teams.json');
-            const content = JSON.parse(await readFile(teamsFilePath, 'utf-8'));
-            if (content.orchestrator) {
-                // Remove legacy status field and use only the new fields
-                delete content.orchestrator.status;
-                content.orchestrator.agentStatus = agentStatus;
-                content.orchestrator.workingStatus = workingStatus;
-                content.orchestrator.updatedAt = new Date().toISOString();
-            }
-            else {
-                content.orchestrator = {
-                    sessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-                    agentStatus,
-                    workingStatus,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                };
-            }
-            await writeFile(teamsFilePath, JSON.stringify(content, null, 2));
+            const output = await Promise.race([
+                this.tmuxService.capturePane(sessionName, 5), // 5 lines only
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout')), 500))
+            ]);
+            // Limit output size to prevent memory issues
+            return output.length > this.MAX_OUTPUT_SIZE
+                ? output.substring(output.length - this.MAX_OUTPUT_SIZE)
+                : output;
         }
         catch (error) {
-            this.logger.error('Error updating orchestrator with statuses', {
-                error: error instanceof Error ? error.message : String(error)
-            });
+            return '';
         }
     }
     isRunning() {
@@ -294,6 +360,32 @@ export class ActivityMonitorService {
     }
     getPollingInterval() {
         return this.POLLING_INTERVAL;
+    }
+    /**
+     * Get current team working status data
+     * Useful for external services that need to check working statuses
+     */
+    async getTeamWorkingStatus() {
+        return await this.loadTeamWorkingStatusFile();
+    }
+    /**
+     * Get working status for a specific session
+     */
+    async getWorkingStatusForSession(sessionName) {
+        try {
+            const data = await this.loadTeamWorkingStatusFile();
+            if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+                return data.orchestrator.workingStatus;
+            }
+            return data.teamMembers[sessionName]?.workingStatus || null;
+        }
+        catch (error) {
+            this.logger.error('Failed to get working status for session', {
+                sessionName,
+                error: error instanceof Error ? error.message : String(error)
+            });
+            return null;
+        }
     }
 }
 //# sourceMappingURL=activity-monitor.service.js.map

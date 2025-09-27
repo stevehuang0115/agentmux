@@ -255,30 +255,15 @@ export async function stopProject(req, res) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
-        // Cancel ALL scheduled messages for this project
-        if (this.messageSchedulerService) {
-            try {
-                // Get all scheduled messages and find ones targeting this project
-                const allMessages = await this.storageService.getScheduledMessages();
-                const projectMessages = allMessages.filter((msg) => msg.targetProject === id);
-                console.log(`Found ${projectMessages.length} scheduled messages to cancel for project ${id}`);
-                // Cancel each message and delete from storage
-                for (const message of projectMessages) {
-                    try {
-                        this.messageSchedulerService.cancelMessage(message.id);
-                        await this.storageService.deleteScheduledMessage(message.id);
-                        console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
-                    }
-                    catch (msgError) {
-                        console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
-                    }
-                }
-                project.scheduledMessageId = undefined; // Clear the schedule ID
-            }
-            catch (e) {
-                console.warn('Failed to cancel scheduled messages:', e);
-            }
+        // Cancel ALL scheduled messages for this project with robust cleanup
+        const cleanupResult = await (this.cleanupProjectScheduledMessages ?
+            this.cleanupProjectScheduledMessages(id) :
+            cleanupProjectScheduledMessages.call(this, id));
+        if (cleanupResult.errors.length > 0) {
+            console.warn(`${cleanupResult.errors.length} errors occurred during message cleanup:`, cleanupResult.errors);
         }
+        console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages for project ${id}`);
+        project.scheduledMessageId = undefined; // Clear the schedule ID
         try {
             await this.activeProjectsService.stopProject(id, this.messageSchedulerService);
         }
@@ -744,29 +729,14 @@ export async function deleteProject(req, res) {
             res.status(404).json({ success: false, error: 'Project not found' });
             return;
         }
-        // Cancel ALL scheduled messages for this project BEFORE deletion
-        if (this.messageSchedulerService) {
-            try {
-                // Get all scheduled messages and find ones targeting this project
-                const allMessages = await this.storageService.getScheduledMessages();
-                const projectMessages = allMessages.filter((msg) => msg.targetProject === id);
-                console.log(`Found ${projectMessages.length} scheduled messages to cancel for project ${id} before deletion`);
-                // Cancel each message and delete from storage
-                for (const message of projectMessages) {
-                    try {
-                        this.messageSchedulerService.cancelMessage(message.id);
-                        await this.storageService.deleteScheduledMessage(message.id);
-                        console.log(`Cancelled and deleted scheduled message: ${message.name} (${message.id})`);
-                    }
-                    catch (msgError) {
-                        console.warn(`Failed to cancel/delete message ${message.id}:`, msgError);
-                    }
-                }
-            }
-            catch (e) {
-                console.warn('Failed to cancel scheduled messages during project deletion:', e);
-            }
+        // Cancel ALL scheduled messages for this project BEFORE deletion with robust cleanup
+        const cleanupResult = await (this.cleanupProjectScheduledMessages ?
+            this.cleanupProjectScheduledMessages(id) :
+            cleanupProjectScheduledMessages.call(this, id));
+        if (cleanupResult.errors.length > 0) {
+            console.warn(`${cleanupResult.errors.length} errors occurred during message cleanup before deletion:`, cleanupResult.errors);
         }
+        console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages before deleting project ${id}`);
         const teams = await this.storageService.getTeams();
         const activeTeams = teams.filter((t) => t.currentProject === id);
         if (activeTeams.length > 0) {
@@ -779,7 +749,7 @@ export async function deleteProject(req, res) {
         await this.storageService.deleteProject(id);
         res.json({
             success: true,
-            message: `Project deleted successfully. ${activeTeams.length} teams were unassigned and all scheduled messages cancelled.`,
+            message: `Project deleted successfully. ${activeTeams.length} teams were unassigned and ${cleanupResult.cancelled} scheduled messages were cancelled.`,
         });
     }
     catch (error) {
@@ -1073,5 +1043,69 @@ export async function continueWithMisalignment(req, res) {
             error: 'Failed to handle continue with misalignment',
         });
     }
+}
+/**
+ * Robust cleanup of scheduled messages for a project
+ */
+export async function cleanupProjectScheduledMessages(projectId) {
+    const result = {
+        found: 0,
+        cancelled: 0,
+        errors: []
+    };
+    try {
+        console.log(`🧹 Starting scheduled message cleanup for project ${projectId}...`);
+        // Get all scheduled messages for this project
+        const allMessages = await this.storageService.getScheduledMessages();
+        const projectMessages = allMessages.filter((msg) => msg.targetProject === projectId);
+        result.found = projectMessages.length;
+        console.log(`Found ${result.found} scheduled messages to clean up for project ${projectId}`);
+        if (result.found === 0) {
+            console.log('✅ No scheduled messages found for this project');
+            return result;
+        }
+        // Cancel and delete each message with individual error handling
+        for (const message of projectMessages) {
+            try {
+                // Cancel from scheduler if messageSchedulerService is available
+                if (this.messageSchedulerService) {
+                    this.messageSchedulerService.cancelMessage(message.id);
+                    console.log(`✅ Cancelled message "${message.name}" from scheduler`);
+                }
+                // Delete from storage
+                await this.storageService.deleteScheduledMessage(message.id);
+                console.log(`✅ Deleted message "${message.name}" from storage`);
+                result.cancelled++;
+            }
+            catch (msgError) {
+                const errorMsg = `Failed to cleanup message "${message.name}" (${message.id}): ${msgError instanceof Error ? msgError.message : 'Unknown error'}`;
+                result.errors.push(errorMsg);
+                console.error(errorMsg);
+                // Try to at least deactivate the message if we can't delete it
+                try {
+                    const deactivatedMessage = {
+                        ...message,
+                        isActive: false,
+                        updatedAt: new Date().toISOString()
+                    };
+                    await this.storageService.saveScheduledMessage(deactivatedMessage);
+                    console.log(`⚠️ Deactivated message "${message.name}" as fallback`);
+                }
+                catch (deactivateError) {
+                    console.error(`Failed to deactivate message "${message.name}":`, deactivateError);
+                }
+            }
+        }
+        console.log(`✅ Message cleanup complete: ${result.cancelled}/${result.found} messages cleaned up successfully`);
+        if (result.errors.length > 0) {
+            console.warn(`⚠️ ${result.errors.length} errors occurred during cleanup`);
+        }
+    }
+    catch (error) {
+        const errorMsg = `Failed to cleanup scheduled messages for project ${projectId}: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        result.errors.push(errorMsg);
+        console.error(errorMsg);
+    }
+    return result;
 }
 //# sourceMappingURL=project.controller.js.map

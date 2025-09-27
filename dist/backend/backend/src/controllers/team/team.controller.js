@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { ORCHESTRATOR_ROLE, RUNTIME_TYPES } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
+import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 /**
  * Core logic for starting a single team member
  * @param context - API context with services
@@ -976,6 +977,15 @@ export async function registerMemberStatus(req, res) {
     try {
         const { sessionName, role, status, registeredAt, memberId } = req.body;
         console.log(`[API] 📋 Extracted parameters:`, { sessionName, role, status, registeredAt, memberId });
+        // Update agent heartbeat (proof of life)
+        try {
+            await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+            console.log(`[API] ✅ Agent heartbeat updated successfully for session: ${sessionName}`);
+        }
+        catch (error) {
+            console.log(`[API] ⚠️ Failed to update agent heartbeat:`, error);
+            // Continue execution - heartbeat failures shouldn't break registration
+        }
         if (!sessionName || !role) {
             res.status(400).json({ success: false, error: 'sessionName and role are required' });
             return;

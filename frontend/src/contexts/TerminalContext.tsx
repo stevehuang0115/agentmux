@@ -5,8 +5,8 @@ interface TerminalContextType {
   selectedSession: string;
   openTerminal: () => void;
   closeTerminal: () => void;
-  setSelectedSession: (sessionId: string) => void;
-  openTerminalWithSession: (sessionId: string) => void;
+  setSelectedSession: (sessionName: string) => void;
+  openTerminalWithSession: (sessionName: string) => void;
 }
 
 const TerminalContext = createContext<TerminalContextType | undefined>(undefined);
@@ -30,11 +30,11 @@ export const TerminalProvider: React.FC<TerminalProviderProps> = ({ children }) 
   const openTerminal = () => setIsTerminalOpen(true);
   const closeTerminal = () => setIsTerminalOpen(false);
 
-  const openTerminalWithSession = (sessionId: string) => {
-    console.log('TerminalContext: openTerminalWithSession called with:', sessionId);
-    setSelectedSession(sessionId);
+  const openTerminalWithSession = (sessionName: string) => {
+    console.log('TerminalContext: openTerminalWithSession called with:', sessionName);
+    setSelectedSession(sessionName);
     setIsTerminalOpen(true);
-    console.log('TerminalContext: Terminal opened and session set to:', sessionId);
+    console.log('TerminalContext: Terminal opened and session set to:', sessionName);
   };
 
   const value: TerminalContextType = {

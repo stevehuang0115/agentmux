@@ -73,7 +73,12 @@ export class TmuxCommandService {
 	 * Get path to the tmux_robosend.sh script
 	 */
 	private getTmuxRobosendScriptPath(): string {
-		return path.join(this.projectRoot, 'config', 'runtime_scripts', AGENTMUX_CONSTANTS.INIT_SCRIPTS.TMUX_ROBOSEND);
+		return path.join(
+			this.projectRoot,
+			'config',
+			'runtime_scripts',
+			AGENTMUX_CONSTANTS.INIT_SCRIPTS.TMUX_ROBOSEND
+		);
 	}
 
 	/**
@@ -611,11 +616,11 @@ export class TmuxCommandService {
 			// Format: bash tmux_robosend.sh --shadow -L socketName sessionName "message"
 			const scriptArgs = [
 				scriptPath,
-				'--shadow',  // Use shadow client for detached sessions
+				'--shadow', // Use shadow client for detached sessions
 				'-L',
 				socketName,
 				sessionName,
-				cleanMessage
+				cleanMessage,
 			];
 
 			this.logger.debug('🔍 Executing tmux_robosend script:', {
@@ -623,17 +628,25 @@ export class TmuxCommandService {
 				socketName,
 				sessionName,
 				messageLength: cleanMessage.length,
-				command: `bash ${scriptArgs.join(' ')}`
+				command: `bash ${scriptArgs.join(' ')}`,
 			});
 
 			// Execute the script using bash
-			await this.executeShellCommand(`bash "${scriptPath}" --shadow -L "${socketName}" "${sessionName}" "${cleanMessage.replace(/"/g, '\\"')}"`);
+			// Escape both double quotes and backticks to prevent bash interpretation
+			const escapedMessage = cleanMessage
+				.replace(/\\/g, '\\\\')  // Escape backslashes first
+				.replace(/"/g, '\\"')    // Escape double quotes
+				.replace(/`/g, '\\`')    // Escape backticks to prevent command substitution
+				.replace(/\$/g, '\\$');  // Escape dollar signs to prevent variable expansion
+
+			await this.executeShellCommand(
+				`bash "${scriptPath}" --shadow -L "${socketName}" "${sessionName}" "${escapedMessage}"`
+			);
 
 			this.logger.debug('✅ Message sent successfully via robosend script', {
 				sessionName,
 				messageLength: cleanMessage.length,
 			});
-
 		} catch (error) {
 			this.logger.error('Error sending message via robosend script', {
 				sessionName,
@@ -691,7 +704,9 @@ export class TmuxCommandService {
 		await this.sendCtrlC(sessionName);
 		await this.sendEnter(sessionName);
 		await this.sendEscape(sessionName);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
 		await this.sendEscape(sessionName);
+		await new Promise((resolve) => setTimeout(resolve, 1000));
 		await this.sendEscape(sessionName);
 		await this.sendEnter(sessionName);
 	}
@@ -711,7 +726,11 @@ export class TmuxCommandService {
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		} catch (error) {
 			// Fallback to basic approach if enhanced method fails
-			this.logger.debug('Enhanced control key method failed, using fallback', { sessionName, key, error });
+			this.logger.debug('Enhanced control key method failed, using fallback', {
+				sessionName,
+				key,
+				error,
+			});
 			await this.executeTmuxCommand(['send-keys', '-t', sessionName, key]);
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}

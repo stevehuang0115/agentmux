@@ -9,7 +9,6 @@ import { Assignments } from './pages/Assignments';
 import { ScheduledCheckins } from './pages/ScheduledCheckins';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
-import './App.css';
 
 function App() {
   return (

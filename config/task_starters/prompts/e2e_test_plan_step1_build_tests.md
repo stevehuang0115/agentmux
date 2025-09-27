@@ -27,6 +27,46 @@ E2E TEST PLAN GENERATION - STEP 1
 
 ---
 
+## Step 0 — Check for Existing Evaluation & Project Analysis
+
+**1) Check for Existing E2E Evaluation Artifacts**
+
+-   First, check if these files exist:
+    -   `{PROJECT_PATH}/e2e_tests/e2e_evaluation_instructions.md`
+    -   `{PROJECT_PATH}/e2e_tests/e2e_evaluation_report.md`
+-   If `e2e_evaluation_report.md` exists, its content must guide your new evaluation. Your primary goal is to build upon the previous run, addressing any failures, gaps, or regressions identified in the report while still fulfilling the original `{INITIAL_GOAL}`.
+-   If these files do not exist, proceed with a fresh project analysis from scratch.
+
+**2) Project Analysis (Specs → Codebase Reality)**
+
+Produce a concise analysis (≤ 14 bullets) that **compares specs to the current codebase**:
+
+**a) Project Type Identification**
+
+-   Decide: **Web**, **Mobile (iOS/Android)**, **Desktop (Electron/native)**, **API/Backend**, **Terminal/CLI**, or **Hybrid**.
+-   Cite signals (files/deps like `react`, `next`, `flutter`, `react-native`, `electron`, `express`, `fastapi`, `spring`, CLI entrypoints, etc.).
+-   Note deployment targets (browsers, devices/OS, distributions).
+
+**b) Technology Stack (from specs vs. code)**
+
+-   **Frontend:** framework(s), build tool, SSR/SSG, state mgmt, styling.
+-   **Backend/API:** language/runtime, framework, auth (OIDC/JWT), protocols (REST/GraphQL/gRPC), jobs/queues.
+-   **Data/Integrations:** DBs, caches, 3rd-party APIs (payments, auth, analytics).
+-   **CI/CD & Environments:** pipelines, environments, containers, existing test tooling.
+-   **Existing E2E/Integration Tooling:** anything already used (Cypress/Playwright/Appium configs, etc.).
+
+**c) Constraints & Non-functionals**
+
+-   Parallelization needs, flake tolerance, security/compliance (PII/SOC2), a11y/perf budgets, coverage expectations (devices/browsers).
+
+**d) Diff & Gaps**
+
+-   Where **specs** and **codebase** diverge; risks and blockers for E2E evaluation.
+
+**Deliverable for Step 1:**
+
+-   A **one-paragraph summary** + **bullet list of decisive indicators** with pointers to files/lines.
+
 ## Step 1 — Project Analysis (Specs → Codebase Reality)
 
 Produce a concise analysis (≤ 14 bullets) that **compares specs to the current codebase**:
@@ -143,11 +183,14 @@ All files must be returned as content **ready to save** under:
 
 ### Example Skeletons (generate only those that match the detected stack)
 
-**Web — `web_e2e_tests.ts` (Playwright programmatic API)**
+**Web — `web_e2e_tests.ts` (Playwright programmatic API with Visual & A11y checks)**
 
 ```ts
 // {PROJECT_PATH}/e2e_tests/web_e2e_tests.ts
-import { chromium, firefox, webkit, Browser } from 'playwright';
+// Potential new dev dependencies: @axe-core/playwright
+import { chromium, firefox, webkit, Browser, Page, expect } from 'playwright';
+import AxeBuilder from '@axe-core/playwright';
+
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const BROWSERS = (process.env.BROWSERS || 'chromium').split(',');
 const HEADLESS = process.env.HEADLESS !== 'false';
@@ -163,15 +206,33 @@ async function runBrowser(name: string, fn: (b: Browser) => Promise<void>) {
 	}
 }
 
+async function checkAccessibility(page: Page) {
+	const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
+	expect(accessibilityScanResults.violations).toEqual([]);
+}
+
 async function criticalPathSmoke(browser: Browser) {
 	const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 	await ctx.tracing.start({ screenshots: true, snapshots: true, sources: true });
 	const page = await ctx.newPage();
 	await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
-	// PLACEHOLDERS — replace per {USER_JOURNEY}
+	// --- Functional, Visual, and Accessibility Checks ---
 	await page.waitForLoadState('networkidle');
-	if (!(await page.locator('header').first().isVisible())) throw new Error('Header not visible');
+	// 1. Functional check: Is the header visible?
+	await expect(page.locator('header').first()).toBeVisible();
+
+	// 2. Visual Regression check: Does the page look correct?
+	// This will take a screenshot on the first run and compare against it on subsequent runs.
+	await expect(page).toHaveScreenshot('landing-page.png', { maxDiffPixels: 100 });
+
+	// 3. Accessibility check: Are there any violations?
+	await checkAccessibility(page);
+
+	// TODO: Add more steps based on {USER_JOURNEY}
+	// Example: await page.getByRole('button', { name: 'Sign In' }).click();
+	// await expect(page).toHaveScreenshot('signin-modal.png');
+	// await checkAccessibility(page);
 
 	await ctx.tracing.stop({ path: `./artifacts/trace-${Date.now()}.zip` });
 	await ctx.close();
@@ -287,13 +348,15 @@ setTimeout(() => process.exit(0), 3000);
 
 ## Scripts Produced
 
--   <<list only the relevant script(s): web_e2e_tests.ts | web_e2e_tests.java | api_e2e_tests.ts | api_e2e_tests.py | mobile_e2e_tests.ts | desktop_e2e_tests.ts | terminal_e2e_tests.ts>>
+-   <<list only the relevant script(s): web_e2e_tests.ts | ... >>
 -   Location: `{PROJECT_PATH}/e2e_tests/`
 
 ## Prerequisites
 
--   Appropriate runtime(s): Node.js LTS and/or Java 17+ and/or Python 3.10+
+-   Appropriate runtime(s): Node.js LTS, etc.
 -   Project services running (see project README)
+-   Dependencies installed:
+    -   JS/TS: `pnpm i playwright @playwright/test @axe-core/playwright`
 -   Env vars:
     -   `BASE_URL` / `API_BASE_URL`
     -   `BROWSERS=chromium,firefox,webkit` (Web/Playwright)
@@ -301,22 +364,23 @@ setTimeout(() => process.exit(0), 3000);
 
 ## How to Run (by the subsequent task)
 
--   Install deps:
-    -   JS/TS: `pnpm i` (or `npm i` / `yarn`)
-    -   Java: resolve driver/binaries; `mvn test` or `gradle test`
-    -   Python: `pip install -r requirements.txt`
 -   Execute examples:
     -   Web (Playwright): `ts-node e2e_tests/web_e2e_tests.ts` (env: `HEADLESS=true`)
-    -   Web (Selenium Java): `mvn -Dtest=WebE2ETests test`
-    -   API (TS): `ts-node e2e_tests/api_e2e_tests.ts`
-    -   API (Py): `pytest e2e_tests/api_e2e_tests.py -q`
-    -   Mobile: `node e2e_tests/mobile_e2e_tests.ts` (delegates to Appium/WDIO)
-    -   Desktop: `ts-node e2e_tests/desktop_e2e_tests.ts`
-    -   Terminal: `ts-node e2e_tests/terminal_e2e_tests.ts`
+    -   ...
+
+## Managing Visual Baselines
+
+The evaluation script uses Playwright's visual regression capability (`toHaveScreenshot`).
+
+-   **First Run:** When you run the script for the first time, it will generate baseline screenshots (e.g., `landing-page.png`) inside a new `e2e_tests/web_e2e_tests.ts-snapshots` directory. **You must review and commit these initial images to your repository.**
+-   **Subsequent Runs:** The script will compare the current UI against these committed baseline images and fail if there are any visual differences.
+-   **Updating Baselines:** If a UI change is intentional, you must update the baseline images by running the test runner with an update flag (e.g., `npx playwright test --update-snapshots`).
 
 ## Artifacts
 
--   Traces/videos/screenshots/logs under `./artifacts` or CI workspace (framework-dependent).
+-   Traces/videos/screenshots/logs under `./artifacts` or CI workspace.
+-   **Visual Diffs:** If a visual test fails, Playwright will generate `*-diff.png` and `*-actual.png` files showing the discrepancy.
+-   **Accessibility Violations:** If an accessibility check fails, the test output will list the specific violations found by Axe-core.
 
 ## Scenario Mapping
 

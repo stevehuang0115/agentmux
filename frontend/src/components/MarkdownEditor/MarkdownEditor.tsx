@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, Eye, Edit3, File, FolderOpen } from 'lucide-react';
-import './MarkdownEditor.css';
+import { Button, IconButton } from '../UI';
 
 interface MarkdownFile {
   name: string;
@@ -239,28 +239,26 @@ You are a QA Tester AI agent responsible for:
           <div className="header-right">
             {activeFile && (
               <>
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => setIsPreviewMode(!isPreviewMode)}
-                  className={`btn btn-secondary ${isPreviewMode ? 'active' : ''}`}
                   title={isPreviewMode ? 'Edit Mode' : 'Preview Mode'}
-                >
-                  {isPreviewMode ? <Edit3 size={16} /> : <Eye size={16} />}
-                </button>
-                
-                <button
+                  icon={isPreviewMode ? Edit3 : Eye}
+                />
+
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={saveFile}
                   disabled={!activeFile.modified || isLoading}
-                  className="btn btn-primary"
                   title="Save File"
-                >
-                  <Save size={16} />
-                </button>
+                  icon={Save}
+                />
               </>
             )}
-            
-            <button onClick={onClose} className="btn btn-ghost" title="Close">
-              <X size={16} />
-            </button>
+
+            <IconButton aria-label="Close" variant="ghost" icon={X} onClick={onClose} />
           </div>
         </div>
 

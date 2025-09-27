@@ -118,7 +118,7 @@ describe('Terminal Handlers', () => {
     it('should capture terminal output successfully with default lines', async () => {
       const mockOutput = 'Terminal output line 1\nTerminal output line 2\nTerminal output line 3';
 
-      mockRequest.params = { session: 'test-session' };
+      mockRequest.params = { sessionName: 'test-session' };
       mockRequest.query = {};
 
       mockTmuxService.capturePane.mockResolvedValue(mockOutput);
@@ -134,7 +134,7 @@ describe('Terminal Handlers', () => {
         success: true,
         data: {
           output: mockOutput,
-          session: 'test-session'
+          sessionName: 'test-session'
         }
       });
     });
@@ -142,7 +142,7 @@ describe('Terminal Handlers', () => {
     it('should capture terminal output with custom number of lines', async () => {
       const mockOutput = 'Recent terminal output';
 
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.query = { lines: '50' };
 
       mockTmuxService.capturePane.mockResolvedValue(mockOutput);
@@ -158,7 +158,7 @@ describe('Terminal Handlers', () => {
         success: true,
         data: {
           output: mockOutput,
-          session: 'dev-session'
+          sessionName: 'dev-session'
         }
       });
     });
@@ -166,7 +166,7 @@ describe('Terminal Handlers', () => {
     it('should handle invalid line numbers gracefully', async () => {
       const mockOutput = 'Terminal output';
 
-      mockRequest.params = { session: 'test-session' };
+      mockRequest.params = { sessionName: 'test-session' };
       mockRequest.query = { lines: 'invalid' };
 
       mockTmuxService.capturePane.mockResolvedValue(mockOutput);
@@ -182,7 +182,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle capture errors', async () => {
-      mockRequest.params = { session: 'nonexistent-session' };
+      mockRequest.params = { sessionName: 'nonexistent-session' };
       mockTmuxService.capturePane.mockRejectedValue(new Error('Session not found'));
 
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
@@ -204,7 +204,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle empty capture output', async () => {
-      mockRequest.params = { session: 'empty-session' };
+      mockRequest.params = { sessionName: 'empty-session' };
       mockRequest.query = { lines: '10' };
 
       mockTmuxService.capturePane.mockResolvedValue('');
@@ -219,7 +219,7 @@ describe('Terminal Handlers', () => {
         success: true,
         data: {
           output: '',
-          session: 'empty-session'
+          sessionName: 'empty-session'
         }
       });
     });
@@ -227,7 +227,7 @@ describe('Terminal Handlers', () => {
 
   describe('sendTerminalInput', () => {
     it('should send input to terminal successfully', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = { input: 'ls -la' };
 
       mockTmuxService.sendMessage.mockResolvedValue(undefined);
@@ -246,7 +246,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should return 400 when input is missing', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = {};
 
       await terminalHandlers.sendTerminalInput.call(
@@ -264,7 +264,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should return 400 when input is empty string', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = { input: '' };
 
       await terminalHandlers.sendTerminalInput.call(
@@ -281,7 +281,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle complex commands with special characters', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = { input: 'grep -r "test" . | head -10' };
 
       mockTmuxService.sendMessage.mockResolvedValue(undefined);
@@ -300,7 +300,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle send message errors', async () => {
-      mockRequest.params = { session: 'nonexistent-session' };
+      mockRequest.params = { sessionName: 'nonexistent-session' };
       mockRequest.body = { input: 'echo "test"' };
 
       mockTmuxService.sendMessage.mockRejectedValue(new Error('Session not found'));
@@ -326,7 +326,7 @@ describe('Terminal Handlers', () => {
 
   describe('sendTerminalKey', () => {
     it('should send special keys successfully', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = { key: 'C-c' };
 
       mockTmuxService.sendKeys.mockResolvedValue(undefined);
@@ -348,7 +348,7 @@ describe('Terminal Handlers', () => {
       const specialKeys = ['C-c', 'C-z', 'Enter', 'Tab', 'Escape', 'Up', 'Down'];
       
       for (const key of specialKeys) {
-        mockRequest.params = { session: 'test-session' };
+        mockRequest.params = { sessionName: 'test-session' };
         mockRequest.body = { key };
 
         mockTmuxService.sendKeys.mockResolvedValue(undefined);
@@ -364,7 +364,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should return 400 when key is missing', async () => {
-      mockRequest.params = { session: 'dev-session' };
+      mockRequest.params = { sessionName: 'dev-session' };
       mockRequest.body = {};
 
       await terminalHandlers.sendTerminalKey.call(
@@ -382,7 +382,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle send keys errors', async () => {
-      mockRequest.params = { session: 'nonexistent-session' };
+      mockRequest.params = { sessionName: 'nonexistent-session' };
       mockRequest.body = { key: 'Enter' };
 
       mockTmuxService.sendKeys.mockRejectedValue(new Error('Session not accessible'));
@@ -420,7 +420,7 @@ describe('Terminal Handlers', () => {
     });
 
     it('should handle missing request body', async () => {
-      mockRequest.params = { session: 'test-session' };
+      mockRequest.params = { sessionName: 'test-session' };
       mockRequest.body = null;
 
       await terminalHandlers.sendTerminalInput.call(
@@ -442,7 +442,7 @@ describe('Terminal Handlers', () => {
       // Test that all handlers properly delegate to tmux service
       expect(mockApiContext.tmuxService).toBe(mockTmuxService);
 
-      mockRequest.params = { session: 'integration-test' };
+      mockRequest.params = { sessionName: 'integration-test' };
       mockTmuxService.listSessions.mockResolvedValue([]);
 
       await terminalHandlers.listTerminalSessions.call(
@@ -458,7 +458,7 @@ describe('Terminal Handlers', () => {
       const sessionName = 'persistent-session';
 
       // Capture initial state
-      mockRequest.params = { session: sessionName };
+      mockRequest.params = { sessionName: sessionName };
       mockTmuxService.capturePane.mockResolvedValue('initial output');
 
       await terminalHandlers.captureTerminal.call(

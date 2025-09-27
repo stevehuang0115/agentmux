@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FormPopup, Dropdown } from '../UI';
+import { FormPopup, Dropdown, Button } from '../UI';
 
 interface Project {
   id: string;
@@ -249,11 +249,11 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
           </div>
 
           <div className="team-members-section">
-            <div className="section-header">
-              <h3>Team Members ({members.length})</h3>
-              <button type="button" className="add-member-button" onClick={addMember}>
-                + Add Member
-              </button>
+            <div className="flex items-center justify-between p-5 border-b border-border-dark">
+              <h3 className="text-xl font-semibold">Team Members ({members.length})</h3>
+              <Button type="button" variant="primary" size="sm" onClick={addMember}>
+                Add Member
+              </Button>
             </div>
 
             <div className="team-members-list">
@@ -262,13 +262,14 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                   <div className="member-header">
                     <h4>Member {index + 1}</h4>
                     {members.length > 1 && (
-                      <button
+                      <Button
                         type="button"
-                        className="remove-member-button"
+                        variant="danger"
+                        size="sm"
                         onClick={() => removeMember(member.id)}
                       >
                         Remove
-                      </button>
+                      </Button>
                     )}
                   </div>
 

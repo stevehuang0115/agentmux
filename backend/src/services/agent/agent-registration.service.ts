@@ -492,7 +492,7 @@ export class AgentRegistrationService {
 				stack: error instanceof Error ? error.stack : undefined,
 			});
 
-			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionId": "${sessionName}"}`;
+			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionName": "${sessionName}"}`;
 		}
 	}
 

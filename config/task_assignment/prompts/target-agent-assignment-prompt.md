@@ -12,8 +12,8 @@
 - **Priority:** {taskPriority}
 - **Milestone:** {taskMilestone}
 
-**Task File:** `{taskPath}`
-**DEBUG - Full Task Path:** `{taskPath}`
+**Task File (Absolute Path):** `{absoluteTaskPath}`
+**DEBUG - Full Absolute Task Path:** `{absoluteTaskPath}`
 
 ---
 
@@ -26,33 +26,34 @@ If you can handle this task, follow these steps:
 
 1. **Read the complete task requirements:**
    ```
-   read_task({ taskPath: '{taskPath}' })
+   read_task({ absoluteTaskPath: '{absoluteTaskPath}' })
    ```
 
 2. **Accept the task assignment:**
    ```
    accept_task({
-     taskPath: '{taskPath}',
+     absoluteTaskPath: '{absoluteTaskPath}',
      sessionName: '{yourSessionName}'
    })
    ```
 
 3. **Complete the work** following exact deliverables and file locations specified in the task file
 
-4. **Mark task as complete:**
+4. **MANDATORY: Mark task as complete when finished:**
    ```
    complete_task({
-     taskPath: '{taskPath}',
+     absoluteTaskPath: '{absoluteTaskPath}',
      sessionName: '{yourSessionName}'
    })
    ```
+   **⚠️ CRITICAL: You MUST call complete_task when you finish the work!**
 
 ### Option 2: Delegate to Another Agent
 If you cannot handle this task (wrong skillset, overloaded, etc.), delegate it:
 
 1. **Read the task requirements first** to understand delegation needs:
    ```
-   read_task({ taskPath: '{taskPath}' })
+   read_task({ absoluteTaskPath: '{absoluteTaskPath}' })
    ```
 
 2. **Check available team members:**
@@ -63,7 +64,7 @@ If you cannot handle this task (wrong skillset, overloaded, etc.), delegate it:
 3. **Delegate to appropriate team member:**
    ```
    assign_task({
-     taskPath: '{taskPath}',
+     absoluteTaskPath: '{absoluteTaskPath}',
      targetSessionName: 'CHOSEN_TARGET_SESSION_NAME',
      delegatedBy: '{yourSessionName}',
      reason: 'Brief reason for delegation (e.g., "Backend task requires backend expertise")'
@@ -110,3 +111,9 @@ If you cannot handle this task (wrong skillset, overloaded, etc.), delegate it:
 **Delegation chain:** {delegationChain}
 
 Please respond promptly with either acceptance or delegation.
+
+---
+
+## 🔔 FINAL REMINDER
+
+**IF YOU ACCEPT THIS TASK:** You MUST call `complete_task()` when you finish the work. Do not forget this step!

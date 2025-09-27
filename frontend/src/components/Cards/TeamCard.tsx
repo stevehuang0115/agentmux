@@ -1,6 +1,5 @@
 import React from 'react';
-import { Users, Activity, FolderOpen, User, Play } from 'lucide-react';
-import clsx from 'clsx';
+import { Users, FolderOpen, User } from 'lucide-react';
 import { Team, TeamMember } from '@/types';
 import { useTerminal } from '@/contexts/TerminalContext';
 
@@ -11,15 +10,15 @@ interface TeamCardProps {
 }
 
 const statusColors = {
-  idle: 'bg-gray-100 text-gray-800',
-  working: 'bg-green-100 text-green-800', 
-  blocked: 'bg-yellow-100 text-yellow-800',
-  terminated: 'bg-red-100 text-red-800',
-  ready: 'bg-green-100 text-green-800',
-  activating: 'bg-orange-100 text-orange-800',
-  active: 'bg-emerald-100 text-emerald-800',
-  inactive: 'bg-gray-100 text-gray-800',
-  completed: 'bg-blue-100 text-blue-800'
+  idle: 'bg-gray-500/10 text-gray-400',
+  working: 'bg-green-500/10 text-green-400',
+  blocked: 'bg-yellow-500/10 text-yellow-400',
+  terminated: 'bg-red-500/10 text-red-400',
+  ready: 'bg-green-500/10 text-green-400',
+  activating: 'bg-orange-500/10 text-orange-400',
+  active: 'bg-emerald-500/10 text-emerald-400',
+  inactive: 'bg-gray-500/10 text-gray-400',
+  completed: 'bg-blue-500/10 text-blue-400'
 };
 
 const roleColors: Record<string, string> = {
@@ -54,83 +53,77 @@ export const TeamCard: React.FC<TeamCardProps> = ({
     }
   };
 
+  const isActive = members.some(m => m.agentStatus === 'active' || m.sessionName);
+  const statusBadge = (
+    <span className={`text-xs font-medium px-2 py-1 rounded-full ${isActive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-500/10 text-gray-400'}`}>
+      {isActive ? 'active' : 'inactive'}
+    </span>
+  );
+
   return (
-    <div 
-      className={clsx(
-        'team-card',
-        onClick && 'team-card--clickable'
-      )}
+    <div
+      className={`bg-surface-dark p-5 rounded-xl border border-border-dark transition-all hover:shadow-lg hover:border-primary/50 flex flex-col h-full ${onClick ? 'cursor-pointer' : ''}`}
       onClick={onClick}
     >
-      <div className="team-card-header">
-        <div className="team-info">
-          <div className="team-icon">
-            <Users className="icon" />
-          </div>
-          <div className="team-content">
-            <h3 className="team-title">{team.name}</h3>
-            <div className="team-meta-line">
-              <span className="team-member-count">
-                {members.length} member{members.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-          </div>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center">
+          <Users className="h-5 w-5 mr-3 text-text-secondary-dark" />
+          <h3 className="font-semibold text-lg">{team.name}</h3>
         </div>
+        {statusBadge}
       </div>
 
+      <p className="text-sm text-text-secondary-dark mb-4">
+        {members.length} member{members.length !== 1 ? 's' : ''}
+      </p>
+
       {team.currentProject && (
-        <div className="project-assignment">
-          <FolderOpen className="project-icon" />
-          <span className="project-name" title={team.currentProject}>
-            {team.currentProject.length > 25 ? 
-              `${team.currentProject.substring(0, 25)}...` : 
+        <div className="flex items-center mb-4 p-2 bg-background-dark rounded">
+          <FolderOpen className="h-4 w-4 mr-2 text-text-secondary-dark" />
+          <span className="text-xs text-text-secondary-dark" title={team.currentProject}>
+            {team.currentProject.length > 25 ?
+              `${team.currentProject.substring(0, 25)}...` :
               team.currentProject}
           </span>
         </div>
       )}
 
       {members.length > 0 && (
-        <div className="team-members-compact">
-          <h4 className="members-title">Team Members</h4>
-          <div className="members-compact-list">
-            {members.map((member) => (
-              <div 
+        <div className="flex-grow">
+          <h4 className="text-sm font-medium mb-2 text-text-secondary-dark">Team Members</h4>
+          <div className="space-y-2">
+            {members.slice(0, 3).map((member) => (
+              <div
                 key={member.id}
-                className={clsx(
-                  'member-compact-item',
-                  member.sessionName && 'clickable'
-                )}
+                className={`flex items-center justify-between p-2 rounded hover:bg-background-dark transition-colors ${member.sessionName ? 'cursor-pointer' : ''}`}
                 onClick={(e) => handleMemberClick(e, member)}
-                style={{ 
-                  cursor: member.sessionName ? 'pointer' : 'default'
-                }}
-                title={member.sessionName ? 
-                  `${member.name} - Active session: ${member.sessionName} (Click to open terminal)` : 
+                title={member.sessionName ?
+                  `${member.name} - Active session: ${member.sessionName} (Click to open terminal)` :
                   `${member.name} - No active session`
                 }
               >
-                <div className="member-avatar">
-                  <User className="avatar-icon" />
-                </div>
-                <div className="member-info-compact">
-                  <span className="member-name">{member.name}</span>
-                  <span 
-                    className="member-role"
-                    style={{ color: roleColors[member.role] || '#6b7280' }}
-                  >
-                    {member.role}
-                  </span>
-                </div>
-                <div className="member-status-compact">
-                  <div className={clsx(
-                    'session-indicator',
-                    member.sessionName ? 'active' : 'inactive'
-                  )}>
-                    <div className="session-dot"></div>
+                <div className="flex items-center">
+                  <div className="w-6 h-6 rounded-full bg-background-dark flex items-center justify-center mr-2">
+                    <User className="h-3 w-3 text-text-secondary-dark" />
+                  </div>
+                  <div className="text-xs">
+                    <div className="font-medium">{member.name}</div>
+                    <div
+                      className="text-xs"
+                      style={{ color: roleColors[member.role] || '#9ab0d9' }}
+                    >
+                      {member.role}
+                    </div>
                   </div>
                 </div>
+                <div className={`w-2 h-2 rounded-full ${member.sessionName ? 'bg-green-400' : 'bg-gray-500'}`}></div>
               </div>
             ))}
+            {members.length > 3 && (
+              <div className="text-xs text-text-secondary-dark text-center py-1">
+                +{members.length - 3} more
+              </div>
+            )}
           </div>
         </div>
       )}

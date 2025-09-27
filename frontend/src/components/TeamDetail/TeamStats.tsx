@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ScoreCard, ScoreCardGrid } from '../UI/ScoreCard';
 import { TeamStatsProps } from './types';
-import '../../components/UI/ScoreCard.css';
 
 interface Project {
   id: string;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { TeamMemberCard } from '../TeamMemberCard';
+import { TeamMemberRow } from './TeamMemberRow';
 import { MembersListProps } from './types';
 
 export const MembersList: React.FC<MembersListProps> = ({
@@ -11,19 +11,16 @@ export const MembersList: React.FC<MembersListProps> = ({
   onStopMember,
 }) => {
   return (
-    <div className="members-list">
+    <div className="space-y-4">
       {team?.members?.map((member) => (
-        <TeamMemberCard
+        <TeamMemberRow
           key={member.id}
           member={member}
-          onUpdate={onUpdateMember}
-          onDelete={onDeleteMember}
+          teamId={teamId}
           onStart={onStartMember}
           onStop={onStopMember}
-          teamId={teamId}
         />
       ))}
-      
       {!team?.members?.length && (
         <div className="empty-state">
           <p>No team members yet. Add members to get started.</p>

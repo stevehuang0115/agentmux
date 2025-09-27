@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useLocation, useNavigate } from 'react-router-dom';
+import { useParams, useLocation, useNavigate, Link } from 'react-router-dom';
 import { UserPlus, Play, FolderOpen, CheckSquare, FileText, Plus, Trash2, UserMinus, Info, ExternalLink, Square } from 'lucide-react';
 import { Project, Team, Ticket } from '../types';
 import { apiService } from '../services/api.service';
@@ -1308,18 +1308,22 @@ export const ProjectDetail: React.FC = () => {
 
   if (state.loading) {
     return (
-      <div className="project-detail-loading">
-        <div className="loading-spinner" />
-        <p>Loading project...</p>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4 mx-auto"></div>
+          <p className="text-text-secondary-dark">Loading project...</p>
+        </div>
       </div>
     );
   }
 
   if (state.error || !state.project) {
     return (
-      <div className="project-detail-error">
-        <h2>Error Loading Project</h2>
-        <p>{state.error || 'Project not found'}</p>
+      <div className="max-w-4xl mx-auto px-6 py-16">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4">Error Loading Project</h2>
+          <p className="text-text-secondary-dark">{state.error || 'Project not found'}</p>
+        </div>
       </div>
     );
   }
@@ -1327,34 +1331,42 @@ export const ProjectDetail: React.FC = () => {
   const { project, assignedTeams, tickets } = state;
 
   return (
-    <div className="project-detail">
+    <div className="max-w-7xl mx-auto px-6 py-8">
       {/* Project Header */}
-      <div className="page-header">
-        <div className="header-info">
-          <h1 className="page-title">{project.name}</h1>
-          <p className="page-description">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
+        <div className="flex-1">
+          <div className="flex items-center gap-3 text-sm text-text-secondary-dark mb-1">
+            <Link to="/projects" className="hover:text-primary">Projects</Link>
+            <span className="text-text-secondary-dark">/</span>
+            <span className="text-text-primary-dark">{project.name}</span>
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight mb-2">{project.name}</h1>
+          <p className="text-sm text-text-secondary-dark mb-2">
             {project.description || 'AgentMux project for collaborative development'}
-            <br />
-            <span className="project-path-with-action">
-              <span className="project-path">
-                <FolderOpen className="path-icon" />
-                {project.path}
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={ExternalLink}
-                onClick={handleOpenInFinder}
-                title="Open project folder in Finder"
-              >
-                Open in Finder
-              </Button>
-            </span>
           </p>
+          <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1 text-sm text-text-secondary-dark">
+              <FolderOpen className="w-4 h-4" />
+              {project.path}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={ExternalLink}
+              onClick={handleOpenInFinder}
+              title="Open project folder in Finder"
+            >
+              Open in Finder
+            </Button>
+          </div>
         </div>
-        
-        <div className="header-controls">
-          <span className={`status-badge status-${project.status}`}>
+
+        <div className="flex items-center gap-3">
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+            project.status === 'active' ? 'bg-green-500/10 text-green-400' :
+            project.status === 'completed' ? 'bg-blue-500/10 text-blue-400' :
+            'bg-yellow-500/10 text-yellow-400'
+          }`}>
             {project.status}
           </span>
           <Button
@@ -1403,39 +1415,55 @@ export const ProjectDetail: React.FC = () => {
 
 
       {/* Tabs */}
-      <div className="project-tabs">
-        <button 
-          className={`tab ${activeTab === 'detail' ? 'tab--active' : ''}`}
+      <div className="flex gap-1 mb-6 border-b border-border-dark">
+        <button
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === 'detail'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-text-secondary-dark hover:text-text-primary-dark'
+          }`}
           onClick={() => updateActiveTab('detail')}
         >
-          <Info className="tab-icon" />
+          <Info className="w-4 h-4" />
           Detail
         </button>
-        <button 
-          className={`tab ${activeTab === 'editor' ? 'tab--active' : ''}`}
+        <button
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === 'editor'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-text-secondary-dark hover:text-text-primary-dark'
+          }`}
           onClick={() => updateActiveTab('editor')}
         >
-          <FolderOpen className="tab-icon" />
+          <FolderOpen className="w-4 h-4" />
           Editor
         </button>
-        <button 
-          className={`tab ${activeTab === 'tasks' ? 'tab--active' : ''}`}
+        <button
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === 'tasks'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-text-secondary-dark hover:text-text-primary-dark'
+          }`}
           onClick={() => updateActiveTab('tasks')}
         >
-          <CheckSquare className="tab-icon" />
+          <CheckSquare className="w-4 h-4" />
           Tasks ({tickets.length})
         </button>
-        <button 
-          className={`tab ${activeTab === 'teams' ? 'tab--active' : ''}`}
+        <button
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === 'teams'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-text-secondary-dark hover:text-text-primary-dark'
+          }`}
           onClick={() => updateActiveTab('teams')}
         >
-          <UserPlus className="tab-icon" />
+          <UserPlus className="w-4 h-4" />
           Teams ({assignedTeams.length})
         </button>
       </div>
 
       {/* Tab Content */}
-      <div className="tab-content">
+      <div>
         {activeTab === 'detail' ? (
           <DetailView 
             project={project} 
@@ -1486,6 +1514,10 @@ export const ProjectDetail: React.FC = () => {
             assignedTeams={assignedTeams} 
             onUnassignTeam={handleUnassignTeam}
             openTerminalWithSession={openTerminalWithSession}
+            onAssignTeam={handleAssignTeams}
+            projectName={project.name}
+            onViewTeam={(teamId) => navigate(`/teams/${teamId}`)}
+            onEditTeam={(teamId) => navigate(`/teams/${teamId}?edit=true`)}
           />
         )}
       </div>
@@ -1711,9 +1743,4 @@ export const ProjectDetail: React.FC = () => {
     </div>
   );
 };
-
-
-
-
-
 

@@ -3,6 +3,7 @@ export interface TeamMember {
   name: string;
   sessionName: string; // tmux session name
   role: 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'qa' | 'tester' | 'designer';
+  avatar?: string; // URL or emoji for member avatar
   systemPrompt: string;
   agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
   workingStatus: 'idle' | 'in_progress'; // Activity level status

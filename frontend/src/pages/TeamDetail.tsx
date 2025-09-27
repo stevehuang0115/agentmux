@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Team, TeamMember } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
+import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus } from '../components/TeamDetail';
 import { safeParseJSON } from '../utils/api';
 
@@ -15,6 +16,7 @@ export const TeamDetail: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [orchestratorSessionActive, setOrchestratorSessionActive] = useState(false);
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
+  const [showEditTeamModal, setShowEditTeamModal] = useState(false);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
 
@@ -125,6 +127,31 @@ export const TeamDetail: React.FC = () => {
       alert('Error starting team. Please try again.');
     } finally {
       setStartTeamLoading(false);
+    }
+  };
+
+  const handleOpenEditTeam = () => {
+    setShowEditTeamModal(true);
+  };
+
+  const handleEditTeamSubmit = async (teamData: any) => {
+    if (!team) return;
+    try {
+      const response = await fetch(`/api/teams/${team.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(teamData),
+      });
+      if (response.ok) {
+        fetchTeamData();
+        setShowEditTeamModal(false);
+      } else {
+        const err = await response.json();
+        alert(err.error || 'Failed to update team');
+      }
+    } catch (e) {
+      console.error('Error updating team:', e);
+      alert('Failed to update team');
     }
   };
 
@@ -434,25 +461,33 @@ export const TeamDetail: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="team-detail">
-        <div className="loading-state">Loading team details...</div>
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4 mx-auto"></div>
+          <p className="text-text-secondary-dark">Loading team details...</p>
+        </div>
       </div>
     );
   }
 
   if (!team) {
     return (
-      <div className="team-detail">
-        <div className="error-state">
-          <h2>Team not found</h2>
-          <p>The requested team could not be found.</p>
+      <div className="max-w-4xl mx-auto px-6 py-16">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4">Team not found</h2>
+          <p className="text-text-secondary-dark">The requested team could not be found.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="team-detail">
+    <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="flex items-center gap-3 text-sm text-text-secondary-dark mb-1">
+        <Link to="/teams" className="hover:text-primary">Teams</Link>
+        <span className="text-text-secondary-dark">/</span>
+        <span className="text-text-primary-dark">{team.name}</span>
+      </div>
       <TeamHeader
         team={team}
         teamStatus={getTeamStatus()}
@@ -461,6 +496,7 @@ export const TeamDetail: React.FC = () => {
         onStopTeam={handleStopTeam}
         onViewTerminal={handleViewTerminal}
         onDeleteTeam={handleDeleteTeam}
+        onEditTeam={handleOpenEditTeam}
       />
 
       <TeamOverview
@@ -483,6 +519,16 @@ export const TeamDetail: React.FC = () => {
         team={team}
         loading={startTeamLoading}
       />
+
+      {/* Edit Team Modal (reuses TeamModal) */}
+      {showEditTeamModal && (
+        <TeamModal
+          isOpen={showEditTeamModal}
+          onClose={() => setShowEditTeamModal(false)}
+          onSubmit={handleEditTeamSubmit}
+          team={team}
+        />
+      )}
     </div>
   );
 };

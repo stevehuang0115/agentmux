@@ -192,34 +192,33 @@ export const Assignments: React.FC = () => {
   const assignedTeams = teams.filter(team => team.currentProject);
 
   return (
-    <div className="page assignments-page">
-      <div className="page-header">
-        <div className="header-info">
-          <h1 className="page-title">Assignments</h1>
-          <p className="page-description">Track and manage project assignments and team orchestration</p>
+    <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Assignments</h2>
+          <p className="text-sm text-text-secondary-dark mt-1">Track and manage project assignments and team orchestration</p>
         </div>
       </div>
-      
-      <div className="assignments-layout">
-        {/* Projects & Teams Panel - Full Width */}
-        <div className="assignments-panel">
-          <div className="panel-header">
-            <h2>Active Projects & Teams</h2>
-            <div className="header-controls">
-              <button 
-                className={`view-toggle ${viewMode === 'enhanced' ? 'active' : ''}`}
-                onClick={() => setViewMode('enhanced' as any)}
-              >
-                Task View
-              </button>
-              <ViewToggle
-                viewMode={viewMode === 'enhanced' ? 'projects' : viewMode}
-                assignedProjects={assignedProjects}
-                assignedTeams={assignedTeams}
-                onViewModeChange={(mode) => setViewMode(mode === 'projects' ? 'enhanced' as any : mode)}
-              />
-            </div>
+
+      {/* Projects & Teams Panel - Full Width */}
+      <div className="bg-surface-dark border border-border-dark rounded-lg">
+        <div className="flex items-center justify-between p-5 border-b border-border-dark">
+          <h3 className="text-xl font-semibold">Active Projects & Teams</h3>
+          <div className="flex items-center gap-3">
+            <button
+              className={`px-3 py-2 rounded-lg border text-sm ${viewMode === 'enhanced' ? 'border-primary text-primary' : 'border-border-dark text-text-primary-dark hover:border-primary/50'}`}
+              onClick={() => setViewMode('enhanced')}
+            >
+              Task View
+            </button>
+            <ViewToggle
+              viewMode={viewMode === 'enhanced' ? 'projects' : viewMode}
+              assignedProjects={assignedProjects}
+              assignedTeams={assignedTeams}
+              onViewModeChange={(mode) => setViewMode(mode === 'projects' ? 'enhanced' : mode)}
+            />
           </div>
+        </div>
 
           {viewMode !== 'enhanced' && (
             <AssignmentFilters
@@ -232,26 +231,29 @@ export const Assignments: React.FC = () => {
           )}
 
           {viewMode === 'enhanced' ? (
-            <EnhancedAssignmentsList
-              projects={projects}
-              teams={teams}
-              enhancedMembers={enhancedMembers}
-              onMemberClick={handleMemberClick}
-            />
+            <div className="p-5">
+              <EnhancedAssignmentsList
+                projects={projects}
+                teams={teams}
+                enhancedMembers={enhancedMembers}
+                onMemberClick={handleMemberClick}
+              />
+            </div>
           ) : (
-            <AssignmentsList
-              viewMode={viewMode}
-              assignedProjects={assignedProjects}
-              assignedTeams={assignedTeams}
-              teams={teams}
-              projects={projects}
-              onMemberClick={handleMemberClick}
-              onOrchestratorClick={handleOrchestratorClick}
-              onUnassignTeam={handleUnassignTeam}
-            />
+            <div className="p-5">
+              <AssignmentsList
+                viewMode={viewMode}
+                assignedProjects={assignedProjects}
+                assignedTeams={assignedTeams}
+                teams={teams}
+                projects={projects}
+                onMemberClick={handleMemberClick}
+                onOrchestratorClick={handleOrchestratorClick}
+                onUnassignTeam={handleUnassignTeam}
+              />
+            </div>
           )}
         </div>
       </div>
-    </div>
   );
 };

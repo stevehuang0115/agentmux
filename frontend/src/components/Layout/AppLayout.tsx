@@ -22,18 +22,20 @@ export const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="app-layout">
-      <div className={clsx('app-sidebar', isCollapsed && 'collapsed')}>
+    <div className="flex min-h-screen bg-background-dark">
+      <div className={clsx('transition-all duration-200', isCollapsed ? 'w-16' : 'w-64')}>
         <Navigation />
       </div>
-      <main className={clsx('app-main', isCollapsed && 'sidebar-collapsed')}>
+      <main className="flex-1 flex flex-col">
         <OrchestratorStatusBanner />
-        <Outlet />
+        <div className="flex-1 p-6">
+          <Outlet />
+        </div>
       </main>
-      
+
       {/* Terminal Toggle Button */}
       <IconButton
-        className={`terminal-toggle-btn ${isTerminalOpen ? 'active' : ''}`}
+        className={`fixed bottom-6 right-6 z-40 ${isTerminalOpen ? 'bg-primary/90' : ''}`}
         icon={Terminal}
         onClick={toggleTerminal}
         variant="primary"
@@ -42,7 +44,12 @@ export const AppLayout: React.FC = () => {
 
       {/* Terminal Side Panel with Overlay */}
       <>
-        {isTerminalOpen && <div className="terminal-panel-overlay" onClick={closeTerminal} />}
+        {isTerminalOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 z-30"
+            onClick={closeTerminal}
+          />
+        )}
         <TerminalPanel
           isOpen={isTerminalOpen}
           onClose={closeTerminal}

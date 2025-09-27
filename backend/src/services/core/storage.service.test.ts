@@ -99,7 +99,7 @@ describe('StorageService', () => {
 
       const initialData = {
         teams: [existingTeam],
-        orchestrator: { sessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, agentStatus: 'activating', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        orchestrator: { sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, agentStatus: 'activating', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
       };
       mockFsPromises.readFile.mockResolvedValue(JSON.stringify(initialData));
 
@@ -186,7 +186,7 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionId: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
 
       await storageService.saveTeam(testTeam);
 
@@ -221,7 +221,7 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionId: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
 
       // Start concurrent writes
       const write1 = storageService.saveTeam(team1);
@@ -246,7 +246,7 @@ describe('StorageService', () => {
 
       // Mock rename to fail
       mockFsPromises.rename.mockRejectedValue(new Error('Rename failed'));
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionId: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
 
       await expect(storageService.saveTeam(testTeam)).rejects.toThrow('Rename failed');
 

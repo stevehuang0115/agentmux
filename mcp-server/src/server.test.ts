@@ -34,6 +34,7 @@ const mockFs = fs as any;
 // Mock AgentMuxMCP class
 class MockAgentMuxMCP {
   public requestQueue = new Map<string, number>();
+  public sessionName = 'mock-session';
   
   async sendMessage(params: any): Promise<any> {
     const message = params.message;
@@ -106,14 +107,14 @@ class MockAgentMuxMCP {
   }
 
   async registerAgentStatus(params: any): Promise<any> {
-    const { role, sessionId, memberId } = params;
+    const { role, sessionName, memberId } = params;
     
     // Validate required parameters
-    if (!role || !sessionId) {
+    if (!role || !sessionName) {
       return {
         content: [{
           type: 'text' as const,
-          text: 'Error: role and sessionId are required for agent registration'
+          text: 'Error: role and sessionName are required for agent registration'
         }],
         isError: true
       };
@@ -124,7 +125,7 @@ class MockAgentMuxMCP {
     const endpoint = `${apiBaseUrl}/api/teams/members/register`;
     
     const requestBody = {
-      sessionName: sessionId,
+      sessionName: sessionName,
       role: role,
       status: 'active',
       registeredAt: new Date().toISOString(),
@@ -153,7 +154,7 @@ class MockAgentMuxMCP {
         return {
           content: [{
             type: 'text' as const,
-            text: `Agent registered successfully. Role: ${role}, Session: ${sessionId}${memberId ? `, Member ID: ${memberId}` : ''}`
+            text: `Agent registered successfully. Role: ${role}, Session: ${sessionName}${memberId ? `, Member ID: ${memberId}` : ''}`
           }]
         };
       } else {
@@ -257,7 +258,7 @@ class MockAgentMuxMCP {
   }
 
   async assignTask(params: any): Promise<any> {
-    const { taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
+    const { absoluteTaskPath: taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
 
     // Validate required parameters
     if (!taskPath || !targetSessionName) {
@@ -322,7 +323,7 @@ class MockAgentMuxMCP {
   }
 
   async readTask(params: any): Promise<any> {
-    const { taskPath } = params;
+    const { absoluteTaskPath: taskPath } = params;
 
     if (!taskPath) {
       return {
@@ -386,6 +387,26 @@ This is a mock task for testing purposes.
     }
     
     return false;
+  }
+
+  async terminateAgent(params: any): Promise<any> {
+    if (!params.sessionName) {
+      return {
+        content: [{ type: 'text', text: 'sessionName parameter is required' }],
+        isError: true
+      };
+    }
+
+    if (params.sessionName === 'orchestrator' || params.sessionName === this.sessionName) {
+      return {
+        content: [{ type: 'text', text: 'Cannot shutdown orchestrator or self' }],
+        isError: true
+      };
+    }
+
+    return {
+      content: [{ type: 'text', text: `Agent session ${params.sessionName} has been shutdown` }]
+    };
   }
 }
 
@@ -666,7 +687,7 @@ describe('AgentMuxMCP', () => {
       // Make a registration call
       await mcpServer.registerAgentStatus({
         role: 'tpm',
-        sessionId: 'test-session-123'
+        sessionName: 'test-session-123'
       });
       
       // Verify fetch was called with the correct endpoint
@@ -693,20 +714,20 @@ describe('AgentMuxMCP', () => {
       expect(callArgs[0]).toBe('http://localhost:3000/api/teams/members/register');
     });
 
-    it('should register agent with role and sessionId only', async () => {
+    it('should register agent with role and sessionName only', async () => {
       const result = await mcpServer.registerAgentStatus({
         role: 'tpm',
-        sessionId: 'test-session-123'
+        sessionName: 'test-session-123'
       });
       
       expect(result.content[0].text).toBe('Agent registered successfully. Role: tpm, Session: test-session-123');
       expect(result.isError).toBeUndefined();
     });
 
-    it('should register agent with role, sessionId, and memberId', async () => {
+    it('should register agent with role, sessionName, and memberId', async () => {
       const result = await mcpServer.registerAgentStatus({
         role: 'developer',
-        sessionId: 'dev-session-456',
+        sessionName: 'dev-session-456',
         memberId: 'member-abc123'
       });
       
@@ -716,26 +737,26 @@ describe('AgentMuxMCP', () => {
 
     it('should handle missing role parameter', async () => {
       const result = await mcpServer.registerAgentStatus({
-        sessionId: 'test-session-123'
+        sessionName: 'test-session-123'
       });
       
-      expect(result.content[0].text).toBe('Error: role and sessionId are required for agent registration');
+      expect(result.content[0].text).toBe('Error: role and sessionName are required for agent registration');
       expect(result.isError).toBe(true);
     });
 
-    it('should handle missing sessionId parameter', async () => {
+    it('should handle missing sessionName parameter', async () => {
       const result = await mcpServer.registerAgentStatus({
         role: 'tpm'
       });
       
-      expect(result.content[0].text).toBe('Error: role and sessionId are required for agent registration');
+      expect(result.content[0].text).toBe('Error: role and sessionName are required for agent registration');
       expect(result.isError).toBe(true);
     });
 
     it('should handle missing both required parameters', async () => {
       const result = await mcpServer.registerAgentStatus({});
       
-      expect(result.content[0].text).toBe('Error: role and sessionId are required for agent registration');
+      expect(result.content[0].text).toBe('Error: role and sessionName are required for agent registration');
       expect(result.isError).toBe(true);
     });
 
@@ -745,7 +766,7 @@ describe('AgentMuxMCP', () => {
       for (const role of roles) {
         const result = await mcpServer.registerAgentStatus({
           role: role,
-          sessionId: `${role}-session`,
+          sessionName: `${role}-session`,
           memberId: `${role}-member-123`
         });
         
@@ -974,7 +995,7 @@ describe('AgentMuxMCP', () => {
       expect(result.isError).toBeUndefined();
     });
 
-    it('should require taskPath parameter', async () => {
+    it('should require absoluteTaskPath parameter', async () => {
       const result = await mcpServer.assignTask({
         targetSessionName: 'test-session'
       });
@@ -1150,7 +1171,7 @@ describe('AgentMuxMCP', () => {
       expect(result.isError).toBeUndefined();
     });
 
-    it('should require taskPath parameter', async () => {
+    it('should require absoluteTaskPath parameter', async () => {
       const result = await mcpServer.readTask({});
 
       expect(result.content[0].text).toBe('❌ taskPath is required');
@@ -1164,6 +1185,54 @@ describe('AgentMuxMCP', () => {
 
       expect(result.content[0].text).toMatch(/📋 Task File Content \(\d+ chars\):/);
       expect(result.isError).toBeUndefined();
+    });
+  });
+
+  describe('terminateAgent', () => {
+    it('should shutdown agent with valid sessionName', async () => {
+      const result = await mcpServer.terminateAgent({
+        sessionName: 'test-agent-session'
+      });
+
+      expect(result.content[0].text).toContain('Agent session test-agent-session has been shutdown');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require sessionName parameter', async () => {
+      const result = await mcpServer.terminateAgent({});
+
+      expect(result.content[0].text).toBe('sessionName parameter is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should reject session parameter (legacy)', async () => {
+      const result = await mcpServer.terminateAgent({
+        session: 'test-agent-session'
+      });
+
+      expect(result.content[0].text).toBe('sessionName parameter is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should prevent shutdown of orchestrator session', async () => {
+      const result = await mcpServer.terminateAgent({
+        sessionName: 'orchestrator'
+      });
+
+      expect(result.content[0].text).toBe('Cannot shutdown orchestrator or self');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should prevent shutdown of self session', async () => {
+      // Mock the sessionName property
+      (mcpServer as any).sessionName = 'current-session';
+
+      const result = await mcpServer.terminateAgent({
+        sessionName: 'current-session'
+      });
+
+      expect(result.content[0].text).toBe('Cannot shutdown orchestrator or self');
+      expect(result.isError).toBe(true);
     });
   });
 });

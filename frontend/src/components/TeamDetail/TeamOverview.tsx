@@ -47,28 +47,18 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   };
 
   return (
-    <div className="tab-content">
-      {/* Team Stats Section */}
-      <TeamStats
-        team={team}
-        teamStatus={teamStatus}
-        projectName={projectName}
-        onProjectChange={onProjectChange}
-      />
-
-      {/* Team Description Section */}
-      <TeamDescription description={team?.description} />
-
-      {/* Team Members Section */}
-      <div className="members-section">
-        <AddMemberForm
-          isVisible={showAddMember}
-          onToggle={handleToggleAddMember}
-          onAdd={handleAddMember}
-          onCancel={handleCancelAddMember}
-          isOrchestratorTeam={isOrchestratorTeam}
-        />
-
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-xl font-semibold">Team Members ({team.members?.length || 0})</h3>
+          <AddMemberForm
+            isVisible={showAddMember}
+            onToggle={handleToggleAddMember}
+            onAdd={handleAddMember}
+            onCancel={handleCancelAddMember}
+            isOrchestratorTeam={isOrchestratorTeam}
+          />
+        </div>
         <MembersList
           team={team}
           teamId={teamId}
@@ -77,6 +67,16 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
           onStartMember={onStartMember}
           onStopMember={onStopMember}
         />
+      </div>
+      <div className="space-y-6">
+        <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
+          <h4 className="text-lg font-semibold mb-3">Assigned Project</h4>
+          <p className="text-sm text-text-secondary-dark">{projectName || 'None'}</p>
+        </div>
+        <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
+          <h4 className="text-lg font-semibold mb-3">Recent Activity</h4>
+          <p className="text-sm text-text-secondary-dark">No recent activity.</p>
+        </div>
       </div>
     </div>
   );

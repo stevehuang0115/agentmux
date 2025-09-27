@@ -16,7 +16,7 @@ export class StorageService {
     // Helper function to create default orchestrator object
     createDefaultOrchestrator() {
         return {
-            sessionId: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+            sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
             agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING,
             workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
             runtimeType: RUNTIME_TYPES.CLAUDE_CODE, // Default to claude-code

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Activity, TrendingUp, AlertCircle, RefreshCw, Trash2 } from 'lucide-react';
+import { Button } from '../UI';
 
 interface ErrorEvent {
   id: string;
@@ -164,22 +165,26 @@ export const ErrorDashboard: React.FC = () => {
             </label>
           </div>
           
-          <button
+          <Button
             className={`refresh-btn ${refreshing ? 'refreshing' : ''}`}
             onClick={() => loadData(true)}
             disabled={refreshing}
+            variant="secondary"
+            size="sm"
+            icon={RefreshCw}
           >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </Button>
           
-          <button
+          <Button
             className="clear-btn"
             onClick={() => handleClearErrors()}
+            variant="danger"
+            size="sm"
+            icon={Trash2}
           >
-            <Trash2 className="w-4 h-4" />
             Clear All
-          </button>
+          </Button>
         </div>
       </div>
 

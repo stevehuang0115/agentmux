@@ -9,9 +9,11 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
 }) => {
   return (
     <div className="empty-state">
-      <Icon size={48} />
-      <h3>{title}</h3>
-      <p>{description}</p>
+      <div className="empty-icon">
+        <Icon size={24} />
+      </div>
+      <h3 className="empty-title">{title}</h3>
+      <p className="empty-description">{description}</p>
     </div>
   );
 };

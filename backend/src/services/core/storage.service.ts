@@ -22,7 +22,7 @@ export class StorageService {
   // Helper function to create default orchestrator object
   private createDefaultOrchestrator() {
     return { 
-      sessionId: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 
+      sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 
       agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING, 
       workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
       runtimeType: RUNTIME_TYPES.CLAUDE_CODE, // Default to claude-code
@@ -766,7 +766,7 @@ This is a foundational task that should be completed first before other developm
   }
 
   // Orchestrator management
-  async getOrchestratorStatus(): Promise<{ sessionId: string; agentStatus: AgentStatus; workingStatus: WorkingStatus; runtimeType: RuntimeType; createdAt: string; updatedAt: string } | null> {
+  async getOrchestratorStatus(): Promise<{ sessionName: string; agentStatus: AgentStatus; workingStatus: WorkingStatus; runtimeType: RuntimeType; createdAt: string; updatedAt: string } | null> {
     try {
       await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
       const content = await fs.readFile(this.teamsFile, 'utf-8');

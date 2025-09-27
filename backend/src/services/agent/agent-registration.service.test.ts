@@ -189,13 +189,13 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should remove member ID parameter when not provided', async () => {
-			const promptTemplate = 'Register {"role": "{{ROLE}}", "sessionId": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}';
+			const promptTemplate = 'Register {"role": "{{ROLE}}", "sessionName": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}';
 			mockReadFile.mockResolvedValue(promptTemplate);
 
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
 			const result = await loadRegistrationPrompt('orchestrator', 'test-session');
 
-			expect(result).toBe('Register {"role": "orchestrator", "sessionId": "test-session"}');
+			expect(result).toBe('Register {"role": "orchestrator", "sessionName": "test-session"}');
 		});
 
 		it('should use fallback prompt when file not found', async () => {
@@ -206,7 +206,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(result).toContain('Please immediately run: register_agent_status');
 			expect(result).toContain('"role": "dev"');
-			expect(result).toContain('"sessionId": "test-session"');
+			expect(result).toContain('"sessionName": "test-session"');
 		});
 	});
 

@@ -48,13 +48,13 @@ class MockAgentMuxMCP {
   async getTeamStatus() {
     const mockStatuses = [
       {
-        session: 'dev-alice',
+        sessionName: 'dev-alice',
         attached: true,
         status: 'working',
         lastActivity: 'Implementing feature X'
       },
       {
-        session: 'pm-bob',
+        sessionName: 'pm-bob',
         attached: false,
         status: 'waiting',
         lastActivity: 'Reviewing tickets'
@@ -207,7 +207,7 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
   }
 
   // Task Management Tools
-  async acceptTask(args: { taskPath: string; memberId?: string }) {
+  async acceptTask(args: { absoluteTaskPath: string; memberId?: string }) {
     const memberId = args.memberId || this.sessionName;
     
     // Mock task acceptance - simulate moving from open to in_progress
@@ -226,21 +226,21 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
       
       // Create a mock task file if it doesn't exist
       let content: string;
-      if (!await this.fileExists(args.taskPath)) {
+      if (!await this.fileExists(args.absoluteTaskPath)) {
         content = `# Test Task\n\nThis is a test task for MCP testing.\n\n## Status\n- [ ] Task item 1\n- [ ] Task item 2\n`;
-        await fs.mkdir(path.dirname(args.taskPath), { recursive: true });
-        await fs.writeFile(args.taskPath, content);
+        await fs.mkdir(path.dirname(args.absoluteTaskPath), { recursive: true });
+        await fs.writeFile(args.absoluteTaskPath, content);
       } else {
-        content = await fs.readFile(args.taskPath, 'utf-8');
+        content = await fs.readFile(args.absoluteTaskPath, 'utf-8');
       }
       
       // Simulate moving file from open to in_progress
-      const fileName = path.basename(args.taskPath);
+      const fileName = path.basename(args.absoluteTaskPath);
       const newTaskPath = path.join(inProgressDir, fileName);
       
       // Write to new location and remove old
       await fs.writeFile(newTaskPath, content);
-      await fs.unlink(args.taskPath);
+      await fs.unlink(args.absoluteTaskPath);
       
       // Update tracking JSON
       let inProgressTasks = [];
@@ -254,7 +254,7 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
       const taskId = `task_${Date.now()}`;
       inProgressTasks.push({
         id: taskId,
-        taskPath: newTaskPath,
+        absoluteTaskPath: newTaskPath,
         taskName: fileName,
         memberId: memberId,
         assignedAt: new Date().toISOString(),
@@ -280,7 +280,7 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
     }
   }
 
-  async completeTask(args: { taskPath: string }) {
+  async completeTask(args: { absoluteTaskPath: string }) {
     // Mock task completion - simulate moving from in_progress to done
     const testProjectPath = '/tmp/test-project';
     const doneDir = path.join(testProjectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'done');
@@ -292,13 +292,13 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
       await fs.mkdir(doneDir, { recursive: true });
       
       // Simulate moving file from in_progress to done
-      const fileName = path.basename(args.taskPath);
+      const fileName = path.basename(args.absoluteTaskPath);
       const newTaskPath = path.join(doneDir, fileName);
       
       // Read and move the file
-      const content = await fs.readFile(args.taskPath, 'utf-8');
+      const content = await fs.readFile(args.absoluteTaskPath, 'utf-8');
       await fs.writeFile(newTaskPath, content);
-      await fs.unlink(args.taskPath);
+      await fs.unlink(args.absoluteTaskPath);
       
       // Update tracking JSON - remove from in_progress
       let inProgressTasks = [];
@@ -310,7 +310,7 @@ Next: ${args.nextSteps || 'Continue implementation'}`;
       }
       
       // Remove the completed task from tracking
-      const updatedTasks = inProgressTasks.filter((task: any) => task.taskPath !== args.taskPath);
+      const updatedTasks = inProgressTasks.filter((task: any) => task.taskPath !== args.absoluteTaskPath);
       await fs.writeFile(trackingFile, JSON.stringify(updatedTasks, null, 2));
       
       return {
@@ -612,7 +612,7 @@ describe('MCP Server Tools Integration Tests', () => {
 
       // Accept the task
       const result = await mcpServer.acceptTask({
-        taskPath: openTaskPath,
+        absoluteTaskPath: openTaskPath,
         memberId: 'test-member-123'
       });
 
@@ -645,7 +645,7 @@ describe('MCP Server Tools Integration Tests', () => {
 
       // Accept the task without memberId
       const result = await mcpServer.acceptTask({
-        taskPath: openTaskPath
+        absoluteTaskPath: openTaskPath
       });
 
       // Verify response
@@ -667,7 +667,7 @@ describe('MCP Server Tools Integration Tests', () => {
       await fs.mkdir(path.dirname(trackingFile), { recursive: true });
       const trackingData = [{
         id: 'task_123',
-        taskPath: inProgressTaskPath,
+        absoluteTaskPath: inProgressTaskPath,
         taskName: 'test_task_001.md',
         memberId: 'test-member-123',
         assignedAt: new Date().toISOString(),
@@ -677,7 +677,7 @@ describe('MCP Server Tools Integration Tests', () => {
 
       // Complete the task
       const result = await mcpServer.completeTask({
-        taskPath: inProgressTaskPath
+        absoluteTaskPath: inProgressTaskPath
       });
 
       // Verify response
@@ -703,7 +703,7 @@ describe('MCP Server Tools Integration Tests', () => {
       const nonExistentPath = '/tmp/test-project/.agentmux/tasks/m0_build_spec_tasks/open/nonexistent.md';
 
       const result = await mcpServer.acceptTask({
-        taskPath: nonExistentPath
+        absoluteTaskPath: nonExistentPath
       });
 
       // Should create the file and then process it
@@ -714,7 +714,7 @@ describe('MCP Server Tools Integration Tests', () => {
       const nonExistentPath = '/tmp/test-project/.agentmux/tasks/m0_build_spec_tasks/in_progress/nonexistent.md';
 
       const result = await mcpServer.completeTask({
-        taskPath: nonExistentPath
+        absoluteTaskPath: nonExistentPath
       });
 
       // Should fail gracefully
@@ -730,7 +730,7 @@ describe('MCP Server Tools Integration Tests', () => {
 
       // Step 1: Accept task
       const acceptResult = await mcpServer.acceptTask({
-        taskPath: openTaskPath,
+        absoluteTaskPath: openTaskPath,
         memberId: 'workflow-tester'
       });
       expect(acceptResult.content[0].text).toContain('✅ Task accepted successfully');
@@ -740,7 +740,7 @@ describe('MCP Server Tools Integration Tests', () => {
 
       // Step 2: Complete task
       const completeResult = await mcpServer.completeTask({
-        taskPath: inProgressTaskPath
+        absoluteTaskPath: inProgressTaskPath
       });
       expect(completeResult.content[0].text).toContain('✅ Task completed successfully');
 

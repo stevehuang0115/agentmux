@@ -13,6 +13,7 @@ import {
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
+import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 
 // Internal helper function types
 interface StartTeamMemberResult {
@@ -803,7 +804,7 @@ export async function getTeamMemberSession(this: ApiContext, req: Request, res: 
 export async function addTeamMember(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { name, role } = req.body as any;
+    const { name, role, avatar } = req.body as any;
     if (!name || !role) { res.status(400).json({ success: false, error: 'Name and role are required' } as ApiResponse); return; }
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === id);
@@ -813,6 +814,7 @@ export async function addTeamMember(this: ApiContext, req: Request, res: Respons
       name: String(name).trim(),
       sessionName: '',
       role: role as any,
+      avatar: avatar,
       systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
       agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
       workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
@@ -1029,6 +1031,15 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
   try {
     const { sessionName, role, status, registeredAt, memberId } = req.body as any;
     console.log(`[API] 📋 Extracted parameters:`, { sessionName, role, status, registeredAt, memberId });
+
+    // Update agent heartbeat (proof of life)
+    try {
+      await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+      console.log(`[API] ✅ Agent heartbeat updated successfully for session: ${sessionName}`);
+    } catch (error) {
+      console.log(`[API] ⚠️ Failed to update agent heartbeat:`, error);
+      // Continue execution - heartbeat failures shouldn't break registration
+    }
     if (!sessionName || !role) { res.status(400).json({ success: false, error: 'sessionName and role are required' } as ApiResponse); return; }
     if (role === 'orchestrator' && sessionName === CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
       console.log(`[API] 🎭 Handling orchestrator registration`);

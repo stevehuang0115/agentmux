@@ -7,6 +7,7 @@
 
 import {
   AGENTMUX_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS,
   MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
@@ -15,6 +16,7 @@ import {
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
+  type AgentId,
   type MCPTool,
   type MessageType,
 } from './constants.js';
@@ -135,6 +137,77 @@ describe('AgentMux Cross-Domain Constants', () => {
           expect(displayName.length).toBeGreaterThan(0);
         });
       });
+    });
+
+    describe('AGENT_IDS', () => {
+      test('should have orchestrator ID defined', () => {
+        expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
+      });
+
+      test('should be a valid string constant', () => {
+        const orchestratorId: AgentId = AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID;
+        expect(typeof orchestratorId).toBe('string');
+        expect(orchestratorId.length).toBeGreaterThan(0);
+        expect(orchestratorId).toBe('orchestrator');
+      });
+
+      test('orchestrator ID should match role constant', () => {
+        expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR);
+      });
+    });
+  });
+
+  describe('AGENT_IDENTITY_CONSTANTS', () => {
+    describe('ORCHESTRATOR', () => {
+      test('should have complete orchestrator identity', () => {
+        const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
+
+        expect(orch.ID).toBe('orchestrator');
+        expect(orch.SESSION_NAME).toBe('agentmux-orc');
+        expect(orch.ROLE).toBe('orchestrator');
+      });
+
+      test('should reference existing constants consistently', () => {
+        const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
+
+        // Verify references point to correct source constants
+        expect(orch.ID).toBe(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID);
+        expect(orch.SESSION_NAME).toBe(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+        expect(orch.ROLE).toBe(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR);
+      });
+
+      test('should maintain type safety', () => {
+        const orchestratorId: AgentId = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID;
+        const orchestratorRole: AgentRole = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ROLE;
+
+        expect(orchestratorId).toBe('orchestrator');
+        expect(orchestratorRole).toBe('orchestrator');
+      });
+
+      test('should provide constants for agent heartbeat system', () => {
+        // These constants are essential for the new agent heartbeat architecture
+        expect(typeof AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID).toBe('string');
+        expect(typeof AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.SESSION_NAME).toBe('string');
+        expect(typeof AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ROLE).toBe('string');
+
+        // All should be non-empty
+        expect(AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID.length).toBeGreaterThan(0);
+        expect(AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.SESSION_NAME.length).toBeGreaterThan(0);
+        expect(AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ROLE.length).toBeGreaterThan(0);
+      });
+    });
+
+    test('should maintain consistency across all orchestrator references', () => {
+      // All orchestrator constants should be consistent
+      expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
+      expect(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR).toBe('orchestrator');
+      expect(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('agentmux-orc');
+
+      // Identity helper should match
+      const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
+      expect(orch.ID).toBe('orchestrator');
+      expect(orch.ROLE).toBe('orchestrator');
+      expect(orch.SESSION_NAME).toBe('agentmux-orc');
     });
   });
 

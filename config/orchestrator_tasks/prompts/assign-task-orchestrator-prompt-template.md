@@ -35,7 +35,7 @@ The complete requirements are in the task markdown file. You and the assigned te
 **WORKFLOW:**
 
 1. First call `read_task` to read and understand the task requirements:
-   read_task({ taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+   read_task({ absoluteTaskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
 
 2. Then call `get_team_status` to get available team members
 

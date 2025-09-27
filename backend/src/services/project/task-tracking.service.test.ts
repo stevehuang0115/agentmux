@@ -32,7 +32,7 @@ describe('TaskTrackingService', () => {
     taskName: 'Test Task',
     targetRole: 'developer',
     assignedTeamMemberId: 'member-789',
-    assignedSessionId: 'session-abc',
+    assignedSessionName: 'session-abc',
     assignedAt: '2023-01-01T10:00:00.000Z',
     status: 'assigned'
   };
@@ -144,7 +144,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Test Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'member-789',
-        assignedSessionId: 'session-abc',
+        assignedSessionName: 'session-abc',
         assignedAt: expect.any(String),
         status: 'assigned'
       });
@@ -174,7 +174,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Test Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'member-789',
-        assignedSessionId: 'session-abc',
+        assignedSessionName: 'session-abc',
         assignedAt: expect.any(String),
         status: 'assigned'
       });
@@ -265,7 +265,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Queued Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'orchestrator',
-        assignedSessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         assignedAt: '2023-01-01T12:00:00.000Z',
         status: 'pending_assignment',
         priority: 'high'
@@ -298,7 +298,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Queued Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'orchestrator',
-        assignedSessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         assignedAt: '2023-01-01T12:00:00.000Z',
         status: 'pending_assignment',
         priority: 'high'

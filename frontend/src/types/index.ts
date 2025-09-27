@@ -4,6 +4,7 @@ export interface TeamMember {
   name: string;
   sessionName: string; // tmux session name
   role: string; // Now accepts any role key from configuration
+  avatar?: string; // URL or emoji
   systemPrompt: string;
   agentStatus: 'inactive' | 'activating' | 'active'; // Connection/registration status
   workingStatus: 'idle' | 'in_progress'; // Activity level status

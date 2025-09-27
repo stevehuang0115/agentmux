@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Button } from '../UI';
 import { TeamMember } from '@/types';
 import { webSocketService } from '@/services/websocket.service';
 
@@ -333,13 +334,15 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
                     />
                     Auto-refresh (fallback)
                   </label>
-                  <button 
+                  <Button 
                     className="refresh-button" 
                     onClick={fetchSessionData}
                     disabled={loading || isRealTimeConnected}
+                    variant="secondary"
+                    size="sm"
                   >
                     {loading ? 'Loading...' : 'Manual Refresh'}
-                  </button>
+                  </Button>
                 </div>
               </div>
 
@@ -354,9 +357,9 @@ export const TeamMemberModal: React.FC<TeamMemberModalProps> = ({ member, teamId
                 {error && (
                   <div className="error-state">
                     <p>Error: {error}</p>
-                    <button onClick={fetchSessionData} className="retry-button">
+                    <Button onClick={fetchSessionData} className="retry-button" variant="outline" size="sm">
                       Retry
-                    </button>
+                    </Button>
                   </div>
                 )}
 

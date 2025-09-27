@@ -26,15 +26,31 @@ export const TerminalEmulator: React.FC<TerminalEmulatorProps> = ({
   useEffect(() => {
     if (!terminalRef.current || isInitialized) return;
 
-    // Initialize terminal
+    // Initialize terminal with new theme
     const terminal = new Terminal({
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontFamily: '"Fira Code", Menlo, Monaco, "Courier New", monospace',
       theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#ffffff',
+        background: '#111721', // background-dark
+        foreground: '#f6f7f8', // text-primary-dark
+        cursor: '#2a73ea', // primary
+        black: '#111721',
+        red: '#ef4444',
+        green: '#10b981',
+        yellow: '#f59e0b',
+        blue: '#2a73ea',
+        magenta: '#8b5cf6',
+        cyan: '#06b6d4',
+        white: '#f6f7f8',
+        brightBlack: '#313a48', // border-dark
+        brightRed: '#f87171',
+        brightGreen: '#34d399',
+        brightYellow: '#fbbf24',
+        brightBlue: '#60a5fa',
+        brightMagenta: '#a78bfa',
+        brightCyan: '#22d3ee',
+        brightWhite: '#ffffff',
       },
       scrollback: 1000,
     });
@@ -75,18 +91,24 @@ export const TerminalEmulator: React.FC<TerminalEmulatorProps> = ({
     };
   }, [terminalRef.current]);
 
-  // Update terminal content when new data arrives
+  // Update terminal content when session changes or new data arrives
   useEffect(() => {
-    if (!terminalInstance.current || !terminalData.length) return;
+    if (!terminalInstance.current) return;
 
     const terminal = terminalInstance.current;
-    const latestOutput = terminalData[terminalData.length - 1];
-    
-    if (latestOutput && latestOutput.sessionName === sessionName) {
-      // Clear terminal and write fresh content
-      terminal.clear();
-      terminal.write(latestOutput.content.replace(/\n/g, '\r\n'));
-      
+
+    // Clear terminal and display all content for this session
+    terminal.clear();
+
+    if (terminalData.length > 0) {
+      // Combine all terminal outputs for this session
+      const allContent = terminalData
+        .map(output => output.content)
+        .join('\n')
+        .replace(/\n/g, '\r\n');
+
+      terminal.write(allContent);
+
       // Scroll to bottom
       terminal.scrollToBottom();
     }

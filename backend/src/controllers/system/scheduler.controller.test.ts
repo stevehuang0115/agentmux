@@ -33,7 +33,7 @@ describe('Scheduler Handlers', () => {
         isRecurring: false,
         intervalMinutes: 60
       },
-      query: { session: 'session-1' }
+      query: { sessionName: 'session-1' }
     };
 
     mockResponse = {
@@ -214,8 +214,8 @@ describe('Scheduler Handlers', () => {
   describe('getScheduledChecks', () => {
     it('should return checks for specific session when session query provided', async () => {
       const mockChecks = [
-        { id: 'check-1', session: 'session-1', message: 'First check' },
-        { id: 'check-2', session: 'session-1', message: 'Second check' }
+        { id: 'check-1', sessionName: 'session-1', message: 'First check' },
+        { id: 'check-2', sessionName: 'session-1', message: 'Second check' }
       ];
 
       mockSchedulerService.getChecksForSession.mockReturnValue(mockChecks);
@@ -235,9 +235,9 @@ describe('Scheduler Handlers', () => {
 
     it('should return all scheduled checks when no session query provided', async () => {
       const mockAllChecks = [
-        { id: 'check-1', session: 'session-1', message: 'Check 1' },
-        { id: 'check-2', session: 'session-2', message: 'Check 2' },
-        { id: 'check-3', session: 'session-1', message: 'Check 3' }
+        { id: 'check-1', sessionName: 'session-1', message: 'Check 1' },
+        { id: 'check-2', sessionName: 'session-2', message: 'Check 2' },
+        { id: 'check-3', sessionName: 'session-1', message: 'Check 3' }
       ];
 
       mockSchedulerService.listScheduledChecks.mockReturnValue(mockAllChecks);
@@ -296,7 +296,7 @@ describe('Scheduler Handlers', () => {
     it('should handle empty session parameter', async () => {
       const mockAllChecks = [];
       mockSchedulerService.listScheduledChecks.mockReturnValue(mockAllChecks);
-      mockRequest.query = { session: '' };
+      mockRequest.query = { sessionName: '' };
 
       await schedulerHandlers.getScheduledChecks.call(
         mockApiContext as ApiContext,

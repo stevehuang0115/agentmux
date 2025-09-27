@@ -44,7 +44,7 @@ export class TaskTrackingService extends EventEmitter {
             throw error;
         }
     }
-    async assignTask(projectId, teamId, taskFilePath, taskName, targetRole, teamMemberId, sessionId) {
+    async assignTask(projectId, teamId, taskFilePath, taskName, targetRole, teamMemberId, sessionName) {
         const data = await this.loadTaskData();
         const task = {
             id: uuidv4(),
@@ -54,7 +54,7 @@ export class TaskTrackingService extends EventEmitter {
             taskName,
             targetRole,
             assignedTeamMemberId: teamMemberId,
-            assignedSessionId: sessionId,
+            assignedSessionName: sessionName,
             assignedAt: new Date().toISOString(),
             status: 'assigned'
         };
@@ -96,7 +96,7 @@ export class TaskTrackingService extends EventEmitter {
             taskName: taskInfo.taskName,
             targetRole: taskInfo.targetRole,
             assignedTeamMemberId: 'orchestrator', // Queued for orchestrator assignment
-            assignedSessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+            assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
             assignedAt: taskInfo.createdAt,
             status: 'pending_assignment', // New status for tasks awaiting assignment
             priority: taskInfo.priority
@@ -189,6 +189,142 @@ export class TaskTrackingService extends EventEmitter {
             .replace(/_[a-z]+$/, '') // Remove role suffix
             .replace(/_/g, ' ')
             .replace(/\b\w/g, l => l.toUpperCase());
+    }
+    /**
+     * Recovers abandoned in-progress tasks by checking agent status and moving inactive tasks back to open
+     * @param getTeamStatus Function to get current team status from API
+     * @returns Recovery report with actions taken
+     */
+    async recoverAbandonedTasks(getTeamStatus) {
+        const report = {
+            totalInProgress: 0,
+            recovered: 0,
+            skipped: 0,
+            errors: [],
+            recoveredTasks: []
+        };
+        try {
+            console.log('[RECOVERY] 🔍 Starting task recovery check...');
+            const data = await this.loadTaskData();
+            const inProgressTasks = data.tasks.filter(t => t.status === 'assigned' || t.status === 'active');
+            report.totalInProgress = inProgressTasks.length;
+            if (inProgressTasks.length === 0) {
+                console.log('[RECOVERY] ✅ No in-progress tasks found to recover');
+                return report;
+            }
+            console.log(`[RECOVERY] 📋 Found ${inProgressTasks.length} in-progress tasks to check`);
+            // Get current team status
+            const teams = await getTeamStatus();
+            const activeMembers = new Set();
+            teams.forEach(team => {
+                team.members?.forEach((member) => {
+                    if (member.agentStatus === 'active' && member.workingStatus === 'in_progress') {
+                        activeMembers.add(member.sessionName);
+                        activeMembers.add(member.id);
+                    }
+                });
+            });
+            console.log(`[RECOVERY] 👥 Found ${activeMembers.size} active working members`);
+            // Check each in-progress task
+            for (const task of inProgressTasks) {
+                try {
+                    const isAgentActive = activeMembers.has(task.assignedSessionName) ||
+                        activeMembers.has(task.assignedTeamMemberId);
+                    if (isAgentActive) {
+                        console.log(`[RECOVERY] ✅ Agent ${task.assignedSessionName} is still active, keeping task: ${task.taskName}`);
+                        report.skipped++;
+                        continue;
+                    }
+                    console.log(`[RECOVERY] ⚠️ Agent ${task.assignedSessionName} is inactive, recovering task: ${task.taskName}`);
+                    // Move task back to open folder and clean metadata
+                    const recovered = await this.moveTaskBackToOpen(task);
+                    if (recovered) {
+                        // Remove from JSON tracking
+                        await this.removeTask(task.id);
+                        report.recovered++;
+                        report.recoveredTasks.push(task.taskName);
+                        console.log(`[RECOVERY] ✅ Successfully recovered task: ${task.taskName}`);
+                    }
+                    else {
+                        report.errors.push(`Failed to move task back to open: ${task.taskName}`);
+                        console.log(`[RECOVERY] ❌ Failed to recover task: ${task.taskName}`);
+                    }
+                }
+                catch (error) {
+                    const errorMsg = `Error processing task ${task.taskName}: ${error instanceof Error ? error.message : String(error)}`;
+                    report.errors.push(errorMsg);
+                    console.error(`[RECOVERY] ❌ ${errorMsg}`);
+                }
+            }
+            console.log(`[RECOVERY] 📊 Recovery complete - Recovered: ${report.recovered}, Skipped: ${report.skipped}, Errors: ${report.errors.length}`);
+        }
+        catch (error) {
+            const errorMsg = `Task recovery failed: ${error instanceof Error ? error.message : String(error)}`;
+            report.errors.push(errorMsg);
+            console.error(`[RECOVERY] ❌ ${errorMsg}`);
+        }
+        return report;
+    }
+    /**
+     * Moves a task back to the open folder and cleans assignment metadata
+     */
+    async moveTaskBackToOpen(task) {
+        try {
+            // Check if task file still exists in in_progress
+            if (!fsSync.existsSync(task.taskFilePath)) {
+                console.log(`[RECOVERY] ⚠️ Task file not found in in_progress: ${task.taskFilePath}`);
+                return false;
+            }
+            // Read current task content
+            const content = await fs.readFile(task.taskFilePath, 'utf-8');
+            // Clean assignment metadata
+            const cleanedContent = this.cleanAssignmentMetadata(content);
+            // Calculate target path in open folder
+            const openPath = task.taskFilePath.replace('/in_progress/', '/open/');
+            const openDir = path.dirname(openPath);
+            // Ensure open directory exists
+            if (!fsSync.existsSync(openDir)) {
+                await fs.mkdir(openDir, { recursive: true });
+            }
+            // Write cleaned content to open folder
+            await fs.writeFile(openPath, cleanedContent, 'utf-8');
+            // Remove from in_progress folder
+            await fs.unlink(task.taskFilePath);
+            console.log(`[RECOVERY] 📁 Moved task from ${task.taskFilePath} to ${openPath}`);
+            return true;
+        }
+        catch (error) {
+            console.error(`[RECOVERY] ❌ Failed to move task back to open:`, error);
+            return false;
+        }
+    }
+    /**
+     * Removes assignment metadata sections from task content
+     */
+    cleanAssignmentMetadata(content) {
+        // Remove ## Assignment Information section and everything after it
+        // This preserves the original task content but removes assignment metadata
+        const lines = content.split('\n');
+        const cleanedLines = [];
+        let inAssignmentSection = false;
+        for (const line of lines) {
+            if (line.trim().startsWith('## Assignment Information')) {
+                inAssignmentSection = true;
+                continue;
+            }
+            // If we hit another ## section after assignment, stop skipping
+            if (inAssignmentSection && line.trim().startsWith('## ') && !line.includes('Assignment Information')) {
+                inAssignmentSection = false;
+            }
+            if (!inAssignmentSection) {
+                cleanedLines.push(line);
+            }
+        }
+        // Remove trailing empty lines
+        while (cleanedLines.length > 0 && cleanedLines[cleanedLines.length - 1].trim() === '') {
+            cleanedLines.pop();
+        }
+        return cleanedLines.join('\n');
     }
 }
 //# sourceMappingURL=task-tracking.service.js.map

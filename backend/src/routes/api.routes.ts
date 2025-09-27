@@ -30,7 +30,12 @@ export function createApiRoutes(apiController: ApiController): Router {
     activeProjectsService: apiController.activeProjectsService,
     promptTemplateService: apiController.promptTemplateService,
     taskAssignmentMonitor: apiController.taskAssignmentMonitor,
-    taskTrackingService: apiController.taskTrackingService
+    taskTrackingService: apiController.taskTrackingService,
+    cleanupProjectScheduledMessages: async (projectId: string) => {
+      // Import and call the cleanup function with the current context
+      const { cleanupProjectScheduledMessages } = await import('../controllers/project/project.controller.js');
+      return cleanupProjectScheduledMessages.call(context, projectId);
+    }
   };
 
   // Use the new organized controller structure

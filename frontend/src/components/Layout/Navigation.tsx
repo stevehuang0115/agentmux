@@ -4,7 +4,6 @@ import {
 	Home,
 	FolderOpen,
 	Users,
-	ClipboardList,
 	Clock,
 	ChevronLeft,
 	ChevronRight,
@@ -16,63 +15,140 @@ const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
 	{ name: 'Projects', href: '/projects', icon: FolderOpen },
 	{ name: 'Teams', href: '/teams', icon: Users },
-	{ name: 'Assignments', href: '/assignments', icon: ClipboardList },
 	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
 ];
 
 export const Navigation: React.FC = () => {
-	const location = useLocation();
-	const { isCollapsed, toggleSidebar } = useSidebar();
+  const location = useLocation();
+  const { isCollapsed, toggleSidebar } = useSidebar();
+
+  // Detect when viewing a specific project to show contextual sub-navigation
+  const projectMatch = location.pathname.match(/\/projects\/([^/]+)/);
+  const activeProjectId = projectMatch ? projectMatch[1] : null;
+  const activeHash = (location.hash || '#detail').replace('#', '') as 'detail' | 'editor' | 'tasks' | 'teams';
 
 	return (
-		<div className={clsx('navigation', isCollapsed && 'navigation--collapsed')}>
+    <div className={clsx(
+            'flex flex-col h-screen max-h-screen bg-surface-dark border-r border-border-dark overflow-hidden w-full'
+        )}>
 			{/* Logo Section */}
-			<div className="nav-header">
-				<div className="nav-logo">
-					<div className="logo-icon">
-						<div className="triangle"></div>
+			<div className="flex items-center p-4 border-b border-border-dark">
+				<div className="flex items-center">
+					<div className="w-8 h-8 bg-primary rounded flex items-center justify-center">
+						<div className="w-3 h-3 bg-white rounded-sm"></div>
 					</div>
-					{!isCollapsed && <span className="logo-text">AgentMux</span>}
+					{!isCollapsed && (
+						<span className="ml-3 text-lg font-bold text-text-primary-dark">
+							AgentMux
+						</span>
+					)}
 				</div>
 			</div>
 
 			{/* Main Navigation */}
-			<nav className="nav-menu">
-				<div className="nav-section">
-					{navigationItems.map((item) => {
-						const isActive =
-							location.pathname === item.href ||
-							(item.href !== '/' && location.pathname.startsWith(item.href));
+            <nav className="flex-1 p-2 overflow-y-auto">
+				<div className="space-y-1">
+            {navigationItems.map((item) => {
+              const isActive =
+                location.pathname === item.href ||
+                (item.href !== '/' && location.pathname.startsWith(item.href));
 
-						return (
-							<NavLink
-								key={item.name}
-								to={item.href}
-								className={clsx('nav-item', isActive && 'nav-item--active')}
-								title={isCollapsed ? item.name : undefined}
-							>
-								<item.icon className="nav-icon" />
-								{!isCollapsed && <span className="nav-label">{item.name}</span>}
-							</NavLink>
-						);
-					})}
-				</div>
-			</nav>
+              return (
+                <div key={item.name}>
+                  <NavLink
+                    to={item.href}
+                    className={clsx(
+                      'flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-primary text-white'
+                        : 'text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark'
+                    )}
+                    title={isCollapsed ? item.name : undefined}
+                  >
+                    <item.icon className="h-5 w-5 flex-shrink-0" />
+                    {!isCollapsed && <span className="ml-3">{item.name}</span>}
+                  </NavLink>
 
-			{/* Bottom Section - Toggle button only */}
-			<button
-				className="nav-footer nav-footer--toggle"
-				onClick={toggleSidebar}
-				aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-			>
-				<div className="nav-toggle-icon">
+                  {/* Nest project sub-nav directly under Projects item when viewing a project */}
+                  {!isCollapsed && item.href === '/projects' && activeProjectId && (
+                    <div className="mt-2 ml-9 space-y-1">
+                      <NavLink
+                        to={`/projects/${activeProjectId}#detail`}
+                        className={() =>
+                          clsx(
+                            'block px-2 py-1 rounded text-sm',
+                            activeHash === 'detail'
+                              ? 'text-primary'
+                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                          )
+                        }
+                      >
+                        Overview
+                      </NavLink>
+                      <NavLink
+                        to={`/projects/${activeProjectId}#editor`}
+                        className={() =>
+                          clsx(
+                            'block px-2 py-1 rounded text-sm',
+                            activeHash === 'editor'
+                              ? 'text-primary'
+                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                          )
+                        }
+                      >
+                        Editor
+                      </NavLink>
+                      <NavLink
+                        to={`/projects/${activeProjectId}#tasks`}
+                        className={() =>
+                          clsx(
+                            'block px-2 py-1 rounded text-sm',
+                            activeHash === 'tasks'
+                              ? 'text-primary'
+                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                          )
+                        }
+                      >
+                        Tasks
+                      </NavLink>
+                      <NavLink
+                        to={`/projects/${activeProjectId}#teams`}
+                        className={() =>
+                          clsx(
+                            'block px-2 py-1 rounded text-sm',
+                            activeHash === 'teams'
+                              ? 'text-primary'
+                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                          )
+                        }
+                      >
+                        Teams
+                      </NavLink>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </nav>
+
+			{/* Bottom Section - Toggle button */}
+			<div className="p-2 border-t border-border-dark">
+				<button
+					className="flex items-center justify-center w-full p-2 text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark rounded-lg transition-colors"
+					onClick={toggleSidebar}
+					aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+				>
 					{isCollapsed ? (
-						<ChevronRight className="toggle-icon" />
+						<ChevronRight className="h-5 w-5" />
 					) : (
-						<ChevronLeft className="toggle-icon" />
+						<>
+							<ChevronLeft className="h-5 w-5 mr-3" />
+							<span className="text-sm">Collapse</span>
+						</>
 					)}
-				</div>
-			</button>
+				</button>
+			</div>
 		</div>
 	);
 };

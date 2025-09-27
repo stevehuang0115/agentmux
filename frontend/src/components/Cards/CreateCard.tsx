@@ -1,31 +1,26 @@
 import React from 'react';
 import { Plus } from 'lucide-react';
-import clsx from 'clsx';
 
 interface CreateCardProps {
   title: string;
   icon?: React.ReactNode;
-  onClick: () => void;
+  onClick?: () => void;
   className?: string;
 }
 
 export const CreateCard: React.FC<CreateCardProps> = ({
   title,
-  icon = <Plus className="create-icon" />,
+  icon = <Plus className="text-4xl" />,
   onClick,
-  className
+  className = ''
 }) => {
   return (
-    <div 
-      className={clsx('create-card', className)}
+    <div
       onClick={onClick}
+      className={`flex items-center justify-center flex-col p-6 rounded-lg border-2 border-dashed border-border-dark hover:border-primary transition-colors cursor-pointer text-text-secondary-dark hover:text-primary h-full ${className}`}
     >
-      <div className="create-content">
-        <div className="create-icon-wrapper">
-          {icon}
-        </div>
-        <h3 className="create-title">{title}</h3>
-      </div>
+      {icon}
+      <p className="mt-2 text-sm font-semibold">{title}</p>
     </div>
   );
 };

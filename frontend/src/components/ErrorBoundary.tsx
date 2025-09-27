@@ -1,4 +1,5 @@
 import React from 'react';
+import { Button } from './UI';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -64,13 +65,13 @@ const DefaultErrorFallback: React.FC<ErrorFallbackProps> = ({ error, resetError 
         <h2>Something went wrong</h2>
         <p>We encountered an unexpected error. Please try refreshing the page.</p>
         
-        <div className="error-actions">
-          <button onClick={resetError} className="btn btn-primary">
+        <div className="error-actions flex items-center gap-3 mt-4">
+          <Button onClick={resetError} variant="primary">
             Try Again
-          </button>
-          <button onClick={() => window.location.reload()} className="btn btn-secondary">
+          </Button>
+          <Button onClick={() => window.location.reload()} variant="secondary">
             Refresh Page
-          </button>
+          </Button>
         </div>
 
         {process.env.NODE_ENV === 'development' && error && (

@@ -77,48 +77,51 @@ export const MessageForm: React.FC<MessageFormProps> = ({
 
       <FormGroup>
         <FormLabel>Schedule</FormLabel>
-        <div className="schedule-controls">
-          <div className="schedule-type">
-            <label className="radio-option">
+        <div className="grid gap-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <label className="flex items-start gap-3 p-3 rounded-lg border border-border-dark cursor-pointer hover:border-primary/50">
               <input
                 type="radio"
                 name="scheduleType"
+                className="mt-0.5"
                 checked={!formData.isRecurring}
-                onChange={() => setFormData({...formData, isRecurring: false})}
+                onChange={() => setFormData({ ...formData, isRecurring: false })}
               />
-              <span className="radio-label">
-                <strong>One-time</strong>
-                <small>Send message once after delay</small>
+              <span>
+                <div className="font-medium">One-time</div>
+                <div className="text-xs text-text-secondary-dark">Send message once after delay</div>
               </span>
             </label>
-            <label className="radio-option">
+            <label className="flex items-start gap-3 p-3 rounded-lg border border-border-dark cursor-pointer hover:border-primary/50">
               <input
                 type="radio"
                 name="scheduleType"
+                className="mt-0.5"
                 checked={formData.isRecurring}
-                onChange={() => setFormData({...formData, isRecurring: true})}
+                onChange={() => setFormData({ ...formData, isRecurring: true })}
               />
-              <span className="radio-label">
-                <strong>Recurring</strong>
-                <small>Send message repeatedly at interval</small>
+              <span>
+                <div className="font-medium">Recurring</div>
+                <div className="text-xs text-text-secondary-dark">Send message repeatedly at interval</div>
               </span>
             </label>
           </div>
-          <div className="delay-input">
-            <label className="delay-label">
+          <div className="grid gap-2">
+            <label className="text-sm text-text-secondary-dark">
               {formData.isRecurring ? 'Send every:' : 'Send after:'}
             </label>
-            <div className="delay-controls">
+            <div className="flex items-center gap-3">
               <input
                 type="number"
                 min="1"
                 value={formData.delayAmount}
-                onChange={(e) => setFormData({...formData, delayAmount: e.target.value})}
+                onChange={(e) => setFormData({ ...formData, delayAmount: e.target.value })}
                 required
+                className="w-28 bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
               />
               <Dropdown
                 value={formData.delayUnit}
-                onChange={(value) => setFormData({...formData, delayUnit: value as 'seconds' | 'minutes' | 'hours'})}
+                onChange={(value) => setFormData({ ...formData, delayUnit: value as 'seconds' | 'minutes' | 'hours' })}
                 options={[
                   { value: 'seconds', label: 'seconds' },
                   { value: 'minutes', label: 'minutes' },

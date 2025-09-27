@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Button } from '../UI';
 import { X, Users, Check } from 'lucide-react';
 import { Team, Project } from '@/types';
 import { apiService } from '@/services/api.service';
@@ -117,9 +118,9 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
           ) : error ? (
             <div className="error-state">
               <p>Error: {error}</p>
-              <button onClick={loadTeams} className="retry-button">
+              <Button onClick={loadTeams} className="retry-button" variant="outline" size="sm">
                 Retry
-              </button>
+              </Button>
             </div>
           ) : allTeams.length === 0 ? (
             <div className="empty-state">
@@ -213,26 +214,18 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
         </div>
 
         <div className="modal-footer">
-          <button className="secondary-button" onClick={onClose} disabled={saving}>
+          <Button className="secondary-button" onClick={onClose} disabled={saving} variant="secondary">
             Cancel
-          </button>
-          <button 
+          </Button>
+          <Button 
             className="primary-button" 
             onClick={handleSave}
             disabled={saving || allTeams.length === 0}
+            loading={saving}
+            icon={Check}
           >
-            {saving ? (
-              <>
-                <div className="button-spinner"></div>
-                Saving...
-              </>
-            ) : (
-              <>
-                <Check size={16} />
-                Assign {selectedTeams.size} Team{selectedTeams.size !== 1 ? 's' : ''}
-              </>
-            )}
-          </button>
+            Assign {selectedTeams.size} Team{selectedTeams.size !== 1 ? 's' : ''}
+          </Button>
         </div>
       </div>
     </div>

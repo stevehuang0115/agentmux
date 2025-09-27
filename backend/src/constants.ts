@@ -3,31 +3,28 @@
  * Re-exported from the main config constants for backend use
  */
 
-// Re-export the constants that the backend needs from the main config
+// Import from config directory for cross-domain constants
+import {
+  AGENTMUX_CONSTANTS as CONFIG_AGENTMUX_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS as CONFIG_AGENT_IDENTITY_CONSTANTS,
+  TIMING_CONSTANTS as CONFIG_TIMING_CONSTANTS
+} from '../../config/constants.js';
+
+// Re-export the cross-domain constants for backend use
+export const AGENT_IDENTITY_CONSTANTS = CONFIG_AGENT_IDENTITY_CONSTANTS;
+export const TIMING_CONSTANTS = CONFIG_TIMING_CONSTANTS;
+
+// Re-export specific constants that the backend needs from the main config
 export const ORCHESTRATOR_SESSION_NAME = 'agentmux-orc';
 export const ORCHESTRATOR_ROLE = 'orchestrator';
 export const ORCHESTRATOR_WINDOW_NAME = 'AgentMux Orchestrator';
 export const AGENT_INITIALIZATION_TIMEOUT = 90000;
 export const CLAUDE_INITIALIZATION_TIMEOUT = 45000;
 
-// Agent and Working Status Constants (duplicated from config/constants.ts for backend use)
+// Merge cross-domain constants with backend-specific extensions
 export const AGENTMUX_CONSTANTS = {
-	SESSIONS: {
-		ORCHESTRATOR_NAME: 'agentmux-orc',
-		DEFAULT_TIMEOUT: 120000,
-		REGISTRATION_CHECK_INTERVAL: 5000,
-		CLAUDE_DETECTION_CACHE_TIMEOUT: 30000,
-		DEFAULT_SHELL: '/bin/bash',
-	},
-	AGENT_STATUSES: {
-		INACTIVE: 'inactive' as const,
-		ACTIVATING: 'activating' as const,
-		ACTIVE: 'active' as const,
-	},
-	WORKING_STATUSES: {
-		IDLE: 'idle' as const,
-		IN_PROGRESS: 'in_progress' as const,
-	},
+	...CONFIG_AGENTMUX_CONSTANTS,
+	// Backend-specific extensions
 	INIT_SCRIPTS: {
 		TMUX: 'initialize_tmux.sh',
 		CLAUDE: 'initialize_claude.sh',
@@ -60,3 +57,4 @@ export type AgentStatus =
 export type WorkingStatus =
 	(typeof AGENTMUX_CONSTANTS.WORKING_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.WORKING_STATUSES];
 export type RuntimeType = (typeof RUNTIME_TYPES)[keyof typeof RUNTIME_TYPES];
+export type AgentId = string; // Agent identifier type for heartbeat service

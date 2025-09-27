@@ -82,14 +82,14 @@ export interface FormInputProps extends React.InputHTMLAttributes<HTMLInputEleme
   error?: boolean;
 }
 
-export const FormInput: React.FC<FormInputProps> = ({ 
-  error = false, 
-  className = '', 
-  ...props 
+export const FormInput: React.FC<FormInputProps> = ({
+  error = false,
+  className = '',
+  ...props
 }) => (
-  <input 
-    className={`form-input ${error ? 'form-input--error' : ''} ${className}`} 
-    {...props} 
+  <input
+    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    {...props}
   />
 );
 
@@ -98,14 +98,14 @@ export interface FormTextareaProps extends React.TextareaHTMLAttributes<HTMLText
   error?: boolean;
 }
 
-export const FormTextarea: React.FC<FormTextareaProps> = ({ 
-  error = false, 
-  className = '', 
-  ...props 
+export const FormTextarea: React.FC<FormTextareaProps> = ({
+  error = false,
+  className = '',
+  ...props
 }) => (
-  <textarea 
-    className={`form-textarea ${error ? 'form-textarea--error' : ''} ${className}`} 
-    {...props} 
+  <textarea
+    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    {...props}
   />
 );
 

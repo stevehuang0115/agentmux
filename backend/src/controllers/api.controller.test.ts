@@ -216,7 +216,7 @@ describe('ApiController', () => {
     beforeEach(async () => {
       mockRequest = { 
         body: { input: 'test command' }, 
-        params: { session: 'test-session' } 
+        params: { sessionName: 'test-session' } 
       };
       mockResponse = { json: jest.fn(), status: jest.fn().mockReturnThis() };
       

@@ -88,7 +88,7 @@ export interface DelegateTaskParams {
 }
 
 export interface AssignTaskDelegationParams {
-  taskPath: string;
+  absoluteTaskPath: string;
   targetSessionName: string;
   delegatedBy?: string;
   reason?: string;
@@ -102,27 +102,27 @@ export interface LoadProjectContextParams {
 }
 
 export interface AssignTaskParams {
-  taskPath: string;
-  memberId: string;
-  sessionId: string;
+  absoluteTaskPath: string;
+  teamMemberId: string;
+  sessionName: string;
 }
 
 export interface AcceptTaskParams {
-  taskPath: string;
+  absoluteTaskPath: string;
   sessionName: string;
 }
 
 export interface CompleteTaskParams {
-  taskPath: string;
+  absoluteTaskPath: string;
   sessionName: string;
 }
 
 export interface ReadTaskParams {
-  taskPath: string;
+  absoluteTaskPath: string;
 }
 
 export interface BlockTaskParams {
-  taskPath: string;
+  absoluteTaskPath: string;
   reason: string;
   questions?: string[];
   urgency?: 'low' | 'medium' | 'high';
@@ -154,8 +154,8 @@ export interface ReportReadyParams {
 
 export interface RegisterAgentStatusParams {
   role: string;
-  sessionId: string;
-  memberId?: string;
+  sessionName: string;
+  teamMemberId?: string;
 }
 
 export interface GetAgentLogsParams {
@@ -170,7 +170,7 @@ export interface GetAgentStatusParams {
 }
 
 export interface ShutdownAgentParams {
-  session: string;
+  sessionName: string;
 }
 
 export interface TicketInfo {

@@ -544,17 +544,23 @@ export class TmuxCommandService {
                 '-L',
                 socketName,
                 sessionName,
-                cleanMessage
+                cleanMessage,
             ];
             this.logger.debug('🔍 Executing tmux_robosend script:', {
                 scriptPath,
                 socketName,
                 sessionName,
                 messageLength: cleanMessage.length,
-                command: `bash ${scriptArgs.join(' ')}`
+                command: `bash ${scriptArgs.join(' ')}`,
             });
             // Execute the script using bash
-            await this.executeShellCommand(`bash "${scriptPath}" --shadow -L "${socketName}" "${sessionName}" "${cleanMessage.replace(/"/g, '\\"')}"`);
+            // Escape both double quotes and backticks to prevent bash interpretation
+            const escapedMessage = cleanMessage
+                .replace(/\\/g, '\\\\') // Escape backslashes first
+                .replace(/"/g, '\\"') // Escape double quotes
+                .replace(/`/g, '\\`') // Escape backticks to prevent command substitution
+                .replace(/\$/g, '\\$'); // Escape dollar signs to prevent variable expansion
+            await this.executeShellCommand(`bash "${scriptPath}" --shadow -L "${socketName}" "${sessionName}" "${escapedMessage}"`);
             this.logger.debug('✅ Message sent successfully via robosend script', {
                 sessionName,
                 messageLength: cleanMessage.length,
@@ -610,7 +616,9 @@ export class TmuxCommandService {
         await this.sendCtrlC(sessionName);
         await this.sendEnter(sessionName);
         await this.sendEscape(sessionName);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         await this.sendEscape(sessionName);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         await this.sendEscape(sessionName);
         await this.sendEnter(sessionName);
     }
@@ -629,7 +637,11 @@ export class TmuxCommandService {
         }
         catch (error) {
             // Fallback to basic approach if enhanced method fails
-            this.logger.debug('Enhanced control key method failed, using fallback', { sessionName, key, error });
+            this.logger.debug('Enhanced control key method failed, using fallback', {
+                sessionName,
+                key,
+                error,
+            });
             await this.executeTmuxCommand(['send-keys', '-t', sessionName, key]);
             await new Promise((resolve) => setTimeout(resolve, 100));
         }

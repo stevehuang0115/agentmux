@@ -15,19 +15,29 @@ export const TabNavigation: React.FC<TabNavigationProps> = ({
   completedMessages
 }) => {
   return (
-    <div className="scheduled-messages-tabs">
-      <button 
-        className={`tab ${activeTab === 'active' ? 'tab--active' : ''}`}
-        onClick={() => setActiveTab('active')}
-      >
-        Active Messages ({activeMessages.length})
-      </button>
-      <button 
-        className={`tab ${activeTab === 'completed' ? 'tab--active' : ''}`}
-        onClick={() => setActiveTab('completed')}
-      >
-        Completed Messages ({completedMessages.length})
-      </button>
+    <div className="mb-6 border-b border-border-dark">
+      <nav aria-label="Tabs" className="-mb-px flex space-x-8">
+        <button
+          onClick={() => setActiveTab('active')}
+          className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
+            activeTab === 'active'
+              ? 'text-primary border-primary'
+              : 'text-text-secondary-dark hover:text-text-primary-dark hover:border-border-dark border-transparent'
+          }`}
+        >
+          Active ({activeMessages.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('completed')}
+          className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${
+            activeTab === 'completed'
+              ? 'text-primary border-primary'
+              : 'text-text-secondary-dark hover:text-text-primary-dark hover:border-border-dark border-transparent'
+          }`}
+        >
+          Completed ({completedMessages.length})
+        </button>
+      </nav>
     </div>
   );
 };

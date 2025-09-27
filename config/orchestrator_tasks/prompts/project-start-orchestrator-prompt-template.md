@@ -37,7 +37,7 @@ Before assigning any new tasks, you must first audit all work currently in progr
     Provide an immediate status update by responding to this message:
 
     1. **If TASK IS COMPLETE:**
-       - You must run this command now: `complete_task({ taskPath: '{task_file_path}', sessionName: 'YOUR_SESSION_NAME' })`
+       - You must run this command now: `complete_task({ absoluteTaskPath: '{task_file_path}', sessionName: 'YOUR_SESSION_NAME' })`
        - Confirm why you had not already marked it as complete.
 
     2. **If TASK IS NOT COMPLETE:**

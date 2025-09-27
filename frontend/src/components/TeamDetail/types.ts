@@ -20,6 +20,7 @@ export interface TeamHeaderProps {
   onStopTeam: () => void;
   onViewTerminal: () => void;
   onDeleteTeam: () => void;
+  onEditTeam: () => void;
 }
 
 export interface TeamStatsProps {

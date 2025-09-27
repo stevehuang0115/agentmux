@@ -69,7 +69,7 @@ describe('System Handlers', () => {
     mockRequest = {
       params: { conditionId: 'alert-1' },
       body: { config: 'value', enabled: true },
-      query: { hours: '24', level: 'error', limit: '50', session: 'test-session' }
+      query: { hours: '24', level: 'error', limit: '50', sessionName: 'test-session' }
     };
 
     mockResponse = {

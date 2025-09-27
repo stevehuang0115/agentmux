@@ -49,7 +49,7 @@ This is a critical step to ensure accountability and prevent task stagnation. Yo
 
     1. **TASK IS COMPLETE:**
        - If the work is finished, why have you not used the `complete_task` tool?
-       - You must run this command now: `complete_task({ taskPath: '{task_file_path}', sessionName: 'YOUR_SESSION_NAME' })`
+       - You must run this command now: `complete_task({ absoluteTaskPath: '{task_file_path}', sessionName: 'YOUR_SESSION_NAME' })`
 
     2. **TASK IS NOT COMPLETE:**
        - What is the current percentage of completion?
@@ -70,7 +70,7 @@ This is a critical step to ensure accountability and prevent task stagnation. Yo
 3.  **Process Responses & Take Action**:
     Based on the agent's reply (or lack thereof), take one of the following actions immediately within this cycle:
 
-    -   **If Agent Confirms Task is Complete**: Your primary job is to enforce procedure. Respond immediately, instructing them to use the `complete_task` tool. Example: _"Thank you for the update. Please run `complete_task({ taskPath: '{task_file_path}', sessionName: 'AGENT_SESSION_NAME' })` immediately to close this out."_
+    -   **If Agent Confirms Task is Complete**: Your primary job is to enforce procedure. Respond immediately, instructing them to use the `complete_task` tool. Example: _"Thank you for the update. Please run `complete_task({ absoluteTaskPath: '{task_file_path}', sessionName: 'AGENT_SESSION_NAME' })` immediately to close this out."_
     -   **If Agent Reports a Blocker**: Analyze the blocker. Provide specific, actionable assistance. Escalate if necessary. Your goal is to help them _continue the implementation_. Example: _"Understood. The dependency you're waiting on is now complete. Please review the updated files at {path_to_files} and continue."_
     -   **If Agent Confirms They Have Stalled or Abandoned**: Immediately move the task back to the `open` queue so it can be reassigned during Phase 2.
     -   **If Agent is Non-Responsive**: Make a note of the agent and task. The task is now a candidate for forceful reassignment. If no response is received by the next check-in, the task should be moved back to the `open` queue.
@@ -113,12 +113,12 @@ send_message({
 
 Please proceed:
 1. Review the full task requirements:
-   read_task({ taskPath: '{task_file_path}' })
+   read_task({ absoluteTaskPath: '{task_file_path}' })
 2. Accept the task to move it to your in_progress folder:
-   accept_task({ taskPath: '{task_file_path}', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
+   accept_task({ absoluteTaskPath: '{task_file_path}', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
 3. Follow the deliverables specified in the task file precisely.
 4. Mark the task as done when finished:
-   complete_task({ taskPath: '{task_file_path}', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
+   complete_task({ absoluteTaskPath: '{task_file_path}', sessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME' })
 
 CRITICAL: Use the read_task tool before starting."
 })

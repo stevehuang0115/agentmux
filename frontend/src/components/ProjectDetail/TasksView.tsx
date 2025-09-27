@@ -1,17 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, FolderOpen, Play, Unlock } from 'lucide-react';
+import { Plus, FolderOpen, Play, Unlock, MoreHorizontal, Link2, Inbox } from 'lucide-react';
 import { Project } from '../../types';
-import { 
-  Button, 
-  FormPopup, 
-  FormGroup, 
-  FormRow, 
-  FormLabel, 
-  FormInput, 
+import {
+  Button,
+  FormPopup,
+  FormGroup,
+  FormRow,
+  FormLabel,
+  FormInput,
   FormTextarea,
-  FormHelp 
+  FormHelp
 } from '../UI';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
+import { inProgressTasksService } from '../../services/in-progress-tasks.service';
 
 export const TasksView: React.FC<TasksViewProps> = ({
   project,
@@ -42,11 +43,16 @@ export const TasksView: React.FC<TasksViewProps> = ({
     name: '',
     description: ''
   });
+  const [taskAssignments, setTaskAssignments] = useState<Map<string, any>>(new Map());
   const milestonesGridRef = useRef<HTMLDivElement>(null);
+  const [visibleCounts, setVisibleCounts] = useState<{open: number; in_progress: number; done: number; blocked: number}>({ open: 20, in_progress: 20, done: 20, blocked: 20 });
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
   
-  // Filter tickets based on selected milestone
-  const filteredTickets = selectedMilestoneFilter 
-    ? tickets.filter(t => (t.milestone || t.milestoneId || 'Uncategorized') === selectedMilestoneFilter)
+  // Filter tickets based on selected milestone or completed
+  const filteredTickets = selectedMilestoneFilter
+    ? selectedMilestoneFilter === 'Completed'
+      ? tickets.filter(t => t.status === 'done' || t.status === 'completed')
+      : tickets.filter(t => (t.milestone || t.milestoneId || 'Uncategorized') === selectedMilestoneFilter)
     : tickets;
   
   // Group tasks by status for kanban board
@@ -78,8 +84,57 @@ export const TasksView: React.FC<TasksViewProps> = ({
     return getMilestoneSequence(a) - getMilestoneSequence(b);
   });
 
-  // Get available milestones for form dropdown
+  // Get available milestones for filter chips and form dropdown
   const availableMilestones = Object.keys(tasksByMilestone);
+
+  // Load task assignment data when tickets change
+  useEffect(() => {
+    const loadAssignmentData = async () => {
+      const assignments = new Map();
+
+      for (const ticket of tickets) {
+        if (ticket.filePath) {
+          try {
+            const assignmentDetails = await inProgressTasksService.getTaskAssignedMemberDetails(ticket.filePath);
+            if (assignmentDetails.memberName || assignmentDetails.sessionName) {
+              assignments.set(ticket.id, assignmentDetails);
+            }
+          } catch (error) {
+            console.debug('No assignment data found for task:', ticket.id);
+          }
+        }
+      }
+
+      setTaskAssignments(assignments);
+    };
+
+    if (tickets.length > 0) {
+      loadAssignmentData();
+    }
+  }, [tickets]);
+
+  // Load team avatars to map assignee/sessionName -> avatar
+  useEffect(() => {
+    const loadAvatars = async () => {
+      try {
+        const resp = await fetch('/api/teams');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const teams = data.success ? (data.data || []) : (data || []);
+        const map: Record<string, string> = {};
+        teams.forEach((team: any) => {
+          (team.members || []).forEach((m: any) => {
+            if (m.name) map[m.name.toLowerCase()] = m.avatar || '';
+            if (m.sessionName) map[m.sessionName.toLowerCase()] = m.avatar || '';
+          });
+        });
+        setAvatarMap(map);
+      } catch (e) {
+        // ignore
+      }
+    };
+    loadAvatars();
+  }, []);
 
   // Auto-scroll to first in-progress milestone when tasks load
   useEffect(() => {
@@ -208,65 +263,35 @@ export const TasksView: React.FC<TasksViewProps> = ({
         </div>
       </div>
       
-      {/* Milestone Overview */}
-      <div className="milestones-section">
-        <div className="milestones-header">
-          <h4>Milestones Overview</h4>
-          {selectedMilestoneFilter && (
-            <Button
-              variant="secondary"
-              onClick={() => setSelectedMilestoneFilter(null)}
-              title="Clear milestone filter"
-            >
-              Clear Filter
-            </Button>
-          )}
-        </div>
-        <div className="milestones-grid" ref={milestonesGridRef}>
-          {sortedMilestones.map(([milestone, tasks]: [string, any[]], index) => {
-            const sequenceNumber = getMilestoneSequence(milestone);
-            const displayNumber = sequenceNumber !== 999 ? sequenceNumber : null;
-
-            // Calculate task counts
-            const openCount = tasks.filter(t => t.status === 'open' || t.status === 'pending').length;
-            const inProgressCount = tasks.filter(t => t.status === 'in_progress').length;
-            const doneCount = tasks.filter(t => t.status === 'done').length;
-
-            // Determine if milestone is completed (no open or in progress tasks)
-            const isCompleted = openCount === 0 && inProgressCount === 0;
-
+      {/* Milestone filter chips (prototype style) */}
+      <div className="mb-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm text-text-secondary-dark">Milestones:</span>
+          <button
+            className={`chip ${!selectedMilestoneFilter ? 'chip--active' : ''}`}
+            onClick={() => setSelectedMilestoneFilter(null)}
+          >
+            All
+          </button>
+          {sortedMilestones.map(([milestone, tasks]: [string, any[]]) => {
+            const displayName = milestone.replace(/_/g, ' ').replace(/^m\d+\s*/, '').replace(/^\w/, c => c.toUpperCase());
             return (
-              <div
+              <button
                 key={milestone}
-                className={`milestone-card milestone-card-compact ${selectedMilestoneFilter === milestone ? 'milestone-card--active' : ''} ${isCompleted ? 'milestone-card--completed' : 'milestone-card--active-work'}`}
-                onClick={() => setSelectedMilestoneFilter(selectedMilestoneFilter === milestone ? null : milestone)}
+                className={`chip ${selectedMilestoneFilter === milestone ? 'chip--active' : ''}`}
+                onClick={() => setSelectedMilestoneFilter(milestone)}
               >
-                <div className="milestone-header">
-                  <h5 className="milestone-title">
-                    {displayNumber !== null && <span className="milestone-sequence">{displayNumber}. </span>}
-                    {milestone.replace(/_/g, ' ').replace(/^m\d+\s*/, '').replace(/^\w/, c => c.toUpperCase())}
-                  </h5>
-                  <span className="milestone-count">{tasks.length} tasks</span>
-                </div>
-                <div className="milestone-progress">
-                  <div className="progress-stats">
-                    <span className="stat">
-                      <span className="stat-value">{openCount}</span>
-                      <span className="stat-label">Open</span>
-                    </span>
-                    <span className="stat">
-                      <span className="stat-value">{inProgressCount}</span>
-                      <span className="stat-label">In Progress</span>
-                    </span>
-                    <span className="stat">
-                      <span className="stat-value">{doneCount}</span>
-                      <span className="stat-label">Done</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
+                {displayName}
+                <span className="chip-count">{tasks.length}</span>
+              </button>
             );
           })}
+          <button
+            className={`chip ${selectedMilestoneFilter === 'Completed' ? 'chip--active' : ''}`}
+            onClick={() => setSelectedMilestoneFilter('Completed')}
+          >
+            Completed
+          </button>
         </div>
       </div>
 
@@ -277,46 +302,66 @@ export const TasksView: React.FC<TasksViewProps> = ({
           <TaskColumn
             title="Open"
             count={tasksByStatus.open.length}
-            tasks={tasksByStatus.open}
+            totalCount={tasksByStatus.open.length}
+            tasks={tasksByStatus.open.slice(0, visibleCounts.open)}
             status="open"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
             onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
             taskUnblockLoading={taskUnblockLoading}
+            taskAssignments={taskAssignments}
+            onCreateTaskClick={() => setIsCreateTaskModalOpen(true)}
+            onLoadMore={tasksByStatus.open.length > visibleCounts.open ? () => setVisibleCounts(v => ({...v, open: v.open + 20})) : undefined}
+            avatarMap={avatarMap}
           />
           <TaskColumn
             title="In Progress"
             count={tasksByStatus.in_progress.length}
-            tasks={tasksByStatus.in_progress}
+            totalCount={tasksByStatus.in_progress.length}
+            tasks={tasksByStatus.in_progress.slice(0, visibleCounts.in_progress)}
             status="in_progress"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
             onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
             taskUnblockLoading={taskUnblockLoading}
+            taskAssignments={taskAssignments}
+            onCreateTaskClick={() => setIsCreateTaskModalOpen(true)}
+            onLoadMore={tasksByStatus.in_progress.length > visibleCounts.in_progress ? () => setVisibleCounts(v => ({...v, in_progress: v.in_progress + 20})) : undefined}
+            avatarMap={avatarMap}
           />
           <TaskColumn
             title="Done"
             count={tasksByStatus.done.length}
-            tasks={tasksByStatus.done}
+            totalCount={tasksByStatus.done.length}
+            tasks={tasksByStatus.done.slice(0, visibleCounts.done)}
             status="done"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
             onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
             taskUnblockLoading={taskUnblockLoading}
+            taskAssignments={taskAssignments}
+            onCreateTaskClick={() => setIsCreateTaskModalOpen(true)}
+            onLoadMore={tasksByStatus.done.length > visibleCounts.done ? () => setVisibleCounts(v => ({...v, done: v.done + 20})) : undefined}
+            avatarMap={avatarMap}
           />
           <TaskColumn
             title="Blocked"
             count={tasksByStatus.blocked.length}
-            tasks={tasksByStatus.blocked}
+            totalCount={tasksByStatus.blocked.length}
+            tasks={tasksByStatus.blocked.slice(0, visibleCounts.blocked)}
             status="blocked"
             onTaskClick={onTaskClick}
             onTaskAssign={onTaskAssign}
             onTaskUnblock={onTaskUnblock}
             taskAssignmentLoading={taskAssignmentLoading}
             taskUnblockLoading={taskUnblockLoading}
+            taskAssignments={taskAssignments}
+            onCreateTaskClick={() => setIsCreateTaskModalOpen(true)}
+            onLoadMore={tasksByStatus.blocked.length > visibleCounts.blocked ? () => setVisibleCounts(v => ({...v, blocked: v.blocked + 20})) : undefined}
+            avatarMap={avatarMap}
           />
         </div>
       </div>
@@ -459,110 +504,107 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
   onTaskAssign,
   onTaskUnblock,
   taskAssignmentLoading,
-  taskUnblockLoading
+  taskUnblockLoading,
+  taskAssignments,
+  onCreateTaskClick,
+  onLoadMore,
+  totalCount,
+  avatarMap
 }) => {
   return (
-    <div className={`task-column task-column--${status}`}>
+    <div className={`task-column task-column--${status}`} style={{ maxHeight: 'calc(100vh - 22rem)' }}>
       <div className="column-header">
-        <h4 className="column-title">{title}</h4>
-        <span className="task-count">{count}</span>
+        <div className="flex items-center gap-2">
+          <h4 className="column-title">{title}</h4>
+          <span className="task-count">{count}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {onCreateTaskClick && (
+            <button
+              className="inline-flex items-center justify-center w-6 h-6 rounded-full border border-border-dark text-text-secondary-dark hover:text-text-primary-dark hover:border-primary/50"
+              title={`Create ${title} task`}
+              onClick={onCreateTaskClick}
+            >
+              +
+            </button>
+          )}
+          <MoreHorizontal className="w-4 h-4 text-text-secondary-dark" />
+        </div>
       </div>
-      <div className="column-content">
+      <div className="column-content overflow-y-auto">
         {tasks.map(task => (
           <div 
             key={task.id} 
-            className="task-card task-card-clickable" 
+            className={`task-card task-card-clickable ${task.status === 'done' || task.status === 'completed' ? 'opacity-90' : ''}`} 
             onClick={() => onTaskClick(task)}
           >
             <div className="task-header">
-              <h5 className="task-title">{task.title}</h5>
-              <div className="task-actions">
-                <button
-                  className={`task-play-btn ${taskAssignmentLoading === task.id ? 'loading' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTaskAssign(task);
-                  }}
-                  disabled={taskAssignmentLoading === task.id}
-                  title="Assign this task to the orchestrator team"
-                >
-                  {taskAssignmentLoading === task.id ? (
-                    <div className="task-spinner" />
-                  ) : (
-                    <Play className="task-play-icon" />
-                  )}
-                </button>
-                {status === 'blocked' && (
-                  <button
-                    className={`task-unblock-btn ${taskUnblockLoading === task.id ? 'loading' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTaskUnblock(task);
-                    }}
-                    disabled={taskUnblockLoading === task.id}
-                    title="Unblock this task and move it to open for reassignment"
-                  >
-                    {taskUnblockLoading === task.id ? (
-                      <div className="task-spinner" />
-                    ) : (
-                      <Unlock className="task-unblock-icon" />
-                    )}
-                  </button>
-                )}
-                <div className="task-badges">
-                  {task.priority && (
-                    <span className={`priority-badge priority-${task.priority}`}>
-                      {task.priority}
-                    </span>
-                  )}
+              <h5 className="task-title" style={{ textDecoration: (task.status === 'done' || task.status === 'completed') ? 'line-through' : 'none' }}>{task.title}</h5>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  const assignment = taskAssignments.get(task.id);
+                  const displayName = assignment?.memberName || task.assignee || '';
+                  const sessionName = assignment?.sessionName || '';
+                  const key1 = displayName.toLowerCase();
+                  const key2 = sessionName.toLowerCase();
+                  const avatarValue = (avatarMap && (avatarMap[key1] || avatarMap[key2])) || '';
+                  if (avatarValue && (avatarValue.startsWith('http') || avatarValue.startsWith('data:'))) {
+                    return <img className="task-avatar" src={avatarValue} alt={displayName} title={displayName || sessionName} />;
+                  }
+                  if (avatarValue) {
+                    return <div className="task-avatar" title={displayName || sessionName}>{avatarValue}</div>;
+                  }
+                  const avatarText = (displayName || sessionName || '•').charAt(0).toUpperCase();
+                  return <div className="task-avatar" title={displayName || sessionName}>{avatarText}</div>;
+                })()}
+                <div className="task-play-wrap">
+                  <Play className="w-3.5 h-3.5" />
                 </div>
               </div>
             </div>
-            <p className="task-description">{task.description}</p>
-            
-            <div className="task-meta">
-              <div className="task-milestone">
-                <span className="milestone-badge">
-                  {task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '') || 'General'}
+
+            <div className="task-badges">
+              {task.priority && (
+                <span className={`priority-badge priority-${task.priority}`}>
+                  {task.priority}
                 </span>
-              </div>
-              {task.assignee && (
-                <div className="task-assignee">
-                  <span className="assignee-badge">
-                    {task.assignee}
-                  </span>
-                </div>
+              )}
+              <span className="milestone-badge">
+                {task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '') || 'General'}
+              </span>
+              {((task as any).linksCount || (task as any).links?.length) && (
+                <span className="link-chip">
+                  <Link2 className="w-3 h-3" />
+                  {(task as any).linksCount || (task as any).links?.length}
+                </span>
               )}
             </div>
 
-            {task.tasks && task.tasks.length > 0 && (
-              <div className="task-subtasks">
-                <div className="subtasks-header">
-                  <span className="subtasks-title">Tasks:</span>
-                </div>
-                <div className="subtasks-list">
-                  {task.tasks.slice(0, 3).map((subtask: string, index: number) => (
-                    <div key={index} className="subtask-item">
-                      <span className="subtask-text">{subtask.replace(/^\[x\]\s*|\[\s*\]\s*/i, '')}</span>
-                    </div>
-                  ))}
-                  {task.tasks.length > 3 && (
-                    <div className="subtask-more">
-                      +{task.tasks.length - 3} more
-                    </div>
-                  )}
-                </div>
-              </div>
+            {task.description && (
+              <p className="task-description">{task.description}</p>
             )}
           </div>
         ))}
         {tasks.length === 0 && (
-          <div className="column-empty-state">
-            <div className="column-empty-icon">📋</div>
-            <p>No {title.toLowerCase()} tasks</p>
+          <div className="p-4 flex-grow flex flex-col items-center justify-center text-center">
+            <div className="flex flex-col items-center justify-center p-6 rounded-lg bg-surface-dark/50 border-2 border-dashed border-border-dark h-full w-full">
+              <Inbox className="w-12 h-12 text-text-secondary-dark mb-3" />
+              <h4 className="font-semibold mb-1">No {title} Tasks</h4>
+              <p className="text-sm text-text-secondary-dark mb-4">{title === 'Open' ? 'All tasks are in progress or completed.' : `No ${title.toLowerCase()} tasks at the moment.`}</p>
+              {onCreateTaskClick && (
+                <button onClick={onCreateTaskClick} className="bg-primary text-white h-9 px-3 rounded-lg text-sm font-semibold hover:bg-primary/90 transition-colors">Create New Task</button>
+              )}
+            </div>
           </div>
         )}
       </div>
+      {onLoadMore && (
+        <div className="p-4 border-t border-border-dark">
+          <button onClick={onLoadMore} className="w-full h-9 px-3 rounded-lg text-sm font-semibold bg-surface-dark border border-border-dark hover:bg-background-dark text-text-secondary-dark hover:text-primary transition-colors">
+            Load More
+          </button>
+        </div>
+      )}
     </div>
   );
 };

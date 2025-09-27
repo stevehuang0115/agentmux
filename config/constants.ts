@@ -101,6 +101,14 @@ export const AGENTMUX_CONSTANTS = {
 	},
 
 	/**
+	 * Special agent identifiers for system-level agents
+	 */
+	AGENT_IDS: {
+		/** Orchestrator agent identifier - used in teamAgentStatus.json */
+		ORCHESTRATOR_ID: 'orchestrator',
+	},
+
+	/**
 	 * Human-readable role display names
 	 */
 	ROLE_DISPLAY_NAMES: {
@@ -123,6 +131,25 @@ export const AGENTMUX_CONSTANTS = {
 		/** AgentMux session name prefix pattern */
 		SESSION_PREFIX: 'agentmux_',
 	},
+} as const;
+
+// ========================= AGENT IDENTITY CONSTANTS =========================
+
+/**
+ * Convenient agent identity references combining multiple constants
+ */
+export const AGENT_IDENTITY_CONSTANTS = {
+	/**
+	 * Orchestrator agent identity - combines ID, session name, and role
+	 */
+	ORCHESTRATOR: {
+		/** Agent identifier used in teamAgentStatus.json */
+		ID: AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID, // 'orchestrator'
+		/** Tmux session name */
+		SESSION_NAME: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // 'agentmux-orc'
+		/** Agent role */
+		ROLE: AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR // 'orchestrator'
+	}
 } as const;
 
 // ========================= MCP SERVER CONSTANTS =========================
@@ -502,3 +529,4 @@ export type OrchestratorCommand =
 	(typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS)[keyof typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS];
 export type HTTPStatusCode =
 	(typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES)[keyof typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES];
+export type AgentId = (typeof AGENTMUX_CONSTANTS.AGENT_IDS)[keyof typeof AGENTMUX_CONSTANTS.AGENT_IDS];

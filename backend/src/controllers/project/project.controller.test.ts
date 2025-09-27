@@ -621,6 +621,119 @@ describe('Projects Handlers', () => {
     });
   });
 
+  describe('cleanupProjectScheduledMessages', () => {
+    let mockCleanupFunction: jest.Mock;
+
+    beforeEach(() => {
+      // Mock the cleanup function that was added to the project controller
+      mockCleanupFunction = jest.fn();
+      (mockApiContext as any).cleanupProjectScheduledMessages = mockCleanupFunction;
+    });
+
+    it('should clean up scheduled messages for stopProject', async () => {
+      const mockCleanupResult = {
+        found: 2,
+        cancelled: 2,
+        errors: []
+      };
+
+      mockCleanupFunction.mockResolvedValue(mockCleanupResult);
+      mockRequest.params = { id: 'project-123' };
+      mockStorageService.getProjects.mockResolvedValue([mockProject]);
+      mockActiveProjectsService.stopProject.mockResolvedValue();
+      mockStorageService.saveProject.mockResolvedValue();
+
+      await projectsHandlers.stopProject.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockCleanupFunction).toHaveBeenCalledWith('project-123');
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Project stopped successfully. Auto-assignment scheduling has been cancelled.',
+        data: { projectId: 'project-123', status: 'stopped' }
+      });
+    });
+
+    it('should clean up scheduled messages for deleteProject', async () => {
+      const mockCleanupResult = {
+        found: 1,
+        cancelled: 1,
+        errors: []
+      };
+
+      mockCleanupFunction.mockResolvedValue(mockCleanupResult);
+      mockRequest.params = { id: 'project-123' };
+      mockStorageService.getProjects.mockResolvedValue([mockProject]);
+      mockStorageService.getTeams.mockResolvedValue([]);
+      mockStorageService.deleteProject.mockResolvedValue(true);
+
+      await projectsHandlers.deleteProject.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockCleanupFunction).toHaveBeenCalledWith('project-123');
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Project deleted successfully. 0 teams were unassigned and 1 scheduled messages were cancelled.'
+      });
+    });
+
+    it('should handle cleanup errors gracefully in stopProject', async () => {
+      const mockCleanupResult = {
+        found: 2,
+        cancelled: 1,
+        errors: ['Failed to cancel message-1']
+      };
+
+      mockCleanupFunction.mockResolvedValue(mockCleanupResult);
+      mockRequest.params = { id: 'project-123' };
+      mockStorageService.getProjects.mockResolvedValue([mockProject]);
+      mockActiveProjectsService.stopProject.mockResolvedValue();
+      mockStorageService.saveProject.mockResolvedValue();
+
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      await projectsHandlers.stopProject.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        '1 errors occurred during message cleanup:',
+        ['Failed to cancel message-1']
+      );
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+
+      consoleWarnSpy.mockRestore();
+    });
+
+    it('should handle cleanup failure completely', async () => {
+      mockCleanupFunction.mockRejectedValue(new Error('Cleanup failed completely'));
+      mockRequest.params = { id: 'project-123' };
+      mockStorageService.getProjects.mockResolvedValue([mockProject]);
+
+      await projectsHandlers.stopProject.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(500);
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Failed to stop project'
+      });
+    });
+  });
+
   describe('Integration', () => {
     it('should properly coordinate between storage and active projects services', async () => {
       mockRequest.params = { id: 'integration-test' };

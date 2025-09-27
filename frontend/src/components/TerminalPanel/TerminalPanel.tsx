@@ -417,19 +417,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   }, [isOpen, handleKeyDown]);
 
   return (
-    <div 
+    <div
       ref={terminalPanelRef}
-      className={`terminal-side-panel ${isOpen ? 'open' : 'closed'}`}
+      className={`fixed top-0 right-0 h-full bg-surface-dark border-l border-border-dark flex flex-col z-50 transition-transform duration-300 ${
+        isOpen ? 'translate-x-0' : 'translate-x-full'
+      } w-96`}
       tabIndex={0}
       style={{ outline: 'none' }}
     >
-      <div className="terminal-panel-header">
-        <div className="terminal-panel-title">
-          <Terminal className="w-5 h-5" />
-          <span>Terminal</span>
-          <div className={`terminal-panel-status`}>
-            <div className={`status-indicator ${connectionStatus}`}></div>
-            <span>
+      <div className="flex items-center justify-between p-4 border-b border-border-dark">
+        <div className="flex items-center space-x-3">
+          <Terminal className="w-5 h-5 text-text-secondary-dark" />
+          <span className="font-medium text-text-primary-dark">Terminal</span>
+          <div className="flex items-center space-x-2">
+            <div className={`w-2 h-2 rounded-full ${
+              connectionStatus === 'connected' ? 'bg-green-400' :
+              connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? 'bg-yellow-400' :
+              connectionStatus === 'error' ? 'bg-red-400' : 'bg-gray-400'
+            }`}></div>
+            <span className="text-sm text-text-secondary-dark">
               {connectionStatus === 'connected' ? 'Live' :
                connectionStatus === 'connecting' ? 'Connecting...' :
                connectionStatus === 'reconnecting' ? 'Reconnecting...' :
@@ -437,24 +443,26 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
             </span>
           </div>
         </div>
-        
+
         <button
           onClick={onClose}
-          className="terminal-panel-close"
+          className="p-1 text-text-secondary-dark hover:text-text-primary-dark hover:bg-background-dark rounded transition-colors"
           aria-label="Close Terminal"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="terminal-panel-controls">
-        <div className="session-selector">
-          <label htmlFor="session-select">Session:</label>
+      <div className="px-4 py-3 border-b border-border-dark">
+        <div className="flex items-center space-x-3">
+          <label htmlFor="session-select" className="text-sm font-medium text-text-secondary-dark">
+            Session:
+          </label>
           <select
             id="session-select"
             value={selectedSession}
             onChange={(e) => setSelectedSession(e.target.value)}
-            className="session-select"
+            className="flex-1 px-3 py-1 bg-background-dark border border-border-dark rounded text-sm text-text-primary-dark focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50"
             disabled={connectionStatus !== 'connected'}
           >
             {availableSessions.map((session) => (
@@ -466,49 +474,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         </div>
       </div>
 
-      <div className="terminal-panel-content">
+      <div className="flex-1 flex flex-col">
         {error && (
-          <div className="error-banner" style={{
-            padding: '0.5rem 1rem',
-            background: '#fee2e2',
-            borderLeft: '4px solid #dc2626',
-            color: '#991b1b',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem'
-          }}>
-            <AlertCircle className="w-4 h-4" />
-            <span>{error}</span>
-            <Button onClick={retryConnection} variant="ghost" size="sm">
+          <div className="mx-4 my-2 px-4 py-3 bg-red-500/10 border-l-4 border-red-500 text-red-400 flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span className="flex-1 text-sm">{error}</span>
+            <Button onClick={retryConnection} variant="ghost" size="sm" className="text-red-400 hover:text-red-300">
               Retry
             </Button>
           </div>
         )}
-        
-        <div className="terminal-panel-output">
+
+        <div className="flex-1 overflow-hidden">
           <pre
             ref={terminalOutputRef}
-            className="terminal-output-text"
+            className="h-full w-full p-4 bg-background-dark font-mono text-sm text-text-primary-dark overflow-auto whitespace-pre-wrap break-words"
             onScroll={handleScroll}
           >
-            {connectionStatus === 'connected' ? terminalOutput : 
+            {connectionStatus === 'connected' ? terminalOutput :
              connectionStatus === 'connecting' ? '# Connecting to terminal session...\n# Please wait...' :
              connectionStatus === 'error' ? '# Connection Error\n# Please check your connection and try again.' :
              '# Terminal Disconnected\n# Open terminal panel to connect'}
           </pre>
         </div>
-        
+
         {loading && connectionStatus === 'connected' && (
-          <div className="terminal-panel-footer">
-            <div className="terminal-info" style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
-              <div className="loading-spinner" style={{
-                width: '12px', 
-                height: '12px', 
-                border: '2px solid #e5e7eb',
-                borderTop: '2px solid #3b82f6',
-                borderRadius: '50%',
-                animation: 'spin 1s linear infinite'
-              }}></div>
+          <div className="px-4 py-2 border-t border-border-dark">
+            <div className="flex items-center space-x-2 text-sm text-text-secondary-dark">
+              <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
               <span>Loading terminal output...</span>
             </div>
           </div>

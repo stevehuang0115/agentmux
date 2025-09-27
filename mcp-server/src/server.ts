@@ -226,8 +226,8 @@ export class AgentMuxMCPServer {
 
         // Find matching team member data
         let memberData: any = null;
-        if (teamData?.data?.teams) {
-          for (const team of teamData.data.teams) {
+        if (teamData?.teams) {
+          for (const team of teamData.teams) {
             if (team.members) {
               const member = team.members.find((m: any) =>
                 m.sessionName === sessionInfo.sessionName
@@ -241,8 +241,8 @@ export class AgentMuxMCPServer {
         }
 
         statuses.push({
-          sessionId: sessionInfo.sessionName,
-          memberId: memberData?.id || null,
+          sessionName: sessionInfo.sessionName,
+          teamMemberId: memberData?.id || null,
           name: memberData?.name || this.getDefaultNameFromSession(sessionInfo.sessionName),
           attached: sessionInfo.attached,
           status: status,
@@ -631,11 +631,11 @@ export class AgentMuxMCPServer {
     
     try {
       const requestBody = {
-        sessionName: params.sessionId,
+        sessionName: params.sessionName,
         role: params.role,
         status: 'active',
         registeredAt: new Date().toISOString(),
-        memberId: params.memberId
+        memberId: params.teamMemberId
       };
       
       console.log(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
@@ -696,10 +696,58 @@ export class AgentMuxMCPServer {
       const duration = Date.now() - startTime;
       console.log(`[MCP] ✅ Registration successful! Duration: ${duration}ms`);
 
+      // If this is an orchestrator registration, check for abandoned tasks to recover
+      let recoveryReport: any = null;
+      if (params.role === 'orchestrator') {
+        console.log(`[MCP] 🔄 Orchestrator registered, checking for abandoned tasks...`);
+        try {
+          const recoveryResponse = await fetch(`${this.apiBaseUrl}/api/task-management/recover-abandoned-tasks`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'AgentMux-MCP/1.0.0'
+            },
+            body: JSON.stringify({ sessionName: params.sessionName })
+          });
+
+          if (recoveryResponse.ok) {
+            recoveryReport = await recoveryResponse.json();
+            console.log(`[MCP] 📊 Recovery completed:`, recoveryReport);
+          } else {
+            console.log(`[MCP] ⚠️ Recovery check failed: ${recoveryResponse.status}`);
+          }
+        } catch (recoveryError) {
+          console.log(`[MCP] ⚠️ Recovery check error:`, recoveryError);
+        }
+      }
+
+      // Build response message
+      let responseText = `Agent registered successfully. Role: ${params.role}, Session: ${params.sessionName}${params.teamMemberId ? `, Member ID: ${params.teamMemberId}` : ''}`;
+
+      if (recoveryReport && recoveryReport.success) {
+        const report = recoveryReport.data;
+        if (report.totalInProgress > 0) {
+          responseText += `\n\n🔄 Task Recovery Report:`;
+          responseText += `\n- Total in-progress tasks checked: ${report.totalInProgress}`;
+          responseText += `\n- Tasks recovered (moved back to open): ${report.recovered}`;
+          responseText += `\n- Tasks kept (agent still active): ${report.skipped}`;
+
+          if (report.recovered > 0) {
+            responseText += `\n- Recovered tasks: ${report.recoveredTasks.join(', ')}`;
+          }
+
+          if (report.errors.length > 0) {
+            responseText += `\n- Errors: ${report.errors.length}`;
+          }
+        } else {
+          responseText += `\n\n✅ No abandoned tasks found to recover.`;
+        }
+      }
+
       return {
         content: [{
           type: 'text',
-          text: `Agent registered successfully. Role: ${params.role}, Session: ${params.sessionId}${params.memberId ? `, Member ID: ${params.memberId}` : ''}`
+          text: responseText
         }]
       };
     } catch (error) {
@@ -726,7 +774,7 @@ export class AgentMuxMCPServer {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskPath: params.taskPath,
+          taskPath: params.absoluteTaskPath,
           sessionName: params.sessionName
         })
       });
@@ -743,14 +791,14 @@ export class AgentMuxMCPServer {
         return {
           content: [{
             type: 'text',
-            text: `❌ Task assignment failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+            text: `❌ Task assignment failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.absoluteTaskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
           }],
           isError: true
         };
       }
 
       // Add task to in_progress_tasks.json
-      await this.addTaskToInProgressTracking(params.taskPath, params.sessionName, result);
+      await this.addTaskToInProgressTracking(params.absoluteTaskPath, params.sessionName, result);
 
       return {
         content: [{
@@ -775,7 +823,7 @@ export class AgentMuxMCPServer {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskPath: params.taskPath
+          taskPath: params.absoluteTaskPath
         })
       });
 
@@ -791,7 +839,7 @@ export class AgentMuxMCPServer {
         return {
           content: [{
             type: 'text',
-            text: `❌ Task read failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}`
+            text: `❌ Task read failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.absoluteTaskPath}`
           }],
           isError: true
         };
@@ -820,7 +868,7 @@ export class AgentMuxMCPServer {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskPath: params.taskPath,
+          taskPath: params.absoluteTaskPath,
           sessionName: params.sessionName
         })
       });
@@ -837,14 +885,14 @@ export class AgentMuxMCPServer {
         return {
           content: [{
             type: 'text',
-            text: `❌ Task completion failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+            text: `❌ Task completion failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.absoluteTaskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
           }],
           isError: true
         };
       }
 
       // Success case - remove task from in_progress_tasks.json
-      await this.removeTaskFromInProgressTracking(params.taskPath);
+      await this.removeTaskFromInProgressTracking(params.absoluteTaskPath);
 
       return {
         content: [{
@@ -869,7 +917,7 @@ export class AgentMuxMCPServer {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskPath: params.taskPath,
+          taskPath: params.absoluteTaskPath,
           sessionName: this.sessionName,
           reason: params.reason,
           questions: params.questions || [],
@@ -889,7 +937,7 @@ export class AgentMuxMCPServer {
         return {
           content: [{
             type: 'text',
-            text: `❌ Task blocking failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.taskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
+            text: `❌ Task blocking failed: ${result.error}\n\n📋 Details: ${result.details}\n\n💡 Suggestion: ${result.suggestion || result.action || 'Check the task file path and workflow state'}\n\n📂 Task Path: ${result.taskPath || params.absoluteTaskPath}${result.currentFolder ? `\n📁 Current Folder: ${result.currentFolder}` : ''}${result.expectedFolder ? `\n🎯 Expected Folder: ${result.expectedFolder}` : ''}`
           }],
           isError: true
         };
@@ -922,7 +970,7 @@ export class AgentMuxMCPServer {
 
   async assignTask(params: AssignTaskDelegationParams): Promise<MCPToolResult> {
     try {
-      const { taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
+      const { absoluteTaskPath: taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
       console.log(`📋 Assigning task to ${targetSessionName} via delegation`);
 
       // Prevent delegation loops
@@ -964,7 +1012,7 @@ export class AgentMuxMCPServer {
       let taskProjectPath = this.projectPath; // Default fallback
 
       try {
-        const taskReadResult = await this.readTask({ taskPath });
+        const taskReadResult = await this.readTask({ absoluteTaskPath: taskPath });
         if (!taskReadResult.isError) {
           const content = taskReadResult.content[0]?.text || '';
           taskDetails = this.parseTaskContent(content, taskPath);
@@ -1611,49 +1659,215 @@ export class AgentMuxMCPServer {
     }
   }
 
-  async shutdownAgent(params: ShutdownAgentParams): Promise<MCPToolResult> {
+  async terminateAgent(params: any): Promise<MCPToolResult> {
     try {
-      const { session } = params;
-      console.log(`🛑 Shutting down agent session ${session}`);
+      console.log(`[SHUTDOWN] Step 1: Starting shutdown process for params:`, params);
+
+      if (!params.sessionName) {
+        throw new Error('sessionName parameter is required');
+      }
+
+      const sessionName = params.sessionName;
+      console.log(`[SHUTDOWN] Step 2: Validated sessionName: ${sessionName}`);
 
       // Safety checks
-      if (session === 'orchestrator' || session === this.sessionName) {
+      if (sessionName === 'orchestrator' || sessionName === this.sessionName) {
+        console.log(`[SHUTDOWN] Step 3: Safety check failed - orchestrator/self protection`);
         throw new Error('Cannot shutdown orchestrator or self');
       }
 
-      if (session.includes('orchestrator') || session.includes('orc')) {
+      if (sessionName.includes('orchestrator') || sessionName.includes('orc')) {
+        console.log(`[SHUTDOWN] Step 4: Safety check failed - orchestrator name detection`);
         throw new Error('Cannot shutdown orchestrator sessions');
       }
+      console.log(`[SHUTDOWN] Step 5: Safety checks passed`);
 
       // Check if session exists
-      if (!(await this.tmuxService.sessionExists(session))) {
-        throw new Error(`Session ${session} not found`);
+      console.log(`[SHUTDOWN] Step 6: Checking if session exists...`);
+      if (!(await this.tmuxService.sessionExists(sessionName))) {
+        console.log(`[SHUTDOWN] Step 7: Session existence check failed`);
+        throw new Error(`Session ${sessionName} not found`);
       }
+      console.log(`[SHUTDOWN] Step 8: Session exists, proceeding with shutdown`);
 
-      // Send warning message first
-      await this.tmuxService.sendMessage(session, '⚠️  WARNING: Agent shutdown in 5 seconds. Please save your work!');
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Send notification message (less alarming than "warning")
+      console.log(`[SHUTDOWN] Step 9: Sending notification message...`);
+      await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
+      console.log(`[SHUTDOWN] Step 10: Notification sent, proceeding with termination`);
 
-      // Shutdown the session
-      await this.tmuxService.killSession(session);
+      // Terminate the session
+      console.log(`[SHUTDOWN] Step 11: Executing session termination...`);
+      await this.tmuxService.killSession(sessionName);
+      console.log(`[SHUTDOWN] Step 12: Session termination completed successfully`);
 
       // Notify remaining sessions
+      console.log(`[SHUTDOWN] Step 13: Broadcasting termination notification...`);
       await this.broadcast({
-        message: `🛑 Agent ${session} has been shutdown by ${this.sessionName}`,
+        message: `📋 Agent ${sessionName} has been terminated by ${this.sessionName}`,
         excludeSelf: true
       });
+      console.log(`[SHUTDOWN] Step 14: Broadcast completed, termination process finished`);
 
       return {
         content: [{
           type: 'text',
-          text: `✅ Agent session ${session} shutdown successfully`
+          text: `✅ Agent session ${sessionName} terminated successfully`
         }]
       };
     } catch (error) {
+      console.log(`[SHUTDOWN] ERROR: Shutdown process failed:`, error);
       return {
         content: [{
           type: 'text',
           text: `Failed to shutdown agent: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async terminateAgents(params: any): Promise<MCPToolResult> {
+    try {
+      console.log(`[BULK-TERMINATE] Step 1: Starting bulk termination for:`, params.sessionNames);
+
+      if (!params.sessionNames || !Array.isArray(params.sessionNames)) {
+        throw new Error('sessionNames array parameter is required');
+      }
+
+      if (params.sessionNames.length === 0) {
+        throw new Error('sessionNames array cannot be empty');
+      }
+
+      console.log(`[BULK-TERMINATE] Step 2: Validating ${params.sessionNames.length} sessions`);
+
+      const results = {
+        successful: [] as string[],
+        failed: [] as { sessionName: string; error: string }[],
+        skipped: [] as { sessionName: string; reason: string }[]
+      };
+
+      // Process each session
+      for (const sessionName of params.sessionNames) {
+        console.log(`[BULK-TERMINATE] Processing: ${sessionName}`);
+
+        try {
+          // Safety checks
+          if (sessionName === 'orchestrator' || sessionName === this.sessionName) {
+            results.skipped.push({
+              sessionName,
+              reason: 'Cannot terminate orchestrator or self'
+            });
+            console.log(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator/self protection`);
+            continue;
+          }
+
+          if (sessionName.includes('orchestrator') || sessionName.includes('orc')) {
+            results.skipped.push({
+              sessionName,
+              reason: 'Cannot terminate orchestrator sessions'
+            });
+            console.log(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator name detection`);
+            continue;
+          }
+
+          // Check if session exists
+          if (!(await this.tmuxService.sessionExists(sessionName))) {
+            results.failed.push({
+              sessionName,
+              error: 'Session not found'
+            });
+            console.log(`[BULK-TERMINATE] Failed ${sessionName}: session not found`);
+            continue;
+          }
+
+          // Send notification message
+          console.log(`[BULK-TERMINATE] Sending notification to: ${sessionName}`);
+          await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
+
+          // Terminate the session
+          console.log(`[BULK-TERMINATE] Terminating session: ${sessionName}`);
+          await this.tmuxService.killSession(sessionName);
+
+          results.successful.push(sessionName);
+          console.log(`[BULK-TERMINATE] Successfully terminated: ${sessionName}`);
+
+        } catch (error) {
+          results.failed.push({
+            sessionName,
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+          console.log(`[BULK-TERMINATE] Error terminating ${sessionName}:`, error);
+        }
+      }
+
+      // Broadcast summary notification to remaining agent sessions (exclude orchestrator)
+      if (results.successful.length > 0) {
+        console.log(`[BULK-TERMINATE] Broadcasting summary notification...`);
+
+        // Get all sessions and send to non-orchestrator sessions only
+        const sessions = await this.tmuxService.listSessions();
+        let broadcastCount = 0;
+
+        for (const session of sessions) {
+          const sessionName = session.sessionName;
+
+          // Skip orchestrator sessions and self
+          if (sessionName.includes('orchestrator') || sessionName.includes('orc') || sessionName === this.sessionName) {
+            console.log(`[BULK-TERMINATE] Skipping broadcast to: ${sessionName} (orchestrator/self)`);
+            continue;
+          }
+
+          try {
+            if (await this.tmuxService.sessionExists(sessionName)) {
+              await this.tmuxService.sendMessage(sessionName, `📋 Bulk termination completed: ${results.successful.length} agents terminated by ${this.sessionName}`);
+              broadcastCount++;
+              console.log(`[BULK-TERMINATE] Broadcasted to: ${sessionName}`);
+            }
+          } catch (error) {
+            console.log(`[BULK-TERMINATE] Failed to broadcast to ${sessionName}:`, error);
+          }
+        }
+
+        console.log(`[BULK-TERMINATE] Broadcast completed to ${broadcastCount} sessions`);
+      }
+
+      console.log(`[BULK-TERMINATE] Bulk termination completed:`, results);
+
+      // Format response
+      let responseText = `✅ Bulk termination completed:\n`;
+      responseText += `  • Successful: ${results.successful.length} sessions\n`;
+
+      if (results.successful.length > 0) {
+        responseText += `    - ${results.successful.join(', ')}\n`;
+      }
+
+      if (results.failed.length > 0) {
+        responseText += `  • Failed: ${results.failed.length} sessions\n`;
+        results.failed.forEach(f => {
+          responseText += `    - ${f.sessionName}: ${f.error}\n`;
+        });
+      }
+
+      if (results.skipped.length > 0) {
+        responseText += `  • Skipped: ${results.skipped.length} sessions\n`;
+        results.skipped.forEach(s => {
+          responseText += `    - ${s.sessionName}: ${s.reason}\n`;
+        });
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: responseText
+        }]
+      };
+
+    } catch (error) {
+      console.log(`[BULK-TERMINATE] ERROR: Bulk termination failed:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `Failed to terminate agents: ${error instanceof Error ? error.message : 'Unknown error'}`
         }],
         isError: true
       };
@@ -1998,16 +2212,20 @@ Please respond promptly with either acceptance or delegation.`;
     // Replace template variables
     return template
       .replace(/{taskPath}/g, taskPath || 'Direct delegation (no file)')
+      .replace(/{absoluteTaskPath}/g, taskPath || 'Direct delegation (no file)')
+      .replace(/{task_file_path}/g, taskPath || 'Direct delegation (no file)')
       .replace(/{taskTitle}/g, taskDetails.title || task || 'Task Assignment')
       .replace(/{taskId}/g, taskDetails.id || (taskPath ? path.basename(taskPath, '.md') : 'direct-task'))
       .replace(/{taskDescription}/g, taskDetails.description || task || 'See task details')
       .replace(/{taskPriority}/g, taskDetails.priority || priority)
+      .replace(/{task_priority}/g, taskDetails.priority || priority)
       .replace(/{taskMilestone}/g, taskDetails.milestone || 'current')
       .replace(/{projectName}/g, taskDetails.projectName || 'Current Project')
       .replace(/{projectPath}/g, taskProjectPath)
       .replace(/{yourSessionName}/g, targetSessionName)
       .replace(/{assignedBy}/g, delegatedBy)
       .replace(/{assignmentTimestamp}/g, new Date().toISOString())
+      .replace(/{currentTimestamp}/g, new Date().toISOString())
       .replace(/{delegationChain}/g, newChain.length > 0 ? newChain.join(' → ') : 'Direct assignment')
       .replace(/{delegatedBy}/g, delegatedBy)
       .replace(/{reason}/g, reason || 'Task assignment')
@@ -2153,8 +2371,11 @@ Please respond promptly with either acceptance or delegation.`;
                 case 'delegate_task':
                   result = await this.delegateTask(toolArgs);
                   break;
-                case 'shutdown_agent':
-                  result = await this.shutdownAgent(toolArgs);
+                case 'terminate_agent':
+                  result = await this.terminateAgent(toolArgs);
+                  break;
+                case 'terminate_agents':
+                  result = await this.terminateAgents(toolArgs);
                   break;
                 default:
                   throw new Error(`Unknown tool: ${toolName}`);
@@ -2230,7 +2451,8 @@ Please respond promptly with either acceptance or delegation.`;
           type: 'object',
           properties: {
             to: { type: 'string', description: 'Recipient team member session name' },
-            message: { type: 'string', description: 'Message content' }
+            message: { type: 'string', description: 'Message content' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['to', 'message']
         }
@@ -2242,7 +2464,8 @@ Please respond promptly with either acceptance or delegation.`;
           type: 'object',
           properties: {
             message: { type: 'string', description: 'Message to broadcast' },
-            excludeSelf: { type: 'boolean', description: 'Exclude own session from broadcast' }
+            excludeSelf: { type: 'boolean', description: 'Exclude own session from broadcast' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['message']
         }
@@ -2254,7 +2477,9 @@ Please respond promptly with either acceptance or delegation.`;
         description: 'Get current team status',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
+          },
           required: []
         }
       },
@@ -2266,7 +2491,8 @@ Please respond promptly with either acceptance or delegation.`;
           properties: {
             agentName: { type: 'string', description: 'Name of the agent to get logs from' },
             sessionName: { type: 'string', description: 'Session name of the agent (alternative to agentName)' },
-            lines: { type: 'number', description: 'Number of lines to retrieve (default: 50)' }
+            lines: { type: 'number', description: 'Number of lines to retrieve (default: 50)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: []
         }
@@ -2278,7 +2504,8 @@ Please respond promptly with either acceptance or delegation.`;
           type: 'object',
           properties: {
             agentName: { type: 'string', description: 'Name of the agent to check status for' },
-            sessionName: { type: 'string', description: 'Session name of the agent (alternative to agentName)' }
+            sessionName: { type: 'string', description: 'Session name of the agent (alternative to agentName)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: []
         }
@@ -2290,10 +2517,10 @@ Please respond promptly with either acceptance or delegation.`;
           type: 'object',
           properties: {
             role: { type: 'string', description: 'Agent role (orchestrator, tpm, dev, qa)' },
-            sessionId: { type: 'string', description: 'Tmux session identifier' },
-            memberId: { type: 'string', description: 'Team member ID for association' }
+            sessionName: { type: 'string', description: 'Tmux session identifier' },
+            teamMemberId: { type: 'string', description: 'Team member ID for association' }
           },
-          required: ['role', 'sessionId']
+          required: ['role', 'sessionName']
         }
       },
 
@@ -2304,10 +2531,11 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            taskPath: { type: 'string', description: 'Path to task file in open folder' },
-            sessionName: { type: 'string', description: 'Session name of the team member accepting the task' }
+            absoluteTaskPath: { type: 'string', description: 'Absolute path to task file in open folder' },
+            sessionName: { type: 'string', description: 'Session name of the team member accepting the task' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['taskPath', 'sessionName']
+          required: ['absoluteTaskPath', 'sessionName']
         }
       },
       {
@@ -2316,10 +2544,11 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            taskPath: { type: 'string', description: 'Path to current task file' },
-            sessionName: { type: 'string', description: 'Session name of the team member completing the task' }
+            absoluteTaskPath: { type: 'string', description: 'Absolute path to current task file' },
+            sessionName: { type: 'string', description: 'Session name of the team member completing the task' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['taskPath', 'sessionName']
+          required: ['absoluteTaskPath', 'sessionName']
         }
       },
       {
@@ -2328,9 +2557,10 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            taskPath: { type: 'string', description: 'Path to task file to read' }
+            absoluteTaskPath: { type: 'string', description: 'Absolute path to task file to read' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['taskPath']
+          required: ['absoluteTaskPath']
         }
       },
       {
@@ -2339,12 +2569,13 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            taskPath: { type: 'string', description: 'Path to task file in in_progress folder' },
+            absoluteTaskPath: { type: 'string', description: 'Absolute path to task file in in_progress folder' },
             reason: { type: 'string', description: 'Reason for blocking the task' },
             questions: { type: 'array', items: { type: 'string' }, description: 'Questions requiring human answers' },
-            urgency: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Urgency level of the blocker' }
+            urgency: { type: 'string', enum: ['low', 'medium', 'high'], description: 'Urgency level of the blocker' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['taskPath', 'reason']
+          required: ['absoluteTaskPath', 'reason']
         }
       },
       {
@@ -2353,13 +2584,14 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            taskPath: { type: 'string', description: 'Path to task file to assign' },
+            absoluteTaskPath: { type: 'string', description: 'Absolute path to task file to assign' },
             targetSessionName: { type: 'string', description: 'Session name of the target team member' },
             delegatedBy: { type: 'string', description: 'Session name of the delegating agent (optional)' },
             reason: { type: 'string', description: 'Reason for delegation (optional)' },
-            delegationChain: { type: 'array', items: { type: 'string' }, description: 'Current delegation chain to prevent loops (optional)' }
+            delegationChain: { type: 'array', items: { type: 'string' }, description: 'Current delegation chain to prevent loops (optional)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['taskPath', 'targetSessionName']
+          required: ['absoluteTaskPath', 'targetSessionName']
         }
       },
 
@@ -2371,7 +2603,8 @@ Please respond promptly with either acceptance or delegation.`;
           type: 'object',
           properties: {
             status: { type: 'string', description: 'Filter by status (open, in_progress, blocked, done)' },
-            all: { type: 'boolean', description: 'Get all tickets (default: only assigned to you)' }
+            all: { type: 'boolean', description: 'Get all tickets (default: only assigned to you)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: []
         }
@@ -2385,7 +2618,8 @@ Please respond promptly with either acceptance or delegation.`;
             ticketId: { type: 'string', description: 'Ticket ID to update' },
             status: { type: 'string', description: 'New status (open, in_progress, blocked, done)' },
             notes: { type: 'string', description: 'Update notes' },
-            blockers: { type: 'array', items: { type: 'string' }, description: 'List of blockers' }
+            blockers: { type: 'array', items: { type: 'string' }, description: 'List of blockers' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['ticketId']
         }
@@ -2401,7 +2635,8 @@ Please respond promptly with either acceptance or delegation.`;
             completed: { type: 'array', items: { type: 'string' }, description: 'List of completed items' },
             current: { type: 'string', description: 'What you are currently working on' },
             blockers: { type: 'array', items: { type: 'string' }, description: 'Current blockers' },
-            nextSteps: { type: 'string', description: 'Next steps to take' }
+            nextSteps: { type: 'string', description: 'Next steps to take' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['progress']
         }
@@ -2415,7 +2650,8 @@ Please respond promptly with either acceptance or delegation.`;
             ticketId: { type: 'string', description: 'Ticket ID for the work to review' },
             reviewer: { type: 'string', description: 'Specific reviewer session name (optional)' },
             branch: { type: 'string', description: 'Git branch to review (optional)' },
-            message: { type: 'string', description: 'Review request message (optional)' }
+            message: { type: 'string', description: 'Review request message (optional)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['ticketId']
         }
@@ -2428,7 +2664,8 @@ Please respond promptly with either acceptance or delegation.`;
           properties: {
             minutes: { type: 'number', description: 'Minutes from now to send reminder' },
             message: { type: 'string', description: 'Reminder message' },
-            target: { type: 'string', description: 'Target session name (optional, defaults to self)' }
+            target: { type: 'string', description: 'Target session name (optional, defaults to self)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['minutes', 'message']
         }
@@ -2439,7 +2676,8 @@ Please respond promptly with either acceptance or delegation.`;
         inputSchema: {
           type: 'object',
           properties: {
-            message: { type: 'string', description: 'Custom commit message (optional)' }
+            message: { type: 'string', description: 'Custom commit message (optional)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: []
         }
@@ -2455,7 +2693,8 @@ Please respond promptly with either acceptance or delegation.`;
             role: { type: 'string', description: 'Agent role (dev, qa, tpm, designer)' },
             name: { type: 'string', description: 'Session name' },
             projectPath: { type: 'string', description: 'Project path (optional)' },
-            systemPrompt: { type: 'string', description: 'Initial system prompt (optional)' }
+            systemPrompt: { type: 'string', description: 'Initial system prompt (optional)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['role', 'name']
         }
@@ -2469,20 +2708,38 @@ Please respond promptly with either acceptance or delegation.`;
             to: { type: 'string', description: 'Target session name' },
             task: { type: 'string', description: 'Task description' },
             priority: { type: 'string', description: 'Task priority (low, normal, high, urgent)' },
-            ticketId: { type: 'string', description: 'Related ticket ID (optional)' }
+            ticketId: { type: 'string', description: 'Related ticket ID (optional)' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['to', 'task', 'priority']
         }
       },
       {
-        name: 'shutdown_agent',
-        description: 'Shutdown an agent session (with safety checks)',
+        name: 'terminate_agent',
+        description: 'Terminate an agent session (with safety checks)',
         inputSchema: {
           type: 'object',
           properties: {
-            session: { type: 'string', description: 'Session name to shutdown' }
+            sessionName: { type: 'string', description: 'Session name to terminate' },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
-          required: ['session']
+          required: ['sessionName']
+        }
+      },
+      {
+        name: 'terminate_agents',
+        description: 'Terminate multiple agent sessions in bulk (with safety checks)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            sessionNames: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of session names to terminate'
+            },
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
+          },
+          required: ['sessionNames']
         }
       }
     ];
@@ -2498,7 +2755,9 @@ Please respond promptly with either acceptance or delegation.`;
       /✓.*done/i,
       /finished/i,
       /ready for next/i,
-      /waiting for input/i
+      /waiting for input/i,
+      /bypass permissions/i,
+      /⏵⏵ bypass permissions/i
     ];
 
     if (idlePatterns.some(pattern => output.match(pattern))) return 'idle';
@@ -2611,7 +2870,7 @@ Please respond promptly with either acceptance or delegation.`;
         taskPath: assignmentResult.newPath || taskPath.replace('/open/', '/in_progress/'),
         taskName: taskName,
         assignedSessionName: sessionName,
-        assignedMemberId: assignmentResult.memberId || 'unknown',
+        assignedTeamMemberId: assignmentResult.memberId || 'unknown',
         assignedAt: new Date().toISOString(),
         status: 'in_progress',
         originalPath: taskPath

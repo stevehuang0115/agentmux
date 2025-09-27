@@ -1,6 +1,9 @@
 export { Button, IconButton } from './Button';
 export type { ButtonProps, IconButtonProps, ButtonVariant, ButtonSize } from './Button';
 
+export { StatusBadge } from './StatusBadge';
+export type { StatusType } from './StatusBadge';
+
 export { Modal, ModalFooter, ModalBody } from './Modal';
 export type { ModalProps, ModalFooterProps, ModalBodyProps } from './Modal';
 

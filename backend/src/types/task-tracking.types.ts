@@ -6,7 +6,7 @@ export interface InProgressTask {
   taskName: string;
   targetRole: string; // tpm, pgm, dev, qa
   assignedTeamMemberId: string;
-  assignedSessionId: string;
+  assignedSessionName: string;
   assignedAt: string; // ISO timestamp
   status: 'assigned' | 'active' | 'blocked' | 'pending_assignment' | 'completed';
   lastCheckedAt?: string;

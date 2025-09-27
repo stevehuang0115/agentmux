@@ -15,7 +15,7 @@ As the orchestrator, you specialize in:
 ## Registration Required
 
 **IMMEDIATELY** after initialization, you must register yourself by calling agentmux mcp tool:
-`register_agent_status` with parameters: {"role": "orchestrator", "sessionId": "{{SESSION_ID}}"}
+`register_agent_status` with parameters: {"role": "orchestrator", "sessionName": "{{SESSION_ID}}"}
 
 **IMPORTANT:** ALWAYS run this tool regardless you have done that previously or not.
 This registration is essential for proper system operation.

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Plus, CheckSquare, Info, Play } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { Button } from '../UI';
+import { apiService } from '../../services/api.service';
 import { DetailViewProps } from './types';
 
 interface ProjectStats {
@@ -42,6 +43,7 @@ const DetailView: React.FC<DetailViewProps> = ({
     hasInitialUserJourneyMd: false
   });
   const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics] = useState({ progressPercent: 0, tasksCompleted: 0, tasksTotal: 0, assignedTeams: 0 });
 
   useEffect(() => {
     loadProjectStats();
@@ -58,6 +60,18 @@ const DetailView: React.FC<DetailViewProps> = ({
         if (result.success) {
           setProjectStats(result.data);
         }
+      }
+
+      // Prototype metrics (progress, completed/total, assigned teams)
+      try {
+        const tasks = await apiService.getAllTasks(project.id);
+        const total = tasks.length;
+        const completed = tasks.filter((t: any) => t.status === 'done' || t.status === 'completed').length;
+        const progress = total ? Math.round((completed / total) * 100) : 0;
+        const assigned = (availableTeams || []).filter((t: any) => t.currentProject === project.id || t.currentProject === project.name).length;
+        setMetrics({ progressPercent: progress, tasksCompleted: completed, tasksTotal: total, assignedTeams: assigned });
+      } catch (e) {
+        console.warn('Failed to compute prototype metrics', e);
       }
     } catch (error) {
       console.error('Error loading project stats:', error);
@@ -423,7 +437,7 @@ Describe the main objective and purpose of this project.
 
       {/* Scorecards Section */}
       <div className="detail-section">
-        <div className="section-header">
+        <div className="flex items-center justify-between p-5 border-b border-border-dark">
           <h4>Project Metrics</h4>
         </div>
         {loading ? (
@@ -434,70 +448,31 @@ Describe the main objective and purpose of this project.
           <div className="scorecards-grid">
             <div className="scorecard">
               <div className="scorecard-header">
-                <FileText className="scorecard-icon" />
-                <h5>Specification Files</h5>
+                <h5>Overall Progress</h5>
               </div>
-              <div className="scorecard-value">{projectStats.mdFileCount}</div>
-              <div className="scorecard-label">Markdown files in specs/</div>
+              <div className="scorecard-value">{metrics.progressPercent}%</div>
             </div>
             <div className="scorecard">
               <div className="scorecard-header">
-                <CheckSquare className="scorecard-icon" />
-                <h5>Tasks Defined</h5>
+                <h5>Tasks Completed</h5>
               </div>
-              <div className="scorecard-value">{projectStats.taskCount}</div>
-              <div className="scorecard-label">Total project tasks</div>
+              <div className="scorecard-value">{metrics.tasksCompleted}/{metrics.tasksTotal}</div>
             </div>
             <div className="scorecard">
               <div className="scorecard-header">
-                <Info className="scorecard-icon" />
-                <h5>Project Status</h5>
+                <h5>Assigned Teams</h5>
               </div>
-              <div className="scorecard-value">
-                <span className={`status-badge status-${project.status}`}>
-                  {project.status}
-                </span>
-              </div>
-              <div className="scorecard-label">Current state</div>
+              <div className="scorecard-value">{metrics.assignedTeams}</div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Project Information Section */}
-      <div className="detail-section">
-        <div className="section-header">
-          <h4>Project Information</h4>
-        </div>
-        <div className="project-info-grid">
-          <div className="info-section">
-            <h5>Name</h5>
-            <p>{project.name}</p>
-          </div>
-          <div className="info-section">
-            <h5>Path</h5>
-            <p>{project.path}</p>
-          </div>
-          <div className="info-section">
-            <h5>Status</h5>
-            <p>
-              <span className={`status-badge status-${project.status}`}>
-                {project.status}
-              </span>
-            </p>
-          </div>
-          {project.description && (
-            <div className="info-section">
-              <h5>Description</h5>
-              <p>{project.description}</p>
-            </div>
-          )}
-        </div>
-      </div>
+      {/* Project Information removed to match prototype */}
 
       {/* Spec Files Management Section */}
       <div className="detail-section">
-        <div className="section-header">
+        <div className="flex items-center justify-between p-5 border-b border-border-dark">
           <h4>Specification Management</h4>
         </div>
         <div className="spec-management">
@@ -522,7 +497,6 @@ Describe the main objective and purpose of this project.
                 ) : (
                   <Button
                     variant="primary"
-                    icon={Plus}
                     onClick={onAddGoal}
                   >
                     Add Goal
@@ -551,7 +525,6 @@ Describe the main objective and purpose of this project.
                 ) : (
                   <Button
                     variant="primary"
-                    icon={Plus}
                     onClick={onAddUserJourney}
                   >
                     Add User Journey
@@ -561,36 +534,15 @@ Describe the main objective and purpose of this project.
             </div>
           </div>
           
-          {/* Task Creation Actions */}
+          {/* Generate Project Tasks */}
           <div className="spec-task-actions">
             <h5>Generate Project Tasks</h5>
             <div className="task-creation-buttons">
-              <Button
-                variant="success"
-                icon={FileText}
-                onClick={onCreateSpecsTasks}
-                disabled={loading}
-                title="Create specification and requirements tasks for TPM role"
-              >
-                Create Specs Tasks
+              <Button onClick={onCreateSpecsTasks} className="w-full sm:w-auto flex-1">
+                Generate Tasks from Goal
               </Button>
-              <Button
-                variant="success"
-                icon={CheckSquare}
-                onClick={onCreateDevTasks}
-                disabled={loading}
-                title="Create development and implementation tasks for dev role"
-              >
-                Create Dev Tasks
-              </Button>
-              <Button
-                variant="success"
-                icon={Play}
-                onClick={onCreateE2ETasks}
-                disabled={loading}
-                title="Create end-to-end testing tasks with intelligent technology selection for QA role"
-              >
-                Create E2E Tasks
+              <Button variant="secondary" onClick={onCreateDevTasks} className="w-full sm:w-auto flex-1">
+                Generate Tasks from User Journey
               </Button>
             </div>
           </div>

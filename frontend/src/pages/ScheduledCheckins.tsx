@@ -41,28 +41,27 @@ export const ScheduledCheckins: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="page scheduled-checkins-page">
-        <div className="loading-spinner"></div>
-        <p>Loading scheduled check-ins...</p>
+      <div className="flex items-center justify-center min-h-[300px]">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3 mx-auto" />
+          <p className="text-text-secondary-dark">Loading scheduled messages...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="page scheduled-checkins-page">
-      <div className="page-header">
-        <div className="header-info">
-          <h1 className="page-title">Scheduled Messages</h1>
-          <p className="page-description">
-            Create and manage scheduled messages for teams and projects
-          </p>
+    <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Scheduled Messages</h2>
+          <p className="text-sm text-text-secondary-dark mt-1">Create and manage scheduled messages for teams and projects</p>
         </div>
-        
-        <button 
-          className="primary-button"
+        <button
+          className="bg-primary text-white px-4 py-2 rounded-lg hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
           onClick={handleCreate}
         >
-          <Plus className="button-icon" />
+          <Plus className="w-5 h-5" />
           New Scheduled Message
         </button>
       </div>
@@ -74,10 +73,10 @@ export const ScheduledCheckins: React.FC = () => {
         completedMessages={completedMessages}
       />
 
-      <div className="scheduled-messages-content">
+      <div>
         {activeTab === 'active' ? (
           activeMessages.length > 0 ? (
-            <div className="scheduled-messages-grid">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mb-10">
               {activeMessages.map((message) => (
                 <ScheduledMessageCard
                   key={message.id}
@@ -96,7 +95,7 @@ export const ScheduledCheckins: React.FC = () => {
           )
         ) : (
           completedMessages.length > 0 ? (
-            <div className="scheduled-messages-grid">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 mb-10">
               {completedMessages.map((message) => (
                 <ScheduledMessageCard
                   key={message.id}

@@ -5,6 +5,8 @@ import { readFile, writeFile, mkdir, rename, readdir, stat, unlink } from 'fs/pr
 import { join, basename, dirname, resolve, relative } from 'path';
 import { existsSync } from 'fs';
 import { resolveStepConfig } from '../../utils/prompt-resolver.js';
+import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 /**
  * Assigns a task to a team member by moving it from open/ to in_progress/ folder
@@ -15,6 +17,14 @@ import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 export async function assignTask(this: ApiController, req: Request, res: Response): Promise<void> {
 	try {
 		const { taskPath, sessionName } = req.body;
+
+		// Update agent heartbeat (proof of life)
+		try {
+			await updateAgentHeartbeat(sessionName, undefined, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+		} catch (error) {
+			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
+			// Continue execution - heartbeat failures shouldn't break task assignment
+		}
 
 		if (!taskPath) {
 			res.status(400).json({ success: false, error: 'taskPath is required' });
@@ -141,6 +151,14 @@ export async function completeTask(
 ): Promise<void> {
 	try {
 		const { taskPath, sessionName } = req.body;
+
+		// Update agent heartbeat (proof of life)
+		try {
+			await updateAgentHeartbeat(sessionName, undefined, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+		} catch (error) {
+			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
+			// Continue execution - heartbeat failures shouldn't break task completion
+		}
 
 		if (!taskPath) {
 			res.status(400).json({ success: false, error: 'taskPath is required' });
@@ -721,6 +739,43 @@ export async function startTaskExecution(
 	}
 }
 
+/**
+ * Recovers abandoned in-progress tasks when orchestrator starts
+ *
+ * @param req - Request containing sessionName (optional)
+ * @param res - Response with recovery report
+ */
+export async function recoverAbandonedTasks(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		console.log('[RECOVERY] 🔄 Starting abandoned task recovery...');
+
+		// Function to get current team status from storage
+		const getTeamStatus = async () => {
+			const teams = await this.storageService.getTeams();
+			return teams;
+		};
+
+		// Run recovery
+		const report = await this.taskTrackingService.recoverAbandonedTasks(getTeamStatus);
+
+		console.log('[RECOVERY] 📊 Recovery completed:', report);
+
+		res.json({
+			success: true,
+			message: `Task recovery completed. Recovered: ${report.recovered}, Skipped: ${report.skipped}`,
+			data: report
+		});
+
+	} catch (error) {
+		console.error('[RECOVERY] ❌ Recovery failed:', error);
+		res.status(500).json({
+			success: false,
+			error: 'Failed to recover abandoned tasks',
+			details: error instanceof Error ? error.message : String(error)
+		});
+	}
+}
+
 export async function createTasksFromConfig(
 	this: ApiContext,
 	req: Request,
@@ -942,9 +997,9 @@ async function unlinkFile(filePath: string): Promise<void> {
 }
 
 // Helper function to add assignment information to task content
-function addTaskAssignmentInfo(content: string, memberId: string, sessionId?: string): string {
+function addTaskAssignmentInfo(content: string, memberId: string, sessionName?: string): string {
 	const assignmentInfo = `\n\n## Assignment Information\n- **Assigned to**: ${memberId}\n- **Session**: ${
-		sessionId || 'N/A'
+		sessionName || 'N/A'
 	}\n- **Assigned at**: ${new Date().toISOString()}\n- **Status**: In Progress\n`;
 	return content + assignmentInfo;
 }

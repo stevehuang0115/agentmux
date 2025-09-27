@@ -27,7 +27,7 @@ if curl -s http://localhost:3001/health | grep -q "ok"; then
     echo "📋 PID: $MCP_PID"
     echo ""
     echo "Test register_agent_status with:"
-    echo "curl -X POST http://localhost:3001/mcp -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":1,\"params\":{\"name\":\"register_agent_status\",\"arguments\":{\"role\":\"orchestrator\",\"sessionId\":\"agentmux-orc\"}}}'"
+    echo "curl -X POST http://localhost:3001/mcp -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":1,\"params\":{\"name\":\"register_agent_status\",\"arguments\":{\"role\":\"orchestrator\",\"sessionName\":\"agentmux-orc\"}}}'"
     echo ""
     echo "To stop:"
     echo "kill $MCP_PID"

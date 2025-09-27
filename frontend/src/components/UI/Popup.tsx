@@ -71,55 +71,70 @@ export const Popup: React.FC<PopupProps> = ({
     }
   };
 
+  const sizeClasses = {
+    sm: 'max-w-sm',
+    md: 'max-w-md',
+    lg: 'max-w-lg',
+    xl: 'max-w-xl',
+    xxl: 'max-w-4xl'
+  };
+
   return (
-    <div 
-      className="modal-overlay"
+    <div
+      className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center p-4 z-50"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
     >
-      <div 
+      <div
         ref={modalRef}
-        className={`modal-content modal-${size} ${loading ? 'modal-loading' : ''} ${className}`}
+        className={`bg-surface-dark border border-border-dark rounded-xl shadow-lg w-full ${sizeClasses[size]} ${loading ? 'pointer-events-none' : ''} ${className}`}
         onClick={e => e.stopPropagation()}
       >
         {/* Modal Header */}
         {(title || subtitle || closable) && (
-          <div className="modal-header">
-            <div className="modal-header-content">
-              {title && <h2 className="modal-title">{title}</h2>}
-              {subtitle && <p className="modal-subtitle">{subtitle}</p>}
+          <div className="p-6 pb-0">
+            <div className="flex items-center justify-between">
+              <div>
+                {title && <h2 className="text-xl font-semibold">{title}</h2>}
+                {subtitle && <p className="text-sm text-text-secondary-dark mt-1">{subtitle}</p>}
+              </div>
+              {closable && (
+                <IconButton
+                  icon={X}
+                  onClick={onClose}
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Close modal"
+                  className="text-text-secondary-dark hover:text-text-primary-dark"
+                  disabled={loading}
+                />
+              )}
             </div>
-            {closable && (
-              <IconButton
-                icon={X}
-                onClick={onClose}
-                variant="ghost"
-                size="sm"
-                aria-label="Close modal"
-                className="modal-close-btn"
-                disabled={loading}
-              />
-            )}
           </div>
         )}
         
         {/* Modal Body */}
-        <div className="modal-body">
+        <div className="p-6">
           {children}
         </div>
 
         {/* Modal Footer */}
         {footer && (
-          <div className={`modal-footer modal-footer--${footerAlign}`}>
+          <div className={`px-6 py-4 border-t border-border-dark flex gap-3 ${
+            footerAlign === 'left' ? 'justify-start' :
+            footerAlign === 'center' ? 'justify-center' :
+            footerAlign === 'space-between' ? 'justify-between' :
+            'justify-end'
+          }`}>
             {footer}
           </div>
         )}
 
         {/* Loading Overlay */}
         {loading && (
-          <div className="modal-loading-overlay">
-            <div className="modal-spinner" />
+          <div className="absolute inset-0 bg-surface-dark/50 flex items-center justify-center rounded-xl">
+            <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
           </div>
         )}
       </div>
@@ -261,7 +276,7 @@ export const ConfirmPopup: React.FC<ConfirmPopupProps> = ({
       footer={footer}
       loading={loading}
     >
-      <div className="popup-message">
+      <div className="text-sm text-text-primary-dark">
         {message}
       </div>
     </Popup>

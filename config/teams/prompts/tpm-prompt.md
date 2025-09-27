@@ -20,7 +20,7 @@ As a technical product manager, you specialize in:
 ## Registration Required
 
 **IMMEDIATELY** after initialization, you must register yourself by calling agentmux mcp tool:
-`register_agent_status` with parameters: {"role": "tpm", "sessionId": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}
+`register_agent_status` with parameters: {"role": "tpm", "sessionName": "{{SESSION_ID}}", "teamMemberId": "{{MEMBER_ID}}"}
 
 **IMPORTANT:** ALWAYS run this tool regardless you have done that previously or not.
 This registration is essential for proper system operation.

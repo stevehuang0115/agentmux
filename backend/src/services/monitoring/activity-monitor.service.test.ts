@@ -1,17 +1,21 @@
-import { ActivityMonitorService } from './activity-monitor.service';
-import { StorageService } from './storage.service';
+import { ActivityMonitorService, TeamWorkingStatusFile } from './activity-monitor.service';
+import { StorageService } from '../core/storage.service.js';
 import { TmuxService } from '../agent/tmux.service.js';
+import { AgentHeartbeatService } from '../agent/agent-heartbeat.service.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { existsSync } from 'fs';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
-jest.mock('./storage.service');
+jest.mock('../core/storage.service.js');
 jest.mock('../agent/tmux.service.js');
-jest.mock('./logger.service');
+jest.mock('../agent/agent-heartbeat.service.js');
+jest.mock('../core/logger.service.js');
 jest.mock('fs/promises');
+jest.mock('fs');
 jest.mock('path');
 jest.mock('os');
 
@@ -20,6 +24,7 @@ describe('ActivityMonitorService', () => {
   let mockLogger: jest.Mocked<ComponentLogger>;
   let mockStorageService: jest.Mocked<StorageService>;
   let mockTmuxService: jest.Mocked<TmuxService>;
+  let mockAgentHeartbeatService: jest.Mocked<AgentHeartbeatService>;
   let mockLoggerService: jest.Mocked<LoggerService>;
 
   beforeEach(() => {
@@ -34,19 +39,29 @@ describe('ActivityMonitorService', () => {
       warn: jest.fn(),
       error: jest.fn(),
       debug: jest.fn()
-    } as jest.Mocked<ComponentLogger>;
-    
+    } as any;
+
     mockLoggerService = {
       createComponentLogger: jest.fn().mockReturnValue(mockLogger)
-    } as jest.Mocked<LoggerService>;
+    } as any;
     
     (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLoggerService);
     
     mockStorageService = new StorageService() as jest.Mocked<StorageService>;
     mockTmuxService = new TmuxService() as jest.Mocked<TmuxService>;
-    
+    mockAgentHeartbeatService = {
+      detectStaleAgents: jest.fn().mockResolvedValue([]),
+      getInstance: jest.fn()
+    } as any;
+
     (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorageService);
     (TmuxService as jest.MockedClass<typeof TmuxService>).mockImplementation(() => mockTmuxService);
+    (AgentHeartbeatService.getInstance as jest.Mock).mockReturnValue(mockAgentHeartbeatService);
+
+    // Mock file system
+    (existsSync as jest.Mock).mockReturnValue(false);
+    (homedir as jest.Mock).mockReturnValue('/mock/home');
+    (join as jest.Mock).mockImplementation((...args) => args.join('/'));
     
     service = ActivityMonitorService.getInstance();
   });
@@ -81,22 +96,22 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should start polling with immediate first check', () => {
-      const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue();
+      const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue(undefined);
       
       service.startPolling();
       
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith('Starting activity monitoring with 30-second intervals');
+      expect(mockLogger.info).toHaveBeenCalledWith('Starting activity monitoring with 2-minute intervals (NEW ARCHITECTURE: workingStatus only)');
       expect(service.isRunning()).toBe(true);
     });
 
     it('should set up recurring polling', () => {
-      const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue();
+      const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue(undefined);
       
       service.startPolling();
       
-      // Fast forward 30 seconds
-      jest.advanceTimersByTime(30000);
+      // Fast forward 2 minutes
+      jest.advanceTimersByTime(120000);
       
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(2); // Initial + 1 interval
     });
@@ -138,132 +153,157 @@ describe('ActivityMonitorService', () => {
   describe('performActivityCheck', () => {
     const mockTeam = {
       id: 'test-team',
+      name: 'Test Team',
+      createdAt: '2023-01-01T00:00:00.000Z',
+      updatedAt: '2023-01-01T00:00:00.000Z',
       members: [
         {
           id: 'member-1',
           name: 'Test Member 1',
-          agentStatus: 'active',
-          workingStatus: 'idle',
+          role: 'developer' as const,
+          runtimeType: 'claude-code' as const,
+          systemPrompt: 'Test prompt',
+          agentStatus: 'active' as const,
+          workingStatus: 'idle' as const,
           sessionName: 'test-session-1',
-          lastActivityCheck: '2023-01-01T00:00:00.000Z',
+          createdAt: '2023-01-01T00:00:00.000Z',
           updatedAt: '2023-01-01T00:00:00.000Z'
         },
         {
           id: 'member-2',
           name: 'Test Member 2',
-          agentStatus: 'inactive',
-          workingStatus: 'idle',
-          sessionName: 'test-session-2'
+          role: 'qa' as const,
+          runtimeType: 'claude-code' as const,
+          systemPrompt: 'Test prompt 2',
+          agentStatus: 'inactive' as const,
+          workingStatus: 'idle' as const,
+          sessionName: 'test-session-2',
+          createdAt: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
         }
       ]
     };
 
-    const mockOrchestratorStatus = {
-      status: 'inactive',
-      agentStatus: 'inactive',
-      workingStatus: 'idle'
+    const mockWorkingStatusData: TeamWorkingStatusFile = {
+      orchestrator: {
+        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        workingStatus: 'idle',
+        lastActivityCheck: '2023-01-01T00:00:00.000Z',
+        updatedAt: '2023-01-01T00:00:00.000Z'
+      },
+      teamMembers: {},
+      metadata: {
+        lastUpdated: '2023-01-01T00:00:00.000Z',
+        version: '1.0.0'
+      }
     };
 
     beforeEach(() => {
-      mockStorageService.getOrchestratorStatus.mockResolvedValue(mockOrchestratorStatus);
       mockStorageService.getTeams.mockResolvedValue([mockTeam]);
-      mockStorageService.saveTeam.mockResolvedValue();
       mockTmuxService.sessionExists.mockResolvedValue(true);
       mockTmuxService.capturePane.mockResolvedValue('some terminal output');
+      mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue([]);
+
+      // Mock file operations
+      (readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockWorkingStatusData));
+      (writeFile as jest.Mock).mockResolvedValue(undefined);
+      (existsSync as jest.Mock).mockReturnValue(true);
     });
 
-    it('should check orchestrator status and update if changed', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // orchestrator session
-      const updateOrchestratorSpy = jest.spyOn(service as any, 'updateOrchestratorWithStatuses').mockResolvedValue();
-      
+    it('should detect stale agents using AgentHeartbeatService', async () => {
+      const staleAgents = ['member-1', 'member-2'];
+      mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue(staleAgents);
+
       await (service as any).performActivityCheck();
-      
+
+      expect(mockAgentHeartbeatService.detectStaleAgents).toHaveBeenCalledWith(30);
+      expect(mockLogger.info).toHaveBeenCalledWith('Detected stale agents for potential inactivity', {
+        staleAgents,
+        thresholdMinutes: 30
+      });
+    });
+
+    it('should check orchestrator working status and update teamWorkingStatus.json', async () => {
+      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // orchestrator session
+      mockTmuxService.capturePane.mockResolvedValue('new terminal output');
+
+      await (service as any).performActivityCheck();
+
       expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(updateOrchestratorSpy).toHaveBeenCalledWith('active', 'active', 'idle');
+      expect(mockTmuxService.capturePane).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 5);
     });
 
-    it('should not update orchestrator if status unchanged', async () => {
-      mockOrchestratorStatus.status = 'active';
-      mockOrchestratorStatus.agentStatus = 'active';
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // orchestrator session
-      const updateOrchestratorSpy = jest.spyOn(service as any, 'updateOrchestratorWithStatuses').mockResolvedValue();
-      
-      await (service as any).performActivityCheck();
-      
-      expect(updateOrchestratorSpy).not.toHaveBeenCalled();
-    });
-
-    it('should check active team member sessions', async () => {
+    it('should check team member sessions for working status', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session (inactive)
       mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session
-      
+
       await (service as any).performActivityCheck();
-      
+
       expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-1');
-      expect(mockTmuxService.capturePane).toHaveBeenCalledWith('test-session-1', 50);
+      expect(mockTmuxService.capturePane).toHaveBeenCalledWith('test-session-1', 5);
     });
 
-    it('should mark member as inactive if session no longer exists', async () => {
+    it('should set member working status to idle if session no longer exists', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // member session doesn't exist
-      
+
       await (service as any).performActivityCheck();
-      
-      expect(mockTeam.members[0].agentStatus).toBe('inactive');
-      expect(mockTeam.members[0].workingStatus).toBe('idle');
-      expect(mockTeam.members[0].lastActivityCheck).toBeDefined();
-      expect(mockTeam.members[0].updatedAt).toBeDefined();
-      expect(mockStorageService.saveTeam).toHaveBeenCalledWith(mockTeam);
+
+      expect(writeFile).toHaveBeenCalled();
+      const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
+      expect(savedData.teamMembers['test-session-1'].workingStatus).toBe('idle');
     });
 
-    it('should detect activity and update working status', async () => {
+    it('should detect activity and update working status to in_progress', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
       mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
       mockTmuxService.capturePane.mockResolvedValue('new terminal output');
-      
-      // Set previous output different from current
-      (mockTeam.members[0] as any).lastTerminalOutput = 'old terminal output';
-      
+
+      // Simulate different output from cache (activity detected)
+      (service as any).lastTerminalOutputs.set('test-session-1', 'old terminal output');
+
       await (service as any).performActivityCheck();
-      
-      expect(mockTeam.members[0].workingStatus).toBe('in_progress');
-      expect((mockTeam.members[0] as any).lastTerminalOutput).toBe('new terminal output');
-      expect(mockStorageService.saveTeam).toHaveBeenCalledWith(mockTeam);
+
+      expect(writeFile).toHaveBeenCalled();
+      const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
+      expect(savedData.teamMembers['test-session-1'].workingStatus).toBe('in_progress');
     });
 
-    it('should not update status if no activity detected', async () => {
-      const originalWorkingStatus = mockTeam.members[0].workingStatus;
+    it('should not update status if no activity detected (same output)', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
       mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
       mockTmuxService.capturePane.mockResolvedValue('same terminal output');
-      
-      // Set previous output same as current
-      (mockTeam.members[0] as any).lastTerminalOutput = 'same terminal output';
-      
+
+      // Simulate same output as cache (no activity)
+      (service as any).lastTerminalOutputs.set('test-session-1', 'same terminal output');
+
       await (service as any).performActivityCheck();
-      
-      expect(mockTeam.members[0].workingStatus).toBe(originalWorkingStatus);
-      expect(mockStorageService.saveTeam).not.toHaveBeenCalled();
+
+      // Should still update metadata but status should remain idle
+      expect(writeFile).toHaveBeenCalled();
+      const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
+      expect(savedData.teamMembers['test-session-1'].workingStatus).toBe('idle');
     });
 
-    it('should skip inactive members', async () => {
+    it('should check all members with sessions regardless of status', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      
+      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member-1 session
+      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member-2 session
+
       await (service as any).performActivityCheck();
-      
-      // Should only check session for active member (member-1), not inactive member (member-2)
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledTimes(2); // orchestrator + member-1
-      expect(mockTmuxService.sessionExists).not.toHaveBeenCalledWith('test-session-2');
+
+      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-1');
+      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-2');
     });
 
-    it('should handle member activity check errors gracefully', async () => {
+    it('should handle member working status check errors gracefully', async () => {
       mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
       mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
       mockTmuxService.capturePane.mockRejectedValue(new Error('Capture pane error'));
-      
+
       await (service as any).performActivityCheck();
-      
-      expect(mockLogger.error).toHaveBeenCalledWith('Error checking member activity', {
+
+      expect(mockLogger.error).toHaveBeenCalledWith('Error checking member working status', {
         teamId: 'test-team',
         memberId: 'member-1',
         memberName: 'Test Member 1',
@@ -273,73 +313,129 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should handle overall activity check errors gracefully', async () => {
-      mockStorageService.getOrchestratorStatus.mockRejectedValue(new Error('Storage error'));
-      
+      mockAgentHeartbeatService.detectStaleAgents.mockRejectedValue(new Error('Heartbeat service error'));
+
       await (service as any).performActivityCheck();
-      
+
       expect(mockLogger.error).toHaveBeenCalledWith('Error during activity check', {
-        error: 'Storage error'
+        error: 'Heartbeat service error'
       });
     });
   });
 
-  describe('updateOrchestratorWithStatuses', () => {
-    const mockTeamsFilePath = '/mock/home/.agentmux/teams.json';
-    const mockTeamsData = {
-      orchestrator: {
-        sessionId: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-        status: 'inactive',
-        agentStatus: 'inactive',
-        workingStatus: 'idle',
-        createdAt: '2023-01-01T00:00:00.000Z',
-        updatedAt: '2023-01-01T00:00:00.000Z'
-      }
-    };
+  describe('teamWorkingStatus.json file management', () => {
+    it('should create default teamWorkingStatus.json if it does not exist', async () => {
+      (existsSync as jest.Mock).mockReturnValue(false);
 
+      const result = await (service as any).loadTeamWorkingStatusFile();
+
+      expect(result.orchestrator.sessionName).toBe(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(result.orchestrator.workingStatus).toBe('idle');
+      expect(result.teamMembers).toEqual({});
+      expect(result.metadata.version).toBe('1.0.0');
+    });
+
+    it('should load existing teamWorkingStatus.json file', async () => {
+      const mockData = {
+        orchestrator: {
+          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          workingStatus: 'in_progress',
+          lastActivityCheck: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
+        },
+        teamMembers: {},
+        metadata: {
+          lastUpdated: '2023-01-01T00:00:00.000Z',
+          version: '1.0.0'
+        }
+      };
+      (existsSync as jest.Mock).mockReturnValue(true);
+      (readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockData));
+
+      const result = await (service as any).loadTeamWorkingStatusFile();
+
+      expect(result.orchestrator.workingStatus).toBe('in_progress');
+      expect(result.metadata.version).toBe('1.0.0');
+    });
+
+    it('should handle corrupted teamWorkingStatus.json file', async () => {
+      (existsSync as jest.Mock).mockReturnValue(true);
+      (readFile as jest.Mock).mockResolvedValue('invalid json');
+
+      const result = await (service as any).loadTeamWorkingStatusFile();
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Failed to load teamWorkingStatus.json, creating new file',
+        expect.objectContaining({ error: expect.any(String) })
+      );
+      expect(result.orchestrator.workingStatus).toBe('idle');
+    });
+  });
+
+  describe('getTeamWorkingStatus', () => {
+    it('should return current team working status data', async () => {
+      const mockData = {
+        orchestrator: {
+          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          workingStatus: 'idle',
+          lastActivityCheck: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
+        },
+        teamMembers: {},
+        metadata: {
+          lastUpdated: '2023-01-01T00:00:00.000Z',
+          version: '1.0.0'
+        }
+      };
+      (existsSync as jest.Mock).mockReturnValue(true);
+      (readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockData));
+
+      const result = await service.getTeamWorkingStatus();
+
+      expect(result).toEqual(mockData);
+    });
+  });
+
+  describe('getWorkingStatusForSession', () => {
     beforeEach(() => {
-      (homedir as jest.Mock).mockReturnValue('/mock/home');
-      (join as jest.Mock).mockReturnValue(mockTeamsFilePath);
-      (readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockTeamsData));
-      (writeFile as jest.Mock).mockResolvedValue(undefined);
+      const mockData = {
+        orchestrator: {
+          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          workingStatus: 'in_progress',
+          lastActivityCheck: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
+        },
+        teamMembers: {
+          'test-session': {
+            sessionName: 'test-session',
+            teamMemberId: 'member-1',
+            workingStatus: 'idle',
+            lastActivityCheck: '2023-01-01T00:00:00.000Z',
+            updatedAt: '2023-01-01T00:00:00.000Z'
+          }
+        },
+        metadata: {
+          lastUpdated: '2023-01-01T00:00:00.000Z',
+          version: '1.0.0'
+        }
+      };
+      (existsSync as jest.Mock).mockReturnValue(true);
+      (readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockData));
     });
 
-    it('should update existing orchestrator status', async () => {
-      await (service as any).updateOrchestratorWithStatuses('active', 'active', 'in_progress');
-      
-      expect(readFile).toHaveBeenCalledWith(mockTeamsFilePath, 'utf-8');
-      expect(writeFile).toHaveBeenCalledWith(
-        mockTeamsFilePath,
-        expect.stringContaining('"status":"active"')
-      );
-      expect(writeFile).toHaveBeenCalledWith(
-        mockTeamsFilePath,
-        expect.stringContaining('"agentStatus":"active"')
-      );
-      expect(writeFile).toHaveBeenCalledWith(
-        mockTeamsFilePath,
-        expect.stringContaining('"workingStatus":"in_progress"')
-      );
+    it('should return orchestrator working status', async () => {
+      const result = await service.getWorkingStatusForSession(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(result).toBe('in_progress');
     });
 
-    it('should create orchestrator status if it does not exist', async () => {
-      (readFile as jest.Mock).mockResolvedValue(JSON.stringify({}));
-      
-      await (service as any).updateOrchestratorWithStatuses('active', 'active', 'idle');
-      
-      expect(writeFile).toHaveBeenCalledWith(
-        mockTeamsFilePath,
-        expect.stringContaining(`"sessionId":"${AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME}"`)
-      );
+    it('should return team member working status', async () => {
+      const result = await service.getWorkingStatusForSession('test-session');
+      expect(result).toBe('idle');
     });
 
-    it('should handle file read/write errors gracefully', async () => {
-      (readFile as jest.Mock).mockRejectedValue(new Error('File read error'));
-      
-      await (service as any).updateOrchestratorWithStatuses('active', 'active', 'idle');
-      
-      expect(mockLogger.error).toHaveBeenCalledWith('Error updating orchestrator with statuses', {
-        error: 'File read error'
-      });
+    it('should return null for non-existent session', async () => {
+      const result = await service.getWorkingStatusForSession('non-existent-session');
+      expect(result).toBe(null);
     });
   });
 
@@ -361,7 +457,7 @@ describe('ActivityMonitorService', () => {
 
   describe('getPollingInterval', () => {
     it('should return the correct polling interval', () => {
-      expect(service.getPollingInterval()).toBe(30000);
+      expect(service.getPollingInterval()).toBe(120000); // 2 minutes
     });
   });
 });

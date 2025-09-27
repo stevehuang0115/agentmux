@@ -301,7 +301,7 @@ export class AgentRegistrationService {
                 error: error instanceof Error ? error.message : String(error),
                 stack: error instanceof Error ? error.stack : undefined,
             });
-            return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionId": "${sessionName}"}`;
+            return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionName": "${sessionName}"}`;
         }
     }
     /**

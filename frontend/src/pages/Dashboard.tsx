@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
 import { TeamCard } from '@/components/Cards/TeamCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
-import { ScoreCard, ScoreCardGrid } from '@/components/UI/ScoreCard';
 import { Team, Project, ApiResponse } from '@/types';
 import axios from 'axios';
 import { FolderOpen, Users, ArrowRight } from 'lucide-react';
-import '@/components/UI/ScoreCard.css';
 
 const API_BASE = '/api';
 
@@ -59,132 +57,83 @@ export const Dashboard: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="dashboard-loading">
-        <div className="loading-spinner"></div>
-        <p>Loading dashboard...</p>
+      <div className="flex items-center justify-center min-h-64">
+        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent"></div>
+        <p className="ml-3 text-text-secondary-dark">Loading dashboard...</p>
       </div>
     );
   }
 
-  // Show top 6 projects and teams on dashboard
-  const topProjects = projects.slice(0, 6);
-  const topTeams = teams.slice(0, 6);
+  // Show top 2 projects and teams on dashboard like prototype
+  const topProjects = projects.slice(0, 2);
+  const topTeams = teams.slice(0, 2);
+
+  const StatCard: React.FC<{title: string, value: string | number}> = ({title, value}) => (
+    <div className="bg-surface-dark p-6 rounded-lg border border-border-dark transition-all hover:shadow-lg hover:border-primary/50">
+      <p className="text-sm font-medium text-text-secondary-dark">{title}</p>
+      <p className="text-3xl font-bold mt-1">{value}</p>
+    </div>
+  );
 
   return (
-    <div className="page dashboard">
-      <div className="page-header">
-        <div className="header-info">
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-description">
-            Manage your projects and teams from the central hub
-          </p>
+    <div className="max-w-7xl mx-auto">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
+          <p className="text-sm text-text-secondary-dark mt-1">Welcome back. Here's a summary of your teams and projects.</p>
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <section className="dashboard-stats">
-        <ScoreCardGrid variant="dashboard">
-          <ScoreCard 
-            label="Projects" 
-            value={projects.length}
-            variant="dashboard"
-          />
-          
-          <ScoreCard 
-            label="Teams" 
-            value={teams.length}
-            variant="dashboard"
-          />
-          
-          <ScoreCard 
-            label="Active" 
-            value={teams.filter(t => t.members.some(m => m.agentStatus === 'active')).length}
-            variant="dashboard"
-          />
-          
-          <ScoreCard 
-            label="Running" 
-            value={projects.filter(p => p.status === 'active').length}
-            variant="dashboard"
-          />
-        </ScoreCardGrid>
-      </section>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <StatCard title="Projects" value={projects.length} />
+        <StatCard title="Teams" value={teams.length} />
+        <StatCard title="Active Projects" value={projects.filter(p => p.status === 'active').length} />
+        <StatCard title="Running Agents" value={teams.flatMap(t => t.members).filter(m => m.agentStatus === 'active').length} />
+      </div>
 
-      {/* Projects Section */}
-      <section className="dashboard-section">
-        <div className="section-header">
-          <div className="section-info">
-            <h2 className="section-title">
-              <FolderOpen className="section-icon" />
-              Projects
-            </h2>
-            <p className="section-description">
-              {projects.length} total projects
-            </p>
+      <div className="space-y-10">
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-semibold">Projects</h3>
+            <Link to="/projects" className="text-sm font-semibold text-primary hover:underline">View All</Link>
           </div>
-          <button 
-            className="section-action"
-            onClick={navigateToProjects}
-          >
-            View All
-            <ArrowRight className="action-icon" />
-          </button>
-        </div>
-
-        <div className="cards-grid">
-          {topProjects.map((project) => (
-            <ProjectCard 
-              key={project.id} 
-              project={project}
-              showStatus
-              showTeams
-              onClick={() => navigateToProject(project.id)}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {topProjects.map(project => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                showStatus
+                showTeams
+                onClick={() => navigateToProject(project.id)}
+              />
+            ))}
+            <CreateCard
+              title="Create New Project"
+              onClick={openProjectCreator}
             />
-          ))}
-          
-          <CreateCard
-            title="New Project"
-            onClick={openProjectCreator}
-          />
-        </div>
-      </section>
-
-      {/* Teams Section */}
-      <section className="dashboard-section">
-        <div className="section-header">
-          <div className="section-info">
-            <h2 className="section-title">
-              <Users className="section-icon" />
-              Teams
-            </h2>
-            <p className="section-description">
-              {teams.length} active teams
-            </p>
           </div>
-          <button 
-            className="section-action"
-            onClick={navigateToTeams}
-          >
-            View All
-            <ArrowRight className="action-icon" />
-          </button>
-        </div>
+        </section>
 
-        <div className="cards-grid">
-          {topTeams.map((team) => (
-            <TeamCard 
-              key={team.id} 
-              team={team}
-              onClick={() => navigateToTeam(team.id)}
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-semibold">Teams</h3>
+            <Link to="/teams" className="text-sm font-semibold text-primary hover:underline">View All</Link>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {topTeams.map(team => (
+              <TeamCard
+                key={team.id}
+                team={team}
+                onClick={() => navigateToTeam(team.id)}
+              />
+            ))}
+            <CreateCard
+              title="Create New Team"
+              onClick={openTeamCreator}
             />
-          ))}
-          
-          <CreateCard
-            title="New Team"
-            onClick={openTeamCreator}
-          />
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
     </div>
   );
 };

@@ -10,8 +10,10 @@ export function registerTaskManagementRoutes(router, apiController) {
     router.post('/task-management/take-next', (req, res) => taskMgmtHandlers.takeNextTask.call(apiController, req, res));
     router.post('/task-management/sync', (req, res) => taskMgmtHandlers.syncTaskStatus.call(apiController, req, res));
     router.get('/task-management/team-progress', (req, res) => taskMgmtHandlers.getTeamProgress.call(apiController, req, res));
-    // Task Execution Routes (for UI)  
+    // Task Execution Routes (for UI)
     router.post('/task-management/start-execution', (req, res) => taskMgmtHandlers.startTaskExecution.call(apiController, req, res));
+    // Task Recovery Routes (for orchestrator startup)
+    router.post('/task-management/recover-abandoned-tasks', (req, res) => taskMgmtHandlers.recoverAbandonedTasks.call(apiController, req, res));
     // Task Creation Routes
     router.post('/tasks/create-from-config', (req, res) => taskMgmtHandlers.createTasksFromConfig.call(apiController, req, res));
     // In-Progress Tasks Routes

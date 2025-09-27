@@ -182,7 +182,15 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
     >
       <div className="member-header">
         <div className="member-avatar">
-          <User size={20} />
+          {member.avatar ? (
+            member.avatar.startsWith('http') || member.avatar.startsWith('data:') ? (
+              <img src={member.avatar} alt={member.name} style={{ width: 20, height: 20, borderRadius: '50%' }} />
+            ) : (
+              <span style={{ fontSize: 14 }}>{member.avatar}</span>
+            )
+          ) : (
+            <User size={20} />
+          )}
         </div>
         <div className="member-basic-info">
           {isEditing ? (

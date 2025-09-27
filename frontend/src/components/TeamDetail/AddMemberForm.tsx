@@ -11,33 +11,31 @@ export const AddMemberForm: React.FC<AddMemberFormProps> = ({
   isOrchestratorTeam,
 }) => {
   const [newMember, setNewMember] = useState<NewMember>({ name: '', role: '' });
+  const [avatar, setAvatar] = useState<string>('');
 
   const handleAdd = () => {
     if (!newMember.name.trim() || !newMember.role.trim()) {
       alert('Please fill in both name and role');
       return;
     }
-    onAdd(newMember);
+    const payload: any = { ...newMember };
+    if (avatar.trim()) payload.avatar = avatar.trim();
+    onAdd(payload);
     setNewMember({ name: '', role: '' });
+    setAvatar('');
   };
 
   const handleCancel = () => {
     setNewMember({ name: '', role: '' });
+    setAvatar('');
     onCancel();
   };
 
   return (
     <div className="members-header">
       <h3>Team Members</h3>
-      {/* Hide Add Member button for Orchestrator Team */}
       {!isOrchestratorTeam && (
-        <Button 
-          variant="primary"
-          onClick={onToggle}
-          icon={Plus}
-        >
-          Add Member
-        </Button>
+        <Button variant="primary" onClick={onToggle} icon={Plus} aria-label="Toggle add member" />
       )}
 
       {isVisible && (
@@ -55,6 +53,13 @@ export const AddMemberForm: React.FC<AddMemberFormProps> = ({
               placeholder="Role (e.g., Developer, PM, QA)"
               value={newMember.role}
               onChange={(e) => setNewMember({ ...newMember, role: e.target.value })}
+              className="form-input"
+            />
+            <input
+              type="text"
+              placeholder="Avatar URL or emoji (optional)"
+              value={avatar}
+              onChange={(e) => setAvatar(e.target.value)}
               className="form-input"
             />
             <Button 

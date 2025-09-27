@@ -9,9 +9,10 @@ export class TerminalGateway {
     }
     setupEventHandlers() {
         this.io.on('connection', (socket) => {
-            console.log(`WebSocket client connected: ${socket.id}`);
+            console.log(`[TERMINAL-GATEWAY] WebSocket client connected: ${socket.id}`);
             // Handle subscription to terminal sessions
             socket.on('subscribe_to_session', (sessionName) => {
+                console.log(`[TERMINAL-GATEWAY] Received subscribe_to_session event for: ${sessionName} from socket: ${socket.id}`);
                 this.subscribeToSession(sessionName, socket);
             });
             // Handle unsubscription from terminal sessions
@@ -52,17 +53,18 @@ export class TerminalGateway {
      * Subscribe a client to a specific terminal session
      */
     subscribeToSession(sessionName, socket) {
+        console.log(`[TERMINAL-GATEWAY] Subscribing client ${socket.id} to session ${sessionName}`);
         // Add client to subscription list
         if (!this.connectedClients.has(sessionName)) {
             this.connectedClients.set(sessionName, new Set());
             // Enable output streaming for this session if it's the first subscriber
             this.tmuxService.enableOutputStreaming(sessionName);
-            console.log(`Enabled output streaming for session ${sessionName}`);
+            console.log(`[TERMINAL-GATEWAY] Enabled output streaming for session ${sessionName}`);
         }
         this.connectedClients.get(sessionName).add(socket.id);
         // Join socket.io room for this session
         socket.join(`terminal_${sessionName}`);
-        console.log(`Client ${socket.id} subscribed to session ${sessionName}`);
+        console.log(`[TERMINAL-GATEWAY] Client ${socket.id} subscribed to session ${sessionName}`);
         // Send current terminal state to new subscriber
         this.sendCurrentTerminalState(sessionName, socket);
         // Confirm subscription
@@ -196,8 +198,10 @@ export class TerminalGateway {
      */
     async sendCurrentTerminalState(sessionName, socket) {
         try {
+            console.log(`[TERMINAL-GATEWAY] Sending current terminal state for ${sessionName} to socket ${socket.id}`);
             // Check if session exists
             if (!await this.tmuxService.sessionExists(sessionName)) {
+                console.log(`[TERMINAL-GATEWAY] Session ${sessionName} does not exist`);
                 socket.emit('session_not_found', {
                     type: 'session_not_found',
                     payload: { sessionName },
@@ -207,12 +211,14 @@ export class TerminalGateway {
             }
             // Capture current terminal content
             const output = await this.tmuxService.capturePane(sessionName, 100);
+            console.log(`[TERMINAL-GATEWAY] Captured terminal output for ${sessionName}, length: ${output.length}`);
             const terminalState = {
                 sessionName,
                 content: output,
                 timestamp: new Date().toISOString(),
                 type: 'stdout'
             };
+            console.log(`[TERMINAL-GATEWAY] Emitting initial_terminal_state for ${sessionName} to socket ${socket.id}`);
             // Send initial terminal state
             socket.emit('initial_terminal_state', {
                 type: 'initial_terminal_state',
@@ -221,7 +227,7 @@ export class TerminalGateway {
             });
         }
         catch (error) {
-            console.error(`Error getting terminal state for ${sessionName}:`, error);
+            console.error(`[TERMINAL-GATEWAY] Error getting terminal state for ${sessionName}:`, error);
             socket.emit('error', {
                 type: 'terminal_state_error',
                 payload: {
