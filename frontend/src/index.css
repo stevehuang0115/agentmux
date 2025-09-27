@@ -156,7 +156,7 @@
   .task-card { @apply bg-surface-dark border border-border-dark rounded-xl p-4 transition-all hover:border-primary/50 hover:shadow-lg; }
   .task-card-clickable { @apply cursor-pointer; }
   .task-header { @apply flex items-center justify-between gap-3 mb-2; }
-  .task-title { @apply font-semibold text-text-primary-dark; }
+  .task-title { @apply font-semibold text-text-primary-dark text-sm; }
   .task-actions { @apply flex items-center gap-2; }
   .task-avatar { @apply w-6 h-6 rounded-full bg-background-dark border border-border-dark flex items-center justify-center text-xs text-text-secondary-dark; }
   .task-play-wrap { @apply inline-flex items-center justify-center w-6 h-6 rounded-full border border-border-dark text-text-secondary-dark hover:text-text-primary-dark hover:border-primary/50; }
@@ -169,7 +169,7 @@
   .priority-high { @apply bg-red-500/10 text-red-400; }
   .priority-medium { @apply bg-yellow-500/10 text-yellow-400; }
   .priority-low { @apply bg-green-500/10 text-green-400; }
-  .task-description { @apply mt-2 text-sm text-text-secondary-dark; }
+  .task-description { @apply mt-2 text-xs text-text-secondary-dark; }
   .task-meta { @apply mt-3 flex items-center justify-between; }
   .milestone-badge { @apply text-xs px-2 py-0.5 rounded-full bg-background-dark border border-border-dark; }
   .assignee-badge { @apply text-xs px-2 py-0.5 rounded-full bg-background-dark border border-border-dark; }

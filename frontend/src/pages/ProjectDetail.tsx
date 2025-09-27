@@ -4,6 +4,7 @@ import { UserPlus, Play, FolderOpen, CheckSquare, FileText, Plus, Trash2, UserMi
 import { Project, Team, Ticket } from '../types';
 import { apiService } from '../services/api.service';
 import { TeamAssignmentModal } from '../components/Modals/TeamAssignmentModal';
+import { TaskDetailModal } from '../components/Modals/TaskDetailModal';
 import { MarkdownEditor } from '../components/MarkdownEditor/MarkdownEditor';
 import { useTerminal } from '../contexts/TerminalContext';
 import { Button, useAlert, useConfirm, Dropdown, FormPopup, FormGroup, FormRow, FormLabel, FormInput, FormTextarea, FormHelp } from '../components/UI';
@@ -1527,142 +1528,16 @@ export const ProjectDetail: React.FC = () => {
       )}
 
       {/* Task Detail Modal */}
-      {isTaskDetailModalOpen && selectedTaskForDetail && (
-        <FormPopup
-          isOpen={isTaskDetailModalOpen}
-          onClose={() => {
-            setIsTaskDetailModalOpen(false);
-            setSelectedTaskForDetail(null);
-          }}
-          title="Task Details"
-          subtitle={`${selectedTaskForDetail.title} - Full Information`}
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleTaskAssign(selectedTaskForDetail);
-            setIsTaskDetailModalOpen(false);
-            setSelectedTaskForDetail(null);
-          }}
-          submitText={taskAssignmentLoading === selectedTaskForDetail.id ? 'Starting...' : 'Start'}
-          submitDisabled={taskAssignmentLoading === selectedTaskForDetail.id}
-          loading={taskAssignmentLoading === selectedTaskForDetail.id}
-          cancelText="Close"
-          size="xxl"
-        >
-          <div className="task-detail-content">
-            <FormGroup>
-              <FormLabel>Task Title</FormLabel>
-              <div className="task-detail-field">{selectedTaskForDetail.title}</div>
-            </FormGroup>
-
-            <FormGroup>
-              <FormLabel>Description</FormLabel>
-              <div className="task-detail-field task-detail-description">
-                {selectedTaskForDetail.description ? (
-                  <div className="task-content">
-                    {selectedTaskForDetail.description.split('\n').map((line: string, index: number) => (
-                      <p key={index} className="task-description-line">{line}</p>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="task-no-description">
-                    <span className="no-description-text">No description provided</span>
-                    {(selectedTaskForDetail.tasks && selectedTaskForDetail.tasks.length > 0) ||
-                     (selectedTaskForDetail.acceptanceCriteria && selectedTaskForDetail.acceptanceCriteria.length > 0) ? (
-                      <p className="no-description-help">Task details are available in the sections below.</p>
-                    ) : (
-                      <p className="no-description-help">This task may need additional details to be added.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </FormGroup>
-
-            {selectedTaskForDetail.acceptanceCriteria && selectedTaskForDetail.acceptanceCriteria.length > 0 && (
-              <FormGroup>
-                <FormLabel>Acceptance Criteria ({selectedTaskForDetail.acceptanceCriteria.length})</FormLabel>
-                <div className="task-detail-acceptance-criteria">
-                  {selectedTaskForDetail.acceptanceCriteria.map((criteria: string, index: number) => (
-                    <div key={index} className="task-detail-criteria">
-                      <span className="criteria-bullet">✓</span>
-                      <span className="criteria-text">{criteria}</span>
-                    </div>
-                  ))}
-                </div>
-              </FormGroup>
-            )}
-
-            <FormRow>
-              <FormGroup>
-                <FormLabel>Priority</FormLabel>
-                <div className={`task-detail-badge priority-badge priority-${selectedTaskForDetail.priority || 'medium'}`}>
-                  {selectedTaskForDetail.priority || 'Medium'}
-                </div>
-              </FormGroup>
-              
-              <FormGroup>
-                <FormLabel>Milestone</FormLabel>
-                <div className="task-detail-badge milestone-badge">
-                  {selectedTaskForDetail.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '') || 'General'}
-                </div>
-              </FormGroup>
-            </FormRow>
-
-            {selectedTaskForDetail.assignee && (
-              <FormGroup>
-                <FormLabel>Assignee</FormLabel>
-                <div className="task-detail-badge assignee-badge">
-                  {selectedTaskForDetail.assignee}
-                </div>
-              </FormGroup>
-            )}
-
-            {/* Show assigned team member for in-progress tasks */}
-            {(taskAssignedMemberDetails.memberName || taskAssignedMemberDetails.sessionName) && (
-              <FormGroup>
-                <FormLabel>Currently Assigned To</FormLabel>
-                <div className="task-detail-assigned-member">
-                  <div className="assigned-member-info">
-                    {taskAssignedMemberDetails.memberName && (
-                      <div className="task-detail-badge assignee-badge active-assignee">
-                        👤 {taskAssignedMemberDetails.memberName}
-                      </div>
-                    )}
-                    {taskAssignedMemberDetails.sessionName && (
-                      <div className="task-detail-badge session-badge">
-                        🖥️ {taskAssignedMemberDetails.sessionName}
-                      </div>
-                    )}
-                    {taskAssignedMemberDetails.teamName && (
-                      <div className="task-detail-badge team-badge">
-                        👥 {taskAssignedMemberDetails.teamName}
-                      </div>
-                    )}
-                  </div>
-                  <div className="assigned-member-status">
-                    <span className="status-indicator in-progress">● In Progress</span>
-                  </div>
-                </div>
-              </FormGroup>
-            )}
-
-            {selectedTaskForDetail.tasks && selectedTaskForDetail.tasks.length > 0 && (
-              <FormGroup>
-                <FormLabel>Subtasks ({selectedTaskForDetail.tasks.length})</FormLabel>
-                <div className="task-detail-subtasks">
-                  {selectedTaskForDetail.tasks.map((subtask: string, index: number) => (
-                    <div key={index} className="task-detail-subtask">
-                      <span className="subtask-text">
-                        {subtask.replace(/^\[x\]\s*|\[\s*\]\s*/i, '')}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </FormGroup>
-            )}
-
-          </div>
-        </FormPopup>
-      )}
+      <TaskDetailModal
+        isOpen={isTaskDetailModalOpen}
+        onClose={() => {
+          setIsTaskDetailModalOpen(false);
+          setSelectedTaskForDetail(null);
+        }}
+        task={selectedTaskForDetail}
+        onAssign={handleTaskAssign}
+        taskAssignmentLoading={taskAssignmentLoading}
+      />
 
       {/* Goal Modal */}
       {isGoalModalOpen && (

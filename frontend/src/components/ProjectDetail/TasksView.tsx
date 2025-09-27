@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, FolderOpen, Play, Unlock, MoreHorizontal, Link2, Inbox } from 'lucide-react';
+import { Plus, FolderOpen, Play, Unlock, Link2, Inbox } from 'lucide-react';
 import { Project } from '../../types';
 import {
   Button,
@@ -11,6 +11,7 @@ import {
   FormTextarea,
   FormHelp
 } from '../UI';
+import { OverflowMenu } from '../UI/OverflowMenu';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
 import { inProgressTasksService } from '../../services/in-progress-tasks.service';
 
@@ -234,32 +235,20 @@ export const TasksView: React.FC<TasksViewProps> = ({
   return (
     <div className="tasks-view">
       <div className="tasks-header">
-        <div className="tasks-title-section">
-          <h3>Project Tasks ({tickets.length})</h3>
-          <div className="tasks-info">
-            <span className="tasks-summary">
-              {Object.keys(tasksByMilestone).length} Milestones • {tickets.length} Tasks
-            </span>
-          </div>
-        </div>
-        
-        <div className="task-creation-controls">
-          <Button
-            variant="primary"
-            icon={Plus}
-            onClick={() => setIsCreateTaskModalOpen(true)}
-            title="Create a new task"
-          >
-            Create Task
-          </Button>
-          <Button
-            variant="secondary"
-            icon={FolderOpen}
-            onClick={() => setIsCreateMilestoneModalOpen(true)}
-            title="Create a new milestone"
-          >
-            Create Milestone
-          </Button>
+        <div className="flex justify-end">
+          <OverflowMenu
+            align="bottom-right"
+            items={[
+              {
+                label: 'Create Task',
+                onClick: () => setIsCreateTaskModalOpen(true)
+              },
+              {
+                label: 'Create Milestone',
+                onClick: () => setIsCreateMilestoneModalOpen(true)
+              }
+            ]}
+          />
         </div>
       </div>
       
@@ -520,29 +509,37 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
           <h4 className="column-title">{title}</h4>
           <span className="task-count">{count}</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          {onCreateTaskClick && (
-            <button
-              className="inline-flex items-center justify-center w-6 h-6 rounded-full border border-border-dark text-text-secondary-dark hover:text-text-primary-dark hover:border-primary/50"
-              title={`Create ${title} task`}
-              onClick={onCreateTaskClick}
-            >
-              +
-            </button>
-          )}
-          <MoreHorizontal className="w-4 h-4 text-text-secondary-dark" />
-        </div>
       </div>
       <div className="column-content overflow-y-auto">
         {tasks.map(task => (
-          <div 
-            key={task.id} 
-            className={`task-card task-card-clickable ${task.status === 'done' || task.status === 'completed' ? 'opacity-90' : ''}`} 
+          <div
+            key={task.id}
+            className={`bg-surface-dark p-4 rounded-lg border border-border-dark hover:border-primary/50 cursor-pointer shadow-sm transition-all ${task.status === 'done' || task.status === 'completed' ? 'opacity-70' : ''} ${task.status === 'blocked' ? 'border-red-500/50 hover:border-red-500/80' : ''}`}
             onClick={() => onTaskClick(task)}
           >
-            <div className="task-header">
-              <h5 className="task-title" style={{ textDecoration: (task.status === 'done' || task.status === 'completed') ? 'line-through' : 'none' }}>{task.title}</h5>
+            <p className={`font-semibold text-sm leading-snug ${task.status === 'done' || task.status === 'completed' ? 'line-through text-text-secondary-dark' : ''}`}>{task.title}</p>
+            <div className="flex items-center justify-between mt-3 gap-2">
               <div className="flex items-center gap-2">
+                {task.priority && (
+                  <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                    task.priority === 'high' || task.priority === 'critical' ? 'bg-red-500/20 text-red-400' :
+                    task.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                    'bg-green-500/20 text-green-400'
+                  }`}>
+                    {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
+                  </span>
+                )}
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-primary/20 text-primary/80 border border-primary/30">
+                  {task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '').split(':')[0] || 'General'}
+                </span>
+                {((task as any).linksCount || (task as any).links?.length) && (
+                  <div className="flex items-center gap-1 text-primary" title={`${(task as any).linksCount || (task as any).links?.length} dependencies`}>
+                    <Link2 className="w-3 h-3" />
+                    <span className="text-xs font-medium">{(task as any).linksCount || (task as any).links?.length}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
                 {(() => {
                   const assignment = taskAssignments.get(task.id);
                   const displayName = assignment?.memberName || task.assignee || '';
@@ -551,40 +548,22 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
                   const key2 = sessionName.toLowerCase();
                   const avatarValue = (avatarMap && (avatarMap[key1] || avatarMap[key2])) || '';
                   if (avatarValue && (avatarValue.startsWith('http') || avatarValue.startsWith('data:'))) {
-                    return <img className="task-avatar" src={avatarValue} alt={displayName} title={displayName || sessionName} />;
+                    return <img className="w-6 h-6 rounded-full bg-cover bg-center ring-2 ring-surface-dark" src={avatarValue} alt={displayName} title={displayName || sessionName} />;
                   }
                   if (avatarValue) {
-                    return <div className="task-avatar" title={displayName || sessionName}>{avatarValue}</div>;
+                    return <div className="w-6 h-6 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs text-text-secondary-dark ring-2 ring-surface-dark" title={displayName || sessionName}>{avatarValue}</div>;
                   }
                   const avatarText = (displayName || sessionName || '•').charAt(0).toUpperCase();
-                  return <div className="task-avatar" title={displayName || sessionName}>{avatarText}</div>;
+                  return <div className="w-6 h-6 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs text-text-secondary-dark ring-2 ring-surface-dark" title={displayName || sessionName}>{avatarText}</div>;
                 })()}
-                <div className="task-play-wrap">
-                  <Play className="w-3.5 h-3.5" />
-                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); }}
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-text-secondary-dark hover:bg-primary/10 hover:text-primary transition-colors"
+                >
+                  <Play className="w-4 h-4" />
+                </button>
               </div>
             </div>
-
-            <div className="task-badges">
-              {task.priority && (
-                <span className={`priority-badge priority-${task.priority}`}>
-                  {task.priority}
-                </span>
-              )}
-              <span className="milestone-badge">
-                {task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '') || 'General'}
-              </span>
-              {((task as any).linksCount || (task as any).links?.length) && (
-                <span className="link-chip">
-                  <Link2 className="w-3 h-3" />
-                  {(task as any).linksCount || (task as any).links?.length}
-                </span>
-              )}
-            </div>
-
-            {task.description && (
-              <p className="task-description">{task.description}</p>
-            )}
           </div>
         ))}
         {tasks.length === 0 && (
