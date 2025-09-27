@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
 import { ProjectCreator } from '@/components/Modals/ProjectCreator';
-import { Project, ApiResponse } from '@/types';
+import { Project, Team, ApiResponse } from '@/types';
 import { apiService } from '@/services/api.service';
 import axios from 'axios';
 import { Plus, Search, Filter, Folder } from 'lucide-react';
@@ -28,6 +28,7 @@ export const Projects: React.FC = () => {
     done: number;
     blocked: number;
   }>>({});
+  const [teamsMap, setTeamsMap] = useState<Record<string, Team[]>>({});
 
   useEffect(() => {
     loadProjects();
@@ -49,8 +50,9 @@ export const Projects: React.FC = () => {
       if (response.data.success) {
         const list = response.data.data || [];
         setProjects(list);
-        // Calculate progress asynchronously
+        // Calculate progress and teams asynchronously
         calculateProgressForProjects(list).catch(err => console.error('Progress calc failed:', err));
+        loadTeamsForProjects(list).catch(err => console.error('Teams loading failed:', err));
       }
     } catch (error) {
       console.error('Error loading projects:', error);
@@ -79,6 +81,28 @@ export const Projects: React.FC = () => {
       }
     }));
     setProgressMap(Object.fromEntries(entries));
+  };
+
+  const loadTeamsForProjects = async (list: Project[]) => {
+    try {
+      // Get all teams
+      const allTeams = await apiService.getTeams();
+
+      // Create a map of project ID to assigned teams
+      const entries = list.map(project => {
+        const assignedTeams = allTeams.filter(team => {
+          // Match by project ID or project name
+          const matchesById = team.currentProject === project.id;
+          const matchesByName = team.currentProject === project.name;
+          return matchesById || matchesByName;
+        });
+        return [project.id, assignedTeams] as const;
+      });
+
+      setTeamsMap(Object.fromEntries(entries));
+    } catch (error) {
+      console.error('Failed to load teams for projects:', error);
+    }
   };
 
   const handleProjectCreate = async (path: string) => {
@@ -175,6 +199,7 @@ export const Projects: React.FC = () => {
                 project={project}
                 showStatus
                 showTeams
+                assignedTeams={teamsMap[project.id] || []}
                 onClick={() => navigateToProject(project.id)}
                 progressPercent={progressMap[project.id]?.percent}
                 progressLabel={typeof progressMap[project.id]?.total === 'number' ? `${progressMap[project.id]?.active || 0} active of ${progressMap[project.id]?.total || 0}` : undefined}

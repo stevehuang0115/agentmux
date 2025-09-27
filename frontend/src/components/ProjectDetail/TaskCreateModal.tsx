@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { useAlert } from '../UI/Dialog';
 import { FormPopup, FormGroup, FormLabel, FormInput, FormTextarea, FormRow, Dropdown } from '../UI';
 import { TaskCreateModalProps, TaskCreateFormData } from './types';
 
 const TaskCreateModal: React.FC<TaskCreateModalProps> = ({ onClose, onSubmit }) => {
+  const { showWarning, AlertComponent } = useAlert();
   const [formData, setFormData] = useState<TaskCreateFormData>({
     title: '',
     description: '',
@@ -14,7 +16,7 @@ const TaskCreateModal: React.FC<TaskCreateModalProps> = ({ onClose, onSubmit }) 
     e.preventDefault();
     
     if (!formData.title.trim()) {
-      alert('Task title is required');
+      showWarning('Task title is required');
       return;
     }
     
@@ -31,6 +33,7 @@ const TaskCreateModal: React.FC<TaskCreateModalProps> = ({ onClose, onSubmit }) 
   };
 
   return (
+    <>
     <FormPopup
       isOpen={true}
       onClose={onClose}
@@ -96,6 +99,8 @@ const TaskCreateModal: React.FC<TaskCreateModalProps> = ({ onClose, onSubmit }) 
         </FormGroup>
       </FormRow>
     </FormPopup>
+    <AlertComponent />
+  </>
   );
 };
 

@@ -33,35 +33,33 @@ export const Dropdown: React.FC<DropdownProps> = ({
   };
 
   return (
-    <div className={`dropdown-wrapper ${className}`}>
-      <div className={`dropdown-container ${error ? 'dropdown-container--error' : ''} ${loading ? 'dropdown-container--loading' : ''}`}>
-        <select
-          className={`dropdown-select ${error ? 'dropdown-select--error' : ''}`}
-          value={value || ''}
-          onChange={handleChange}
-          disabled={disabled || loading}
-          {...props}
-        >
-          <option value="" disabled>
-            {loading ? 'Loading...' : placeholder}
+    <div className={`relative ${className}`}>
+      <select
+        className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 pr-10 text-sm text-text-primary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors appearance-none cursor-pointer ${
+          error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''
+        } ${loading || disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+        value={value || ''}
+        onChange={handleChange}
+        disabled={disabled || loading}
+        {...props}
+      >
+        <option value="" disabled className="text-text-secondary-dark">
+          {loading ? 'Loading...' : placeholder}
+        </option>
+        {options.map((option) => (
+          <option
+            key={option.value}
+            value={option.value}
+            disabled={option.disabled}
+            className="text-text-primary-dark bg-surface-dark"
+          >
+            {option.label}
           </option>
-          {options.map((option) => (
-            <option 
-              key={option.value} 
-              value={option.value}
-              disabled={option.disabled}
-            >
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <div className="dropdown-icon">
-          <ChevronDown size={16} />
-        </div>
+        ))}
+      </select>
+      <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+        <ChevronDown className={`h-4 w-4 ${error ? 'text-red-500' : 'text-text-secondary-dark'}`} />
       </div>
-      {loading && (
-        <div className="dropdown-loading-indicator" />
-      )}
     </div>
   );
 };

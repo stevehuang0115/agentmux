@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAlert } from './UI/Dialog';
 import { FormPopup, FormSection, FormGroup, FormLabel, Dropdown, Toggle } from './UI';
 
 interface Project {
@@ -22,7 +23,8 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 	onStartTeam,
 	team,
 	loading,
-}) => {
+} ) => {
+	const { showWarning, AlertComponent } = useAlert();
 	const [selectedProject, setSelectedProject] = useState<string>('');
 	const [enableGitReminder, setEnableGitReminder] = useState<boolean>(true);
 	const [projects, setProjects] = useState<Project[]>([]);
@@ -60,7 +62,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();
 		if (!isAlreadyAssigned && !selectedProject) {
-			alert('Please select a project');
+			showWarning('Please select a project');
 			return;
 		}
 
@@ -76,6 +78,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 	};
 
 	return (
+		<>
 		<FormPopup
 			isOpen={isOpen}
 			onClose={onClose}
@@ -141,5 +144,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 				</div>
 			</div>
 		</FormPopup>
+		<AlertComponent />
+		</>
 	);
 };

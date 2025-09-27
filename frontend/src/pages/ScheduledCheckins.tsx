@@ -33,7 +33,8 @@ export const ScheduledCheckins: React.FC = () => {
     clearDeliveryLogs,
     // Utils
     formatDate
-  } = useScheduledMessages();
+     , AlertComponent, ConfirmComponent } = useScheduledMessages();
+
 
   // Filter messages based on active/completed status
   const activeMessages = scheduledMessages.filter(msg => msg.isActive);
@@ -129,6 +130,10 @@ export const ScheduledCheckins: React.FC = () => {
         onClose={handleCloseModal}
         onSubmit={handleSubmit}
       />
+
+      {/* Global dialogs for this page */}
+      <AlertComponent />
+      <ConfirmComponent />
     </div>
   );
 };

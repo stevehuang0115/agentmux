@@ -88,7 +88,7 @@ export const FormInput: React.FC<FormInputProps> = ({
   ...props
 }) => (
   <input
-    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark placeholder:text-text-secondary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
     {...props}
   />
 );
@@ -104,7 +104,7 @@ export const FormTextarea: React.FC<FormTextareaProps> = ({
   ...props
 }) => (
   <textarea
-    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
+    className={`w-full bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark placeholder:text-text-secondary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors resize-vertical ${error ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : ''} ${className}`}
     {...props}
   />
 );

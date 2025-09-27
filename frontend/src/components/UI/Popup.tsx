@@ -188,6 +188,7 @@ export const FormPopup: React.FC<FormPopupProps> = ({
         variant={submitVariant}
         loading={loading}
         disabled={submitDisabled || loading}
+        className="bg-primary hover:bg-primary/90 text-white font-medium px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={(e) => {
           // For submit buttons, let the form handle the submission
           if (!loading && !submitDisabled) {

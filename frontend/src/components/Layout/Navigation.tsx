@@ -71,15 +71,15 @@ export const Navigation: React.FC = () => {
 
                   {/* Nest project sub-nav directly under Projects item when viewing a project */}
                   {!isCollapsed && item.href === '/projects' && activeProjectId && (
-                    <div className="mt-2 ml-9 space-y-1">
+                    <div className="mt-1 ml-6 space-y-1">
                       <NavLink
                         to={`/projects/${activeProjectId}#detail`}
                         className={() =>
                           clsx(
-                            'block px-2 py-1 rounded text-sm',
+                            'group flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                             activeHash === 'detail'
-                              ? 'text-primary'
-                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                              ? 'bg-primary/10 text-primary border border-primary/20'
+                              : 'text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark'
                           )
                         }
                       >
@@ -89,10 +89,10 @@ export const Navigation: React.FC = () => {
                         to={`/projects/${activeProjectId}#editor`}
                         className={() =>
                           clsx(
-                            'block px-2 py-1 rounded text-sm',
+                            'group flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                             activeHash === 'editor'
-                              ? 'text-primary'
-                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                              ? 'bg-primary/10 text-primary border border-primary/20'
+                              : 'text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark'
                           )
                         }
                       >
@@ -102,10 +102,10 @@ export const Navigation: React.FC = () => {
                         to={`/projects/${activeProjectId}#tasks`}
                         className={() =>
                           clsx(
-                            'block px-2 py-1 rounded text-sm',
+                            'group flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                             activeHash === 'tasks'
-                              ? 'text-primary'
-                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                              ? 'bg-primary/10 text-primary border border-primary/20'
+                              : 'text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark'
                           )
                         }
                       >
@@ -115,10 +115,10 @@ export const Navigation: React.FC = () => {
                         to={`/projects/${activeProjectId}#teams`}
                         className={() =>
                           clsx(
-                            'block px-2 py-1 rounded text-sm',
+                            'group flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                             activeHash === 'teams'
-                              ? 'text-primary'
-                              : 'text-text-secondary-dark hover:text-text-primary-dark'
+                              ? 'bg-primary/10 text-primary border border-primary/20'
+                              : 'text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark'
                           )
                         }
                       >

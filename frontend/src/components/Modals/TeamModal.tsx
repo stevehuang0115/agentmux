@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FormPopup, Dropdown, Button } from '../UI';
+import { useAlert } from '../UI/Dialog';
 
 interface Project {
   id: string;
@@ -36,6 +37,7 @@ interface TeamModalProps {
 // Will be loaded from configuration
 
 export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit, team }) => {
+  const { showWarning, AlertComponent } = useAlert();
   const [formData, setFormData] = useState({
     name: '',
     projectPath: '',
@@ -174,7 +176,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     // Validate all members have required fields
     for (const member of members) {
       if (!member.name.trim()) {
-        alert('All team members must have a name');
+        showWarning('All team members must have a name');
         return;
       }
     }
@@ -206,6 +208,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
 
 
   return (
+    <>
     <FormPopup
       isOpen={isOpen}
       onClose={onClose}
@@ -313,5 +316,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
             </div>
           </div>
     </FormPopup>
+    <AlertComponent />
+  </>
   );
 };

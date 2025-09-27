@@ -1,11 +1,12 @@
 import React from 'react';
 import { FolderOpen, Users, Clock } from 'lucide-react';
-import { Project } from '@/types';
+import { Project, Team } from '@/types';
 
 interface ProjectCardProps {
   project: Project;
   showStatus?: boolean;
   showTeams?: boolean;
+  assignedTeams?: Team[];
   onClick?: () => void;
   progressPercent?: number; // 0-100 representing (open+in_progress)/total
   progressLabel?: string;   // optional label like "X of Y active"
@@ -20,22 +21,24 @@ interface ProjectCardProps {
 }
 
 const statusColors = {
-  active: { bg: 'bg-green-500/10', text: 'text-green-400' },
-  paused: { bg: 'bg-yellow-500/10', text: 'text-yellow-400' },
-  completed: { bg: 'bg-blue-500/10', text: 'text-blue-400' },
-  blocked: { bg: 'bg-red-500/10', text: 'text-red-400' },
+  active: { bg: 'bg-green-500/10', text: 'text-green-400', label: 'Running' },
+  paused: { bg: 'bg-yellow-500/10', text: 'text-yellow-400', label: 'Stopped' },
+  completed: { bg: 'bg-blue-500/10', text: 'text-blue-400', label: 'Completed' },
+  blocked: { bg: 'bg-red-500/10', text: 'text-red-400', label: 'Blocked' },
+  stopped: { bg: 'bg-gray-500/10', text: 'text-gray-400', label: 'Stopped' },
 };
 
 export const ProjectCard: React.FC<ProjectCardProps> = ({
   project,
   showStatus = false,
   showTeams = false,
+  assignedTeams = [],
   onClick,
   progressPercent,
   progressLabel,
   progressBreakdown
 }) => {
-  const teamCount = Object.values(project.teams || {}).flat().length;
+  const teamCount = assignedTeams.length || Object.values(project.teams || {}).flat().length;
   const lastUpdated = new Date(project.updatedAt).toLocaleDateString();
   const statusColor = statusColors[project.status as keyof typeof statusColors] || statusColors.active;
 
@@ -60,7 +63,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         <h3 className="font-semibold text-lg">{project.name}</h3>
         {showStatus && (
           <span className={`text-xs font-medium px-2 py-1 rounded-full ${statusColor.bg} ${statusColor.text}`}>
-            {project.status}
+            {statusColor.label}
           </span>
         )}
       </div>
@@ -72,11 +75,38 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
         {pathLabel}
       </p>
 
-      <div className="space-y-2 mb-4">
-        {showTeams && teamCount > 0 && (
-          <div className="flex items-center text-xs text-text-secondary-dark">
-            <Users className="h-3 w-3 mr-1" />
-            <span>{teamCount} teams</span>
+      <div className="space-y-3 mb-4">
+        {showTeams && assignedTeams.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center text-xs text-text-secondary-dark">
+              <Users className="h-3 w-3 mr-1" />
+              <span>{assignedTeams.length} team{assignedTeams.length !== 1 ? 's' : ''} assigned</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {assignedTeams.slice(0, 4).map((team) => {
+                // Get initials from team name
+                const initials = team.name
+                  .split(' ')
+                  .map(word => word.charAt(0).toUpperCase())
+                  .join('')
+                  .slice(0, 2);
+
+                return (
+                  <div
+                    key={team.id}
+                    className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-primary-dark"
+                    title={team.name}
+                  >
+                    {initials}
+                  </div>
+                );
+              })}
+              {assignedTeams.length > 4 && (
+                <div className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-secondary-dark">
+                  +{assignedTeams.length - 4}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

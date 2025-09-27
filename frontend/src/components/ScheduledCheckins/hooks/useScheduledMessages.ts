@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useAlert, useConfirm } from '../../UI/Dialog';
 import { ScheduledMessage, ScheduledMessageFormData, MessageDeliveryLog, DEFAULT_FORM_DATA } from '../types';
 
 export const useScheduledMessages = () => {
@@ -8,6 +9,8 @@ export const useScheduledMessages = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
   const [formData, setFormData] = useState<ScheduledMessageFormData>(DEFAULT_FORM_DATA);
+  const { showError, showSuccess, AlertComponent } = useAlert();
+  const { showConfirm, ConfirmComponent } = useConfirm();
 
   useEffect(() => {
     loadScheduledMessages();
@@ -65,20 +68,19 @@ export const useScheduledMessages = () => {
         handleCloseModal();
       } else {
         const error = await response.text();
-        alert('Failed to save scheduled message: ' + error);
+        showError('Failed to save scheduled message: ' + error);
       }
     } catch (error) {
       console.error('Error saving scheduled message:', error);
-      alert('Failed to save scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to save scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}"?`)) {
-      return;
-    }
+    
+    const doDelete = async () => {
+      try {
 
-    try {
       const response = await fetch(`/api/scheduled-messages/${id}`, {
         method: 'DELETE',
       });
@@ -87,12 +89,20 @@ export const useScheduledMessages = () => {
         await loadScheduledMessages();
       } else {
         const error = await response.text();
-        alert('Failed to delete scheduled message: ' + error);
+        showError('Failed to delete scheduled message: ' + error);
       }
-    } catch (error) {
-      console.error('Error deleting scheduled message:', error);
-      alert('Failed to delete scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    }
+    
+      } catch (error) {
+        console.error('Error deleting scheduled message:', error);
+        showError('Failed to delete scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    };
+    showConfirm(
+      `Are you sure you want to delete "${name}"?`,
+      doDelete,
+      { type: 'error', title: 'Delete Scheduled Message', confirmText: 'Delete' }
+    );
+
   };
 
   const handleToggleActive = async (id: string, isActive: boolean) => {
@@ -109,36 +119,43 @@ export const useScheduledMessages = () => {
         await loadScheduledMessages();
       } else {
         const error = await response.text();
-        alert('Failed to toggle scheduled message: ' + error);
+        showError('Failed to toggle scheduled message: ' + error);
       }
     } catch (error) {
       console.error('Error toggling scheduled message:', error);
-      alert('Failed to toggle scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to toggle scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
+  
   const handleRunNow = async (id: string, name: string) => {
-    if (!window.confirm(`Run "${name}" now?`)) {
-      return;
-    }
+    const doRun = async () => {
+      try {
 
-    try {
       const response = await fetch(`/api/scheduled-messages/${id}/run`, {
         method: 'POST',
       });
 
       if (response.ok) {
-        alert('Scheduled message executed successfully!');
+        showSuccess('Scheduled message executed successfully!');
         await loadScheduledMessages();
         await loadDeliveryLogs();
       } else {
         const error = await response.text();
         alert('Failed to run scheduled message: ' + error);
       }
-    } catch (error) {
-      console.error('Error running scheduled message:', error);
-      alert('Failed to run scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    }
+    
+      } catch (error) {
+        console.error('Error running scheduled message:', error);
+        showError('Failed to run scheduled message: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    };
+    showConfirm(
+      `Run "${name}" now?`,
+      doRun,
+      { title: 'Run Scheduled Message', confirmText: 'Run Now', type: 'warning' }
+    );
+
   };
 
   const handleEdit = (message: ScheduledMessage) => {
@@ -201,6 +218,9 @@ export const useScheduledMessages = () => {
     handleCloseModal,
     clearDeliveryLogs,
     // Utils
-    formatDate
+    formatDate,
+    // Dialog components for mounting at page-level
+    AlertComponent,
+    ConfirmComponent
   };
 };

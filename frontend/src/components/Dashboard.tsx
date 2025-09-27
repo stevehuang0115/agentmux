@@ -15,10 +15,12 @@ import {
   EmptyTerminalState
 } from './Dashboard/index';
 import axios from 'axios';
+import { useAlert } from './UI/Dialog';
 
 const API_BASE = '/api';
 
 export const Dashboard: React.FC = () => {
+  const { showError, AlertComponent } = useAlert();
   const [teams, setTeams] = useState<Team[]>([]);
   // const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -74,7 +76,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Error adding project:', error);
-      alert('Failed to add project. Please check the path and try again.');
+      showError('Failed to add project. Please check the path and try again.');
     }
   };
 
@@ -90,7 +92,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Error creating team:', error);
-      alert('Failed to create team. Please try again.');
+      showError('Failed to create team. Please try again.');
     }
   };
 
@@ -110,7 +112,7 @@ export const Dashboard: React.FC = () => {
       }
     } catch (error) {
       console.error('Error terminating team:', error);
-      alert('Failed to terminate team. Please try again.');
+      showError('Failed to terminate team. Please try again.');
     }
   };
 
@@ -221,6 +223,7 @@ export const Dashboard: React.FC = () => {
         {activeTab === 'terminal' && !selectedMember && (
           <EmptyTerminalState />
         )}
+      <AlertComponent />
       </main>
     </div>
   );

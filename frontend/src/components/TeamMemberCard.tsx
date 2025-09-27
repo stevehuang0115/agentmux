@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useConfirm } from './UI/Dialog';
 import { User, Edit2, Trash2, Save, X, Play, Square } from 'lucide-react';
 import { TeamMember } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
@@ -19,7 +20,8 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   onStart,
   onStop,
   teamId
-}) => {
+} ) => {
+  const { showConfirm, ConfirmComponent } = useConfirm();
   const { openTerminalWithSession } = useTerminal();
   const [isEditing, setIsEditing] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -54,9 +56,11 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
   };
 
   const handleDelete = () => {
-    if (window.confirm(`Are you sure you want to remove ${member.name} from the team?`)) {
-      onDelete(member.id);
-    }
+    showConfirm(
+      `Remove ${member.name} from the team?`,
+      () => onDelete(member.id),
+      { title: 'Remove Member', type: 'warning', confirmText: 'Remove' }
+    )
   };
 
   const handleStart = async (e: React.MouseEvent) => {
@@ -346,6 +350,8 @@ export const TeamMemberCard: React.FC<TeamMemberCardProps> = ({
           </div>
         </div>
       </div>
+      <ConfirmComponent />
+      <ConfirmComponent />
     </div>
   );
 };

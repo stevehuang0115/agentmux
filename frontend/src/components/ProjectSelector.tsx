@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAlert } from './UI/Dialog';
 import { FolderOpenIcon, PlusIcon } from '@heroicons/react/24/outline';
 
 interface ProjectSelectorProps {
@@ -9,7 +10,8 @@ interface ProjectSelectorProps {
 export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
   onProjectSelect,
   className = '',
-}) => {
+} ) => {
+  const { showError, AlertComponent } = useAlert();
   const [selectedPath, setSelectedPath] = useState('');
   const [isSelecting, setIsSelecting] = useState(false);
 
@@ -27,7 +29,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       }
     } catch (error) {
       console.error('Error selecting folder:', error);
-      alert('Failed to select folder. Please try again.');
+      showError('Failed to select folder. Please try again.');
     } finally {
       setIsSelecting(false);
     }
@@ -70,6 +72,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
           </ul>
         </div>
       </div>
+      <AlertComponent />
     </div>
   );
 };

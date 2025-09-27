@@ -1,4 +1,5 @@
 import React from 'react';
+import { useConfirm, useAlert } from './UI/Dialog';
 import { Team, TeamMember } from '@/types';
 import { 
   UserGroupIcon, 
@@ -49,6 +50,8 @@ export const TeamList: React.FC<TeamListProps> = ({
   onTeamTerminate,
   className = '',
 }) => {
+  const { showConfirm, ConfirmComponent } = useConfirm();
+  const { showError, AlertComponent } = useAlert();
   const handleTerminate = (teamId: string, teamName: string) => {
     if (confirm(`Are you sure you want to terminate team "${teamName}"? This will stop all Claude Code sessions.`)) {
       onTeamTerminate?.(teamId);
@@ -68,6 +71,7 @@ export const TeamList: React.FC<TeamListProps> = ({
   }
 
   return (
+    <>
     <div className={`bg-white rounded-lg shadow-md ${className}`}>
       <div className="px-6 py-4 border-b border-gray-200">
         <div className="flex items-center">
@@ -201,5 +205,8 @@ export const TeamList: React.FC<TeamListProps> = ({
         })}
       </div>
     </div>
+    <AlertComponent />
+    <ConfirmComponent />
+    </>
   );
 };

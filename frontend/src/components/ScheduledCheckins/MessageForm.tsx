@@ -79,36 +79,58 @@ export const MessageForm: React.FC<MessageFormProps> = ({
         <FormLabel>Schedule</FormLabel>
         <div className="grid gap-4">
           <div className="flex flex-col sm:flex-row gap-4">
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border-dark cursor-pointer hover:border-primary/50">
+            <label className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+              !formData.isRecurring
+                ? 'border-primary bg-primary/10 text-text-primary-dark'
+                : 'border-border-dark hover:border-primary/50 text-text-primary-dark'
+            }`}>
               <input
                 type="radio"
                 name="scheduleType"
-                className="mt-0.5"
+                className="mt-1 w-4 h-4 text-primary border-border-dark focus:ring-primary focus:ring-2"
                 checked={!formData.isRecurring}
                 onChange={() => setFormData({ ...formData, isRecurring: false })}
               />
-              <span>
-                <div className="font-medium">One-time</div>
-                <div className="text-xs text-text-secondary-dark">Send message once after delay</div>
-              </span>
+              <div className="flex-1">
+                <div className="font-medium text-sm">One-time</div>
+                <div className="text-xs text-text-secondary-dark mt-1">Send a single message after a delay.</div>
+              </div>
+              {!formData.isRecurring && (
+                <div className="ml-auto">
+                  <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+              )}
             </label>
-            <label className="flex items-start gap-3 p-3 rounded-lg border border-border-dark cursor-pointer hover:border-primary/50">
+            <label className={`flex items-start gap-3 p-4 rounded-lg border cursor-pointer transition-all ${
+              formData.isRecurring
+                ? 'border-primary bg-primary/10 text-text-primary-dark'
+                : 'border-border-dark hover:border-primary/50 text-text-primary-dark'
+            }`}>
               <input
                 type="radio"
                 name="scheduleType"
-                className="mt-0.5"
+                className="mt-1 w-4 h-4 text-primary border-border-dark focus:ring-primary focus:ring-2"
                 checked={formData.isRecurring}
                 onChange={() => setFormData({ ...formData, isRecurring: true })}
               />
-              <span>
-                <div className="font-medium">Recurring</div>
-                <div className="text-xs text-text-secondary-dark">Send message repeatedly at interval</div>
-              </span>
+              <div className="flex-1">
+                <div className="font-medium text-sm">Recurring</div>
+                <div className="text-xs text-text-secondary-dark mt-1">Send a message on a recurring basis.</div>
+              </div>
+              {formData.isRecurring && (
+                <div className="ml-auto">
+                  <svg className="w-5 h-5 text-primary" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+              )}
             </label>
           </div>
-          <div className="grid gap-2">
-            <label className="text-sm text-text-secondary-dark">
-              {formData.isRecurring ? 'Send every:' : 'Send after:'}
+          <div className="grid gap-3">
+            <label className="text-sm font-medium text-text-primary-dark">
+              {formData.isRecurring ? 'Send Every' : 'Send After'}
             </label>
             <div className="flex items-center gap-3">
               <input
@@ -117,7 +139,7 @@ export const MessageForm: React.FC<MessageFormProps> = ({
                 value={formData.delayAmount}
                 onChange={(e) => setFormData({ ...formData, delayAmount: e.target.value })}
                 required
-                className="w-28 bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                className="w-20 bg-surface-dark border border-border-dark rounded-lg px-3 py-2.5 text-sm text-text-primary-dark focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
               />
               <Dropdown
                 value={formData.delayUnit}
@@ -127,6 +149,7 @@ export const MessageForm: React.FC<MessageFormProps> = ({
                   { value: 'minutes', label: 'minutes' },
                   { value: 'hours', label: 'hours' }
                 ]}
+                className="min-w-[120px]"
               />
             </div>
           </div>

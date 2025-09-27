@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAlert } from '../../components/UI/Dialog';
 import { FileText } from 'lucide-react';
 import { Button } from '../UI';
 import { apiService } from '../../services/api.service';
@@ -34,6 +35,7 @@ const DetailView: React.FC<DetailViewProps> = ({
   onCreateDevTasks,
   onCreateE2ETasks 
 }) => {
+  const { showSuccess, showError, AlertComponent } = useAlert();
   const [projectStats, setProjectStats] = useState<ProjectStats>({
     mdFileCount: 0,
     taskCount: 0,
@@ -93,13 +95,13 @@ const DetailView: React.FC<DetailViewProps> = ({
       const result = await response.json();
       if (result.success) {
         // Show success message briefly
-        alert('✅ Project folder opened in Finder');
+        showSuccess('Project folder opened in Finder');
       } else {
         throw new Error(result.error || 'Failed to open Finder');
       }
     } catch (error) {
       console.error('Error opening Finder:', error);
-      alert('❌ Failed to open Finder: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to open Finder: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -124,7 +126,7 @@ const DetailView: React.FC<DetailViewProps> = ({
       if (response.ok) {
         const result = await response.json();
         if (result.success) {
-          alert(`✅ ${fileName} created successfully!`);
+          showSuccess(`${fileName} created successfully!`);
           // Reload stats to reflect the new file
           loadProjectStats();
         } else {
@@ -135,7 +137,7 @@ const DetailView: React.FC<DetailViewProps> = ({
       }
     } catch (error) {
       console.error(`Error creating ${fileName}:`, error);
-      alert(`❌ Failed to create ${fileName}: ` + (error instanceof Error ? error.message : 'Unknown error'));
+      showError(`Failed to create ${fileName}: ` + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 

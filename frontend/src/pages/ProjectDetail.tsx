@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useLocation, useNavigate, Link } from 'react-router-dom';
 import { UserPlus, Play, FolderOpen, CheckSquare, FileText, Plus, Trash2, UserMinus, Info, ExternalLink, Square } from 'lucide-react';
 import { Project, Team, Ticket } from '../types';
@@ -37,13 +37,17 @@ export const ProjectDetail: React.FC = () => {
   const { showConfirm, showDeleteConfirm, ConfirmComponent } = useConfirm();
   
   // Initialize activeTab from URL hash or default to 'detail'
-  const getTabFromHash = () => {
+  const getTabFromHash = useCallback(() => {
     const hash = location.hash.replace('#', '');
     const validTabs = ['detail', 'editor', 'tasks', 'teams'];
     return validTabs.includes(hash) ? hash as 'detail' | 'editor' | 'tasks' | 'teams' : 'detail';
-  };
-  
-  const [activeTab, setActiveTab] = useState<'detail' | 'editor' | 'tasks' | 'teams'>(getTabFromHash());
+  }, [location.hash]);
+
+  const [activeTab, setActiveTab] = useState<'detail' | 'editor' | 'tasks' | 'teams'>(() => {
+    const hash = location.hash.replace('#', '');
+    const validTabs = ['detail', 'editor', 'tasks', 'teams'];
+    return validTabs.includes(hash) ? hash as 'detail' | 'editor' | 'tasks' | 'teams' : 'detail';
+  });
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [isTeamAssignmentModalOpen, setIsTeamAssignmentModalOpen] = useState(false);
   const [isMarkdownEditorOpen, setIsMarkdownEditorOpen] = useState(false);
@@ -94,15 +98,10 @@ export const ProjectDetail: React.FC = () => {
   const [isCreateMilestoneModalOpen, setIsCreateMilestoneModalOpen] = useState(false);
   const [selectedMilestoneFilter, setSelectedMilestoneFilter] = useState<string | null>(null);
 
-  // Update activeTab when hash changes
+  // Update activeTab when location changes
   useEffect(() => {
-    const handleHashChange = () => {
-      setActiveTab(getTabFromHash());
-    };
-    
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [location.hash]);
+    setActiveTab(getTabFromHash());
+  }, [getTabFromHash]);
 
   // Update hash when activeTab changes
   const updateActiveTab = (tab: 'detail' | 'editor' | 'tasks' | 'teams') => {
@@ -772,13 +771,13 @@ export const ProjectDetail: React.FC = () => {
       }
     } catch (error) {
       console.error('Error loading goal content:', error);
-      alert('❌ Failed to load goal content: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to load goal content: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
   
   const handleSaveGoal = async () => {
     if (!goalContent.trim()) {
-      alert('Please enter project goal content');
+      showAlert('Please enter project goal content');
       return;
     }
     
@@ -841,13 +840,13 @@ export const ProjectDetail: React.FC = () => {
       }
     } catch (error) {
       console.error('Error loading user journey content:', error);
-      alert('❌ Failed to load user journey content: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to load user journey content: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
   
   const handleSaveUserJourney = async () => {
     if (!userJourneyContent.trim()) {
-      alert('Please enter user journey content');
+      showAlert('Please enter user journey content');
       return;
     }
     
@@ -883,7 +882,7 @@ export const ProjectDetail: React.FC = () => {
       }
     } catch (error) {
       console.error('Error saving user journey:', error);
-      alert('Failed to save user journey: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to save user journey: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -1302,7 +1301,7 @@ export const ProjectDetail: React.FC = () => {
 
     } catch (error) {
       console.error('Error building specs:', error);
-      alert('❌ Failed to build specs: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to build specs: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 

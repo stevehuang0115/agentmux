@@ -195,11 +195,11 @@ export const TasksView: React.FC<TasksViewProps> = ({
         onTicketsUpdate(); // Refresh tasks
       } else {
         const error = await response.text();
-        alert('Failed to create task: ' + error);
+        console.error('Failed to create task: ' + error);
       }
     } catch (error) {
       console.error('Error creating task:', error);
-      alert('Failed to create task');
+      console.error('Failed to create task');
     }
   };
 
@@ -223,11 +223,11 @@ export const TasksView: React.FC<TasksViewProps> = ({
         onTicketsUpdate(); // Refresh tasks
       } else {
         const error = await response.text();
-        alert('Failed to create milestone: ' + error);
+        console.error('Failed to create milestone: ' + error);
       }
     } catch (error) {
       console.error('Error creating milestone:', error);
-      alert('Failed to create milestone');
+      console.error('Failed to create milestone');
     }
   };
 

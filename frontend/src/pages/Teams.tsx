@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Grid, List } from 'lucide-react';
+import { useAlert } from '../components/UI/Dialog';
 import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamMemberModal } from '../components/Modals/TeamMemberModal';
@@ -20,6 +21,7 @@ export const Teams: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [projectsForFilter, setProjectsForFilter] = useState<{ id: string; name: string }[]>([]);
+  const { showError, AlertComponent } = useAlert();
   const projectMap = Object.fromEntries(projectsForFilter.map(p => [p.id, p.name]));
   const [projectFilter, setProjectFilter] = useState<string>('all');
 
@@ -111,11 +113,11 @@ export const Teams: React.FC = () => {
         }
       } else {
         const errorResult = await response.json();
-        alert('Error creating team: ' + (errorResult.error || 'Unknown error'));
+        showError('Error creating team: ' + (errorResult.error || 'Unknown error'));
       }
     } catch (error) {
       console.error('Error creating team:', error);
-      alert('Error creating team: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Error creating team: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -279,6 +281,7 @@ export const Teams: React.FC = () => {
           onClose={closeMemberModal}
         />
       )}
+      <AlertComponent />
     </div>
   );
 };

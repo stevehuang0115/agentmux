@@ -89,39 +89,33 @@ export const TeamCard: React.FC<TeamCardProps> = ({
       )}
 
       {members.length > 0 && (
-        <div className="flex-grow">
-          <h4 className="text-sm font-medium mb-2 text-text-secondary-dark">Team Members</h4>
-          <div className="space-y-2">
-            {members.slice(0, 3).map((member) => (
-              <div
-                key={member.id}
-                className={`flex items-center justify-between p-2 rounded hover:bg-background-dark transition-colors ${member.sessionName ? 'cursor-pointer' : ''}`}
-                onClick={(e) => handleMemberClick(e, member)}
-                title={member.sessionName ?
-                  `${member.name} - Active session: ${member.sessionName} (Click to open terminal)` :
-                  `${member.name} - No active session`
-                }
-              >
-                <div className="flex items-center">
-                  <div className="w-6 h-6 rounded-full bg-background-dark flex items-center justify-center mr-2">
-                    <User className="h-3 w-3 text-text-secondary-dark" />
-                  </div>
-                  <div className="text-xs">
-                    <div className="font-medium">{member.name}</div>
-                    <div
-                      className="text-xs"
-                      style={{ color: roleColors[member.role] || '#9ab0d9' }}
-                    >
-                      {member.role}
-                    </div>
-                  </div>
+        <div className="mt-4">
+          <div className="flex items-center gap-1">
+            {members.slice(0, 4).map((member) => {
+              // Get initials from member name
+              const initials = member.name
+                .split(' ')
+                .map(word => word.charAt(0).toUpperCase())
+                .join('')
+                .slice(0, 2);
+
+              return (
+                <div
+                  key={member.id}
+                  className={`w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-primary-dark ${member.sessionName ? 'cursor-pointer' : ''}`}
+                  onClick={(e) => handleMemberClick(e, member)}
+                  title={member.sessionName ?
+                    `${member.name} (${member.role}) - Active session: ${member.sessionName} (Click to open terminal)` :
+                    `${member.name} (${member.role}) - No active session`
+                  }
+                >
+                  {initials}
                 </div>
-                <div className={`w-2 h-2 rounded-full ${member.sessionName ? 'bg-green-400' : 'bg-gray-500'}`}></div>
-              </div>
-            ))}
-            {members.length > 3 && (
-              <div className="text-xs text-text-secondary-dark text-center py-1">
-                +{members.length - 3} more
+              );
+            })}
+            {members.length > 4 && (
+              <div className="w-8 h-8 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs font-medium text-text-secondary-dark">
+                +{members.length - 4}
               </div>
             )}
           </div>
