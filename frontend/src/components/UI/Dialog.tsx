@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CheckCircle, XCircle, AlertTriangle, Info } from 'lucide-react';
-import { Modal, ModalFooter } from './Modal';
+import { Popup } from './Popup';
 import { Button } from './Button';
 
 export type AlertType = 'success' | 'error' | 'warning' | 'info';
@@ -16,7 +16,7 @@ export interface AlertDialogProps {
 
 export interface ConfirmDialogProps {
   isOpen: boolean;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   onCancel: () => void;
   title?: string;
   message: string;
@@ -26,7 +26,27 @@ export interface ConfirmDialogProps {
   loading?: boolean;
 }
 
-// Alert Dialog Component
+const IconForType = ({ type }: { type: AlertType }) => {
+  const map = {
+    success: CheckCircle,
+    error: XCircle,
+    warning: AlertTriangle,
+    info: Info,
+  } as const;
+  const Icon = map[type] ?? Info;
+  return (
+    <div className={`mx-auto mb-3 w-12 h-12 rounded-full flex items-center justify-center ` +
+      (type === 'success' ? 'bg-green-500/10 text-green-400' :
+       type === 'error' ? 'bg-rose-500/10 text-rose-400' :
+       type === 'warning' ? 'bg-yellow-500/10 text-yellow-400' :
+       'bg-blue-500/10 text-blue-300')
+    }>
+      <Icon className="w-6 h-6" />
+    </div>
+  );
+};
+
+// Alert Dialog Component (prototype-styled via Popup)
 export const AlertDialog: React.FC<AlertDialogProps> = ({
   isOpen,
   onClose,
@@ -35,49 +55,30 @@ export const AlertDialog: React.FC<AlertDialogProps> = ({
   type = 'info',
   confirmText = 'OK'
 }) => {
-  const getIcon = () => {
-    switch (type) {
-      case 'success': return CheckCircle;
-      case 'error': return XCircle;
-      case 'warning': return AlertTriangle;
-      case 'info': return Info;
-      default: return Info;
-    }
-  };
-
-  const Icon = getIcon();
-
   return (
-    <Modal
+    <Popup
       isOpen={isOpen}
       onClose={onClose}
       title={title}
       size="sm"
-      className="dialog-modal"
+      closable={true}
+      footer={
+        <Button variant="primary" onClick={onClose} fullWidth>
+          {confirmText}
+        </Button>
+      }
     >
-      <div className="dialog-content">
-        <div className={`dialog-icon dialog-icon-${type}`}>
-          <Icon size={48} />
-        </div>
-        <div className="dialog-message">
+      <div className="text-center">
+        <IconForType type={type} />
+        <div className="whitespace-pre-line text-sm text-text-primary-dark">
           {message}
         </div>
       </div>
-      
-      <ModalFooter>
-        <Button
-          variant="primary"
-          onClick={onClose}
-          fullWidth
-        >
-          {confirmText}
-        </Button>
-      </ModalFooter>
-    </Modal>
+    </Popup>
   );
 };
 
-// Confirm Dialog Component
+// Confirm Dialog Component (prototype-styled via Popup)
 export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   isOpen,
   onConfirm,
@@ -89,55 +90,31 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   cancelText = 'Cancel',
   loading = false
 }) => {
-  const getIcon = () => {
-    switch (type) {
-      case 'success': return CheckCircle;
-      case 'error': return XCircle;
-      case 'warning': return AlertTriangle;
-      case 'info': return Info;
-      default: return AlertTriangle;
-    }
-  };
-
-  const Icon = getIcon();
-
   return (
-    <Modal
+    <Popup
       isOpen={isOpen}
       onClose={onCancel}
       title={title}
       size="sm"
-      className="dialog-modal"
       closable={!loading}
-    >
-      <div className="dialog-content">
-        <div className={`dialog-icon dialog-icon-${type}`}>
-          <Icon size={48} />
-        </div>
-        <div className="dialog-message">
-          {message}
-        </div>
-      </div>
-      
-      <ModalFooter>
-        <div className="dialog-actions">
-          <Button
-            variant="secondary"
-            onClick={onCancel}
-            disabled={loading}
-          >
+      footer={
+        <div className="flex gap-3 w-full justify-end">
+          <Button variant="secondary" onClick={onCancel} disabled={loading}>
             {cancelText}
           </Button>
-          <Button
-            variant={type === 'error' ? 'danger' : 'primary'}
-            onClick={onConfirm}
-            loading={loading}
-          >
+          <Button variant={type === 'error' ? 'danger' : 'primary'} onClick={onConfirm} loading={loading}>
             {confirmText}
           </Button>
         </div>
-      </ModalFooter>
-    </Modal>
+      }
+    >
+      <div className="text-center">
+        <IconForType type={type} />
+        <div className="whitespace-pre-line text-sm text-text-primary-dark">
+          {message}
+        </div>
+      </div>
+    </Popup>
   );
 };
 
@@ -156,8 +133,8 @@ export const useAlert = () => {
   });
 
   const showAlert = (
-    message: string, 
-    type: AlertType = 'info', 
+    message: string,
+    type: AlertType = 'info',
     title?: string,
     confirmText?: string
   ) => {
@@ -188,7 +165,6 @@ export const useAlert = () => {
   return {
     showAlert,
     AlertComponent,
-    // Convenience methods
     showSuccess: (message: string, title?: string) => showAlert(message, 'success', title),
     showError: (message: string, title?: string) => showAlert(message, 'error', title),
     showWarning: (message: string, title?: string) => showAlert(message, 'warning', title),
@@ -205,7 +181,7 @@ export const useConfirm = () => {
     type: AlertType;
     confirmText?: string;
     cancelText?: string;
-    onConfirm: () => void;
+    onConfirm: () => void | Promise<void>;
     loading: boolean;
   }>({
     isOpen: false,
@@ -217,7 +193,7 @@ export const useConfirm = () => {
 
   const showConfirm = (
     message: string,
-    onConfirm: () => void,
+    onConfirm: () => void | Promise<void>,
     {
       type = 'warning',
       title,
@@ -253,7 +229,6 @@ export const useConfirm = () => {
       closeConfirm();
     } catch (error) {
       setConfirmState(prev => ({ ...prev, loading: false }));
-      // Error handling could be added here
     }
   };
 
@@ -274,8 +249,7 @@ export const useConfirm = () => {
   return {
     showConfirm,
     ConfirmComponent,
-    // Convenience methods
-    showDeleteConfirm: (itemName: string, onConfirm: () => void) => 
+    showDeleteConfirm: (itemName: string, onConfirm: () => void | Promise<void>) =>
       showConfirm(
         `Are you sure you want to delete "${itemName}"? This action cannot be undone.`,
         onConfirm,

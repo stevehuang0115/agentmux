@@ -29,7 +29,7 @@ export const Navigation: React.FC = () => {
 
 	return (
     <div className={clsx(
-            'flex flex-col h-screen max-h-screen bg-surface-dark border-r border-border-dark overflow-hidden w-full'
+            'flex flex-col h-screen max-h-screen bg-surface-dark/95 border-r border-border-dark overflow-hidden w-full'
         )}>
 			{/* Logo Section */}
 			<div className="flex items-center p-4 border-b border-border-dark">
@@ -46,7 +46,7 @@ export const Navigation: React.FC = () => {
 			</div>
 
 			{/* Main Navigation */}
-            <nav className="flex-1 p-2 overflow-y-auto">
+            <nav className="flex-1 px-2 py-3 overflow-y-auto">
 				<div className="space-y-1">
             {navigationItems.map((item) => {
               const isActive =
@@ -58,10 +58,10 @@ export const Navigation: React.FC = () => {
                   <NavLink
                     to={item.href}
                     className={clsx(
-                      'flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                      'group flex items-center px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                       isActive
-                        ? 'bg-primary text-white'
-                        : 'text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark'
+                        ? 'bg-surface-dark text-text-primary-dark border border-border-dark ring-1 ring-primary/30'
+                        : 'text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark'
                     )}
                     title={isCollapsed ? item.name : undefined}
                   >
@@ -135,7 +135,7 @@ export const Navigation: React.FC = () => {
 			{/* Bottom Section - Toggle button */}
 			<div className="p-2 border-t border-border-dark">
 				<button
-					className="flex items-center justify-center w-full p-2 text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark rounded-lg transition-colors"
+					className="flex items-center justify-center w-full p-2 text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark rounded-lg transition-colors"
 					onClick={toggleSidebar}
 					aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 				>

@@ -5,6 +5,7 @@ import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus } from '../components/TeamDetail';
+import { useAlert, useConfirm } from '../components/UI/Dialog';
 import { safeParseJSON } from '../utils/api';
 
 export const TeamDetail: React.FC = () => {
@@ -19,6 +20,8 @@ export const TeamDetail: React.FC = () => {
   const [showEditTeamModal, setShowEditTeamModal] = useState(false);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const { showSuccess, showError, showWarning, AlertComponent } = useAlert();
+  const { showConfirm, ConfirmComponent } = useConfirm();
 
   useEffect(() => {
     if (id) {
@@ -118,13 +121,13 @@ export const TeamDetail: React.FC = () => {
         fetchTeamData();
         // Terminal functionality moved to centralized WebSocket system
         // Show success message
-        alert(result.message || 'Team started successfully!');
+        showSuccess(result.message || 'Team started successfully!');
       } else {
-        alert(result.error || 'Failed to start team');
+        showError(result.error || 'Failed to start team');
       }
     } catch (error) {
       console.error('Error starting team:', error);
-      alert('Error starting team. Please try again.');
+      showError('Error starting team. Please try again.');
     } finally {
       setStartTeamLoading(false);
     }
@@ -147,11 +150,11 @@ export const TeamDetail: React.FC = () => {
         setShowEditTeamModal(false);
       } else {
         const err = await response.json();
-        alert(err.error || 'Failed to update team');
+        showError(err.error || 'Failed to update team');
       }
     } catch (e) {
       console.error('Error updating team:', e);
-      alert('Failed to update team');
+      showError('Failed to update team');
     }
   };
 
@@ -171,7 +174,7 @@ export const TeamDetail: React.FC = () => {
           checkOrchestratorSession();
         } else {
           const result = await response.json();
-          alert(result.error || 'Failed to stop orchestrator');
+          showError(result.error || 'Failed to stop orchestrator');
         }
       } else {
         // Regular team stop
@@ -192,17 +195,12 @@ export const TeamDetail: React.FC = () => {
     
     // Prevent deletion of orchestrator team
     if (team.id === 'orchestrator' || team.name === 'Orchestrator Team') {
-      alert('The Orchestrator Team cannot be deleted as it is required for system operations.');
-      return;
-    }
-    
-    const confirmMessage = `Are you sure you want to delete team "${team.name}"?\n\nThis will:\n- Delete the team and all its members\n- Kill all associated tmux sessions\n- Remove all team data permanently\n\nThis action cannot be undone.`;
-    
-    if (!window.confirm(confirmMessage)) {
+      showWarning('The Orchestrator Team cannot be deleted as it is required for system operations.');
       return;
     }
 
-    try {
+    const executeDelete = async () => {
+      try {
       // First stop the team to ensure sessions are terminated
       await fetch(`/api/teams/${id}/stop`, {
         method: 'POST',
@@ -221,12 +219,19 @@ export const TeamDetail: React.FC = () => {
         navigate('/teams');
       } else {
         const error = await response.text();
-        alert('Failed to delete team: ' + error);
+        showError('Failed to delete team: ' + error);
       }
     } catch (error) {
       console.error('Error deleting team:', error);
-      alert('Failed to delete team: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      showError('Failed to delete team: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
+    };
+
+    showConfirm(
+      `Are you sure you want to delete team "${team.name}"?\n\nThis will:\n• Delete the team and all its members\n• Kill all associated tmux sessions\n• Remove all team data permanently\n\nThis action cannot be undone.`,
+      executeDelete,
+      { type: 'error', title: 'Delete Team', confirmText: 'Delete', cancelText: 'Cancel' }
+    );
   };
 
   const getTeamStatus = (): TeamStatus => {
@@ -254,7 +259,7 @@ export const TeamDetail: React.FC = () => {
 
   const handleAddMember = async (member: { name: string; role: string }) => {
     if (!member.name.trim() || !member.role.trim()) {
-      alert('Please fill in both name and role');
+      showWarning('Please fill in both name and role');
       return;
     }
 
@@ -271,11 +276,11 @@ export const TeamDetail: React.FC = () => {
         fetchTeamData();
       } else {
         const error = await response.text();
-        alert('Failed to add member: ' + error);
+        showError('Failed to add member: ' + error);
       }
     } catch (error) {
       console.error('Error adding member:', error);
-      alert('Failed to add member');
+      showError('Failed to add member');
     }
   };
 
@@ -296,7 +301,7 @@ export const TeamDetail: React.FC = () => {
           return;
         } else {
           const result = await response.json();
-          alert('Failed to update member runtime: ' + (result.error || 'Unknown error'));
+          showError('Failed to update member runtime: ' + (result.error || 'Unknown error'));
           return;
         }
       }
@@ -314,11 +319,11 @@ export const TeamDetail: React.FC = () => {
         fetchTeamData();
       } else {
         const error = await response.text();
-        alert('Failed to update member: ' + error);
+        showError('Failed to update member: ' + error);
       }
     } catch (error) {
       console.error('Error updating member:', error);
-      alert('Failed to update member');
+      showError('Failed to update member');
     }
   };
 
@@ -332,11 +337,11 @@ export const TeamDetail: React.FC = () => {
         fetchTeamData();
       } else {
         const error = await response.text();
-        alert('Failed to remove member: ' + error);
+        showError('Failed to remove member: ' + error);
       }
     } catch (error) {
       console.error('Error removing member:', error);
-      alert('Failed to remove member');
+      showError('Failed to remove member');
     }
   };
 
@@ -359,7 +364,7 @@ export const TeamDetail: React.FC = () => {
           checkOrchestratorSession();
           console.log('Orchestrator setup successfully');
         } else {
-          alert(result.error || 'Failed to setup orchestrator');
+          showError(result.error || 'Failed to setup orchestrator');
         }
       } else {
         // Regular team member start
@@ -377,12 +382,12 @@ export const TeamDetail: React.FC = () => {
           fetchTeamData();
           console.log(`Member ${memberId} started successfully`);
         } else {
-          alert(result.error || 'Failed to start team member');
+          showError(result.error || 'Failed to start team member');
         }
       }
     } catch (error) {
       console.error('Error starting team member:', error);
-      alert('Error starting team member. Please try again.');
+      showError('Error starting team member. Please try again.');
     }
   };
 
@@ -405,7 +410,7 @@ export const TeamDetail: React.FC = () => {
           checkOrchestratorSession();
           console.log('Orchestrator stopped successfully');
         } else {
-          alert(result.error || 'Failed to stop orchestrator');
+          showError(result.error || 'Failed to stop orchestrator');
         }
       } else {
         // Regular team member stop
@@ -423,12 +428,12 @@ export const TeamDetail: React.FC = () => {
           fetchTeamData();
           console.log(`Member ${memberId} stopped successfully`);
         } else {
-          alert(result.error || 'Failed to stop team member');
+          showError(result.error || 'Failed to stop team member');
         }
       }
     } catch (error) {
       console.error('Error stopping team member:', error);
-      alert('Error stopping team member. Please try again.');
+      showError('Error stopping team member. Please try again.');
     }
   };
 
@@ -449,11 +454,11 @@ export const TeamDetail: React.FC = () => {
         await fetchTeamData();
       } else {
         const result = await response.json();
-        alert(result.error || 'Failed to update team project');
+        showError(result.error || 'Failed to update team project');
       }
     } catch (error) {
       console.error('Error updating team project:', error);
-      alert('Error updating team project. Please try again.');
+      showError('Error updating team project. Please try again.');
     }
   };
 
@@ -529,6 +534,10 @@ export const TeamDetail: React.FC = () => {
           team={team}
         />
       )}
+
+      {/* Global alert/confirm dialogs */}
+      <AlertComponent />
+      <ConfirmComponent />
     </div>
   );
 };

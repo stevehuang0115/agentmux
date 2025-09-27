@@ -23,6 +23,7 @@ interface TeamMember {
   role: string;
   systemPrompt: string;
   runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  avatar?: string;
 }
 
 interface TeamModalProps {
@@ -37,7 +38,6 @@ interface TeamModalProps {
 export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit, team }) => {
   const [formData, setFormData] = useState({
     name: '',
-    description: '',
     projectPath: '',
   });
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -51,8 +51,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     if (team) {
       setFormData({
         name: team.name || '',
-        description: team.description || '',
-        projectPath: team.projectPath || '',
+        projectPath: team.currentProject || team.projectPath || '',
       });
       if (team.members && Array.isArray(team.members)) {
         // Ensure all members have runtimeType (for backward compatibility)
@@ -140,6 +139,15 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     }));
   };
 
+  const avatarChoices = [
+    'https://picsum.photos/seed/1/64',
+    'https://picsum.photos/seed/2/64',
+    'https://picsum.photos/seed/3/64',
+    'https://picsum.photos/seed/4/64',
+    'https://picsum.photos/seed/5/64',
+    'https://picsum.photos/seed/6/64',
+  ];
+
   const addMember = () => {
     const newId = (Math.max(...members.map(m => parseInt(m.id))) + 1).toString();
     const fullstackDevRole = availableRoles.find(role => role.key === 'fullstack-dev');
@@ -181,7 +189,8 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
           name: member.name,
           role: member.role,
           systemPrompt: member.systemPrompt,
-          runtimeType: member.runtimeType
+          runtimeType: member.runtimeType,
+          avatar: member.avatar
         })),
         currentProject: formData.projectPath || undefined, // Send project ID, not path
         projectPath: selectedProject ? selectedProject.path : undefined, // Keep path for backend processing
@@ -204,48 +213,37 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       subtitle={team ? 'Modify team configuration and members' : 'Set up a new collaborative team'}
       size="xl"
       onSubmit={handleSubmit}
-      submitText={team ? 'Update Team' : 'Create Team'}
+      submitText={team ? 'Save Changes' : 'Create Team'}
       submitDisabled={!formData.name.trim() || members.length === 0}
       loading={loading}
     >
-          <div className="form-group">
-            <label htmlFor="name">Team Name *</label>
-            <input
-              type="text"
-              id="name"
-              name="name"
-              value={formData.name}
-              onChange={handleInputChange}
-              placeholder="Enter team name (e.g., Frontend Team)"
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="description">Description</label>
-            <input
-              type="text"
-              id="description"
-              name="description"
-              value={formData.description}
-              onChange={handleInputChange}
-              placeholder="Brief description of the team's purpose"
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="projectPath">Project (Optional)</label>
-            <Dropdown
-              id="projectPath"
-              name="projectPath"
-              value={formData.projectPath}
-              onChange={(value) => setFormData(prev => ({ ...prev, projectPath: value }))}
-              placeholder="No project assigned"
-              options={projects.map(project => ({
-                value: project.id,
-                label: `${project.name} (${project.path})`
-              }))}
-            />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="form-group">
+              <label htmlFor="name">Team Name *</label>
+              <input
+                type="text"
+                id="name"
+                name="name"
+                value={formData.name}
+                onChange={handleInputChange}
+                placeholder="Enter team name (e.g., Frontend Team)"
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="projectPath">Assigned Project</label>
+              <Dropdown
+                id="projectPath"
+                name="projectPath"
+                value={formData.projectPath}
+                onChange={(value) => setFormData(prev => ({ ...prev, projectPath: value }))}
+                placeholder="No project assigned"
+                options={projects.map(project => ({
+                  value: project.id,
+                  label: project.name
+                }))}
+              />
+            </div>
           </div>
 
           <div className="team-members-section">
@@ -259,61 +257,56 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
             <div className="team-members-list">
               {members.map((member, index) => (
                 <div key={member.id} className="team-member-card">
-                  <div className="member-header">
-                    <h4>Member {index + 1}</h4>
-                    {members.length > 1 && (
-                      <Button
-                        type="button"
-                        variant="danger"
-                        size="sm"
-                        onClick={() => removeMember(member.id)}
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-
-                  <div className="member-form">
-                    <div className="form-row">
+                  <div className="member-form space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-2">Avatar</label>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {avatarChoices.map((url) => (
+                          <button key={url} type="button" className={`w-8 h-8 rounded-full border ${member.avatar === url ? 'border-primary ring-2 ring-primary/40' : 'border-border-dark'} overflow-hidden`}
+                            onClick={() => handleMemberChange(member.id, 'avatar', url)}
+                          >
+                            <img src={url} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="form-group">
-                        <label>Name *</label>
-                        <input
-                          type="text"
-                          value={member.name}
-                          onChange={(e) => handleMemberChange(member.id, 'name', e.target.value)}
-                          placeholder="Member name"
-                          required
-                        />
+                        <label>Agent Name</label>
+                        <input type="text" value={member.name} onChange={(e) => handleMemberChange(member.id, 'name', e.target.value)} placeholder="Member name" required />
                       </div>
                       <div className="form-group">
-                        <label>Role *</label>
+                        <label>Role</label>
                         <Dropdown
                           value={member.role}
                           onChange={(value) => handleMemberChange(member.id, 'role', value)}
                           required
-                          options={availableRoles
-                            .filter(role => !role.hidden)
-                            .map(role => ({
-                              value: role.key,
-                              label: role.displayName
-                            }))}
+                          options={availableRoles.filter(r => !r.hidden).map(r => ({ value: r.key, label: r.displayName }))}
                         />
                       </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                       <div className="form-group">
-                        <label>Runtime Type *</label>
+                        <label>Runtime Type</label>
                         <Dropdown
                           value={member.runtimeType}
                           onChange={(value) => handleMemberChange(member.id, 'runtimeType', value)}
                           required
                           options={[
-                            { value: 'claude-code', label: 'Claude Code' },
+                            { value: 'claude-code', label: 'Claude CLI' },
                             { value: 'gemini-cli', label: 'Gemini CLI' },
                             { value: 'codex-cli', label: 'Codex CLI' }
                           ]}
                         />
                       </div>
+                      {members.length > 1 && (
+                        <div className="flex justify-end">
+                          <button type="button" className="text-sm text-text-secondary-dark hover:text-red-400" onClick={() => removeMember(member.id)}>
+                            Delete Member
+                          </button>
+                        </div>
+                      )}
                     </div>
-
                   </div>
                 </div>
               ))}

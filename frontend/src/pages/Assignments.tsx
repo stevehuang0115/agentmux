@@ -12,6 +12,7 @@ import {
   EnhancedTeamMember 
 } from '../components/Assignments';
 import { EnhancedAssignmentsList } from '../components/Assignments/EnhancedAssignmentsList';
+import { useAlert, useConfirm } from '../components/UI/Dialog';
 
 export const Assignments: React.FC = () => {
   const { openTerminalWithSession } = useTerminal();
@@ -23,6 +24,8 @@ export const Assignments: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterTeam, setFilterTeam] = useState<string>('all');
   const [viewMode, setViewMode] = useState<'projects' | 'teams' | 'enhanced'>('enhanced');
+  const { showSuccess, showError, AlertComponent } = useAlert();
+  const { showConfirm, ConfirmComponent } = useConfirm();
 
   useEffect(() => {
     loadData();
@@ -149,14 +152,8 @@ export const Assignments: React.FC = () => {
 
   const handleUnassignTeam = async (teamId: string, teamName: string, projectId?: string) => {
     if (!projectId) return;
-    
-    const confirmed = window.confirm(
-      `Are you sure you want to unassign "${teamName}" from their current project?\n\nThis will send a command to the orchestrator to delete the team's tmux sessions.`
-    );
-    
-    if (!confirmed) return;
-    
-    try {
+    const doUnassign = async () => {
+      try {
       // Send unassign command to orchestrator to delete tmux sessions
       const response = await fetch('/api/orchestrator/execute', {
         method: 'POST',
@@ -176,12 +173,17 @@ export const Assignments: React.FC = () => {
       // Reload data to reflect changes
       await loadData();
       
-      alert(`✅ Team "${teamName}" has been unassigned and their tmux sessions have been terminated.`);
-      
-    } catch (error) {
-      console.error('Failed to unassign team:', error);
-      alert('❌ Failed to unassign team: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    }
+      showSuccess(`Team "${teamName}" has been unassigned and their tmux sessions have been terminated.`);
+      } catch (error) {
+        console.error('Failed to unassign team:', error);
+        showError('Failed to unassign team: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    };
+    showConfirm(
+      `Unassign "${teamName}" from their project?\n\n• The team's tmux sessions will be deleted\n• The team remains available to assign again`,
+      doUnassign,
+      { title: 'Unassign Team', confirmText: 'Unassign', cancelText: 'Cancel', type: 'warning' }
+    );
   };
 
 
@@ -253,7 +255,9 @@ export const Assignments: React.FC = () => {
               />
             </div>
           )}
-        </div>
       </div>
+      <AlertComponent />
+      <ConfirmComponent />
+    </div>
   );
 };
