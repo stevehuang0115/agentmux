@@ -1,5 +1,0 @@
-{
-  "name": "AgentMux AI Studio",
-  "description": "An interactive frontend application to manage and monitor AI agents, projects, and teams. It features a dashboard overview, detailed project and team management pages, and a real-time terminal interface for direct agent interaction.",
-  "requestFramePermissions": []
-}

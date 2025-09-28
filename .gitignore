@@ -107,3 +107,12 @@ $RECYCLE.BIN/
 # Example: agentmux data directories if they contain sensitive info
 # .agentmux/
 # secrets/
+
+# Prototype and development files
+frontend_prototype/
+
+# Development and documentation files
+specs/
+TODO.md
+docker-compose.yml
+Dockerfile
