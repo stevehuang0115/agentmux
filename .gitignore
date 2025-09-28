@@ -23,7 +23,6 @@ mcp-server/dist/
 *.js.map
 # But keep the main dist directories and intentionally committed JS files
 !dist/
-!frontend/dist/
 !backend/dist/
 !cli/dist/
 !mcp-server/dist/
