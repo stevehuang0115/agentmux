@@ -27,16 +27,6 @@ export interface Team {
   updatedAt: string;
 }
 
-// UI-specific Team interface for new dashboard components
-export interface UITeam {
-  id: string;
-  name: string;
-  project: string;
-  members: number;
-  lastActivity: string;
-  description?: string;
-}
-
 export interface Project {
   id: string;
   name: string;

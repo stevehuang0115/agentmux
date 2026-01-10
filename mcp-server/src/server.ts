@@ -3,7 +3,10 @@
 import * as http from 'http';
 import * as url from 'url';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import * as os from 'os';
+import * as fs from 'fs/promises';
+import { execSync, spawn } from 'child_process';
+import { logger, createLogger } from './logger.js';
 import { TmuxService } from '../../backend/src/services/agent/tmux.service.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import {
@@ -1118,8 +1121,6 @@ export class AgentMuxMCPServer {
       const { status, all } = params;
 
       const tickets: TicketInfo[] = [];
-      const fs = await import('fs/promises');
-      const path = await import('path');
 
       // Check for both YAML tickets (legacy) and MD tickets (current)
       const ticketsDir = path.join(this.projectPath, '.agentmux', 'tickets');
@@ -1209,8 +1210,6 @@ export class AgentMuxMCPServer {
       const { ticketId, status, notes, blockers } = params;
       console.log(`📝 Updating ticket ${ticketId}`);
 
-      const fs = await import('fs/promises');
-
       // Find the ticket file
       const ticket = await this.findTicketById(ticketId);
       if (!ticket) {
@@ -1261,7 +1260,6 @@ export class AgentMuxMCPServer {
 
         // Move file if status changed
         if (status && ticket.status !== status) {
-          const path = await import('path');
           const oldDir = path.dirname(ticket.path!);
           const newDir = oldDir.replace(/\/(open|in_progress|blocked|done)$/, `/${status}`);
           const fileName = path.basename(ticket.path!);
@@ -1455,9 +1453,6 @@ export class AgentMuxMCPServer {
     try {
       const { message } = params;
       console.log('🔒 Enforcing git commit');
-
-      const { spawn } = await import('child_process');
-      const path = await import('path');
 
       return new Promise((resolve) => {
         const gitStatus = spawn('git', ['status', '--porcelain'], {
@@ -1959,8 +1954,6 @@ export class AgentMuxMCPServer {
   }
 
   private async findTicketById(ticketId: string): Promise<TicketInfo | null> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     // Search in tickets directory (YAML)
     const ticketsDir = path.join(this.projectPath, '.agentmux', 'tickets');
@@ -2031,8 +2024,6 @@ export class AgentMuxMCPServer {
   }
 
   private async logProgress(message: string): Promise<void> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     const logPath = path.join(this.projectPath, '.agentmux', 'memory', 'progress.log');
     const logEntry = `${new Date().toISOString()} [${this.sessionName}]:\n${message}\n---\n\n`;
@@ -2046,8 +2037,6 @@ export class AgentMuxMCPServer {
   }
 
   private async logSchedule(message: string): Promise<void> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     const logPath = path.join(this.projectPath, '.agentmux', 'memory', 'scheduled.log');
     const logEntry = `${new Date().toISOString()}\n${message}\n---\n\n`;
@@ -2061,8 +2050,6 @@ export class AgentMuxMCPServer {
   }
 
   private async logDelegation(from: string, to: string, task: string, priority?: string): Promise<void> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     const logPath = path.join(this.projectPath, '.agentmux', 'memory', 'delegations.log');
     const logEntry = `${new Date().toISOString()} [${from} → ${to}]:\n${task}\nPriority: ${priority || 'normal'}\n---\n\n`;
@@ -2076,8 +2063,6 @@ export class AgentMuxMCPServer {
   }
 
   private async logTaskDelegation(taskPath: string, from: string, to: string, reason?: string, delegationChain?: string[]): Promise<void> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     const logPath = path.join(this.projectPath, '.agentmux', 'memory', 'task-delegations.log');
     const logEntry = `${new Date().toISOString()} [TASK DELEGATION]\n` +
@@ -2162,8 +2147,6 @@ export class AgentMuxMCPServer {
    * Shared Template Methods for Assignment Messages
    */
   private async loadAssignmentTemplate(): Promise<string> {
-    const fs = await import('fs/promises');
-    const path = await import('path');
 
     const promptPath = path.join(process.cwd(), 'config', 'task_assignment', 'prompts', 'target-agent-assignment-prompt.md');
 
@@ -2215,8 +2198,6 @@ Please respond promptly with either acceptance or delegation.`;
       priority = 'normal',
       ticketId = ''
     } = params;
-
-    const path = await import('path');
 
     // Build delegation chain
     const newChain = [...delegationChain];
@@ -2854,10 +2835,6 @@ Please respond promptly with either acceptance or delegation.`;
    */
   private async addTaskToInProgressTracking(taskPath: string, sessionName: string, assignmentResult: AssignmentResult): Promise<void> {
     try {
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      const os = await import('os');
-
       const trackingFilePath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
       const trackingDir = path.dirname(trackingFilePath);
 
@@ -2910,10 +2887,6 @@ Please respond promptly with either acceptance or delegation.`;
    */
   private async removeTaskFromInProgressTracking(taskPath: string): Promise<void> {
     try {
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      const os = await import('os');
-
       const trackingFilePath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
 
       // Load existing data
@@ -2951,7 +2924,6 @@ Please respond promptly with either acceptance or delegation.`;
   private async cleanup(): Promise<void> {
     try {
       // Use spawn instead of execAsync since we removed execAsync
-      const { spawn } = await import('child_process');
       spawn('find', ['/tmp', '-name', 'mcp-*', '-type', 'f', '-mtime', '+1', '-delete'], {
         stdio: 'ignore'
       });
@@ -2974,7 +2946,6 @@ Please respond promptly with either acceptance or delegation.`;
     const logEntry = `${new Date().toISOString()} [${from} -> ${to}]: ${message}\n`;
     
     try {
-      const fs = await import('fs/promises');
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {

@@ -39,6 +39,3 @@ export { ConfigService } from './core/config.service.js';
 export { ErrorTrackingService } from './core/error-tracking.service.js';
 export { LoggerService, ComponentLogger } from './core/logger.service.js';
 export { StorageService } from './core/storage.service.js';
-
-// Legacy imports for backwards compatibility (these will be removed in future versions)
-export { TmuxService as TmuxOrchestrationService } from './agent/tmux.service.js';
