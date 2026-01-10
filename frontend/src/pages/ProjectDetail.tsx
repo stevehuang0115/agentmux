@@ -1391,6 +1391,16 @@ export const ProjectDetail: React.FC = () => {
                 label: 'Assign Team',
                 onClick: handleAssignTeams
               },
+              ...(activeTab === 'tasks' ? [
+                {
+                  label: 'Create Task',
+                  onClick: () => setIsCreateTaskModalOpen(true)
+                },
+                {
+                  label: 'Create Milestone',
+                  onClick: () => setIsCreateMilestoneModalOpen(true)
+                }
+              ] : []),
               {
                 label: 'Delete Project',
                 onClick: handleDeleteProject,

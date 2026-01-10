@@ -7,9 +7,11 @@ import {
 	Clock,
 	ChevronLeft,
 	ChevronRight,
+	X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useSidebar } from '../../contexts/SidebarContext';
+import { IconButton } from '../UI';
 
 const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
@@ -18,9 +20,20 @@ const navigationItems = [
 	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
 ];
 
-export const Navigation: React.FC = () => {
+interface NavigationProps {
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
+}
+
+export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileClose }) => {
   const location = useLocation();
   const { isCollapsed, toggleSidebar } = useSidebar();
+
+  const handleLinkClick = () => {
+    if (onMobileClose) {
+      onMobileClose();
+    }
+  };
 
   // Detect when viewing a specific project to show contextual sub-navigation
   const projectMatch = location.pathname.match(/\/projects\/([^/]+)/);
@@ -32,19 +45,28 @@ export const Navigation: React.FC = () => {
             'flex flex-col h-screen max-h-screen bg-surface-dark/95 border-r border-border-dark overflow-hidden w-full'
         )}>
 			{/* Logo Section */}
-			<div className="flex items-center p-4 border-b border-border-dark">
+			<div className="flex items-center justify-between p-4 border-b border-border-dark">
 				<div className="flex items-center">
 					<div className="bg-primary text-white p-2 rounded-lg">
 						<svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
 							<path d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
 						</svg>
 					</div>
-					{!isCollapsed && (
+					{(!isCollapsed || isMobileOpen) && (
 						<span className="ml-3 text-lg font-bold text-text-primary-dark">
 							AgentMux
 						</span>
 					)}
 				</div>
+				{onMobileClose && (
+					<IconButton
+						variant="ghost"
+						icon={X}
+						onClick={onMobileClose}
+						className="md:hidden -mr-2"
+						aria-label="Close menu"
+					/>
+				)}
 			</div>
 
 			{/* Main Navigation */}
@@ -59,8 +81,10 @@ export const Navigation: React.FC = () => {
                 <div key={item.name}>
                   <NavLink
                     to={item.href}
+                    onClick={handleLinkClick}
                     className={clsx(
                       'group flex items-center px-4 py-2 rounded-lg text-sm transition-colors',
+                      isCollapsed ? 'md:justify-center' : '',
                       isActive
                         ? 'bg-primary/10 text-primary font-semibold'
                         : 'text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark'
@@ -68,14 +92,15 @@ export const Navigation: React.FC = () => {
                     title={isCollapsed ? item.name : undefined}
                   >
                     <item.icon className={clsx("h-5 w-5 flex-shrink-0", isActive ? "text-primary" : "")} />
-                    {!isCollapsed && <span className="ml-3">{item.name}</span>}
+                    <span className={clsx('ml-3', isCollapsed ? 'md:hidden' : '')}>{item.name}</span>
                   </NavLink>
 
                   {/* Nest project sub-nav directly under Projects item when viewing a project */}
-                  {!isCollapsed && item.href === '/projects' && activeProjectId && (
+                  {(!isCollapsed || isMobileOpen) && item.href === '/projects' && activeProjectId && (
                     <div className="mt-2 ml-4 space-y-1 border-l border-border-dark pl-4">
                       <NavLink
                         to={`/projects/${activeProjectId}#detail`}
+                        onClick={handleLinkClick}
                         className={() =>
                           clsx(
                             'block px-4 py-2 text-sm rounded-lg transition-colors',
@@ -89,6 +114,7 @@ export const Navigation: React.FC = () => {
                       </NavLink>
                       <NavLink
                         to={`/projects/${activeProjectId}#editor`}
+                        onClick={handleLinkClick}
                         className={() =>
                           clsx(
                             'block px-4 py-2 text-sm rounded-lg transition-colors',
@@ -102,6 +128,7 @@ export const Navigation: React.FC = () => {
                       </NavLink>
                       <NavLink
                         to={`/projects/${activeProjectId}#tasks`}
+                        onClick={handleLinkClick}
                         className={() =>
                           clsx(
                             'block px-4 py-2 text-sm rounded-lg transition-colors',
@@ -115,6 +142,7 @@ export const Navigation: React.FC = () => {
                       </NavLink>
                       <NavLink
                         to={`/projects/${activeProjectId}#teams`}
+                        onClick={handleLinkClick}
                         className={() =>
                           clsx(
                             'block px-4 py-2 text-sm rounded-lg transition-colors',

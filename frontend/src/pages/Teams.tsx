@@ -8,6 +8,7 @@ import { TeamMemberModal } from '../components/Modals/TeamMemberModal';
 import { Team, TeamMember } from '../types';
 import TeamListItem from '@/components/Teams/TeamListItem';
 import { apiService } from '@/services/api.service';
+import { logSilentError } from '@/utils/error-handling';
 
 export const Teams: React.FC = () => {
   const navigate = useNavigate();
@@ -35,7 +36,7 @@ export const Teams: React.FC = () => {
       const projects = await apiService.getProjects();
       setProjectsForFilter(projects.map(p => ({ id: p.id, name: p.name })));
     } catch (e) {
-      // ignore
+      logSilentError(e, { context: 'Loading projects for filter' });
     }
   };
 
@@ -168,7 +169,7 @@ export const Teams: React.FC = () => {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="max-w-7xl mx-auto">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Teams</h2>

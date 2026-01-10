@@ -12,7 +12,14 @@ jest.mock('fs', () => ({
 
 // Mock child_process
 jest.mock('child_process', () => ({
-  exec: jest.fn()
+  exec: jest.fn(),
+  spawn: jest.fn(() => ({
+    on: jest.fn((event, callback) => {
+      if (event === 'close') {
+        callback(0); // Success exit code
+      }
+    })
+  }))
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -29,31 +36,46 @@ describe('ContextLoaderService', () => {
   });
 
   describe('loadProjectContext', () => {
-    test.skip('should load basic project context with all options enabled', async () => {
-      // Mock file existence checks
-      mockExistsSync
-        .mockReturnValueOnce(true) // .agentmux/project.md exists
-        .mockReturnValueOnce(true) // README.md exists  
-        .mockReturnValueOnce(true) // .agentmux/tickets exists
-        .mockReturnValueOnce(true); // package.json exists
+    test('should load basic project context with all options enabled', async () => {
+      // Mock file existence checks - use mockReturnValue for all checks
+      mockExistsSync.mockImplementation((filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('project.md')) return true;
+        if (pathStr.includes('README.md')) return true;
+        if (pathStr.includes('tasks')) return true;
+        if (pathStr.includes('package.json')) return true;
+        return false;
+      });
 
-      // Mock file reads in the order they'll be called
-      mockFs.readFile
-        .mockResolvedValueOnce('# Project Specifications\nThis is the project spec') // project.md
-        .mockResolvedValueOnce('# Project README\nThis is the readme') // README.md
-        .mockResolvedValueOnce('{"name": "test-project", "dependencies": {"express": "^4.18.0"}}') // package.json
-        .mockResolvedValueOnce(`id: ticket1\ntitle: Test Ticket\nstatus: open\npriority: high\ndescription: Test description`); // ticket1.yaml
+      // Mock file reads based on path
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('project.md')) return '# Project Specifications\nThis is the project spec';
+        if (pathStr.includes('README.md')) return '# Project README\nThis is the readme';
+        if (pathStr.includes('package.json')) return '{"name": "test-project", "dependencies": {"express": "^4.18.0"}}';
+        if (pathStr.includes('ticket1.yaml')) return `id: ticket1\ntitle: Test Ticket\nstatus: open\npriority: high\ndescription: Test description`;
+        return '';
+      });
 
-      // Mock directory reads - first for project structure, then for src directory, then for tickets
-      mockFs.readdir
-        .mockResolvedValueOnce([
-          { name: 'src', isDirectory: () => true, isFile: () => false },
-          { name: 'package.json', isDirectory: () => false, isFile: () => true }
-        ] as any) // project directory structure
-        .mockResolvedValueOnce([
-          { name: 'index.ts', isDirectory: () => false, isFile: () => true }
-        ] as any) // src directory structure  
-        .mockResolvedValueOnce(['ticket1.yaml'] as any); // tickets directory
+      // Mock directory reads based on path
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) {
+          return ['ticket1.yaml'] as any;
+        }
+        if (pathStr.endsWith(testProjectPath) || pathStr === testProjectPath) {
+          return [
+            { name: 'src', isDirectory: () => true, isFile: () => false },
+            { name: 'package.json', isDirectory: () => false, isFile: () => true }
+          ] as any;
+        }
+        if (pathStr.includes('src')) {
+          return [
+            { name: 'index.ts', isDirectory: () => false, isFile: () => true }
+          ] as any;
+        }
+        return [];
+      });
 
       // Mock fs.stat for file info
       mockFs.stat.mockResolvedValue({
@@ -61,7 +83,8 @@ describe('ContextLoaderService', () => {
         size: 1000
       } as any);
 
-      const context = await contextLoader.loadProjectContext();
+      // Disable git history loading to avoid dynamic import issues
+      const context = await contextLoader.loadProjectContext({ includeGitHistory: false });
 
       expect(context).toMatchObject({
         specifications: expect.stringContaining('Project Specifications'),
@@ -71,15 +94,16 @@ describe('ContextLoaderService', () => {
       expect(context.tickets).toHaveLength(1);
     });
 
-    test.skip('should handle missing specification files gracefully', async () => {
+    test('should handle missing specification files gracefully', async () => {
       mockExistsSync.mockReturnValue(false);
-      mockFs.readdir
-        .mockResolvedValueOnce([]) // project directory structure
-        .mockResolvedValueOnce([]); // tickets directory
-      
-      mockFs.readFile.mockResolvedValueOnce('{}'); // empty package.json
+      mockFs.readdir.mockResolvedValue([]);
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('package.json')) return '{}';
+        throw new Error('File not found');
+      });
 
-      const context = await contextLoader.loadProjectContext();
+      const context = await contextLoader.loadProjectContext({ includeGitHistory: false });
 
       expect(context.specifications).toBe('');
       expect(context.readme).toBe('');
@@ -88,21 +112,27 @@ describe('ContextLoaderService', () => {
       expect(context.dependencies).toEqual({});
     });
 
-    test.skip('should filter files by extension when specified', async () => {
+    test('should filter files by extension when specified', async () => {
       const options: ContextLoadOptions = {
-        fileExtensions: ['.ts', '.js']
+        fileExtensions: ['.ts', '.js'],
+        includeGitHistory: false
       };
 
       mockExistsSync.mockReturnValue(false);
-      mockFs.readdir
-        .mockResolvedValueOnce([
-          { name: 'app.ts', isDirectory: () => false, isFile: () => true } as any,
-          { name: 'config.json', isDirectory: () => false, isFile: () => true } as any,
-          { name: 'styles.css', isDirectory: () => false, isFile: () => true } as any
-        ]) // project directory structure
-        .mockResolvedValueOnce([]); // tickets directory
-      
-      mockFs.readFile.mockResolvedValueOnce('{}'); // empty package.json
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) return [];
+        if (pathStr.endsWith(testProjectPath) || pathStr === testProjectPath) {
+          return [
+            { name: 'app.ts', isDirectory: () => false, isFile: () => true },
+            { name: 'config.json', isDirectory: () => false, isFile: () => true },
+            { name: 'styles.css', isDirectory: () => false, isFile: () => true }
+          ] as any;
+        }
+        return [];
+      });
+
+      mockFs.readFile.mockImplementation(async () => '{}');
 
       mockFs.stat.mockResolvedValue({
         mtime: new Date('2024-01-01T00:00:00.000Z'),
@@ -115,30 +145,38 @@ describe('ContextLoaderService', () => {
       expect(context.structure[0].path).toBe('app.ts');
     });
 
-    test.skip('should skip large files when maxFileSize is specified', async () => {
+    test('should skip large files when maxFileSize is specified', async () => {
       const options: ContextLoadOptions = {
-        maxFileSize: 1000 // 1KB
+        maxFileSize: 1000, // 1KB
+        fileExtensions: ['.txt'], // Only look for txt files
+        includeGitHistory: false
       };
 
       mockExistsSync.mockReturnValue(false);
-      mockFs.readdir
-        .mockResolvedValueOnce([
-          { name: 'small.txt', isDirectory: () => false, isFile: () => true } as any,
-          { name: 'large.txt', isDirectory: () => false, isFile: () => true } as any
-        ]) // project directory structure
-        .mockResolvedValueOnce([]); // tickets directory
-      
-      mockFs.readFile.mockResolvedValueOnce('{}'); // empty package.json
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) return [];
+        if (pathStr.endsWith(testProjectPath) || pathStr === testProjectPath) {
+          return [
+            { name: 'small.txt', isDirectory: () => false, isFile: () => true },
+            { name: 'large.txt', isDirectory: () => false, isFile: () => true }
+          ] as any;
+        }
+        return [];
+      });
 
-      mockFs.stat
-        .mockResolvedValueOnce({
-          mtime: new Date('2024-01-01T00:00:00.000Z'),
-          size: 500 // Small file
-        } as any)
-        .mockResolvedValueOnce({
-          mtime: new Date('2024-01-01T00:00:00.000Z'),
-          size: 2000 // Large file
-        } as any);
+      mockFs.readFile.mockImplementation(async () => '{}');
+
+      mockFs.stat.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('small.txt')) {
+          return { mtime: new Date('2024-01-01T00:00:00.000Z'), size: 500 } as any;
+        }
+        if (pathStr.includes('large.txt')) {
+          return { mtime: new Date('2024-01-01T00:00:00.000Z'), size: 2000 } as any;
+        }
+        return { mtime: new Date('2024-01-01T00:00:00.000Z'), size: 100 } as any;
+      });
 
       const context = await contextLoader.loadProjectContext(options);
 
@@ -146,28 +184,36 @@ describe('ContextLoaderService', () => {
       expect(context.structure[0].path).toBe('small.txt');
     });
 
-    test.skip('should load ticket information correctly', async () => {
-      mockExistsSync
-        .mockReturnValueOnce(false) // no specs
-        .mockReturnValueOnce(false) // no readme
-        .mockReturnValueOnce(true); // tickets exist
+    test('should load ticket information correctly', async () => {
+      mockExistsSync.mockImplementation((filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('tasks')) return true;
+        return false;
+      });
 
-      mockFs.readdir
-        .mockResolvedValueOnce([]) // no project files
-        .mockResolvedValueOnce(['ticket1.yaml', 'readme.txt'] as any); // tickets dir
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) {
+          return ['ticket1.yaml', 'readme.txt'] as any;
+        }
+        return [];
+      });
 
-      mockFs.readFile
-        .mockResolvedValueOnce('{}') // empty package.json
-        .mockResolvedValueOnce(`
-id: ticket1
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('package.json')) return '{}';
+        if (pathStr.includes('ticket1.yaml')) {
+          return `id: ticket1
 title: Fix authentication bug
 status: open
 priority: high
 assignedTo: developer-1
-description: Fix the login issue
-`);
+description: Fix the login issue`;
+        }
+        return '';
+      });
 
-      const context = await contextLoader.loadProjectContext();
+      const context = await contextLoader.loadProjectContext({ includeGitHistory: false });
 
       expect(context.tickets).toHaveLength(1);
       expect(context.tickets[0]).toContain('Fix authentication bug');
@@ -177,43 +223,57 @@ description: Fix the login issue
   });
 
   describe('generateContextPrompt', () => {
-    test.skip('should generate a comprehensive context prompt for a team member', async () => {
+    test('should generate a comprehensive context prompt for a team member', async () => {
       const teamMember: TeamMember = {
         id: 'member-1',
         name: 'John Developer',
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a senior developer responsible for backend implementation.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
 
       // Mock context loading
-      mockExistsSync.mockReturnValue(true);
-      mockFs.readFile
-        .mockResolvedValueOnce('# Project Spec\nBuild a web app')
-        .mockResolvedValueOnce('# README\nGetting started guide')
-        .mockResolvedValueOnce('{"dependencies": {"express": "^4.18.0"}}')
-        .mockResolvedValueOnce('id: ticket1\ntitle: Test Ticket\nstatus: todo\ndescription: Test');
+      mockExistsSync.mockImplementation((filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('project.md')) return true;
+        if (pathStr.includes('README.md')) return true;
+        if (pathStr.includes('package.json')) return true;
+        if (pathStr.includes('tasks')) return true;
+        return false;
+      });
 
-      mockFs.readdir
-        .mockResolvedValueOnce([
-          { name: 'src', isDirectory: () => true, isFile: () => false } as any
-        ])
-        .mockResolvedValueOnce([
-          { name: 'index.ts', isDirectory: () => false, isFile: () => true }
-        ] as any)
-        .mockResolvedValueOnce(['ticket1.yaml'] as any);
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('project.md')) return '# Project Spec\nBuild a web app';
+        if (pathStr.includes('README.md')) return '# README\nGetting started guide';
+        if (pathStr.includes('package.json')) return '{"dependencies": {"express": "^4.18.0"}}';
+        if (pathStr.includes('ticket1.yaml')) return 'id: ticket1\ntitle: Test Ticket\nstatus: todo\ndescription: Test';
+        return '';
+      });
+
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) return ['ticket1.yaml'] as any;
+        if (pathStr === testProjectPath) {
+          return [{ name: 'src', isDirectory: () => true, isFile: () => false }] as any;
+        }
+        if (pathStr.includes('src')) {
+          return [{ name: 'index.ts', isDirectory: () => false, isFile: () => true }] as any;
+        }
+        return [];
+      });
 
       mockFs.stat.mockResolvedValue({
         mtime: new Date('2024-01-01T00:00:00.000Z'),
         size: 1000
       } as any);
 
-      const contextPrompt = await contextLoader.generateContextPrompt(teamMember);
+      const contextPrompt = await contextLoader.generateContextPrompt(teamMember, { includeGitHistory: false });
 
       expect(contextPrompt).toContain('# Project Context for John Developer (developer)');
       expect(contextPrompt).toContain('## Your Role');
@@ -223,41 +283,53 @@ description: Fix the login issue
       expect(contextPrompt).toContain('## Project Structure');
     });
 
-    test.skip('should filter tickets relevant to the team member', async () => {
+    test('should filter tickets relevant to the team member', async () => {
       const teamMember: TeamMember = {
         id: 'member-1',
         name: 'John Developer',
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
 
-      mockExistsSync.mockReturnValue(true);
-      mockFs.readFile
-        .mockResolvedValueOnce('') // empty specs
-        .mockResolvedValueOnce('') // empty readme
-        .mockResolvedValueOnce('{}') // empty package.json
-        .mockResolvedValueOnce(`
-title: Task for John
+      mockExistsSync.mockImplementation((filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('tasks')) return true;
+        return false;
+      });
+
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('package.json')) return '{}';
+        if (pathStr.includes('ticket1.yaml')) {
+          return `title: Task for John
 assignedTo: John Developer
-description: This is assigned to John
-`) // First ticket read
-        .mockResolvedValueOnce(`
-title: Unassigned Task
-assignedTo: 
-description: This needs someone
-`); // Second ticket read
+status: open
+priority: high
+description: This is assigned to John`;
+        }
+        if (pathStr.includes('ticket2.yaml')) {
+          return `title: Unassigned Task
+assignedTo:
+status: open
+priority: medium
+description: This needs someone`;
+        }
+        return '';
+      });
 
-      mockFs.readdir
-        .mockResolvedValueOnce([]) // no project files
-        .mockResolvedValueOnce(['ticket1.yaml', 'ticket2.yaml'] as any);
+      mockFs.readdir.mockImplementation(async (dirPath: any) => {
+        const pathStr = String(dirPath);
+        if (pathStr.includes('tasks')) return ['ticket1.yaml', 'ticket2.yaml'] as any;
+        return [];
+      });
 
-      const contextPrompt = await contextLoader.generateContextPrompt(teamMember);
+      const contextPrompt = await contextLoader.generateContextPrompt(teamMember, { includeGitHistory: false });
 
       expect(contextPrompt).toContain('## Relevant Tickets');
       expect(contextPrompt).toContain('Task for John');
@@ -272,9 +344,9 @@ description: This needs someone
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -323,9 +395,9 @@ description: This needs someone
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -347,9 +419,9 @@ description: This needs someone
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
@@ -374,38 +446,45 @@ description: This needs someone
       expect(mockFs.writeFile).toHaveBeenCalled();
     });
 
-    test.skip('should create new context if file does not exist', async () => {
+    test('should create new context if file does not exist', async () => {
       const teamMember: TeamMember = {
         id: 'member-1',
         name: 'John Developer',
         role: 'developer',
         sessionName: 'session-dev-1',
         systemPrompt: 'You are a developer.',
-        status: 'working',
         agentStatus: 'active',
         workingStatus: 'in_progress',
+        runtimeType: 'claude-code',
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z'
       };
 
-      // Mock non-existing context file first, then existing after creation
-      mockExistsSync
-        .mockReturnValueOnce(false) // context file doesn't exist
-        .mockReturnValueOnce(false) // context dir doesn't exist
-        .mockReturnValueOnce(true); // context file exists after creation
+      // Mock non-existing context file, then context dir doesn't exist
+      let contextFileExistsCallCount = 0;
+      mockExistsSync.mockImplementation((filePath: any) => {
+        const pathStr = String(filePath);
+        // First call for context file check returns false
+        if (pathStr.includes('context') && pathStr.includes('context.md')) {
+          contextFileExistsCallCount++;
+          return contextFileExistsCallCount > 1; // False first, then true
+        }
+        // Context directory check
+        if (pathStr.includes('context')) return false;
+        return false;
+      });
 
       mockFs.mkdir.mockResolvedValue(undefined);
       mockFs.writeFile.mockResolvedValue();
 
       // Mock context loading
-      mockFs.readFile
-        .mockResolvedValueOnce('')
-        .mockResolvedValueOnce('')
-        .mockResolvedValueOnce('{}');
+      mockFs.readFile.mockImplementation(async (filePath: any) => {
+        const pathStr = String(filePath);
+        if (pathStr.includes('package.json')) return '{}';
+        return '';
+      });
 
-      mockFs.readdir
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([]);
+      mockFs.readdir.mockResolvedValue([]);
 
       const contextPath = await contextLoader.refreshContext(teamMember);
 

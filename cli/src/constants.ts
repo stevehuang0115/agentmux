@@ -1,207 +1,128 @@
 /**
- * AgentMux Application Constants
- * 
- * This file contains all hardcoded values used throughout the application
- * to ensure consistency and make maintenance easier.
+ * AgentMux CLI Constants
+ *
+ * This file provides CLI-specific constants and re-exports shared constants
+ * from the central config for convenience.
+ *
+ * For shared constants, use:
+ * - AGENTMUX_CONSTANTS: Core system identifiers and paths
+ * - WEB_CONSTANTS: Web server ports and endpoints
+ * - MCP_CONSTANTS: MCP server configuration
+ * - TIMING_CONSTANTS: Timeouts and intervals
+ * - MESSAGE_CONSTANTS: Message handling configuration
+ * - ENV_CONSTANTS: Environment variable names
+ * - BACKEND_CONSTANTS: Backend-specific configuration
  */
 
-// ========================= ORCHESTRATOR CONSTANTS =========================
+// Re-export from central config for convenience
+export {
+  AGENTMUX_CONSTANTS,
+  WEB_CONSTANTS,
+  MCP_CONSTANTS,
+  TIMING_CONSTANTS,
+  MESSAGE_CONSTANTS,
+  ENV_CONSTANTS,
+  BACKEND_CONSTANTS,
+} from '../../config/index.js';
+
+// Import for creating convenience aliases
+import {
+  AGENTMUX_CONSTANTS,
+  WEB_CONSTANTS,
+  MCP_CONSTANTS,
+  BACKEND_CONSTANTS,
+  ENV_CONSTANTS,
+  TIMING_CONSTANTS,
+  MESSAGE_CONSTANTS,
+} from '../../config/index.js';
+
+// ========================= CLI-SPECIFIC CONSTANTS =========================
 
 /**
- * Default orchestrator session name used across the application
+ * CLI-specific configuration constants
+ * These constants are only used within the CLI tool itself
  */
-export const ORCHESTRATOR_SESSION_NAME = 'agentmux-orc';
+export const CLI_CONSTANTS = {
+  /** CLI tool name for display */
+  TOOL_NAME: 'agentmux',
 
-/**
- * Display name for the orchestrator role
- */
-export const ORCHESTRATOR_DISPLAY_NAME = 'Orchestrator';
+  /** CLI version (should match package.json) */
+  VERSION: '1.0.0',
 
-/**
- * Orchestrator role identifier
- */
-export const ORCHESTRATOR_ROLE = 'orchestrator';
+  /** Default output format */
+  DEFAULT_OUTPUT_FORMAT: 'text' as const,
 
-/**
- * Default orchestrator window name in tmux
- */
-export const ORCHESTRATOR_WINDOW_NAME = 'AgentMux Orchestrator';
+  /** Colors for status display */
+  STATUS_COLORS: {
+    SUCCESS: 'green',
+    ERROR: 'red',
+    WARNING: 'yellow',
+    INFO: 'blue',
+  },
 
-// ========================= TIMEOUT CONSTANTS =========================
-
-/**
- * Default timeout for orchestrator setup (30 seconds)
- */
-export const ORCHESTRATOR_SETUP_TIMEOUT = 30000;
-
-/**
- * Default timeout for agent initialization (90 seconds)
- */
-export const AGENT_INITIALIZATION_TIMEOUT = 90000;
-
-/**
- * Default timeout for Claude initialization (45 seconds)
- */
-export const CLAUDE_INITIALIZATION_TIMEOUT = 45000;
-
-/**
- * Timeout for waiting for Claude to be ready (45 seconds)
- */
-export const CLAUDE_READY_TIMEOUT = 45000;
-
-// ========================= DIRECTORY CONSTANTS =========================
-
-/**
- * AgentMux home directory name
- */
-export const AGENTMUX_HOME_DIR = '.agentmux';
-
-/**
- * Configuration directory name
- */
-export const CONFIG_DIR = 'config';
-
-/**
- * Prompts directory name
- */
-export const PROMPTS_DIR = 'prompts';
-
-/**
- * Tasks directory name
- */
-export const TASKS_DIR = 'tasks';
-
-/**
- * Specs directory name
- */
-export const SPECS_DIR = 'specs';
-
-/**
- * Memory directory name
- */
-export const MEMORY_DIR = 'memory';
-
-// ========================= FILE CONSTANTS =========================
-
-/**
- * Teams configuration file name
- */
-export const TEAMS_CONFIG_FILE = 'teams.json';
-
-/**
- * Active projects tracking file name
- */
-export const ACTIVE_PROJECTS_FILE = 'active_projects.json';
-
-/**
- * Task tracking file name
- */
-export const TASK_TRACKING_FILE = 'in_progress_tasks.json';
-
-/**
- * Communication log file name
- */
-export const COMMUNICATION_LOG_FILE = 'communication.log';
-
-// ========================= PORT CONSTANTS =========================
-
-/**
- * Default web server port
- */
-export const DEFAULT_WEB_PORT = 8788;
-
-/**
- * Default MCP server port
- */
-export const DEFAULT_MCP_PORT = 8789;
-
-// ========================= ROLE CONSTANTS =========================
-
-/**
- * Available agent roles
- */
-export const AGENT_ROLES = {
-  ORCHESTRATOR: 'orchestrator',
-  PROJECT_MANAGER: 'pm',
-  TECH_LEAD: 'tpm',
-  DEVELOPER: 'developer',
-  QA: 'qa',
-  DEVOPS: 'devops'
+  /** Exit codes */
+  EXIT_CODES: {
+    SUCCESS: 0,
+    ERROR: 1,
+    INVALID_ARGS: 2,
+  },
 } as const;
 
-/**
- * Role display names
- */
-export const ROLE_DISPLAY_NAMES = {
-  [AGENT_ROLES.ORCHESTRATOR]: 'Orchestrator',
-  [AGENT_ROLES.PROJECT_MANAGER]: 'Project Manager', 
-  [AGENT_ROLES.TECH_LEAD]: 'Technical Project Manager',
-  [AGENT_ROLES.DEVELOPER]: 'Developer',
-  [AGENT_ROLES.QA]: 'Quality Assurance',
-  [AGENT_ROLES.DEVOPS]: 'DevOps Engineer'
-} as const;
-
-// ========================= ENVIRONMENT CONSTANTS =========================
+// ========================= CONVENIENCE ALIASES =========================
 
 /**
- * Environment variable names
+ * Convenience aliases for commonly used constants
+ * These provide backwards compatibility and shorter imports
  */
-export const ENV_VARS = {
-  TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
-  AGENTMUX_ROLE: 'AGENTMUX_ROLE',
-  API_PORT: 'API_PORT',
-  MCP_PORT: 'AGENTMUX_MCP_PORT',
-  PROJECT_PATH: 'PROJECT_PATH',
-  AGENT_ROLE: 'AGENT_ROLE'
-} as const;
 
-// ========================= SCRIPT CONSTANTS =========================
+// Orchestrator constants
+export const ORCHESTRATOR_SESSION_NAME = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+export const ORCHESTRATOR_DISPLAY_NAME = AGENTMUX_CONSTANTS.ORCHESTRATOR.DISPLAY_NAME;
+export const ORCHESTRATOR_ROLE = AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR;
+export const ORCHESTRATOR_WINDOW_NAME = AGENTMUX_CONSTANTS.ORCHESTRATOR.WINDOW_NAME;
 
-/**
- * Initialization script file names
- */
-export const INIT_SCRIPTS = {
-  TMUX: 'initialize_tmux.sh',
-  CLAUDE: 'initialize_claude.sh'
-} as const;
+// Timeout constants
+export const ORCHESTRATOR_SETUP_TIMEOUT = TIMING_CONSTANTS.TIMEOUTS.ORCHESTRATOR_SETUP;
+export const AGENT_INITIALIZATION_TIMEOUT = TIMING_CONSTANTS.TIMEOUTS.AGENT_SETUP;
+export const CLAUDE_INITIALIZATION_TIMEOUT = TIMING_CONSTANTS.TIMEOUTS.CLAUDE_INIT;
+export const CLAUDE_READY_TIMEOUT = TIMING_CONSTANTS.TIMEOUTS.CLAUDE_INIT;
 
-// ========================= DETECTION CONSTANTS =========================
+// Directory constants
+export const AGENTMUX_HOME_DIR = AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME;
+export const CONFIG_DIR = AGENTMUX_CONSTANTS.PATHS.CONFIG_DIR;
+export const PROMPTS_DIR = AGENTMUX_CONSTANTS.PATHS.PROMPTS_DIR;
+export const TASKS_DIR = AGENTMUX_CONSTANTS.PATHS.TASKS_DIR;
+export const SPECS_DIR = AGENTMUX_CONSTANTS.PATHS.SPECS_DIR;
+export const MEMORY_DIR = AGENTMUX_CONSTANTS.PATHS.MEMORY_DIR;
 
-/**
- * Claude detection timeout (30 seconds cache)
- */
-export const CLAUDE_DETECTION_CACHE_TIMEOUT = 30000;
+// File constants
+export const TEAMS_CONFIG_FILE = AGENTMUX_CONSTANTS.PATHS.TEAMS_FILE;
+export const ACTIVE_PROJECTS_FILE = BACKEND_CONSTANTS.FILES.ACTIVE_PROJECTS_FILE;
+export const TASK_TRACKING_FILE = BACKEND_CONSTANTS.FILES.TASK_TRACKING_FILE;
+export const COMMUNICATION_LOG_FILE = BACKEND_CONSTANTS.FILES.COMMUNICATION_LOG_FILE;
 
-/**
- * Memory cleanup interval (5 minutes)
- */
-export const MEMORY_CLEANUP_INTERVAL = 5 * 60 * 1000;
+// Port constants
+export const DEFAULT_WEB_PORT = WEB_CONSTANTS.PORTS.BACKEND;
+export const DEFAULT_MCP_PORT = MCP_CONSTANTS.PORTS.DEFAULT;
 
-/**
- * Maximum buffer size for output streaming
- */
-export const MAX_OUTPUT_BUFFER_SIZE = 100;
+// Role constants
+export const AGENT_ROLES = AGENTMUX_CONSTANTS.ROLES;
+export const ROLE_DISPLAY_NAMES = AGENTMUX_CONSTANTS.ROLE_DISPLAY_NAMES;
 
-// ========================= MESSAGE CONSTANTS =========================
+// Environment constants
+export const ENV_VARS = ENV_CONSTANTS;
 
-/**
- * Message chunking size for large messages
- */
-export const MESSAGE_CHUNK_SIZE = 1500;
+// Script constants
+export const INIT_SCRIPTS = BACKEND_CONSTANTS.INIT_SCRIPTS;
 
-/**
- * Small chunk size to avoid paste detection
- */
-export const SMALL_CHUNK_SIZE = 200;
+// Detection constants
+export const CLAUDE_DETECTION_CACHE_TIMEOUT = AGENTMUX_CONSTANTS.SESSIONS.CLAUDE_DETECTION_CACHE_TIMEOUT;
+export const MEMORY_CLEANUP_INTERVAL = TIMING_CONSTANTS.INTERVALS.MEMORY_CLEANUP;
+export const MAX_OUTPUT_BUFFER_SIZE = MESSAGE_CONSTANTS.LIMITS.MAX_BUFFER_SIZE;
 
-// ========================= API ENDPOINTS =========================
+// Message constants
+export const MESSAGE_CHUNK_SIZE = MESSAGE_CONSTANTS.LIMITS.CHUNK_SIZE;
+export const SMALL_CHUNK_SIZE = MESSAGE_CONSTANTS.LIMITS.SMALL_CHUNK_SIZE;
 
-/**
- * API endpoint paths
- */
-export const API_ENDPOINTS = {
-  ORCHESTRATOR_SETUP: '/api/orchestrator/setup',
-  TEAMS: '/api/teams',
-  TEAM_START: '/api/teams/:id/start',
-  HEALTH: '/health'
-} as const;
+// API endpoints
+export const API_ENDPOINTS = BACKEND_CONSTANTS.API_ENDPOINTS;

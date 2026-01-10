@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
-import { Terminal } from 'lucide-react';
+import { Terminal, Menu, X } from 'lucide-react';
 import { Navigation } from './Navigation';
 import { TerminalPanel } from '../TerminalPanel/TerminalPanel';
 import { OrchestratorStatusBanner } from '../OrchestratorStatusBanner';
@@ -12,6 +12,7 @@ import clsx from 'clsx';
 export const AppLayout: React.FC = () => {
   const { isTerminalOpen, openTerminal, closeTerminal } = useTerminal();
   const { isCollapsed } = useSidebar();
+  const [isMobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const toggleTerminal = () => {
     if (isTerminalOpen) {
@@ -23,15 +24,48 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="flex min-h-screen bg-background-dark">
-      <div className={clsx('transition-all duration-200', isCollapsed ? 'w-16' : 'w-64')}>
-        <Navigation />
+      {/* Mobile Backdrop */}
+      <div
+        className={`fixed inset-0 bg-black/60 z-40 md:hidden transition-opacity ${isMobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        onClick={() => setMobileMenuOpen(false)}
+        aria-hidden="true"
+      />
+
+      {/* Sidebar - Mobile & Desktop */}
+      <div className={clsx(
+        'fixed left-0 top-0 h-full z-50 transition-all duration-300 ease-in-out',
+        'md:translate-x-0',
+        isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full',
+        isCollapsed ? 'md:w-16' : 'md:w-64',
+        'w-64' // Always full width on mobile
+      )}>
+        <Navigation isMobileOpen={isMobileMenuOpen} onMobileClose={() => setMobileMenuOpen(false)} />
       </div>
-      <main className="flex-1 flex flex-col">
-        <OrchestratorStatusBanner />
-        <div className="flex-1 p-6">
-          <Outlet />
-        </div>
-      </main>
+
+      {/* Main Content Area */}
+      <div className={clsx(
+        "flex-1 flex flex-col min-w-0 transition-all duration-300 ease-in-out",
+        isCollapsed ? 'md:ml-16' : 'md:ml-64'
+      )}>
+        {/* Mobile Header */}
+        <header className="md:hidden h-16 flex items-center justify-between px-4 bg-surface-dark/80 backdrop-blur-sm border-b border-border-dark sticky top-0 z-30">
+          <IconButton
+            variant="ghost"
+            icon={Menu}
+            onClick={() => setMobileMenuOpen(true)}
+            aria-label="Open menu"
+          />
+          <h1 className="text-lg font-bold">AgentMux</h1>
+          <div className="w-10 h-10" /> {/* Spacer to center title */}
+        </header>
+
+        <main className="flex-1 flex flex-col">
+          <OrchestratorStatusBanner />
+          <div className="flex-1 p-4 md:p-6">
+            <Outlet />
+          </div>
+        </main>
+      </div>
 
       {/* Terminal Toggle Button */}
       <IconButton
