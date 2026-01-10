@@ -79,7 +79,7 @@ export class AgentMuxMCPServer {
     this.tmuxService = new TmuxService();
 
     // Debug log session name
-    console.log(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
+    logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
 
     // Setup periodic cleanup
     setInterval(() => {
@@ -95,7 +95,7 @@ export class AgentMuxMCPServer {
       const sessionName = execSync('tmux display-message -p "#S"', { encoding: 'utf8' }).trim();
       return sessionName || null;
     } catch (error) {
-      console.warn('[MCP Server] Could not get tmux session name:', error);
+      logger.warn('[MCP Server] Could not get tmux session name:', error);
       return null;
     }
   }
@@ -107,9 +107,9 @@ export class AgentMuxMCPServer {
     try {
       // Initialize TmuxService
       await this.tmuxService.initialize();
-      console.log('TmuxService initialized successfully');
+      logger.info('TmuxService initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize TmuxService:', error);
+      logger.error('Failed to initialize TmuxService:', error);
       throw error;
     }
   }
@@ -135,7 +135,7 @@ export class AgentMuxMCPServer {
     try {
       // Check if target session exists
       if (!(await this.tmuxService.sessionExists(params.to))) {
-        console.warn(`Session ${params.to} does not exist, skipping message`);
+        logger.warn(`Session ${params.to} does not exist, skipping message`);
         return {
           content: [{ type: 'text', text: `Session ${params.to} not found - message not sent` }],
         };
@@ -145,13 +145,13 @@ export class AgentMuxMCPServer {
       await this.tmuxService.sendMessage(params.to, params.message);
 
       // Log message for tracking
-      this.logMessage(this.sessionName, params.to, params.message).catch(console.error);
+      this.logMessage(this.sessionName, params.to, params.message).catch((e) => logger.error('Failed to log message', e));
 
       return {
         content: [{ type: 'text', text: `Message sent to ${params.to}` }],
       };
     } catch (error) {
-      console.error(`Send message error: ${error}`);
+      logger.error(`Send message error: ${error}`);
       return {
         content: [{ type: 'text', text: `Failed to send message to ${params.to}: ${error instanceof Error ? error.message : 'Unknown error'}` }],
         isError: true
@@ -186,7 +186,7 @@ export class AgentMuxMCPServer {
               broadcastCount++;
             }
           } catch (error) {
-            console.warn(`Failed to broadcast to session ${sessionName}: ${error}`);
+            logger.warn(`Failed to broadcast to session ${sessionName}: ${error}`);
           }
         });
         
@@ -200,7 +200,7 @@ export class AgentMuxMCPServer {
         content: [{ type: 'text', text: `Broadcast sent to ${broadcastCount}/${sessionNames.length} sessions` }],
       };
     } catch (error) {
-      console.error(`Broadcast error: ${error}`);
+      logger.error(`Broadcast error: ${error}`);
       return {
         content: [{ type: 'text', text: `Broadcast failed: ${error instanceof Error ? error.message : 'Unknown error'}` }],
         isError: true
@@ -224,7 +224,7 @@ export class AgentMuxMCPServer {
           teamData = data;
         }
       } catch (error) {
-        console.warn('Failed to fetch team data from API:', error);
+        logger.warn('Failed to fetch team data from API:', error);
       }
 
       const statuses = [];
@@ -234,7 +234,7 @@ export class AgentMuxMCPServer {
 
         // Debug logging for status detection
         if (process.env.NODE_ENV !== 'production') {
-          console.log(`[DEBUG] Status analysis for ${sessionInfo.sessionName}:`, {
+          logger.info(`[DEBUG] Status analysis for ${sessionInfo.sessionName}:`, {
             status,
             outputSnippet: output.slice(-100), // Last 100 chars
             sessionName: sessionInfo.sessionName
@@ -332,224 +332,68 @@ export class AgentMuxMCPServer {
     const { agentName, sessionName } = params;
     const startTime = Date.now();
 
-    // Enhanced logging for debugging
-    console.log(`[MCP-STATUS] 🔍 Starting agent status check for: ${agentName || sessionName}`);
+    logger.info(`[MCP-STATUS] 🔍 Starting agent status check for: ${agentName || sessionName}`);
 
-    // Validate required parameters
+    // Step 1: Validate required parameters
     if (!agentName && !sessionName) {
-      console.log('[MCP-STATUS] ❌ Missing required parameters');
+      logger.info('[MCP-STATUS] ❌ Missing required parameters');
       return {
-        content: [{
-          type: 'text',
-          text: 'Error: either agentName or sessionName is required'
-        }],
+        content: [{ type: 'text', text: 'Error: either agentName or sessionName is required' }],
         isError: true
       };
     }
 
     const targetSession = (sessionName || agentName)!;
-    console.log(`[MCP-STATUS] 🎯 Target session: ${targetSession}`);
+    logger.info(`[MCP-STATUS] 🎯 Target session: ${targetSession}`);
 
-    // Initialize status tracking
+    // Step 2: Fetch backend data
+    const backendData = await this.fetchBackendTeams();
+
+    // Step 3: Search for agent in backend data
     let agentFound = false;
     let agentData: BackendAgentData | null = null;
     let teamData: Team | null = null;
-    let sessionExists = false;
-    let paneOutput = '';
 
-    // Step 1: Try to get status from backend API with retry logic
-    let backendData: { success?: boolean; data?: { teams: Team[] } } | null = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        console.log(`[MCP-STATUS] 🌐 Backend API attempt ${attempt}/3...`);
-
-        // Increased timeout from default
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), TIMING_CONSTANTS.TIMEOUTS.CONNECTION);
-
-        const response = await fetch(`${this.apiBaseUrl}/api/teams`, {
-          signal: controller.signal,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'AgentMux-MCP-Server'
-          }
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        backendData = await response.json() as { success?: boolean; data?: { teams: Team[] } };
-        console.log(`[MCP-STATUS] ✅ Backend API success on attempt ${attempt}`);
-        break;
-
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        console.log(`[MCP-STATUS] ❌ Backend API attempt ${attempt} failed: ${errorMsg}`);
-
-        if (attempt === 3) {
-          console.log('[MCP-STATUS] 🚨 All backend API attempts failed, using fallback');
-        } else {
-          // Wait before retry (exponential backoff)
-          await new Promise(resolve => setTimeout(resolve, attempt * TIMING_CONSTANTS.RETRIES.BASE_DELAY));
-        }
-      }
-    }
-
-    // Step 2: Search for agent in backend data
     if (backendData?.success && backendData?.data?.teams) {
-      console.log(`[MCP-STATUS] 🔎 Searching through ${backendData.data.teams.length} teams...`);
-
-      for (const team of backendData.data.teams) {
-        if (team.members) {
-          const member = team.members.find((m: TeamMember) =>
-            m.sessionName === targetSession ||
-            m.name === targetSession ||
-            m.id === targetSession
-          );
-
-          if (member) {
-            agentFound = true;
-            agentData = member;
-            teamData = team;
-            console.log(`[MCP-STATUS] ✅ Agent found in team: ${team.name}`);
-            break;
-          }
-        }
+      const result = this.findAgentInTeams(backendData.data.teams, targetSession);
+      if (result) {
+        agentFound = true;
+        agentData = result.agent;
+        teamData = result.team;
       }
     }
 
-    // Step 3: Check tmux session existence with retry
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        console.log(`[MCP-STATUS] 🖥️ Checking tmux session (attempt ${attempt}/2)...`);
-        sessionExists = await this.tmuxService.sessionExists(targetSession);
-        console.log(`[MCP-STATUS] 📡 Session exists: ${sessionExists}`);
-        break;
-      } catch (error) {
-        console.log(`[MCP-STATUS] ⚠️ Session check attempt ${attempt} failed:`, error);
-        if (attempt === 2) {
-          sessionExists = false; // Default to false if all attempts fail
-        }
-      }
-    }
+    // Step 4: Check tmux session status
+    const { exists: sessionExists, paneOutput } = await this.checkTmuxSessionStatus(targetSession);
 
-    // Step 4: Get pane output for progress indication (only if session exists)
-    if (sessionExists) {
-      try {
-        console.log('[MCP-STATUS] 📋 Capturing pane output...');
-        paneOutput = await this.tmuxService.capturePane(targetSession, 10);
-        console.log(`[MCP-STATUS] ✅ Captured ${paneOutput.length} chars of output`);
-      } catch (error) {
-        console.log('[MCP-STATUS] ⚠️ Failed to capture pane output:', error);
-        paneOutput = 'Unable to capture terminal output';
-      }
-    }
+    // Step 5: Determine final agent status
+    const { finalAgentStatus, finalWorkingStatus, statusIcon, statusColor } =
+      this.determineAgentStatusDisplay(agentData, sessionExists);
 
-    // Step 5: Determine final agent status with better mapping
-    let finalAgentStatus: string;
-    let finalWorkingStatus: string;
-    let statusIcon: string;
-    let statusColor: string;
-
-    if (agentFound && agentData) {
-      // Use backend data as primary source
-      finalAgentStatus = this.mapAgentStatus(agentData.agentStatus, sessionExists);
-      finalWorkingStatus = agentData.workingStatus || 'idle';
-
-      // Determine status presentation
-      if (finalAgentStatus === 'active' && sessionExists) {
-        statusIcon = '✅';
-        statusColor = 'ACTIVE';
-      } else if (finalAgentStatus === 'activating') {
-        statusIcon = '🔄';
-        statusColor = 'ACTIVATING';
-      } else if (sessionExists) {
-        statusIcon = '⚠️';
-        statusColor = 'CONNECTED (inactive in backend)';
-      } else {
-        statusIcon = '❌';
-        statusColor = 'INACTIVE';
-      }
-    } else if (sessionExists) {
-      // Session exists but not in backend - likely a manual session
-      finalAgentStatus = 'session-only';
-      finalWorkingStatus = 'unknown';
-      statusIcon = '🔗';
-      statusColor = 'SESSION ONLY (not registered)';
-    } else {
-      // No backend data and no session
-      finalAgentStatus = 'unavailable';
-      finalWorkingStatus = 'offline';
-      statusIcon = '💀';
-      statusColor = 'UNAVAILABLE';
-    }
-
-    // Step 6: Analyze pane output for progress indication
+    // Step 6: Analyze progress
     const progressIndicator = this.analyzeAgentProgress(paneOutput);
 
-    // Step 7: Build comprehensive status report
+    // Step 7: Build and return status report
     const elapsedMs = Date.now() - startTime;
-    console.log(`[MCP-STATUS] ✅ Status check completed in ${elapsedMs}ms`);
+    logger.info(`[MCP-STATUS] ✅ Status check completed in ${elapsedMs}ms`);
 
-    let statusReport = `🔍 Status for ${targetSession}:\n\n`;
-
-    // Agent Status Section
-    statusReport += `${statusIcon} Agent Status: ${statusColor}\n`;
-    statusReport += `⚡ Working Status: ${finalWorkingStatus.toUpperCase()}\n`;
-    statusReport += `📡 Session: ${targetSession} (${sessionExists ? 'running' : 'not found'})\n`;
-
-    if (agentFound && teamData) {
-      statusReport += `👥 Team: ${teamData.name}\n`;
-      statusReport += `🎭 Role: ${agentData?.role || 'unknown'}\n`;
-      statusReport += `🕐 Last Activity: ${agentData?.lastActivityCheck || 'unknown'}\n`;
-    }
-
-    statusReport += `⏱️ Check Duration: ${elapsedMs}ms\n`;
-    statusReport += `🔄 Backend API: ${backendData ? 'connected' : 'failed'}\n\n`;
-
-    // Progress Indicator Section
-    statusReport += `📊 Progress Indicator:\n${progressIndicator}\n\n`;
-
-    // Recent Terminal Output Section (if available)
-    if (sessionExists && paneOutput) {
-      const outputLines = paneOutput.trim().split('\n').slice(-5); // Last 5 lines
-      statusReport += `📋 Recent Terminal Activity (last 5 lines):\n`;
-      statusReport += '```\n';
-      if (outputLines.length > 0) {
-        outputLines.forEach(line => {
-          statusReport += `${line}\n`;
-        });
-      } else {
-        statusReport += '(no recent output)\n';
-      }
-      statusReport += '```\n\n';
-    } else if (sessionExists) {
-      statusReport += `📋 Terminal Output: Unable to capture\n\n`;
-    } else {
-      statusReport += `📋 Terminal Output: Session not running\n\n`;
-    }
-
-    // Troubleshooting Section (if there are issues)
-    if (!sessionExists || !agentFound) {
-      statusReport += `🔧 Troubleshooting:\n`;
-      if (!sessionExists) {
-        statusReport += `• Session '${targetSession}' is not running in tmux\n`;
-        statusReport += `• Try: tmux list-sessions to see active sessions\n`;
-      }
-      if (!agentFound) {
-        statusReport += `• Agent not found in backend teams database\n`;
-        statusReport += `• Agent may not be properly registered\n`;
-      }
-    }
+    const statusReport = this.buildAgentStatusReport({
+      targetSession,
+      statusIcon,
+      statusColor,
+      finalWorkingStatus,
+      sessionExists,
+      agentFound,
+      teamData,
+      agentData,
+      elapsedMs,
+      backendConnected: !!backendData,
+      progressIndicator,
+      paneOutput
+    });
 
     return {
-      content: [{
-        type: 'text',
-        text: statusReport
-      }],
+      content: [{ type: 'text', text: statusReport }],
       isError: finalAgentStatus === 'unavailable'
     };
   }
@@ -635,143 +479,444 @@ export class AgentMuxMCPServer {
     return '🔄 Active (see recent terminal output below)';
   }
 
+  // ==================== getAgentStatus Helper Methods ====================
+
+  /**
+   * Fetch team data from the backend API with retry logic
+   *
+   * @returns Backend teams data or null if all attempts fail
+   */
+  private async fetchBackendTeams(): Promise<{ success?: boolean; data?: { teams: Team[] } } | null> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        logger.info(`[MCP-STATUS] 🌐 Backend API attempt ${attempt}/3...`);
+
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMING_CONSTANTS.TIMEOUTS.CONNECTION);
+
+        const response = await fetch(`${this.apiBaseUrl}/api/teams`, {
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'AgentMux-MCP-Server'
+          }
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json() as { success?: boolean; data?: { teams: Team[] } };
+        logger.info(`[MCP-STATUS] ✅ Backend API success on attempt ${attempt}`);
+        return data;
+
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        logger.info(`[MCP-STATUS] ❌ Backend API attempt ${attempt} failed: ${errorMsg}`);
+
+        if (attempt === 3) {
+          logger.info('[MCP-STATUS] 🚨 All backend API attempts failed, using fallback');
+          return null;
+        }
+        // Wait before retry (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, attempt * TIMING_CONSTANTS.RETRIES.BASE_DELAY));
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Search for an agent in the teams data
+   *
+   * @param teams - Array of teams to search
+   * @param targetSession - Session name to find
+   * @returns Object containing agent and team data, or null if not found
+   */
+  private findAgentInTeams(
+    teams: Team[],
+    targetSession: string
+  ): { agent: BackendAgentData; team: Team } | null {
+    logger.info(`[MCP-STATUS] 🔎 Searching through ${teams.length} teams...`);
+
+    for (const team of teams) {
+      if (team.members) {
+        const member = team.members.find((m: TeamMember) =>
+          m.sessionName === targetSession ||
+          m.name === targetSession ||
+          m.id === targetSession
+        );
+
+        if (member) {
+          logger.info(`[MCP-STATUS] ✅ Agent found in team: ${team.name}`);
+          return { agent: member, team };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check tmux session status and capture pane output
+   *
+   * @param targetSession - Session name to check
+   * @returns Session existence and pane output
+   */
+  private async checkTmuxSessionStatus(targetSession: string): Promise<{ exists: boolean; paneOutput: string }> {
+    let sessionExists = false;
+    let paneOutput = '';
+
+    // Check session existence with retry
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        logger.info(`[MCP-STATUS] 🖥️ Checking tmux session (attempt ${attempt}/2)...`);
+        sessionExists = await this.tmuxService.sessionExists(targetSession);
+        logger.info(`[MCP-STATUS] 📡 Session exists: ${sessionExists}`);
+        break;
+      } catch (error) {
+        logger.info(`[MCP-STATUS] ⚠️ Session check attempt ${attempt} failed:`, error);
+        if (attempt === 2) {
+          sessionExists = false;
+        }
+      }
+    }
+
+    // Get pane output if session exists
+    if (sessionExists) {
+      try {
+        logger.info('[MCP-STATUS] 📋 Capturing pane output...');
+        paneOutput = await this.tmuxService.capturePane(targetSession, 10);
+        logger.info(`[MCP-STATUS] ✅ Captured ${paneOutput.length} chars of output`);
+      } catch (error) {
+        logger.info('[MCP-STATUS] ⚠️ Failed to capture pane output:', error);
+        paneOutput = 'Unable to capture terminal output';
+      }
+    }
+
+    return { exists: sessionExists, paneOutput };
+  }
+
+  /**
+   * Determine the final agent status based on available data
+   *
+   * @param agentData - Backend agent data (or null)
+   * @param sessionExists - Whether the tmux session exists
+   * @returns Status determination with icon and color
+   */
+  private determineAgentStatusDisplay(
+    agentData: BackendAgentData | null,
+    sessionExists: boolean
+  ): {
+    finalAgentStatus: string;
+    finalWorkingStatus: string;
+    statusIcon: string;
+    statusColor: string;
+  } {
+    if (agentData) {
+      const finalAgentStatus = this.mapAgentStatus(agentData.agentStatus, sessionExists);
+      const finalWorkingStatus = agentData.workingStatus || 'idle';
+
+      let statusIcon: string;
+      let statusColor: string;
+
+      if (finalAgentStatus === 'active' && sessionExists) {
+        statusIcon = '✅';
+        statusColor = 'ACTIVE';
+      } else if (finalAgentStatus === 'activating') {
+        statusIcon = '🔄';
+        statusColor = 'ACTIVATING';
+      } else if (sessionExists) {
+        statusIcon = '⚠️';
+        statusColor = 'CONNECTED (inactive in backend)';
+      } else {
+        statusIcon = '❌';
+        statusColor = 'INACTIVE';
+      }
+
+      return { finalAgentStatus, finalWorkingStatus, statusIcon, statusColor };
+    } else if (sessionExists) {
+      return {
+        finalAgentStatus: 'session-only',
+        finalWorkingStatus: 'unknown',
+        statusIcon: '🔗',
+        statusColor: 'SESSION ONLY (not registered)'
+      };
+    } else {
+      return {
+        finalAgentStatus: 'unavailable',
+        finalWorkingStatus: 'offline',
+        statusIcon: '💀',
+        statusColor: 'UNAVAILABLE'
+      };
+    }
+  }
+
+  /**
+   * Build the status report string
+   *
+   * @param params - All the data needed to build the report
+   * @returns Formatted status report string
+   */
+  private buildAgentStatusReport(params: {
+    targetSession: string;
+    statusIcon: string;
+    statusColor: string;
+    finalWorkingStatus: string;
+    sessionExists: boolean;
+    agentFound: boolean;
+    teamData: Team | null;
+    agentData: BackendAgentData | null;
+    elapsedMs: number;
+    backendConnected: boolean;
+    progressIndicator: string;
+    paneOutput: string;
+  }): string {
+    const {
+      targetSession, statusIcon, statusColor, finalWorkingStatus,
+      sessionExists, agentFound, teamData, agentData,
+      elapsedMs, backendConnected, progressIndicator, paneOutput
+    } = params;
+
+    let report = `🔍 Status for ${targetSession}:\n\n`;
+
+    // Agent Status Section
+    report += `${statusIcon} Agent Status: ${statusColor}\n`;
+    report += `⚡ Working Status: ${finalWorkingStatus.toUpperCase()}\n`;
+    report += `📡 Session: ${targetSession} (${sessionExists ? 'running' : 'not found'})\n`;
+
+    if (agentFound && teamData) {
+      report += `👥 Team: ${teamData.name}\n`;
+      report += `🎭 Role: ${agentData?.role || 'unknown'}\n`;
+      report += `🕐 Last Activity: ${agentData?.lastActivityCheck || 'unknown'}\n`;
+    }
+
+    report += `⏱️ Check Duration: ${elapsedMs}ms\n`;
+    report += `🔄 Backend API: ${backendConnected ? 'connected' : 'failed'}\n\n`;
+
+    // Progress Indicator Section
+    report += `📊 Progress Indicator:\n${progressIndicator}\n\n`;
+
+    // Recent Terminal Output Section
+    if (sessionExists && paneOutput) {
+      const outputLines = paneOutput.trim().split('\n').slice(-5);
+      report += `📋 Recent Terminal Activity (last 5 lines):\n`;
+      report += '```\n';
+      if (outputLines.length > 0) {
+        outputLines.forEach(line => {
+          report += `${line}\n`;
+        });
+      } else {
+        report += '(no recent output)\n';
+      }
+      report += '```\n\n';
+    } else if (sessionExists) {
+      report += `📋 Terminal Output: Unable to capture\n\n`;
+    } else {
+      report += `📋 Terminal Output: Session not running\n\n`;
+    }
+
+    // Troubleshooting Section
+    if (!sessionExists || !agentFound) {
+      report += `🔧 Troubleshooting:\n`;
+      if (!sessionExists) {
+        report += `• Session '${targetSession}' is not running in tmux\n`;
+        report += `• Try: tmux list-sessions to see active sessions\n`;
+      }
+      if (!agentFound) {
+        report += `• Agent not found in backend teams database\n`;
+        report += `• Agent may not be properly registered\n`;
+      }
+    }
+
+    return report;
+  }
+
+  // ==================== registerAgentStatus Helper Methods ====================
+
+  /**
+   * Test API server connectivity
+   *
+   * @returns True if server is healthy
+   */
+  private async testApiConnectivity(): Promise<boolean> {
+    try {
+      logger.info(`[MCP] 🔍 Testing API server connectivity...`);
+      const healthResponse = await fetch(`${this.apiBaseUrl}/health`);
+      logger.info(`[MCP] 💓 Health check status: ${healthResponse.status} ${healthResponse.statusText}`);
+      return healthResponse.ok;
+    } catch (healthError) {
+      logger.info(`[MCP] ❌ Health check failed:`, healthError instanceof Error ? healthError.message : String(healthError));
+      return false;
+    }
+  }
+
+  /**
+   * Make registration API call
+   *
+   * @param params - Registration parameters
+   * @returns Registration response data
+   */
+  private async callRegistrationApi(params: RegisterAgentStatusParams): Promise<unknown> {
+    const requestBody = {
+      sessionName: params.sessionName,
+      role: params.role,
+      status: 'active',
+      registeredAt: new Date().toISOString(),
+      memberId: params.teamMemberId
+    };
+
+    logger.info(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
+
+    const endpoint = `${this.apiBaseUrl}/api/teams/members/register`;
+    logger.info(`[MCP] 📡 Calling endpoint: ${endpoint}`);
+    logger.info(`[MCP] 📞 Making registration API call...`);
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'AgentMux-MCP/1.0.0'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    logger.info(`[MCP] 📨 Response received - Status: ${response.status} ${response.statusText}`);
+    logger.info(`[MCP] 📋 Response headers:`, Object.fromEntries(response.headers.entries()));
+
+    if (!response.ok) {
+      let responseBody = '';
+      try {
+        responseBody = await response.text();
+        logger.info(`[MCP] 📄 Response body:`, responseBody);
+      } catch (bodyError) {
+        logger.info(`[MCP] ❌ Failed to read response body:`, bodyError);
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    // Parse response
+    try {
+      const responseText = await response.text();
+      logger.info(`[MCP] 📄 Response body text:`, responseText);
+      if (responseText) {
+        const responseData = JSON.parse(responseText);
+        logger.info(`[MCP] 📋 Parsed response data:`, JSON.stringify(responseData, null, 2));
+        return responseData;
+      }
+    } catch (parseError) {
+      logger.info(`[MCP] ❌ Failed to parse response body:`, parseError);
+    }
+
+    return null;
+  }
+
+  /**
+   * Check for abandoned tasks when orchestrator registers
+   *
+   * @param sessionName - Orchestrator session name
+   * @returns Recovery report or null
+   */
+  private async checkOrchestratorRecovery(sessionName: string): Promise<RecoveryReport | null> {
+    logger.info(`[MCP] 🔄 Orchestrator registered, checking for abandoned tasks...`);
+    try {
+      const recoveryResponse = await fetch(`${this.apiBaseUrl}/api/task-management/recover-abandoned-tasks`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'AgentMux-MCP/1.0.0'
+        },
+        body: JSON.stringify({ sessionName })
+      });
+
+      if (recoveryResponse.ok) {
+        const report = await recoveryResponse.json() as RecoveryReport;
+        logger.info(`[MCP] 📊 Recovery completed:`, report);
+        return report;
+      } else {
+        logger.info(`[MCP] ⚠️ Recovery check failed: ${recoveryResponse.status}`);
+        return null;
+      }
+    } catch (recoveryError) {
+      logger.info(`[MCP] ⚠️ Recovery check error:`, recoveryError);
+      return null;
+    }
+  }
+
+  /**
+   * Build registration response message
+   *
+   * @param params - Registration params
+   * @param recoveryReport - Optional recovery report
+   * @returns Response message string
+   */
+  private buildRegistrationResponse(
+    params: RegisterAgentStatusParams,
+    recoveryReport: RecoveryReport | null
+  ): string {
+    let responseText = `Agent registered successfully. Role: ${params.role}, Session: ${params.sessionName}${params.teamMemberId ? `, Member ID: ${params.teamMemberId}` : ''}`;
+
+    if (recoveryReport && recoveryReport.success) {
+      const report = recoveryReport.data;
+      if (report.totalInProgress > 0) {
+        responseText += `\n\n🔄 Task Recovery Report:`;
+        responseText += `\n- Total in-progress tasks checked: ${report.totalInProgress}`;
+        responseText += `\n- Tasks recovered (moved back to open): ${report.recovered}`;
+        responseText += `\n- Tasks kept (agent still active): ${report.skipped}`;
+
+        if (report.recovered > 0) {
+          responseText += `\n- Recovered tasks: ${report.recoveredTasks.join(', ')}`;
+        }
+
+        if (report.errors.length > 0) {
+          responseText += `\n- Errors: ${report.errors.length}`;
+        }
+      } else {
+        responseText += `\n\n✅ No abandoned tasks found to recover.`;
+      }
+    }
+
+    return responseText;
+  }
+
   /**
    * Register Agent Status
    */
   async registerAgentStatus(params: RegisterAgentStatusParams): Promise<MCPToolResult> {
     const startTime = Date.now();
-    console.log(`[MCP] 🚀 Starting agent registration process...`);
-    console.log(`[MCP] 📋 Arguments:`, JSON.stringify(params, null, 2));
-    console.log(`[MCP] 🌐 API Base URL: ${this.apiBaseUrl}`);
-    console.log(`[MCP] 📍 Session Name: ${this.sessionName}`);
-    console.log(`[MCP] 🎭 Agent Role: ${this.agentRole}`);
-    
+    logger.info(`[MCP] 🚀 Starting agent registration process...`);
+    logger.info(`[MCP] 📋 Arguments:`, JSON.stringify(params, null, 2));
+    logger.info(`[MCP] 🌐 API Base URL: ${this.apiBaseUrl}`);
+    logger.info(`[MCP] 📍 Session Name: ${this.sessionName}`);
+    logger.info(`[MCP] 🎭 Agent Role: ${this.agentRole}`);
+
     try {
-      const requestBody = {
-        sessionName: params.sessionName,
-        role: params.role,
-        status: 'active',
-        registeredAt: new Date().toISOString(),
-        memberId: params.teamMemberId
-      };
-      
-      console.log(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
-      
-      const endpoint = `${this.apiBaseUrl}/api/teams/members/register`;
-      console.log(`[MCP] 📡 Calling endpoint: ${endpoint}`);
-      
-      // Test API server connectivity
-      try {
-        console.log(`[MCP] 🔍 Testing API server connectivity...`);
-        const healthResponse = await fetch(`${this.apiBaseUrl}/health`);
-        console.log(`[MCP] 💓 Health check status: ${healthResponse.status} ${healthResponse.statusText}`);
-      } catch (healthError) {
-        console.log(`[MCP] ❌ Health check failed:`, healthError instanceof Error ? healthError.message : String(healthError));
-      }
-      
-      // Make registration call
-      console.log(`[MCP] 📞 Making registration API call...`);
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'User-Agent': 'AgentMux-MCP/1.0.0'
-        },
-        body: JSON.stringify(requestBody)
-      });
+      // Step 1: Test API connectivity
+      await this.testApiConnectivity();
 
-      console.log(`[MCP] 📨 Response received - Status: ${response.status} ${response.statusText}`);
-      console.log(`[MCP] 📋 Response headers:`, Object.fromEntries(response.headers.entries()));
-
-      if (!response.ok) {
-        let responseBody = '';
-        try {
-          responseBody = await response.text();
-          console.log(`[MCP] 📄 Response body:`, responseBody);
-        } catch (bodyError) {
-          console.log(`[MCP] ❌ Failed to read response body:`, bodyError);
-        }
-        
-        const errorMsg = `HTTP ${response.status}: ${response.statusText}`;
-        console.log(`[MCP] ❌ Registration failed: ${errorMsg}`);
-        throw new Error(errorMsg);
-      }
-
-      // Parse response
-      let responseData;
-      try {
-        const responseText = await response.text();
-        console.log(`[MCP] 📄 Response body text:`, responseText);
-        if (responseText) {
-          responseData = JSON.parse(responseText);
-          console.log(`[MCP] 📋 Parsed response data:`, JSON.stringify(responseData, null, 2));
-        }
-      } catch (parseError) {
-        console.log(`[MCP] ❌ Failed to parse response body:`, parseError);
-      }
+      // Step 2: Make registration API call
+      await this.callRegistrationApi(params);
 
       const duration = Date.now() - startTime;
-      console.log(`[MCP] ✅ Registration successful! Duration: ${duration}ms`);
+      logger.info(`[MCP] ✅ Registration successful! Duration: ${duration}ms`);
 
-      // If this is an orchestrator registration, check for abandoned tasks to recover
+      // Step 3: Check for abandoned tasks if orchestrator
       let recoveryReport: RecoveryReport | null = null;
       if (params.role === 'orchestrator') {
-        console.log(`[MCP] 🔄 Orchestrator registered, checking for abandoned tasks...`);
-        try {
-          const recoveryResponse = await fetch(`${this.apiBaseUrl}/api/task-management/recover-abandoned-tasks`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'User-Agent': 'AgentMux-MCP/1.0.0'
-            },
-            body: JSON.stringify({ sessionName: params.sessionName })
-          });
-
-          if (recoveryResponse.ok) {
-            recoveryReport = await recoveryResponse.json() as RecoveryReport;
-            console.log(`[MCP] 📊 Recovery completed:`, recoveryReport);
-          } else {
-            console.log(`[MCP] ⚠️ Recovery check failed: ${recoveryResponse.status}`);
-          }
-        } catch (recoveryError) {
-          console.log(`[MCP] ⚠️ Recovery check error:`, recoveryError);
-        }
+        recoveryReport = await this.checkOrchestratorRecovery(params.sessionName);
       }
 
-      // Build response message
-      let responseText = `Agent registered successfully. Role: ${params.role}, Session: ${params.sessionName}${params.teamMemberId ? `, Member ID: ${params.teamMemberId}` : ''}`;
-
-      if (recoveryReport && recoveryReport.success) {
-        const report = recoveryReport.data;
-        if (report.totalInProgress > 0) {
-          responseText += `\n\n🔄 Task Recovery Report:`;
-          responseText += `\n- Total in-progress tasks checked: ${report.totalInProgress}`;
-          responseText += `\n- Tasks recovered (moved back to open): ${report.recovered}`;
-          responseText += `\n- Tasks kept (agent still active): ${report.skipped}`;
-
-          if (report.recovered > 0) {
-            responseText += `\n- Recovered tasks: ${report.recoveredTasks.join(', ')}`;
-          }
-
-          if (report.errors.length > 0) {
-            responseText += `\n- Errors: ${report.errors.length}`;
-          }
-        } else {
-          responseText += `\n\n✅ No abandoned tasks found to recover.`;
-        }
-      }
+      // Step 4: Build and return response
+      const responseText = this.buildRegistrationResponse(params, recoveryReport);
 
       return {
-        content: [{
-          type: 'text',
-          text: responseText
-        }]
+        content: [{ type: 'text', text: responseText }]
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.log(`[MCP] ❌ Registration failed after ${duration}ms`);
-      console.log(`[MCP] 💥 Error details:`, error);
-      
+      logger.info(`[MCP] ❌ Registration failed after ${duration}ms`);
+      logger.info(`[MCP] 💥 Error details:`, error);
+
       return {
         content: [{
           type: 'text',
@@ -988,7 +1133,7 @@ export class AgentMuxMCPServer {
   async assignTask(params: AssignTaskDelegationParams): Promise<MCPToolResult> {
     try {
       const { absoluteTaskPath: taskPath, targetSessionName, delegatedBy, reason, delegationChain = [] } = params;
-      console.log(`📋 Assigning task to ${targetSessionName} via delegation`);
+      logger.info(`📋 Assigning task to ${targetSessionName} via delegation`);
 
       // Prevent delegation loops
       const currentChain = delegationChain || [];
@@ -1042,17 +1187,17 @@ export class AgentMuxMCPServer {
           taskProjectPath = taskPath.substring(0, agentmuxIndex);
         }
       } catch (error) {
-        console.warn('Could not read task details for assignment:', error);
+        logger.warn('Could not read task details for assignment:', error);
       }
 
       // Load assignment template using shared method
       const promptTemplate = await this.loadAssignmentTemplate();
 
       // Debug logging for template variables
-      console.log(`[MCP] 🔍 Template replacement debug:`);
-      console.log(`[MCP]   taskPath: "${taskPath}"`);
-      console.log(`[MCP]   taskProjectPath: "${taskProjectPath}"`);
-      console.log(`[MCP]   targetSessionName: "${targetSessionName}"`);
+      logger.info(`[MCP] 🔍 Template replacement debug:`);
+      logger.info(`[MCP]   taskPath: "${taskPath}"`);
+      logger.info(`[MCP]   taskProjectPath: "${taskProjectPath}"`);
+      logger.info(`[MCP]   targetSessionName: "${targetSessionName}"`);
 
       // Build delegation chain
       const newChain = [...currentChain];
@@ -1073,8 +1218,8 @@ export class AgentMuxMCPServer {
       });
 
       // Send assignment message directly to target session
-      console.log(`[MCP] 📤 Sending assignment message to ${targetSessionName}...`);
-      console.log(`[MCP] 📝 Assignment details: ${taskDetails.title || taskPath}`);
+      logger.info(`[MCP] 📤 Sending assignment message to ${targetSessionName}...`);
+      logger.info(`[MCP] 📝 Assignment details: ${taskDetails.title || taskPath}`);
 
       try {
         // Use the existing sendMessage method to send the assignment
@@ -1083,17 +1228,17 @@ export class AgentMuxMCPServer {
           message: assignmentMessage
         });
 
-        console.log(`[MCP] ✅ Assignment message sent to ${targetSessionName}`);
+        logger.info(`[MCP] ✅ Assignment message sent to ${targetSessionName}`);
 
       } catch (messageError) {
-        console.error(`[MCP] ❌ Failed to send assignment message:`, messageError);
+        logger.error(`[MCP] ❌ Failed to send assignment message:`, messageError);
         throw new Error(`Failed to send assignment message to ${targetSessionName}: ${messageError instanceof Error ? messageError.message : 'Unknown error'}`);
       }
 
       // Log the delegation
       await this.logTaskDelegation(taskPath, this.sessionName, targetSessionName, reason, newChain);
 
-      console.log(`[MCP] ✅ Task delegation completed successfully for ${targetSessionName}`);
+      logger.info(`[MCP] ✅ Task delegation completed successfully for ${targetSessionName}`);
 
       return {
         content: [{
@@ -1117,7 +1262,7 @@ export class AgentMuxMCPServer {
    */
   async getTickets(params: GetTicketsParams): Promise<MCPToolResult> {
     try {
-      console.log('🎫 Getting tickets and tasks');
+      logger.info('🎫 Getting tickets and tasks');
       const { status, all } = params;
 
       const tickets: TicketInfo[] = [];
@@ -1143,7 +1288,7 @@ export class AgentMuxMCPServer {
           }
         }
       } catch (error) {
-        console.warn('No legacy YAML tickets found:', error);
+        logger.warn('No legacy YAML tickets found:', error);
       }
 
       // Current MD tickets with milestone structure
@@ -1180,7 +1325,7 @@ export class AgentMuxMCPServer {
           }
         }
       } catch (error) {
-        console.warn('No MD task structure found:', error);
+        logger.warn('No MD task structure found:', error);
       }
 
       const summary = `Found ${tickets.length} tickets${status ? ` with status: ${status}` : ''}${all ? ' (all)' : ' (assigned to you)'}`;
@@ -1208,7 +1353,7 @@ export class AgentMuxMCPServer {
   async updateTicket(params: UpdateTicketParams): Promise<MCPToolResult> {
     try {
       const { ticketId, status, notes, blockers } = params;
-      console.log(`📝 Updating ticket ${ticketId}`);
+      logger.info(`📝 Updating ticket ${ticketId}`);
 
       // Find the ticket file
       const ticket = await this.findTicketById(ticketId);
@@ -1295,7 +1440,7 @@ export class AgentMuxMCPServer {
   async reportProgress(params: ReportProgressParams): Promise<MCPToolResult> {
     try {
       const { ticketId, progress, completed, current, blockers, nextSteps } = params;
-      console.log(`📊 Reporting progress for ${ticketId || 'current work'}: ${progress}%`);
+      logger.info(`📊 Reporting progress for ${ticketId || 'current work'}: ${progress}%`);
 
       let message = `PROGRESS REPORT - ${new Date().toISOString()}\n`;
       message += `Agent: ${this.sessionName}\n`;
@@ -1351,7 +1496,7 @@ export class AgentMuxMCPServer {
   async requestReview(params: RequestReviewParams): Promise<MCPToolResult> {
     try {
       const { ticketId, reviewer, branch, message } = params;
-      console.log(`👀 Requesting review for ticket ${ticketId}`);
+      logger.info(`👀 Requesting review for ticket ${ticketId}`);
 
       let reviewMessage = `REVIEW REQUEST\n`;
       reviewMessage += `From: ${this.sessionName}\n`;
@@ -1385,7 +1530,7 @@ export class AgentMuxMCPServer {
             await this.tmuxService.sendMessage(sessionInfo.sessionName, reviewMessage);
             sentCount++;
           } catch (error) {
-            console.warn(`Failed to send review request to ${sessionInfo.sessionName}`);
+            logger.warn(`Failed to send review request to ${sessionInfo.sessionName}`);
           }
         }
 
@@ -1410,7 +1555,7 @@ export class AgentMuxMCPServer {
   async scheduleCheck(params: ScheduleCheckParams): Promise<MCPToolResult> {
     try {
       const { minutes, message, target } = params;
-      console.log(`⏰ Scheduling check in ${minutes} minutes`);
+      logger.info(`⏰ Scheduling check in ${minutes} minutes`);
 
       const checkTime = new Date(Date.now() + minutes * 60 * 1000);
       const scheduleMessage = `SCHEDULED CHECK - ${checkTime.toISOString()}\nFrom: ${this.sessionName}\nMessage: ${message}`;
@@ -1425,7 +1570,7 @@ export class AgentMuxMCPServer {
             await this.tmuxService.sendMessage(this.sessionName, `⏰ REMINDER: ${message}`);
           }
         } catch (error) {
-          console.error('Scheduled check failed:', error);
+          logger.error('Scheduled check failed:', error);
         }
       }, minutes * 60 * 1000);
 
@@ -1452,7 +1597,7 @@ export class AgentMuxMCPServer {
   async enforceCommit(params: EnforceCommitParams): Promise<MCPToolResult> {
     try {
       const { message } = params;
-      console.log('🔒 Enforcing git commit');
+      logger.info('🔒 Enforcing git commit');
 
       return new Promise((resolve) => {
         const gitStatus = spawn('git', ['status', '--porcelain'], {
@@ -1550,7 +1695,7 @@ export class AgentMuxMCPServer {
   async createTeam(params: CreateTeamParams): Promise<MCPToolResult> {
     try {
       const { role, name, projectPath, systemPrompt } = params;
-      console.log(`🚀 Creating team ${name} with role ${role}`);
+      logger.info(`🚀 Creating team ${name} with role ${role}`);
 
       // Check orchestrator permission
       if (!this.sessionName.includes('orchestrator') && this.sessionName !== 'mcp-server') {
@@ -1600,10 +1745,10 @@ export class AgentMuxMCPServer {
         });
 
         if (response.ok) {
-          console.log(`Registered ${name} with backend API`);
+          logger.info(`Registered ${name} with backend API`);
         }
       } catch (apiError) {
-        console.warn(`Failed to register with API: ${apiError}`);
+        logger.warn(`Failed to register with API: ${apiError}`);
       }
 
       return {
@@ -1626,7 +1771,7 @@ export class AgentMuxMCPServer {
   async delegateTask(params: DelegateTaskParams): Promise<MCPToolResult> {
     try {
       const { to, task, priority, ticketId } = params;
-      console.log(`📋 Delegating task to ${to}`);
+      logger.info(`📋 Delegating task to ${to}`);
 
       // Load assignment template using shared method
       const promptTemplate = await this.loadAssignmentTemplate();
@@ -1670,52 +1815,52 @@ export class AgentMuxMCPServer {
 
   async terminateAgent(params: TerminateAgentParams): Promise<MCPToolResult> {
     try {
-      console.log(`[SHUTDOWN] Step 1: Starting shutdown process for params:`, params);
+      logger.info(`[SHUTDOWN] Step 1: Starting shutdown process for params:`, params);
 
       if (!params.sessionName) {
         throw new Error('sessionName parameter is required');
       }
 
       const sessionName = params.sessionName;
-      console.log(`[SHUTDOWN] Step 2: Validated sessionName: ${sessionName}`);
+      logger.info(`[SHUTDOWN] Step 2: Validated sessionName: ${sessionName}`);
 
       // Safety checks
       if (sessionName === 'orchestrator' || sessionName === this.sessionName) {
-        console.log(`[SHUTDOWN] Step 3: Safety check failed - orchestrator/self protection`);
+        logger.info(`[SHUTDOWN] Step 3: Safety check failed - orchestrator/self protection`);
         throw new Error('Cannot shutdown orchestrator or self');
       }
 
       if (sessionName.includes('orchestrator') || sessionName.includes('orc')) {
-        console.log(`[SHUTDOWN] Step 4: Safety check failed - orchestrator name detection`);
+        logger.info(`[SHUTDOWN] Step 4: Safety check failed - orchestrator name detection`);
         throw new Error('Cannot shutdown orchestrator sessions');
       }
-      console.log(`[SHUTDOWN] Step 5: Safety checks passed`);
+      logger.info(`[SHUTDOWN] Step 5: Safety checks passed`);
 
       // Check if session exists
-      console.log(`[SHUTDOWN] Step 6: Checking if session exists...`);
+      logger.info(`[SHUTDOWN] Step 6: Checking if session exists...`);
       if (!(await this.tmuxService.sessionExists(sessionName))) {
-        console.log(`[SHUTDOWN] Step 7: Session existence check failed`);
+        logger.info(`[SHUTDOWN] Step 7: Session existence check failed`);
         throw new Error(`Session ${sessionName} not found`);
       }
-      console.log(`[SHUTDOWN] Step 8: Session exists, proceeding with shutdown`);
+      logger.info(`[SHUTDOWN] Step 8: Session exists, proceeding with shutdown`);
 
       // Send notification message (less alarming than "warning")
-      console.log(`[SHUTDOWN] Step 9: Sending notification message...`);
+      logger.info(`[SHUTDOWN] Step 9: Sending notification message...`);
       await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
-      console.log(`[SHUTDOWN] Step 10: Notification sent, proceeding with termination`);
+      logger.info(`[SHUTDOWN] Step 10: Notification sent, proceeding with termination`);
 
       // Terminate the session
-      console.log(`[SHUTDOWN] Step 11: Executing session termination...`);
+      logger.info(`[SHUTDOWN] Step 11: Executing session termination...`);
       await this.tmuxService.killSession(sessionName);
-      console.log(`[SHUTDOWN] Step 12: Session termination completed successfully`);
+      logger.info(`[SHUTDOWN] Step 12: Session termination completed successfully`);
 
       // Notify remaining sessions
-      console.log(`[SHUTDOWN] Step 13: Broadcasting termination notification...`);
+      logger.info(`[SHUTDOWN] Step 13: Broadcasting termination notification...`);
       await this.broadcast({
         message: `📋 Agent ${sessionName} has been terminated by ${this.sessionName}`,
         excludeSelf: true
       });
-      console.log(`[SHUTDOWN] Step 14: Broadcast completed, termination process finished`);
+      logger.info(`[SHUTDOWN] Step 14: Broadcast completed, termination process finished`);
 
       return {
         content: [{
@@ -1724,7 +1869,7 @@ export class AgentMuxMCPServer {
         }]
       };
     } catch (error) {
-      console.log(`[SHUTDOWN] ERROR: Shutdown process failed:`, error);
+      logger.info(`[SHUTDOWN] ERROR: Shutdown process failed:`, error);
       return {
         content: [{
           type: 'text',
@@ -1737,7 +1882,7 @@ export class AgentMuxMCPServer {
 
   async terminateAgents(params: TerminateAgentsParams): Promise<MCPToolResult> {
     try {
-      console.log(`[BULK-TERMINATE] Step 1: Starting bulk termination for:`, params.sessionNames);
+      logger.info(`[BULK-TERMINATE] Step 1: Starting bulk termination for:`, params.sessionNames);
 
       if (!params.sessionNames || !Array.isArray(params.sessionNames)) {
         throw new Error('sessionNames array parameter is required');
@@ -1747,7 +1892,7 @@ export class AgentMuxMCPServer {
         throw new Error('sessionNames array cannot be empty');
       }
 
-      console.log(`[BULK-TERMINATE] Step 2: Validating ${params.sessionNames.length} sessions`);
+      logger.info(`[BULK-TERMINATE] Step 2: Validating ${params.sessionNames.length} sessions`);
 
       const results = {
         successful: [] as string[],
@@ -1757,7 +1902,7 @@ export class AgentMuxMCPServer {
 
       // Process each session
       for (const sessionName of params.sessionNames) {
-        console.log(`[BULK-TERMINATE] Processing: ${sessionName}`);
+        logger.info(`[BULK-TERMINATE] Processing: ${sessionName}`);
 
         try {
           // Safety checks
@@ -1766,7 +1911,7 @@ export class AgentMuxMCPServer {
               sessionName,
               reason: 'Cannot terminate orchestrator or self'
             });
-            console.log(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator/self protection`);
+            logger.info(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator/self protection`);
             continue;
           }
 
@@ -1775,7 +1920,7 @@ export class AgentMuxMCPServer {
               sessionName,
               reason: 'Cannot terminate orchestrator sessions'
             });
-            console.log(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator name detection`);
+            logger.info(`[BULK-TERMINATE] Skipped ${sessionName}: orchestrator name detection`);
             continue;
           }
 
@@ -1785,33 +1930,33 @@ export class AgentMuxMCPServer {
               sessionName,
               error: 'Session not found'
             });
-            console.log(`[BULK-TERMINATE] Failed ${sessionName}: session not found`);
+            logger.info(`[BULK-TERMINATE] Failed ${sessionName}: session not found`);
             continue;
           }
 
           // Send notification message
-          console.log(`[BULK-TERMINATE] Sending notification to: ${sessionName}`);
+          logger.info(`[BULK-TERMINATE] Sending notification to: ${sessionName}`);
           await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
 
           // Terminate the session
-          console.log(`[BULK-TERMINATE] Terminating session: ${sessionName}`);
+          logger.info(`[BULK-TERMINATE] Terminating session: ${sessionName}`);
           await this.tmuxService.killSession(sessionName);
 
           results.successful.push(sessionName);
-          console.log(`[BULK-TERMINATE] Successfully terminated: ${sessionName}`);
+          logger.info(`[BULK-TERMINATE] Successfully terminated: ${sessionName}`);
 
         } catch (error) {
           results.failed.push({
             sessionName,
             error: error instanceof Error ? error.message : 'Unknown error'
           });
-          console.log(`[BULK-TERMINATE] Error terminating ${sessionName}:`, error);
+          logger.info(`[BULK-TERMINATE] Error terminating ${sessionName}:`, error);
         }
       }
 
       // Broadcast summary notification to remaining agent sessions (exclude orchestrator)
       if (results.successful.length > 0) {
-        console.log(`[BULK-TERMINATE] Broadcasting summary notification...`);
+        logger.info(`[BULK-TERMINATE] Broadcasting summary notification...`);
 
         // Get all sessions and send to non-orchestrator sessions only
         const sessions = await this.tmuxService.listSessions();
@@ -1822,7 +1967,7 @@ export class AgentMuxMCPServer {
 
           // Skip orchestrator sessions and self
           if (sessionName.includes('orchestrator') || sessionName.includes('orc') || sessionName === this.sessionName) {
-            console.log(`[BULK-TERMINATE] Skipping broadcast to: ${sessionName} (orchestrator/self)`);
+            logger.info(`[BULK-TERMINATE] Skipping broadcast to: ${sessionName} (orchestrator/self)`);
             continue;
           }
 
@@ -1830,17 +1975,17 @@ export class AgentMuxMCPServer {
             if (await this.tmuxService.sessionExists(sessionName)) {
               await this.tmuxService.sendMessage(sessionName, `📋 Bulk termination completed: ${results.successful.length} agents terminated by ${this.sessionName}`);
               broadcastCount++;
-              console.log(`[BULK-TERMINATE] Broadcasted to: ${sessionName}`);
+              logger.info(`[BULK-TERMINATE] Broadcasted to: ${sessionName}`);
             }
           } catch (error) {
-            console.log(`[BULK-TERMINATE] Failed to broadcast to ${sessionName}:`, error);
+            logger.info(`[BULK-TERMINATE] Failed to broadcast to ${sessionName}:`, error);
           }
         }
 
-        console.log(`[BULK-TERMINATE] Broadcast completed to ${broadcastCount} sessions`);
+        logger.info(`[BULK-TERMINATE] Broadcast completed to ${broadcastCount} sessions`);
       }
 
-      console.log(`[BULK-TERMINATE] Bulk termination completed:`, results);
+      logger.info(`[BULK-TERMINATE] Bulk termination completed:`, results);
 
       // Format response
       let responseText = `✅ Bulk termination completed:\n`;
@@ -1872,7 +2017,7 @@ export class AgentMuxMCPServer {
       };
 
     } catch (error) {
-      console.log(`[BULK-TERMINATE] ERROR: Bulk termination failed:`, error);
+      logger.info(`[BULK-TERMINATE] ERROR: Bulk termination failed:`, error);
       return {
         content: [{
           type: 'text',
@@ -2032,7 +2177,7 @@ export class AgentMuxMCPServer {
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {
-      console.error('Failed to log progress:', error);
+      logger.error('Failed to log progress:', error);
     }
   }
 
@@ -2045,7 +2190,7 @@ export class AgentMuxMCPServer {
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {
-      console.error('Failed to log schedule:', error);
+      logger.error('Failed to log schedule:', error);
     }
   }
 
@@ -2058,7 +2203,7 @@ export class AgentMuxMCPServer {
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {
-      console.error('Failed to log delegation:', error);
+      logger.error('Failed to log delegation:', error);
     }
   }
 
@@ -2077,7 +2222,7 @@ export class AgentMuxMCPServer {
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {
-      console.error('Failed to log task delegation:', error);
+      logger.error('Failed to log task delegation:', error);
     }
   }
 
@@ -2422,18 +2567,18 @@ Please respond promptly with either acceptance or delegation.`;
     });
 
     httpServer.listen(port, () => {
-      console.log(`╔════════════════════════════════════════════════╗`);
-      console.log(`║        AgentMux MCP Server Started!            ║`);
-      console.log(`╠════════════════════════════════════════════════╣`);
-      console.log(`║  🌐 URL: http://localhost:${port}/mcp           ║`);
-      console.log(`║  ❤️  Health: http://localhost:${port}/health    ║`);
-      console.log(`║  📡 Session: ${this.sessionName.padEnd(25)} ║`);
-      console.log(`║  📂 Project: ${path.basename(this.projectPath).padEnd(24)} ║`);
-      console.log(`╚════════════════════════════════════════════════╝`);
-      console.log('');
-      console.log('To configure Claude Code:');
-      console.log(`claude mcp add --transport http agentmux http://localhost:${port}/mcp`);
-      console.log('');
+      logger.info(`╔════════════════════════════════════════════════╗`);
+      logger.info(`║        AgentMux MCP Server Started!            ║`);
+      logger.info(`╠════════════════════════════════════════════════╣`);
+      logger.info(`║  🌐 URL: http://localhost:${port}/mcp           ║`);
+      logger.info(`║  ❤️  Health: http://localhost:${port}/health    ║`);
+      logger.info(`║  📡 Session: ${this.sessionName.padEnd(25)} ║`);
+      logger.info(`║  📂 Project: ${path.basename(this.projectPath).padEnd(24)} ║`);
+      logger.info(`╚════════════════════════════════════════════════╝`);
+      logger.info('');
+      logger.info('To configure Claude Code:');
+      logger.info(`claude mcp add --transport http agentmux http://localhost:${port}/mcp`);
+      logger.info('');
     });
   }
 
@@ -2849,7 +2994,7 @@ Please respond promptly with either acceptance or delegation.`;
           trackingData = JSON.parse(content);
         }
       } catch (error) {
-        console.warn('Could not load existing in_progress_tasks.json, creating new one');
+        logger.warn('Could not load existing in_progress_tasks.json, creating new one');
       }
 
       // Extract task information
@@ -2876,9 +3021,9 @@ Please respond promptly with either acceptance or delegation.`;
       // Save updated data
       await fs.writeFile(trackingFilePath, JSON.stringify(trackingData, null, 2), 'utf-8');
 
-      console.log(`Added task to in_progress tracking: ${taskName} -> ${sessionName}`);
+      logger.info(`Added task to in_progress tracking: ${taskName} -> ${sessionName}`);
     } catch (error) {
-      console.error('Error adding task to in_progress tracking:', error);
+      logger.error('Error adding task to in_progress tracking:', error);
     }
   }
 
@@ -2897,7 +3042,7 @@ Please respond promptly with either acceptance or delegation.`;
           trackingData = JSON.parse(content);
         }
       } catch (error) {
-        console.warn('Could not load in_progress_tasks.json for removal');
+        logger.warn('Could not load in_progress_tasks.json for removal');
         return;
       }
 
@@ -2915,9 +3060,9 @@ Please respond promptly with either acceptance or delegation.`;
       await fs.writeFile(trackingFilePath, JSON.stringify(trackingData, null, 2), 'utf-8');
 
       const removedCount = originalTaskCount - trackingData.tasks.length;
-      console.log(`Removed ${removedCount} task(s) from in_progress tracking for path: ${taskPath}`);
+      logger.info(`Removed ${removedCount} task(s) from in_progress tracking for path: ${taskPath}`);
     } catch (error) {
-      console.error('Error removing task from in_progress tracking:', error);
+      logger.error('Error removing task from in_progress tracking:', error);
     }
   }
 
@@ -2937,7 +3082,7 @@ Please respond promptly with either acceptance or delegation.`;
 
       this.lastCleanup = now;
     } catch (error) {
-      console.error('Cleanup error:', error);
+      logger.error('Cleanup error:', error);
     }
   }
 
@@ -2949,7 +3094,7 @@ Please respond promptly with either acceptance or delegation.`;
       await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(logPath, logEntry);
     } catch (error) {
-      console.error('Failed to log message:', error);
+      logger.error('Failed to log message:', error);
     }
   }
 }

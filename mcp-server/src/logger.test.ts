@@ -86,31 +86,45 @@ describe('MCPLogger', () => {
         expect.stringMatching(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
       );
     });
+  });
 
-    it('should include context when provided', () => {
+  describe('additional data logging', () => {
+    it('should log additional string data', () => {
       logger.setLevel('info');
-      logger.info('test message', { sessionName: 'test-session' });
+      logger.info('test message', 'additional info');
 
       expect(consoleInfoSpy).toHaveBeenCalledWith(
-        expect.stringContaining('sessionName=test-session')
+        expect.stringContaining('test message'),
+        'additional info'
       );
     });
 
-    it('should include multiple context values', () => {
+    it('should log additional object data as JSON', () => {
       logger.setLevel('info');
-      logger.info('test message', { sessionName: 'session-1', toolName: 'getStatus' });
+      logger.info('test message', { key: 'value' });
 
-      const call = consoleInfoSpy.mock.calls[0][0];
-      expect(call).toContain('sessionName=session-1');
-      expect(call).toContain('toolName=getStatus');
+      expect(consoleInfoSpy).toHaveBeenCalledWith(
+        expect.stringContaining('test message'),
+        expect.stringContaining('"key": "value"')
+      );
+    });
+
+    it('should handle Error objects in info/warn/debug', () => {
+      logger.setLevel('warn');
+      const error = new Error('Test error');
+      logger.warn('warning with error', error);
+
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('warning with error'),
+        expect.stringContaining('Test error')
+      );
     });
   });
 
   describe('child loggers', () => {
     it('should create child with inherited context', () => {
-      logger.setLevel('info');
       const childLogger = createLogger({ toolName: 'getAgentStatus' });
-
+      childLogger.setLevel('info');
       childLogger.info('tool executed');
 
       expect(consoleInfoSpy).toHaveBeenCalledWith(
@@ -138,23 +152,23 @@ describe('MCPLogger', () => {
 
       logger.error('Operation failed', error);
 
-      expect(consoleErrorSpy).toHaveBeenCalledTimes(2);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('Operation failed')
       );
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Stack:')
+        expect.stringContaining('Error: Test error')
       );
     });
 
-    it('should log non-Error objects as JSON', () => {
+    it('should log non-Error objects as details', () => {
       logger.setLevel('error');
       const errorObj = { code: 'ERR_001', reason: 'Unknown' };
 
       logger.error('Operation failed', errorObj);
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Details:')
+        expect.stringContaining('Details:'),
+        expect.stringContaining('ERR_001')
       );
     });
 
