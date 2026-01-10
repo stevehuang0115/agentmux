@@ -261,8 +261,9 @@ describe('MCP Server Index', () => {
 				const content = await fs.readFile(indexPath, 'utf8');
 				expect(content.startsWith('#!/usr/bin/env node')).toBe(true);
 			} catch (error) {
-				// Test file might not exist during testing, but we can verify the expected structure
-				expect(true).toBe(true); // This test validates the expected file structure
+				// If file doesn't exist during testing, verify the error is expected
+				expect(error).toBeDefined();
+				expect((error as NodeJS.ErrnoException).code).toBe('ENOENT');
 			}
 		});
 	});

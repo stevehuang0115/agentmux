@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { vi } from 'vitest';
 import { TaskDetailModal } from './TaskDetailModal';
 
 const mockTask = {
@@ -19,7 +20,7 @@ describe('TaskDetailModal', () => {
     render(
       <TaskDetailModal
         isOpen={true}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
         task={mockTask}
       />
     );
@@ -34,7 +35,7 @@ describe('TaskDetailModal', () => {
     render(
       <TaskDetailModal
         isOpen={false}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
         task={mockTask}
       />
     );
@@ -43,7 +44,7 @@ describe('TaskDetailModal', () => {
   });
 
   it('calls onClose when close button is clicked', () => {
-    const onCloseMock = jest.fn();
+    const onCloseMock = vi.fn();
     render(
       <TaskDetailModal
         isOpen={true}
@@ -57,11 +58,11 @@ describe('TaskDetailModal', () => {
   });
 
   it('calls onAssign when start task button is clicked', () => {
-    const onAssignMock = jest.fn();
+    const onAssignMock = vi.fn();
     render(
       <TaskDetailModal
         isOpen={true}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
         task={mockTask}
         onAssign={onAssignMock}
       />
@@ -75,7 +76,7 @@ describe('TaskDetailModal', () => {
     render(
       <TaskDetailModal
         isOpen={true}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
         task={mockTask}
       />
     );
@@ -89,7 +90,7 @@ describe('TaskDetailModal', () => {
     render(
       <TaskDetailModal
         isOpen={true}
-        onClose={jest.fn()}
+        onClose={vi.fn()}
         task={mockTask}
       />
     );

@@ -529,14 +529,19 @@ describe('Orchestrator Workflow Integration Tests', () => {
   });
 
   describe('WebSocket Orchestrator Integration', () => {
-    test.skip('should establish WebSocket connection with capabilities', (done) => {
-      clientSocket.on('orchestrator_connected', (data: any) => {
+    test('should establish WebSocket connection with capabilities', (done) => {
+      // Create a new socket connection to receive the 'orchestrator_connected' event
+      const port = (server.address() as any)?.port;
+      const newSocket = Client(`http://localhost:${port}`);
+
+      newSocket.on('orchestrator_connected', (data: any) => {
         expect(data).toHaveProperty('message');
         expect(data).toHaveProperty('timestamp');
         expect(data).toHaveProperty('capabilities');
         expect(data.capabilities).toContain('command_execution');
         expect(data.capabilities).toContain('team_monitoring');
         expect(data.capabilities).toContain('task_scheduling');
+        newSocket.close();
         done();
       });
     });

@@ -160,7 +160,7 @@ describe('WebSocketService', () => {
     });
 
     it('handles errors in event callbacks gracefully', () => {
-      const errorCallback = jest.fn(() => {
+      const errorCallback = vi.fn(() => {
         throw new Error('Callback error');
       });
       

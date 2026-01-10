@@ -2,8 +2,14 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
 import axios from 'axios';
+import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../../config/index.js';
 
 const execAsync = promisify(exec);
+
+// Computed URLs using constants - allow environment variable override
+const BACKEND_PORT = process.env.WEB_PORT || WEB_CONSTANTS.PORTS.BACKEND;
+const BACKEND_URL = `http://localhost:${BACKEND_PORT}`;
+const MCP_PORT = process.env.AGENTMUX_MCP_PORT || MCP_CONSTANTS.PORTS.DEFAULT;
 
 interface StatusOptions {
   verbose?: boolean;
@@ -33,17 +39,23 @@ export async function statusCommand(options: StatusOptions) {
 
 async function checkBackendStatus(): Promise<void> {
   try {
-    const response = await axios.get('http://localhost:3000/health', { timeout: 3000 });
-    
+    const response = await axios.get(
+      `${BACKEND_URL}${WEB_CONSTANTS.ENDPOINTS.HEALTH}`,
+      { timeout: TIMING_CONSTANTS.TIMEOUTS.HTTP_HEALTH_CHECK }
+    );
+
     if (response.status === 200) {
       console.log(chalk.green('✅ Backend Server: Running'));
-      console.log(chalk.gray(`   URL: http://localhost:3000`));
+      console.log(chalk.gray(`   URL: ${BACKEND_URL}`));
       console.log(chalk.gray(`   Uptime: ${Math.round(response.data.uptime || 0)}s`));
       console.log(chalk.gray(`   Version: ${response.data.version || 'unknown'}`));
-      
+
       // Try to get teams data
       try {
-        const teamsResponse = await axios.get('http://localhost:3000/api/teams', { timeout: 2000 });
+        const teamsResponse = await axios.get(
+          `${BACKEND_URL}${WEB_CONSTANTS.ENDPOINTS.TEAMS}`,
+          { timeout: TIMING_CONSTANTS.TIMEOUTS.API_REQUEST_QUICK }
+        );
         if (teamsResponse.data.success) {
           const teams = teamsResponse.data.data || [];
           console.log(chalk.gray(`   Active Teams: ${teams.length}`));
@@ -132,7 +144,7 @@ async function checkRunningProcesses(): Promise<void> {
     
     // Check port usage
     try {
-      const { stdout: portCheck } = await execAsync('lsof -i :3000,3001 2>/dev/null || echo ""');
+      const { stdout: portCheck } = await execAsync(`lsof -i :${BACKEND_PORT},${MCP_PORT} 2>/dev/null || echo ""`);
       if (portCheck.trim()) {
         console.log(chalk.blue('\n🔌 Port Usage:'));
         console.log(chalk.gray(portCheck.trim()));

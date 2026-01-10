@@ -1,25 +1,26 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
+import { vi } from 'vitest';
 import { AppLayout } from './AppLayout';
 import { TerminalProvider } from '../../contexts/TerminalContext';
 import { SidebarProvider } from '../../contexts/SidebarContext';
 
 // Mock the child components
-jest.mock('./Navigation', () => ({
+vi.mock('./Navigation', () => ({
   Navigation: () => <div data-testid="navigation">Navigation</div>
 }));
 
-jest.mock('../TerminalPanel/TerminalPanel', () => ({
+vi.mock('../TerminalPanel/TerminalPanel', () => ({
   TerminalPanel: ({ isOpen }: { isOpen: boolean }) =>
     isOpen ? <div data-testid="terminal-panel">Terminal Panel</div> : null
 }));
 
-jest.mock('../OrchestratorStatusBanner', () => ({
+vi.mock('../OrchestratorStatusBanner', () => ({
   OrchestratorStatusBanner: () => <div data-testid="orchestrator-banner">Orchestrator Banner</div>
 }));
 
-jest.mock('../UI', () => ({
+vi.mock('../UI', () => ({
   IconButton: ({ onClick, children, className, 'aria-label': ariaLabel }: any) => (
     <button onClick={onClick} className={className} aria-label={ariaLabel}>
       {children}

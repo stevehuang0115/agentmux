@@ -11,9 +11,9 @@ import {
   FormTextarea,
   FormHelp
 } from '../UI';
-import { OverflowMenu } from '../UI/OverflowMenu';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
 import { inProgressTasksService } from '../../services/in-progress-tasks.service';
+import { logSilentError } from '../../utils/error-handling';
 
 export const TasksView: React.FC<TasksViewProps> = ({
   project,
@@ -131,7 +131,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
         });
         setAvatarMap(map);
       } catch (e) {
-        // ignore
+        logSilentError(e, { context: 'Loading team avatars' });
       }
     };
     loadAvatars();
@@ -234,23 +234,6 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   return (
     <div className="tasks-view">
-      <div className="tasks-header">
-        <div className="flex justify-end">
-          <OverflowMenu
-            align="bottom-right"
-            items={[
-              {
-                label: 'Create Task',
-                onClick: () => setIsCreateTaskModalOpen(true)
-              },
-              {
-                label: 'Create Milestone',
-                onClick: () => setIsCreateMilestoneModalOpen(true)
-              }
-            ]}
-          />
-        </div>
-      </div>
       
       {/* Milestone filter chips (prototype style) */}
       <div className="mb-4">
@@ -529,8 +512,15 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
                     {task.priority.charAt(0).toUpperCase() + task.priority.slice(1)}
                   </span>
                 )}
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-primary/20 text-primary/80 border border-primary/30">
-                  {task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '').split(':')[0] || 'General'}
+                <span
+                  className="px-2 py-0.5 text-xs font-medium rounded-full bg-primary/20 text-primary/80 border border-primary/30"
+                  title={task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '').split(':')[0] || 'General'}
+                >
+                  {(() => {
+                    const milestone = task.milestoneId?.replace(/_/g, ' ').replace(/^m\d+\s*/, '').split(':')[0] || 'General';
+                    // Truncate long milestone names
+                    return milestone.length > 10 ? milestone.substring(0, 10) + '...' : milestone;
+                  })()}
                 </span>
                 {((task as any).linksCount || (task as any).links?.length) && (
                   <div className="flex items-center gap-1 text-primary" title={`${(task as any).linksCount || (task as any).links?.length} dependencies`}>
@@ -557,8 +547,14 @@ export const TaskColumn: React.FC<TaskColumnProps> = ({
                   return <div className="w-6 h-6 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center text-xs text-text-secondary-dark ring-2 ring-surface-dark" title={displayName || sessionName}>{avatarText}</div>;
                 })()}
                 <button
-                  onClick={(e) => { e.stopPropagation(); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onTaskAssign && task.status !== 'done' && task.status !== 'completed') {
+                      onTaskAssign(task);
+                    }
+                  }}
                   className="w-7 h-7 flex items-center justify-center rounded-full text-text-secondary-dark hover:bg-primary/10 hover:text-primary transition-colors"
+                  disabled={taskAssignmentLoading === task.id || task.status === 'done' || task.status === 'completed'}
                 >
                   <Play className="w-4 h-4" />
                 </button>

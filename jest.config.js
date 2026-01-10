@@ -1,12 +1,13 @@
 export default {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/tests', '<rootDir>/backend/src', '<rootDir>/mcp-server/src', '<rootDir>/cli/src'],
+  roots: ['<rootDir>/tests', '<rootDir>/backend/src', '<rootDir>/mcp-server/src', '<rootDir>/cli/src', '<rootDir>/config'],
   testMatch: [
     '**/tests/**/?(*.)+(spec|test).ts',
     '**/backend/src/**/?(*.)+(spec|test).ts',
     '**/mcp-server/src/**/?(*.)+(spec|test).ts',
-    '**/cli/src/**/?(*.)+(spec|test).ts'
+    '**/cli/src/**/?(*.)+(spec|test).ts',
+    '**/config/**/?(*.)+(spec|test).ts'
   ],
   transform: {
     '^.+\\.ts$': ['ts-jest', {

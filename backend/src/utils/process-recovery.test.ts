@@ -243,14 +243,16 @@ describe('ProcessRecovery Stress Tests', () => {
 		const recovery = new ProcessRecovery();
 
 		// Start and stop multiple times rapidly
+		let cycleCount = 0;
 		for (let i = 0; i < 5; i++) {
 			await recovery.start();
 			await new Promise(resolve => setTimeout(resolve, 1000));
 			await recovery.shutdown();
+			cycleCount++;
 		}
 
-		// Should not crash or leak resources
-		expect(true).toBe(true);
+		// Should complete all cycles without crashing or throwing
+		expect(cycleCount).toBe(5);
 	});
 });
 

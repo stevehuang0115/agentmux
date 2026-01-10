@@ -500,19 +500,6 @@ export class ApiController {
     return clearDeliveryLogs.call(this, req, res);
   }
 
-  // Workflows Methods - Deprecated (orchestration now handled via scheduled messages)
-  public async getWorkflowExecution(req: Request, res: Response): Promise<void> {
-    res.status(410).json({ success: false, error: 'Workflow execution API deprecated - orchestration now handled via scheduled messages' });
-  }
-
-  public async getActiveWorkflows(req: Request, res: Response): Promise<void> {
-    res.status(410).json({ success: false, error: 'Active workflows API deprecated - orchestration now handled via scheduled messages' });
-  }
-
-  public async cancelWorkflowExecution(req: Request, res: Response): Promise<void> {
-    res.status(410).json({ success: false, error: 'Workflow cancellation API deprecated - orchestration now handled via scheduled messages' });
-  }
-
   // Config Files Methods
   public async getConfigFile(req: Request, res: Response): Promise<void> {
     const { getConfigFile } = await import('./system/config.controller.js');

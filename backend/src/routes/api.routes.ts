@@ -6,7 +6,6 @@ import { registerSystemRoutes } from './modules/system.routes.js';
 import { registerSchedulerRoutes } from './modules/scheduler.routes.js';
 import { registerTerminalRoutes } from './modules/terminal.routes.js';
 import { registerAssignmentsRoutes } from './modules/assignments.routes.js';
-import { registerWorkflowRoutes } from './modules/workflows.routes.js';
 import { registerErrorRoutes } from './modules/errors.routes.js';
 import { registerScheduledMessageRoutes } from './modules/scheduled-messages.routes.js';
 import { registerDeliveryLogRoutes } from './modules/delivery-logs.routes.js';
@@ -47,7 +46,6 @@ export function createApiRoutes(apiController: ApiController): Router {
   registerSchedulerRoutes(router, apiController);
   registerTerminalRoutes(router, apiController);
   registerAssignmentsRoutes(router, apiController);
-  registerWorkflowRoutes(router, apiController);
   registerErrorRoutes(router, apiController);
   registerScheduledMessageRoutes(router, apiController);
   registerDeliveryLogRoutes(router, apiController);

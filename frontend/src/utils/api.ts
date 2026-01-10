@@ -13,21 +13,3 @@ export const safeParseJSON = async (response: Response): Promise<any> => {
   
   return response.json();
 };
-
-/**
- * Makes a safe API request with proper error handling
- */
-export const safeApiRequest = async (url: string, options?: RequestInit): Promise<any> => {
-  try {
-    const response = await fetch(url, options);
-    
-    if (!response.ok) {
-      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
-    }
-    
-    return await safeParseJSON(response);
-  } catch (error) {
-    console.error('API request error:', error);
-    throw error;
-  }
-};

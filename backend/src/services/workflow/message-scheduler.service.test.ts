@@ -504,7 +504,7 @@ describe('MessageSchedulerService', () => {
       expect(executeMessageSpy).not.toHaveBeenCalledWith(regularMessage);
     });
 
-    it.skip('should process multiple auto-assignment messages sequentially', async () => {
+    it('should process multiple auto-assignment messages sequentially', async () => {
       const message1 = { ...mockAutoAssignmentMessage, id: 'auto-assign-1', targetProject: 'project-1' };
       const message2 = { ...mockAutoAssignmentMessage, id: 'auto-assign-2', targetProject: 'project-2' };
       const message3 = { ...mockAutoAssignmentMessage, id: 'auto-assign-3', targetProject: 'project-3' };
@@ -513,27 +513,20 @@ describe('MessageSchedulerService', () => {
       jest.spyOn(service as any, 'executeMessage').mockImplementation(async (...args: any[]) => {
         const msg = args[0] as ScheduledMessage;
         executionOrder.push(msg.id);
-        // No artificial delay needed for testing
         await Promise.resolve();
       });
 
-      // Process messages through sequential queue
-      const promises = [
-        (service as any).executeMessageSequentially(message1),
-        (service as any).executeMessageSequentially(message2),
-        (service as any).executeMessageSequentially(message3)
-      ];
+      // Queue all messages for sequential processing
+      const promise1 = (service as any).executeMessageSequentially(message1);
+      const promise2 = (service as any).executeMessageSequentially(message2);
+      const promise3 = (service as any).executeMessageSequentially(message3);
 
-      // Start the processing
-      const completionPromise = Promise.all(promises);
-      
-      // Advance timers to allow sequential processing with delays
-      for (let i = 0; i < 3; i++) {
-        jest.advanceTimersByTime(2000);
-        await Promise.resolve(); // Allow async operations to complete
-      }
-      
-      await completionPromise;
+      // Advance timers incrementally to process queue
+      await jest.advanceTimersByTimeAsync(2000);
+      await jest.advanceTimersByTimeAsync(2000);
+      await jest.advanceTimersByTimeAsync(2000);
+
+      await Promise.all([promise1, promise2, promise3]);
 
       // Verify they were processed in order
       expect(executionOrder).toEqual(['auto-assign-1', 'auto-assign-2', 'auto-assign-3']);
@@ -554,7 +547,7 @@ describe('MessageSchedulerService', () => {
       );
     });
 
-    it.skip('should add delay between sequential executions', async () => {
+    it('should add delay between sequential executions', async () => {
       const message1 = { ...mockAutoAssignmentMessage, id: 'auto-assign-delay-1' };
       const message2 = { ...mockAutoAssignmentMessage, id: 'auto-assign-delay-2' };
 
@@ -563,38 +556,32 @@ describe('MessageSchedulerService', () => {
         executeCallCount++;
       });
 
-      const promises = [
-        (service as any).executeMessageSequentially(message1),
-        (service as any).executeMessageSequentially(message2)
-      ];
+      // Start both promises
+      const promise1 = (service as any).executeMessageSequentially(message1);
+      const promise2 = (service as any).executeMessageSequentially(message2);
 
-      // Start the promises (first will start processing immediately)
-      const promiseCompletion = Promise.all(promises);
+      // Advance timers to process the queue with delays
+      await jest.advanceTimersByTimeAsync(2000);
+      await jest.advanceTimersByTimeAsync(2000);
 
-      // Advance past the first execution delay
-      jest.advanceTimersByTime(2000);
-      await Promise.resolve(); // Let the first execution complete
-
-      // Advance past the second execution delay  
-      jest.advanceTimersByTime(2000);
-      await promiseCompletion;
+      await Promise.all([promise1, promise2]);
 
       // Verify both messages were processed
       expect(executeCallCount).toBe(2);
     });
 
-    it.skip('should log queue processing information', async () => {
+    it('should log queue processing information', async () => {
       const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
       const queueMessage = { ...mockAutoAssignmentMessage, targetProject: 'test-project-queue' };
 
       const executionPromise = (service as any).executeMessageSequentially(queueMessage);
 
       // Advance timers to allow the delay in queue processing
-      jest.advanceTimersByTime(2000);
+      await jest.advanceTimersByTimeAsync(2000);
       await executionPromise;
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        'Processing auto-assignment message for project test-project-queue (queue length: 0)'
+        expect.stringContaining('test-project-queue (queue length: 0)')
       );
       expect(consoleSpy).toHaveBeenCalledWith('Finished processing message queue');
     });

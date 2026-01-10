@@ -268,6 +268,14 @@ export const TIMING_CONSTANTS = {
 		STATUS_UPDATE: 10000,
 		/** Activity monitoring interval (15 seconds) */
 		ACTIVITY_MONITOR: 15000,
+		/** General cleanup interval (1 minute) */
+		CLEANUP: 60000,
+		/** Batch operation delay (500ms) */
+		BATCH_DELAY: 500,
+		/** Rate limit window for short bursts (1 second) */
+		RATE_LIMIT_WINDOW: 1000,
+		/** Task cleanup interval (5 minutes) */
+		TASK_CLEANUP: 300000,
 	},
 
 	/**
@@ -288,6 +296,14 @@ export const TIMING_CONSTANTS = {
 		TASK_MONITOR_POLL: 2000,
 		/** Health check timeout for individual checks (1 second) */
 		HEALTH_CHECK_TIMEOUT: 1000,
+		/** HTTP health check timeout for CLI commands (3 seconds) */
+		HTTP_HEALTH_CHECK: 3000,
+		/** API request timeout for quick calls (2 seconds) */
+		API_REQUEST_QUICK: 2000,
+		/** Shutdown wait timeout (2 seconds) */
+		SHUTDOWN: 2000,
+		/** Connection timeout for network requests (10 seconds) */
+		CONNECTION: 10000,
 		/** Agent default timeout for operations (5 minutes) */
 		AGENT_DEFAULT: 300000,
 		/** Context refresh interval (30 minutes) */
