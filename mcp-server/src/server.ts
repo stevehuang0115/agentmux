@@ -5,6 +5,7 @@ import * as url from 'url';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { TmuxService } from '../../backend/src/services/agent/tmux.service.js';
+import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import {
   MCPRequest,
   MCPResponse,
@@ -37,7 +38,20 @@ import {
   ShutdownAgentParams,
   TicketInfo,
   ToolSchema,
-  AgentStatus
+  AgentStatus,
+  TmuxSession,
+  Team,
+  TeamMember,
+  BackendAgentData,
+  TaskContent,
+  TaskTrackingData,
+  TaskDetails,
+  AssignmentResult,
+  TerminateAgentParams,
+  TerminateAgentsParams,
+  RecoveryReport,
+  YAMLFieldValue,
+  InProgressTask
 } from './types.js';
 
 
@@ -54,7 +68,7 @@ export class AgentMuxMCPServer {
     // Try to get session name from environment variable first
     // If not available, try to get from tmux directly
     this.sessionName = process.env.TMUX_SESSION_NAME || this.getCurrentTmuxSession() || 'mcp-server';
-    this.apiBaseUrl = `http://localhost:${process.env.API_PORT || 8788}`;
+    this.apiBaseUrl = `http://localhost:${process.env.API_PORT || WEB_CONSTANTS.PORTS.BACKEND}`;
     this.projectPath = process.env.PROJECT_PATH || process.cwd();
     this.agentRole = process.env.AGENT_ROLE || 'developer';
 
@@ -67,7 +81,7 @@ export class AgentMuxMCPServer {
     // Setup periodic cleanup
     setInterval(() => {
       this.cleanup();
-    }, 60000); // Every minute
+    }, TIMING_CONSTANTS.INTERVALS.CLEANUP);
   }
 
   /**
@@ -155,7 +169,7 @@ export class AgentMuxMCPServer {
 
       let broadcastCount = 0;
       const maxConcurrent = 3;
-      const sessionNames = sessions.map((s: any) => s.sessionName);
+      const sessionNames = sessions.map((s: TmuxSession) => s.sessionName);
       
       // Process sessions in batches
       for (let i = 0; i < sessionNames.length; i += maxConcurrent) {
@@ -199,11 +213,11 @@ export class AgentMuxMCPServer {
       const sessions = await this.tmuxService.listSessions();
 
       // Get team data from backend API to enrich session information
-      let teamData: any = null;
+      let teamData: { teams?: Team[] } | null = null;
       try {
         const response = await fetch(`${this.apiBaseUrl}/api/teams`);
         if (response.ok) {
-          const data = await response.json();
+          const data = await response.json() as { teams?: Team[] };
           teamData = data;
         }
       } catch (error) {
@@ -225,11 +239,11 @@ export class AgentMuxMCPServer {
         }
 
         // Find matching team member data
-        let memberData: any = null;
+        let memberData: TeamMember | null = null;
         if (teamData?.teams) {
           for (const team of teamData.teams) {
             if (team.members) {
-              const member = team.members.find((m: any) =>
+              const member = team.members.find((m: TeamMember) =>
                 m.sessionName === sessionInfo.sessionName
               );
               if (member) {
@@ -335,20 +349,20 @@ export class AgentMuxMCPServer {
 
     // Initialize status tracking
     let agentFound = false;
-    let agentData: any = null;
-    let teamData: any = null;
+    let agentData: BackendAgentData | null = null;
+    let teamData: Team | null = null;
     let sessionExists = false;
     let paneOutput = '';
 
     // Step 1: Try to get status from backend API with retry logic
-    let backendData: any = null;
+    let backendData: { success?: boolean; data?: { teams: Team[] } } | null = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         console.log(`[MCP-STATUS] 🌐 Backend API attempt ${attempt}/3...`);
 
         // Increased timeout from default
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        const timeoutId = setTimeout(() => controller.abort(), TIMING_CONSTANTS.TIMEOUTS.CONNECTION);
 
         const response = await fetch(`${this.apiBaseUrl}/api/teams`, {
           signal: controller.signal,
@@ -364,7 +378,7 @@ export class AgentMuxMCPServer {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        backendData = await response.json();
+        backendData = await response.json() as { success?: boolean; data?: { teams: Team[] } };
         console.log(`[MCP-STATUS] ✅ Backend API success on attempt ${attempt}`);
         break;
 
@@ -376,7 +390,7 @@ export class AgentMuxMCPServer {
           console.log('[MCP-STATUS] 🚨 All backend API attempts failed, using fallback');
         } else {
           // Wait before retry (exponential backoff)
-          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+          await new Promise(resolve => setTimeout(resolve, attempt * TIMING_CONSTANTS.RETRIES.BASE_DELAY));
         }
       }
     }
@@ -387,7 +401,7 @@ export class AgentMuxMCPServer {
 
       for (const team of backendData.data.teams) {
         if (team.members) {
-          const member = team.members.find((m: any) =>
+          const member = team.members.find((m: TeamMember) =>
             m.sessionName === targetSession ||
             m.name === targetSession ||
             m.id === targetSession
@@ -486,8 +500,8 @@ export class AgentMuxMCPServer {
 
     if (agentFound && teamData) {
       statusReport += `👥 Team: ${teamData.name}\n`;
-      statusReport += `🎭 Role: ${agentData.role || 'unknown'}\n`;
-      statusReport += `🕐 Last Activity: ${agentData.lastActivityCheck || 'unknown'}\n`;
+      statusReport += `🎭 Role: ${agentData?.role || 'unknown'}\n`;
+      statusReport += `🕐 Last Activity: ${agentData?.lastActivityCheck || 'unknown'}\n`;
     }
 
     statusReport += `⏱️ Check Duration: ${elapsedMs}ms\n`;
@@ -697,7 +711,7 @@ export class AgentMuxMCPServer {
       console.log(`[MCP] ✅ Registration successful! Duration: ${duration}ms`);
 
       // If this is an orchestrator registration, check for abandoned tasks to recover
-      let recoveryReport: any = null;
+      let recoveryReport: RecoveryReport | null = null;
       if (params.role === 'orchestrator') {
         console.log(`[MCP] 🔄 Orchestrator registered, checking for abandoned tasks...`);
         try {
@@ -711,7 +725,7 @@ export class AgentMuxMCPServer {
           });
 
           if (recoveryResponse.ok) {
-            recoveryReport = await recoveryResponse.json();
+            recoveryReport = await recoveryResponse.json() as RecoveryReport;
             console.log(`[MCP] 📊 Recovery completed:`, recoveryReport);
           } else {
             console.log(`[MCP] ⚠️ Recovery check failed: ${recoveryResponse.status}`);
@@ -1008,7 +1022,7 @@ export class AgentMuxMCPServer {
       }
 
       // Read the task file to get details
-      let taskDetails: any = {};
+      let taskDetails: TaskDetails = {};
       let taskProjectPath = this.projectPath; // Default fallback
 
       try {
@@ -1311,7 +1325,7 @@ export class AgentMuxMCPServer {
 
       // If there's a specific orchestrator, send to them
       const orchestratorSessions = await this.tmuxService.listSessions();
-      const orchestrator = orchestratorSessions.find((s: any) =>
+      const orchestrator = orchestratorSessions.find((s: TmuxSession) =>
         s.sessionName.includes('orchestrator') || s.sessionName.includes('orc')
       );
 
@@ -1659,7 +1673,7 @@ export class AgentMuxMCPServer {
     }
   }
 
-  async terminateAgent(params: any): Promise<MCPToolResult> {
+  async terminateAgent(params: TerminateAgentParams): Promise<MCPToolResult> {
     try {
       console.log(`[SHUTDOWN] Step 1: Starting shutdown process for params:`, params);
 
@@ -1726,7 +1740,7 @@ export class AgentMuxMCPServer {
     }
   }
 
-  async terminateAgents(params: any): Promise<MCPToolResult> {
+  async terminateAgents(params: TerminateAgentsParams): Promise<MCPToolResult> {
     try {
       console.log(`[BULK-TERMINATE] Step 1: Starting bulk termination for:`, params.sessionNames);
 
@@ -1997,7 +2011,7 @@ export class AgentMuxMCPServer {
     return null;
   }
 
-  private updateYAMLField(frontmatter: string, field: string, value: any): string {
+  private updateYAMLField(frontmatter: string, field: string, value: YAMLFieldValue): string {
     const lines = frontmatter.split('\n');
     let updated = false;
 
@@ -2083,7 +2097,7 @@ export class AgentMuxMCPServer {
   }
 
 
-  private parseTaskContent(content: string, taskPath: string): any {
+  private parseTaskContent(content: string, taskPath: string): TaskContent {
     // Extract basic info from path using built-in path operations
     const pathParts = taskPath.split('/');
     const fileName = taskPath.split('/').pop()?.replace('.md', '') || 'unknown';
@@ -2137,6 +2151,7 @@ export class AgentMuxMCPServer {
       id: fileName,
       title: title,
       description: description.substring(0, 200) + (description.length > 200 ? '...' : ''),
+      status: 'open',
       priority: priority,
       milestone: milestone,
       projectName: projectName
@@ -2177,7 +2192,7 @@ Please respond promptly with either acceptance or delegation.`;
   private async buildAssignmentMessage(params: {
     template: string;
     taskPath?: string;
-    taskDetails?: any;
+    taskDetails?: TaskDetails;
     taskProjectPath?: string;
     targetSessionName: string;
     delegatedBy?: string;
@@ -2825,11 +2840,11 @@ Please respond promptly with either acceptance or delegation.`;
   private checkRateLimit(identifier: string): boolean {
     const now = Date.now();
     const lastRequest = this.requestQueue.get(identifier) || 0;
-    
-    if (now - lastRequest < 1000) {
+
+    if (now - lastRequest < TIMING_CONSTANTS.INTERVALS.RATE_LIMIT_WINDOW) {
       return false;
     }
-    
+
     this.requestQueue.set(identifier, now);
     return true;
   }
@@ -2837,7 +2852,7 @@ Please respond promptly with either acceptance or delegation.`;
   /**
    * Add task to in_progress_tasks.json for tracking
    */
-  private async addTaskToInProgressTracking(taskPath: string, sessionName: string, assignmentResult: any): Promise<void> {
+  private async addTaskToInProgressTracking(taskPath: string, sessionName: string, assignmentResult: AssignmentResult): Promise<void> {
     try {
       const fs = await import('fs/promises');
       const path = await import('path');
@@ -2850,7 +2865,7 @@ Please respond promptly with either acceptance or delegation.`;
       await fs.mkdir(trackingDir, { recursive: true });
 
       // Load existing data
-      let trackingData: any = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
+      let trackingData: TaskTrackingData = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
       try {
         if (await fs.access(trackingFilePath).then(() => true).catch(() => false)) {
           const content = await fs.readFile(trackingFilePath, 'utf-8');
@@ -2902,7 +2917,7 @@ Please respond promptly with either acceptance or delegation.`;
       const trackingFilePath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
 
       // Load existing data
-      let trackingData: any = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
+      let trackingData: TaskTrackingData = { tasks: [], lastUpdated: new Date().toISOString(), version: '1.0.0' };
       try {
         if (await fs.access(trackingFilePath).then(() => true).catch(() => false)) {
           const content = await fs.readFile(trackingFilePath, 'utf-8');
@@ -2915,7 +2930,7 @@ Please respond promptly with either acceptance or delegation.`;
 
       // Remove task by original path or current path
       const originalTaskCount = trackingData.tasks.length;
-      trackingData.tasks = trackingData.tasks.filter((task: any) =>
+      trackingData.tasks = trackingData.tasks.filter((task: InProgressTask) =>
         task.taskPath !== taskPath &&
         task.originalPath !== taskPath &&
         task.taskPath !== taskPath.replace('/in_progress/', '/done/')
@@ -2943,7 +2958,7 @@ Please respond promptly with either acceptance or delegation.`;
 
       const now = Date.now();
       for (const [key, timestamp] of this.requestQueue.entries()) {
-        if (now - timestamp > 300000) {
+        if (now - timestamp > TIMING_CONSTANTS.INTERVALS.TASK_CLEANUP) {
           this.requestQueue.delete(key);
         }
       }

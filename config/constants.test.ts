@@ -62,11 +62,11 @@ describe('AgentMux Cross-Domain Constants', () => {
       });
 
       test('file paths should have proper extensions', () => {
-        expect(AGENTMUX_CONSTANTS.PATHS.TEAMS_FILE).toMatch(/\\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.PROJECTS_FILE).toMatch(/\\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.RUNTIME_FILE).toMatch(/\\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.SCHEDULED_MESSAGES_FILE).toMatch(/\\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.MESSAGE_DELIVERY_LOGS_FILE).toMatch(/\\.json$/);
+        expect(AGENTMUX_CONSTANTS.PATHS.TEAMS_FILE).toMatch(/\.json$/);
+        expect(AGENTMUX_CONSTANTS.PATHS.PROJECTS_FILE).toMatch(/\.json$/);
+        expect(AGENTMUX_CONSTANTS.PATHS.RUNTIME_FILE).toMatch(/\.json$/);
+        expect(AGENTMUX_CONSTANTS.PATHS.SCHEDULED_MESSAGES_FILE).toMatch(/\.json$/);
+        expect(AGENTMUX_CONSTANTS.PATHS.MESSAGE_DELIVERY_LOGS_FILE).toMatch(/\.json$/);
       });
 
       test('directory names should not contain slashes', () => {
@@ -79,7 +79,7 @@ describe('AgentMux Cross-Domain Constants', () => {
         ];
 
         dirs.forEach((dir) => {
-          expect(dir).not.toMatch(/\\//);
+          expect(dir).not.toMatch(/\//);
           expect(dir.length).toBeGreaterThan(0);
         });
       });
@@ -214,7 +214,7 @@ describe('AgentMux Cross-Domain Constants', () => {
   describe('MCP_CONSTANTS', () => {
     describe('PORTS', () => {
       test('should have valid port configuration', () => {
-        expect(MCP_CONSTANTS.PORTS.DEFAULT).toBe(3001);
+        expect(MCP_CONSTANTS.PORTS.DEFAULT).toBe(8789);
         expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toBe('/health');
       });
 
@@ -224,7 +224,7 @@ describe('AgentMux Cross-Domain Constants', () => {
       });
 
       test('health check should be a valid endpoint', () => {
-        expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toMatch(/^\\/[a-z]+$/);
+        expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toMatch(/^\/[a-z]+$/);
       });
     });
 
@@ -275,7 +275,7 @@ describe('AgentMux Cross-Domain Constants', () => {
   describe('WEB_CONSTANTS', () => {
     describe('PORTS', () => {
       test('should have valid port numbers', () => {
-        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(3000);
+        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(8788);
         expect(WEB_CONSTANTS.PORTS.FRONTEND).toBe(3002);
       });
 
@@ -304,7 +304,7 @@ describe('AgentMux Cross-Domain Constants', () => {
 
       test('all endpoints should start with forward slash', () => {
         Object.values(WEB_CONSTANTS.ENDPOINTS).forEach((endpoint) => {
-          expect(endpoint).toMatch(/^\\/[a-z]/);
+          expect(endpoint).toMatch(/^\/[a-z]/);
         });
       });
 
@@ -318,7 +318,7 @@ describe('AgentMux Cross-Domain Constants', () => {
         ];
 
         apiEndpoints.forEach((endpoint) => {
-          expect(endpoint).toMatch(/^\\/api\\//);
+          expect(endpoint).toMatch(/^\/api\//);
         });
       });
     });
@@ -350,6 +350,10 @@ describe('AgentMux Cross-Domain Constants', () => {
         expect(TIMING_CONSTANTS.INTERVALS.MEMORY_CLEANUP).toBe(300000);
         expect(TIMING_CONSTANTS.INTERVALS.STATUS_UPDATE).toBe(10000);
         expect(TIMING_CONSTANTS.INTERVALS.ACTIVITY_MONITOR).toBe(15000);
+        expect(TIMING_CONSTANTS.INTERVALS.CLEANUP).toBe(60000);
+        expect(TIMING_CONSTANTS.INTERVALS.BATCH_DELAY).toBe(500);
+        expect(TIMING_CONSTANTS.INTERVALS.RATE_LIMIT_WINDOW).toBe(1000);
+        expect(TIMING_CONSTANTS.INTERVALS.TASK_CLEANUP).toBe(300000);
       });
 
       test('all intervals should be positive numbers', () => {
@@ -357,6 +361,18 @@ describe('AgentMux Cross-Domain Constants', () => {
           expect(typeof interval).toBe('number');
           expect(interval).toBeGreaterThan(0);
         });
+      });
+
+      test('cleanup interval should be greater than batch delay', () => {
+        expect(TIMING_CONSTANTS.INTERVALS.CLEANUP).toBeGreaterThan(
+          TIMING_CONSTANTS.INTERVALS.BATCH_DELAY
+        );
+      });
+
+      test('task cleanup should be greater than rate limit window', () => {
+        expect(TIMING_CONSTANTS.INTERVALS.TASK_CLEANUP).toBeGreaterThan(
+          TIMING_CONSTANTS.INTERVALS.RATE_LIMIT_WINDOW
+        );
       });
     });
 
@@ -366,6 +382,10 @@ describe('AgentMux Cross-Domain Constants', () => {
         expect(TIMING_CONSTANTS.TIMEOUTS.AGENT_SETUP).toBe(90000);
         expect(TIMING_CONSTANTS.TIMEOUTS.TASK_COMPLETION).toBe(300000);
         expect(TIMING_CONSTANTS.TIMEOUTS.WEBSOCKET).toBe(30000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.HTTP_HEALTH_CHECK).toBe(3000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.API_REQUEST_QUICK).toBe(2000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.SHUTDOWN).toBe(2000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.CONNECTION).toBe(10000);
       });
 
       test('all timeouts should be positive numbers', () => {
@@ -373,6 +393,16 @@ describe('AgentMux Cross-Domain Constants', () => {
           expect(typeof timeout).toBe('number');
           expect(timeout).toBeGreaterThan(0);
         });
+      });
+
+      test('http health check timeout should be reasonable', () => {
+        expect(TIMING_CONSTANTS.TIMEOUTS.HTTP_HEALTH_CHECK).toBeLessThanOrEqual(10000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.HTTP_HEALTH_CHECK).toBeGreaterThanOrEqual(1000);
+      });
+
+      test('connection timeout should be reasonable', () => {
+        expect(TIMING_CONSTANTS.TIMEOUTS.CONNECTION).toBeGreaterThanOrEqual(5000);
+        expect(TIMING_CONSTANTS.TIMEOUTS.CONNECTION).toBeLessThanOrEqual(30000);
       });
     });
   });

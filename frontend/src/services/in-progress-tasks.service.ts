@@ -2,6 +2,8 @@
  * Service for managing in-progress tasks data from ~/.agentmux/in_progress_tasks.json
  */
 
+import { TeamMember } from '../types';
+
 export interface InProgressTask {
   id: string;
   taskPath: string;
@@ -96,12 +98,20 @@ class InProgressTasksService {
       }
 
       const teamsData = await teamsResponse.json();
-      const teams = teamsData.success ? teamsData.data.teams : teamsData.teams || [];
+      const teams = teamsData.success ? teamsData.data : teamsData.teams || [];
+
+      // Ensure teams is an array
+      if (!Array.isArray(teams)) {
+        console.warn('Teams data is not an array:', teams);
+        return {
+          sessionName: inProgressTask.assignedSessionName
+        };
+      }
 
       // Find the team member
       for (const team of teams) {
         if (team.members) {
-          const member = team.members.find((m: any) =>
+          const member = team.members.find((m: TeamMember) =>
             m.id === inProgressTask.assignedMemberId ||
             m.sessionName === inProgressTask.assignedSessionName
           );

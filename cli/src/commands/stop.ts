@@ -2,8 +2,13 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import chalk from 'chalk';
 import axios from 'axios';
+import { WEB_CONSTANTS, TIMING_CONSTANTS } from '../../../config/index.js';
 
 const execAsync = promisify(exec);
+
+// Computed URLs using constants - allow environment variable override
+const BACKEND_PORT = process.env.WEB_PORT || WEB_CONSTANTS.PORTS.BACKEND;
+const BACKEND_URL = `http://localhost:${BACKEND_PORT}`;
 
 interface StopOptions {
   force?: boolean;
@@ -40,10 +45,13 @@ export async function stopCommand(options: StopOptions) {
 async function attemptGracefulShutdown(): Promise<void> {
   try {
     console.log(chalk.blue('📡 Attempting graceful shutdown...'));
-    
+
     // Check if server is running
-    const response = await axios.get('http://localhost:3000/health', { timeout: 2000 });
-    
+    const response = await axios.get(
+      `${BACKEND_URL}${WEB_CONSTANTS.ENDPOINTS.HEALTH}`,
+      { timeout: TIMING_CONSTANTS.TIMEOUTS.SHUTDOWN }
+    );
+
     if (response.status === 200) {
       // Server is running, attempt graceful shutdown
       // Note: In a real implementation, you'd have a shutdown endpoint
@@ -119,7 +127,7 @@ async function killBackendProcesses(force: boolean = false): Promise<void> {
         
         // Wait a moment for graceful shutdown
         if (!force) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise(resolve => setTimeout(resolve, TIMING_CONSTANTS.TIMEOUTS.SHUTDOWN));
         }
       }
     } else {

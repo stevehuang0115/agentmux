@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
+import { vi, beforeEach } from 'vitest';
 import { EnhancedAssignmentsList } from './EnhancedAssignmentsList';
 import { EnhancedTeamMember } from './types';
 import { Project, Team } from '../../types';
@@ -63,10 +64,10 @@ describe('EnhancedAssignmentsList', () => {
     }
   ];
 
-  const mockOnMemberClick = jest.fn();
+  const mockOnMemberClick = vi.fn();
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('renders project with team members and their tasks', () => {

@@ -202,3 +202,197 @@ export interface AgentStatus {
   lastActivityCheck: string;
   sessionActive: boolean;
 }
+
+// ============================================
+// Session Types
+// ============================================
+
+export interface TmuxSession {
+  sessionName: string;
+  windowName?: string;
+  paneId?: string;
+  isAttached?: boolean;
+  createdAt?: string;
+}
+
+// ============================================
+// Team and Member Types
+// ============================================
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  sessionName: string;
+  role: string;
+  systemPrompt?: string;
+  agentStatus: 'inactive' | 'activating' | 'active';
+  workingStatus: 'idle' | 'in_progress';
+  runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  currentTickets?: string[];
+  readyAt?: string;
+  capabilities?: string[];
+  avatar?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  description?: string;
+  members: TeamMember[];
+  currentProject?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TeamResponse {
+  success: boolean;
+  data?: Team;
+  error?: string;
+}
+
+export interface TeamsListResponse {
+  success: boolean;
+  data?: Team[];
+  error?: string;
+}
+
+// ============================================
+// Agent Data Types
+// ============================================
+
+export interface BackendAgentData {
+  agentStatus: string;
+  workingStatus: string;
+  currentTickets?: string[];
+  teamId?: string;
+  memberName?: string;
+  role?: string;
+  lastActivityCheck?: string;
+}
+
+export interface AgentStatusResult {
+  sessionName: string;
+  exists: boolean;
+  agentStatus: string;
+  workingStatus: string;
+  teamId?: string;
+  teamName?: string;
+  memberName?: string;
+  role?: string;
+  currentTickets?: string[];
+  lastActivity?: string;
+  recentOutput?: string;
+  error?: string;
+}
+
+// ============================================
+// Task Types
+// ============================================
+
+export interface TaskContent {
+  id: string;
+  title: string;
+  description?: string;
+  status: string;
+  assignedTo?: string;
+  priority?: string;
+  labels?: string[];
+  filePath?: string;
+  milestone?: string;
+  acceptanceCriteria?: string[];
+  tasks?: string[];
+  projectName?: string;
+}
+
+export interface InProgressTask {
+  id?: string;
+  taskId?: string;
+  taskPath: string;
+  taskName?: string;
+  filePath?: string;
+  assignedTo?: string;
+  assignedSessionName?: string;
+  assignedTeamMemberId?: string;
+  assignedAt?: string;
+  sessionName?: string;
+  teamId?: string;
+  projectId?: string;
+  startedAt?: string;
+  status: string;
+  originalPath?: string;
+}
+
+export interface TaskTrackingData {
+  tasks: InProgressTask[];
+  lastUpdated: string;
+  version: string;
+}
+
+export interface TaskDetails {
+  id?: string;
+  title?: string;
+  description?: string;
+  status?: string;
+  priority?: string;
+  assignedTo?: string;
+  milestone?: string;
+  filePath?: string;
+  projectName?: string;
+}
+
+export interface AssignmentResult {
+  success: boolean;
+  taskPath?: string;
+  teamId?: string;
+  projectId?: string;
+  error?: string;
+  newPath?: string;
+  memberId?: string;
+}
+
+// ============================================
+// Terminate Agent Types
+// ============================================
+
+export interface TerminateAgentParams {
+  sessionName: string;
+  force?: boolean;
+  reason?: string;
+}
+
+export interface TerminateAgentsParams {
+  sessionNames: string[];
+  force?: boolean;
+  reason?: string;
+}
+
+// ============================================
+// Recovery Types
+// ============================================
+
+export interface RecoveryReportData {
+  totalInProgress: number;
+  recovered: number;
+  skipped: number;
+  recoveredTasks: string[];
+  errors: string[];
+}
+
+export interface RecoveryReport {
+  success: boolean;
+  data: RecoveryReportData;
+}
+
+export interface RecoveryDetail {
+  sessionName: string;
+  status: 'recovered' | 'failed' | 'skipped';
+  reason?: string;
+}
+
+// ============================================
+// YAML Field Value Type
+// ============================================
+
+export type YAMLFieldValue = string | number | boolean | string[] | null;
