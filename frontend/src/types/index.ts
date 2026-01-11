@@ -2,7 +2,7 @@
 export interface TeamMember {
   id: string;
   name: string;
-  sessionName: string; // tmux session name
+  sessionName: string; // terminal session name
   role: string; // Now accepts any role key from configuration
   avatar?: string; // URL or emoji
   systemPrompt: string;

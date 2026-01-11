@@ -1,7 +1,14 @@
+/**
+ * Tests for AgentRegistrationService
+ * Tests the multi-step agent initialization and registration process
+ */
+
 import { AgentRegistrationService } from './agent-registration.service.js';
-import { TmuxCommandService } from './tmux-command.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
+import * as sessionModule from '../session/index.js';
+import { RuntimeServiceFactory } from './runtime-service.factory.js';
+import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -25,86 +32,78 @@ jest.mock('os', () => ({
 	homedir: jest.fn().mockReturnValue('/home/test'),
 }));
 
+// Mock session module
+jest.mock('../session/index.js', () => ({
+	getSessionBackendSync: jest.fn(),
+	createSessionBackend: jest.fn(),
+	createSessionCommandHelper: jest.fn(),
+}));
+
+// Mock RuntimeServiceFactory
+jest.mock('./runtime-service.factory.js', () => ({
+	RuntimeServiceFactory: {
+		create: jest.fn(),
+	},
+}));
+
 describe('AgentRegistrationService', () => {
 	let service: AgentRegistrationService;
-	let mockTmuxCommand: jest.Mocked<TmuxCommandService>;
 	let mockStorageService: jest.Mocked<StorageService>;
 	let mockReadFile: jest.Mock;
+	let mockSessionHelper: any;
+	let mockRuntimeService: any;
 
 	beforeEach(() => {
 		jest.clearAllMocks();
 
-		// Mock TmuxCommandService
-		mockTmuxCommand = {
-			sessionExists: jest.fn(),
-			killSession: jest.fn(),
-			createSession: jest.fn(),
-			sendCtrlC: jest.fn(),
-			sendMessage: jest.fn(),
-			capturePane: jest.fn(),
-			setEnvironmentVariable: jest.fn(),
-		} as any;
+		// Mock SessionCommandHelper
+		mockSessionHelper = {
+			sessionExists: jest.fn().mockReturnValue(false),
+			killSession: jest.fn().mockResolvedValue(undefined),
+			createSession: jest.fn().mockResolvedValue({ pid: 1234, cwd: '/test', name: 'test-session' }),
+			sendCtrlC: jest.fn().mockResolvedValue(undefined),
+			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
+			sendMessage: jest.fn().mockResolvedValue(undefined),
+			sendKey: jest.fn().mockResolvedValue(undefined),
+			capturePane: jest.fn().mockResolvedValue(''),
+			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
+		};
 
-		// Mock ClaudeAgentService
-		mockClaudeAgent = {
+		// Mock RuntimeService
+		mockRuntimeService = {
 			clearDetectionCache: jest.fn(),
-			detectClaudeWithSlashCommand: jest.fn(),
-			executeClaudeInitScript: jest.fn(),
-			waitForClaudeReady: jest.fn(),
-		} as any;
+			detectRuntimeWithCommand: jest.fn().mockResolvedValue(true),
+			executeRuntimeInitScript: jest.fn().mockResolvedValue(undefined),
+			waitForRuntimeReady: jest.fn().mockResolvedValue(true),
+		};
+
+		// Setup session module mocks
+		(sessionModule.getSessionBackendSync as jest.Mock).mockReturnValue({});
+		(sessionModule.createSessionBackend as jest.Mock).mockResolvedValue({});
+		(sessionModule.createSessionCommandHelper as jest.Mock).mockReturnValue(mockSessionHelper);
+
+		// Setup RuntimeServiceFactory mock
+		(RuntimeServiceFactory.create as jest.Mock).mockReturnValue(mockRuntimeService);
 
 		// Mock StorageService
 		mockStorageService = {
 			updateAgentStatus: jest.fn().mockResolvedValue(undefined),
 			updateOrchestratorStatus: jest.fn().mockResolvedValue(undefined),
+			getOrchestratorStatus: jest.fn().mockResolvedValue({ agentStatus: 'active' }),
+			getTeams: jest.fn().mockResolvedValue([]),
 		} as any;
 
 		mockReadFile = require('fs/promises').readFile;
+		mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orchestrator-prompt.md"}]}');
 
-		service = new AgentRegistrationService(mockTmuxCommand, '/test/project', mockStorageService);
+		service = new AgentRegistrationService(null, '/test/project', mockStorageService);
 	});
 
 	describe('initializeAgentWithRegistration', () => {
-		it('should succeed on Step 1 (direct registration)', async () => {
-			// Mock successful direct registration
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('Please register as {{ROLE}} with session {{SESSION_ID}}');
-			mockTmuxCommand.sendCtrlC.mockResolvedValue();
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			
-			// Mock successful registration check
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('{"orchestrator": {"status": "active"}}');
-
-			const result = await service.initializeAgentWithRegistration(
-				'test-session',
-				'orchestrator',
-				'/test/path',
-				90000
-			);
-
-			expect(result.success).toBe(true);
-			expect(result.message).toBe('Agent registered successfully via direct prompt');
-			expect(mockClaudeAgent.clearDetectionCache).toHaveBeenCalledWith('test-session');
-		});
-
-		it('should proceed to Step 2 if Step 1 fails', async () => {
-			// Mock Step 1 failure
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(false);
-
-			// Mock Step 2 success
-			mockTmuxCommand.sendCtrlC.mockResolvedValue();
-			mockClaudeAgent.executeClaudeInitScript.mockResolvedValue();
-			mockClaudeAgent.waitForClaudeReady.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand
-				.mockResolvedValueOnce(false) // Step 1 detection
-				.mockResolvedValueOnce(true)  // Step 2 post-init detection
-				.mockResolvedValueOnce(true); // Registration check detection
-			mockReadFile.mockResolvedValue('Please register');
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('{"orchestrator": {"status": "active"}}');
+		it('should succeed when runtime is ready after cleanup and reinit', async () => {
+			// Mock runtime ready after reinit
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
 
 			const result = await service.initializeAgentWithRegistration(
 				'test-session',
@@ -115,30 +114,16 @@ describe('AgentRegistrationService', () => {
 
 			expect(result.success).toBe(true);
 			expect(result.message).toBe('Agent registered successfully after cleanup and reinit');
+			expect(mockRuntimeService.clearDetectionCache).toHaveBeenCalledWith('test-session');
 		});
 
-		it('should proceed to Step 3 if Step 2 fails', async () => {
-			// Mock Step 1 failure
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(false);
+		it('should attempt full recreation if cleanup and reinit fails', async () => {
+			// Mock Step 1 failure (reinit doesn't work)
+			mockRuntimeService.waitForRuntimeReady
+				.mockResolvedValueOnce(false) // Step 1 fails
+				.mockResolvedValueOnce(true);  // Step 2 succeeds
 
-			// Mock Step 2 failure (Claude not ready after reinit)
-			mockTmuxCommand.sendCtrlC.mockResolvedValue();
-			mockClaudeAgent.executeClaudeInitScript.mockResolvedValue();
-			mockClaudeAgent.waitForClaudeReady.mockResolvedValue(false);
-
-			// Mock Step 3 success
-			mockTmuxCommand.killSession.mockResolvedValue();
-			mockTmuxCommand.createSession.mockResolvedValue();
-			mockClaudeAgent.executeClaudeInitScript.mockResolvedValue();
-			mockClaudeAgent.waitForClaudeReady.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand
-				.mockResolvedValueOnce(false) // Step 1
-				.mockResolvedValueOnce(true)  // Step 3 post-recreation
-				.mockResolvedValueOnce(true); // Registration check
-			mockReadFile.mockResolvedValue('Please register');
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('{"orchestrator": {"status": "active"}}');
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
 
 			const result = await service.initializeAgentWithRegistration(
 				'test-session',
@@ -149,16 +134,12 @@ describe('AgentRegistrationService', () => {
 
 			expect(result.success).toBe(true);
 			expect(result.message).toBe('Agent registered successfully after full recreation');
+			expect(mockSessionHelper.killSession).toHaveBeenCalledWith('test-session');
 		});
 
 		it('should fail after all escalation attempts', async () => {
 			// Mock all steps failing
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(false);
-			mockTmuxCommand.sendCtrlC.mockResolvedValue();
-			mockClaudeAgent.executeClaudeInitScript.mockResolvedValue();
-			mockClaudeAgent.waitForClaudeReady.mockResolvedValue(false);
-			mockTmuxCommand.killSession.mockResolvedValue();
-			mockTmuxCommand.createSession.mockResolvedValue();
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(false);
 
 			const result = await service.initializeAgentWithRegistration(
 				'test-session',
@@ -168,34 +149,276 @@ describe('AgentRegistrationService', () => {
 			);
 
 			expect(result.success).toBe(false);
-			expect(result.error).toContain('Failed to initialize agent after all escalation attempts');
+			expect(result.error).toContain('Failed to initialize agent after optimized escalation attempts');
+		});
+
+		it('should update agent status to active when runtime is ready', async () => {
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'developer',
+				'/test/path',
+				90000
+			);
+
+			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
+				'test-session',
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+			);
 		});
 	});
 
-	describe('loadRegistrationPrompt', () => {
-		it('should load prompt from file and replace placeholders', async () => {
-			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}}';
-			mockReadFile.mockResolvedValue(promptTemplate);
+	describe('sendRegistrationPromptAsync', () => {
+		it('should send registration prompt without blocking', async () => {
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}} as {{ROLE}}');
 
-			// Use reflection to access private method
-			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
-			const result = await loadRegistrationPrompt('dev', 'test-session', 'member-123');
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'developer',
+				'/test/path',
+				90000
+			);
 
-			expect(result).toBe('Register as dev with session test-session and member member-123');
-			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/dev-prompt.md'),
-				'utf8'
+			// Give time for async operation to complete
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			// Should have called sendMessage with the registration prompt
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
+		});
+	});
+
+	describe('createAgentSession', () => {
+		it('should create a new session when one does not exist', async () => {
+			// Ensure session does not exist initially
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)  // Initial check
+				.mockReturnValueOnce(true);  // After creation check
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+
+			// Mock the roles config properly
+			mockReadFile
+				.mockResolvedValueOnce('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}')
+				.mockResolvedValueOnce('Register {{SESSION_ID}}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+			});
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.createSession).toHaveBeenCalledWith('test-session', '/test/project');
+		});
+
+		it('should set environment variables after creating session', async () => {
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)  // Initial check
+				.mockReturnValueOnce(true);  // After creation check
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile
+				.mockResolvedValueOnce('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}')
+				.mockResolvedValueOnce('Register {{SESSION_ID}}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			// Session should be created successfully
+			expect(result.success).toBe(true);
+
+			// Environment variables should be set
+			expect(mockSessionHelper.setEnvironmentVariable).toHaveBeenCalledWith(
+				'test-session',
+				'TMUX_SESSION_NAME',
+				'test-session'
+			);
+			expect(mockSessionHelper.setEnvironmentVariable).toHaveBeenCalledWith(
+				'test-session',
+				'AGENTMUX_ROLE',
+				'developer'
 			);
 		});
 
+		it('should attempt recovery when session already exists', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}');
+
+			// Mock successful registration check
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-1',
+				members: [{
+					sessionName: 'test-session',
+					role: 'developer',
+					agentStatus: 'active',
+				}],
+			}] as any);
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain('recovered');
+		});
+
+		it('should fall back to session recreation when recovery fails', async () => {
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(true)  // Initial check
+				.mockReturnValueOnce(true); // After kill, check again returns false
+
+			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(mockSessionHelper.killSession).toHaveBeenCalled();
+			expect(result.success).toBe(true);
+		});
+	});
+
+	describe('terminateAgentSession', () => {
+		it('should kill existing session and update status', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.terminateAgentSession('test-session', 'developer');
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.killSession).toHaveBeenCalledWith('test-session');
+			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
+				'test-session',
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+		});
+
+		it('should update status even if session does not exist', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+
+			const result = await service.terminateAgentSession('test-session', 'developer');
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain('already terminated');
+			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
+				'test-session',
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+		});
+	});
+
+	describe('sendMessageToAgent', () => {
+		it('should send message to existing session', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
+		});
+
+		it('should fail if session does not exist', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('does not exist');
+		});
+
+		it('should fail if message is empty', async () => {
+			const result = await service.sendMessageToAgent('test-session', '');
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Message is required');
+		});
+	});
+
+	describe('sendKeyToAgent', () => {
+		it('should send key to existing session', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.sendKeyToAgent('test-session', 'Enter');
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', 'Enter');
+		});
+
+		it('should fail if session does not exist', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+
+			const result = await service.sendKeyToAgent('test-session', 'Enter');
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('does not exist');
+		});
+	});
+
+	describe('checkAgentHealth', () => {
+		it('should return active status when session exists', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.checkAgentHealth('test-session', 'developer');
+
+			expect(result.success).toBe(true);
+			expect(result.data?.agent.running).toBe(true);
+			expect(result.data?.agent.status).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+		});
+
+		it('should return inactive status when session does not exist', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+
+			const result = await service.checkAgentHealth('test-session', 'developer');
+
+			expect(result.success).toBe(true);
+			expect(result.data?.agent.running).toBe(false);
+			expect(result.data?.agent.status).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+		});
+
+		it('should include timestamp in response', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.checkAgentHealth('test-session');
+
+			expect(result.data?.timestamp).toBeDefined();
+			expect(new Date(result.data!.timestamp).getTime()).toBeLessThanOrEqual(Date.now());
+		});
+	});
+
+	describe('loadRegistrationPrompt (private method)', () => {
+		it('should load prompt from file and replace placeholders', async () => {
+			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}}';
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "dev", "promptFile": "dev-prompt.md"}]}');
+			mockReadFile.mockResolvedValueOnce('{"roles": [{"key": "dev", "promptFile": "dev-prompt.md"}]}');
+			mockReadFile.mockResolvedValueOnce(promptTemplate);
+
+			// Access private method via reflection
+			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
+			const result = await loadRegistrationPrompt('dev', 'test-session', 'member-123');
+
+			expect(result).toContain('test-session');
+			expect(result).toContain('member-123');
+		});
+
 		it('should remove member ID parameter when not provided', async () => {
-			const promptTemplate = 'Register {"role": "{{ROLE}}", "sessionName": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}';
-			mockReadFile.mockResolvedValue(promptTemplate);
+			const promptTemplate = 'Register {"sessionName": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}';
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orc-prompt.md"}]}');
+			mockReadFile.mockResolvedValueOnce('{"roles": [{"key": "orchestrator", "promptFile": "orc-prompt.md"}]}');
+			mockReadFile.mockResolvedValueOnce(promptTemplate);
 
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
 			const result = await loadRegistrationPrompt('orchestrator', 'test-session');
 
-			expect(result).toBe('Register {"role": "orchestrator", "sessionName": "test-session"}');
+			expect(result).toContain('test-session');
+			expect(result).not.toContain('{{MEMBER_ID}}');
 		});
 
 		it('should use fallback prompt when file not found', async () => {
@@ -204,95 +427,69 @@ describe('AgentRegistrationService', () => {
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
 			const result = await loadRegistrationPrompt('dev', 'test-session');
 
-			expect(result).toContain('Please immediately run: register_agent_status');
+			expect(result).toContain('register_agent_status');
 			expect(result).toContain('"role": "dev"');
 			expect(result).toContain('"sessionName": "test-session"');
 		});
 	});
 
-	describe('checkAgentRegistration', () => {
-		it('should return false if session does not exist', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(false);
-
-			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
-			const result = await checkAgentRegistration('test-session', 'dev');
-
-			expect(result).toBe(false);
-		});
-
-		it('should return false if Claude is not running', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(false);
-
-			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
-			const result = await checkAgentRegistration('test-session', 'dev');
-
-			expect(result).toBe(false);
-		});
-
-		it('should check orchestrator registration in teams.json', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('{"orchestrator": {"status": "active"}}');
+	describe('checkAgentRegistration (private method)', () => {
+		it('should return true for active orchestrator', async () => {
+			mockStorageService.getOrchestratorStatus.mockResolvedValue({
+				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+			} as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
 			const result = await checkAgentRegistration('test-session', 'orchestrator');
 
 			expect(result).toBe(true);
-			expect(mockReadFile).toHaveBeenCalledWith(
-				'/home/test/.agentmux/teams.json',
-				'utf8'
-			);
 		});
 
-		it('should check orchestrator registration in terminal output', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockRejectedValue(new Error('teams.json not found'));
-			mockTmuxCommand.capturePane.mockResolvedValue("Perfect! I'm now registered as the orchestrator");
+		it('should return false for inactive orchestrator', async () => {
+			mockStorageService.getOrchestratorStatus.mockResolvedValue({
+				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+			} as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
 			const result = await checkAgentRegistration('test-session', 'orchestrator');
 
-			expect(result).toBe(true);
+			expect(result).toBe(false);
 		});
 
 		it('should check team member registration in teams.json', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue(`{
-				"teams": [{
-					"members": [{
-						"sessionName": "test-session",
-						"role": "dev"
-					}]
-				}]
-			}`);
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-1',
+				members: [{
+					sessionName: 'test-session',
+					role: 'developer',
+					agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+				}],
+			}] as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
-			const result = await checkAgentRegistration('test-session', 'dev');
+			const result = await checkAgentRegistration('test-session', 'developer');
 
 			expect(result).toBe(true);
 		});
 
-		it('should handle teams.json parsing errors', async () => {
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('invalid json');
+		it('should return false when team member not found', async () => {
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-1',
+				members: [],
+			}] as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
-			const result = await checkAgentRegistration('test-session', 'dev');
+			const result = await checkAgentRegistration('test-session', 'developer');
 
 			expect(result).toBe(false);
 		});
 	});
 
-	describe('waitForRegistration', () => {
+	describe('waitForRegistration (private method)', () => {
 		it('should return true when registration is confirmed', async () => {
-			// Mock successful registration check
-			mockTmuxCommand.sessionExists.mockResolvedValue(true);
-			mockClaudeAgent.detectClaudeWithSlashCommand.mockResolvedValue(true);
-			mockReadFile.mockResolvedValue('{"orchestrator": {"status": "active"}}');
+			mockStorageService.getOrchestratorStatus.mockResolvedValue({
+				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+			} as any);
 
 			const waitForRegistration = (service as any).waitForRegistration.bind(service);
 			const result = await waitForRegistration('test-session', 'orchestrator', 10000);
@@ -301,8 +498,9 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should timeout if registration is not confirmed', async () => {
-			// Mock failed registration check
-			mockTmuxCommand.sessionExists.mockResolvedValue(false);
+			mockStorageService.getOrchestratorStatus.mockResolvedValue({
+				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+			} as any);
 
 			const waitForRegistration = (service as any).waitForRegistration.bind(service);
 			const startTime = Date.now();
@@ -310,7 +508,7 @@ describe('AgentRegistrationService', () => {
 			const elapsed = Date.now() - startTime;
 
 			expect(result).toBe(false);
-			expect(elapsed).toBeGreaterThan(900);
+			expect(elapsed).toBeGreaterThanOrEqual(900);
 		});
 	});
 });

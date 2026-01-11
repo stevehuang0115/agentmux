@@ -66,8 +66,8 @@ export class AgentMuxServer {
 			config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
 
 		this.config = {
-			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '3000'),
-			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '3001'),
+			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '8787'),
+			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '8789'),
 			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||
@@ -244,9 +244,13 @@ export class AgentMuxServer {
 			// Check if port is already in use
 			await this.checkPortAvailability();
 
-			// Initialize tmux server
-			console.log('🔧 Initializing tmux server...');
-			await this.tmuxService.initialize();
+			// Skip tmux initialization since we're using PTY session backend
+			// Note: TmuxService is kept for backward compatibility but PTY is the active backend
+			try {
+				await this.tmuxService.initialize();
+			} catch (error) {
+				// Ignore tmux initialization errors - PTY backend is primary
+			}
 
 			// Initialize PTY session backend and restore saved sessions
 			console.log('🔌 Initializing PTY session backend...');

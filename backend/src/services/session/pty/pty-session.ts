@@ -92,6 +92,15 @@ export class PtySession implements ISession {
 	) {
 		this.logger = LoggerService.getInstance().createComponentLogger(`PtySession:${name}`);
 
+		this.logger.info('Creating PTY session', {
+			name,
+			cwd,
+			command: options.command,
+			args: options.args,
+			cols: options.cols ?? DEFAULT_TERMINAL_COLS,
+			rows: options.rows ?? DEFAULT_TERMINAL_ROWS,
+		});
+
 		// Merge process environment with session-specific environment
 		const sessionEnv: Record<string, string> = {
 			...this.sanitizeEnv(process.env),
@@ -100,14 +109,31 @@ export class PtySession implements ISession {
 			TERM: 'xterm-256color',
 		};
 
-		// Spawn the PTY process
-		this.ptyProcess = pty.spawn(options.command, options.args ?? [], {
-			name: 'xterm-256color',
-			cols: options.cols ?? DEFAULT_TERMINAL_COLS,
-			rows: options.rows ?? DEFAULT_TERMINAL_ROWS,
-			cwd: options.cwd,
-			env: sessionEnv,
-		});
+		try {
+			// Spawn the PTY process
+			this.ptyProcess = pty.spawn(options.command, options.args ?? [], {
+				name: 'xterm-256color',
+				cols: options.cols ?? DEFAULT_TERMINAL_COLS,
+				rows: options.rows ?? DEFAULT_TERMINAL_ROWS,
+				cwd: options.cwd,
+				env: sessionEnv,
+			});
+
+			this.logger.info('PTY process spawned successfully', {
+				name,
+				pid: this.ptyProcess.pid,
+				command: options.command,
+			});
+		} catch (spawnError) {
+			this.logger.error('Failed to spawn PTY process', {
+				name,
+				command: options.command,
+				cwd: options.cwd,
+				error: spawnError instanceof Error ? spawnError.message : String(spawnError),
+				stack: spawnError instanceof Error ? spawnError.stack : undefined,
+			});
+			throw spawnError;
+		}
 
 		// Set up event handlers
 		this.setupEventHandlers();

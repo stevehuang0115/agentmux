@@ -1,5 +1,5 @@
-import React from 'react';
-import { Play, Square, Terminal } from 'lucide-react';
+import React, { useState } from 'react';
+import { Play, Square, Loader2 } from 'lucide-react';
 import { TeamMember } from '@/types';
 import { OverflowMenu } from '@/components/UI/OverflowMenu';
 
@@ -12,17 +12,50 @@ interface TeamMemberRowProps {
 }
 
 export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, onStart, onStop, onViewTerminal }) => {
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+
   const isActive = member.agentStatus === 'active';
-  const isActivating = member.agentStatus === 'activating';
-  const statusColor = isActive ? 'bg-emerald-500/10 text-emerald-400' : isActivating ? 'bg-yellow-500/10 text-yellow-400' : 'bg-gray-500/10 text-gray-300';
+  const isActivating = member.agentStatus === 'activating' || isStarting;
+  const isLoading = isStarting || isStopping;
+
+  // Determine status display
+  let statusText = 'Stopped';
+  let statusColor = 'bg-gray-500/10 text-gray-300';
+
+  if (isActive && !isStopping) {
+    statusText = 'Started';
+    statusColor = 'bg-emerald-500/10 text-emerald-400';
+  } else if (isActivating) {
+    statusText = 'Starting...';
+    statusColor = 'bg-yellow-500/10 text-yellow-400';
+  } else if (isStopping) {
+    statusText = 'Stopping...';
+    statusColor = 'bg-orange-500/10 text-orange-400';
+  }
 
   const handleStart = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onStart) await onStart(member.id);
+    if (onStart && !isLoading) {
+      setIsStarting(true);
+      try {
+        await onStart(member.id);
+      } finally {
+        setIsStarting(false);
+      }
+    }
   };
+
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (onStop) await onStop(member.id);
+    if (onStop && !isLoading) {
+      setIsStopping(true);
+      try {
+        await onStop(member.id);
+      } finally {
+        setIsStopping(false);
+      }
+    }
   };
 
   const avatar = member.avatar;
@@ -47,23 +80,44 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
         </div>
       </div>
       <div className="flex items-center gap-3">
-        <span className={`px-3 py-1 rounded-full text-sm font-medium ${statusColor}`}>{isActive ? 'Started' : isActivating ? 'Activating' : 'Stopped'}</span>
+        <span className={`px-3 py-1 rounded-full text-sm font-medium flex items-center gap-2 ${statusColor}`}>
+          {isLoading && <Loader2 className="w-3 h-3 animate-spin" />}
+          {statusText}
+        </span>
         <div className="flex items-center gap-2">
-          {isActive ? (
+          {(isActive || isStopping) && !isStarting ? (
             <button
-              className="w-9 h-9 rounded-full hover:bg-red-500/20 hover:text-red-400 flex items-center justify-center transition-colors"
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                isLoading
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:bg-red-500/20 hover:text-red-400'
+              }`}
               title="Stop"
               onClick={handleStop}
+              disabled={isLoading}
             >
-              <Square className="w-4 h-4" />
+              {isStopping ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
             </button>
           ) : (
             <button
-              className="w-9 h-9 rounded-full hover:bg-green-500/20 hover:text-green-400 flex items-center justify-center transition-colors"
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+                isLoading
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:bg-green-500/20 hover:text-green-400'
+              }`}
               title="Start"
               onClick={handleStart}
+              disabled={isLoading}
             >
-              <Play className="w-4 h-4" />
+              {isStarting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Play className="w-4 h-4" />
+              )}
             </button>
           )}
           <OverflowMenu
@@ -85,4 +139,3 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
 };
 
 export default TeamMemberRow;
-

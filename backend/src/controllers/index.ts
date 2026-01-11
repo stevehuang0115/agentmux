@@ -7,6 +7,7 @@ import { createTeamRouter } from './team/team.routes.js';
 import { createOrchestratorRouter } from './orchestrator/orchestrator.routes.js';
 import { createMonitoringRouter } from './monitoring/monitoring.routes.js';
 import { createSystemRouter } from './system/system.routes.js';
+import { createSessionRouter } from './session/session.routes.js';
 
 /**
  * Creates the main API router that aggregates all feature routers
@@ -22,6 +23,7 @@ export function createApiRouter(context: ApiContext): Router {
   router.use('/orchestrator', createOrchestratorRouter(context));
   router.use('/monitoring', createMonitoringRouter(context));
   router.use('/system', createSystemRouter(context));
+  router.use('/sessions', createSessionRouter(context));
 
   return router;
 }

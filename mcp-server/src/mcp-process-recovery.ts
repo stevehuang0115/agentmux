@@ -36,13 +36,13 @@ export class MCPProcessRecovery extends EventEmitter {
 	private memoryMonitorInterval: NodeJS.Timeout | null = null;
 	private processStartTime: number = 0;
 	private minRuntime: number = 15000; // Process must run for at least 15 seconds
-	private mcpPort: number = 3001;
+	private mcpPort: number = 8789;
 	private lastHealthyTime: number = 0;
 
 	constructor() {
 		super();
 		this.setupSignalHandlers();
-		this.mcpPort = parseInt(process.env.AGENTMUX_MCP_PORT || '3001');
+		this.mcpPort = parseInt(process.env.AGENTMUX_MCP_PORT || '8789');
 	}
 
 	/**

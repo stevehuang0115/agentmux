@@ -13,6 +13,7 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
   onViewTerminal,
   onDeleteTeam,
   onEditTeam,
+  isStoppingTeam = false,
 }) => {
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
   const members = team?.members || [];
@@ -31,8 +32,13 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
             Start Team
           </Button>
         ) : (
-          <Button variant="danger" onClick={onStopTeam} icon={Square}>
-            Stop Team
+          <Button
+            variant="danger"
+            onClick={onStopTeam}
+            icon={Square}
+            loading={isStoppingTeam}
+          >
+            {isStoppingTeam ? 'Stopping...' : 'Stop Team'}
           </Button>
         )}
         {isOrchestratorTeam && (

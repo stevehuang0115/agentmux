@@ -88,15 +88,19 @@ export async function executeOrchestratorCommand(
 				.join('\n')}`;
 		} else if (command.startsWith('list_sessions')) {
 			try {
-				const { exec } = await import('child_process');
-				const { promisify } = await import('util');
-				const execAsync = promisify(exec);
-				const result = await execAsync(
-					'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo "No sessions"'
-				);
-				output = `Active tmux sessions:\n${result.stdout}`;
+				// Use PTY session backend instead of tmux
+				const { getSessionBackendSync } = await import('../../services/session/index.js');
+				const sessionBackend = getSessionBackendSync();
+				if (sessionBackend) {
+					const sessions = sessionBackend.listSessions();
+					output = sessions.length > 0
+						? `Active terminal sessions:\n${sessions.join('\n')}`
+						: 'No active terminal sessions';
+				} else {
+					output = 'Session backend not initialized';
+				}
 			} catch (error) {
-				output = 'No tmux sessions found or tmux not available';
+				output = 'Failed to list terminal sessions';
 			}
 		} else if (command.startsWith('broadcast')) {
 			const message = command.substring(10).trim();
@@ -107,7 +111,7 @@ export async function executeOrchestratorCommand(
 			output = `Available Orchestrator Commands:
 get_team_status - Show status of all teams
 list_projects - List all projects and their status
-list_sessions - Show active tmux sessions
+list_sessions - Show active terminal sessions
 broadcast <message> - Send message to all team members
 delegate_task <team> <task> - Assign task to team
 create_team <role> <name> - Create new team
@@ -204,6 +208,7 @@ export async function setupOrchestrator(
 	req: Request,
 	res: Response
 ): Promise<void> {
+	console.log('[OrchestratorController] setupOrchestrator called');
 	try {
 		// Get orchestrator's runtime type from storage
 		let runtimeType = 'claude-code'; // Default fallback
@@ -211,20 +216,26 @@ export async function setupOrchestrator(
 			const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 			if (orchestratorStatus?.runtimeType) {
 				runtimeType = orchestratorStatus.runtimeType;
-				console.log('Using orchestrator runtime type from storage:', runtimeType);
+				console.log('[OrchestratorController] Using orchestrator runtime type from storage:', runtimeType);
 			} else {
 				console.warn(
-					'No runtime type found in orchestrator status, using default:',
+					'[OrchestratorController] No runtime type found in orchestrator status, using default:',
 					runtimeType
 				);
 			}
 		} catch (error) {
 			console.warn(
-				'Failed to get orchestrator runtime type from storage, using default:',
+				'[OrchestratorController] Failed to get orchestrator runtime type from storage, using default:',
 				runtimeType,
 				error
 			);
 		}
+
+		console.log('[OrchestratorController] Calling agentRegistrationService.createAgentSession', {
+			sessionName: ORCHESTRATOR_SESSION_NAME,
+			role: ORCHESTRATOR_ROLE,
+			runtimeType,
+		});
 
 		// Use the unified agent registration service for orchestrator creation
 		const result = await this.agentRegistrationService.createAgentSession({
@@ -235,13 +246,23 @@ export async function setupOrchestrator(
 			runtimeType: runtimeType as any, // Pass the runtime type from teams.json
 		});
 
+		console.log('[OrchestratorController] createAgentSession result:', {
+			success: result.success,
+			sessionName: result.sessionName,
+			message: result.message,
+			error: result.error,
+		});
+
 		if (!result.success) {
+			console.error('[OrchestratorController] Failed to create orchestrator session:', result.error);
 			res.status(500).json({
 				success: false,
 				error: result.error || 'Failed to create orchestrator session',
 			} as ApiResponse);
 			return;
 		}
+
+		console.log('[OrchestratorController] Orchestrator session created successfully');
 
 		// For Gemini CLI orchestrator, add all existing project paths to allowlist
 		if (runtimeType === 'gemini-cli') {
@@ -258,11 +279,11 @@ export async function setupOrchestrator(
 					// Import RuntimeServiceFactory dynamically to avoid circular dependency
 					const { RuntimeServiceFactory } = await import('../../services/agent/runtime-service.factory.js');
 					const { RUNTIME_TYPES } = await import('../../constants.js');
-					
-					// Get Gemini runtime service instance
+
+					// Get Gemini runtime service instance (uses PTY session backend)
 					const geminiService = RuntimeServiceFactory.create(
 						RUNTIME_TYPES.GEMINI_CLI,
-						this.tmuxService.getTmuxCommandService(),
+						null, // Legacy tmux parameter - ignored, PTY session backend is used
 						process.cwd()
 					) as any; // Cast to access Gemini-specific methods
 					
@@ -289,21 +310,8 @@ export async function setupOrchestrator(
 			}
 		}
 
-		// PHASE 2: Immediately set ALL members to 'activating' for instant UI feedback
-		try {
-			const teams = await this.storageService.getTeams();
-			for (const team of teams) {
-				for (const member of team.members) {
-					member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
-					(member as any).updatedAt = new Date().toISOString();
-				}
-				await this.storageService.saveTeam(team);
-			}
-		} catch (error) {
-			console.warn('Failed to set team members to activating status (continuing anyway):', {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		// Note: Agent status is now updated to 'active' directly in AgentRegistrationService.tryCleanupAndReinit
+		// when the runtime is detected as ready. No need to set 'activating' here.
 
 		res.json({
 			success: true,

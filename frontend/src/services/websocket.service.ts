@@ -110,6 +110,18 @@ export class WebSocketService {
         this.emit('unsubscription_confirmed', message.payload);
       });
 
+      // Session pending (session is being created)
+      this.socket.on('session_pending', (message: WebSocketMessage) => {
+        console.log('Session pending:', message.payload);
+        this.emit('session_pending', message.payload);
+      });
+
+      // Session not found
+      this.socket.on('session_not_found', (message: WebSocketMessage) => {
+        console.log('Session not found:', message.payload);
+        this.emit('session_not_found', message.payload);
+      });
+
       // Error handling
       this.socket.on('error', (message: WebSocketMessage) => {
         console.error('WebSocket error:', message.payload);
