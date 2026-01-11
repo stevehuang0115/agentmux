@@ -51,6 +51,26 @@ export const RUNTIME_TYPES = {
 	CODEX_CLI: 'codex-cli',
 } as const;
 
+// PTY session constants
+export const PTY_CONSTANTS = {
+	MAX_DATA_LISTENERS: 100,
+	MAX_EXIT_LISTENERS: 50,
+	DEFAULT_MAX_HISTORY_SIZE: 10 * 1024 * 1024, // 10MB
+	DEFAULT_SCROLLBACK: 5000,
+	DEFAULT_COLS: 80,
+	DEFAULT_ROWS: 24,
+	MAX_RESIZE_COLS: 1000,
+	MAX_RESIZE_ROWS: 1000,
+} as const;
+
+// Session command timing delays (in milliseconds)
+export const SESSION_COMMAND_DELAYS = {
+	MESSAGE_DELAY: 100,
+	KEY_DELAY: 50,
+	CLEAR_COMMAND_DELAY: 100,
+	ENV_VAR_DELAY: 100,
+} as const;
+
 // Type helpers
 export type AgentStatus =
 	(typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];

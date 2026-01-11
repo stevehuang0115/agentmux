@@ -1,5 +1,5 @@
 import { StorageService } from '../core/storage.service.js';
-import { TmuxService } from '../agent/tmux.service.js';
+import { getSessionBackendSync, createSessionBackend, type ISessionBackend } from '../session/index.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { AgentHeartbeatService } from '../agent/agent-heartbeat.service.js';
 import { writeFile, readFile, rename, unlink } from 'fs/promises';
@@ -55,7 +55,7 @@ export class ActivityMonitorService {
   private static instance: ActivityMonitorService;
   private logger: ComponentLogger;
   private storageService: StorageService;
-  private tmuxService: TmuxService;
+  private _sessionBackend: ISessionBackend | null = null;
   private agentHeartbeatService: AgentHeartbeatService;
   private intervalId: NodeJS.Timeout | null = null;
   private readonly POLLING_INTERVAL = 120000; // 2 minutes
@@ -69,10 +69,32 @@ export class ActivityMonitorService {
   private constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('ActivityMonitor');
     this.storageService = StorageService.getInstance();
-    this.tmuxService = new TmuxService();
     this.agentHeartbeatService = AgentHeartbeatService.getInstance();
     this.agentmuxHome = join(homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
     this.teamWorkingStatusFile = join(this.agentmuxHome, 'teamWorkingStatus.json');
+  }
+
+  /**
+   * Get the session backend, lazily initializing if needed.
+   */
+  private async getBackend(): Promise<ISessionBackend> {
+    if (!this._sessionBackend) {
+      this._sessionBackend = getSessionBackendSync();
+      if (!this._sessionBackend) {
+        this._sessionBackend = await createSessionBackend('pty');
+      }
+    }
+    return this._sessionBackend;
+  }
+
+  /**
+   * Get the session backend synchronously (may return null if not initialized).
+   */
+  private get sessionBackend(): ISessionBackend | null {
+    if (!this._sessionBackend) {
+      this._sessionBackend = getSessionBackendSync();
+    }
+    return this._sessionBackend;
   }
 
   public static getInstance(): ActivityMonitorService {
@@ -155,8 +177,9 @@ export class ActivityMonitorService {
       let hasChanges = false;
 
       // Step 3: Check orchestrator working status
+      const backend = await this.getBackend();
       const orchestratorRunning = await Promise.race([
-        this.tmuxService.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME),
+        Promise.resolve(backend.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME)),
         new Promise<boolean>((_, reject) =>
           setTimeout(() => reject(new Error('Orchestrator check timeout')), 1000)
         )
@@ -201,7 +224,7 @@ export class ActivityMonitorService {
             try {
               // Check if session exists
               const sessionExists = await Promise.race([
-                this.tmuxService.sessionExists(member.sessionName),
+                Promise.resolve(backend.sessionExists(member.sessionName)),
                 new Promise<boolean>((_, reject) =>
                   setTimeout(() => reject(new Error('Session check timeout')), 500)
                 )
@@ -410,8 +433,9 @@ export class ActivityMonitorService {
    */
   private async getTerminalOutput(sessionName: string): Promise<string> {
     try {
+      const backend = await this.getBackend();
       const output = await Promise.race([
-        this.tmuxService.capturePane(sessionName, 5), // 5 lines only
+        Promise.resolve(backend.captureOutput(sessionName, 5)), // 5 lines only
         new Promise<string>((_, reject) =>
           setTimeout(() => reject(new Error('Capture timeout')), 500)
         )

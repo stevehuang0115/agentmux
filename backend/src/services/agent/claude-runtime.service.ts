@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
-import { TmuxCommandService } from './tmux-command.service.js';
+import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 
 /**
@@ -8,8 +8,8 @@ import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
  * Handles Claude Code CLI initialization, detection, and interaction patterns.
  */
 export class ClaudeRuntimeService extends RuntimeAgentService {
-	constructor(tmuxCommandService: TmuxCommandService, projectRoot: string) {
-		super(tmuxCommandService, projectRoot);
+	constructor(sessionHelper: SessionCommandHelper, projectRoot: string) {
+		super(sessionHelper, projectRoot);
 	}
 
 	protected getRuntimeType(): RuntimeType {
@@ -23,18 +23,18 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 
 		// First to clear the current command
-		await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+		await this.sessionHelper.clearCurrentCommandLine(sessionName);
 
 		// Capture the output before checking
-		const beforeOutput = await this.tmuxCommand.capturePane(sessionName, 20);
+		const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
 		// Send the '/' key to detect changes
-		await this.tmuxCommand.sendKey(sessionName, '/');
+		await this.sessionHelper.sendKey(sessionName, '/');
 		await new Promise((resolve) => setTimeout(resolve, 2000));
 		// Capture the output after sending '/'
-		const afterOutput = await this.tmuxCommand.capturePane(sessionName, 20);
+		const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
 
 		// Clear the '/' command again
-		await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+		await this.sessionHelper.clearCurrentCommandLine(sessionName);
 
 		const hasOutputChange = afterOutput.length - beforeOutput.length > 5;
 
@@ -159,7 +159,7 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 			this.logger.info('Initializing Claude Code in session', { sessionName });
 
 			// Start Claude Code by sending Enter
-			await this.tmuxCommand.sendEnter(sessionName);
+			await this.sessionHelper.sendEnter(sessionName);
 
 			// Wait for Claude to be ready
 			const isReady = await this.waitForRuntimeReady(sessionName, 45000);

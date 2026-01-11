@@ -2,7 +2,7 @@ module.exports = {
 	apps: [
 		{
 			name: 'agentmux-server',
-			script: 'backend/dist/server.js',
+			script: 'dist/backend/index.js',
 			cwd: '/app',
 			instances: 1,
 			exec_mode: 'cluster',
@@ -41,7 +41,7 @@ module.exports = {
 		},
 		{
 			name: 'agentmux-mcp',
-			script: 'mcp-server/dist/mcp-process-recovery.js',
+			script: 'dist/mcp-server/mcp-process-recovery.js',
 			cwd: '/app',
 			instances: 1,
 			exec_mode: 'fork',
@@ -75,12 +75,11 @@ module.exports = {
 			ref: 'origin/main',
 			repo: 'https://github.com/your-username/agentmux.git',
 			path: '/var/www/agentmux',
-			'pre-setup': 'apt-get update && apt-get install -y git tmux',
+			'pre-setup': 'apt-get update && apt-get install -y git tmux && npm install pm2 -g',
 			'post-setup': 'npm install && npm run build',
 			'pre-deploy-local': '',
 			'post-deploy':
 				'npm install && npm run build && pm2 reload ecosystem.config.js --env production',
-			'pre-setup': 'npm install pm2 -g',
 		},
 	},
 };
