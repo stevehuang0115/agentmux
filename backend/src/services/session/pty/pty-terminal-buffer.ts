@@ -12,18 +12,7 @@ import {
 	DEFAULT_TERMINAL_COLS,
 	DEFAULT_TERMINAL_ROWS,
 } from '../session-backend.interface.js';
-
-/**
- * Default maximum history size in bytes (10MB).
- * This limits the raw output history to prevent memory exhaustion.
- */
-const DEFAULT_MAX_HISTORY_SIZE = 10 * 1024 * 1024;
-
-/**
- * Default scrollback lines for terminal buffer.
- * This limits the number of lines stored in the terminal's internal buffer.
- */
-const DEFAULT_SCROLLBACK = 5000;
+import { PTY_CONSTANTS } from '../../../constants.js';
 
 /**
  * Terminal buffer manager using @xterm/headless.
@@ -94,13 +83,13 @@ export class PtyTerminalBuffer {
 	constructor(
 		cols: number = DEFAULT_TERMINAL_COLS,
 		rows: number = DEFAULT_TERMINAL_ROWS,
-		maxHistorySize: number = DEFAULT_MAX_HISTORY_SIZE
+		maxHistorySize: number = PTY_CONSTANTS.DEFAULT_MAX_HISTORY_SIZE
 	) {
 		this.maxHistorySize = maxHistorySize;
 		this.terminal = new Terminal({
 			cols,
 			rows,
-			scrollback: DEFAULT_SCROLLBACK,
+			scrollback: PTY_CONSTANTS.DEFAULT_SCROLLBACK,
 			allowProposedApi: true,
 		});
 	}

@@ -13,18 +13,8 @@ import {
 	DEFAULT_TERMINAL_COLS,
 	DEFAULT_TERMINAL_ROWS,
 } from '../session-backend.interface.js';
-
-/**
- * Maximum number of data listeners allowed per session.
- * Prevents memory leaks from excessive listener registration.
- */
-const MAX_DATA_LISTENERS = 100;
-
-/**
- * Maximum number of exit listeners allowed per session.
- * Prevents memory leaks from excessive listener registration.
- */
-const MAX_EXIT_LISTENERS = 50;
+import { PTY_CONSTANTS } from '../../../constants.js';
+import { LoggerService, ComponentLogger } from '../../core/logger.service.js';
 
 /**
  * PTY Session implementation using node-pty.
@@ -71,6 +61,11 @@ export class PtySession implements ISession {
 	private killed = false;
 
 	/**
+	 * Logger for this session
+	 */
+	private logger: ComponentLogger;
+
+	/**
 	 * Create a new PTY session.
 	 *
 	 * @param name - Unique name for this session
@@ -95,6 +90,8 @@ export class PtySession implements ISession {
 		public readonly cwd: string,
 		options: SessionOptions
 	) {
+		this.logger = LoggerService.getInstance().createComponentLogger(`PtySession:${name}`);
+
 		// Merge process environment with session-specific environment
 		const sessionEnv: Record<string, string> = {
 			...this.sanitizeEnv(process.env),
@@ -139,9 +136,9 @@ export class PtySession implements ISession {
 	 * ```
 	 */
 	onData(callback: (data: string) => void): () => void {
-		if (this.dataListeners.length >= MAX_DATA_LISTENERS) {
+		if (this.dataListeners.length >= PTY_CONSTANTS.MAX_DATA_LISTENERS) {
 			throw new Error(
-				`Maximum data listener count (${MAX_DATA_LISTENERS}) exceeded for session ${this.name}`
+				`Maximum data listener count (${PTY_CONSTANTS.MAX_DATA_LISTENERS}) exceeded for session ${this.name}`
 			);
 		}
 
@@ -170,9 +167,9 @@ export class PtySession implements ISession {
 	 * ```
 	 */
 	onExit(callback: (code: number) => void): () => void {
-		if (this.exitListeners.length >= MAX_EXIT_LISTENERS) {
+		if (this.exitListeners.length >= PTY_CONSTANTS.MAX_EXIT_LISTENERS) {
 			throw new Error(
-				`Maximum exit listener count (${MAX_EXIT_LISTENERS}) exceeded for session ${this.name}`
+				`Maximum exit listener count (${PTY_CONSTANTS.MAX_EXIT_LISTENERS}) exceeded for session ${this.name}`
 			);
 		}
 
@@ -271,7 +268,9 @@ export class PtySession implements ISession {
 						callback(data);
 					} catch (error) {
 						// Log error but don't let one bad listener break others
-						console.error(`Error in data listener for session ${this.name}:`, error);
+						this.logger.error('Error in data listener', {
+							error: error instanceof Error ? error.message : String(error),
+						});
 					}
 				}
 			}
@@ -286,7 +285,9 @@ export class PtySession implements ISession {
 					callback(exitCode);
 				} catch (error) {
 					// Log error but don't let one bad listener break others
-					console.error(`Error in exit listener for session ${this.name}:`, error);
+					this.logger.error('Error in exit listener', {
+						error: error instanceof Error ? error.message : String(error),
+					});
 				}
 			}
 

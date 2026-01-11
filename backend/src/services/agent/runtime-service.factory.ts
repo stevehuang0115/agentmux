@@ -10,6 +10,7 @@ import {
 	type ISessionBackend,
 } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Factory for creating runtime-specific service instances.
@@ -20,6 +21,8 @@ export class RuntimeServiceFactory {
 	private static instanceCache: Map<string, RuntimeAgentService> = new Map();
 	// Cache the session helper to reuse across runtime service creations
 	private static sessionHelperCache: SessionCommandHelper | null = null;
+	// Logger for the factory
+	private static logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('RuntimeServiceFactory');
 
 	/**
 	 * Get or create a SessionCommandHelper, using lazy initialization.
@@ -87,7 +90,7 @@ export class RuntimeServiceFactory {
 
 			default:
 				// Fallback to Claude Code for unknown runtime types
-				console.warn(`Unknown runtime type: ${runtimeType}, falling back to Claude Code`);
+				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
 				runtimeService = new ClaudeRuntimeService(sessionHelper, projectRoot);
 				break;
 		}
@@ -125,7 +128,7 @@ export class RuntimeServiceFactory {
 
 			default:
 				// Fallback to Claude Code for unknown runtime types
-				console.warn(`Unknown runtime type: ${runtimeType}, falling back to Claude Code`);
+				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
 				return new ClaudeRuntimeService(sessionHelper, projectRoot);
 		}
 	}
@@ -204,7 +207,7 @@ export class RuntimeServiceFactory {
 				return new CodexRuntimeService(sessionHelper, projectRoot);
 
 			default:
-				console.warn(`Unknown runtime type: ${runtimeType}, falling back to Claude Code`);
+				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
 				return new ClaudeRuntimeService(sessionHelper, projectRoot);
 		}
 	}

@@ -18,6 +18,7 @@
 
 import type { ISession, ISessionBackend } from './session-backend.interface.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { SESSION_COMMAND_DELAYS } from '../../constants.js';
 
 /**
  * Key code mappings for special keys
@@ -93,7 +94,7 @@ export class SessionCommandHelper {
 		session.write(message + '\r');
 
 		// Small delay to allow processing
-		await this.delay(100);
+		await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
 	}
 
 	/**
@@ -123,7 +124,7 @@ export class SessionCommandHelper {
 			isSpecialKey: !!keyCode,
 		});
 
-		await this.delay(50);
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -137,7 +138,7 @@ export class SessionCommandHelper {
 
 		session.write('\x03');
 		this.logger.debug('Sent Ctrl+C to session', { sessionName });
-		await this.delay(50);
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -151,7 +152,7 @@ export class SessionCommandHelper {
 
 		session.write('\r');
 		this.logger.debug('Sent Enter to session', { sessionName });
-		await this.delay(50);
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -165,7 +166,7 @@ export class SessionCommandHelper {
 
 		session.write('\x1b');
 		this.logger.debug('Sent Escape to session', { sessionName });
-		await this.delay(50);
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -180,13 +181,13 @@ export class SessionCommandHelper {
 
 		// Ctrl+C to cancel any running command
 		session.write('\x03');
-		await this.delay(100);
+		await this.delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
 		// Ctrl+U to clear the current line
 		session.write('\x15');
 
 		this.logger.debug('Cleared command line', { sessionName });
-		await this.delay(50);
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -269,7 +270,7 @@ export class SessionCommandHelper {
 		// Export the variable
 		session.write(`export ${key}="${value}"\r`);
 		this.logger.debug('Set environment variable', { sessionName, key });
-		await this.delay(100);
+		await this.delay(SESSION_COMMAND_DELAYS.ENV_VAR_DELAY);
 	}
 
 	/**
