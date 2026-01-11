@@ -73,9 +73,9 @@ describe('SessionBackendFactory', () => {
 			await destroySessionBackend();
 		});
 
-		it('should throw error for tmux backend (not yet implemented)', async () => {
+		it('should throw error for tmux backend (currently disabled)', async () => {
 			await expect(createSessionBackend('tmux')).rejects.toThrow(
-				'tmux session backend adapter is not yet implemented'
+				'tmux backend is currently disabled'
 			);
 		});
 
