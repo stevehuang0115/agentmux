@@ -202,23 +202,6 @@ export class StorageService {
 
   async saveTeam(team: Team): Promise<void> {
     try {
-      console.log(`[STORAGE-DEBUG-TS] 💾 saveTeam called for team: ${team.name} at ${new Date().toISOString()}`);
-
-      // CRITICAL: Log the call stack to identify who's calling saveTeam
-      const stack = new Error().stack;
-      const stackLines = stack?.split('\n').slice(1, 6) || []; // Get first 5 stack frames
-      console.log(`[STORAGE-DEBUG-TS] 📞 CALL STACK:`);
-      stackLines.forEach((line, index) => {
-        console.log(`[STORAGE-DEBUG-TS] 📞 ${index + 1}: ${line.trim()}`);
-      });
-
-      // Log all member statuses before save
-      if (team.members) {
-        team.members.forEach(member => {
-          console.log(`[STORAGE-DEBUG-TS] 👤 Saving member ${member.name}: agentStatus=${member.agentStatus}, workingStatus=${member.workingStatus}, readyAt=${(member as any).readyAt}`);
-        });
-      }
-
       await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
       const content = await fs.readFile(this.teamsFile, 'utf-8');
       const data = JSON.parse(content);
@@ -236,18 +219,14 @@ export class StorageService {
       const existingIndex = teams.findIndex((t: Team) => t.id === team.id);
 
       if (existingIndex >= 0) {
-        console.log(`[STORAGE-DEBUG-TS] 🔄 Updating existing team at index ${existingIndex}`);
         teams[existingIndex] = team;
       } else {
-        console.log(`[STORAGE-DEBUG-TS] 🆕 Adding new team`);
         teams.push(team);
       }
 
       teamsData.teams = teams;
 
-      console.log(`[STORAGE-DEBUG-TS] 💿 Writing teams.json file at ${new Date().toISOString()}`);
       await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
-      console.log(`[STORAGE-DEBUG-TS] ✅ File write completed at ${new Date().toISOString()}`);
     } catch (error) {
       console.error('Error saving team:', error);
       throw error;

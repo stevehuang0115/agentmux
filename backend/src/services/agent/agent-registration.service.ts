@@ -118,6 +118,44 @@ export class AgentRegistrationService {
 	}
 
 	/**
+	 * Create a runtime service instance for the given runtime type.
+	 * Centralizes RuntimeServiceFactory creation to reduce code duplication.
+	 */
+	private createRuntimeService(runtimeType: RuntimeType): RuntimeAgentService {
+		return RuntimeServiceFactory.create(runtimeType, null, this.projectRoot);
+	}
+
+	/**
+	 * Get the check interval based on environment.
+	 * Uses shorter intervals in test environment for faster tests.
+	 */
+	private getCheckInterval(): number {
+		return process.env.NODE_ENV === 'test' ? 1000 : 2000;
+	}
+
+	/**
+	 * Update agent status with safe error handling (non-blocking).
+	 * Returns true if successful, false if failed.
+	 */
+	private async updateAgentStatusSafe(
+		sessionName: string,
+		status: (typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES],
+		context?: { role?: string }
+	): Promise<boolean> {
+		try {
+			await this.storageService.updateAgentStatus(sessionName, status);
+			this.logger.info(`Agent status updated to ${status}`, { sessionName, ...context });
+			return true;
+		} catch (error) {
+			this.logger.warn('Failed to update agent status (non-critical)', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+	}
+
+	/**
 	 * Load team roles configuration from available_team_roles.json
 	 */
 	private async loadTeamRolesConfig(): Promise<TeamRolesConfig> {
@@ -190,11 +228,7 @@ export class AgentRegistrationService {
 		this.logger.info('Starting agent session initialization', { sessionName, role });
 
 		// Clear detection cache to ensure fresh runtime detection
-		const runtimeService = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService = this.createRuntimeService(runtimeType);
 		runtimeService.clearDetectionCache(sessionName);
 
 		// Skip Step 1 (direct registration) as it often fails in concurrent scenarios
@@ -275,11 +309,7 @@ export class AgentRegistrationService {
 		// First check if runtime is running before sending the prompt
 		// runtimeService2: Separate instance for pre-registration runtime detection
 		// This instance is isolated from main runtimeService to avoid cache interference
-		const runtimeService2 = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService2 = this.createRuntimeService(runtimeType);
 		const runtimeRunning = await runtimeService2.detectRuntimeWithCommand(sessionName);
 		if (!runtimeRunning) {
 			this.logger.debug('Runtime not detected in Step 1, skipping direct registration', {
@@ -326,11 +356,7 @@ export class AgentRegistrationService {
 		// Reinitialize runtime using the appropriate initialization script
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
-		const runtimeService2 = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService2 = this.createRuntimeService(runtimeType);
 		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath);
 
 		// Wait for runtime to be ready (simplified detection)
@@ -426,23 +452,14 @@ export class AgentRegistrationService {
 			});
 
 			// Initialize runtime for orchestrator using script (stay in agentmux project)
-			const runtimeService = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService = this.createRuntimeService(runtimeType);
 			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd());
 
 			// Wait for runtime to be ready
-			// Use shorter check interval in test environment
-			const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000;
+			const checkInterval = this.getCheckInterval();
 			// runtimeService3: Separate instance for orchestrator ready-state detection
 			// Isolated from runtimeService to prevent interference between init and ready checks
-			const runtimeService3 = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService3 = this.createRuntimeService(runtimeType);
 			const isReady = await runtimeService3.waitForRuntimeReady(
 				sessionName,
 				45000,
@@ -468,11 +485,7 @@ export class AgentRegistrationService {
 			});
 			// runtimeService4: Final verification instance for orchestrator responsiveness
 			// Clean instance for post-initialization responsiveness testing
-			const runtimeService4 = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService4 = this.createRuntimeService(runtimeType);
 			const runtimeResponding = await runtimeService4.detectRuntimeWithCommand(sessionName);
 			if (!runtimeResponding) {
 				throw new Error(
@@ -489,21 +502,13 @@ export class AgentRegistrationService {
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			// Initialize runtime using the initialization script
-			const runtimeService = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService = this.createRuntimeService(runtimeType);
 			await runtimeService.executeRuntimeInitScript(sessionName, projectPath);
 
 			// Wait for runtime to be ready (simplified detection)
-			// Use shorter check interval in test environment
-			const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000;
-			const isReady = await RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			).waitForRuntimeReady(sessionName, 25000, checkInterval); // 25s timeout
+			const checkInterval = this.getCheckInterval();
+			const isReady = await this.createRuntimeService(runtimeType)
+				.waitForRuntimeReady(sessionName, 25000, checkInterval); // 25s timeout
 			if (!isReady) {
 				throw new Error(
 					`Failed to initialize ${runtimeType} in recreated session within timeout`
@@ -716,13 +721,7 @@ export class AgentRegistrationService {
 				if (!skipInitialCleanup || attempt > 1) {
 					// Only do runtime detection on retries or when runtime wasn't just initialized
 					const forceRefresh = attempt > 1; // Force refresh on retry attempts
-					// runtimeService5: Runtime detection instance for retry attempts
-					// Separate instance allows force refresh without affecting other detection operations
-					const runtimeService5 = RuntimeServiceFactory.create(
-						runtimeType,
-						null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-						this.projectRoot
-					);
+					const runtimeService5 = this.createRuntimeService(runtimeType);
 					runtimeRunning = await runtimeService5.detectRuntimeWithCommand(
 						sessionName,
 						forceRefresh
@@ -737,13 +736,7 @@ export class AgentRegistrationService {
 						});
 
 						// Clear detection cache before continuing to retry
-						// runtimeService6: Cache clearing instance for failed detection recovery
-						// Dedicated instance for clearing detection cache without disrupting ongoing operations
-						const runtimeService6 = RuntimeServiceFactory.create(
-							runtimeType,
-							null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-							this.projectRoot
-						);
+						const runtimeService6 = this.createRuntimeService(runtimeType);
 						runtimeService6.clearDetectionCache(sessionName);
 
 						// Add longer delay between failed detection attempts
@@ -992,11 +985,7 @@ export class AgentRegistrationService {
 				);
 
 				// Step 1: Try to detect if runtime is already running using slash command
-				const runtimeService = RuntimeServiceFactory.create(
-					runtimeType,
-					null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-					this.projectRoot
-				);
+				const runtimeService = this.createRuntimeService(runtimeType);
 
 				let recoverySuccess = false;
 
