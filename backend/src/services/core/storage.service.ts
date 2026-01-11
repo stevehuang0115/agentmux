@@ -21,13 +21,13 @@ export class StorageService {
 
   // Helper function to create default orchestrator object
   private createDefaultOrchestrator() {
-    return { 
-      sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 
-      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING, 
+    return {
+      sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE, // Default to inactive until started
       workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
       runtimeType: RUNTIME_TYPES.CLAUDE_CODE, // Default to claude-code
-      createdAt: new Date().toISOString(), 
-      updatedAt: new Date().toISOString() 
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
   }
   private projectsFile: string;
@@ -776,9 +776,9 @@ This is a foundational task that should be completed first before other developm
         return data.orchestrator;
       }
       
-      // If no orchestrator in new format, create one
+      // If no orchestrator in new format, create one with inactive status
       const orchestrator = this.createDefaultOrchestrator();
-      await this.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING);
+      await this.updateAgentStatus(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
       return orchestrator;
     } catch (error) {
       console.error('Error reading orchestrator status:', error);

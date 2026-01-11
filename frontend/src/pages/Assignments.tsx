@@ -154,7 +154,7 @@ export const Assignments: React.FC = () => {
     if (!projectId) return;
     const doUnassign = async () => {
       try {
-      // Send unassign command to orchestrator to delete tmux sessions
+      // Send unassign command to orchestrator to delete terminal sessions
       const response = await fetch('/api/orchestrator/execute', {
         method: 'POST',
         headers: {
@@ -173,14 +173,14 @@ export const Assignments: React.FC = () => {
       // Reload data to reflect changes
       await loadData();
       
-      showSuccess(`Team "${teamName}" has been unassigned and their tmux sessions have been terminated.`);
+      showSuccess(`Team "${teamName}" has been unassigned and their terminal sessions have been terminated.`);
       } catch (error) {
         console.error('Failed to unassign team:', error);
         showError('Failed to unassign team: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
     };
     showConfirm(
-      `Unassign "${teamName}" from their project?\n\n• The team's tmux sessions will be deleted\n• The team remains available to assign again`,
+      `Unassign "${teamName}" from their project?\n\n• The team's terminal sessions will be deleted\n• The team remains available to assign again`,
       doUnassign,
       { title: 'Unassign Team', confirmText: 'Unassign', cancelText: 'Cancel', type: 'warning' }
     );

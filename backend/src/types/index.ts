@@ -154,7 +154,7 @@ export interface TerminalOutput {
 export interface WebSocketMessage {
   type: 'terminal_output' | 'file_change' | 'team_status' | 'schedule_update'
        | 'connection_established' | 'subscription_confirmed' | 'unsubscription_confirmed'
-       | 'session_not_found' | 'input_error' | 'initial_terminal_state' 
+       | 'session_not_found' | 'session_pending' | 'input_error' | 'initial_terminal_state'
        | 'terminal_state_error' | 'system_notification' | 'orchestrator_status_changed'
        | 'team_member_status_changed' | 'team_activity_updated';
   payload: any;

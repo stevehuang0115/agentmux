@@ -69,16 +69,29 @@ export class AgentRegistrationService {
 	 * Get or create the session helper with lazy initialization
 	 */
 	private async getSessionHelper(): Promise<SessionCommandHelper> {
+		this.logger.debug('Getting session helper', {
+			hasExistingHelper: !!this._sessionHelper,
+		});
+
 		if (this._sessionHelper) {
 			return this._sessionHelper;
 		}
 
 		let backend = getSessionBackendSync();
+		this.logger.debug('Backend sync check', {
+			hasBackend: !!backend,
+		});
+
 		if (!backend) {
+			this.logger.info('Creating new PTY session backend');
 			backend = await createSessionBackend('pty');
+			this.logger.info('PTY session backend created', {
+				hasBackend: !!backend,
+			});
 		}
 
 		this._sessionHelper = createSessionCommandHelper(backend);
+		this.logger.debug('Session helper created');
 		return this._sessionHelper;
 	}
 
@@ -332,16 +345,59 @@ export class AgentRegistrationService {
 			throw new Error(`Failed to reinitialize ${runtimeType} within timeout`);
 		}
 
-		// Fast verification and registration with retry (skip Ctrl+C since runtime was just initialized)
-		return await this.attemptRegistrationWithVerification(
+		// For PTY sessions, once runtime is detected as ready, consider initialization successful
+		// MCP registration will happen async when the agent processes its first prompt
+		this.logger.info('Runtime detected as ready, session initialization successful', {
 			sessionName,
 			role,
-			timeout,
-			memberId,
-			3,
-			true,
-			runtimeType
-		);
+			runtimeType,
+		});
+
+		// Send the registration prompt in background (don't block on it)
+		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
+			this.logger.warn('Background registration prompt failed (non-blocking)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+
+		// Update agent status to 'active' since the runtime is running
+		// This was previously done by the MCP callback, but we now do it immediately
+		try {
+			await this.storageService.updateAgentStatus(
+				sessionName,
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+			);
+			this.logger.info('Agent status updated to active', { sessionName, role });
+		} catch (statusError) {
+			this.logger.warn('Failed to update agent status (non-critical)', {
+				sessionName,
+				error: statusError instanceof Error ? statusError.message : String(statusError),
+			});
+		}
+
+		return true;
+	}
+
+	/**
+	 * Send registration prompt asynchronously (non-blocking)
+	 */
+	private async sendRegistrationPromptAsync(
+		sessionName: string,
+		role: string,
+		memberId?: string,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+	): Promise<void> {
+		try {
+			const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+			await this.sendPromptRobustly(sessionName, prompt);
+			this.logger.debug('Registration prompt sent asynchronously', { sessionName, role });
+		} catch (error) {
+			this.logger.warn('Failed to send registration prompt asynchronously', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/**
@@ -425,12 +481,9 @@ export class AgentRegistrationService {
 			}
 
 			this.logger.debug(
-				'Runtime confirmed ready for orchestrator in Step 3, sending registration prompt',
+				'Runtime confirmed ready for orchestrator in Step 3',
 				{ sessionName, runtimeType }
 			);
-
-			// Send Ctrl+C to cancel any pending slash command from detection
-			await (await this.getSessionHelper()).sendCtrlC(sessionName);
 		} else {
 			// For other roles, create basic session and initialize Claude
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
@@ -458,16 +511,36 @@ export class AgentRegistrationService {
 			}
 		}
 
-		// Use enhanced registration with verification (skip Ctrl+C since runtime was just initialized)
-		return await this.attemptRegistrationWithVerification(
+		// For PTY sessions, once runtime is detected as ready, consider initialization successful
+		this.logger.info('Runtime detected as ready after full recreation, session initialization successful', {
 			sessionName,
 			role,
-			timeout,
-			memberId,
-			3,
-			true,
-			runtimeType
-		);
+			runtimeType,
+		});
+
+		// Send the registration prompt in background (don't block on it)
+		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
+			this.logger.warn('Background registration prompt failed after recreation (non-blocking)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+
+		// Update agent status to 'active' since the runtime is running
+		try {
+			await this.storageService.updateAgentStatus(
+				sessionName,
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+			);
+			this.logger.info('Agent status updated to active after recreation', { sessionName, role });
+		} catch (statusError) {
+			this.logger.warn('Failed to update agent status after recreation (non-critical)', {
+				sessionName,
+				error: statusError instanceof Error ? statusError.message : String(statusError),
+			});
+		}
+
+		return true;
 	}
 
 	/**
@@ -888,14 +961,28 @@ export class AgentRegistrationService {
 				sessionName,
 				role,
 				runtimeType,
+				projectPath,
+				windowName,
+				memberId,
+			});
+
+			// Get session helper first
+			this.logger.debug('Getting session helper for session creation');
+			const sessionHelper = await this.getSessionHelper();
+			this.logger.debug('Session helper obtained', {
+				hasHelper: !!sessionHelper,
 			});
 
 			// Check if session already exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			const sessionExists = sessionHelper.sessionExists(sessionName);
+			this.logger.debug('Checked if session exists', {
+				sessionName,
+				sessionExists,
+			});
 
 			if (!sessionExists) {
 				// Session doesn't exist, go directly to creating a new session
-				this.logger.info('Session does not exist, creating new session', { sessionName });
+				this.logger.info('Session does not exist, will create new session', { sessionName });
 			} else {
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
@@ -1011,21 +1098,53 @@ export class AgentRegistrationService {
 			}
 
 			// Create new session (same approach for both orchestrator and team members)
-			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
+			const cwdToUse = projectPath || process.cwd();
+			this.logger.info('Creating PTY session', {
+				sessionName,
+				cwd: cwdToUse,
+			});
+
+			try {
+				const createdSession = await sessionHelper.createSession(sessionName, cwdToUse);
+				this.logger.info('PTY session created successfully', {
+					sessionName,
+					pid: createdSession.pid,
+					cwd: createdSession.cwd,
+				});
+			} catch (createError) {
+				this.logger.error('Failed to create PTY session', {
+					sessionName,
+					cwd: cwdToUse,
+					error: createError instanceof Error ? createError.message : String(createError),
+					stack: createError instanceof Error ? createError.stack : undefined,
+				});
+				throw createError;
+			}
+
+			// Verify session was created
+			const sessionCreatedCheck = sessionHelper.sessionExists(sessionName);
+			this.logger.info('Session creation verification', {
+				sessionName,
+				exists: sessionCreatedCheck,
+			});
+
+			if (!sessionCreatedCheck) {
+				throw new Error(`Session '${sessionName}' was not created successfully`);
+			}
 
 			// Set environment variables for MCP connection
-			await (await this.getSessionHelper()).setEnvironmentVariable(
+			await sessionHelper.setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.TMUX_SESSION_NAME,
 				sessionName
 			);
-			await (await this.getSessionHelper()).setEnvironmentVariable(
+			await sessionHelper.setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.AGENTMUX_ROLE,
 				role
 			);
 
-			this.logger.info('Agent session created, initializing with registration', {
+			this.logger.info('Agent session created and environment variables set, initializing with registration', {
 				sessionName,
 				role,
 				runtimeType,
