@@ -244,9 +244,13 @@ export class AgentMuxServer {
 			// Check if port is already in use
 			await this.checkPortAvailability();
 
-			// Initialize tmux server
-			console.log('🔧 Initializing tmux server...');
-			await this.tmuxService.initialize();
+			// Skip tmux initialization since we're using PTY session backend
+			// Note: TmuxService is kept for backward compatibility but PTY is the active backend
+			try {
+				await this.tmuxService.initialize();
+			} catch (error) {
+				// Ignore tmux initialization errors - PTY backend is primary
+			}
 
 			// Initialize PTY session backend and restore saved sessions
 			console.log('🔌 Initializing PTY session backend...');
