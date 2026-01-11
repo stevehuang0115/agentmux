@@ -38,6 +38,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const currentSubscription = useRef<string | null>(null);
   const sessionSwitchTimeout = useRef<NodeJS.Timeout | null>(null);
   const sessionPendingRetryRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const connectionCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptRef = useRef<number>(0);
+  const maxReconnectAttempts = 3;
 
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
@@ -123,26 +127,34 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         sessionSwitchTimeout.current = null;
       }
 
-      // Clear any existing retry interval
+      // Clear any existing retry timeout
       if (sessionPendingRetryRef.current) {
-        clearInterval(sessionPendingRetryRef.current);
+        clearTimeout(sessionPendingRetryRef.current);
+        sessionPendingRetryRef.current = null;
       }
 
-      // Retry subscription every 3 seconds
-      sessionPendingRetryRef.current = setInterval(() => {
-        console.log('Retrying session subscription:', selectedSession);
-        webSocketService.subscribeToSession(selectedSession);
-      }, 3000);
+      // Retry subscription with exponential backoff (3s, 6s, 12s, etc.)
+      let retryAttempt = 0;
+      const maxRetries = 10;
+      const baseDelay = 3000;
 
-      // Stop retrying after 60 seconds
-      setTimeout(() => {
-        if (sessionPendingRetryRef.current) {
-          clearInterval(sessionPendingRetryRef.current);
-          sessionPendingRetryRef.current = null;
+      const scheduleRetry = () => {
+        if (retryAttempt >= maxRetries) {
           setLoading(false);
           setTerminalOutput(`# Session "${selectedSession}" is taking longer than expected to start.\n# The orchestrator may still be initializing.\n# Try refreshing the page or check the backend logs.\n`);
+          return;
         }
-      }, 60000);
+
+        const delay = Math.min(baseDelay * Math.pow(1.5, retryAttempt), 30000); // Cap at 30s
+        sessionPendingRetryRef.current = setTimeout(() => {
+          console.log(`Retrying session subscription (attempt ${retryAttempt + 1}/${maxRetries}):`, selectedSession);
+          webSocketService.subscribeToSession(selectedSession);
+          retryAttempt++;
+          scheduleRetry();
+        }, delay);
+      };
+
+      scheduleRetry();
     }
   }, [selectedSession]);
 
@@ -182,22 +194,38 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
   // Handle session switching
   useEffect(() => {
+    // Clean up any previous intervals/timeouts
+    if (connectionCheckIntervalRef.current) {
+      clearInterval(connectionCheckIntervalRef.current);
+      connectionCheckIntervalRef.current = null;
+    }
+    if (connectionCheckTimeoutRef.current) {
+      clearTimeout(connectionCheckTimeoutRef.current);
+      connectionCheckTimeoutRef.current = null;
+    }
+
     if (isOpen && selectedSession) {
       // Check if WebSocket is connected, if not, wait for connection
       if (webSocketService.isConnected()) {
         switchSession(selectedSession);
       } else {
         // Wait for connection with timeout
-        const connectionCheckInterval = setInterval(() => {
+        connectionCheckIntervalRef.current = setInterval(() => {
           if (webSocketService.isConnected()) {
-            clearInterval(connectionCheckInterval);
+            if (connectionCheckIntervalRef.current) {
+              clearInterval(connectionCheckIntervalRef.current);
+              connectionCheckIntervalRef.current = null;
+            }
             switchSession(selectedSession);
           }
         }, 100);
 
         // Clear interval after 5 seconds if still not connected
-        setTimeout(() => {
-          clearInterval(connectionCheckInterval);
+        connectionCheckTimeoutRef.current = setTimeout(() => {
+          if (connectionCheckIntervalRef.current) {
+            clearInterval(connectionCheckIntervalRef.current);
+            connectionCheckIntervalRef.current = null;
+          }
           if (!webSocketService.isConnected()) {
             console.error('WebSocket not connected after 5 seconds, cannot switch session');
             setError('Connection lost. Please refresh the page.');
@@ -205,6 +233,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         }, 5000);
       }
     }
+
+    // Cleanup function to prevent memory leaks
+    return () => {
+      if (connectionCheckIntervalRef.current) {
+        clearInterval(connectionCheckIntervalRef.current);
+        connectionCheckIntervalRef.current = null;
+      }
+      if (connectionCheckTimeoutRef.current) {
+        clearTimeout(connectionCheckTimeoutRef.current);
+        connectionCheckTimeoutRef.current = null;
+      }
+    };
   }, [selectedSession, isOpen]);
 
   const initializeWebSocket = async () => {
@@ -294,13 +334,24 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     // Check WebSocket connection status
     if (!webSocketService.isConnected()) {
-      console.warn('WebSocket not connected, attempting to reconnect...');
+      // Prevent infinite reconnect loop
+      if (reconnectAttemptRef.current >= maxReconnectAttempts) {
+        console.error(`Max reconnect attempts (${maxReconnectAttempts}) reached`);
+        setError('Failed to connect after multiple attempts. Please refresh the page.');
+        setLoading(false);
+        reconnectAttemptRef.current = 0;
+        return;
+      }
+
+      reconnectAttemptRef.current++;
+      console.warn(`WebSocket not connected, attempting to reconnect (attempt ${reconnectAttemptRef.current}/${maxReconnectAttempts})...`);
       setError('WebSocket disconnected. Attempting to reconnect...');
       setConnectionStatus('reconnecting');
 
-      // Try to reconnect
+      // Try to reconnect with retry limit
       webSocketService.connect().then(() => {
         console.log('Reconnected, retrying session switch');
+        reconnectAttemptRef.current = 0; // Reset on successful connection
         switchSession(sessionName); // Retry after connection
       }).catch((error) => {
         console.error('Failed to reconnect:', error);
@@ -309,6 +360,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       });
       return;
     }
+
+    // Reset reconnect attempts on successful connection
+    reconnectAttemptRef.current = 0;
 
     // Subscribe to new session
     setLoading(true);
@@ -371,7 +425,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
   const sendTerminalInput = (input: string) => {
     if (webSocketService.isConnected() && selectedSession) {
-      webSocketService.sendInput(selectedSession, input);
+      try {
+        webSocketService.sendInput(selectedSession, input);
+      } catch (error) {
+        console.error('Failed to send terminal input:', error);
+        setError('Failed to send input. Please try again.');
+      }
     } else {
       setError('Not connected to terminal service');
     }

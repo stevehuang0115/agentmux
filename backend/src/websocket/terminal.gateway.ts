@@ -182,7 +182,7 @@ export class TerminalGateway {
 		}
 
 		// Subscribe to PTY onData events - real-time streaming
-		const unsubscribe = session.onData((data: string) => {
+		const unsubscribeData = session.onData((data: string) => {
 			const terminalOutput: TerminalOutput = {
 				sessionName,
 				content: data,
@@ -193,14 +193,18 @@ export class TerminalGateway {
 			this.broadcastOutput(sessionName, terminalOutput);
 		});
 
-		// Also subscribe to exit events
-		session.onExit((exitCode: number) => {
+		// Subscribe to exit events
+		const unsubscribeExit = session.onExit((exitCode: number) => {
 			this.logger.info('Session exited', { sessionName, exitCode });
 			this.broadcastSessionStatus(sessionName, 'terminated');
 			this.cleanupSessionSubscription(sessionName);
 		});
 
-		this.sessionSubscriptions.set(sessionName, unsubscribe);
+		// Store combined cleanup function to prevent memory leaks
+		this.sessionSubscriptions.set(sessionName, () => {
+			unsubscribeData();
+			unsubscribeExit();
+		});
 		this.logger.info('Started PTY streaming for session', { sessionName });
 		return true;
 	}
