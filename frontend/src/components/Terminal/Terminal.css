@@ -1,0 +1,252 @@
+/**
+ * Terminal Component Styles
+ *
+ * Styles for the Terminal component using xterm.js.
+ * Compatible with both dark and light themes.
+ */
+
+/* Container */
+.terminal-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-height: 300px;
+	background: #111721;
+	border-radius: 8px;
+	overflow: hidden;
+	position: relative;
+}
+
+/* Header */
+.terminal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 8px 12px;
+	background: #1a2332;
+	border-bottom: 1px solid #313a48;
+	flex-shrink: 0;
+}
+
+.terminal-header-left {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.terminal-header-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+/* Traffic light dots */
+.terminal-dots {
+	display: flex;
+	gap: 6px;
+}
+
+.terminal-dot {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+}
+
+.terminal-dot-red {
+	background-color: #ef4444;
+}
+
+.terminal-dot-yellow {
+	background-color: #f59e0b;
+}
+
+.terminal-dot-green {
+	background-color: #10b981;
+}
+
+/* Title */
+.terminal-title {
+	color: #a1a9b8;
+	font-size: 13px;
+	font-weight: 500;
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Status indicator */
+.terminal-status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+}
+
+.terminal-status-text {
+	color: #a1a9b8;
+	font-size: 12px;
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Read-only badge */
+.terminal-readonly-badge {
+	padding: 2px 6px;
+	background: #313a48;
+	color: #a1a9b8;
+	font-size: 11px;
+	border-radius: 4px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+/* Terminal content area */
+.terminal-content {
+	flex: 1;
+	padding: 8px;
+	overflow: hidden;
+}
+
+.terminal-content .xterm {
+	height: 100%;
+}
+
+.terminal-content .xterm-viewport {
+	overflow-y: auto !important;
+}
+
+.terminal-content .xterm-screen {
+	width: 100% !important;
+}
+
+/* Loading overlay */
+.terminal-loading {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	background: rgba(17, 23, 33, 0.9);
+	color: #a1a9b8;
+	font-size: 14px;
+	z-index: 10;
+}
+
+.terminal-loading-spinner {
+	width: 24px;
+	height: 24px;
+	border: 2px solid #313a48;
+	border-top-color: #2a73ea;
+	border-radius: 50%;
+	animation: terminal-spin 0.8s linear infinite;
+}
+
+@keyframes terminal-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* Error message */
+.terminal-error {
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	padding: 12px 16px;
+	background: rgba(239, 68, 68, 0.15);
+	border-top: 1px solid rgba(239, 68, 68, 0.3);
+	color: #f87171;
+	font-size: 13px;
+	z-index: 10;
+}
+
+/* Light theme overrides */
+.terminal-container.light {
+	background: #ffffff;
+}
+
+.terminal-container.light .terminal-header {
+	background: #f8fafc;
+	border-bottom-color: #e2e8f0;
+}
+
+.terminal-container.light .terminal-title,
+.terminal-container.light .terminal-status-text {
+	color: #475569;
+}
+
+.terminal-container.light .terminal-readonly-badge {
+	background: #e2e8f0;
+	color: #475569;
+}
+
+.terminal-container.light .terminal-loading {
+	background: rgba(255, 255, 255, 0.9);
+	color: #475569;
+}
+
+.terminal-container.light .terminal-loading-spinner {
+	border-color: #e2e8f0;
+	border-top-color: #2a73ea;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+	.terminal-header {
+		padding: 6px 10px;
+	}
+
+	.terminal-dots {
+		gap: 4px;
+	}
+
+	.terminal-dot {
+		width: 10px;
+		height: 10px;
+	}
+
+	.terminal-title {
+		font-size: 12px;
+	}
+
+	.terminal-content {
+		padding: 4px;
+	}
+}
+
+/* Scrollbar styling for terminal viewport */
+.terminal-content .xterm-viewport::-webkit-scrollbar {
+	width: 8px;
+}
+
+.terminal-content .xterm-viewport::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.terminal-content .xterm-viewport::-webkit-scrollbar-thumb {
+	background: #313a48;
+	border-radius: 4px;
+}
+
+.terminal-content .xterm-viewport::-webkit-scrollbar-thumb:hover {
+	background: #4b5563;
+}
+
+/* Focus styles */
+.terminal-container:focus-within .terminal-header {
+	border-bottom-color: #2a73ea;
+}
+
+/* Animation for status dot */
+.terminal-status-dot.bg-yellow-500 {
+	animation: terminal-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes terminal-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.5;
+	}
+}
