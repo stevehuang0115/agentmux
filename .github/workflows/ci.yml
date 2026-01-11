@@ -1,0 +1,170 @@
+# CI Workflow for AgentMux
+# Runs on push to main/develop and pull requests
+# Tests on Windows, macOS, and Linux to ensure cross-platform compatibility
+
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  # Main build and test job - runs on all platforms
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all packages
+        run: npm run build
+
+      - name: Run type check
+        run: npm run typecheck
+
+      - name: Run linter
+        run: npm run lint
+        continue-on-error: true
+
+      # Run PTY-specific tests on all platforms
+      - name: Run PTY unit tests
+        run: npm run test:pty
+
+      # Run unit tests
+      - name: Run unit tests
+        run: npm run test:unit
+
+      # Integration tests only on Linux (needs full environment)
+      - name: Run integration tests
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:integration
+        continue-on-error: true
+
+  # PTY reliability tests (longer running, separate job)
+  reliability-tests:
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Run input reliability tests
+        run: npm run test:reliability
+        timeout-minutes: 10
+
+  # Windows-specific PTY verification
+  windows-pty-verify:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build backend
+        run: npm run build:backend
+
+      - name: Run PTY unit tests
+        run: npm run test:pty
+
+      - name: Verify PTY spawn works
+        run: |
+          node -e "
+            const pty = require('node-pty');
+            const shell = process.platform === 'win32' ? 'cmd.exe' : 'bash';
+            console.log('Platform:', process.platform);
+            console.log('Spawning:', shell);
+            const proc = pty.spawn(shell, [], {
+              name: 'xterm-256color',
+              cols: 80,
+              rows: 24,
+              cwd: process.cwd(),
+            });
+            console.log('PTY spawned, PID:', proc.pid);
+            let output = '';
+            proc.onData(data => {
+              output += data;
+              if (output.length < 500) console.log('Data:', data.slice(0, 100));
+            });
+            proc.write('echo PTY_TEST_SUCCESS\r\n');
+            setTimeout(() => {
+              proc.kill();
+              if (output.includes('PTY_TEST_SUCCESS')) {
+                console.log('PTY verification PASSED');
+                process.exit(0);
+              } else {
+                console.log('PTY verification FAILED');
+                console.log('Output was:', output.slice(0, 500));
+                process.exit(1);
+              }
+            }, 3000);
+          "
+        shell: cmd
+
+  # Frontend tests (separate job for cleaner separation)
+  frontend-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
+      - name: Build frontend
+        run: npm run build:frontend
+
+      - name: Run frontend tests
+        run: cd frontend && npm test
+        continue-on-error: true

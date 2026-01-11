@@ -38,6 +38,8 @@
     "test:integration": "jest tests/integration",
     "test:mcp": "jest tests/integration/mcp-connection.test.ts",
     "test:orchestrator": "jest tests/unit/tmux.service.test.ts tests/integration/orchestrator-initialization.test.ts --testNamePattern=\"Orchestrator|orchestrator\"",
+    "test:pty": "jest --testPathPattern=\"backend/src/services/session/pty\" --testTimeout=60000",
+    "test:reliability": "jest --testPathPattern=\"pty-input-reliability\" --testTimeout=60000",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
