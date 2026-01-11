@@ -70,3 +70,12 @@ export {
 	createSessionCommandHelper,
 	KEY_CODES,
 } from './session-command-helper.js';
+
+// Re-export session state persistence
+export {
+	SessionStatePersistence,
+	getSessionStatePersistence,
+	resetSessionStatePersistence,
+} from './session-state-persistence.js';
+
+export type { PersistedSessionInfo, PersistedState } from './session-state-persistence.js';

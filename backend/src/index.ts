@@ -20,6 +20,11 @@ import {
 	TeamActivityWebSocketService,
 	TeamsJsonWatcherService,
 } from './services/index.js';
+import {
+	getSessionBackend,
+	getSessionStatePersistence,
+	destroySessionBackend,
+} from './services/session/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { TerminalGateway } from './websocket/terminal.gateway.js';
@@ -243,6 +248,15 @@ export class AgentMuxServer {
 			console.log('🔧 Initializing tmux server...');
 			await this.tmuxService.initialize();
 
+			// Initialize PTY session backend and restore saved sessions
+			console.log('🔌 Initializing PTY session backend...');
+			const sessionBackend = await getSessionBackend();
+			const persistence = getSessionStatePersistence();
+			const restoredCount = await persistence.restoreState(sessionBackend);
+			if (restoredCount > 0) {
+				console.log(`📂 Restored ${restoredCount} PTY session(s) from saved state`);
+			}
+
 			// Start message scheduler
 			console.log('📅 Starting message scheduler...');
 			await this.messageSchedulerService.start();
@@ -401,15 +415,30 @@ export class AgentMuxServer {
 		console.log('\n🛑 Shutting down AgentMux server...');
 
 		try {
+			// Save PTY session state before cleanup
+			console.log('💾 Saving PTY session state...');
+			try {
+				const sessionBackend = await getSessionBackend();
+				const persistence = getSessionStatePersistence();
+				const savedCount = await persistence.saveState(sessionBackend);
+				if (savedCount > 0) {
+					console.log(`✅ Saved ${savedCount} PTY session(s) for later restoration`);
+				}
+				// Destroy PTY session backend
+				await destroySessionBackend();
+			} catch (error) {
+				console.error('⚠️ Failed to save PTY session state:', error);
+			}
+
 			// Clean up schedulers
 			this.schedulerService.cleanup();
 			this.messageSchedulerService.cleanup();
 			// Stop activity monitoring
 			this.activityMonitorService.stopPolling();
-			
+
 			// Stop team activity WebSocket service
 			this.teamActivityWebSocketService.stop();
-			
+
 			// Stop teams.json file watcher
 			this.teamsJsonWatcherService.stop();
 
