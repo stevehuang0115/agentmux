@@ -108,7 +108,7 @@ export class AgentMuxServer {
 			this.schedulerService,
 			this.messageSchedulerService
 		);
-		this.terminalGateway = new TerminalGateway(this.io, this.tmuxService);
+		this.terminalGateway = new TerminalGateway(this.io);
 		
 		// Connect WebSocket service to terminal gateway for broadcasting
 		this.teamActivityWebSocketService.setTerminalGateway(this.terminalGateway);

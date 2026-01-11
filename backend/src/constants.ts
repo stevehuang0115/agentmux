@@ -71,6 +71,13 @@ export const SESSION_COMMAND_DELAYS = {
 	ENV_VAR_DELAY: 100,
 } as const;
 
+// Terminal controller constants
+export const TERMINAL_CONTROLLER_CONSTANTS = {
+	DEFAULT_CAPTURE_LINES: 50,
+	MAX_CAPTURE_LINES: 500,
+	MAX_OUTPUT_SIZE: 16384, // 16KB max output per request
+} as const;
+
 // Type helpers
 export type AgentStatus =
 	(typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];

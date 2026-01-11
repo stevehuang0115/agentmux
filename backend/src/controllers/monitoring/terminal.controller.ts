@@ -1,80 +1,491 @@
+/**
+ * Terminal Controller
+ *
+ * Handles terminal session management endpoints for the API.
+ * Uses ISessionBackend for PTY-based session operations.
+ *
+ * @module terminal-controller
+ */
+
 import { Request, Response } from 'express';
-import type { ApiContext } from '../types.js';
 import { ApiResponse } from '../../types/index.js';
+import { getSessionBackendSync } from '../../services/session/index.js';
+import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
+import { TERMINAL_CONTROLLER_CONSTANTS } from '../../constants.js';
 
-export async function listTerminalSessions(this: ApiContext, req: Request, res: Response): Promise<void> {
-  try {
-    const sessions = await this.tmuxService.listSessions();
-    res.json({ success: true, data: sessions } as ApiResponse);
-  } catch (error) {
-    console.error('Error listing terminal sessions:', error);
-    res.status(500).json({ success: false, error: 'Failed to list terminal sessions' } as ApiResponse);
-  }
+/** Logger instance for terminal controller */
+const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
+
+/**
+ * List all active terminal sessions.
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * GET /api/terminal/sessions
+ * Response: { success: true, data: { sessions: ["session1", "session2"] } }
+ */
+export async function listTerminalSessions(req: Request, res: Response): Promise<void> {
+	try {
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		const sessions = backend.listSessions();
+		res.json({
+			success: true,
+			data: { sessions },
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error listing terminal sessions', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to list terminal sessions',
+		} as ApiResponse);
+	}
 }
 
-export async function captureTerminal(this: ApiContext, req: Request, res: Response): Promise<void> {
-  try {
-    const { sessionName } = req.params as any;
-    const { lines } = req.query as any;
+/**
+ * Check if a terminal session exists.
+ *
+ * @param req - Express request object with sessionName param
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * GET /api/terminal/my-session/exists
+ * Response: { success: true, data: { exists: true, sessionName: "my-session" } }
+ */
+export async function sessionExists(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
 
-    // Limit lines to prevent memory issues and apply strict timeout
-    const maxLines = Math.min(parseInt(lines) || 50, 30); // Max 30 lines, default 50 reduced from 100
-    const MAX_OUTPUT_SIZE = 2048; // Max 2KB output per request
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
 
-    // Add timeout to prevent hanging requests
-    const output = await Promise.race([
-      this.tmuxService.capturePane(sessionName, maxLines),
-      new Promise<string>((_, reject) => 
-        setTimeout(() => reject(new Error('Terminal capture timeout')), 1500) // 1.5 second timeout
-      )
-    ]).catch((error) => {
-      console.warn(`Terminal capture failed for session ${sessionName}:`, error.message);
-      return ''; // Return empty output on timeout/error
-    });
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
 
-    // Limit output size to prevent memory issues
-    const trimmedOutput = output.length > MAX_OUTPUT_SIZE
-      ? '...' + output.substring(output.length - MAX_OUTPUT_SIZE + 3)
-      : output;
-
-    res.json({
-      success: true,
-      data: {
-        output: trimmedOutput,
-        sessionName,
-        lines: maxLines,
-        truncated: output.length > MAX_OUTPUT_SIZE
-      }
-    } as ApiResponse);
-    
-  } catch (error) {
-    console.error('Error capturing terminal:', error);
-    res.status(500).json({ success: false, error: 'Failed to capture terminal output' } as ApiResponse);
-  }
+		const exists = backend.sessionExists(sessionName);
+		res.json({
+			success: true,
+			data: { exists, sessionName },
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error checking session existence', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to check session existence',
+		} as ApiResponse);
+	}
 }
 
-export async function sendTerminalInput(this: ApiContext, req: Request, res: Response): Promise<void> {
-  try {
-    const { sessionName } = req.params as any;
-    const { input } = req.body as any;
-    if (!input) { res.status(400).json({ success: false, error: 'Input is required' } as ApiResponse); return; }
-    await this.tmuxService.sendMessage(sessionName, input);
-    res.json({ success: true, message: 'Input sent successfully' } as ApiResponse);
-  } catch (error) {
-    console.error('Error sending terminal input:', error);
-    res.status(500).json({ success: false, error: 'Failed to send terminal input' } as ApiResponse);
-  }
+/**
+ * Capture terminal output from a session.
+ *
+ * @param req - Express request object with sessionName param and lines query
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * GET /api/terminal/my-session/output?lines=50
+ * Response: { success: true, data: { output: "...", sessionName: "my-session", lines: 50, truncated: false } }
+ */
+export async function captureTerminal(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const { lines } = req.query;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		// Limit lines to prevent memory issues
+		const requestedLines = parseInt(lines as string) || TERMINAL_CONTROLLER_CONSTANTS.DEFAULT_CAPTURE_LINES;
+		const maxLines = Math.min(requestedLines, TERMINAL_CONTROLLER_CONSTANTS.MAX_CAPTURE_LINES);
+
+		// Check if session exists
+		if (!backend.sessionExists(sessionName)) {
+			res.status(404).json({
+				success: false,
+				error: `Session '${sessionName}' not found`,
+			} as ApiResponse);
+			return;
+		}
+
+		// Capture output from session
+		const output = backend.captureOutput(sessionName, maxLines);
+
+		// Limit output size to prevent memory issues
+		const trimmedOutput =
+			output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE
+				? '...' + output.substring(output.length - TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE + 3)
+				: output;
+
+		res.json({
+			success: true,
+			data: {
+				output: trimmedOutput,
+				sessionName,
+				lines: maxLines,
+				truncated: output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE,
+			},
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error capturing terminal', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to capture terminal output',
+		} as ApiResponse);
+	}
 }
 
-export async function sendTerminalKey(this: ApiContext, req: Request, res: Response): Promise<void> {
-  try {
-    const { sessionName } = req.params as any;
-    const { key } = req.body as any;
-    if (!key) { res.status(400).json({ success: false, error: 'Key is required' } as ApiResponse); return; }
-    await this.tmuxService.sendKey(sessionName, key);
-    res.json({ success: true, message: 'Key sent successfully' } as ApiResponse);
-  } catch (error) {
-    console.error('Error sending terminal key:', error);
-    res.status(500).json({ success: false, error: 'Failed to send terminal key' } as ApiResponse);
-  }
+/**
+ * Write data to a terminal session.
+ *
+ * @param req - Express request object with sessionName param and data in body
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * POST /api/terminal/my-session/write
+ * Body: { data: "hello\r" }
+ * Response: { success: true, message: "Data written successfully" }
+ */
+export async function writeToSession(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const { data } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		if (data === undefined || data === null) {
+			res.status(400).json({
+				success: false,
+				error: 'Data is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		const session = backend.getSession(sessionName);
+		if (!session) {
+			res.status(404).json({
+				success: false,
+				error: `Session '${sessionName}' not found`,
+			} as ApiResponse);
+			return;
+		}
+
+		// Write data to session
+		session.write(data);
+
+		logger.debug('Data written to session', {
+			sessionName,
+			dataLength: String(data).length,
+		});
+
+		res.json({
+			success: true,
+			message: 'Data written successfully',
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error writing to session', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to write to session',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Send terminal input to a session (legacy endpoint).
+ *
+ * @param req - Express request object with sessionName param and input in body
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * POST /api/terminal/my-session/input
+ * Body: { input: "echo hello" }
+ * Response: { success: true, message: "Input sent successfully" }
+ */
+export async function sendTerminalInput(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const { input } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		if (!input) {
+			res.status(400).json({
+				success: false,
+				error: 'Input is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		const session = backend.getSession(sessionName);
+		if (!session) {
+			res.status(404).json({
+				success: false,
+				error: `Session '${sessionName}' not found`,
+			} as ApiResponse);
+			return;
+		}
+
+		// Write input to session (add carriage return for command execution)
+		session.write(input + '\r');
+
+		logger.debug('Input sent to session', {
+			sessionName,
+			inputLength: input.length,
+		});
+
+		res.json({
+			success: true,
+			message: 'Input sent successfully',
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error sending terminal input', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to send terminal input',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Send a special key to a terminal session.
+ *
+ * @param req - Express request object with sessionName param and key in body
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * POST /api/terminal/my-session/key
+ * Body: { key: "Enter" }
+ * Response: { success: true, message: "Key sent successfully" }
+ */
+export async function sendTerminalKey(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const { key } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		if (!key) {
+			res.status(400).json({
+				success: false,
+				error: 'Key is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		const session = backend.getSession(sessionName);
+		if (!session) {
+			res.status(404).json({
+				success: false,
+				error: `Session '${sessionName}' not found`,
+			} as ApiResponse);
+			return;
+		}
+
+		// Map key names to their escape sequences
+		const keySequence = mapKeyToSequence(key);
+		session.write(keySequence);
+
+		logger.debug('Key sent to session', {
+			sessionName,
+			key,
+		});
+
+		res.json({
+			success: true,
+			message: 'Key sent successfully',
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error sending terminal key', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to send terminal key',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Kill a terminal session.
+ *
+ * @param req - Express request object with sessionName param
+ * @param res - Express response object
+ * @returns Promise that resolves when response is sent
+ *
+ * @example
+ * DELETE /api/terminal/my-session
+ * Response: { success: true, message: "Session killed successfully" }
+ */
+export async function killSession(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not initialized',
+			} as ApiResponse);
+			return;
+		}
+
+		if (!backend.sessionExists(sessionName)) {
+			res.status(404).json({
+				success: false,
+				error: `Session '${sessionName}' not found`,
+			} as ApiResponse);
+			return;
+		}
+
+		await backend.killSession(sessionName);
+
+		logger.info('Session killed', { sessionName });
+
+		res.json({
+			success: true,
+			message: 'Session killed successfully',
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error killing session', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to kill session',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Map a key name to its terminal escape sequence.
+ *
+ * @param key - The key name (e.g., "Enter", "Escape", "C-c")
+ * @returns The corresponding escape sequence
+ */
+function mapKeyToSequence(key: string): string {
+	const keyMap: Record<string, string> = {
+		Enter: '\r',
+		Return: '\r',
+		Escape: '\x1b',
+		Tab: '\t',
+		Backspace: '\x7f',
+		Delete: '\x1b[3~',
+		Up: '\x1b[A',
+		Down: '\x1b[B',
+		Right: '\x1b[C',
+		Left: '\x1b[D',
+		Home: '\x1b[H',
+		End: '\x1b[F',
+		PageUp: '\x1b[5~',
+		PageDown: '\x1b[6~',
+		'C-c': '\x03', // Ctrl+C
+		'C-d': '\x04', // Ctrl+D
+		'C-z': '\x1a', // Ctrl+Z
+		'C-l': '\x0c', // Ctrl+L (clear)
+	};
+
+	return keyMap[key] ?? key;
 }

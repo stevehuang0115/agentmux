@@ -1,367 +1,579 @@
+/**
+ * Terminal Gateway Module
+ *
+ * Provides WebSocket-based real-time terminal streaming for PTY sessions.
+ * Uses event-based streaming instead of polling for better performance.
+ *
+ * @module terminal-gateway
+ */
+
 import { Server as SocketIOServer, Socket } from 'socket.io';
-import { TmuxService } from '../services/index.js';
 import { TerminalOutput, WebSocketMessage } from '../types/index.js';
+import { LoggerService, ComponentLogger } from '../services/core/logger.service.js';
+import {
+	getSessionBackend,
+	getSessionBackendSync,
+	type ISessionBackend,
+} from '../services/session/index.js';
 
+/**
+ * Terminal Gateway class for WebSocket-based terminal streaming.
+ *
+ * Provides:
+ * - Real-time terminal output streaming via PTY onData events
+ * - Terminal input forwarding to PTY sessions
+ * - Terminal resize handling
+ * - Session subscription management
+ */
 export class TerminalGateway {
-  private io: SocketIOServer;
-  private tmuxService: TmuxService;
-  private connectedClients: Map<string, Set<string>> = new Map(); // sessionName -> Set<socketId>
+	private io: SocketIOServer;
+	private logger: ComponentLogger;
 
-  constructor(io: SocketIOServer, tmuxService: TmuxService) {
-    this.io = io;
-    this.tmuxService = tmuxService;
-    
-    this.setupEventHandlers();
-  }
+	/** Map of session name to set of subscribed socket IDs */
+	private connectedClients: Map<string, Set<string>> = new Map();
 
-  private setupEventHandlers(): void {
-    this.io.on('connection', (socket: Socket) => {
-      console.log(`[TERMINAL-GATEWAY] WebSocket client connected: ${socket.id}`);
+	/** Map of session name to unsubscribe function for PTY onData */
+	private sessionSubscriptions: Map<string, () => void> = new Map();
 
-      // Handle subscription to terminal sessions
-      socket.on('subscribe_to_session', (sessionName: string) => {
-        console.log(`[TERMINAL-GATEWAY] Received subscribe_to_session event for: ${sessionName} from socket: ${socket.id}`);
-        this.subscribeToSession(sessionName, socket);
-      });
+	/**
+	 * Create a new TerminalGateway.
+	 *
+	 * @param io - Socket.IO server instance
+	 */
+	constructor(io: SocketIOServer) {
+		this.io = io;
+		this.logger = LoggerService.getInstance().createComponentLogger('TerminalGateway');
 
-      // Handle unsubscription from terminal sessions
-      socket.on('unsubscribe_from_session', (sessionName: string) => {
-        this.unsubscribeFromSession(sessionName, socket);
-      });
+		this.setupEventHandlers();
+	}
 
-      // Handle sending input to terminal sessions
-      socket.on('send_input', async (data: { sessionName: string; input: string }) => {
-        await this.sendInput(data.sessionName, data.input, socket);
-      });
+	/**
+	 * Set up WebSocket event handlers.
+	 */
+	private setupEventHandlers(): void {
+		this.io.on('connection', (socket: Socket) => {
+			this.logger.info('WebSocket client connected', { socketId: socket.id });
 
-      // Handle terminal resize events
-      socket.on('terminal_resize', (data: { sessionName: string; cols: number; rows: number }) => {
-        this.handleTerminalResize(data.sessionName, data.cols, data.rows);
-      });
+			// Handle subscription to terminal sessions
+			socket.on('subscribe_to_session', (sessionName: string) => {
+				this.logger.debug('Received subscribe_to_session event', {
+					sessionName,
+					socketId: socket.id,
+				});
+				this.subscribeToSession(sessionName, socket);
+			});
 
-      // Handle client disconnection
-      socket.on('disconnect', () => {
-        this.handleClientDisconnect(socket);
-      });
+			// Handle unsubscription from terminal sessions
+			socket.on('unsubscribe_from_session', (sessionName: string) => {
+				this.unsubscribeFromSession(sessionName, socket);
+			});
 
-      // Send initial connection confirmation
-      socket.emit('connected', {
-        type: 'connection_established',
-        payload: { socketId: socket.id },
-        timestamp: new Date().toISOString()
-      } as WebSocketMessage);
-    });
+			// Handle sending input to terminal sessions
+			socket.on('send_input', async (data: { sessionName: string; input: string }) => {
+				await this.sendInput(data.sessionName, data.input, socket);
+			});
 
-    // Listen to tmux service events
-    this.tmuxService.on('output', (output: TerminalOutput) => {
-      this.broadcastOutput(output.sessionName, output);
-    });
+			// Handle terminal resize events
+			socket.on('terminal_resize', (data: { sessionName: string; cols: number; rows: number }) => {
+				this.handleTerminalResize(data.sessionName, data.cols, data.rows);
+			});
 
-    this.tmuxService.on('session_killed', (data: { sessionName: string }) => {
-      this.broadcastSessionStatus(data.sessionName, 'terminated');
-    });
+			// Handle client disconnection
+			socket.on('disconnect', () => {
+				this.handleClientDisconnect(socket);
+			});
 
-    this.tmuxService.on('message_sent', (data: { sessionName: string; message: string }) => {
-      this.broadcastMessage(data.sessionName, 'input_sent', data);
-    });
-  }
+			// Send initial connection confirmation
+			socket.emit('connected', {
+				type: 'connection_established',
+				payload: { socketId: socket.id },
+				timestamp: new Date().toISOString(),
+			} as WebSocketMessage);
+		});
+	}
 
-  /**
-   * Subscribe a client to a specific terminal session
-   */
-  subscribeToSession(sessionName: string, socket: Socket): void {
-    console.log(`[TERMINAL-GATEWAY] Subscribing client ${socket.id} to session ${sessionName}`);
+	/**
+	 * Subscribe a client to a specific terminal session.
+	 *
+	 * @param sessionName - The session to subscribe to
+	 * @param socket - The client socket
+	 */
+	subscribeToSession(sessionName: string, socket: Socket): void {
+		this.logger.info('Subscribing client to session', {
+			socketId: socket.id,
+			sessionName,
+		});
 
-    // Add client to subscription list
-    if (!this.connectedClients.has(sessionName)) {
-      this.connectedClients.set(sessionName, new Set());
+		// Initialize client set for this session if not exists
+		if (!this.connectedClients.has(sessionName)) {
+			this.connectedClients.set(sessionName, new Set());
+		}
 
-      // Enable output streaming for this session if it's the first subscriber
-      this.tmuxService.enableOutputStreaming(sessionName);
-      console.log(`[TERMINAL-GATEWAY] Enabled output streaming for session ${sessionName}`);
-    }
+		// Add client to subscription list
+		this.connectedClients.get(sessionName)!.add(socket.id);
 
-    this.connectedClients.get(sessionName)!.add(socket.id);
+		// Join socket.io room for this session
+		socket.join(`terminal_${sessionName}`);
 
-    // Join socket.io room for this session
-    socket.join(`terminal_${sessionName}`);
+		// Start PTY output streaming if not already started
+		this.startPtyStreaming(sessionName);
 
-    console.log(`[TERMINAL-GATEWAY] Client ${socket.id} subscribed to session ${sessionName}`);
+		// Send current terminal state to new subscriber
+		this.sendCurrentTerminalState(sessionName, socket);
 
-    // Send current terminal state to new subscriber
-    this.sendCurrentTerminalState(sessionName, socket);
+		// Confirm subscription
+		socket.emit('subscription_confirmed', {
+			type: 'subscription_confirmed',
+			payload: { sessionName },
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
 
-    // Confirm subscription
-    socket.emit('subscription_confirmed', {
-      type: 'subscription_confirmed',
-      payload: { sessionName },
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+	/**
+	 * Start streaming output from a PTY session.
+	 * Uses event-based onData instead of polling.
+	 *
+	 * @param sessionName - The session to stream from
+	 */
+	private startPtyStreaming(sessionName: string): void {
+		// Don't duplicate subscriptions
+		if (this.sessionSubscriptions.has(sessionName)) {
+			return;
+		}
 
-  /**
-   * Unsubscribe a client from a terminal session
-   */
-  unsubscribeFromSession(sessionName: string, socket: Socket): void {
-    const clients = this.connectedClients.get(sessionName);
-    if (clients) {
-      clients.delete(socket.id);
-      
-      // Clean up empty session subscriptions
-      if (clients.size === 0) {
-        this.connectedClients.delete(sessionName);
-      }
-    }
+		const backend = getSessionBackendSync();
+		if (!backend) {
+			this.logger.warn('Session backend not initialized, cannot start streaming', {
+				sessionName,
+			});
+			return;
+		}
 
-    // Leave socket.io room
-    socket.leave(`terminal_${sessionName}`);
+		const session = backend.getSession(sessionName);
+		if (!session) {
+			this.logger.warn('Session not found for streaming', { sessionName });
+			return;
+		}
 
-    console.log(`Client ${socket.id} unsubscribed from session ${sessionName}`);
+		// Subscribe to PTY onData events - real-time streaming
+		const unsubscribe = session.onData((data: string) => {
+			const terminalOutput: TerminalOutput = {
+				sessionName,
+				content: data,
+				timestamp: new Date().toISOString(),
+				type: 'stdout',
+			};
 
-    // Confirm unsubscription
-    socket.emit('unsubscription_confirmed', {
-      type: 'unsubscription_confirmed',
-      payload: { sessionName },
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+			this.broadcastOutput(sessionName, terminalOutput);
+		});
 
-  /**
-   * Send input to a terminal session
-   */
-  async sendInput(sessionName: string, input: string, socket: Socket): Promise<void> {
-    try {
-      // Verify session exists
-      if (!await this.tmuxService.sessionExists(sessionName)) {
-        socket.emit('error', {
-          type: 'session_not_found',
-          payload: { sessionName, error: 'Session does not exist' },
-          timestamp: new Date().toISOString()
-        } as WebSocketMessage);
-        return;
-      }
+		// Also subscribe to exit events
+		session.onExit((exitCode: number) => {
+			this.logger.info('Session exited', { sessionName, exitCode });
+			this.broadcastSessionStatus(sessionName, 'terminated');
+			this.cleanupSessionSubscription(sessionName);
+		});
 
-      // Send input to tmux session
-      await this.tmuxService.sendMessage(sessionName, input);
+		this.sessionSubscriptions.set(sessionName, unsubscribe);
+		this.logger.info('Started PTY streaming for session', { sessionName });
+	}
 
-      // Broadcast input confirmation to all subscribers
-      this.broadcastMessage(sessionName, 'input_received', {
-        sessionName,
-        input,
-        fromClient: socket.id
-      });
+	/**
+	 * Stop streaming output from a PTY session.
+	 *
+	 * @param sessionName - The session to stop streaming from
+	 */
+	private stopPtyStreaming(sessionName: string): void {
+		const unsubscribe = this.sessionSubscriptions.get(sessionName);
+		if (unsubscribe) {
+			unsubscribe();
+			this.sessionSubscriptions.delete(sessionName);
+			this.logger.info('Stopped PTY streaming for session', { sessionName });
+		}
+	}
 
-    } catch (error) {
-      console.error(`Error sending input to session ${sessionName}:`, error);
-      
-      socket.emit('error', {
-        type: 'input_error',
-        payload: {
-          sessionName,
-          error: error instanceof Error ? error.message : 'Failed to send input'
-        },
-        timestamp: new Date().toISOString()
-      } as WebSocketMessage);
-    }
-  }
+	/**
+	 * Clean up session subscription when session ends.
+	 *
+	 * @param sessionName - The session to clean up
+	 */
+	private cleanupSessionSubscription(sessionName: string): void {
+		this.stopPtyStreaming(sessionName);
+		this.connectedClients.delete(sessionName);
+	}
 
-  /**
-   * Handle terminal resize events
-   */
-  private handleTerminalResize(sessionName: string, cols: number, rows: number): void {
-    // Note: tmux handles terminal resizing automatically, but we can log it
-    console.log(`Terminal resize for session ${sessionName}: ${cols}x${rows}`);
-    
-    // Broadcast resize event to other clients viewing the same session
-    this.broadcastMessage(sessionName, 'terminal_resized', {
-      sessionName,
-      cols,
-      rows
-    });
-  }
+	/**
+	 * Unsubscribe a client from a terminal session.
+	 *
+	 * @param sessionName - The session to unsubscribe from
+	 * @param socket - The client socket
+	 */
+	unsubscribeFromSession(sessionName: string, socket: Socket): void {
+		const clients = this.connectedClients.get(sessionName);
+		if (clients) {
+			clients.delete(socket.id);
 
-  /**
-   * Handle client disconnection
-   */
-  private handleClientDisconnect(socket: Socket): void {
-    console.log(`Client disconnected: ${socket.id}`);
+			// Stop streaming if no more clients watching
+			if (clients.size === 0) {
+				this.stopPtyStreaming(sessionName);
+				this.connectedClients.delete(sessionName);
+			}
+		}
 
-    // Remove client from all session subscriptions
-    for (const [sessionName, clients] of this.connectedClients.entries()) {
-      if (clients.has(socket.id)) {
-        clients.delete(socket.id);
-        
-        // Clean up empty subscriptions
-        if (clients.size === 0) {
-          this.connectedClients.delete(sessionName);
-        }
-      }
-    }
-  }
+		// Leave socket.io room
+		socket.leave(`terminal_${sessionName}`);
 
-  /**
-   * Broadcast terminal output to all subscribers of a session
-   */
-  private broadcastOutput(sessionName: string, output: TerminalOutput): void {
-    const message: WebSocketMessage = {
-      type: 'terminal_output',
-      payload: output,
-      timestamp: new Date().toISOString()
-    };
+		this.logger.debug('Client unsubscribed from session', {
+			socketId: socket.id,
+			sessionName,
+		});
 
-    this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
-  }
+		// Confirm unsubscription
+		socket.emit('unsubscription_confirmed', {
+			type: 'unsubscription_confirmed',
+			payload: { sessionName },
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
 
-  /**
-   * Broadcast session status changes
-   */
-  private broadcastSessionStatus(sessionName: string, status: string): void {
-    const message: WebSocketMessage = {
-      type: 'team_status',
-      payload: { sessionName, status },
-      timestamp: new Date().toISOString()
-    };
+	/**
+	 * Send input to a terminal session.
+	 *
+	 * @param sessionName - The session to send input to
+	 * @param input - The input string
+	 * @param socket - The client socket
+	 */
+	async sendInput(sessionName: string, input: string, socket: Socket): Promise<void> {
+		try {
+			const backend = getSessionBackendSync();
+			if (!backend) {
+				throw new Error('Session backend not initialized');
+			}
 
-    this.io.to(`terminal_${sessionName}`).emit('session_status', message);
-  }
+			const session = backend.getSession(sessionName);
+			if (!session) {
+				socket.emit('error', {
+					type: 'session_not_found',
+					payload: { sessionName, error: 'Session does not exist' },
+					timestamp: new Date().toISOString(),
+				} as WebSocketMessage);
+				return;
+			}
 
-  /**
-   * Broadcast general messages to session subscribers
-   */
-  private broadcastMessage(sessionName: string, type: string, payload: any): void {
-    const message: WebSocketMessage = {
-      type: type as any,
-      payload,
-      timestamp: new Date().toISOString()
-    };
+			// Write input directly to PTY
+			session.write(input);
 
-    this.io.to(`terminal_${sessionName}`).emit(type, message);
-  }
+			this.logger.debug('Sent input to session', {
+				sessionName,
+				inputLength: input.length,
+				fromClient: socket.id,
+			});
 
-  /**
-   * Send current terminal state to a new subscriber
-   */
-  private async sendCurrentTerminalState(sessionName: string, socket: Socket): Promise<void> {
-    try {
-      console.log(`[TERMINAL-GATEWAY] Sending current terminal state for ${sessionName} to socket ${socket.id}`);
+			// Broadcast input confirmation to all subscribers
+			this.broadcastMessage(sessionName, 'input_received', {
+				sessionName,
+				input,
+				fromClient: socket.id,
+			});
+		} catch (error) {
+			this.logger.error('Error sending input to session', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
 
-      // Check if session exists
-      if (!await this.tmuxService.sessionExists(sessionName)) {
-        console.log(`[TERMINAL-GATEWAY] Session ${sessionName} does not exist`);
-        socket.emit('session_not_found', {
-          type: 'session_not_found',
-          payload: { sessionName },
-          timestamp: new Date().toISOString()
-        } as WebSocketMessage);
-        return;
-      }
+			socket.emit('error', {
+				type: 'input_error',
+				payload: {
+					sessionName,
+					error: error instanceof Error ? error.message : 'Failed to send input',
+				},
+				timestamp: new Date().toISOString(),
+			} as WebSocketMessage);
+		}
+	}
 
-      // Capture current terminal content
-      const output = await this.tmuxService.capturePane(sessionName, 100);
-      console.log(`[TERMINAL-GATEWAY] Captured terminal output for ${sessionName}, length: ${output.length}`);
+	/**
+	 * Handle terminal resize events.
+	 *
+	 * @param sessionName - The session to resize
+	 * @param cols - New column count
+	 * @param rows - New row count
+	 */
+	private handleTerminalResize(sessionName: string, cols: number, rows: number): void {
+		try {
+			const backend = getSessionBackendSync();
+			if (!backend) {
+				this.logger.warn('Cannot resize: session backend not initialized');
+				return;
+			}
 
-      const terminalState: TerminalOutput = {
-        sessionName,
-        content: output,
-        timestamp: new Date().toISOString(),
-        type: 'stdout'
-      };
+			const session = backend.getSession(sessionName);
+			if (!session) {
+				this.logger.warn('Cannot resize: session not found', { sessionName });
+				return;
+			}
 
-      console.log(`[TERMINAL-GATEWAY] Emitting initial_terminal_state for ${sessionName} to socket ${socket.id}`);
+			session.resize(cols, rows);
 
-      // Send initial terminal state
-      socket.emit('initial_terminal_state', {
-        type: 'initial_terminal_state',
-        payload: terminalState,
-        timestamp: new Date().toISOString()
-      } as WebSocketMessage);
+			this.logger.debug('Terminal resized', { sessionName, cols, rows });
 
-    } catch (error) {
-      console.error(`[TERMINAL-GATEWAY] Error getting terminal state for ${sessionName}:`, error);
+			// Broadcast resize event to other clients viewing the same session
+			this.broadcastMessage(sessionName, 'terminal_resized', {
+				sessionName,
+				cols,
+				rows,
+			});
+		} catch (error) {
+			this.logger.error('Error resizing terminal', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
 
-      socket.emit('error', {
-        type: 'terminal_state_error',
-        payload: {
-          sessionName,
-          error: error instanceof Error ? error.message : 'Failed to get terminal state'
-        },
-        timestamp: new Date().toISOString()
-      } as WebSocketMessage);
-    }
-  }
+	/**
+	 * Handle client disconnection.
+	 *
+	 * @param socket - The disconnected client socket
+	 */
+	private handleClientDisconnect(socket: Socket): void {
+		this.logger.info('Client disconnected', { socketId: socket.id });
 
-  /**
-   * Get statistics about connected clients
-   */
-  getConnectionStats(): {
-    totalClients: number;
-    sessionSubscriptions: Record<string, number>;
-    totalSessions: number;
-  } {
-    const sessionSubscriptions: Record<string, number> = {};
-    
-    for (const [sessionName, clients] of this.connectedClients.entries()) {
-      sessionSubscriptions[sessionName] = clients.size;
-    }
+		// Remove client from all session subscriptions
+		for (const [sessionName, clients] of this.connectedClients.entries()) {
+			if (clients.has(socket.id)) {
+				clients.delete(socket.id);
 
-    return {
-      totalClients: this.io.sockets.sockets.size,
-      sessionSubscriptions,
-      totalSessions: this.connectedClients.size
-    };
-  }
+				// Stop streaming if no more clients watching
+				if (clients.size === 0) {
+					this.stopPtyStreaming(sessionName);
+					this.connectedClients.delete(sessionName);
+				}
+			}
+		}
+	}
 
-  /**
-   * Force disconnect all clients from a session (useful when session is killed)
-   */
-  disconnectSessionClients(sessionName: string): void {
-    this.io.to(`terminal_${sessionName}`).disconnectSockets();
-    this.connectedClients.delete(sessionName);
-    
-    console.log(`Disconnected all clients from session: ${sessionName}`);
-  }
+	/**
+	 * Broadcast terminal output to all subscribers of a session.
+	 *
+	 * @param sessionName - The session name
+	 * @param output - The terminal output
+	 */
+	private broadcastOutput(sessionName: string, output: TerminalOutput): void {
+		const message: WebSocketMessage = {
+			type: 'terminal_output',
+			payload: output,
+			timestamp: new Date().toISOString(),
+		};
 
-  /**
-   * Broadcast system-wide notifications
-   */
-  broadcastSystemNotification(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
-    this.io.emit('system_notification', {
-      type: 'system_notification',
-      payload: { message, notificationType: type },
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+		this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
+	}
 
-  /**
-   * Broadcast orchestrator status changes
-   */
-  broadcastOrchestratorStatus(orchestratorData: any): void {
-    this.io.emit('orchestrator_status_changed', {
-      type: 'orchestrator_status_changed',
-      payload: orchestratorData,
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+	/**
+	 * Broadcast session status changes.
+	 *
+	 * @param sessionName - The session name
+	 * @param status - The status string
+	 */
+	private broadcastSessionStatus(sessionName: string, status: string): void {
+		const message: WebSocketMessage = {
+			type: 'team_status',
+			payload: { sessionName, status },
+			timestamp: new Date().toISOString(),
+		};
 
-  /**
-   * Broadcast team member status changes
-   */
-  broadcastTeamMemberStatus(memberData: any): void {
-    this.io.emit('team_member_status_changed', {
-      type: 'team_member_status_changed',
-      payload: memberData,
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+		this.io.to(`terminal_${sessionName}`).emit('session_status', message);
+	}
 
-  /**
-   * Broadcast comprehensive team activity updates
-   */
-  broadcastTeamActivity(activityData: any): void {
-    this.io.emit('team_activity_updated', {
-      type: 'team_activity_updated',
-      payload: activityData,
-      timestamp: new Date().toISOString()
-    } as WebSocketMessage);
-  }
+	/**
+	 * Broadcast general messages to session subscribers.
+	 *
+	 * @param sessionName - The session name
+	 * @param type - Message type
+	 * @param payload - Message payload
+	 */
+	private broadcastMessage(sessionName: string, type: string, payload: unknown): void {
+		const message: WebSocketMessage = {
+			type: type as WebSocketMessage['type'],
+			payload,
+			timestamp: new Date().toISOString(),
+		};
+
+		this.io.to(`terminal_${sessionName}`).emit(type, message);
+	}
+
+	/**
+	 * Send current terminal state to a new subscriber.
+	 *
+	 * @param sessionName - The session name
+	 * @param socket - The client socket
+	 */
+	private sendCurrentTerminalState(sessionName: string, socket: Socket): void {
+		try {
+			this.logger.debug('Sending current terminal state', {
+				sessionName,
+				socketId: socket.id,
+			});
+
+			const backend = getSessionBackendSync();
+			if (!backend) {
+				socket.emit('error', {
+					type: 'terminal_state_error',
+					payload: { sessionName, error: 'Session backend not initialized' },
+					timestamp: new Date().toISOString(),
+				} as WebSocketMessage);
+				return;
+			}
+
+			if (!backend.sessionExists(sessionName)) {
+				this.logger.debug('Session does not exist', { sessionName });
+				socket.emit('session_not_found', {
+					type: 'session_not_found',
+					payload: { sessionName },
+					timestamp: new Date().toISOString(),
+				} as WebSocketMessage);
+				return;
+			}
+
+			// Capture current terminal content from buffer
+			const output = backend.captureOutput(sessionName, 500);
+
+			const terminalState: TerminalOutput = {
+				sessionName,
+				content: output,
+				timestamp: new Date().toISOString(),
+				type: 'stdout',
+			};
+
+			this.logger.debug('Emitting initial terminal state', {
+				sessionName,
+				contentLength: output.length,
+			});
+
+			// Send initial terminal state
+			socket.emit('initial_terminal_state', {
+				type: 'initial_terminal_state',
+				payload: terminalState,
+				timestamp: new Date().toISOString(),
+			} as WebSocketMessage);
+		} catch (error) {
+			this.logger.error('Error getting terminal state', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+
+			socket.emit('error', {
+				type: 'terminal_state_error',
+				payload: {
+					sessionName,
+					error: error instanceof Error ? error.message : 'Failed to get terminal state',
+				},
+				timestamp: new Date().toISOString(),
+			} as WebSocketMessage);
+		}
+	}
+
+	/**
+	 * Get statistics about connected clients.
+	 *
+	 * @returns Connection statistics
+	 */
+	getConnectionStats(): {
+		totalClients: number;
+		sessionSubscriptions: Record<string, number>;
+		totalSessions: number;
+		activeStreams: number;
+	} {
+		const sessionSubscriptions: Record<string, number> = {};
+
+		for (const [sessionName, clients] of this.connectedClients.entries()) {
+			sessionSubscriptions[sessionName] = clients.size;
+		}
+
+		return {
+			totalClients: this.io.sockets.sockets.size,
+			sessionSubscriptions,
+			totalSessions: this.connectedClients.size,
+			activeStreams: this.sessionSubscriptions.size,
+		};
+	}
+
+	/**
+	 * Force disconnect all clients from a session.
+	 *
+	 * @param sessionName - The session name
+	 */
+	disconnectSessionClients(sessionName: string): void {
+		this.io.to(`terminal_${sessionName}`).disconnectSockets();
+		this.cleanupSessionSubscription(sessionName);
+
+		this.logger.info('Disconnected all clients from session', { sessionName });
+	}
+
+	/**
+	 * Broadcast system-wide notifications.
+	 *
+	 * @param message - Notification message
+	 * @param type - Notification type
+	 */
+	broadcastSystemNotification(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
+		this.io.emit('system_notification', {
+			type: 'system_notification',
+			payload: { message, notificationType: type },
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
+
+	/**
+	 * Broadcast orchestrator status changes.
+	 *
+	 * @param orchestratorData - Orchestrator data
+	 */
+	broadcastOrchestratorStatus(orchestratorData: unknown): void {
+		this.io.emit('orchestrator_status_changed', {
+			type: 'orchestrator_status_changed',
+			payload: orchestratorData,
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
+
+	/**
+	 * Broadcast team member status changes.
+	 *
+	 * @param memberData - Team member data
+	 */
+	broadcastTeamMemberStatus(memberData: unknown): void {
+		this.io.emit('team_member_status_changed', {
+			type: 'team_member_status_changed',
+			payload: memberData,
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
+
+	/**
+	 * Broadcast comprehensive team activity updates.
+	 *
+	 * @param activityData - Activity data
+	 */
+	broadcastTeamActivity(activityData: unknown): void {
+		this.io.emit('team_activity_updated', {
+			type: 'team_activity_updated',
+			payload: activityData,
+			timestamp: new Date().toISOString(),
+		} as WebSocketMessage);
+	}
+
+	/**
+	 * Destroy the gateway and clean up all subscriptions.
+	 */
+	destroy(): void {
+		// Unsubscribe from all PTY sessions
+		for (const unsubscribe of this.sessionSubscriptions.values()) {
+			unsubscribe();
+		}
+		this.sessionSubscriptions.clear();
+		this.connectedClients.clear();
+
+		this.logger.info('TerminalGateway destroyed');
+	}
 }

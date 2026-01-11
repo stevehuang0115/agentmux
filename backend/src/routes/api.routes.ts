@@ -44,7 +44,7 @@ export function createApiRoutes(apiController: ApiController): Router {
   // Note: Project routes consolidated into new architecture - no longer needed here
   registerTaskManagementRoutes(router, apiController);
   registerSchedulerRoutes(router, apiController);
-  registerTerminalRoutes(router, apiController);
+  registerTerminalRoutes(router);
   registerAssignmentsRoutes(router, apiController);
   registerErrorRoutes(router, apiController);
   registerScheduledMessageRoutes(router, apiController);
