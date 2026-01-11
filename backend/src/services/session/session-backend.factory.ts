@@ -14,6 +14,9 @@ import {
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { PtySessionBackend } from './pty/index.js';
 
+// DORMANT: Uncomment to re-enable tmux backend
+// import { TmuxSessionBackend } from './tmux/index.js';
+
 /**
  * Singleton instance of the session backend
  */
@@ -105,11 +108,18 @@ export async function createSessionBackend(
 				}
 
 				case 'tmux':
-					// tmux backend will be adapted from existing TmuxService
-					// For now, throw an error indicating it's not yet available
+					// DORMANT: tmux backend is available but disabled in favor of PTY.
+					// To re-enable tmux support:
+					// 1. Uncomment the import at the top of this file
+					// 2. Uncomment the lines below
+					// sessionBackendInstance = new TmuxSessionBackend();
+					// currentBackendType = 'tmux';
+					// logger.info('Tmux session backend created');
+					// return sessionBackendInstance;
 					throw new Error(
-						'tmux session backend adapter is not yet implemented. ' +
-							'See task 08-move-tmux-dormant.md for implementation details.'
+						'tmux backend is currently disabled. ' +
+							'PTY backend is preferred. ' +
+							'To re-enable tmux, see session-backend.factory.ts'
 					);
 
 				default: {
