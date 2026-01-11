@@ -46,14 +46,14 @@ export class PtySession implements ISession {
 	private ptyProcess: pty.IPty;
 
 	/**
-	 * Array of data listeners for output events
+	 * Set of data listeners for output events (O(1) add/remove)
 	 */
-	private dataListeners: Array<(data: string) => void> = [];
+	private dataListeners: Set<(data: string) => void> = new Set();
 
 	/**
-	 * Array of exit listeners for process termination events
+	 * Set of exit listeners for process termination events (O(1) add/remove)
 	 */
-	private exitListeners: Array<(code: number) => void> = [];
+	private exitListeners: Set<(code: number) => void> = new Set();
 
 	/**
 	 * Flag indicating whether the session has been killed
@@ -136,19 +136,17 @@ export class PtySession implements ISession {
 	 * ```
 	 */
 	onData(callback: (data: string) => void): () => void {
-		if (this.dataListeners.length >= PTY_CONSTANTS.MAX_DATA_LISTENERS) {
+		if (this.dataListeners.size >= PTY_CONSTANTS.MAX_DATA_LISTENERS) {
 			throw new Error(
 				`Maximum data listener count (${PTY_CONSTANTS.MAX_DATA_LISTENERS}) exceeded for session ${this.name}`
 			);
 		}
 
-		this.dataListeners.push(callback);
+		this.dataListeners.add(callback);
 
+		// Return O(1) unsubscribe function
 		return () => {
-			const index = this.dataListeners.indexOf(callback);
-			if (index > -1) {
-				this.dataListeners.splice(index, 1);
-			}
+			this.dataListeners.delete(callback);
 		};
 	}
 
@@ -167,19 +165,17 @@ export class PtySession implements ISession {
 	 * ```
 	 */
 	onExit(callback: (code: number) => void): () => void {
-		if (this.exitListeners.length >= PTY_CONSTANTS.MAX_EXIT_LISTENERS) {
+		if (this.exitListeners.size >= PTY_CONSTANTS.MAX_EXIT_LISTENERS) {
 			throw new Error(
 				`Maximum exit listener count (${PTY_CONSTANTS.MAX_EXIT_LISTENERS}) exceeded for session ${this.name}`
 			);
 		}
 
-		this.exitListeners.push(callback);
+		this.exitListeners.add(callback);
 
+		// Return O(1) unsubscribe function
 		return () => {
-			const index = this.exitListeners.indexOf(callback);
-			if (index > -1) {
-				this.exitListeners.splice(index, 1);
-			}
+			this.exitListeners.delete(callback);
 		};
 	}
 
@@ -218,6 +214,19 @@ export class PtySession implements ISession {
 		if (this.killed) {
 			throw new Error(`Cannot resize killed session ${this.name}`);
 		}
+
+		// Validate dimensions
+		if (cols <= 0 || rows <= 0 || !Number.isInteger(cols) || !Number.isInteger(rows)) {
+			throw new Error(`Invalid dimensions: cols=${cols}, rows=${rows}. Values must be positive integers.`);
+		}
+
+		// Cap at reasonable maximums to prevent resource exhaustion
+		const maxCols = 1000;
+		const maxRows = 1000;
+		if (cols > maxCols || rows > maxRows) {
+			throw new Error(`Dimensions exceed maximum: cols=${cols} (max ${maxCols}), rows=${rows} (max ${maxRows})`);
+		}
+
 		this.ptyProcess.resize(cols, rows);
 	}
 
@@ -241,8 +250,8 @@ export class PtySession implements ISession {
 		this.ptyProcess.kill();
 
 		// Clear all listeners to prevent memory leaks
-		this.dataListeners = [];
-		this.exitListeners = [];
+		this.dataListeners.clear();
+		this.exitListeners.clear();
 	}
 
 	/**
@@ -261,7 +270,7 @@ export class PtySession implements ISession {
 		// Handle data output
 		this.ptyProcess.onData((data) => {
 			if (!this.killed) {
-				// Copy listeners array to avoid issues with modifications during iteration
+				// Copy listeners set to avoid issues with modifications during iteration
 				const listeners = [...this.dataListeners];
 				for (const callback of listeners) {
 					try {
@@ -278,7 +287,7 @@ export class PtySession implements ISession {
 
 		// Handle process exit
 		this.ptyProcess.onExit(({ exitCode }) => {
-			// Copy listeners array to avoid issues with modifications during iteration
+			// Copy listeners set to avoid issues with modifications during iteration
 			const listeners = [...this.exitListeners];
 			for (const callback of listeners) {
 				try {
@@ -293,8 +302,8 @@ export class PtySession implements ISession {
 
 			// Mark as killed after exit
 			this.killed = true;
-			this.dataListeners = [];
-			this.exitListeners = [];
+			this.dataListeners.clear();
+			this.exitListeners.clear();
 		});
 	}
 

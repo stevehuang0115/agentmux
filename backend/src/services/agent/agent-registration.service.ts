@@ -510,8 +510,6 @@ export class AgentRegistrationService {
 			return prompt;
 		} catch (error) {
 			// Fallback to inline prompt if file doesn't exist
-			console.error(`ERROR: Could not load prompt from config for role '${role}':`, error);
-
 			// Try to get the attempted path for error logging
 			let attemptedPath: string = 'unknown';
 			try {

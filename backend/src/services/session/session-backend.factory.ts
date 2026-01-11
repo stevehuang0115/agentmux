@@ -25,6 +25,12 @@ let sessionBackendInstance: ISessionBackend | null = null;
 let currentBackendType: SessionBackendType | null = null;
 
 /**
+ * Promise-based mutex to prevent race conditions during async initialization.
+ * If a creation is in progress, subsequent calls wait for it to complete.
+ */
+let creationPromise: Promise<ISessionBackend> | null = null;
+
+/**
  * Logger for factory operations
  */
 const getLogger = (): ComponentLogger => {
@@ -57,46 +63,67 @@ export async function createSessionBackend(
 ): Promise<ISessionBackend> {
 	const logger = getLogger();
 
-	// If we have an existing instance of a different type, destroy it first
-	if (sessionBackendInstance && currentBackendType !== type) {
-		logger.info('Destroying existing backend to switch types', {
-			oldType: currentBackendType,
-			newType: type,
-		});
-		await sessionBackendInstance.destroy();
-		sessionBackendInstance = null;
-		currentBackendType = null;
-	}
-
 	// Return existing instance if it matches the requested type
 	if (sessionBackendInstance && currentBackendType === type) {
 		logger.debug('Returning existing session backend instance', { type });
 		return sessionBackendInstance;
 	}
 
-	logger.info('Creating new session backend', { type });
-
-	switch (type) {
-		case 'pty': {
-			sessionBackendInstance = new PtySessionBackend();
-			currentBackendType = 'pty';
-			logger.info('PTY session backend created');
-			return sessionBackendInstance;
-		}
-
-		case 'tmux':
-			// tmux backend will be adapted from existing TmuxService
-			// For now, throw an error indicating it's not yet available
-			throw new Error(
-				'tmux session backend adapter is not yet implemented. ' +
-				'See task 08-move-tmux-dormant.md for implementation details.'
-			);
-
-		default: {
-			const exhaustiveCheck: never = type;
-			throw new Error(`Unsupported session backend type: ${exhaustiveCheck}`);
-		}
+	// If a creation is already in progress, wait for it
+	if (creationPromise) {
+		logger.debug('Waiting for in-progress backend creation', { type });
+		return creationPromise;
 	}
+
+	// Create the backend with mutex protection
+	creationPromise = (async () => {
+		try {
+			// Double-check after acquiring the "lock"
+			if (sessionBackendInstance && currentBackendType === type) {
+				return sessionBackendInstance;
+			}
+
+			// If we have an existing instance of a different type, destroy it first
+			if (sessionBackendInstance && currentBackendType !== type) {
+				logger.info('Destroying existing backend to switch types', {
+					oldType: currentBackendType,
+					newType: type,
+				});
+				await sessionBackendInstance.destroy();
+				sessionBackendInstance = null;
+				currentBackendType = null;
+			}
+
+			logger.info('Creating new session backend', { type });
+
+			switch (type) {
+				case 'pty': {
+					sessionBackendInstance = new PtySessionBackend();
+					currentBackendType = 'pty';
+					logger.info('PTY session backend created');
+					return sessionBackendInstance;
+				}
+
+				case 'tmux':
+					// tmux backend will be adapted from existing TmuxService
+					// For now, throw an error indicating it's not yet available
+					throw new Error(
+						'tmux session backend adapter is not yet implemented. ' +
+							'See task 08-move-tmux-dormant.md for implementation details.'
+					);
+
+				default: {
+					const exhaustiveCheck: never = type;
+					throw new Error(`Unsupported session backend type: ${exhaustiveCheck}`);
+				}
+			}
+		} finally {
+			// Clear the promise after completion (success or failure)
+			creationPromise = null;
+		}
+	})();
+
+	return creationPromise;
 }
 
 /**
@@ -214,6 +241,7 @@ export function isSessionBackendInitialized(): boolean {
 export function resetSessionBackendFactory(): void {
 	sessionBackendInstance = null;
 	currentBackendType = null;
+	creationPromise = null;
 }
 
 /**
