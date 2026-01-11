@@ -59,6 +59,8 @@ export const PTY_CONSTANTS = {
 	DEFAULT_SCROLLBACK: 5000,
 	DEFAULT_COLS: 80,
 	DEFAULT_ROWS: 24,
+	MAX_RESIZE_COLS: 1000,
+	MAX_RESIZE_ROWS: 1000,
 } as const;
 
 // Session command timing delays (in milliseconds)

@@ -221,10 +221,11 @@ export class PtySession implements ISession {
 		}
 
 		// Cap at reasonable maximums to prevent resource exhaustion
-		const maxCols = 1000;
-		const maxRows = 1000;
-		if (cols > maxCols || rows > maxRows) {
-			throw new Error(`Dimensions exceed maximum: cols=${cols} (max ${maxCols}), rows=${rows} (max ${maxRows})`);
+		if (cols > PTY_CONSTANTS.MAX_RESIZE_COLS || rows > PTY_CONSTANTS.MAX_RESIZE_ROWS) {
+			throw new Error(
+				`Dimensions exceed maximum: cols=${cols} (max ${PTY_CONSTANTS.MAX_RESIZE_COLS}), ` +
+					`rows=${rows} (max ${PTY_CONSTANTS.MAX_RESIZE_ROWS})`
+			);
 		}
 
 		this.ptyProcess.resize(cols, rows);

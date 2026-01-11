@@ -59,6 +59,21 @@ export class SessionCommandHelper {
 	}
 
 	/**
+	 * Get a session by name, throwing an error if it doesn't exist.
+	 *
+	 * @param sessionName - The name of the session to retrieve
+	 * @returns The session instance
+	 * @throws Error if the session does not exist
+	 */
+	private getSessionOrThrow(sessionName: string): ISession {
+		const session = this.backend.getSession(sessionName);
+		if (!session) {
+			throw new Error(`Session '${sessionName}' does not exist`);
+		}
+		return session;
+	}
+
+	/**
 	 * Check if a session exists
 	 */
 	sessionExists(sessionName: string): boolean {
@@ -80,10 +95,7 @@ export class SessionCommandHelper {
 	 * @throws Error if session does not exist
 	 */
 	async sendMessage(sessionName: string, message: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
+		const session = this.getSessionOrThrow(sessionName);
 
 		this.logger.debug('Sending message to session', {
 			sessionName,
@@ -105,10 +117,7 @@ export class SessionCommandHelper {
 	 * @throws Error if session does not exist or key is unknown
 	 */
 	async sendKey(sessionName: string, key: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
+		const session = this.getSessionOrThrow(sessionName);
 
 		const keyCode = KEY_CODES[key];
 		if (!keyCode) {
@@ -131,11 +140,7 @@ export class SessionCommandHelper {
 	 * Send Ctrl+C to a session
 	 */
 	async sendCtrlC(sessionName: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
-
+		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x03');
 		this.logger.debug('Sent Ctrl+C to session', { sessionName });
 		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
@@ -145,11 +150,7 @@ export class SessionCommandHelper {
 	 * Send Enter key to a session
 	 */
 	async sendEnter(sessionName: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
-
+		const session = this.getSessionOrThrow(sessionName);
 		session.write('\r');
 		this.logger.debug('Sent Enter to session', { sessionName });
 		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
@@ -159,11 +160,7 @@ export class SessionCommandHelper {
 	 * Send Escape key to a session
 	 */
 	async sendEscape(sessionName: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
-
+		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x1b');
 		this.logger.debug('Sent Escape to session', { sessionName });
 		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
@@ -174,10 +171,7 @@ export class SessionCommandHelper {
 	 * Sends Ctrl+C followed by Ctrl+U to cancel any input and clear the line
 	 */
 	async clearCurrentCommandLine(sessionName: string): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
+		const session = this.getSessionOrThrow(sessionName);
 
 		// Ctrl+C to cancel any running command
 		session.write('\x03');
@@ -262,10 +256,7 @@ export class SessionCommandHelper {
 		key: string,
 		value: string
 	): Promise<void> {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
+		const session = this.getSessionOrThrow(sessionName);
 
 		// Export the variable
 		session.write(`export ${key}="${value}"\r`);
@@ -277,11 +268,7 @@ export class SessionCommandHelper {
 	 * Resize a session's terminal
 	 */
 	resizeSession(sessionName: string, cols: number, rows: number): void {
-		const session = this.backend.getSession(sessionName);
-		if (!session) {
-			throw new Error(`Session '${sessionName}' does not exist`);
-		}
-
+		const session = this.getSessionOrThrow(sessionName);
 		session.resize(cols, rows);
 		this.logger.debug('Session resized', { sessionName, cols, rows });
 	}
