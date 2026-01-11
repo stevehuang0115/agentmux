@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { TmuxCommandService } from './tmux-command.service.js';
+import { SessionCommandHelper } from '../session/index.js';
 import { RuntimeType } from '../../constants.js';
 
 /**
@@ -23,7 +23,7 @@ export interface RuntimeConfig {
  */
 export abstract class RuntimeAgentService {
 	protected logger: ComponentLogger;
-	protected tmuxCommand: TmuxCommandService;
+	protected sessionHelper: SessionCommandHelper;
 	protected projectRoot: string;
 	protected runtimeConfig: RuntimeConfig | null = null;
 
@@ -32,9 +32,9 @@ export abstract class RuntimeAgentService {
 	private detectionResults: Map<string, { isRuntimeRunning: boolean; timestamp: number }> =
 		new Map();
 
-	constructor(tmuxCommandService: TmuxCommandService, projectRoot: string) {
+	constructor(sessionHelper: SessionCommandHelper, projectRoot: string) {
 		this.logger = LoggerService.getInstance().createComponentLogger(`${this.constructor.name}`);
-		this.tmuxCommand = tmuxCommandService;
+		this.sessionHelper = sessionHelper;
 		this.projectRoot = projectRoot;
 		this.initializeRuntimeConfig();
 	}
@@ -63,7 +63,7 @@ export abstract class RuntimeAgentService {
 			});
 
 			// Clear the commandline before execute
-			await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+			await this.sessionHelper.clearCurrentCommandLine(sessionName);
 			await this.sendShellCommandsToSession(sessionName, commands, targetPath);
 
 			this.logger.info('Runtime initialization script completed', {
@@ -190,7 +190,7 @@ export abstract class RuntimeAgentService {
 		while (Date.now() - startTime < timeout) {
 			try {
 				// Capture terminal output
-				const output = await this.tmuxCommand.capturePane(sessionName, 30);
+				const output = this.sessionHelper.capturePane(sessionName, 30);
 
 				// Get runtime-specific ready patterns
 				const readyPatterns = this.getRuntimeReadyPatterns();
@@ -319,14 +319,14 @@ export abstract class RuntimeAgentService {
 	}
 
 	/**
-	 * Send shell commands to tmux session with robust script approach
+	 * Send shell commands to session
 	 */
 	protected async sendShellCommandsToSession(
 		sessionName: string,
 		commands: string[],
 		targetPath?: string
 	): Promise<void> {
-		// Change to target directory first using robust script approach
+		// Change to target directory first
 		const cdPath = targetPath || process.cwd();
 		this.logger.info('Changing directory before runtime init', {
 			sessionName,
@@ -334,11 +334,11 @@ export abstract class RuntimeAgentService {
 			cdPath,
 		});
 
-		// Use robust script approach for cd command (includes Enter automatically)
-		await this.tmuxCommand.sendMessage(sessionName, `cd "${cdPath}"`);
+		// Send cd command (includes Enter automatically)
+		await this.sessionHelper.sendMessage(sessionName, `cd "${cdPath}"`);
 		await new Promise((resolve) => setTimeout(resolve, 500));
 
-		// Send each command using robust script approach
+		// Send each command
 		for (const command of commands) {
 			this.logger.info('Sending command to session', {
 				sessionName,
@@ -346,8 +346,8 @@ export abstract class RuntimeAgentService {
 				command,
 			});
 
-			// Use robust script approach (includes Enter automatically)
-			await this.tmuxCommand.sendMessage(sessionName, command);
+			// Send command (includes Enter automatically)
+			await this.sessionHelper.sendMessage(sessionName, command);
 			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
 	}

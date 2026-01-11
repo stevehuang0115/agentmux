@@ -1,7 +1,12 @@
 import * as path from 'path';
 import { readFile } from 'fs/promises';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { TmuxCommandService } from './tmux-command.service.js';
+import {
+	SessionCommandHelper,
+	createSessionCommandHelper,
+	getSessionBackendSync,
+	createSessionBackend,
+} from '../session/index.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { StorageService } from '../core/storage.service.js';
@@ -40,7 +45,7 @@ export interface OrchestratorConfig {
  */
 export class AgentRegistrationService {
 	private logger: ComponentLogger;
-	private tmuxCommand: TmuxCommandService;
+	private _sessionHelper: SessionCommandHelper | null = null;
 	private storageService: StorageService;
 	private projectRoot: string;
 
@@ -51,14 +56,44 @@ export class AgentRegistrationService {
 	private teamRolesConfig: TeamRolesConfig | null = null;
 
 	constructor(
-		tmuxCommandService: TmuxCommandService,
+		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
 		projectRoot: string | null,
 		storageService: StorageService
 	) {
 		this.logger = LoggerService.getInstance().createComponentLogger('AgentRegistrationService');
-		this.tmuxCommand = tmuxCommandService;
 		this.storageService = storageService;
 		this.projectRoot = projectRoot || this.findProjectRoot();
+	}
+
+	/**
+	 * Get or create the session helper with lazy initialization
+	 */
+	private async getSessionHelper(): Promise<SessionCommandHelper> {
+		if (this._sessionHelper) {
+			return this._sessionHelper;
+		}
+
+		let backend = getSessionBackendSync();
+		if (!backend) {
+			backend = await createSessionBackend('pty');
+		}
+
+		this._sessionHelper = createSessionCommandHelper(backend);
+		return this._sessionHelper;
+	}
+
+	/**
+	 * Get session helper synchronously (may throw if not initialized)
+	 */
+	private getSessionHelperSync(): SessionCommandHelper {
+		if (!this._sessionHelper) {
+			const backend = getSessionBackendSync();
+			if (!backend) {
+				throw new Error('Session backend not initialized');
+			}
+			this._sessionHelper = createSessionCommandHelper(backend);
+		}
+		return this._sessionHelper;
 	}
 
 	/**
@@ -144,7 +179,7 @@ export class AgentRegistrationService {
 		// Clear detection cache to ensure fresh runtime detection
 		const runtimeService = RuntimeServiceFactory.create(
 			runtimeType,
-			this.tmuxCommand,
+			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 			this.projectRoot
 		);
 		runtimeService.clearDetectionCache(sessionName);
@@ -222,14 +257,14 @@ export class AgentRegistrationService {
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<boolean> {
 		// First clear any existing stuff
-		await this.tmuxCommand.sendCtrlC(sessionName);
+		await (await this.getSessionHelper()).sendCtrlC(sessionName);
 
 		// First check if runtime is running before sending the prompt
 		// runtimeService2: Separate instance for pre-registration runtime detection
 		// This instance is isolated from main runtimeService to avoid cache interference
 		const runtimeService2 = RuntimeServiceFactory.create(
 			runtimeType,
-			this.tmuxCommand,
+			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 			this.projectRoot
 		);
 		const runtimeRunning = await runtimeService2.detectRuntimeWithCommand(sessionName);
@@ -247,7 +282,7 @@ export class AgentRegistrationService {
 		});
 
 		// Send Ctrl+C to cancel any pending slash command from detection
-		await this.tmuxCommand.sendCtrlC(sessionName);
+		await (await this.getSessionHelper()).sendCtrlC(sessionName);
 
 		const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
 		const promptDelivered = await this.sendPromptRobustly(sessionName, prompt);
@@ -273,14 +308,14 @@ export class AgentRegistrationService {
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<boolean> {
 		// Clear Commandline
-		await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+		await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
 
 		// Reinitialize runtime using the appropriate initialization script
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
 		const runtimeService2 = RuntimeServiceFactory.create(
 			runtimeType,
-			this.tmuxCommand,
+			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 			this.projectRoot
 		);
 		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath);
@@ -322,7 +357,7 @@ export class AgentRegistrationService {
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<boolean> {
 		// Kill existing session
-		await this.tmuxCommand.killSession(sessionName);
+		await (await this.getSessionHelper()).killSession(sessionName);
 
 		// Wait for cleanup
 		await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -337,7 +372,7 @@ export class AgentRegistrationService {
 			// Initialize runtime for orchestrator using script (stay in agentmux project)
 			const runtimeService = RuntimeServiceFactory.create(
 				runtimeType,
-				this.tmuxCommand,
+				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 				this.projectRoot
 			);
 			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd());
@@ -349,7 +384,7 @@ export class AgentRegistrationService {
 			// Isolated from runtimeService to prevent interference between init and ready checks
 			const runtimeService3 = RuntimeServiceFactory.create(
 				runtimeType,
-				this.tmuxCommand,
+				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 				this.projectRoot
 			);
 			const isReady = await runtimeService3.waitForRuntimeReady(
@@ -379,7 +414,7 @@ export class AgentRegistrationService {
 			// Clean instance for post-initialization responsiveness testing
 			const runtimeService4 = RuntimeServiceFactory.create(
 				runtimeType,
-				this.tmuxCommand,
+				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 				this.projectRoot
 			);
 			const runtimeResponding = await runtimeService4.detectRuntimeWithCommand(sessionName);
@@ -395,15 +430,15 @@ export class AgentRegistrationService {
 			);
 
 			// Send Ctrl+C to cancel any pending slash command from detection
-			await this.tmuxCommand.sendCtrlC(sessionName);
+			await (await this.getSessionHelper()).sendCtrlC(sessionName);
 		} else {
 			// For other roles, create basic session and initialize Claude
-			await this.tmuxCommand.createSession(sessionName, projectPath || process.cwd());
+			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			// Initialize runtime using the initialization script
 			const runtimeService = RuntimeServiceFactory.create(
 				runtimeType,
-				this.tmuxCommand,
+				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 				this.projectRoot
 			);
 			await runtimeService.executeRuntimeInitScript(sessionName, projectPath);
@@ -413,7 +448,7 @@ export class AgentRegistrationService {
 			const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000;
 			const isReady = await RuntimeServiceFactory.create(
 				runtimeType,
-				this.tmuxCommand,
+				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 				this.projectRoot
 			).waitForRuntimeReady(sessionName, 25000, checkInterval); // 25s timeout
 			if (!isReady) {
@@ -591,7 +626,7 @@ export class AgentRegistrationService {
 			try {
 				// Step 1: Send Ctrl+C to clear any pending commands (skip on first attempt if Claude was just initialized)
 				if (!skipInitialCleanup || attempt > 1) {
-					await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+					await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
 					await new Promise((resolve) => setTimeout(resolve, 500));
 					this.logger.debug('Sent Ctrl+C to clear terminal state', {
 						sessionName,
@@ -614,7 +649,7 @@ export class AgentRegistrationService {
 					// Separate instance allows force refresh without affecting other detection operations
 					const runtimeService5 = RuntimeServiceFactory.create(
 						runtimeType,
-						this.tmuxCommand,
+						null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 						this.projectRoot
 					);
 					runtimeRunning = await runtimeService5.detectRuntimeWithCommand(
@@ -635,7 +670,7 @@ export class AgentRegistrationService {
 						// Dedicated instance for clearing detection cache without disrupting ongoing operations
 						const runtimeService6 = RuntimeServiceFactory.create(
 							runtimeType,
-							this.tmuxCommand,
+							null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 							this.projectRoot
 						);
 						runtimeService6.clearDetectionCache(sessionName);
@@ -769,18 +804,18 @@ export class AgentRegistrationService {
 		});
 
 		// Check if session already exists
-		if (await this.tmuxCommand.sessionExists(config.sessionName)) {
+		if (await (await this.getSessionHelper()).sessionExists(config.sessionName)) {
 			this.logger.info('Orchestrator session already exists', {
 				sessionName: config.sessionName,
 			});
 			return;
 		}
 
-		// Create new tmux session for orchestrator
-		await this.tmuxCommand.createSession(
+		// Create new session for orchestrator
+		await (await this.getSessionHelper()).createSession(
 			config.sessionName,
-			config.projectPath,
-			config.windowName
+			config.projectPath
+			// windowName not used in PTY backend
 		);
 
 		this.logger.info('Orchestrator session created successfully', {
@@ -858,7 +893,7 @@ export class AgentRegistrationService {
 			});
 
 			// Check if session already exists
-			const sessionExists = await this.tmuxCommand.sessionExists(sessionName);
+			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
 
 			if (!sessionExists) {
 				// Session doesn't exist, go directly to creating a new session
@@ -874,7 +909,7 @@ export class AgentRegistrationService {
 				// Step 1: Try to detect if runtime is already running using slash command
 				const runtimeService = RuntimeServiceFactory.create(
 					runtimeType,
-					this.tmuxCommand,
+					null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
 					this.projectRoot
 				);
 
@@ -923,9 +958,9 @@ export class AgentRegistrationService {
 						);
 
 						// Send Ctrl+C twice to try to restart Claude
-						await this.tmuxCommand.sendCtrlC(sessionName);
+						await (await this.getSessionHelper()).sendCtrlC(sessionName);
 						await new Promise((resolve) => setTimeout(resolve, 1000));
-						await this.tmuxCommand.sendCtrlC(sessionName);
+						await (await this.getSessionHelper()).sendCtrlC(sessionName);
 						await new Promise((resolve) => setTimeout(resolve, 2000));
 
 						// Clear runtime detection cache after Ctrl+C restart
@@ -973,20 +1008,20 @@ export class AgentRegistrationService {
 						sessionName,
 					}
 				);
-				await this.tmuxCommand.killSession(sessionName);
+				await (await this.getSessionHelper()).killSession(sessionName);
 				await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for cleanup
 			}
 
-			// Create new tmux session (same approach for both orchestrator and team members)
-			await this.tmuxCommand.createSession(sessionName, projectPath, windowName);
+			// Create new session (same approach for both orchestrator and team members)
+			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			// Set environment variables for MCP connection
-			await this.tmuxCommand.setEnvironmentVariable(
+			await (await this.getSessionHelper()).setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.TMUX_SESSION_NAME,
 				sessionName
 			);
-			await this.tmuxCommand.setEnvironmentVariable(
+			await (await this.getSessionHelper()).setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.AGENTMUX_ROLE,
 				role
@@ -1058,11 +1093,11 @@ export class AgentRegistrationService {
 		try {
 			this.logger.info('Terminating agent session (unified approach)', { sessionName, role });
 
-			const sessionExists = await this.tmuxCommand.sessionExists(sessionName);
+			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
 
 			if (sessionExists) {
 				// Kill the tmux session
-				await this.tmuxCommand.killSession(sessionName);
+				await (await this.getSessionHelper()).killSession(sessionName);
 				this.logger.info('Session terminated successfully', { sessionName });
 			} else {
 				this.logger.info('Session already terminated or does not exist', { sessionName });
@@ -1119,7 +1154,7 @@ export class AgentRegistrationService {
 			}
 
 			// Check if session exists
-			const sessionExists = await this.tmuxCommand.sessionExists(sessionName);
+			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
 			if (!sessionExists) {
 				return {
 					success: false,
@@ -1128,10 +1163,10 @@ export class AgentRegistrationService {
 			}
 
 			// Clear the terminal first
-			await this.tmuxCommand.clearCurrentCommandLine(sessionName);
+			await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
 
 			// Send message using tmux command service
-			await this.tmuxCommand.sendMessage(sessionName, message);
+			await (await this.getSessionHelper()).sendMessage(sessionName, message);
 
 			// Note: sendMessage already includes Enter key with 1000ms delay
 
@@ -1174,7 +1209,7 @@ export class AgentRegistrationService {
 	}> {
 		try {
 			// Check if session exists
-			const sessionExists = await this.tmuxCommand.sessionExists(sessionName);
+			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
 			if (!sessionExists) {
 				return {
 					success: false,
@@ -1183,7 +1218,7 @@ export class AgentRegistrationService {
 			}
 
 			// Send key using tmux command service
-			await this.tmuxCommand.sendKey(sessionName, key);
+			await (await this.getSessionHelper()).sendKey(sessionName, key);
 
 			this.logger.info('Key sent to agent successfully', {
 				sessionName,
@@ -1236,7 +1271,7 @@ export class AgentRegistrationService {
 		try {
 			// Lightweight health check with timeout
 			const agentRunning = await Promise.race([
-				this.tmuxCommand.sessionExists(sessionName),
+				(await this.getSessionHelper()).sessionExists(sessionName),
 				new Promise<boolean>((_, reject) =>
 					setTimeout(() => reject(new Error('Health check timeout')), timeout)
 				),
@@ -1289,14 +1324,14 @@ export class AgentRegistrationService {
 				});
 
 				// Capture state before sending
-				const beforeOutput = await this.tmuxCommand.capturePane(sessionName, 10);
+				const beforeOutput = await (await this.getSessionHelper()).capturePane(sessionName, 10);
 				const beforeLength = beforeOutput.length;
 
 				// Clear the existing prompts if any
-				await this.tmuxCommand.sendCtrlC(sessionName);
+				await (await this.getSessionHelper()).sendCtrlC(sessionName);
 
 				// Send the prompt with proper timing
-				await this.tmuxCommand.sendMessage(sessionName, prompt);
+				await (await this.getSessionHelper()).sendMessage(sessionName, prompt);
 
 				// Note: sendMessage already includes Enter key with 1000ms delay
 				// Additional delay for processing to begin
@@ -1306,7 +1341,7 @@ export class AgentRegistrationService {
 				await new Promise((resolve) => setTimeout(resolve, 2000));
 
 				// Verify prompt was delivered and processed
-				const afterOutput = await this.tmuxCommand.capturePane(sessionName, 20);
+				const afterOutput = await (await this.getSessionHelper()).capturePane(sessionName, 20);
 				const afterLength = afterOutput.length;
 
 				// Check for signs of Claude processing the prompt

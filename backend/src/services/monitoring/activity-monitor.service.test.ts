@@ -1,6 +1,6 @@
 import { ActivityMonitorService, TeamWorkingStatusFile } from './activity-monitor.service';
 import { StorageService } from '../core/storage.service.js';
-import { TmuxService } from '../agent/tmux.service.js';
+import * as sessionModule from '../session/index.js';
 import { AgentHeartbeatService } from '../agent/agent-heartbeat.service.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { readFile, writeFile } from 'fs/promises';
@@ -11,7 +11,7 @@ import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/storage.service.js');
-jest.mock('../agent/tmux.service.js');
+jest.mock('../session/index.js');
 jest.mock('../agent/agent-heartbeat.service.js');
 jest.mock('../core/logger.service.js');
 jest.mock('fs/promises');
@@ -23,16 +23,16 @@ describe('ActivityMonitorService', () => {
   let service: ActivityMonitorService;
   let mockLogger: jest.Mocked<ComponentLogger>;
   let mockStorageService: jest.Mocked<StorageService>;
-  let mockTmuxService: jest.Mocked<TmuxService>;
+  let mockSessionBackend: jest.Mocked<sessionModule.ISessionBackend>;
   let mockAgentHeartbeatService: jest.Mocked<AgentHeartbeatService>;
   let mockLoggerService: jest.Mocked<LoggerService>;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
+
     // Reset singleton instance
     (ActivityMonitorService as any).instance = undefined;
-    
+
     // Setup mocks
     mockLogger = {
       info: jest.fn(),
@@ -44,25 +44,34 @@ describe('ActivityMonitorService', () => {
     mockLoggerService = {
       createComponentLogger: jest.fn().mockReturnValue(mockLogger)
     } as any;
-    
+
     (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLoggerService);
-    
+
     mockStorageService = new StorageService() as jest.Mocked<StorageService>;
-    mockTmuxService = new TmuxService() as jest.Mocked<TmuxService>;
+    mockSessionBackend = {
+      sessionExists: jest.fn().mockReturnValue(true),
+      captureOutput: jest.fn().mockReturnValue('some terminal output'),
+      listSessions: jest.fn().mockReturnValue([]),
+      getSession: jest.fn().mockReturnValue(undefined),
+      killSession: jest.fn().mockResolvedValue(undefined),
+      createSession: jest.fn().mockResolvedValue({} as any),
+      getTerminalBuffer: jest.fn().mockReturnValue(''),
+      destroy: jest.fn().mockResolvedValue(undefined),
+    } as any;
     mockAgentHeartbeatService = {
       detectStaleAgents: jest.fn().mockResolvedValue([]),
       getInstance: jest.fn()
     } as any;
 
     (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorageService);
-    (TmuxService as jest.MockedClass<typeof TmuxService>).mockImplementation(() => mockTmuxService);
+    (sessionModule.getSessionBackend as jest.Mock).mockReturnValue(mockSessionBackend);
     (AgentHeartbeatService.getInstance as jest.Mock).mockReturnValue(mockAgentHeartbeatService);
 
     // Mock file system
     (existsSync as jest.Mock).mockReturnValue(false);
     (homedir as jest.Mock).mockReturnValue('/mock/home');
     (join as jest.Mock).mockImplementation((...args) => args.join('/'));
-    
+
     service = ActivityMonitorService.getInstance();
   });
 
@@ -200,8 +209,8 @@ describe('ActivityMonitorService', () => {
 
     beforeEach(() => {
       mockStorageService.getTeams.mockResolvedValue([mockTeam]);
-      mockTmuxService.sessionExists.mockResolvedValue(true);
-      mockTmuxService.capturePane.mockResolvedValue('some terminal output');
+      mockSessionBackend.sessionExists.mockReturnValue(true);
+      mockSessionBackend.captureOutput.mockReturnValue('some terminal output');
       mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue([]);
 
       // Mock file operations
@@ -224,28 +233,28 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should check orchestrator working status and update teamWorkingStatus.json', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // orchestrator session
-      mockTmuxService.capturePane.mockResolvedValue('new terminal output');
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // orchestrator session
+      mockSessionBackend.captureOutput.mockReturnValue('new terminal output');
 
       await (service as any).performActivityCheck();
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockTmuxService.capturePane).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 5);
+      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(mockSessionBackend.captureOutput).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 5);
     });
 
     it('should check team member sessions for working status', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session (inactive)
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session (inactive)
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member session
 
       await (service as any).performActivityCheck();
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-1');
-      expect(mockTmuxService.capturePane).toHaveBeenCalledWith('test-session-1', 5);
+      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith('test-session-1');
+      expect(mockSessionBackend.captureOutput).toHaveBeenCalledWith('test-session-1', 5);
     });
 
     it('should set member working status to idle if session no longer exists', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // member session doesn't exist
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // member session doesn't exist
 
       await (service as any).performActivityCheck();
 
@@ -255,9 +264,9 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should detect activity and update working status to in_progress', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
-      mockTmuxService.capturePane.mockResolvedValue('new terminal output');
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member session exists
+      mockSessionBackend.captureOutput.mockReturnValue('new terminal output');
 
       // Simulate different output from cache (activity detected)
       (service as any).lastTerminalOutputs.set('test-session-1', 'old terminal output');
@@ -270,9 +279,9 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should not update status if no activity detected (same output)', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
-      mockTmuxService.capturePane.mockResolvedValue('same terminal output');
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member session exists
+      mockSessionBackend.captureOutput.mockReturnValue('same terminal output');
 
       // Simulate same output as cache (no activity)
       (service as any).lastTerminalOutputs.set('test-session-1', 'same terminal output');
@@ -286,20 +295,21 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should check all members with sessions regardless of status', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member-1 session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member-2 session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member-1 session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member-2 session
 
       await (service as any).performActivityCheck();
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-1');
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith('test-session-2');
+      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith('test-session-1');
+      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith('test-session-2');
     });
 
     it('should handle member working status check errors gracefully', async () => {
-      mockTmuxService.sessionExists.mockResolvedValueOnce(false); // orchestrator session
-      mockTmuxService.sessionExists.mockResolvedValueOnce(true); // member session exists
-      mockTmuxService.capturePane.mockRejectedValue(new Error('Capture pane error'));
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member session exists
+      // Simulate an error by throwing when captureOutput is called
+      mockSessionBackend.captureOutput.mockImplementation(() => { throw new Error('Capture error'); });
 
       await (service as any).performActivityCheck();
 
@@ -308,7 +318,7 @@ describe('ActivityMonitorService', () => {
         memberId: 'member-1',
         memberName: 'Test Member 1',
         sessionName: 'test-session-1',
-        error: 'Capture pane error'
+        error: 'Capture error'
       });
     });
 
