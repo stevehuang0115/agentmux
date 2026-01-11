@@ -66,8 +66,8 @@ export class AgentMuxServer {
 			config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
 
 		this.config = {
-			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '3000'),
-			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '3001'),
+			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '8787'),
+			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '8789'),
 			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||

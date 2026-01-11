@@ -10,14 +10,14 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3002,
+    port: 8788,
     proxy: {
       '/api': {
-        target: 'http://localhost:8788',
+        target: 'http://localhost:8787',
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:8788',
+        target: 'http://localhost:8787',
         changeOrigin: true,
         ws: true,
       },
