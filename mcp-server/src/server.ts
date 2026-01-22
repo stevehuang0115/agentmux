@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as fs from 'fs/promises';
 import { execSync, spawn } from 'child_process';
 import { logger, createLogger } from './logger.js';
-import { TmuxService } from '../../backend/src/services/agent/tmux.service.js';
+import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import {
   MCPRequest,
@@ -63,7 +63,7 @@ export class AgentMuxMCPServer {
   private apiBaseUrl: string;
   private projectPath: string;
   private agentRole: string;
-  private tmuxService: TmuxService;
+  private sessionAdapter: SessionAdapter;
   private requestQueue: Map<string, number> = new Map();
   private lastCleanup: number = Date.now();
 
@@ -75,8 +75,8 @@ export class AgentMuxMCPServer {
     this.projectPath = process.env.PROJECT_PATH || process.cwd();
     this.agentRole = process.env.AGENT_ROLE || 'developer';
 
-    // Initialize TmuxService
-    this.tmuxService = new TmuxService();
+    // Initialize SessionAdapter (uses backend API for session management)
+    this.sessionAdapter = new SessionAdapter();
 
     // Debug log session name
     logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
@@ -105,11 +105,11 @@ export class AgentMuxMCPServer {
    */
   async initialize(): Promise<void> {
     try {
-      // Initialize TmuxService
-      await this.tmuxService.initialize();
-      logger.info('TmuxService initialized successfully');
+      // Initialize SessionAdapter
+      await this.sessionAdapter.initialize();
+      logger.info('SessionAdapter initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize TmuxService:', error);
+      logger.error('Failed to initialize SessionAdapter:', error);
       throw error;
     }
   }
@@ -118,7 +118,7 @@ export class AgentMuxMCPServer {
    * Cleanup resources when shutting down
    */
   destroy(): void {
-    this.tmuxService.destroy();
+    this.sessionAdapter.destroy();
   }
 
   /**
@@ -134,15 +134,15 @@ export class AgentMuxMCPServer {
     
     try {
       // Check if target session exists
-      if (!(await this.tmuxService.sessionExists(params.to))) {
+      if (!(await this.sessionAdapter.sessionExists(params.to))) {
         logger.warn(`Session ${params.to} does not exist, skipping message`);
         return {
           content: [{ type: 'text', text: `Session ${params.to} not found - message not sent` }],
         };
       }
       
-      // Use TmuxService's robust message sending
-      await this.tmuxService.sendMessage(params.to, params.message);
+      // Use SessionAdapter's robust message sending
+      await this.sessionAdapter.sendMessage(params.to, params.message);
 
       // Log message for tracking
       this.logMessage(this.sessionName, params.to, params.message).catch((e) => logger.error('Failed to log message', e));
@@ -161,8 +161,8 @@ export class AgentMuxMCPServer {
 
   async broadcast(params: BroadcastParams): Promise<MCPToolResult> {
     try {
-      // Get all sessions using TmuxService
-      const sessions = await this.tmuxService.listSessions();
+      // Get all sessions using SessionAdapter
+      const sessions = await this.sessionAdapter.listSessions();
 
       if (sessions.length === 0) {
         return {
@@ -181,8 +181,8 @@ export class AgentMuxMCPServer {
           if (params.excludeSelf && sessionName === this.sessionName) return;
 
           try {
-            if (await this.tmuxService.sessionExists(sessionName)) {
-              await this.tmuxService.sendMessage(sessionName, params.message);
+            if (await this.sessionAdapter.sessionExists(sessionName)) {
+              await this.sessionAdapter.sendMessage(sessionName, params.message);
               broadcastCount++;
             }
           } catch (error) {
@@ -213,7 +213,7 @@ export class AgentMuxMCPServer {
    */
   async getTeamStatus(): Promise<MCPToolResult> {
     try {
-      const sessions = await this.tmuxService.listSessions();
+      const sessions = await this.sessionAdapter.listSessions();
 
       // Get team data from backend API to enrich session information
       let teamData: { teams?: Team[] } | null = null;
@@ -229,7 +229,7 @@ export class AgentMuxMCPServer {
 
       const statuses = [];
       for (const sessionInfo of sessions) {
-        const output = await this.tmuxService.capturePane(sessionInfo.sessionName, 20);
+        const output = await this.sessionAdapter.capturePane(sessionInfo.sessionName, 20);
         const status = this.analyzeAgentStatus(output);
 
         // Debug logging for status detection
@@ -298,7 +298,7 @@ export class AgentMuxMCPServer {
 
     try {
       // Check if session exists first
-      if (!(await this.tmuxService.sessionExists(targetSession))) {
+      if (!(await this.sessionAdapter.sessionExists(targetSession))) {
         return {
           content: [{
             type: 'text',
@@ -308,7 +308,7 @@ export class AgentMuxMCPServer {
         };
       }
       
-      const logs = await this.tmuxService.capturePane(targetSession, lines);
+      const logs = await this.sessionAdapter.capturePane(targetSession, lines);
       const logContent = logs || `No recent activity found for ${targetSession}`;
       
       return {
@@ -571,7 +571,7 @@ export class AgentMuxMCPServer {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         logger.info(`[MCP-STATUS] 🖥️ Checking tmux session (attempt ${attempt}/2)...`);
-        sessionExists = await this.tmuxService.sessionExists(targetSession);
+        sessionExists = await this.sessionAdapter.sessionExists(targetSession);
         logger.info(`[MCP-STATUS] 📡 Session exists: ${sessionExists}`);
         break;
       } catch (error) {
@@ -586,7 +586,7 @@ export class AgentMuxMCPServer {
     if (sessionExists) {
       try {
         logger.info('[MCP-STATUS] 📋 Capturing pane output...');
-        paneOutput = await this.tmuxService.capturePane(targetSession, 10);
+        paneOutput = await this.sessionAdapter.capturePane(targetSession, 10);
         logger.info(`[MCP-STATUS] ✅ Captured ${paneOutput.length} chars of output`);
       } catch (error) {
         logger.info('[MCP-STATUS] ⚠️ Failed to capture pane output:', error);
@@ -1159,7 +1159,7 @@ export class AgentMuxMCPServer {
       }
 
       // Check if target session exists
-      if (!(await this.tmuxService.sessionExists(targetSessionName))) {
+      if (!(await this.sessionAdapter.sessionExists(targetSessionName))) {
         return {
           content: [{
             type: 'text',
@@ -1467,13 +1467,13 @@ export class AgentMuxMCPServer {
       await this.logProgress(message);
 
       // If there's a specific orchestrator, send to them
-      const orchestratorSessions = await this.tmuxService.listSessions();
+      const orchestratorSessions = await this.sessionAdapter.listSessions();
       const orchestrator = orchestratorSessions.find((s: TmuxSession) =>
         s.sessionName.includes('orchestrator') || s.sessionName.includes('orc')
       );
 
       if (orchestrator) {
-        await this.tmuxService.sendMessage(orchestrator.sessionName, `📊 PROGRESS UPDATE:\n${message}`);
+        await this.sessionAdapter.sendMessage(orchestrator.sessionName, `📊 PROGRESS UPDATE:\n${message}`);
       }
 
       return {
@@ -1507,8 +1507,8 @@ export class AgentMuxMCPServer {
 
       if (reviewer) {
         // Send to specific reviewer
-        if (await this.tmuxService.sessionExists(reviewer)) {
-          await this.tmuxService.sendMessage(reviewer, reviewMessage);
+        if (await this.sessionAdapter.sessionExists(reviewer)) {
+          await this.sessionAdapter.sendMessage(reviewer, reviewMessage);
           return {
             content: [{
               type: 'text',
@@ -1520,14 +1520,14 @@ export class AgentMuxMCPServer {
         }
       } else {
         // Broadcast to all sessions (someone will pick it up)
-        const sessions = await this.tmuxService.listSessions();
+        const sessions = await this.sessionAdapter.listSessions();
         let sentCount = 0;
 
         for (const sessionInfo of sessions) {
           if (sessionInfo.sessionName === this.sessionName) continue;
 
           try {
-            await this.tmuxService.sendMessage(sessionInfo.sessionName, reviewMessage);
+            await this.sessionAdapter.sendMessage(sessionInfo.sessionName, reviewMessage);
             sentCount++;
           } catch (error) {
             logger.warn(`Failed to send review request to ${sessionInfo.sessionName}`);
@@ -1563,11 +1563,11 @@ export class AgentMuxMCPServer {
       // Use setTimeout for the schedule (simple implementation)
       setTimeout(async () => {
         try {
-          if (target && await this.tmuxService.sessionExists(target)) {
-            await this.tmuxService.sendMessage(target, `⏰ ${message}`);
+          if (target && await this.sessionAdapter.sessionExists(target)) {
+            await this.sessionAdapter.sendMessage(target, `⏰ ${message}`);
           } else {
             // Send back to self
-            await this.tmuxService.sendMessage(this.sessionName, `⏰ REMINDER: ${message}`);
+            await this.sessionAdapter.sendMessage(this.sessionName, `⏰ REMINDER: ${message}`);
           }
         } catch (error) {
           logger.error('Scheduled check failed:', error);
@@ -1702,7 +1702,7 @@ export class AgentMuxMCPServer {
         throw new Error('Only orchestrator can create teams');
       }
 
-      // Create tmux session using TmuxService
+      // Create tmux session using SessionAdapter
       const sessionConfig = {
         name: name,
         role: role as 'orchestrator' | 'tpm' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'qa' | 'tester' | 'designer',
@@ -1710,7 +1710,7 @@ export class AgentMuxMCPServer {
         projectPath: projectPath || this.projectPath,
         runtimeType: 'claude-code' as const
       };
-      await this.tmuxService.createSession(sessionConfig);
+      await this.sessionAdapter.createSession(sessionConfig);
 
       // Send initial setup commands
       const setupCommands = [
@@ -1721,14 +1721,14 @@ export class AgentMuxMCPServer {
       ];
 
       for (const cmd of setupCommands) {
-        await this.tmuxService.sendKey(name, cmd);
-        await this.tmuxService.sendKey(name, 'Enter');
+        await this.sessionAdapter.sendKey(name, cmd);
+        await this.sessionAdapter.sendKey(name, 'Enter');
         await new Promise(resolve => setTimeout(resolve, 200));
       }
 
       // Send system prompt if provided
       if (systemPrompt) {
-        await this.tmuxService.sendMessage(name, `SYSTEM PROMPT:\n${systemPrompt}\n\nPlease acknowledge and begin work.`);
+        await this.sessionAdapter.sendMessage(name, `SYSTEM PROMPT:\n${systemPrompt}\n\nPlease acknowledge and begin work.`);
       }
 
       // Register with API
@@ -1787,8 +1787,8 @@ export class AgentMuxMCPServer {
         ticketId
       });
 
-      if (await this.tmuxService.sessionExists(to)) {
-        await this.tmuxService.sendMessage(to, taskMessage);
+      if (await this.sessionAdapter.sessionExists(to)) {
+        await this.sessionAdapter.sendMessage(to, taskMessage);
 
         // Log delegation
         await this.logDelegation(this.sessionName, to, task, priority);
@@ -1838,7 +1838,7 @@ export class AgentMuxMCPServer {
 
       // Check if session exists
       logger.info(`[SHUTDOWN] Step 6: Checking if session exists...`);
-      if (!(await this.tmuxService.sessionExists(sessionName))) {
+      if (!(await this.sessionAdapter.sessionExists(sessionName))) {
         logger.info(`[SHUTDOWN] Step 7: Session existence check failed`);
         throw new Error(`Session ${sessionName} not found`);
       }
@@ -1846,12 +1846,12 @@ export class AgentMuxMCPServer {
 
       // Send notification message (less alarming than "warning")
       logger.info(`[SHUTDOWN] Step 9: Sending notification message...`);
-      await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
+      await this.sessionAdapter.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
       logger.info(`[SHUTDOWN] Step 10: Notification sent, proceeding with termination`);
 
       // Terminate the session
       logger.info(`[SHUTDOWN] Step 11: Executing session termination...`);
-      await this.tmuxService.killSession(sessionName);
+      await this.sessionAdapter.killSession(sessionName);
       logger.info(`[SHUTDOWN] Step 12: Session termination completed successfully`);
 
       // Notify remaining sessions
@@ -1925,7 +1925,7 @@ export class AgentMuxMCPServer {
           }
 
           // Check if session exists
-          if (!(await this.tmuxService.sessionExists(sessionName))) {
+          if (!(await this.sessionAdapter.sessionExists(sessionName))) {
             results.failed.push({
               sessionName,
               error: 'Session not found'
@@ -1936,11 +1936,11 @@ export class AgentMuxMCPServer {
 
           // Send notification message
           logger.info(`[BULK-TERMINATE] Sending notification to: ${sessionName}`);
-          await this.tmuxService.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
+          await this.sessionAdapter.sendMessage(sessionName, '📋 Agent session terminating. Please save your work.');
 
           // Terminate the session
           logger.info(`[BULK-TERMINATE] Terminating session: ${sessionName}`);
-          await this.tmuxService.killSession(sessionName);
+          await this.sessionAdapter.killSession(sessionName);
 
           results.successful.push(sessionName);
           logger.info(`[BULK-TERMINATE] Successfully terminated: ${sessionName}`);
@@ -1959,7 +1959,7 @@ export class AgentMuxMCPServer {
         logger.info(`[BULK-TERMINATE] Broadcasting summary notification...`);
 
         // Get all sessions and send to non-orchestrator sessions only
-        const sessions = await this.tmuxService.listSessions();
+        const sessions = await this.sessionAdapter.listSessions();
         let broadcastCount = 0;
 
         for (const session of sessions) {
@@ -1972,8 +1972,8 @@ export class AgentMuxMCPServer {
           }
 
           try {
-            if (await this.tmuxService.sessionExists(sessionName)) {
-              await this.tmuxService.sendMessage(sessionName, `📋 Bulk termination completed: ${results.successful.length} agents terminated by ${this.sessionName}`);
+            if (await this.sessionAdapter.sessionExists(sessionName)) {
+              await this.sessionAdapter.sendMessage(sessionName, `📋 Bulk termination completed: ${results.successful.length} agents terminated by ${this.sessionName}`);
               broadcastCount++;
               logger.info(`[BULK-TERMINATE] Broadcasted to: ${sessionName}`);
             }

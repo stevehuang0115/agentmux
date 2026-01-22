@@ -10,16 +10,35 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3002,
+    port: 8788,
     proxy: {
       '/api': {
-        target: 'http://localhost:8788',
+        target: 'http://localhost:8787',
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:8788',
+        target: 'http://localhost:8787',
         changeOrigin: true,
         ws: true,
+        configure: (proxy, _options) => {
+          // Suppress EPIPE/ECONNRESET errors from abrupt WebSocket disconnections
+          proxy.on('error', (err, _req, _res) => {
+            const code = (err as NodeJS.ErrnoException).code;
+            // Silently ignore broken pipe errors (happen on browser refresh/close)
+            if (code === 'EPIPE' || code === 'ECONNRESET') {
+              return;
+            }
+            console.error('[WS Proxy Error]', err.message);
+          });
+          proxy.on('proxyReqWs', (_proxyReq, _req, socket) => {
+            socket.on('error', (err) => {
+              const code = (err as NodeJS.ErrnoException).code;
+              if (code !== 'EPIPE' && code !== 'ECONNRESET') {
+                console.error('[WS Socket Error]', err.message);
+              }
+            });
+          });
+        },
       },
     },
   },

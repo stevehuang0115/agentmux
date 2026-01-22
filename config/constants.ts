@@ -212,9 +212,9 @@ export const WEB_CONSTANTS = {
 	 */
 	PORTS: {
 		/** Backend API server default port */
-		BACKEND: 8788,
+		BACKEND: 8787,
 		/** Frontend development server default port */
-		FRONTEND: 3002,
+		FRONTEND: 8788,
 	},
 
 	/**

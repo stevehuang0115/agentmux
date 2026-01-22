@@ -116,17 +116,30 @@ export class TerminalGateway {
 		socket.join(`terminal_${sessionName}`);
 
 		// Start PTY output streaming if not already started
-		this.startPtyStreaming(sessionName);
+		const streamingStarted = this.startPtyStreaming(sessionName);
 
 		// Send current terminal state to new subscriber
 		this.sendCurrentTerminalState(sessionName, socket);
 
-		// Confirm subscription
+		// Confirm subscription (even if session doesn't exist yet - client will get updates when it's created)
 		socket.emit('subscription_confirmed', {
 			type: 'subscription_confirmed',
-			payload: { sessionName },
+			payload: { sessionName, sessionExists: streamingStarted },
 			timestamp: new Date().toISOString(),
 		} as WebSocketMessage);
+
+		// If session doesn't exist, also emit a session_not_found so client knows to wait
+		if (!streamingStarted) {
+			this.logger.info('Session does not exist yet, client will wait for creation', {
+				sessionName,
+				socketId: socket.id,
+			});
+			socket.emit('session_pending', {
+				type: 'session_pending',
+				payload: { sessionName, message: 'Session is being created, please wait...' },
+				timestamp: new Date().toISOString(),
+			} as WebSocketMessage);
+		}
 	}
 
 	/**
@@ -134,11 +147,13 @@ export class TerminalGateway {
 	 * Uses event-based onData instead of polling.
 	 *
 	 * @param sessionName - The session to stream from
+	 * @returns True if streaming started successfully, false otherwise
 	 */
-	private startPtyStreaming(sessionName: string): void {
+	private startPtyStreaming(sessionName: string): boolean {
 		// Don't duplicate subscriptions
 		if (this.sessionSubscriptions.has(sessionName)) {
-			return;
+			this.logger.debug('Session already has streaming subscription', { sessionName });
+			return true;
 		}
 
 		const backend = getSessionBackendSync();
@@ -146,17 +161,28 @@ export class TerminalGateway {
 			this.logger.warn('Session backend not initialized, cannot start streaming', {
 				sessionName,
 			});
-			return;
+			return false;
 		}
+
+		// List all available sessions for debugging
+		const availableSessions = backend.listSessions();
+		this.logger.debug('Looking for session in backend', {
+			sessionName,
+			availableSessions,
+			sessionCount: availableSessions.length,
+		});
 
 		const session = backend.getSession(sessionName);
 		if (!session) {
-			this.logger.warn('Session not found for streaming', { sessionName });
-			return;
+			this.logger.warn('Session not found for streaming', {
+				sessionName,
+				availableSessions,
+			});
+			return false;
 		}
 
 		// Subscribe to PTY onData events - real-time streaming
-		const unsubscribe = session.onData((data: string) => {
+		const unsubscribeData = session.onData((data: string) => {
 			const terminalOutput: TerminalOutput = {
 				sessionName,
 				content: data,
@@ -167,15 +193,20 @@ export class TerminalGateway {
 			this.broadcastOutput(sessionName, terminalOutput);
 		});
 
-		// Also subscribe to exit events
-		session.onExit((exitCode: number) => {
+		// Subscribe to exit events
+		const unsubscribeExit = session.onExit((exitCode: number) => {
 			this.logger.info('Session exited', { sessionName, exitCode });
 			this.broadcastSessionStatus(sessionName, 'terminated');
 			this.cleanupSessionSubscription(sessionName);
 		});
 
-		this.sessionSubscriptions.set(sessionName, unsubscribe);
+		// Store combined cleanup function to prevent memory leaks
+		this.sessionSubscriptions.set(sessionName, () => {
+			unsubscribeData();
+			unsubscribeExit();
+		});
 		this.logger.info('Started PTY streaming for session', { sessionName });
+		return true;
 	}
 
 	/**

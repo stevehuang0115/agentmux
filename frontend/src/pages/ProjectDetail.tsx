@@ -650,7 +650,7 @@ export const ProjectDetail: React.FC = () => {
     if (!state.project) return;
     
     showConfirm(
-      `Are you sure you want to unassign "${teamName}" from this project?\n\nThis will send a command to the orchestrator to delete the team's tmux sessions.`,
+      `Are you sure you want to unassign "${teamName}" from this project?\n\nThis will send a command to the orchestrator to delete the team's terminal sessions.`,
       async () => await executeUnassignTeam(teamId, teamName),
       {
         title: 'Unassign Team',
@@ -666,7 +666,7 @@ export const ProjectDetail: React.FC = () => {
     try {
       setState(prev => ({ ...prev, loading: true }));
       
-      // Send unassign command to orchestrator to delete tmux sessions
+      // Send unassign command to orchestrator to delete terminal sessions
       await fetch('/api/orchestrator/execute', {
         method: 'POST',
         headers: {
@@ -684,7 +684,7 @@ export const ProjectDetail: React.FC = () => {
       await loadProjectData(state.project.id);
       
       showSuccess(
-        `Team "${teamName}" has been unassigned from the project and their tmux sessions have been terminated.`,
+        `Team "${teamName}" has been unassigned from the project and their terminal sessions have been terminated.`,
         'Team Unassigned'
       );
       
@@ -1084,7 +1084,7 @@ export const ProjectDetail: React.FC = () => {
     
     // Validate that the team has been started (has session names)
     if (!selectedMember?.sessionName) {
-      showError('Team must be started before using Build Specs. Please click "Start Team" first to create tmux sessions for team members.');
+      showError('Team must be started before using Build Specs. Please click "Start Team" first to create terminal sessions for team members.');
       return;
     }
     

@@ -69,16 +69,29 @@ export class AgentRegistrationService {
 	 * Get or create the session helper with lazy initialization
 	 */
 	private async getSessionHelper(): Promise<SessionCommandHelper> {
+		this.logger.debug('Getting session helper', {
+			hasExistingHelper: !!this._sessionHelper,
+		});
+
 		if (this._sessionHelper) {
 			return this._sessionHelper;
 		}
 
 		let backend = getSessionBackendSync();
+		this.logger.debug('Backend sync check', {
+			hasBackend: !!backend,
+		});
+
 		if (!backend) {
+			this.logger.info('Creating new PTY session backend');
 			backend = await createSessionBackend('pty');
+			this.logger.info('PTY session backend created', {
+				hasBackend: !!backend,
+			});
 		}
 
 		this._sessionHelper = createSessionCommandHelper(backend);
+		this.logger.debug('Session helper created');
 		return this._sessionHelper;
 	}
 
@@ -102,6 +115,44 @@ export class AgentRegistrationService {
 	private findProjectRoot(): string {
 		// Simple fallback - could be improved to walk up directories
 		return process.cwd();
+	}
+
+	/**
+	 * Create a runtime service instance for the given runtime type.
+	 * Centralizes RuntimeServiceFactory creation to reduce code duplication.
+	 */
+	private createRuntimeService(runtimeType: RuntimeType): RuntimeAgentService {
+		return RuntimeServiceFactory.create(runtimeType, null, this.projectRoot);
+	}
+
+	/**
+	 * Get the check interval based on environment.
+	 * Uses shorter intervals in test environment for faster tests.
+	 */
+	private getCheckInterval(): number {
+		return process.env.NODE_ENV === 'test' ? 1000 : 2000;
+	}
+
+	/**
+	 * Update agent status with safe error handling (non-blocking).
+	 * Returns true if successful, false if failed.
+	 */
+	private async updateAgentStatusSafe(
+		sessionName: string,
+		status: (typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES],
+		context?: { role?: string }
+	): Promise<boolean> {
+		try {
+			await this.storageService.updateAgentStatus(sessionName, status);
+			this.logger.info(`Agent status updated to ${status}`, { sessionName, ...context });
+			return true;
+		} catch (error) {
+			this.logger.warn('Failed to update agent status (non-critical)', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
 	}
 
 	/**
@@ -177,11 +228,7 @@ export class AgentRegistrationService {
 		this.logger.info('Starting agent session initialization', { sessionName, role });
 
 		// Clear detection cache to ensure fresh runtime detection
-		const runtimeService = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService = this.createRuntimeService(runtimeType);
 		runtimeService.clearDetectionCache(sessionName);
 
 		// Skip Step 1 (direct registration) as it often fails in concurrent scenarios
@@ -262,11 +309,7 @@ export class AgentRegistrationService {
 		// First check if runtime is running before sending the prompt
 		// runtimeService2: Separate instance for pre-registration runtime detection
 		// This instance is isolated from main runtimeService to avoid cache interference
-		const runtimeService2 = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService2 = this.createRuntimeService(runtimeType);
 		const runtimeRunning = await runtimeService2.detectRuntimeWithCommand(sessionName);
 		if (!runtimeRunning) {
 			this.logger.debug('Runtime not detected in Step 1, skipping direct registration', {
@@ -313,11 +356,7 @@ export class AgentRegistrationService {
 		// Reinitialize runtime using the appropriate initialization script
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
-		const runtimeService2 = RuntimeServiceFactory.create(
-			runtimeType,
-			null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-			this.projectRoot
-		);
+		const runtimeService2 = this.createRuntimeService(runtimeType);
 		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath);
 
 		// Wait for runtime to be ready (simplified detection)
@@ -332,16 +371,59 @@ export class AgentRegistrationService {
 			throw new Error(`Failed to reinitialize ${runtimeType} within timeout`);
 		}
 
-		// Fast verification and registration with retry (skip Ctrl+C since runtime was just initialized)
-		return await this.attemptRegistrationWithVerification(
+		// For PTY sessions, once runtime is detected as ready, consider initialization successful
+		// MCP registration will happen async when the agent processes its first prompt
+		this.logger.info('Runtime detected as ready, session initialization successful', {
 			sessionName,
 			role,
-			timeout,
-			memberId,
-			3,
-			true,
-			runtimeType
-		);
+			runtimeType,
+		});
+
+		// Send the registration prompt in background (don't block on it)
+		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
+			this.logger.warn('Background registration prompt failed (non-blocking)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+
+		// Update agent status to 'active' since the runtime is running
+		// This was previously done by the MCP callback, but we now do it immediately
+		try {
+			await this.storageService.updateAgentStatus(
+				sessionName,
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+			);
+			this.logger.info('Agent status updated to active', { sessionName, role });
+		} catch (statusError) {
+			this.logger.warn('Failed to update agent status (non-critical)', {
+				sessionName,
+				error: statusError instanceof Error ? statusError.message : String(statusError),
+			});
+		}
+
+		return true;
+	}
+
+	/**
+	 * Send registration prompt asynchronously (non-blocking)
+	 */
+	private async sendRegistrationPromptAsync(
+		sessionName: string,
+		role: string,
+		memberId?: string,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+	): Promise<void> {
+		try {
+			const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+			await this.sendPromptRobustly(sessionName, prompt);
+			this.logger.debug('Registration prompt sent asynchronously', { sessionName, role });
+		} catch (error) {
+			this.logger.warn('Failed to send registration prompt asynchronously', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/**
@@ -370,23 +452,14 @@ export class AgentRegistrationService {
 			});
 
 			// Initialize runtime for orchestrator using script (stay in agentmux project)
-			const runtimeService = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService = this.createRuntimeService(runtimeType);
 			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd());
 
 			// Wait for runtime to be ready
-			// Use shorter check interval in test environment
-			const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000;
+			const checkInterval = this.getCheckInterval();
 			// runtimeService3: Separate instance for orchestrator ready-state detection
 			// Isolated from runtimeService to prevent interference between init and ready checks
-			const runtimeService3 = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService3 = this.createRuntimeService(runtimeType);
 			const isReady = await runtimeService3.waitForRuntimeReady(
 				sessionName,
 				45000,
@@ -412,11 +485,7 @@ export class AgentRegistrationService {
 			});
 			// runtimeService4: Final verification instance for orchestrator responsiveness
 			// Clean instance for post-initialization responsiveness testing
-			const runtimeService4 = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService4 = this.createRuntimeService(runtimeType);
 			const runtimeResponding = await runtimeService4.detectRuntimeWithCommand(sessionName);
 			if (!runtimeResponding) {
 				throw new Error(
@@ -425,32 +494,21 @@ export class AgentRegistrationService {
 			}
 
 			this.logger.debug(
-				'Runtime confirmed ready for orchestrator in Step 3, sending registration prompt',
+				'Runtime confirmed ready for orchestrator in Step 3',
 				{ sessionName, runtimeType }
 			);
-
-			// Send Ctrl+C to cancel any pending slash command from detection
-			await (await this.getSessionHelper()).sendCtrlC(sessionName);
 		} else {
 			// For other roles, create basic session and initialize Claude
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			// Initialize runtime using the initialization script
-			const runtimeService = RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			);
+			const runtimeService = this.createRuntimeService(runtimeType);
 			await runtimeService.executeRuntimeInitScript(sessionName, projectPath);
 
 			// Wait for runtime to be ready (simplified detection)
-			// Use shorter check interval in test environment
-			const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000;
-			const isReady = await RuntimeServiceFactory.create(
-				runtimeType,
-				null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-				this.projectRoot
-			).waitForRuntimeReady(sessionName, 25000, checkInterval); // 25s timeout
+			const checkInterval = this.getCheckInterval();
+			const isReady = await this.createRuntimeService(runtimeType)
+				.waitForRuntimeReady(sessionName, 25000, checkInterval); // 25s timeout
 			if (!isReady) {
 				throw new Error(
 					`Failed to initialize ${runtimeType} in recreated session within timeout`
@@ -458,16 +516,36 @@ export class AgentRegistrationService {
 			}
 		}
 
-		// Use enhanced registration with verification (skip Ctrl+C since runtime was just initialized)
-		return await this.attemptRegistrationWithVerification(
+		// For PTY sessions, once runtime is detected as ready, consider initialization successful
+		this.logger.info('Runtime detected as ready after full recreation, session initialization successful', {
 			sessionName,
 			role,
-			timeout,
-			memberId,
-			3,
-			true,
-			runtimeType
-		);
+			runtimeType,
+		});
+
+		// Send the registration prompt in background (don't block on it)
+		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
+			this.logger.warn('Background registration prompt failed after recreation (non-blocking)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+
+		// Update agent status to 'active' since the runtime is running
+		try {
+			await this.storageService.updateAgentStatus(
+				sessionName,
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+			);
+			this.logger.info('Agent status updated to active after recreation', { sessionName, role });
+		} catch (statusError) {
+			this.logger.warn('Failed to update agent status after recreation (non-critical)', {
+				sessionName,
+				error: statusError instanceof Error ? statusError.message : String(statusError),
+			});
+		}
+
+		return true;
 	}
 
 	/**
@@ -643,13 +721,7 @@ export class AgentRegistrationService {
 				if (!skipInitialCleanup || attempt > 1) {
 					// Only do runtime detection on retries or when runtime wasn't just initialized
 					const forceRefresh = attempt > 1; // Force refresh on retry attempts
-					// runtimeService5: Runtime detection instance for retry attempts
-					// Separate instance allows force refresh without affecting other detection operations
-					const runtimeService5 = RuntimeServiceFactory.create(
-						runtimeType,
-						null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-						this.projectRoot
-					);
+					const runtimeService5 = this.createRuntimeService(runtimeType);
 					runtimeRunning = await runtimeService5.detectRuntimeWithCommand(
 						sessionName,
 						forceRefresh
@@ -664,13 +736,7 @@ export class AgentRegistrationService {
 						});
 
 						// Clear detection cache before continuing to retry
-						// runtimeService6: Cache clearing instance for failed detection recovery
-						// Dedicated instance for clearing detection cache without disrupting ongoing operations
-						const runtimeService6 = RuntimeServiceFactory.create(
-							runtimeType,
-							null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-							this.projectRoot
-						);
+						const runtimeService6 = this.createRuntimeService(runtimeType);
 						runtimeService6.clearDetectionCache(sessionName);
 
 						// Add longer delay between failed detection attempts
@@ -888,14 +954,28 @@ export class AgentRegistrationService {
 				sessionName,
 				role,
 				runtimeType,
+				projectPath,
+				windowName,
+				memberId,
+			});
+
+			// Get session helper first
+			this.logger.debug('Getting session helper for session creation');
+			const sessionHelper = await this.getSessionHelper();
+			this.logger.debug('Session helper obtained', {
+				hasHelper: !!sessionHelper,
 			});
 
 			// Check if session already exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			const sessionExists = sessionHelper.sessionExists(sessionName);
+			this.logger.debug('Checked if session exists', {
+				sessionName,
+				sessionExists,
+			});
 
 			if (!sessionExists) {
 				// Session doesn't exist, go directly to creating a new session
-				this.logger.info('Session does not exist, creating new session', { sessionName });
+				this.logger.info('Session does not exist, will create new session', { sessionName });
 			} else {
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
@@ -905,11 +985,7 @@ export class AgentRegistrationService {
 				);
 
 				// Step 1: Try to detect if runtime is already running using slash command
-				const runtimeService = RuntimeServiceFactory.create(
-					runtimeType,
-					null, // Legacy tmux parameter - ignored by RuntimeServiceFactory
-					this.projectRoot
-				);
+				const runtimeService = this.createRuntimeService(runtimeType);
 
 				let recoverySuccess = false;
 
@@ -1011,21 +1087,53 @@ export class AgentRegistrationService {
 			}
 
 			// Create new session (same approach for both orchestrator and team members)
-			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
+			const cwdToUse = projectPath || process.cwd();
+			this.logger.info('Creating PTY session', {
+				sessionName,
+				cwd: cwdToUse,
+			});
+
+			try {
+				const createdSession = await sessionHelper.createSession(sessionName, cwdToUse);
+				this.logger.info('PTY session created successfully', {
+					sessionName,
+					pid: createdSession.pid,
+					cwd: createdSession.cwd,
+				});
+			} catch (createError) {
+				this.logger.error('Failed to create PTY session', {
+					sessionName,
+					cwd: cwdToUse,
+					error: createError instanceof Error ? createError.message : String(createError),
+					stack: createError instanceof Error ? createError.stack : undefined,
+				});
+				throw createError;
+			}
+
+			// Verify session was created
+			const sessionCreatedCheck = sessionHelper.sessionExists(sessionName);
+			this.logger.info('Session creation verification', {
+				sessionName,
+				exists: sessionCreatedCheck,
+			});
+
+			if (!sessionCreatedCheck) {
+				throw new Error(`Session '${sessionName}' was not created successfully`);
+			}
 
 			// Set environment variables for MCP connection
-			await (await this.getSessionHelper()).setEnvironmentVariable(
+			await sessionHelper.setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.TMUX_SESSION_NAME,
 				sessionName
 			);
-			await (await this.getSessionHelper()).setEnvironmentVariable(
+			await sessionHelper.setEnvironmentVariable(
 				sessionName,
 				ENV_CONSTANTS.AGENTMUX_ROLE,
 				role
 			);
 
-			this.logger.info('Agent session created, initializing with registration', {
+			this.logger.info('Agent session created and environment variables set, initializing with registration', {
 				sessionName,
 				role,
 				runtimeType,

@@ -4,7 +4,7 @@ import { AgentMuxMCPServer } from './server.js';
 
 async function main() {
 	const mcpServer = new AgentMuxMCPServer();
-	const port = parseInt(process.env.AGENTMUX_MCP_PORT || '3001');
+	const port = parseInt(process.env.AGENTMUX_MCP_PORT || '8789');
 
 	try {
 		// Initialize the server and its dependencies

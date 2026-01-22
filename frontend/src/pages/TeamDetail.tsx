@@ -19,6 +19,7 @@ export const TeamDetail: React.FC = () => {
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
   const [showEditTeamModal, setShowEditTeamModal] = useState(false);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
+  const [stopTeamLoading, setStopTeamLoading] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
   const { showSuccess, showError, showWarning, AlertComponent } = useAlert();
   const { showConfirm, ConfirmComponent } = useConfirm();
@@ -177,6 +178,7 @@ export const TeamDetail: React.FC = () => {
   };
 
   const handleStopTeam = async () => {
+    setStopTeamLoading(true);
     try {
       // Special handling for orchestrator team
       if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
@@ -205,6 +207,8 @@ export const TeamDetail: React.FC = () => {
       }
     } catch (error) {
       console.error('Error stopping team:', error);
+    } finally {
+      setStopTeamLoading(false);
     }
   };
 
@@ -224,7 +228,7 @@ export const TeamDetail: React.FC = () => {
         method: 'POST',
       });
 
-      // Then delete the team (this will also cleanup tmux sessions)
+      // Then delete the team (this will also cleanup terminal sessions)
       const response = await fetch(`/api/teams/${id}`, {
         method: 'DELETE',
         headers: {
@@ -246,14 +250,14 @@ export const TeamDetail: React.FC = () => {
     };
 
     showConfirm(
-      `Are you sure you want to delete team "${team.name}"?\n\nThis will:\n• Delete the team and all its members\n• Kill all associated tmux sessions\n• Remove all team data permanently\n\nThis action cannot be undone.`,
+      `Are you sure you want to delete team "${team.name}"?\n\nThis will:\n• Delete the team and all its members\n• Kill all associated terminal sessions\n• Remove all team data permanently\n\nThis action cannot be undone.`,
       executeDelete,
       { type: 'error', title: 'Delete Team', confirmText: 'Delete', cancelText: 'Cancel' }
     );
   };
 
   const getTeamStatus = (): TeamStatus => {
-    // For Orchestrator Team, check tmux session status
+    // For Orchestrator Team, check terminal session status
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
       return orchestratorSessionActive ? 'active' : 'idle';
     }
@@ -528,6 +532,7 @@ export const TeamDetail: React.FC = () => {
         onViewTerminal={handleViewTerminal}
         onDeleteTeam={handleDeleteTeam}
         onEditTeam={handleOpenEditTeam}
+        isStoppingTeam={stopTeamLoading}
       />
 
       <TeamOverview
