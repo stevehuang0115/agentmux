@@ -5,7 +5,7 @@ import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
 import { Team, Project, ApiResponse } from '@/types';
 import axios from 'axios';
-import { FolderOpen, Users, ArrowRight } from 'lucide-react';
+import { FolderOpen, Users, ArrowRight, Factory } from 'lucide-react';
 
 const API_BASE = '/api';
 
@@ -187,6 +187,8 @@ export const Dashboard: React.FC = () => {
     </div>
   );
 
+  const navigateToFactory = () => navigate('/factory');
+
   return (
     <div className="max-w-7xl mx-auto">
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
@@ -196,11 +198,23 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
         <StatCard title="Projects" value={projects.length} />
         <StatCard title="Teams" value={teams.length} />
         <StatCard title="Active Projects" value={projects.filter(p => p.status === 'active').length} />
         <StatCard title="Running Agents" value={teams.flatMap(t => t.members).filter(m => m.agentStatus === 'active').length} />
+        <button
+          onClick={navigateToFactory}
+          className="bg-gradient-to-br from-primary/20 to-purple-500/20 p-6 rounded-lg border border-primary/30 transition-all hover:shadow-lg hover:shadow-primary/20 hover:border-primary hover:scale-[1.02] group"
+        >
+          <div className="flex items-center gap-3">
+            <Factory className="w-8 h-8 text-primary group-hover:scale-110 transition-transform" />
+            <div className="text-left">
+              <p className="text-sm font-medium text-text-secondary-dark">3D View</p>
+              <p className="text-lg font-bold text-primary">Factory</p>
+            </div>
+          </div>
+        </button>
       </div>
 
       <div className="space-y-10">

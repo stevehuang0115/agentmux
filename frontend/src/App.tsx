@@ -7,6 +7,7 @@ import { Teams } from './pages/Teams';
 import { TeamDetail } from './pages/TeamDetail';
 import { Assignments } from './pages/Assignments';
 import { ScheduledCheckins } from './pages/ScheduledCheckins';
+import { Factory } from './pages/Factory';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
@@ -24,6 +25,7 @@ function App() {
               <Route path="teams/:id" element={<TeamDetail />} />
               <Route path="assignments" element={<Assignments />} />
               <Route path="scheduled-checkins" element={<ScheduledCheckins />} />
+              <Route path="factory" element={<Factory />} />
             </Route>
           </Routes>
         </Router>
