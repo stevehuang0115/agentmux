@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DOMPurify from 'dompurify';
 
 interface MarkdownEditorProps {
   content: string;
@@ -46,7 +47,15 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
       html = html.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
       html = html.replace(/<\/ul>\s*<ul>/gim, '');
 
-      setRenderedContent(html);
+      // Sanitize HTML to prevent XSS attacks
+      const sanitizedHtml = DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'strong', 'em',
+                       'code', 'pre', 'blockquote', 'ul', 'ol', 'li', 'a', 'img'],
+        ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel'],
+        ALLOW_DATA_ATTR: false
+      });
+
+      setRenderedContent(sanitizedHtml);
     } catch (error) {
       console.error('Error rendering markdown:', error);
       setRenderedContent('Error rendering markdown preview');

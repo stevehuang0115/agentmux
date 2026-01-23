@@ -30,6 +30,7 @@ import { createApiRoutes } from './routes/api.routes.js';
 import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
 import { TerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
+import { LoggerService } from './services/core/logger.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,6 +40,7 @@ export class AgentMuxServer {
 	private httpServer: ReturnType<typeof createServer>;
 	private io: SocketIOServer;
 	private config: StartupConfig;
+	private logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
 
 	private storageService!: StorageService;
 	private tmuxService!: TmuxService;
@@ -115,10 +117,10 @@ export class AgentMuxServer {
 			this.messageSchedulerService
 		);
 		this.terminalGateway = new TerminalGateway(this.io);
-		
+
 		// Connect WebSocket service to terminal gateway for broadcasting
 		this.teamActivityWebSocketService.setTerminalGateway(this.terminalGateway);
-		
+
 		// Connect teams.json watcher to team activity service for real-time updates
 		this.teamsJsonWatcherService.setTeamActivityService(this.teamActivityWebSocketService);
 	}
@@ -194,7 +196,7 @@ export class AgentMuxServer {
 				res: express.Response,
 				next: express.NextFunction
 			) => {
-				console.error('Error:', err);
+				this.logger.error('Request error', { error: err.message, stack: err.stack });
 				res.status(500).json({
 					success: false,
 					error:
@@ -216,10 +218,10 @@ export class AgentMuxServer {
 
 	private configureWebSocket(): void {
 		this.io.on('connection', (socket) => {
-			console.log(`Client connected: ${socket.id}`);
+			this.logger.info('Client connected', { socketId: socket.id });
 
 			socket.on('disconnect', () => {
-				console.log(`Client disconnected: ${socket.id}`);
+				this.logger.info('Client disconnected', { socketId: socket.id });
 			});
 		});
 
@@ -240,10 +242,12 @@ export class AgentMuxServer {
 
 	async start(): Promise<void> {
 		try {
-			console.log('🚀 Starting AgentMux server...');
-			console.log(`📍 Process ID: ${process.pid}`);
-			console.log(`📊 Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
-			console.log(`🎯 Target port: ${this.config.webPort}`);
+			this.logger.info('Starting AgentMux server...');
+			this.logger.info('Server startup info', {
+				pid: process.pid,
+				memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+				targetPort: this.config.webPort
+			});
 
 			// Check if port is already in use
 			await this.checkPortAvailability();
@@ -257,35 +261,35 @@ export class AgentMuxServer {
 			}
 
 			// Initialize PTY session backend and restore saved sessions
-			console.log('🔌 Initializing PTY session backend...');
+			this.logger.info('Initializing PTY session backend...');
 			const sessionBackend = await getSessionBackend();
 			const persistence = getSessionStatePersistence();
 			const restoredCount = await persistence.restoreState(sessionBackend);
 			if (restoredCount > 0) {
-				console.log(`📂 Restored ${restoredCount} PTY session(s) from saved state`);
+				this.logger.info('Restored PTY sessions from saved state', { count: restoredCount });
 			}
 
 			// Start message scheduler
-			console.log('📅 Starting message scheduler...');
+			this.logger.info('Starting message scheduler...');
 			await this.messageSchedulerService.start();
 
 			// Start activity monitoring
-			console.log('📊 Starting activity monitoring...');
+			this.logger.info('Starting activity monitoring...');
 			this.activityMonitorService.startPolling();
 
 			// Start team activity WebSocket service
-			console.log('🌐 Starting team activity WebSocket service...');
+			this.logger.info('Starting team activity WebSocket service...');
 			this.teamActivityWebSocketService.start();
 
 			// Start teams.json file watcher for real-time updates
-			console.log('👁️ Starting teams.json file watcher...');
+			this.logger.info('Starting teams.json file watcher...');
 			this.teamsJsonWatcherService.start();
-			console.log('📁 Teams.json file watcher started for real-time updates');
+			this.logger.info('Teams.json file watcher started for real-time updates');
 
 			// Initialize MCP server (integrated into backend)
-			console.log('🔌 Initializing MCP server...');
+			this.logger.info('Initializing MCP server...');
 			await initializeMCPServer();
-			console.log('✅ MCP server integrated at /mcp endpoint');
+			this.logger.info('MCP server integrated at /mcp endpoint');
 
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
@@ -297,10 +301,10 @@ export class AgentMuxServer {
 			this.startHealthMonitoring();
 
 		} catch (error) {
-			console.error('❌ Failed to start server:', error);
+			this.logger.error('Failed to start server', { error: error instanceof Error ? error.message : String(error) });
 			if (error instanceof Error && error.message.includes('EADDRINUSE')) {
-				console.error(`🚨 Port ${this.config.webPort} is already in use!`);
-				console.error('💡 Try killing existing processes or use a different port');
+				this.logger.error('Port already in use', { port: this.config.webPort });
+				this.logger.info('Try killing existing processes or use a different port');
 				await this.handlePortConflict();
 			}
 			throw error;
@@ -314,7 +318,7 @@ export class AgentMuxServer {
 
 			testServer.listen(this.config.webPort, () => {
 				testServer.close(() => {
-					console.log(`✅ Port ${this.config.webPort} is available`);
+					this.logger.info('Port is available', { port: this.config.webPort });
 					resolve();
 				});
 			});
@@ -335,27 +339,29 @@ export class AgentMuxServer {
 
 			this.httpServer.listen(this.config.webPort, () => {
 				const duration = Date.now() - startTime;
-				console.log(`🚀 AgentMux server started on port ${this.config.webPort} (${duration}ms)`);
-				console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
-				console.log(`🔌 MCP: http://localhost:${this.config.webPort}/mcp`);
-				console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
-				console.log(`🏠 Home: ${this.config.agentmuxHome}`);
-				console.log('');
-				console.log('To configure Claude Code:');
-				console.log(`claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`);
-				console.log('');
+				this.logger.info('AgentMux server started', {
+					port: this.config.webPort,
+					durationMs: duration,
+					dashboardUrl: `http://localhost:${this.config.webPort}`,
+					mcpUrl: `http://localhost:${this.config.webPort}/mcp`,
+					websocketUrl: `ws://localhost:${this.config.webPort}`,
+					home: this.config.agentmuxHome
+				});
+				this.logger.info('To configure Claude Code, run:', {
+					command: `claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`
+				});
 				resolve();
 			});
 
 			this.httpServer.on('error', (error: any) => {
-				console.error('🚨 HTTP Server error:', error);
+				this.logger.error('HTTP Server error', { error: error.message, code: error.code });
 
 				if (error.code === 'EADDRINUSE') {
-					console.error(`❌ Port ${this.config.webPort} is already in use by another process`);
-					console.error(`💡 Suggestion: Kill the existing process or change the port`);
+					this.logger.error('Port already in use by another process', { port: this.config.webPort });
+					this.logger.info('Suggestion: Kill the existing process or change the port');
 				} else if (error.code === 'EACCES') {
-					console.error(`❌ Permission denied for port ${this.config.webPort}`);
-					console.error(`💡 Suggestion: Try a port above 1024 or run with appropriate permissions`);
+					this.logger.error('Permission denied for port', { port: this.config.webPort });
+					this.logger.info('Suggestion: Try a port above 1024 or run with appropriate permissions');
 				}
 
 				reject(error);
@@ -364,50 +370,52 @@ export class AgentMuxServer {
 	}
 
 	private async handlePortConflict(): Promise<void> {
-		console.log('🔍 Attempting to identify conflicting process...');
+		this.logger.info('Attempting to identify conflicting process...');
 
 		try {
 			const { execSync } = await import('child_process');
 			const result = execSync(`lsof -ti :${this.config.webPort}`, { encoding: 'utf8' }).trim();
 
 			if (result) {
-				console.log(`📍 Process using port ${this.config.webPort}: PID ${result}`);
-				console.log(`💡 To kill it manually: kill -9 ${result}`);
+				this.logger.info('Process using port identified', { port: this.config.webPort, pid: result });
+				this.logger.info('To kill it manually', { command: `kill -9 ${result}` });
 			}
 		} catch (error) {
-			console.log('ℹ️ Could not identify the conflicting process');
+			this.logger.info('Could not identify the conflicting process');
 		}
 	}
 
 	private registerSignalHandlers(): void {
-		console.log('🛡️ Registering signal handlers...');
+		this.logger.info('Registering signal handlers...');
 
 		process.on('SIGTERM', () => {
-			console.log('📡 Received SIGTERM signal');
+			this.logger.info('Received SIGTERM signal');
 			this.shutdown();
 		});
 
 		process.on('SIGINT', () => {
-			console.log('📡 Received SIGINT signal (Ctrl+C)');
+			this.logger.info('Received SIGINT signal (Ctrl+C)');
 			this.shutdown();
 		});
 
 		process.on('uncaughtException', (error) => {
-			console.error('🚨 Uncaught exception:', error);
-			console.error('📍 Stack trace:', error.stack);
+			this.logger.error('Uncaught exception', { error: error.message, stack: error.stack });
 			this.logMemoryUsage();
 			this.shutdown();
 		});
 
 		process.on('unhandledRejection', (reason, promise) => {
-			console.error('🚨 Unhandled rejection at:', promise, 'reason:', reason);
+			this.logger.error('Unhandled rejection', {
+				reason: reason instanceof Error ? reason.message : String(reason),
+				stack: reason instanceof Error ? reason.stack : undefined
+			});
 			this.logMemoryUsage();
 			this.shutdown();
 		});
 	}
 
 	private startHealthMonitoring(): void {
-		console.log('💓 Starting health monitoring...');
+		this.logger.info('Starting health monitoring...');
 
 		// Monitor memory usage every 30 seconds
 		setInterval(() => {
@@ -421,31 +429,31 @@ export class AgentMuxServer {
 		const heapTotal = Math.round(usage.heapTotal / 1024 / 1024);
 		const external = Math.round(usage.external / 1024 / 1024);
 
-		console.log(`💾 Memory - Heap: ${heapUsed}/${heapTotal}MB, External: ${external}MB`);
+		this.logger.debug('Memory usage', { heapUsedMB: heapUsed, heapTotalMB: heapTotal, externalMB: external });
 
 		// Warn if memory usage is high
 		if (heapUsed > 500) {
-			console.warn(`⚠️ High memory usage detected: ${heapUsed}MB`);
+			this.logger.warn('High memory usage detected', { heapUsedMB: heapUsed });
 		}
 	}
 
 	async shutdown(): Promise<void> {
-		console.log('\n🛑 Shutting down AgentMux server...');
+		this.logger.info('Shutting down AgentMux server...');
 
 		try {
 			// Save PTY session state before cleanup
-			console.log('💾 Saving PTY session state...');
+			this.logger.info('Saving PTY session state...');
 			try {
 				const sessionBackend = await getSessionBackend();
 				const persistence = getSessionStatePersistence();
 				const savedCount = await persistence.saveState(sessionBackend);
 				if (savedCount > 0) {
-					console.log(`✅ Saved ${savedCount} PTY session(s) for later restoration`);
+					this.logger.info('Saved PTY sessions for later restoration', { count: savedCount });
 				}
 				// Destroy PTY session backend
 				await destroySessionBackend();
 			} catch (error) {
-				console.error('⚠️ Failed to save PTY session state:', error);
+				this.logger.warn('Failed to save PTY session state', { error: error instanceof Error ? error.message : String(error) });
 			}
 
 			// Clean up schedulers
@@ -461,7 +469,7 @@ export class AgentMuxServer {
 			this.teamsJsonWatcherService.stop();
 
 			// Destroy MCP server
-			console.log('🔌 Stopping MCP server...');
+			this.logger.info('Stopping MCP server...');
 			destroyMCPServer();
 
 			// Kill all tmux sessions
@@ -475,14 +483,14 @@ export class AgentMuxServer {
 			// Close HTTP server
 			await new Promise<void>((resolve) => {
 				this.httpServer.close(() => {
-					console.log('✅ Server shut down gracefully');
+					this.logger.info('Server shut down gracefully');
 					resolve();
 				});
 			});
 
 			process.exit(0);
 		} catch (error) {
-			console.error('Error during shutdown:', error);
+			this.logger.error('Error during shutdown', { error: error instanceof Error ? error.message : String(error) });
 			process.exit(1);
 		}
 	}
@@ -495,8 +503,9 @@ export class AgentMuxServer {
 // Start server if this file is run directly
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const server = new AgentMuxServer();
+	const logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
 	server.start().catch((error) => {
-		console.error('Failed to start AgentMux server:', error);
+		logger.error('Failed to start AgentMux server', { error: error instanceof Error ? error.message : String(error) });
 		process.exit(1);
 	});
 }

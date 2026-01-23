@@ -1,5 +1,20 @@
 import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
+import type {
+	CreateProjectRequestBody,
+	StartProjectRequestBody,
+	AssignTeamsRequestBody,
+	UnassignTeamRequestBody,
+	GetProjectFilesQuery,
+	GetFileContentQuery,
+	GetAgentmuxMarkdownFilesQuery,
+	SaveMarkdownFileRequestBody,
+	CreateSpecFileRequestBody,
+	GetSpecFileContentQuery,
+	ProjectContextOptionsQuery,
+	MutableTeam,
+	MutableProject,
+} from '../request-types.js';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -7,16 +22,37 @@ import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
 import { ProjectModel, TeamModel } from '../../models/index.js';
 import { ContextLoaderService, TicketEditorService, TaskService } from '../../services/index.js';
-import { ApiResponse, Project } from '../../types/index.js';
+import { ApiResponse, Project, TeamMember } from '../../types/index.js';
 import { getFileIcon, countFiles } from '../utils/file-utils.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 const execAsync = promisify(exec);
 
+/**
+ * File tree node structure for project file listing
+ */
+interface FileTreeNode {
+	name: string;
+	path: string;
+	type: 'folder' | 'file';
+	size: number;
+	modified: string;
+	icon: string;
+	children?: FileTreeNode[];
+}
+
+/**
+ * Schedule info returned from active projects service
+ */
+interface ScheduleInfo {
+	checkInScheduleId?: string;
+	gitCommitScheduleId?: string;
+}
+
 // Project Management
 export async function createProject(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
-		const { path: projectPath, name, description } = req.body as any;
+		const { path: projectPath, name, description } = req.body as CreateProjectRequestBody;
 		if (!projectPath) {
 			res.status(400).json({
 				success: false,
@@ -26,14 +62,18 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 		}
 		const project = await this.storageService.addProject(projectPath);
 
-		let finalProject = project;
+		let finalProject: Project = project;
 		if (name || description) {
-			const projectModel = ProjectModel.fromJSON(project);
-			if (name) (projectModel as any).name = name;
-			if (description) (projectModel as any).description = description;
-			const updated = projectModel.toJSON();
-			await this.storageService.saveProject(updated);
-			finalProject = updated;
+			// Work directly with the project object to update name and description
+			// since ProjectModel doesn't support the description field
+			const updatedProject: MutableProject = {
+				...project,
+				updatedAt: new Date().toISOString(),
+			};
+			if (name) updatedProject.name = name;
+			if (description) updatedProject.description = description;
+			await this.storageService.saveProject(updatedProject);
+			finalProject = updatedProject;
 		}
 
 		// For Gemini CLI orchestrator, add new project path to allowlist
@@ -66,10 +106,14 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 					RUNTIME_TYPES.GEMINI_CLI,
 					this.tmuxService.getTmuxCommandService(),
 					process.cwd()
-				) as any; // Cast to access Gemini-specific methods
+				);
 
 				// Add new project path to allowlist
-				const allowlistResult = await geminiService.addProjectToAllowlist(
+				// Type assertion needed because RuntimeServiceFactory returns base interface
+				const geminiServiceWithAllowlist = geminiService as typeof geminiService & {
+					addProjectToAllowlist: (session: string, projectPath: string) => Promise<{ success: boolean; message?: string }>;
+				};
+				const allowlistResult = await geminiServiceWithAllowlist.addProjectToAllowlist(
 					ORCHESTRATOR_SESSION_NAME,
 					finalProject.path
 				);
@@ -171,8 +215,8 @@ export async function getProjectStatus(
 // Delegated complex project lifecycle operations (keep behavior intact)
 export async function startProject(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
-		const { id } = req.params as any;
-		const { teamIds } = req.body as any;
+		const { id } = req.params;
+		const { teamIds } = req.body as StartProjectRequestBody;
 		if (!teamIds || !Array.isArray(teamIds) || teamIds.length === 0) {
 			res.status(400).json({
 				success: false,
@@ -237,7 +281,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 
 				const immediateCoordinationMessage = {
 					id: `immediate-coord-${id}-${Date.now()}`,
-					name: `🚀 Project Started - Immediate Coordination - ${project.name}`,
+					name: `Project Started - Immediate Coordination - ${project.name}`,
 					targetTeam: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
 					targetProject: id,
 					message: projectStartMessage,
@@ -259,7 +303,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 		}
 
 		await this.storageService.saveProject(project);
-		let scheduleInfo: any;
+		let scheduleInfo: ScheduleInfo | undefined;
 		try {
 			scheduleInfo = await this.activeProjectsService.startProject(
 				id,
@@ -288,7 +332,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 
 export async function stopProject(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
-		const { id } = req.params as any;
+		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -328,14 +372,14 @@ export async function stopProject(this: ApiContext, req: Request, res: Response)
 
 export async function restartProject(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
-		const { id } = req.params as any;
+		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse);
 			return;
 		}
-		let scheduleInfo: any;
+		let scheduleInfo: ScheduleInfo | undefined;
 		try {
 			scheduleInfo = await this.activeProjectsService.restartProject(
 				id,
@@ -368,8 +412,8 @@ export async function assignTeamsToProject(
 	res: Response
 ): Promise<void> {
 	try {
-		const { id } = req.params as any;
-		const { teamAssignments } = req.body as any;
+		const { id } = req.params;
+		const { teamAssignments } = req.body as AssignTeamsRequestBody;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -379,21 +423,21 @@ export async function assignTeamsToProject(
 		const projectModel = ProjectModel.fromJSON(project);
 		if (teamAssignments) {
 			for (const [role, teamIds] of Object.entries(teamAssignments)) {
-				for (const teamId of teamIds as string[]) {
+				for (const teamId of teamIds) {
 					projectModel.assignTeam(teamId, role);
 				}
 			}
 		}
 		await this.storageService.saveProject(projectModel.toJSON());
-		const assignedTeamDetails: Array<{ team: any; role: string }> = [];
+		const assignedTeamDetails: Array<{ team: MutableTeam; role: string }> = [];
 		if (teamAssignments) {
 			const teams = await this.storageService.getTeams();
 			for (const [role, teamIds] of Object.entries(teamAssignments)) {
-				for (const teamId of teamIds as string[]) {
-					const team = teams.find((t) => t.id === teamId);
+				for (const teamId of teamIds) {
+					const team = teams.find((t) => t.id === teamId) as MutableTeam | undefined;
 					if (team) {
-						(team as any).currentProject = id;
-						(team as any).updatedAt = new Date().toISOString();
+						team.currentProject = id;
+						team.updatedAt = new Date().toISOString();
 						await this.storageService.saveTeam(team);
 						assignedTeamDetails.push({ team, role });
 					}
@@ -410,13 +454,13 @@ export async function assignTeamsToProject(
 							const memberList =
 								(team.members || [])
 									.map(
-										(m: any) =>
+										(m) =>
 											`  - ${m.name} (${m.role}) - ${m.sessionName || 'N/A'}`
 									)
 									.join('\\n') || '  No members found';
 							const sessions =
 								(team.members || [])
-									.map((m: any) => m.sessionName || 'N/A')
+									.map((m) => m.sessionName || 'N/A')
 									.join(', ') || 'No sessions';
 							return `### ${team.name} (${role})\n- **Team ID**: ${
 								team.id
@@ -456,8 +500,8 @@ export async function unassignTeamFromProject(
 	res: Response
 ): Promise<void> {
 	try {
-		const { id: projectId } = req.params as any;
-		const { teamId } = req.body as any;
+		const { id: projectId } = req.params;
+		const { teamId } = req.body as UnassignTeamRequestBody;
 		if (!teamId) {
 			res.status(400).json({
 				success: false,
@@ -472,12 +516,12 @@ export async function unassignTeamFromProject(
 			return;
 		}
 		const teams = await this.storageService.getTeams();
-		const team = teams.find((t) => t.id === teamId);
+		const team = teams.find((t) => t.id === teamId) as MutableTeam | undefined;
 		if (!team) {
 			res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse);
 			return;
 		}
-		if ((team as any).currentProject !== projectId) {
+		if (team.currentProject !== projectId) {
 			res.status(400).json({
 				success: false,
 				error: 'Team is not assigned to this project',
@@ -487,8 +531,8 @@ export async function unassignTeamFromProject(
 		const projectModel = ProjectModel.fromJSON(project);
 		projectModel.unassignTeam(teamId);
 		await this.storageService.saveProject(projectModel.toJSON());
-		(team as any).currentProject = undefined;
-		(team as any).updatedAt = new Date().toISOString();
+		team.currentProject = undefined;
+		team.updatedAt = new Date().toISOString();
 		await this.storageService.saveTeam(team);
 		try {
 			const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
@@ -539,7 +583,7 @@ export async function getProjectFiles(
 ): Promise<void> {
 	try {
 		const { id } = req.params;
-		const { depth = '3', includeDotFiles = 'true' } = req.query as any;
+		const { depth = '3', includeDotFiles = 'true' } = req.query as GetProjectFilesQuery;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -552,11 +596,11 @@ export async function getProjectFiles(
 			relativePath = '',
 			currentDepth = 0,
 			maxDepth = parseInt(depth as string)
-		): Promise<any[]> => {
+		): Promise<FileTreeNode[]> => {
 			if (currentDepth > maxDepth) return [];
 			try {
 				const items = await fs.readdir(dirPath);
-				const tree: any[] = [];
+				const tree: FileTreeNode[] = [];
 				for (const item of items) {
 					const isAgentmuxFolder = item === '.agentmux';
 					const isDotFile = item.startsWith('.');
@@ -565,7 +609,7 @@ export async function getProjectFiles(
 					const relativeItemPath = relativePath ? path.join(relativePath, item) : item;
 					try {
 						const stats = await fs.stat(fullPath);
-						const node: any = {
+						const node: FileTreeNode = {
 							name: item,
 							path: relativeItemPath,
 							type: stats.isDirectory() ? 'folder' : 'file',
@@ -612,12 +656,11 @@ export async function getProjectFiles(
 		}
 		try {
 			await fs.stat(resolvedPath);
-		} catch (pathError: any) {
+		} catch (pathError) {
+			const errorMessage = pathError instanceof Error ? pathError.message : 'Unknown error';
 			res.status(400).json({
 				success: false,
-				error: `Project path "${resolvedPath}" is not accessible: ${
-					pathError?.message || 'Unknown error'
-				}`,
+				error: `Project path "${resolvedPath}" is not accessible: ${errorMessage}`,
 			} as ApiResponse);
 			return;
 		}
@@ -643,8 +686,8 @@ export async function getProjectFiles(
 
 export async function getFileContent(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
-		const { projectId } = req.params as any;
-		const { filePath } = req.query as any;
+		const { projectId } = req.params;
+		const { filePath } = req.query as GetFileContentQuery;
 		if (!filePath || typeof filePath !== 'string') {
 			res.status(400).json({ success: false, error: 'File path is required' } as ApiResponse);
 			return;
@@ -682,10 +725,11 @@ export async function getFileContent(this: ApiContext, req: Request, res: Respon
 				content: string;
 				filePath: string;
 			}>);
-		} catch (fileError: any) {
-			if (fileError.code === 'ENOENT')
+		} catch (fileError) {
+			const err = fileError as NodeJS.ErrnoException;
+			if (err.code === 'ENOENT')
 				res.status(404).json({ success: false, error: 'File not found' } as ApiResponse);
-			else if (fileError.code === 'EISDIR')
+			else if (err.code === 'EISDIR')
 				res.status(400).json({
 					success: false,
 					error: 'Path is a directory, not a file',
@@ -707,7 +751,7 @@ export async function getAgentmuxMarkdownFiles(
 	res: Response
 ): Promise<void> {
 	try {
-		const { projectPath } = req.query as any;
+		const { projectPath } = req.query as GetAgentmuxMarkdownFilesQuery;
 		if (!projectPath || typeof projectPath !== 'string') {
 			res.status(400).json({
 				success: false,
@@ -751,7 +795,7 @@ export async function saveMarkdownFile(
 	res: Response
 ): Promise<void> {
 	try {
-		const { projectPath, filePath, content } = req.body as any;
+		const { projectPath, filePath, content } = req.body as SaveMarkdownFileRequestBody;
 		if (!projectPath || !filePath || content === undefined) {
 			res.status(400).json({
 				success: false,
@@ -786,7 +830,7 @@ export async function getProjectCompletion(
 	try {
 		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
-		const project = projects.find((p: any) => p.id === id);
+		const project = projects.find((p) => p.id === id);
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse);
 			return;
@@ -817,7 +861,7 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 	try {
 		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
-		const project = projects.find((p: any) => p.id === id);
+		const project = projects.find((p) => p.id === id);
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse);
 			return;
@@ -835,11 +879,11 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 		console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages before deleting project ${id}`);
 
 		const teams = await this.storageService.getTeams();
-		const activeTeams = teams.filter((t: any) => (t as any).currentProject === id);
+		const activeTeams = teams.filter((t) => t.currentProject === id);
 		if (activeTeams.length > 0) {
 			for (const team of activeTeams) {
 				const teamModel = (await import('../../models/index.js')).TeamModel.fromJSON(team);
-				(teamModel as any).currentProject = undefined;
+				teamModel.currentProject = undefined;
 				await this.storageService.saveTeam(teamModel.toJSON());
 			}
 		}
@@ -860,7 +904,7 @@ export async function getProjectStats(
 	res: Response
 ): Promise<void> {
 	try {
-		const { id } = req.params as any;
+		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -973,7 +1017,7 @@ export async function openProjectInFinder(
 export async function createSpecFile(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
 		const { id } = req.params;
-		const { fileName, content } = req.body as any;
+		const { fileName, content } = req.body as CreateSpecFileRequestBody;
 		if (!fileName || !content) {
 			res.status(400).json({
 				success: false,
@@ -1023,7 +1067,7 @@ export async function getSpecFileContent(
 ): Promise<void> {
 	try {
 		const { id } = req.params;
-		const { fileName } = req.query as any;
+		const { fileName } = req.query as GetSpecFileContentQuery;
 		if (!fileName) {
 			res.status(400).json({
 				success: false,
@@ -1032,7 +1076,7 @@ export async function getSpecFileContent(
 			return;
 		}
 		const projects = await this.storageService.getProjects();
-		const project = projects.find((p: any) => p.id === id);
+		const project = projects.find((p) => p.id === id);
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse);
 			return;
@@ -1071,9 +1115,9 @@ export async function getProjectContext(
 ): Promise<void> {
 	try {
 		const { projectId } = req.params;
-		const options = req.query as any;
+		const options = req.query as ProjectContextOptionsQuery;
 		const projects = await this.storageService.getProjects();
-		const project = projects.find((p: any) => p.id === projectId);
+		const project = projects.find((p) => p.id === projectId);
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' } as ApiResponse);
 			return;
@@ -1108,7 +1152,7 @@ export async function getAlignmentStatus(
 	res: Response
 ): Promise<void> {
 	try {
-		const { id } = req.params as any;
+		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -1142,7 +1186,7 @@ export async function continueWithMisalignment(
 	res: Response
 ): Promise<void> {
 	try {
-		const { id } = req.params as any;
+		const { id } = req.params;
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {
@@ -1186,7 +1230,7 @@ export async function cleanupProjectScheduledMessages(
 	};
 
 	try {
-		console.log(`🧹 Starting scheduled message cleanup for project ${projectId}...`);
+		console.log(`Starting scheduled message cleanup for project ${projectId}...`);
 
 		// Get all scheduled messages for this project
 		const allMessages = await this.storageService.getScheduledMessages();
@@ -1196,7 +1240,7 @@ export async function cleanupProjectScheduledMessages(
 		console.log(`Found ${result.found} scheduled messages to clean up for project ${projectId}`);
 
 		if (result.found === 0) {
-			console.log('✅ No scheduled messages found for this project');
+			console.log('No scheduled messages found for this project');
 			return result;
 		}
 
@@ -1206,12 +1250,12 @@ export async function cleanupProjectScheduledMessages(
 				// Cancel from scheduler if messageSchedulerService is available
 				if (this.messageSchedulerService) {
 					this.messageSchedulerService.cancelMessage(message.id);
-					console.log(`✅ Cancelled message "${message.name}" from scheduler`);
+					console.log(`Cancelled message "${message.name}" from scheduler`);
 				}
 
 				// Delete from storage
 				await this.storageService.deleteScheduledMessage(message.id);
-				console.log(`✅ Deleted message "${message.name}" from storage`);
+				console.log(`Deleted message "${message.name}" from storage`);
 
 				result.cancelled++;
 
@@ -1228,17 +1272,17 @@ export async function cleanupProjectScheduledMessages(
 						updatedAt: new Date().toISOString()
 					};
 					await this.storageService.saveScheduledMessage(deactivatedMessage);
-					console.log(`⚠️ Deactivated message "${message.name}" as fallback`);
+					console.log(`Deactivated message "${message.name}" as fallback`);
 				} catch (deactivateError) {
 					console.error(`Failed to deactivate message "${message.name}":`, deactivateError);
 				}
 			}
 		}
 
-		console.log(`✅ Message cleanup complete: ${result.cancelled}/${result.found} messages cleaned up successfully`);
+		console.log(`Message cleanup complete: ${result.cancelled}/${result.found} messages cleaned up successfully`);
 
 		if (result.errors.length > 0) {
-			console.warn(`⚠️ ${result.errors.length} errors occurred during cleanup`);
+			console.warn(`${result.errors.length} errors occurred during cleanup`);
 		}
 
 	} catch (error) {

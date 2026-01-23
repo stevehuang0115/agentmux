@@ -1,5 +1,19 @@
 import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
+import type {
+  CreateTeamRequestBody,
+  StartTeamRequestBody,
+  AddTeamMemberRequestBody,
+  UpdateTeamMemberRequestBody,
+  GetTeamMemberSessionQuery,
+  ReportMemberReadyRequestBody,
+  RegisterMemberStatusRequestBody,
+  GenerateMemberContextQuery,
+  UpdateTeamMemberRuntimeRequestBody,
+  UpdateTeamRequestBody,
+  MutableTeamMember,
+  MutableTeam,
+} from '../request-types.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
@@ -31,6 +45,56 @@ interface StopTeamMemberResult {
   memberId: string;
   sessionName: string | null;
   status: string;
+  error?: string;
+}
+
+/**
+ * Result format for team member start/stop operations in API responses
+ */
+interface TeamMemberOperationResult {
+  memberName: string;
+  memberId?: string;
+  sessionName: string | null;
+  status: string;
+  success?: boolean;
+  error?: string;
+}
+
+/**
+ * Session creation result from agent registration service
+ */
+interface SessionCreationResult {
+  success: boolean;
+  sessionName?: string;
+  error?: string;
+}
+
+/**
+ * Current task information for team activity status
+ */
+interface CurrentTaskInfo {
+  id: string;
+  taskName: string;
+  taskFilePath: string;
+  assignedAt: string;
+  status: string;
+}
+
+/**
+ * Member activity status for team activity endpoint
+ */
+interface MemberActivityStatus {
+  teamId: string;
+  teamName: string;
+  memberId: string;
+  memberName: string;
+  role: string;
+  sessionName: string;
+  agentStatus: string;
+  workingStatus: string;
+  lastActivityCheck: string;
+  activityDetected: boolean;
+  currentTask: CurrentTaskInfo | null;
   error?: string;
 }
 
@@ -70,13 +134,13 @@ async function _startTeamMemberCore(
               // Load fresh team data to avoid race conditions
               const currentTeams = await context.storageService.getTeams();
               const currentTeam = currentTeams.find(t => t.id === team.id);
-              const currentMember = currentTeam?.members.find(m => m.id === member.id);
+              const currentMember = currentTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
               if (currentTeam && currentMember) {
                 // Update status to active to sync with session state
                 currentMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
                 currentMember.workingStatus = currentMember.workingStatus || 'working';
-                (currentMember as any).updatedAt = new Date().toISOString();
+                currentMember.updatedAt = new Date().toISOString();
 
                 await context.storageService.saveTeam(currentTeam);
               }
@@ -96,7 +160,7 @@ async function _startTeamMemberCore(
               });
               // Clear the session name and allow new session creation (but don't save yet)
               member.sessionName = '';
-              (member as any).updatedAt = new Date().toISOString();
+              (member as MutableTeamMember).updatedAt = new Date().toISOString();
             }
           } catch (error) {
             // If we can't check the session, assume it's zombie and clean it up
@@ -106,7 +170,7 @@ async function _startTeamMemberCore(
             });
             // Clear the session name and allow new session creation (but don't save yet)
             member.sessionName = '';
-            (member as any).updatedAt = new Date().toISOString();
+            (member as MutableTeamMember).updatedAt = new Date().toISOString();
           }
         } else {
           // Session exists and agent status is active/activating - this is normal conflict
@@ -140,7 +204,7 @@ async function _startTeamMemberCore(
       } else {
         // Session doesn't exist, clear sessionName and allow new creation (but don't save yet)
         member.sessionName = '';
-        (member as any).updatedAt = new Date().toISOString();
+        (member as MutableTeamMember).updatedAt = new Date().toISOString();
       }
     }
 
@@ -153,7 +217,7 @@ async function _startTeamMemberCore(
     // Load fresh team data before making any changes to avoid race conditions with MCP registration
     const currentTeams = await context.storageService.getTeams();
     const currentTeam = currentTeams.find(t => t.id === team.id);
-    const currentMember = currentTeam?.members.find(m => m.id === member.id);
+    const currentMember = currentTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
     if (!currentTeam || !currentMember) {
       return {
@@ -170,7 +234,7 @@ async function _startTeamMemberCore(
     // Use fresh team data to preserve any concurrent agentStatus updates
     currentMember.sessionName = sessionName;
     currentMember.workingStatus = currentMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-    (currentMember as any).updatedAt = new Date().toISOString();
+    currentMember.updatedAt = new Date().toISOString();
 
     console.log(`[TEAM-CONTROLLER-DEBUG] About to save team before session creation - member ${currentMember.name} agentStatus: ${currentMember.agentStatus}`);
     await context.storageService.saveTeam(currentTeam);
@@ -178,7 +242,7 @@ async function _startTeamMemberCore(
     // Use the unified agent registration service for team member creation with retry logic
     // This helps handle race conditions in tmux session creation
     const MAX_CREATION_RETRIES = 3;
-    let createResult: any;
+    let createResult: SessionCreationResult = { success: false };
     let lastError: string | undefined;
 
     for (let attempt = 1; attempt <= MAX_CREATION_RETRIES; attempt++) {
@@ -211,7 +275,7 @@ async function _startTeamMemberCore(
       // CRITICAL: Load fresh data again after session creation to preserve MCP registration updates
       const finalTeams = await context.storageService.getTeams();
       const finalTeam = finalTeams.find(t => t.id === team.id);
-      const finalMember = finalTeam?.members.find(m => m.id === member.id);
+      const finalMember = finalTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
       if (finalTeam && finalMember) {
         // Only update sessionName if needed, preserve all other fields including agentStatus
@@ -219,7 +283,7 @@ async function _startTeamMemberCore(
 
         if (needsSessionUpdate) {
           finalMember.sessionName = createResult.sessionName || sessionName;
-          (finalMember as any).updatedAt = new Date().toISOString();
+          finalMember.updatedAt = new Date().toISOString();
 
           console.log(`[TEAM-CONTROLLER-DEBUG] Saving final team after session creation - member ${finalMember.name} agentStatus: ${finalMember.agentStatus}`);
           await context.storageService.saveTeam(finalTeam);
@@ -247,13 +311,13 @@ async function _startTeamMemberCore(
       // Load fresh data before updating failure status
       const failureTeams = await context.storageService.getTeams();
       const failureTeam = failureTeams.find(t => t.id === team.id);
-      const failureMember = failureTeam?.members.find(m => m.id === member.id);
+      const failureMember = failureTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
       if (failureTeam && failureMember) {
         // Reset to inactive if session creation failed
         failureMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
         failureMember.sessionName = '';
-        (failureMember as any).updatedAt = new Date().toISOString();
+        failureMember.updatedAt = new Date().toISOString();
         await context.storageService.saveTeam(failureTeam);
       }
 
@@ -271,13 +335,13 @@ async function _startTeamMemberCore(
     // Load fresh data before updating error status
     const errorTeams = await context.storageService.getTeams();
     const errorTeam = errorTeams.find(t => t.id === team.id);
-    const errorMember = errorTeam?.members.find(m => m.id === member.id);
+    const errorMember = errorTeam?.members.find(m => m.id === member.id) as MutableTeamMember | undefined;
 
     if (errorTeam && errorMember) {
       // Reset to inactive if session creation failed
       errorMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
       errorMember.sessionName = '';
-      (errorMember as any).updatedAt = new Date().toISOString();
+      errorMember.updatedAt = new Date().toISOString();
       await context.storageService.saveTeam(errorTeam);
     }
 
@@ -328,10 +392,11 @@ async function _stopTeamMemberCore(
 
     // Update team member status
     const oldSessionName = member.sessionName;
-    member.sessionName = '';
-    member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
-    member.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-    (member as any).updatedAt = new Date().toISOString();
+    const mutableMember = member as MutableTeamMember;
+    mutableMember.sessionName = '';
+    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    mutableMember.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+    mutableMember.updatedAt = new Date().toISOString();
     await context.storageService.saveTeam(team);
 
     return {
@@ -356,7 +421,7 @@ async function _stopTeamMemberCore(
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { name, description, members, projectPath, currentProject } = req.body as any;
+    const { name, description, members, projectPath, currentProject } = req.body as CreateTeamRequestBody;
 
     if (!name || !members || !Array.isArray(members) || members.length === 0) {
       res.status(400).json({
@@ -386,7 +451,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
     }
 
     const teamId = uuidv4();
-    const teamMembers: TeamMember[] = [] as any;
+    const teamMembers: TeamMember[] = [];
     for (let i = 0; i < members.length; i++) {
       const member = members[i];
       const memberId = uuidv4();
@@ -457,16 +522,16 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
           sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
           role: 'orchestrator',
           systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-          agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-          workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-          runtimeType: (orchestratorStatus as any)?.runtimeType || 'claude-code',
-          createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
-          updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
-        } as any
+          agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+          workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+          runtimeType: orchestratorStatus?.runtimeType || 'claude-code',
+          createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+          updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
+        }
       ],
-      createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
-      updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
-    } as any;
+      createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+      updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
+    };
 
     const allTeams = [orchestratorTeam, ...teams];
     res.json({
@@ -499,16 +564,16 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
             sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
             role: 'orchestrator',
             systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-            agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-            workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-            runtimeType: (orchestratorStatus as any)?.runtimeType || 'claude-code',
-            createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
-            updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
-          } as any
+            agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+            workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+            runtimeType: orchestratorStatus?.runtimeType || 'claude-code',
+            createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+            updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
+          }
         ],
-        createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
-        updatedAt: (orchestratorStatus as any)?.updatedAt || new Date().toISOString()
-      } as any;
+        createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
+        updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
+      };
       res.json({ success: true, data: orchestratorTeam } as ApiResponse<Team>);
       return;
     }
@@ -529,25 +594,25 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
 export async function startTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { projectId, enableGitReminder = false } = req.body as any;
+    const { projectId, enableGitReminder = false } = req.body as StartTeamRequestBody;
 
     if (id === ORCHESTRATOR_ROLE) {
-      res.status(400).json({ 
-        success: false, 
-        error: 'Orchestrator is managed at system level. Use /orchestrator/setup endpoint instead.' 
+      res.status(400).json({
+        success: false,
+        error: 'Orchestrator is managed at system level. Use /orchestrator/setup endpoint instead.'
       } as ApiResponse);
       return;
     }
 
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === id);
+    const team = teams.find(t => t.id === id) as MutableTeam | undefined;
     if (!team) {
       res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse);
       return;
     }
 
     const projects = await this.storageService.getProjects();
-    let targetProjectId = projectId || (team as any).currentProject;
+    let targetProjectId = projectId || team.currentProject;
     if (!targetProjectId) {
       res.status(400).json({ success: false, error: 'No project specified. Please select a project to assign this team to.' } as ApiResponse);
       return;
@@ -560,18 +625,19 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
     }
 
     // Update team's currentProject field to persist the project assignment
-    (team as any).currentProject = targetProjectId;
-    (team as any).updatedAt = new Date().toISOString();
+    team.currentProject = targetProjectId;
+    team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
     let sessionsCreated = 0;
     let sessionsAlreadyRunning = 0;
-    const results: any[] = [];
+    const results: TeamMemberOperationResult[] = [];
 
     // PHASE 2: Immediately set ALL members to 'activating' for instant UI feedback
     for (const member of team.members) {
-      member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
-      (member as any).updatedAt = new Date().toISOString();
+      const mutableMember = member as MutableTeamMember;
+      mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
+      mutableMember.updatedAt = new Date().toISOString();
     }
     await this.storageService.saveTeam(team);
 
@@ -580,7 +646,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
       const result = await _startTeamMemberCore(this, team, member, assignedProject.path);
 
       // Convert internal result to the expected format for the response
-      const resultForResponse = {
+      const resultForResponse: TeamMemberOperationResult = {
         memberName: result.memberName,
         sessionName: result.sessionName,
         status: result.status === 'synchronized' ? 'already_running' : result.status,
@@ -589,7 +655,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
       };
 
       if (result.error) {
-        (resultForResponse as any).error = result.error;
+        resultForResponse.error = result.error;
       }
 
       // Count sessions for response
@@ -615,7 +681,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
         id: messageId,
         name: `Git Reminder for ${team.name}`,
         targetTeam: team.id,
-        targetProject: (assignedProject as any).id,
+        targetProject: assignedProject.id,
         message: `📝 Git Reminder: Time to commit your changes! Remember our 30-minute commit discipline.\n\n` +
                 `Project: ${assignedProject.name}\n` +
                 `Please check your progress and commit any pending changes:\n` +
@@ -629,7 +695,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
         isActive: true,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      } as any;
+      };
       try {
         await this.storageService.saveScheduledMessage(gitReminderMessage);
         this.messageSchedulerService.scheduleMessage(gitReminderMessage);
@@ -659,10 +725,10 @@ export async function stopTeam(this: ApiContext, req: Request, res: Response): P
       return;
     }
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === id);
+    const team = teams.find(t => t.id === id) as MutableTeam | undefined;
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
 
-    let sessionsStopped = 0; let sessionsNotFound = 0; const results: any[] = [];
+    let sessionsStopped = 0; let sessionsNotFound = 0; const results: TeamMemberOperationResult[] = [];
 
     // Stop each team member using the internal helper function
     for (const member of team.members) {
@@ -675,14 +741,14 @@ export async function stopTeam(this: ApiContext, req: Request, res: Response): P
       const result = await _stopTeamMemberCore(this, team, member);
 
       // Convert internal result to the expected format for the response
-      const resultForResponse = {
+      const resultForResponse: TeamMemberOperationResult = {
         memberName: result.memberName,
         sessionName: result.sessionName,
         status: result.success ? 'stopped' : (result.status === 'failed' ? 'failed' : 'not_found')
       };
 
       if (result.error) {
-        (resultForResponse as any).error = result.error;
+        resultForResponse.error = result.error;
       }
 
       // Count sessions for response
@@ -697,16 +763,16 @@ export async function stopTeam(this: ApiContext, req: Request, res: Response): P
     }
 
     // Update team timestamp after all members have been processed
-    (team as any).updatedAt = new Date().toISOString();
+    team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
     if (this.messageSchedulerService) {
       try {
         const scheduledMessages = await this.storageService.getScheduledMessages();
-        const teamMessages = scheduledMessages.filter(msg => (msg as any).targetTeam === team.id);
+        const teamMessages = scheduledMessages.filter(msg => msg.targetTeam === team.id);
         for (const message of teamMessages) {
-          (message as any).isActive = false;
-          await this.storageService.saveScheduledMessage(message);
+          const mutableMessage = { ...message, isActive: false };
+          await this.storageService.saveScheduledMessage(mutableMessage);
           this.messageSchedulerService.cancelMessage(message.id);
         }
       } catch (error) {
@@ -731,7 +797,7 @@ export async function getTeamWorkload(this: ApiContext, req: Request, res: Respo
     for (const project of projects) {
       const tickets = await this.storageService.getTickets(project.path, { assignedTo: id });
       assignedTickets += tickets.length;
-      completedTickets += tickets.filter((t: any) => t.status === 'done').length;
+      completedTickets += tickets.filter((t) => t.status === 'done').length;
     }
     res.json({ success: true, data: { teamId: id, teamName: team.name, assignedTickets, completedTickets, workloadPercentage: assignedTickets > 0 ? Math.round((completedTickets / assignedTickets) * 100) : 0 } } as ApiResponse);
   } catch (error) {
@@ -786,7 +852,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
 export async function getTeamMemberSession(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { teamId, memberId } = req.params;
-    const { lines = 50 } = req.query as any;
+    const { lines = 50 } = req.query as GetTeamMemberSessionQuery;
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
@@ -804,25 +870,26 @@ export async function getTeamMemberSession(this: ApiContext, req: Request, res: 
 export async function addTeamMember(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { name, role, avatar } = req.body as any;
+    const { name, role, avatar } = req.body as AddTeamMemberRequestBody;
     if (!name || !role) { res.status(400).json({ success: false, error: 'Name and role are required' } as ApiResponse); return; }
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === id);
+    const team = teams.find(t => t.id === id) as MutableTeam | undefined;
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
     const newMember: TeamMember = {
       id: `member-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: String(name).trim(),
       sessionName: '',
-      role: role as any,
+      role: role,
       avatar: avatar,
       systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
       agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
       workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+      runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
-    } as any;
-    team.members.push(newMember);
-    (team as any).updatedAt = new Date().toISOString();
+    };
+    team.members.push(newMember as MutableTeamMember);
+    team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
     res.json({ success: true, data: newMember, message: 'Team member added successfully' } as ApiResponse<TeamMember>);
   } catch (error) {
@@ -834,15 +901,15 @@ export async function addTeamMember(this: ApiContext, req: Request, res: Respons
 export async function updateTeamMember(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { teamId, memberId } = req.params;
-    const updates = req.body as any;
+    const updates = req.body as UpdateTeamMemberRequestBody;
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === teamId);
+    const team = teams.find(t => t.id === teamId) as MutableTeam | undefined;
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
     const memberIndex = team.members.findIndex(m => m.id === memberId);
     if (memberIndex === -1) { res.status(404).json({ success: false, error: 'Team member not found' } as ApiResponse); return; }
-    const updatedMember = { ...team.members[memberIndex], ...updates, updatedAt: new Date().toISOString() } as any;
+    const updatedMember: MutableTeamMember = { ...team.members[memberIndex], ...updates, updatedAt: new Date().toISOString() };
     team.members[memberIndex] = updatedMember;
-    (team as any).updatedAt = new Date().toISOString();
+    team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
     res.json({ success: true, data: updatedMember, message: 'Team member updated successfully' } as ApiResponse<TeamMember>);
   } catch (error) {
@@ -855,7 +922,7 @@ export async function deleteTeamMember(this: ApiContext, req: Request, res: Resp
   try {
     const { teamId, memberId } = req.params;
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === teamId);
+    const team = teams.find(t => t.id === teamId) as MutableTeam | undefined;
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
     const memberIndex = team.members.findIndex(m => m.id === memberId);
     if (memberIndex === -1) { res.status(404).json({ success: false, error: 'Team member not found' } as ApiResponse); return; }
@@ -864,7 +931,7 @@ export async function deleteTeamMember(this: ApiContext, req: Request, res: Resp
       try { await this.tmuxService.killSession(member.sessionName); } catch (error) { console.warn(`Failed to kill tmux session ${member.sessionName}:`, error); }
     }
     team.members.splice(memberIndex, 1);
-    (team as any).updatedAt = new Date().toISOString();
+    team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
     res.json({ success: true, message: 'Team member removed successfully' } as ApiResponse);
   } catch (error) {
@@ -890,15 +957,16 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
     }
 
     // PHASE 3: Immediately set target member to 'activating' for instant UI feedback
-    member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
-    (member as any).updatedAt = new Date().toISOString();
+    const mutableMember = member as MutableTeamMember;
+    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
+    mutableMember.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
     // Get project path if team has a current project
     let projectPath: string | undefined;
-    if ((team as any).currentProject) {
+    if (team.currentProject) {
       const projects = await this.storageService.getProjects();
-      const project = projects.find(p => p.id === (team as any).currentProject);
+      const project = projects.find(p => p.id === team.currentProject);
       projectPath = project?.path;
     }
 
@@ -995,21 +1063,22 @@ export async function stopTeamMember(this: ApiContext, req: Request, res: Respon
 
 export async function reportMemberReady(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { sessionName, role, capabilities, readyAt } = req.body as any;
+    const { sessionName, role, capabilities, readyAt } = req.body as ReportMemberReadyRequestBody;
     if (!sessionName || !role) { res.status(400).json({ success: false, error: 'sessionName and role are required' } as ApiResponse); return; }
     const teams = await this.storageService.getTeams();
     let memberFound = false;
     for (const team of teams) {
       for (const member of team.members) {
         if (member.sessionName === sessionName) {
-          (member as any).readyAt = readyAt || new Date().toISOString();
-          (member as any).capabilities = capabilities || [];
+          const mutableMember = member as MutableTeamMember;
+          mutableMember.readyAt = readyAt || new Date().toISOString();
+          mutableMember.capabilities = capabilities || [];
           memberFound = true;
           break;
         }
       }
       if (memberFound) {
-        (team as any).updatedAt = new Date().toISOString();
+        (team as MutableTeam).updatedAt = new Date().toISOString();
         await this.storageService.saveTeam(team);
         break;
       }
@@ -1029,7 +1098,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
   console.log(`[API] 🌐 Request URL:`, req.url);
   console.log(`[API] 🔧 Request method:`, req.method);
   try {
-    const { sessionName, role, status, registeredAt, memberId } = req.body as any;
+    const { sessionName, role, status, registeredAt, memberId } = req.body as RegisterMemberStatusRequestBody;
     console.log(`[API] 📋 Extracted parameters:`, { sessionName, role, status, registeredAt, memberId });
 
     // Update agent heartbeat (proof of life)
@@ -1057,8 +1126,8 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     console.log(`[API] 🔍 Looking up team member with memberId: ${memberId}, sessionName: ${sessionName}`);
     const teams = await this.storageService.getTeams();
     console.log(`[API] 📋 Found ${teams.length} teams to search`);
-    let targetTeamId = null;
-    let targetMemberId = null;
+    let targetTeamId: string | null = null;
+    let targetMemberId: string | null = null;
 
     // First pass: Find which team and member to update
     for (const team of teams) {
@@ -1083,22 +1152,22 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
       const freshTeam = freshTeams.find(t => t.id === targetTeamId);
 
       if (freshTeam) {
-        const freshMember = freshTeam.members.find(m => m.id === targetMemberId);
+        const freshMember = freshTeam.members.find(m => m.id === targetMemberId) as MutableTeamMember | undefined;
         if (freshMember) {
           console.log(`[API] 📝 Applying registration updates to fresh member data: ${freshMember.name}`);
-          console.log(`[API] 🔍 BEFORE UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${(freshMember as any).workingStatus}`);
+          console.log(`[API] 🔍 BEFORE UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${freshMember.workingStatus}`);
 
           // Apply registration changes to fresh member data
           freshMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
-          (freshMember as any).workingStatus = (freshMember as any).workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-          (freshMember as any).readyAt = registeredAt || new Date().toISOString();
+          freshMember.workingStatus = freshMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+          freshMember.readyAt = registeredAt || new Date().toISOString();
           if (memberId && freshMember.id === memberId && !freshMember.sessionName) {
             freshMember.sessionName = sessionName;
             console.log(`[API] 📝 Updated fresh member sessionName to: ${sessionName}`);
           }
-          (freshTeam as any).updatedAt = new Date().toISOString();
+          (freshTeam as MutableTeam).updatedAt = new Date().toISOString();
 
-          console.log(`[API] ✅ AFTER UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${(freshMember as any).workingStatus}, readyAt=${(freshMember as any).readyAt}`);
+          console.log(`[API] ✅ AFTER UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${freshMember.workingStatus}, readyAt=${freshMember.readyAt}`);
           console.log(`[API] 💾 Saving fresh team with registration updates: ${freshTeam.name} at ${new Date().toISOString()}`);
           await this.storageService.saveTeam(freshTeam);
           console.log(`[API] 🎯 SAVE COMPLETED for ${freshMember.name} at ${new Date().toISOString()}`);
@@ -1117,8 +1186,8 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
 
 export async function generateMemberContext(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { teamId, memberId } = req.params as any;
-    const options = req.query as any;
+    const { teamId, memberId } = req.params;
+    const options = req.query as GenerateMemberContextQuery;
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
@@ -1142,7 +1211,7 @@ export async function generateMemberContext(this: ApiContext, req: Request, res:
 
 export async function injectContextIntoSession(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { teamId, memberId } = req.params as any;
+    const { teamId, memberId } = req.params;
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
@@ -1164,7 +1233,7 @@ export async function injectContextIntoSession(this: ApiContext, req: Request, r
 
 export async function refreshMemberContext(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { teamId, memberId } = req.params as any;
+    const { teamId, memberId } = req.params;
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
@@ -1188,14 +1257,20 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
     const now = new Date().toISOString();
     const orchestratorRunning = await this.tmuxService.sessionExists(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
     const teams = await this.storageService.getTeams();
-    const memberStatuses: any[] = [];
-    const teamsToUpdate: typeof teams = [];
-    
+    const memberStatuses: MemberActivityStatus[] = [];
+    const teamsToUpdate: Team[] = [];
+
     // Get current task assignments
     const inProgressTasks = await this.taskTrackingService.getAllInProgressTasks();
-    const tasksByMember = new Map();
-    inProgressTasks.forEach((task: any) => {
-      tasksByMember.set(task.assignedTeamMemberId, task);
+    const tasksByMember = new Map<string, CurrentTaskInfo>();
+    inProgressTasks.forEach((task) => {
+      tasksByMember.set(task.assignedTeamMemberId, {
+        id: task.id,
+        taskName: task.taskName,
+        taskFilePath: task.taskFilePath,
+        assignedAt: task.assignedAt,
+        status: task.status
+      });
     });
 
     // Process all teams with concurrency limit to prevent overwhelming the system
@@ -1204,30 +1279,31 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
 
     for (let teamIndex = 0; teamIndex < teams.length; teamIndex += CONCURRENCY_LIMIT) {
       const teamBatch = teams.slice(teamIndex, teamIndex + CONCURRENCY_LIMIT);
-      
+
       const teamPromises = teamBatch.map(async (team) => {
         let teamUpdated = false;
-        
+
         for (const member of team.members) {
+          const mutableMember = member as MutableTeamMember;
           if (member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE && member.sessionName) {
             try {
               // Add timeout to prevent hanging
               const sessionExists = await Promise.race([
                 this.tmuxService.sessionExists(member.sessionName),
-                new Promise<boolean>((_, reject) => 
+                new Promise<boolean>((_, reject) =>
                   setTimeout(() => reject(new Error('Session check timeout')), 3000)
                 )
               ]);
 
               if (!sessionExists) {
-                member.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
-                member.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-                (member as any).lastActivityCheck = now;
+                mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+                mutableMember.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+                mutableMember.lastActivityCheck = now;
                 // Clear terminal output to prevent memory leak
-                delete (member as any).lastTerminalOutput;
+                delete mutableMember.lastTerminalOutput;
                 teamUpdated = true;
 
-                const currentTask = tasksByMember.get(member.id);
+                const currentTask = tasksByMember.get(member.id) || null;
                 memberStatuses.push({
                   teamId: team.id,
                   teamName: team.name,
@@ -1239,13 +1315,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                   workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
                   lastActivityCheck: now,
                   activityDetected: false,
-                  currentTask: currentTask ? {
-                    id: currentTask.id,
-                    taskName: currentTask.taskName,
-                    taskFilePath: currentTask.taskFilePath,
-                    assignedAt: currentTask.assignedAt,
-                    status: currentTask.status
-                  } : null
+                  currentTask
                 });
                 continue;
               }
@@ -1253,30 +1323,30 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               // Capture terminal output with strict timeout and size limit
               const currentOutput = await Promise.race([
                 this.tmuxService.capturePane(member.sessionName, 15), // Reduced from 50 to 15 lines
-                new Promise<string>((_, reject) => 
+                new Promise<string>((_, reject) =>
                   setTimeout(() => reject(new Error('Capture timeout')), 2000) // Shorter timeout
                 )
               ]).catch(() => ''); // Return empty string on error/timeout
 
               // Strict size limiting to prevent memory issues
-              const trimmedOutput = currentOutput.length > MAX_OUTPUT_SIZE 
+              const trimmedOutput = currentOutput.length > MAX_OUTPUT_SIZE
                 ? '...' + currentOutput.substring(currentOutput.length - MAX_OUTPUT_SIZE + 3)
                 : currentOutput;
 
-              const previousOutput = (member as any).lastTerminalOutput || '';
+              const previousOutput = mutableMember.lastTerminalOutput || '';
               const activityDetected = trimmedOutput !== previousOutput && trimmedOutput.trim() !== '';
               const newWorkingStatus = activityDetected ? 'in_progress' : AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-              
+
               if (member.workingStatus !== newWorkingStatus) {
-                member.workingStatus = newWorkingStatus;
+                mutableMember.workingStatus = newWorkingStatus;
                 teamUpdated = true;
               }
-              
-              (member as any).lastActivityCheck = now;
-              // Store only limited output to prevent memory leak
-              (member as any).lastTerminalOutput = trimmedOutput;
 
-              const currentTask = tasksByMember.get(member.id);
+              mutableMember.lastActivityCheck = now;
+              // Store only limited output to prevent memory leak
+              mutableMember.lastTerminalOutput = trimmedOutput;
+
+              const currentTask = tasksByMember.get(member.id) || null;
               memberStatuses.push({
                 teamId: team.id,
                 teamName: team.name,
@@ -1288,21 +1358,15 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 workingStatus: newWorkingStatus,
                 lastActivityCheck: now,
                 activityDetected,
-                currentTask: currentTask ? {
-                  id: currentTask.id,
-                  taskName: currentTask.taskName,
-                  taskFilePath: currentTask.taskFilePath,
-                  assignedAt: currentTask.assignedAt,
-                  status: currentTask.status
-                } : null
+                currentTask
               });
 
             } catch (error) {
               console.error(`Error checking activity for member ${member.id}:`, error);
               // Clear terminal output on error to prevent memory leak
-              delete (member as any).lastTerminalOutput;
-              
-              const currentTask = tasksByMember.get(member.id);
+              delete mutableMember.lastTerminalOutput;
+
+              const currentTask = tasksByMember.get(member.id) || null;
               memberStatuses.push({
                 teamId: team.id,
                 teamName: team.name,
@@ -1315,17 +1379,11 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 lastActivityCheck: now,
                 activityDetected: false,
                 error: error instanceof Error ? error.message : String(error),
-                currentTask: currentTask ? {
-                  id: currentTask.id,
-                  taskName: currentTask.taskName,
-                  taskFilePath: currentTask.taskFilePath,
-                  assignedAt: currentTask.assignedAt,
-                  status: currentTask.status
-                } : null
+                currentTask
               });
             }
           } else {
-            const currentTask = tasksByMember.get(member.id);
+            const currentTask = tasksByMember.get(member.id) || null;
             memberStatuses.push({
               teamId: team.id,
               teamName: team.name,
@@ -1335,15 +1393,9 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               sessionName: member.sessionName || '',
               agentStatus: member.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
               workingStatus: member.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-              lastActivityCheck: (member as any).lastActivityCheck || now,
+              lastActivityCheck: mutableMember.lastActivityCheck || now,
               activityDetected: false,
-              currentTask: currentTask ? {
-                id: currentTask.id,
-                taskName: currentTask.taskName,
-                taskFilePath: currentTask.taskFilePath,
-                assignedAt: currentTask.assignedAt,
-                status: currentTask.status
-              } : null
+              currentTask
             });
           }
         }
@@ -1388,7 +1440,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
 export async function updateTeamMemberRuntime(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { teamId, memberId } = req.params;
-    const { runtimeType } = req.body as { runtimeType: string };
+    const { runtimeType } = req.body as UpdateTeamMemberRuntimeRequestBody;
 
     if (!runtimeType || typeof runtimeType !== 'string') {
       res.status(400).json({
@@ -1411,20 +1463,20 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     // Special handling for orchestrator team
     if (teamId === 'orchestrator') {
       // Use the orchestrator-specific runtime update function
-      await this.storageService.updateOrchestratorRuntimeType(runtimeType as any);
+      await this.storageService.updateOrchestratorRuntimeType(runtimeType);
 
       // Get the updated orchestrator status to return
       const orchestratorStatus = await this.storageService.getOrchestratorStatus();
-      const updatedMember = {
+      const updatedMember: TeamMember = {
         id: 'orchestrator-member',
         name: 'Agentmux Orchestrator',
         sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
         systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-        agentStatus: (orchestratorStatus as any)?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-        workingStatus: (orchestratorStatus as any)?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-        runtimeType: runtimeType as any,
-        createdAt: (orchestratorStatus as any)?.createdAt || new Date().toISOString(),
+        agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+        runtimeType: runtimeType,
+        createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
@@ -1437,7 +1489,7 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     }
 
     const teams = await this.storageService.getTeams();
-    const team = teams.find(t => t.id === teamId);
+    const team = teams.find(t => t.id === teamId) as MutableTeam | undefined;
     if (!team) {
       res.status(404).json({
         success: false,
@@ -1456,14 +1508,14 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     }
 
     // Update the member's runtime type
-    const updatedMember = {
+    const updatedMember: MutableTeamMember = {
       ...team.members[memberIndex],
-      runtimeType: runtimeType as any,
+      runtimeType: runtimeType,
       updatedAt: new Date().toISOString()
     };
 
     team.members[memberIndex] = updatedMember;
-    (team as any).updatedAt = new Date().toISOString();
+    team.updatedAt = new Date().toISOString();
 
     await this.storageService.saveTeam(team);
 
@@ -1488,7 +1540,7 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
 export async function updateTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const updates = req.body as UpdateTeamRequestBody;
 
     if (!id) {
       res.status(400).json({
@@ -1520,7 +1572,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
       // but it won't be persisted until we add the proper storage method
 
       // Return the virtual orchestrator team structure
-      const orchestratorTeam = {
+      const orchestratorTeam: Team = {
         id: 'orchestrator',
         name: 'Orchestrator Team',
         description: 'System orchestrator for project management',
@@ -1563,7 +1615,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
       return;
     }
 
-    const team = teams[teamIndex];
+    const team = teams[teamIndex] as MutableTeam;
 
     // Update allowed fields
     if (updates.currentProject !== undefined) {
@@ -1577,7 +1629,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     }
 
     // Update timestamp
-    (team as any).updatedAt = new Date().toISOString();
+    team.updatedAt = new Date().toISOString();
 
     await this.storageService.saveTeam(team);
 

@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { StorageService } from '../core/storage.service.js';
+import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
@@ -9,6 +10,7 @@ export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
   private tmuxService: TmuxService;
   private storageService: StorageService;
+  private logger = LoggerService.getInstance().createComponentLogger('MessageSchedulerService');
   private messageQueue: Array<{ message: ScheduledMessage; resolve: () => void; reject: (error: Error) => void }> = [];
   private isProcessingQueue = false;
 
@@ -22,9 +24,9 @@ export class MessageSchedulerService extends EventEmitter {
    * Start the scheduler - load all active messages and schedule them
    */
   async start(): Promise<void> {
-    console.log('Starting message scheduler service...');
+    this.logger.info('Starting message scheduler service...');
     await this.loadAndScheduleAllMessages();
-    console.log('Message scheduler service started');
+    this.logger.info('Message scheduler service started');
   }
 
   /**
@@ -36,9 +38,9 @@ export class MessageSchedulerService extends EventEmitter {
     }
 
     this.cancelMessage(message.id); // Cancel existing if any
-    
+
     const delayMs = this.getDelayInMilliseconds(message.delayAmount, message.delayUnit);
-    
+
     const executeMessage = async () => {
       // Route ALL messages through sequential queue to prevent race conditions
       await this.executeMessageSequentially(message);
@@ -57,7 +59,12 @@ export class MessageSchedulerService extends EventEmitter {
     this.activeTimers.set(message.id, timer);
 
     const contextInfo = message.targetProject ? ` for project ${message.targetProject}` : '';
-    console.log(`Scheduled message "${message.name}"${contextInfo} to run in ${message.delayAmount} ${message.delayUnit}${message.isRecurring ? ' (recurring)' : ''}`);
+    this.logger.info('Scheduled message', {
+      name: message.name,
+      targetProject: message.targetProject || undefined,
+      delay: `${message.delayAmount} ${message.delayUnit}`,
+      recurring: message.isRecurring
+    });
   }
 
   /**
@@ -68,7 +75,7 @@ export class MessageSchedulerService extends EventEmitter {
     if (timer) {
       clearTimeout(timer);
       this.activeTimers.delete(messageId);
-      console.log(`Cancelled scheduled message: ${messageId}`);
+      this.logger.info('Cancelled scheduled message', { messageId });
     }
   }
 
@@ -76,7 +83,7 @@ export class MessageSchedulerService extends EventEmitter {
    * Reschedule all active messages (used when messages are updated)
    */
   async rescheduleAllMessages(): Promise<void> {
-    console.log('Rescheduling all messages...');
+    this.logger.info('Rescheduling all messages...');
     this.cancelAllMessages();
     await this.loadAndScheduleAllMessages();
   }
@@ -89,7 +96,7 @@ export class MessageSchedulerService extends EventEmitter {
       clearTimeout(timer);
     }
     this.activeTimers.clear();
-    console.log('Cancelled all scheduled messages');
+    this.logger.info('Cancelled all scheduled messages');
   }
 
   /**
@@ -141,17 +148,20 @@ export class MessageSchedulerService extends EventEmitter {
       await this.tmuxService.sendMessage(sessionName, enhancedMessage);
       success = true;
 
-      const contextInfo = message.targetProject ? ` (Project: ${message.targetProject})` : '';
-      console.log(`Executed scheduled message "${message.name}" for ${message.targetTeam}${contextInfo}`);
+      this.logger.info('Executed scheduled message', {
+        name: message.name,
+        targetTeam: message.targetTeam,
+        targetProject: message.targetProject || undefined
+      });
 
     } catch (sendError) {
       success = false;
       error = sendError instanceof Error ? sendError.message : 'Failed to send message';
 
       if (shouldDeactivateMessage) {
-        console.warn(`Deactivating orphaned scheduled message "${message.name}": ${error}`);
+        this.logger.warn('Deactivating orphaned scheduled message', { name: message.name, error });
       } else {
-        console.error(`Error executing scheduled message "${message.name}":`, sendError);
+        this.logger.error('Error executing scheduled message', { name: message.name, error });
       }
     }
 
@@ -169,7 +179,7 @@ export class MessageSchedulerService extends EventEmitter {
     try {
       await this.storageService.saveDeliveryLog(deliveryLog);
     } catch (logError) {
-      console.error('Error saving delivery log:', logError);
+      this.logger.error('Error saving delivery log', { error: logError instanceof Error ? logError.message : String(logError) });
     }
 
     // Update last run time and deactivate if one-off message or orphaned
@@ -188,13 +198,13 @@ export class MessageSchedulerService extends EventEmitter {
         this.cancelMessage(message.id);
 
         if (shouldDeactivateMessage) {
-          console.log(`Orphaned message "${message.name}" has been deactivated and removed from scheduler`);
+          this.logger.info('Orphaned message has been deactivated and removed from scheduler', { name: message.name });
         } else if (!message.isRecurring) {
-          console.log(`One-off message "${message.name}" has been deactivated after execution`);
+          this.logger.info('One-off message has been deactivated after execution', { name: message.name });
         }
       }
     } catch (updateError) {
-      console.error('Error updating message last run time:', updateError);
+      this.logger.error('Error updating message last run time', { error: updateError instanceof Error ? updateError.message : String(updateError) });
     }
 
     // Emit event for monitoring
@@ -212,7 +222,7 @@ export class MessageSchedulerService extends EventEmitter {
     return new Promise((resolve, reject) => {
       // Add message to queue
       this.messageQueue.push({ message, resolve, reject });
-      
+
       // Start processing queue if not already processing
       if (!this.isProcessingQueue) {
         this.processMessageQueue();
@@ -238,8 +248,11 @@ export class MessageSchedulerService extends EventEmitter {
 
       try {
         // Log queue processing for all scheduled messages
-        const projectInfo = message.targetProject ? ` for project ${message.targetProject}` : '';
-        console.log(`Processing scheduled message "${message.name}"${projectInfo} (queue length: ${this.messageQueue.length})`);
+        this.logger.info('Processing scheduled message', {
+          name: message.name,
+          targetProject: message.targetProject || undefined,
+          queueLength: this.messageQueue.length
+        });
 
         // Execute the message
         await this.executeMessage(message);
@@ -249,13 +262,13 @@ export class MessageSchedulerService extends EventEmitter {
 
         resolve();
       } catch (error) {
-        console.error(`Error processing queued message "${message.name}":`, error);
+        this.logger.error('Error processing queued message', { name: message.name, error: error instanceof Error ? error.message : String(error) });
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     }
 
     this.isProcessingQueue = false;
-    console.log('Finished processing message queue');
+    this.logger.info('Finished processing message queue');
   }
 
   /**
@@ -265,14 +278,14 @@ export class MessageSchedulerService extends EventEmitter {
     try {
       const messages = await this.storageService.getScheduledMessages();
       const activeMessages = messages.filter(msg => msg.isActive);
-      
-      console.log(`Found ${activeMessages.length} active scheduled messages to schedule`);
-      
+
+      this.logger.info('Found active scheduled messages to schedule', { count: activeMessages.length });
+
       for (const message of activeMessages) {
         this.scheduleMessage(message);
       }
     } catch (error) {
-      console.error('Error loading scheduled messages:', error);
+      this.logger.error('Error loading scheduled messages', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -300,7 +313,7 @@ export class MessageSchedulerService extends EventEmitter {
       const projects = await this.storageService.getProjects();
       return projects.some(project => project.id === projectId);
     } catch (error) {
-      console.error('Error validating project existence:', error);
+      this.logger.error('Error validating project existence', { error: error instanceof Error ? error.message : String(error) });
       return false; // Assume project doesn't exist if we can't verify
     }
   }
@@ -331,16 +344,16 @@ ${originalMessage}
     };
 
     try {
-      console.log('🧹 Starting orphaned message cleanup...');
+      this.logger.info('Starting orphaned message cleanup...');
 
       const messages = await this.storageService.getScheduledMessages();
       const projectMessages = messages.filter(msg => msg.targetProject && msg.isActive);
 
       result.found = projectMessages.length;
-      console.log(`Found ${result.found} project-targeted messages to validate`);
+      this.logger.info('Found project-targeted messages to validate', { count: result.found });
 
       if (result.found === 0) {
-        console.log('✅ No project-targeted messages found');
+        this.logger.info('No project-targeted messages found');
         return result;
       }
 
@@ -351,7 +364,10 @@ ${originalMessage}
       for (const message of projectMessages) {
         try {
           if (!projectIds.has(message.targetProject!)) {
-            console.log(`🗑️ Deactivating orphaned message "${message.name}" for non-existent project ${message.targetProject}`);
+            this.logger.info('Deactivating orphaned message for non-existent project', {
+              name: message.name,
+              targetProject: message.targetProject
+            });
 
             // Deactivate the message
             const updatedMessage = {
@@ -368,20 +384,20 @@ ${originalMessage}
         } catch (error) {
           const errorMsg = `Failed to process message ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`;
           result.errors.push(errorMsg);
-          console.error(errorMsg);
+          this.logger.error('Failed to process message during cleanup', { messageId: message.id, error: error instanceof Error ? error.message : String(error) });
         }
       }
 
-      console.log(`✅ Orphaned message cleanup complete: ${result.deactivated}/${result.found} messages deactivated`);
+      this.logger.info('Orphaned message cleanup complete', { deactivated: result.deactivated, total: result.found });
 
       if (result.errors.length > 0) {
-        console.warn(`⚠️ ${result.errors.length} errors occurred during cleanup`);
+        this.logger.warn('Errors occurred during cleanup', { errorCount: result.errors.length });
       }
 
     } catch (error) {
       const errorMsg = `Failed to cleanup orphaned messages: ${error instanceof Error ? error.message : 'Unknown error'}`;
       result.errors.push(errorMsg);
-      console.error(errorMsg);
+      this.logger.error('Failed to cleanup orphaned messages', { error: error instanceof Error ? error.message : String(error) });
     }
 
     return result;
@@ -392,6 +408,6 @@ ${originalMessage}
    */
   cleanup(): void {
     this.cancelAllMessages();
-    console.log('Message scheduler service cleaned up');
+    this.logger.info('Message scheduler service cleaned up');
   }
 }
