@@ -86,7 +86,7 @@ export const TeamDetail: React.FC = () => {
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data) {
-          const hasOrcSession = result.data.some((session: any) => 
+          const hasOrcSession = result.data.some((session: any) =>
             session.sessionName === 'agentmux-orc'
           );
           setOrchestratorSessionActive(hasOrcSession);
@@ -132,9 +132,9 @@ export const TeamDetail: React.FC = () => {
           enableGitReminder,
         }),
       });
-      
+
       const result = await response.json();
-      
+
       if (response.ok) {
         setShowStartTeamModal(false);
         fetchTeamData();
@@ -214,7 +214,7 @@ export const TeamDetail: React.FC = () => {
 
   const handleDeleteTeam = async () => {
     if (!team) return;
-    
+
     // Prevent deletion of orchestrator team
     if (team.id === 'orchestrator' || team.name === 'Orchestrator Team') {
       showWarning('The Orchestrator Team cannot be deleted as it is required for system operations.');
@@ -261,13 +261,13 @@ export const TeamDetail: React.FC = () => {
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
       return orchestratorSessionActive ? 'active' : 'idle';
     }
-    
+
     // For other teams, check if any members have active sessions
     const hasActiveSessions = team?.members?.some(m => m.sessionName);
     if (hasActiveSessions) {
       return 'active';
     }
-    
+
     // No active sessions, team is idle
     return 'idle';
   };
@@ -282,7 +282,6 @@ export const TeamDetail: React.FC = () => {
   const handleViewMemberTerminal = (member: TeamMember) => {
     // Open terminal for specific team member session
     if (member.sessionName) {
-      console.log('Opening terminal for member session:', member.sessionName);
       openTerminalWithSession(member.sessionName);
     }
   };
@@ -392,7 +391,6 @@ export const TeamDetail: React.FC = () => {
           // Refresh team data and orchestrator session status
           fetchTeamData();
           checkOrchestratorSession();
-          console.log('Orchestrator setup successfully');
         } else {
           showError(result.error || 'Failed to setup orchestrator');
         }
@@ -410,7 +408,6 @@ export const TeamDetail: React.FC = () => {
         if (response.ok) {
           // Refresh team data to show updated status
           fetchTeamData();
-          console.log(`Member ${memberId} started successfully`);
         } else {
           showError(result.error || 'Failed to start team member');
         }
@@ -438,7 +435,6 @@ export const TeamDetail: React.FC = () => {
           // Refresh team data and orchestrator session status
           fetchTeamData();
           checkOrchestratorSession();
-          console.log('Orchestrator stopped successfully');
         } else {
           showError(result.error || 'Failed to stop orchestrator');
         }
@@ -456,7 +452,6 @@ export const TeamDetail: React.FC = () => {
         if (response.ok) {
           // Refresh team data to show updated status
           fetchTeamData();
-          console.log(`Member ${memberId} stopped successfully`);
         } else {
           showError(result.error || 'Failed to stop team member');
         }

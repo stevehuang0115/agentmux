@@ -9,6 +9,7 @@ import { execSync, spawn } from 'child_process';
 import { logger, createLogger } from './logger.js';
 import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
+import { sanitizeGitCommitMessage } from './security.js';
 import {
   MCPRequest,
   MCPResponse,
@@ -1634,7 +1635,11 @@ export class AgentMuxMCPServer {
             }
 
             const changes = output.trim().split('\n').length;
-            const commitMsg = message || `Auto-commit: ${changes} changes by ${this.sessionName}`;
+            const rawCommitMsg = message || `Auto-commit: ${changes} changes by ${this.sessionName}`;
+            const { sanitized: commitMsg, wasModified } = sanitizeGitCommitMessage(rawCommitMsg);
+            if (wasModified) {
+              logger.warn(`Commit message was sanitized for security. Original: "${rawCommitMsg.substring(0, 100)}..."`);
+            }
 
             // Force add and commit all changes
             const gitAdd = spawn('git', ['add', '-A'], { cwd: this.projectPath });

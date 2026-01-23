@@ -35,6 +35,46 @@ import { LoggerService } from './services/core/logger.service.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Safely parses an integer from a string with validation and fallback.
+ *
+ * @param value - The string value to parse, or undefined
+ * @param defaultValue - The default value to return if parsing fails or value is invalid
+ * @param envVarName - Optional name of the environment variable for logging purposes
+ * @returns The parsed integer or the default value if parsing fails
+ */
+function parseIntWithFallback(value: string | undefined, defaultValue: number, envVarName?: string): number {
+	if (value === undefined || value === '') {
+		return defaultValue;
+	}
+
+	const parsed = parseInt(value, 10);
+
+	// Check if parsing resulted in NaN or if the value contains non-numeric characters
+	// that would be silently ignored by parseInt (e.g., "3000abc" -> 3000)
+	if (Number.isNaN(parsed) || !Number.isFinite(parsed)) {
+		const logger = LoggerService.getInstance().createComponentLogger('ConfigParser');
+		logger.warn('Invalid numeric environment variable value, using default', {
+			envVar: envVarName,
+			value,
+			defaultValue,
+		});
+		return defaultValue;
+	}
+
+	// Validate that the entire string was a valid number (no trailing non-numeric chars)
+	if (String(parsed) !== value.trim()) {
+		const logger = LoggerService.getInstance().createComponentLogger('ConfigParser');
+		logger.warn('Environment variable contains non-numeric characters, using parsed value', {
+			envVar: envVarName,
+			originalValue: value,
+			parsedValue: parsed,
+		});
+	}
+
+	return parsed;
+}
+
 export class AgentMuxServer {
 	private app: express.Application;
 	private httpServer: ReturnType<typeof createServer>;
@@ -69,14 +109,14 @@ export class AgentMuxServer {
 			config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
 
 		this.config = {
-			webPort: config?.webPort || parseInt(process.env.WEB_PORT || '8787'),
-			mcpPort: config?.mcpPort || parseInt(process.env.AGENTMUX_MCP_PORT || '8789'),
+			webPort: config?.webPort || parseIntWithFallback(process.env.WEB_PORT, 8787, 'WEB_PORT'),
+			mcpPort: config?.mcpPort || parseIntWithFallback(process.env.AGENTMUX_MCP_PORT, 8789, 'AGENTMUX_MCP_PORT'),
 			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||
-				parseInt(process.env.DEFAULT_CHECK_INTERVAL || '30'),
+				parseIntWithFallback(process.env.DEFAULT_CHECK_INTERVAL, 30, 'DEFAULT_CHECK_INTERVAL'),
 			autoCommitInterval:
-				config?.autoCommitInterval || parseInt(process.env.AUTO_COMMIT_INTERVAL || '30'),
+				config?.autoCommitInterval || parseIntWithFallback(process.env.AUTO_COMMIT_INTERVAL, 30, 'AUTO_COMMIT_INTERVAL'),
 		};
 
 		this.app = express();

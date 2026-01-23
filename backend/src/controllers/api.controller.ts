@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
-import { 
-  StorageService, 
-  TmuxService, 
-  SchedulerService, 
+import {
+  StorageService,
+  TmuxService,
+  SchedulerService,
   MessageSchedulerService,
   AgentRegistrationService
 } from '../services/index.js';
@@ -28,10 +28,9 @@ export class ApiController {
     this.promptTemplateService = new PromptTemplateService();
     this.taskAssignmentMonitor = new TaskAssignmentMonitorService(this.tmuxService);
     this.taskTrackingService = new TaskTrackingService();
-    
-    // Create AgentRegistrationService - it needs access to the internal services from TmuxService
-    // We'll access the internal services through the TmuxService properties
-    const tmuxCommand = (this.tmuxService as any).tmuxCommand;
+
+    // Create AgentRegistrationService using the public accessor method from TmuxService
+    const tmuxCommand = this.tmuxService.getTmuxCommandService();
     this.agentRegistrationService = new AgentRegistrationService(
       tmuxCommand,
       process.cwd(),
@@ -532,4 +531,3 @@ export class ApiController {
     return getProjectTasksStatus.call(this, req, res);
   }
 }
-

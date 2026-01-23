@@ -43,6 +43,30 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const reconnectAttemptRef = useRef<number>(0);
   const maxReconnectAttempts = 3;
 
+  // Ref to track the current session for use in recursive timeouts
+  // This prevents stale closures in the retry logic
+  const selectedSessionRef = useRef<string>(selectedSession);
+
+  // Keep the ref in sync with the state
+  useEffect(() => {
+    selectedSessionRef.current = selectedSession;
+  }, [selectedSession]);
+
+  /**
+   * Clears all session-related timeouts to prevent memory leaks.
+   * Should be called when switching sessions or cleaning up.
+   */
+  const clearSessionTimeouts = useCallback(() => {
+    if (sessionSwitchTimeout.current) {
+      clearTimeout(sessionSwitchTimeout.current);
+      sessionSwitchTimeout.current = null;
+    }
+    if (sessionPendingRetryRef.current) {
+      clearTimeout(sessionPendingRetryRef.current);
+      sessionPendingRetryRef.current = null;
+    }
+  }, []);
+
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
     // WebSocket message structure: data is the payload containing TerminalOutput
@@ -50,23 +74,14 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     const dataSessionName = data?.sessionName || data?.payload?.sessionName;
     const dataContent = data?.content || data?.payload?.content;
 
-    if (data && dataSessionName === selectedSession) {
+    if (data && dataSessionName === selectedSessionRef.current) {
       setTerminalOutput(dataContent || '');
 
       // Clear loading state when we receive terminal output
       setLoading(false);
 
       // Clear session switch timeout since we got content
-      if (sessionSwitchTimeout.current) {
-        clearTimeout(sessionSwitchTimeout.current);
-        sessionSwitchTimeout.current = null;
-      }
-
-      // Clear session pending retry since we got content
-      if (sessionPendingRetryRef.current) {
-        clearInterval(sessionPendingRetryRef.current);
-        sessionPendingRetryRef.current = null;
-      }
+      clearSessionTimeouts();
 
       // Auto-scroll to bottom if user hasn't manually scrolled up
       if (!isUserScrolling) {
@@ -77,36 +92,27 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         }, 10);
       }
     }
-  }, [selectedSession, isUserScrolling]);
+  }, [isUserScrolling, clearSessionTimeouts]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     console.log('handleInitialTerminalState received data:', data);
-    console.log('Expected sessionName:', selectedSession);
+    console.log('Expected sessionName:', selectedSessionRef.current);
 
     // Check both direct sessionName and nested structure
     const dataSessionName = data?.sessionName || data?.payload?.sessionName;
     const dataContent = data?.content || data?.payload?.content;
 
-    if (data && dataSessionName === selectedSession) {
+    if (data && dataSessionName === selectedSessionRef.current) {
       console.log('Session name matches, setting terminal output:', dataContent?.substring(0, 100));
       setTerminalOutput(dataContent || '');
       setLoading(false);
 
-      // Clear session switch timeout since we got the response
-      if (sessionSwitchTimeout.current) {
-        clearTimeout(sessionSwitchTimeout.current);
-        sessionSwitchTimeout.current = null;
-      }
-
-      // Clear session pending retry since we got the response
-      if (sessionPendingRetryRef.current) {
-        clearInterval(sessionPendingRetryRef.current);
-        sessionPendingRetryRef.current = null;
-      }
+      // Clear session timeouts since we got the response
+      clearSessionTimeouts();
     } else {
-      console.log('Session name mismatch or no data. Data sessionName:', dataSessionName, 'Expected:', selectedSession);
+      console.log('Session name mismatch or no data. Data sessionName:', dataSessionName, 'Expected:', selectedSessionRef.current);
     }
-  }, [selectedSession]);
+  }, [clearSessionTimeouts]);
 
   const handleConnectionError = useCallback((data: any) => {
     setError(data.error || 'WebSocket connection error');
@@ -114,68 +120,80 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     setLoading(false);
   }, []);
 
+  /**
+   * Handles session pending events from WebSocket.
+   * Implements exponential backoff retry logic for session subscription.
+   * Uses refs to check current session state and prevent stale closures.
+   *
+   * @param data - The session pending event data containing sessionName
+   */
   const handleSessionPending = useCallback((data: any) => {
     const dataSessionName = data?.sessionName || data?.payload?.sessionName;
-    if (dataSessionName === selectedSession) {
-      console.log('Session pending, will retry subscription:', dataSessionName);
-      setTerminalOutput('# Session is being created, please wait...\n# This may take a few moments while the agent starts up.\n');
-      setLoading(true);
 
-      // Clear existing timeout
-      if (sessionSwitchTimeout.current) {
-        clearTimeout(sessionSwitchTimeout.current);
-        sessionSwitchTimeout.current = null;
+    // Only process if this is for our current session
+    if (dataSessionName !== selectedSessionRef.current) {
+      return;
+    }
+
+    console.log('Session pending, will retry subscription:', dataSessionName);
+    setTerminalOutput('# Session is being created, please wait...\n# This may take a few moments while the agent starts up.\n');
+    setLoading(true);
+
+    // Clear existing timeouts before starting new retry logic
+    clearSessionTimeouts();
+
+    // Retry subscription with exponential backoff (3s, 6s, 12s, etc.)
+    let retryAttempt = 0;
+    const maxRetries = 10;
+    const baseDelay = 3000;
+
+    /**
+     * Schedules the next retry attempt with exponential backoff.
+     * Checks if the session has changed before each retry to prevent stale operations.
+     */
+    const scheduleRetry = () => {
+      // Check if we've exceeded max retries
+      if (retryAttempt >= maxRetries) {
+        setLoading(false);
+        setTerminalOutput(`# Session "${selectedSessionRef.current}" is taking longer than expected to start.\n# The orchestrator may still be initializing.\n# Try refreshing the page or check the backend logs.\n`);
+        return;
       }
 
-      // Clear any existing retry timeout
-      if (sessionPendingRetryRef.current) {
-        clearTimeout(sessionPendingRetryRef.current);
-        sessionPendingRetryRef.current = null;
-      }
+      const delay = Math.min(baseDelay * Math.pow(1.5, retryAttempt), 30000); // Cap at 30s
 
-      // Retry subscription with exponential backoff (3s, 6s, 12s, etc.)
-      let retryAttempt = 0;
-      const maxRetries = 10;
-      const baseDelay = 3000;
-
-      const scheduleRetry = () => {
-        if (retryAttempt >= maxRetries) {
-          setLoading(false);
-          setTerminalOutput(`# Session "${selectedSession}" is taking longer than expected to start.\n# The orchestrator may still be initializing.\n# Try refreshing the page or check the backend logs.\n`);
+      sessionPendingRetryRef.current = setTimeout(() => {
+        // CRITICAL: Check if the session has changed since we scheduled this retry
+        // If it has, abort the retry chain to prevent memory leaks and stale operations
+        if (dataSessionName !== selectedSessionRef.current) {
+          console.log(`Session changed from ${dataSessionName} to ${selectedSessionRef.current}, aborting retry chain`);
           return;
         }
 
-        const delay = Math.min(baseDelay * Math.pow(1.5, retryAttempt), 30000); // Cap at 30s
-        sessionPendingRetryRef.current = setTimeout(() => {
-          console.log(`Retrying session subscription (attempt ${retryAttempt + 1}/${maxRetries}):`, selectedSession);
-          webSocketService.subscribeToSession(selectedSession);
-          retryAttempt++;
-          scheduleRetry();
-        }, delay);
-      };
+        console.log(`Retrying session subscription (attempt ${retryAttempt + 1}/${maxRetries}):`, dataSessionName);
+        webSocketService.subscribeToSession(dataSessionName);
+        retryAttempt++;
+        scheduleRetry();
+      }, delay);
+    };
 
-      scheduleRetry();
-    }
-  }, [selectedSession]);
+    scheduleRetry();
+  }, [clearSessionTimeouts]);
 
   const handleSessionNotFound = useCallback((data: any) => {
     const dataSessionName = data?.sessionName || data?.payload?.sessionName;
-    if (dataSessionName === selectedSession) {
+    if (dataSessionName === selectedSessionRef.current) {
       console.log('Session not found:', dataSessionName);
       setLoading(false);
 
       // Clear session switch timeout
-      if (sessionSwitchTimeout.current) {
-        clearTimeout(sessionSwitchTimeout.current);
-        sessionSwitchTimeout.current = null;
-      }
+      clearSessionTimeouts();
     }
-  }, [selectedSession]);
+  }, [clearSessionTimeouts]);
 
   const handleConnectionStatusChange = useCallback(() => {
     const status = webSocketService.getConnectionState();
     setConnectionStatus(status);
-    
+
     if (status === 'connected') {
       setError(null);
     }
@@ -192,9 +210,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     return () => cleanupWebSocket();
   }, [isOpen]);
 
-  // Handle session switching
+  // Handle session switching - clear pending retries when session changes
   useEffect(() => {
-    // Clean up any previous intervals/timeouts
+    // Clean up any previous intervals/timeouts when session changes
+    clearSessionTimeouts();
+
     if (connectionCheckIntervalRef.current) {
       clearInterval(connectionCheckIntervalRef.current);
       connectionCheckIntervalRef.current = null;
@@ -236,6 +256,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     // Cleanup function to prevent memory leaks
     return () => {
+      // Clear session-related timeouts when session changes or component unmounts
+      clearSessionTimeouts();
+
       if (connectionCheckIntervalRef.current) {
         clearInterval(connectionCheckIntervalRef.current);
         connectionCheckIntervalRef.current = null;
@@ -245,7 +268,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         connectionCheckTimeoutRef.current = null;
       }
     };
-  }, [selectedSession, isOpen]);
+  }, [selectedSession, isOpen, clearSessionTimeouts]);
 
   const initializeWebSocket = async () => {
     try {
@@ -268,7 +291,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
       // Load available sessions and subscribe to default session
       await loadAvailableSessions();
-      
+
       if (selectedSession) {
         switchSession(selectedSession);
       }
@@ -282,17 +305,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   };
 
   const cleanupWebSocket = () => {
-    // Clear session switch timeout
-    if (sessionSwitchTimeout.current) {
-      clearTimeout(sessionSwitchTimeout.current);
-      sessionSwitchTimeout.current = null;
-    }
-
-    // Clear session pending retry interval
-    if (sessionPendingRetryRef.current) {
-      clearInterval(sessionPendingRetryRef.current);
-      sessionPendingRetryRef.current = null;
-    }
+    // Clear all session-related timeouts
+    clearSessionTimeouts();
 
     // Unsubscribe from current session
     if (currentSubscription.current) {
@@ -320,11 +334,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const switchSession = (sessionName: string) => {
     console.log(`switchSession called with: ${sessionName}`);
 
-    // Clear any existing session switch timeout
-    if (sessionSwitchTimeout.current) {
-      clearTimeout(sessionSwitchTimeout.current);
-      sessionSwitchTimeout.current = null;
-    }
+    // Clear any existing session timeouts
+    clearSessionTimeouts();
 
     // Unsubscribe from previous session
     if (currentSubscription.current && currentSubscription.current !== sessionName) {
@@ -375,9 +386,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     // Set timeout fallback to clear loading state if no response comes within 10 seconds
     sessionSwitchTimeout.current = setTimeout(() => {
-      console.warn(`Session switch timeout for ${sessionName}, clearing loading state`);
-      setLoading(false);
-      setTerminalOutput(`# Connection timeout for session: ${sessionName}\n# No response from server after 10 seconds.\n# Try refreshing the page or selecting a different session.\n`);
+      // Check if this timeout is still relevant (session hasn't changed)
+      if (sessionName === selectedSessionRef.current) {
+        console.warn(`Session switch timeout for ${sessionName}, clearing loading state`);
+        setLoading(false);
+        setTerminalOutput(`# Connection timeout for session: ${sessionName}\n# No response from server after 10 seconds.\n# Try refreshing the page or selecting a different session.\n`);
+      }
       sessionSwitchTimeout.current = null;
     }, 10000);
 
@@ -450,9 +464,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     // Only handle keys when terminal panel is focused and connected
     if (!isOpen || connectionStatus !== 'connected') return;
-    
+
     e.preventDefault();
-    
+
     // Handle special key combinations
     if (e.ctrlKey) {
       switch (e.key.toLowerCase()) {
@@ -540,10 +554,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     if (isOpen && terminalPanelRef.current) {
       // Focus the terminal panel to capture keyboard events
       terminalPanelRef.current.focus();
-      
+
       // Add global keyboard event listener
       document.addEventListener('keydown', handleKeyDown);
-      
+
       return () => {
         document.removeEventListener('keydown', handleKeyDown);
       };

@@ -31,10 +31,8 @@ export const TerminalProvider: React.FC<TerminalProviderProps> = ({ children }) 
   const closeTerminal = () => setIsTerminalOpen(false);
 
   const openTerminalWithSession = (sessionName: string) => {
-    console.log('TerminalContext: openTerminalWithSession called with:', sessionName);
     setSelectedSession(sessionName);
     setIsTerminalOpen(true);
-    console.log('TerminalContext: Terminal opened and session set to:', sessionName);
   };
 
   const value: TerminalContextType = {

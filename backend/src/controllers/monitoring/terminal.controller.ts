@@ -12,6 +12,11 @@ import { ApiResponse } from '../../types/index.js';
 import { getSessionBackendSync } from '../../services/session/index.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
 import { TERMINAL_CONTROLLER_CONSTANTS } from '../../constants.js';
+import {
+	validateTerminalInput,
+	sanitizeTerminalInput,
+	validateSessionName,
+} from '../../utils/security.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -77,6 +82,16 @@ export async function sessionExists(req: Request, res: Response): Promise<void> 
 			return;
 		}
 
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
 		const backend = getSessionBackendSync();
 		if (!backend) {
 			res.status(503).json({
@@ -122,6 +137,16 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 			res.status(400).json({
 				success: false,
 				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
 			} as ApiResponse);
 			return;
 		}
@@ -202,10 +227,36 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 			return;
 		}
 
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
 		if (data === undefined || data === null) {
 			res.status(400).json({
 				success: false,
 				error: 'Data is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Convert data to string and validate for dangerous control sequences
+		const dataStr = String(data);
+		const validation = validateTerminalInput(dataStr);
+		if (!validation.isValid) {
+			logger.warn('Terminal input validation failed', {
+				sessionName,
+				error: validation.error,
+				dataLength: dataStr.length,
+			});
+			res.status(400).json({
+				success: false,
+				error: `Invalid terminal input: ${validation.error}`,
 			} as ApiResponse);
 			return;
 		}
@@ -229,11 +280,11 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 		}
 
 		// Write data to session
-		session.write(data);
+		session.write(dataStr);
 
 		logger.debug('Data written to session', {
 			sessionName,
-			dataLength: String(data).length,
+			dataLength: dataStr.length,
 		});
 
 		res.json({
@@ -276,10 +327,36 @@ export async function sendTerminalInput(req: Request, res: Response): Promise<vo
 			return;
 		}
 
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
 		if (!input) {
 			res.status(400).json({
 				success: false,
 				error: 'Input is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Convert input to string and validate for dangerous control sequences
+		const inputStr = String(input);
+		const validation = validateTerminalInput(inputStr);
+		if (!validation.isValid) {
+			logger.warn('Terminal input validation failed', {
+				sessionName,
+				error: validation.error,
+				inputLength: inputStr.length,
+			});
+			res.status(400).json({
+				success: false,
+				error: `Invalid terminal input: ${validation.error}`,
 			} as ApiResponse);
 			return;
 		}
@@ -303,11 +380,11 @@ export async function sendTerminalInput(req: Request, res: Response): Promise<vo
 		}
 
 		// Write input to session (add carriage return for command execution)
-		session.write(input + '\r');
+		session.write(inputStr + '\r');
 
 		logger.debug('Input sent to session', {
 			sessionName,
-			inputLength: input.length,
+			inputLength: inputStr.length,
 		});
 
 		res.json({
@@ -350,10 +427,34 @@ export async function sendTerminalKey(req: Request, res: Response): Promise<void
 			return;
 		}
 
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
 		if (!key) {
 			res.status(400).json({
 				success: false,
 				error: 'Key is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Validate key name - only allow known safe key names
+		const allowedKeys = [
+			'Enter', 'Return', 'Escape', 'Tab', 'Backspace', 'Delete',
+			'Up', 'Down', 'Right', 'Left', 'Home', 'End', 'PageUp', 'PageDown',
+			'C-c', 'C-d', 'C-z', 'C-l'
+		];
+		if (!allowedKeys.includes(key)) {
+			res.status(400).json({
+				success: false,
+				error: `Invalid key name. Allowed keys: ${allowedKeys.join(', ')}`,
 			} as ApiResponse);
 			return;
 		}
@@ -419,6 +520,16 @@ export async function killSession(req: Request, res: Response): Promise<void> {
 			res.status(400).json({
 				success: false,
 				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
 			} as ApiResponse);
 			return;
 		}
