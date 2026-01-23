@@ -78,7 +78,7 @@ describe('Factory Page', () => {
 
       const iframe = screen.getByTitle('AgentMux Factory');
       expect(iframe).toBeInTheDocument();
-      expect(iframe).toHaveAttribute('src', 'http://localhost:5173');
+      expect(iframe).toHaveAttribute('src', '/avatar-3d/');
       expect(iframe).toHaveClass('w-full', 'h-full', 'border-0');
       expect(iframe).toHaveAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope');
     });
@@ -291,7 +291,8 @@ describe('Factory Page', () => {
       );
 
       const iframe = screen.getByTitle('AgentMux Factory') as HTMLIFrameElement;
-      expect(iframe.src).toBe('http://localhost:5173/');
+      // iframe.src gets resolved relative to jsdom's base URL (http://localhost:3000 by default)
+      expect(iframe.getAttribute('src')).toBe('/avatar-3d/');
     });
   });
 });

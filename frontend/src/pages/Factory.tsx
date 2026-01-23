@@ -32,9 +32,9 @@ export const Factory: React.FC = () => {
         <span className="text-sm font-medium">Back to Dashboard</span>
       </button>
 
-      {/* 3D Factory iframe */}
+      {/* 3D Factory iframe - served from same Vite server via multi-page config */}
       <iframe
-        src="http://localhost:5173"
+        src="/avatar-3d/"
         className="w-full h-full border-0"
         title="AgentMux Factory"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope"

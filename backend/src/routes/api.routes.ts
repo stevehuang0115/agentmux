@@ -10,6 +10,7 @@ import { registerErrorRoutes } from './modules/errors.routes.js';
 import { registerScheduledMessageRoutes } from './modules/scheduled-messages.routes.js';
 import { registerDeliveryLogRoutes } from './modules/delivery-logs.routes.js';
 import { registerConfigRoutes } from './modules/config.routes.js';
+import { createFactoryRoutes } from './factory.routes.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -39,6 +40,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Use the new organized controller structure
   router.use('/', createApiRouter(context));
+
+  // Factory routes for 3D visualization
+  router.use('/factory', createFactoryRoutes());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

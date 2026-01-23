@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentMux Factory</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      overflow: hidden;
+      background: #111721;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    canvas {
+      display: block;
+    }
+    /* Icon styles */
+    .icon {
+      width: 16px;
+      height: 16px;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .icon svg {
+      width: 100%;
+      height: 100%;
+      fill: currentColor;
+    }
+    #info {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      color: #f6f7f8;
+      font-size: 14px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 15px 20px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+      backdrop-filter: blur(10px);
+      min-width: 250px;
+    }
+    #info strong {
+      font-size: 16px;
+      display: block;
+      margin-bottom: 8px;
+      color: #2a73ea;
+      font-weight: 600;
+    }
+    #lighting-toggle {
+      position: absolute;
+      top: 15px;
+      left: 280px;
+      display: flex;
+      gap: 8px;
+    }
+    #lighting-toggle .lighting-btn {
+      background: rgba(26, 34, 44, 0.9);
+      color: #9ab0d9;
+      border: 1px solid #313a48;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: inherit;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #lighting-toggle .lighting-btn:hover {
+      background: rgba(42, 115, 234, 0.2);
+      border-color: rgba(42, 115, 234, 0.5);
+      color: #f6f7f8;
+    }
+    #lighting-toggle .lighting-btn.active {
+      background: rgba(42, 115, 234, 0.3);
+      border-color: #2a73ea;
+      color: #f6f7f8;
+    }
+    #legend {
+      position: absolute;
+      bottom: 20px;
+      left: 15px;
+      color: #f6f7f8;
+      font-size: 12px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+    }
+    #legend h4 {
+      margin-bottom: 8px;
+      color: #9ab0d9;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #legend .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+    }
+    #legend .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+    #legend .dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    #legend .dot.idle { background: #eab308; box-shadow: 0 0 6px #eab308; }
+    #legend .dot.dormant { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+    #controls {
+      position: absolute;
+      top: 15px;
+      right: 15px;
+      color: #f6f7f8;
+      font-size: 12px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+    }
+    #controls h4 {
+      margin-bottom: 8px;
+      color: #9ab0d9;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #controls code {
+      background: rgba(255,255,255,0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 11px;
+    }
+    #project-focus {
+      position: absolute;
+      top: 200px;
+      right: 15px;
+      color: #f6f7f8;
+      font-size: 12px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+      min-width: 180px;
+    }
+    #project-focus h4 {
+      margin-bottom: 8px;
+      color: #9ab0d9;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #project-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #project-buttons button {
+      background: rgba(42, 115, 234, 0.15);
+      color: #2a73ea;
+      border: 1px solid rgba(42, 115, 234, 0.3);
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      text-align: left;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #project-buttons button:hover {
+      background: rgba(42, 115, 234, 0.25);
+      border-color: #2a73ea;
+    }
+    #project-buttons button.active {
+      background: rgba(42, 115, 234, 0.35);
+      border-color: #2a73ea;
+    }
+    #project-buttons button svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    #usage {
+      position: absolute;
+      bottom: 20px;
+      right: 250px;
+      color: #f6f7f8;
+      font-size: 12px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+      min-width: 180px;
+    }
+    #usage h4 {
+      margin-bottom: 8px;
+      color: #9ab0d9;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #usage .stat {
+      display: flex;
+      justify-content: space-between;
+      margin: 4px 0;
+    }
+    #usage .stat-label {
+      color: #9ab0d9;
+    }
+    #usage .stat-value {
+      color: #2a73ea;
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    #usage .stat-value.tokens {
+      color: #a855f7;
+    }
+    #usage .mini-chart {
+      margin-top: 10px;
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 30px;
+    }
+    #usage .mini-chart .bar {
+      flex: 1;
+      background: linear-gradient(to top, #2a73ea, #a855f7);
+      border-radius: 2px 2px 0 0;
+      min-height: 2px;
+    }
+
+    #token-dist {
+      position: absolute;
+      bottom: 20px;
+      right: 15px;
+      color: #f6f7f8;
+      font-size: 12px;
+      background: rgba(26, 34, 44, 0.9);
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: 1px solid #313a48;
+      min-width: 220px;
+    }
+    #token-dist h4 {
+      margin-bottom: 8px;
+      color: #9ab0d9;
+      font-weight: 500;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    #token-dist .dist-bar-container {
+      display: flex;
+      height: 16px;
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255,255,255,0.1);
+      margin-bottom: 10px;
+    }
+    #token-dist .dist-bar-segment {
+      height: 100%;
+      transition: width 0.5s ease;
+    }
+    #token-dist .dist-legend {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #token-dist .dist-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+    }
+    #token-dist .dist-color {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+    }
+    #token-dist .dist-name {
+      flex: 1;
+      color: #9ab0d9;
+    }
+    #token-dist .dist-percent {
+      color: #2a73ea;
+      font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <strong>AgentMux Factory</strong>
+    Loading...
+  </div>
+
+  <div id="lighting-toggle">
+    <button class="lighting-btn active" data-mode="auto" onclick="window.setLightingMode('auto')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+        <polyline points="17 8 21 12 17 16"/>
+      </svg>
+      Auto
+    </button>
+    <button class="lighting-btn" data-mode="day" onclick="window.setLightingMode('day')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="5"/>
+        <line x1="12" y1="1" x2="12" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="23"/>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+        <line x1="1" y1="12" x2="3" y2="12"/>
+        <line x1="21" y1="12" x2="23" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+      </svg>
+      Day
+    </button>
+    <button class="lighting-btn" data-mode="night" onclick="window.setLightingMode('night')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
+      Night
+    </button>
+  </div>
+
+  <div id="legend">
+    <h4>Status</h4>
+    <div class="item"><span class="dot active"></span> Active (typing, screen on)</div>
+    <div class="item"><span class="dot idle"></span> Idle (sleepy, coffee break)</div>
+    <div class="item"><span class="dot dormant"></span> Dormant (gone home)</div>
+  </div>
+
+  <div id="controls">
+    <h4>Controls</h4>
+    <div><b>Drag</b> = Rotate view</div>
+    <div><b>Scroll</b> = Zoom in/out</div>
+    <div style="margin-top: 6px; border-top: 1px solid #313a48; padding-top: 6px;">
+      <code>W/Up</code> Forward &nbsp; <code>S/Down</code> Back
+    </div>
+    <div>
+      <code>A/Left</code> Right &nbsp; <code>D/Right</code> Left
+    </div>
+    <div>
+      <code>Q/Space</code> Up &nbsp; <code>E/Shift</code> Down
+    </div>
+    <div style="margin-top: 8px; color: #9ab0d9;">
+      API: <code>localhost:8790</code>
+    </div>
+  </div>
+
+  <div id="project-focus">
+    <h4>Focus on Project</h4>
+    <div id="project-buttons">
+      <button onclick="window.focusOnProject('overview')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        Overview
+      </button>
+      <button onclick="window.focusOnProject('birdseye')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <circle cx="12" cy="12" r="6"/>
+          <circle cx="12" cy="12" r="2"/>
+        </svg>
+        Bird's Eye
+      </button>
+    </div>
+  </div>
+
+  <div id="usage">
+    <h4>Token Usage</h4>
+    <div id="usage-content">Loading...</div>
+  </div>
+
+  <div id="token-dist">
+    <h4>Workload Distribution</h4>
+    <div id="token-dist-content">Loading...</div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

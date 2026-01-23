@@ -27,6 +27,7 @@ import {
 } from './services/session/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
+import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
 import { TerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
 
@@ -160,6 +161,9 @@ export class AgentMuxServer {
 		// API routes
 		this.app.use('/api', createApiRoutes(this.apiController));
 
+		// MCP routes - JSON-RPC endpoint for Claude Code integration
+		this.app.use('/mcp', createMCPRoutes());
+
 		// Health check
 		this.app.get('/health', (req, res) => {
 			res.json({
@@ -278,6 +282,11 @@ export class AgentMuxServer {
 			this.teamsJsonWatcherService.start();
 			console.log('📁 Teams.json file watcher started for real-time updates');
 
+			// Initialize MCP server (integrated into backend)
+			console.log('🔌 Initializing MCP server...');
+			await initializeMCPServer();
+			console.log('✅ MCP server integrated at /mcp endpoint');
+
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
 
@@ -328,8 +337,13 @@ export class AgentMuxServer {
 				const duration = Date.now() - startTime;
 				console.log(`🚀 AgentMux server started on port ${this.config.webPort} (${duration}ms)`);
 				console.log(`📊 Dashboard: http://localhost:${this.config.webPort}`);
+				console.log(`🔌 MCP: http://localhost:${this.config.webPort}/mcp`);
 				console.log(`⚡ WebSocket: ws://localhost:${this.config.webPort}`);
 				console.log(`🏠 Home: ${this.config.agentmuxHome}`);
+				console.log('');
+				console.log('To configure Claude Code:');
+				console.log(`claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`);
+				console.log('');
 				resolve();
 			});
 
@@ -445,6 +459,10 @@ export class AgentMuxServer {
 
 			// Stop teams.json file watcher
 			this.teamsJsonWatcherService.stop();
+
+			// Destroy MCP server
+			console.log('🔌 Stopping MCP server...');
+			destroyMCPServer();
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();
