@@ -47,6 +47,7 @@ export function createApiRoutes(apiController: ApiController): Router {
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here
   registerTaskManagementRoutes(router, apiController);
+  registerSystemRoutes(router, apiController);
   registerSchedulerRoutes(router, apiController);
   registerTerminalRoutes(router);
   registerAssignmentsRoutes(router, apiController);

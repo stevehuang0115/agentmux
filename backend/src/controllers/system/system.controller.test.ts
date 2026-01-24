@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
+import * as os from 'os';
 import * as systemHandlers from './system.controller.js';
 import type { ApiContext } from '../types.js';
+
+// Mock os module
+jest.mock('os');
 
 jest.mock('../../services/index.js', () => ({
   MonitoringService: {
@@ -675,6 +679,7 @@ describe('System Handlers', () => {
       expect(typeof systemHandlers.createDefaultConfig).toBe('function');
       expect(typeof systemHandlers.healthCheck).toBe('function');
       expect(typeof systemHandlers.getClaudeStatus).toBe('function');
+      expect(typeof systemHandlers.getLocalIpAddress).toBe('function');
     });
 
     it('should handle async operations properly', async () => {
@@ -692,6 +697,277 @@ describe('System Handlers', () => {
       expect(mockResponse.json).toHaveBeenCalled();
 
       process.uptime = originalUptime;
+    });
+  });
+
+  describe('getLocalIpAddress', () => {
+    const mockedOs = os as jest.Mocked<typeof os>;
+    let originalWebPort: string | undefined;
+
+    beforeEach(() => {
+      originalWebPort = process.env.WEB_PORT;
+      delete process.env.WEB_PORT;
+    });
+
+    afterEach(() => {
+      if (originalWebPort) {
+        process.env.WEB_PORT = originalWebPort;
+      } else {
+        delete process.env.WEB_PORT;
+      }
+    });
+
+    it('should return local IP address successfully', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        en0: [
+          {
+            address: '192.168.1.100',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '192.168.1.100/24',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: '192.168.1.100',
+          port: 8787,
+          url: 'http://192.168.1.100:8787',
+          timestamp: expect.any(String),
+        }),
+      });
+    });
+
+    it('should skip internal (loopback) addresses', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        lo0: [
+          {
+            address: '127.0.0.1',
+            netmask: '255.0.0.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: true,
+            cidr: '127.0.0.1/8',
+          },
+        ],
+        en0: [
+          {
+            address: '10.0.0.50',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '10.0.0.50/24',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: '10.0.0.50',
+        }),
+      });
+    });
+
+    it('should skip IPv6 addresses', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        en0: [
+          {
+            address: 'fe80::1',
+            netmask: 'ffff:ffff:ffff:ffff::',
+            family: 'IPv6',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: 'fe80::1/64',
+            scopeid: 1,
+          },
+          {
+            address: '172.16.0.1',
+            netmask: '255.255.0.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '172.16.0.1/16',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: '172.16.0.1',
+        }),
+      });
+    });
+
+    it('should fallback to localhost when no external IP found', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        lo0: [
+          {
+            address: '127.0.0.1',
+            netmask: '255.0.0.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: true,
+            cidr: '127.0.0.1/8',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: 'localhost',
+          url: expect.stringContaining('http://localhost:'),
+        }),
+      });
+    });
+
+    it('should fallback to localhost when no network interfaces', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({});
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: 'localhost',
+        }),
+      });
+    });
+
+    it('should use WEB_PORT from environment', async () => {
+      process.env.WEB_PORT = '3000';
+      mockedOs.networkInterfaces.mockReturnValue({
+        en0: [
+          {
+            address: '192.168.1.100',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '192.168.1.100/24',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          port: 3000,
+          url: 'http://192.168.1.100:3000',
+        }),
+      });
+    });
+
+    it('should return timestamp in ISO format', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        en0: [
+          {
+            address: '192.168.1.100',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '192.168.1.100/24',
+          },
+        ],
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const call = (mockResponse.json as jest.Mock).mock.calls[0][0] as { data: { timestamp: string } };
+      expect(call.data.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    });
+
+    it('should handle error and return 500', async () => {
+      mockedOs.networkInterfaces.mockImplementation(() => {
+        throw new Error('Network error');
+      });
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Failed to get local IP address',
+      });
+    });
+
+    it('should handle interfaces with undefined addresses array', async () => {
+      mockedOs.networkInterfaces.mockReturnValue({
+        eth0: undefined,
+        en0: [
+          {
+            address: '192.168.0.1',
+            netmask: '255.255.255.0',
+            family: 'IPv4',
+            mac: '00:00:00:00:00:00',
+            internal: false,
+            cidr: '192.168.0.1/24',
+          },
+        ],
+      } as NodeJS.Dict<os.NetworkInterfaceInfo[]>);
+
+      await systemHandlers.getLocalIpAddress.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          ip: '192.168.0.1',
+        }),
+      });
     });
   });
 });

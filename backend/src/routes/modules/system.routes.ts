@@ -16,4 +16,7 @@ export function registerSystemRoutes(router: Router, apiController: ApiControlle
 
   // API Health within /api scope
   router.get('/health', (req, res) => systemHandlers.healthCheck.call(apiController, req, res));
+
+  // Local IP address for QR code generation (mobile access)
+  router.get('/system/local-ip', (req, res) => systemHandlers.getLocalIpAddress.call(apiController, req, res));
 }

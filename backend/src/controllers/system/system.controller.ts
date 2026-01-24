@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import os from 'os';
 import type { ApiContext } from '../types.js';
 import { MonitoringService, ConfigService, LoggerService } from '../../services/index.js';
 import { ApiResponse } from '../../types/index.js';
@@ -129,5 +130,54 @@ export async function getClaudeStatus(this: ApiContext, req: Request, res: Respo
   } catch (error) {
     console.error('Error checking Claude status:', error);
     res.status(500).json({ success: false, error: (error as Error).message || 'Failed to check Claude status' } as ApiResponse);
+  }
+}
+
+/**
+ * Gets the local network IP address for QR code generation.
+ * Returns the first non-internal IPv4 address found, or localhost as fallback.
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ * @returns JSON response with local IP address and port information
+ */
+export async function getLocalIpAddress(this: ApiContext, req: Request, res: Response): Promise<void> {
+  try {
+    const interfaces = os.networkInterfaces();
+    let localIp = 'localhost';
+
+    // Find the first non-internal IPv4 address
+    for (const interfaceName of Object.keys(interfaces)) {
+      const addresses = interfaces[interfaceName];
+      if (!addresses) continue;
+
+      for (const address of addresses) {
+        // Skip internal (loopback) and non-IPv4 addresses
+        if (address.family === 'IPv4' && !address.internal) {
+          localIp = address.address;
+          break;
+        }
+      }
+      if (localIp !== 'localhost') break;
+    }
+
+    // Get the port from environment or default
+    const port = process.env.WEB_PORT || '8787';
+
+    res.json({
+      success: true,
+      data: {
+        ip: localIp,
+        port: parseInt(port, 10),
+        url: `http://${localIp}:${port}`,
+        timestamp: new Date().toISOString()
+      }
+    } as ApiResponse);
+  } catch (error) {
+    console.error('Error getting local IP address:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get local IP address'
+    } as ApiResponse);
   }
 }

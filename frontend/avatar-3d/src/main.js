@@ -134,6 +134,314 @@ renderer.domElement.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
+// ====== TOUCH CONTROLS ======
+// Touch state for mobile devices
+const touchState = {
+  isDragging: false,
+  lastX: 0,
+  lastY: 0,
+  // Pinch zoom state
+  isPinching: false,
+  initialPinchDistance: 0,
+  // Two-finger pan state
+  lastPinchCenterX: 0,
+  lastPinchCenterY: 0,
+  // Tap detection state
+  touchStartTime: 0,
+  touchStartX: 0,
+  touchStartY: 0,
+  hasMoved: false,
+  // Double-tap detection state
+  lastTapTime: 0,
+  lastTapX: 0,
+  lastTapY: 0
+};
+
+// Tap-to-move state
+const tapMoveState = {
+  isMoving: false,
+  targetPosition: null,
+  moveSpeed: 8, // Units per second
+  arrivalThreshold: 0.5 // How close to target before stopping
+};
+
+// Raycaster for tap detection
+const raycaster = new THREE.Raycaster();
+const tapPoint = new THREE.Vector2();
+
+// Visual indicator for tap destination
+const tapIndicator = createTapIndicator();
+scene.add(tapIndicator);
+tapIndicator.visible = false;
+
+function createTapIndicator() {
+  const group = new THREE.Group();
+
+  // Outer ring
+  const ringGeometry = new THREE.RingGeometry(0.3, 0.4, 32);
+  const ringMaterial = new THREE.MeshBasicMaterial({
+    color: 0x2a73ea,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.8
+  });
+  const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.05;
+  group.add(ring);
+
+  // Center dot
+  const dotGeometry = new THREE.CircleGeometry(0.15, 16);
+  const dotMaterial = new THREE.MeshBasicMaterial({
+    color: 0x2a73ea,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.6
+  });
+  const dot = new THREE.Mesh(dotGeometry, dotMaterial);
+  dot.rotation.x = -Math.PI / 2;
+  dot.position.y = 0.05;
+  group.add(dot);
+
+  return group;
+}
+
+// Calculate distance between two touch points
+function getTouchDistance(touch1, touch2) {
+  const dx = touch1.clientX - touch2.clientX;
+  const dy = touch1.clientY - touch2.clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Calculate center point between two touches
+function getTouchCenter(touch1, touch2) {
+  return {
+    x: (touch1.clientX + touch2.clientX) / 2,
+    y: (touch1.clientY + touch2.clientY) / 2
+  };
+}
+
+// Touch start - begin rotation or pinch zoom
+renderer.domElement.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+
+  if (e.touches.length === 1) {
+    // Single finger - start rotation and track for tap
+    touchState.isDragging = true;
+    touchState.isPinching = false;
+    touchState.lastX = e.touches[0].clientX;
+    touchState.lastY = e.touches[0].clientY;
+    // Track for tap detection
+    touchState.touchStartTime = Date.now();
+    touchState.touchStartX = e.touches[0].clientX;
+    touchState.touchStartY = e.touches[0].clientY;
+    touchState.hasMoved = false;
+  } else if (e.touches.length === 2) {
+    // Two fingers - start pinch zoom and pan
+    touchState.isDragging = false;
+    touchState.isPinching = true;
+    touchState.initialPinchDistance = getTouchDistance(e.touches[0], e.touches[1]);
+    const center = getTouchCenter(e.touches[0], e.touches[1]);
+    touchState.lastPinchCenterX = center.x;
+    touchState.lastPinchCenterY = center.y;
+    // Cancel tap detection
+    touchState.hasMoved = true;
+  }
+}, { passive: false });
+
+// Touch move - rotate camera or zoom
+renderer.domElement.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+
+  if (e.touches.length === 1 && touchState.isDragging) {
+    // Single finger drag - rotate camera
+    const deltaX = e.touches[0].clientX - touchState.lastX;
+    const deltaY = e.touches[0].clientY - touchState.lastY;
+
+    // Check if moved enough to cancel tap (threshold: 10 pixels)
+    const totalMoveX = Math.abs(e.touches[0].clientX - touchState.touchStartX);
+    const totalMoveY = Math.abs(e.touches[0].clientY - touchState.touchStartY);
+    if (totalMoveX > 10 || totalMoveY > 10) {
+      touchState.hasMoved = true;
+      // Cancel any ongoing tap-to-move when user starts dragging
+      if (tapMoveState.isMoving) {
+        tapMoveState.isMoving = false;
+        tapMoveState.targetPosition = null;
+        tapIndicator.visible = false;
+      }
+    }
+
+    // Update yaw and pitch (reversed left/right for natural touch feel)
+    cameraYaw += deltaX * 0.008;
+    cameraPitch = Math.max(minPitch, Math.min(maxPitch, cameraPitch + deltaY * 0.008));
+
+    updateCameraDirection();
+
+    touchState.lastX = e.touches[0].clientX;
+    touchState.lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2 && touchState.isPinching) {
+    // Two finger pinch - zoom and pan
+    const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+    const delta = currentDistance - touchState.initialPinchDistance;
+
+    // Calculate zoom based on pinch delta
+    const zoomSpeed = 0.02;
+    const forward = new THREE.Vector3(
+      Math.sin(cameraYaw) * Math.cos(cameraPitch),
+      Math.sin(cameraPitch),
+      Math.cos(cameraYaw) * Math.cos(cameraPitch)
+    );
+
+    camera.position.addScaledVector(forward, delta * zoomSpeed);
+
+    // Calculate pan based on center movement
+    const center = getTouchCenter(e.touches[0], e.touches[1]);
+    const panDeltaX = center.x - touchState.lastPinchCenterX;
+    const panDeltaY = center.y - touchState.lastPinchCenterY;
+
+    // Pan camera (move in the opposite direction of finger movement)
+    const panSpeed = 0.02;
+    const right = new THREE.Vector3(Math.sin(cameraYaw + Math.PI/2), 0, Math.cos(cameraYaw + Math.PI/2));
+    const up = new THREE.Vector3(0, 1, 0);
+
+    camera.position.addScaledVector(right, -panDeltaX * panSpeed);
+    camera.position.addScaledVector(up, panDeltaY * panSpeed);
+
+    // Update state for continuous zoom/pan
+    touchState.initialPinchDistance = currentDistance;
+    touchState.lastPinchCenterX = center.x;
+    touchState.lastPinchCenterY = center.y;
+  }
+}, { passive: false });
+
+// Touch end - stop rotation/zoom and detect double taps
+renderer.domElement.addEventListener('touchend', (e) => {
+  if (e.touches.length === 0) {
+    const now = Date.now();
+    // Check if this was a tap (short duration, minimal movement)
+    const tapDuration = now - touchState.touchStartTime;
+    const isTap = tapDuration < 300 && !touchState.hasMoved;
+
+    if (isTap) {
+      // Check for double tap
+      const timeSinceLastTap = now - touchState.lastTapTime;
+      const distanceFromLastTap = Math.sqrt(
+        Math.pow(touchState.touchStartX - touchState.lastTapX, 2) +
+        Math.pow(touchState.touchStartY - touchState.lastTapY, 2)
+      );
+
+      // Double tap: two taps within 400ms and 50 pixels of each other
+      if (timeSinceLastTap < 400 && distanceFromLastTap < 50) {
+        // Handle double-tap-to-move
+        handleTapToMove(touchState.touchStartX, touchState.touchStartY);
+        // Reset last tap to prevent triple-tap triggering another move
+        touchState.lastTapTime = 0;
+      } else {
+        // Record this tap for potential double-tap
+        touchState.lastTapTime = now;
+        touchState.lastTapX = touchState.touchStartX;
+        touchState.lastTapY = touchState.touchStartY;
+      }
+    }
+
+    touchState.isDragging = false;
+    touchState.isPinching = false;
+  } else if (e.touches.length === 1) {
+    // Switched from pinch to single finger
+    touchState.isDragging = true;
+    touchState.isPinching = false;
+    touchState.lastX = e.touches[0].clientX;
+    touchState.lastY = e.touches[0].clientY;
+    // Reset tap tracking for new touch
+    touchState.touchStartTime = Date.now();
+    touchState.touchStartX = e.touches[0].clientX;
+    touchState.touchStartY = e.touches[0].clientY;
+    touchState.hasMoved = false;
+  }
+});
+
+// Handle tap-to-move: raycast to find ground position and move camera there
+function handleTapToMove(screenX, screenY) {
+  // Convert screen coordinates to normalized device coordinates (-1 to +1)
+  tapPoint.x = (screenX / window.innerWidth) * 2 - 1;
+  tapPoint.y = -(screenY / window.innerHeight) * 2 + 1;
+
+  // Cast ray from camera through tap point
+  raycaster.setFromCamera(tapPoint, camera);
+
+  // Find intersections with ground plane (y = 0) and other walkable surfaces
+  // Create a large invisible ground plane for raycasting
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const intersectPoint = new THREE.Vector3();
+
+  if (raycaster.ray.intersectPlane(groundPlane, intersectPoint)) {
+    // Valid intersection with ground
+    // Set target position (keep camera at current height)
+    tapMoveState.targetPosition = new THREE.Vector3(
+      intersectPoint.x,
+      camera.position.y, // Maintain current height
+      intersectPoint.z
+    );
+    tapMoveState.isMoving = true;
+
+    // Show tap indicator at destination
+    tapIndicator.position.set(intersectPoint.x, 0.1, intersectPoint.z);
+    tapIndicator.visible = true;
+
+    // Animate indicator scale
+    tapIndicator.scale.set(0.5, 0.5, 0.5);
+  }
+}
+
+// Update tap-to-move in animation loop
+function updateTapToMove(delta) {
+  if (!tapMoveState.isMoving || !tapMoveState.targetPosition) return;
+
+  const currentPos = camera.position;
+  const targetPos = tapMoveState.targetPosition;
+
+  // Calculate horizontal distance to target
+  const dx = targetPos.x - currentPos.x;
+  const dz = targetPos.z - currentPos.z;
+  const distance = Math.sqrt(dx * dx + dz * dz);
+
+  if (distance < tapMoveState.arrivalThreshold) {
+    // Arrived at destination
+    tapMoveState.isMoving = false;
+    tapMoveState.targetPosition = null;
+    tapIndicator.visible = false;
+    return;
+  }
+
+  // Move towards target
+  const moveAmount = Math.min(tapMoveState.moveSpeed * delta, distance);
+  const moveRatio = moveAmount / distance;
+
+  camera.position.x += dx * moveRatio;
+  camera.position.z += dz * moveRatio;
+
+  // Update camera yaw to face movement direction
+  const targetYaw = Math.atan2(dx, dz);
+  // Smoothly interpolate yaw
+  let yawDiff = targetYaw - cameraYaw;
+  // Normalize to -PI to PI
+  while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+  while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+  cameraYaw += yawDiff * 0.1;
+
+  updateCameraDirection();
+
+  // Animate tap indicator (pulsing effect)
+  const pulse = 1 + Math.sin(Date.now() * 0.01) * 0.1;
+  tapIndicator.scale.set(pulse, pulse, pulse);
+}
+
+// Touch cancel - reset state
+renderer.domElement.addEventListener('touchcancel', () => {
+  touchState.isDragging = false;
+  touchState.isPinching = false;
+});
+
 // Keyboard controls
 document.addEventListener('keydown', (e) => {
   switch (e.code) {
@@ -3220,6 +3528,9 @@ function animate() {
   // Update camera from keyboard input
   updateCameraFromKeyboard(delta);
 
+  // Update tap-to-move for mobile
+  updateTapToMove(delta);
+
   // Animate camera focus if transitioning to a project
   if (window.animateCameraFocus) {
     window.animateCameraFocus(delta);
@@ -3479,8 +3790,19 @@ window.setLightingMode = function(mode) {
 };
 
 function updateLightingButtons() {
-  const buttons = document.querySelectorAll('#lighting-toggle .lighting-btn');
-  buttons.forEach(btn => {
+  // Update desktop lighting buttons
+  const desktopButtons = document.querySelectorAll('#lighting-toggle .lighting-btn');
+  desktopButtons.forEach(btn => {
+    if (btn.dataset.mode === lightingMode) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  // Update mobile lighting buttons
+  const mobileButtons = document.querySelectorAll('#mobile-lighting .mobile-light-btn');
+  mobileButtons.forEach(btn => {
     if (btn.dataset.mode === lightingMode) {
       btn.classList.add('active');
     } else {

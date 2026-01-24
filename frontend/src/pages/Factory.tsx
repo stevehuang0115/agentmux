@@ -22,11 +22,11 @@ export const Factory: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 md:left-16 bg-background-dark">
-      {/* Back button */}
+    <div className="fixed inset-0 top-14 md:top-0 md:left-16 bg-background-dark">
+      {/* Back button - hidden on mobile since we have the header back button */}
       <button
         onClick={handleBack}
-        className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-2 bg-surface-dark/80 backdrop-blur-sm rounded-lg border border-border-dark hover:bg-surface-dark hover:border-primary/50 transition-all"
+        className="hidden md:flex absolute top-4 left-4 z-10 items-center gap-2 px-3 py-2 bg-surface-dark/80 backdrop-blur-sm rounded-lg border border-border-dark hover:bg-surface-dark hover:border-primary/50 transition-all"
       >
         <ArrowLeft className="w-4 h-4" />
         <span className="text-sm font-medium">Back to Dashboard</span>

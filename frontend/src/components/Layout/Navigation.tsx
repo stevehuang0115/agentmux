@@ -12,6 +12,7 @@ import {
 import clsx from 'clsx';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { IconButton } from '../UI';
+import { QRCodeDisplay } from './QRCodeDisplay';
 
 const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
@@ -162,8 +163,12 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
           </div>
         </nav>
 
-			{/* Bottom Section - Toggle button */}
-			<div className="p-2 border-t border-border-dark">
+			{/* Bottom Section - QR Code and Toggle button */}
+			<div className="p-2 border-t border-border-dark space-y-1">
+				{/* QR Code for Mobile Access */}
+				<QRCodeDisplay isCollapsed={isCollapsed && !isMobileOpen} />
+
+				{/* Collapse/Expand Button */}
 				<button
 					className="flex items-center justify-center w-full p-2 text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark rounded-lg transition-colors"
 					onClick={toggleSidebar}
