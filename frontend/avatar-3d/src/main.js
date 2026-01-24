@@ -1851,8 +1851,8 @@ function createSpeechBubble() {
   const texture = new THREE.CanvasTexture(canvas);
   texture.needsUpdate = true;
 
-  // Speech bubble panel - slightly larger
-  const bubbleGeo = new THREE.PlaneGeometry(2.2, 0.55);
+  // Speech bubble panel - larger for better visibility
+  const bubbleGeo = new THREE.PlaneGeometry(3.5, 0.9);
   const bubbleMat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
@@ -1864,8 +1864,8 @@ function createSpeechBubble() {
   // Tail pointing down - small triangle matching bubble color
   const tailShape = new THREE.Shape();
   tailShape.moveTo(0, 0);
-  tailShape.lineTo(-0.08, 0.15);
-  tailShape.lineTo(0.08, 0.15);
+  tailShape.lineTo(-0.12, 0.22);
+  tailShape.lineTo(0.12, 0.22);
   tailShape.closePath();
   const tailGeo = new THREE.ShapeGeometry(tailShape);
   const tailMat = new THREE.MeshBasicMaterial({
@@ -1875,12 +1875,12 @@ function createSpeechBubble() {
     side: THREE.DoubleSide
   });
   const tail = new THREE.Mesh(tailGeo, tailMat);
-  tail.position.y = -0.35;
+  tail.position.y = -0.55;
   tail.position.z = 0.001; // Slight offset to prevent z-fighting
   group.add(tail);
 
   // Position above agent head
-  group.position.set(0, 3.2, 0);
+  group.position.set(0, 3.5, 0);
   group.visible = false; // Hidden by default
 
   return { group, canvas, ctx, texture };
