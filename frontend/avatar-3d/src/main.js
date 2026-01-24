@@ -28,7 +28,7 @@ function isNightTime() {
 
 // Camera - CCTV style from corner of ceiling
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(-22, 14, -22); // Back-left corner, near ceiling
+camera.position.set(-22, 22, -22); // Back-left corner, high on ceiling for full view
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
