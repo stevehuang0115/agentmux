@@ -84,7 +84,7 @@
     }
     #legend {
       position: absolute;
-      bottom: 20px;
+      bottom: 15px;
       left: 15px;
       color: #f6f7f8;
       font-size: 12px;
@@ -143,7 +143,7 @@
     }
     #project-focus {
       position: absolute;
-      top: 200px;
+      top: 170px;
       right: 15px;
       color: #f6f7f8;
       font-size: 12px;
@@ -197,8 +197,8 @@
 
     #usage {
       position: absolute;
-      bottom: 20px;
-      right: 250px;
+      bottom: 15px;
+      right: 240px;
       color: #f6f7f8;
       font-size: 12px;
       background: rgba(26, 34, 44, 0.9);
@@ -246,7 +246,7 @@
 
     #token-dist {
       position: absolute;
-      bottom: 20px;
+      bottom: 15px;
       right: 15px;
       color: #f6f7f8;
       font-size: 12px;
@@ -254,7 +254,7 @@
       padding: 12px 15px;
       border-radius: 8px;
       border: 1px solid #313a48;
-      min-width: 220px;
+      min-width: 210px;
     }
     #token-dist h4 {
       margin-bottom: 8px;
@@ -299,6 +299,55 @@
     #token-dist .dist-percent {
       color: #2a73ea;
       font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    /* Desktop panel collapse/expand functionality */
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+    }
+    .panel-header h4 {
+      margin-bottom: 0 !important;
+    }
+    .panel-toggle-btn {
+      background: none;
+      border: none;
+      color: #9ab0d9;
+      cursor: pointer;
+      padding: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      border-radius: 4px;
+    }
+    .panel-toggle-btn:hover {
+      color: #2a73ea;
+      background: rgba(42, 115, 234, 0.15);
+    }
+    .panel-toggle-btn svg {
+      width: 16px;
+      height: 16px;
+      transition: transform 0.2s;
+    }
+    .panel-collapsed .panel-toggle-btn svg {
+      transform: rotate(180deg);
+    }
+    .panel-content {
+      transition: all 0.2s ease;
+      overflow: hidden;
+    }
+    .panel-collapsed .panel-content {
+      display: none;
+    }
+    .panel-collapsed {
+      padding: 10px 15px !important;
+    }
+    .panel-collapsed .panel-header {
+      margin-bottom: 0;
     }
 
     /* Mobile lighting controls - hidden on desktop */
@@ -558,105 +607,131 @@
   </div>
 
   <div id="legend">
-    <h4>Status</h4>
-    <div class="item"><span class="dot active"></span> Active (typing, screen on)</div>
-    <div class="item"><span class="dot idle"></span> Idle (sleepy, coffee break)</div>
-    <div class="item"><span class="dot dormant"></span> Dormant (gone home)</div>
+    <div class="panel-header" onclick="toggleDesktopPanel('legend')">
+      <h4>Status</h4>
+      <button class="panel-toggle-btn" title="Toggle panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="18 15 12 9 6 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="panel-content">
+      <div style="margin-top: 8px;">
+        <div class="item"><span class="dot active"></span> Active (typing, screen on)</div>
+        <div class="item"><span class="dot idle"></span> Idle (sleepy, coffee break)</div>
+        <div class="item"><span class="dot dormant"></span> Dormant (gone home)</div>
+      </div>
 
-    <!-- Mobile lighting controls -->
-    <div id="mobile-lighting">
-      <h4 style="margin-top: 12px;">Lighting</h4>
-      <div class="mobile-lighting-buttons">
-        <button class="mobile-light-btn active" data-mode="auto" onclick="window.setLightingMode('auto')">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
-            <polyline points="17 8 21 12 17 16"/>
-          </svg>
-          Auto
-        </button>
-        <button class="mobile-light-btn" data-mode="day" onclick="window.setLightingMode('day')">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="5"/>
-            <line x1="12" y1="1" x2="12" y2="3"/>
-            <line x1="12" y1="21" x2="12" y2="23"/>
-          </svg>
-          Day
-        </button>
-        <button class="mobile-light-btn" data-mode="night" onclick="window.setLightingMode('night')">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
-          Night
-        </button>
+      <!-- Mobile lighting controls -->
+      <div id="mobile-lighting">
+        <h4 style="margin-top: 12px;">Lighting</h4>
+        <div class="mobile-lighting-buttons">
+          <button class="mobile-light-btn active" data-mode="auto" onclick="window.setLightingMode('auto')">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+              <polyline points="17 8 21 12 17 16"/>
+            </svg>
+            Auto
+          </button>
+          <button class="mobile-light-btn" data-mode="day" onclick="window.setLightingMode('day')">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="5"/>
+              <line x1="12" y1="1" x2="12" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="23"/>
+            </svg>
+            Day
+          </button>
+          <button class="mobile-light-btn" data-mode="night" onclick="window.setLightingMode('night')">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+            Night
+          </button>
+        </div>
       </div>
     </div>
   </div>
 
   <div id="controls">
-    <h4>Controls</h4>
-    <div><b>Drag</b> = Rotate view</div>
-    <div><b>Scroll</b> = Zoom in/out</div>
-    <div style="margin-top: 6px; border-top: 1px solid #313a48; padding-top: 6px;">
-      <code>W/Up</code> Forward &nbsp; <code>S/Down</code> Back
+    <div class="panel-header" onclick="toggleDesktopPanel('controls')">
+      <h4>Controls</h4>
+      <button class="panel-toggle-btn" title="Toggle panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="18 15 12 9 6 15"/>
+        </svg>
+      </button>
     </div>
-    <div>
-      <code>A/Left</code> Right &nbsp; <code>D/Right</code> Left
-    </div>
-    <div>
-      <code>Q/Space</code> Up &nbsp; <code>E/Shift</code> Down
-    </div>
-    <div style="margin-top: 8px; color: #9ab0d9;">
-      API: <code>localhost:8790</code>
+    <div class="panel-content">
+      <div style="margin-top: 8px;"><b>Drag</b> = Rotate view</div>
+      <div><b>Scroll</b> = Zoom in/out</div>
+      <div style="margin-top: 6px; border-top: 1px solid #313a48; padding-top: 6px;">
+        <code>W/Up</code> Forward &nbsp; <code>S/Down</code> Back
+      </div>
+      <div>
+        <code>A/Left</code> Right &nbsp; <code>D/Right</code> Left
+      </div>
+      <div>
+        <code>Q/Space</code> Up &nbsp; <code>E/Shift</code> Down
+      </div>
     </div>
   </div>
 
   <div id="project-focus">
-    <h4>Camera Views</h4>
-    <div id="project-buttons">
-      <button onclick="window.focusOnProject('overview')">
+    <div class="panel-header" onclick="toggleDesktopPanel('project-focus')">
+      <h4>Camera Views</h4>
+      <button class="panel-toggle-btn" title="Toggle panel">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-          <polyline points="9 22 9 12 15 12 15 22"/>
+          <polyline points="18 15 12 9 6 15"/>
         </svg>
-        Overview
       </button>
-      <button onclick="window.focusOnProject('birdseye')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <circle cx="12" cy="12" r="6"/>
-          <circle cx="12" cy="12" r="2"/>
-        </svg>
-        Bird's Eye
-      </button>
-      <button onclick="window.focusOnProject('outdoor')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="3" y="3" width="18" height="18" rx="2"/>
-          <line x1="3" y1="9" x2="21" y2="9"/>
-        </svg>
-        Outdoor
-      </button>
-      <button onclick="window.toggleBossMode()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-        Boss Mode
-      </button>
+    </div>
+    <div class="panel-content">
+      <div id="project-buttons" style="margin-top: 8px;">
+        <!-- Buttons populated by JavaScript -->
+      </div>
     </div>
   </div>
 
   <div id="usage">
-    <h4>Token Usage</h4>
-    <div id="usage-content">Loading...</div>
+    <div class="panel-header" onclick="toggleDesktopPanel('usage')">
+      <h4>Token Usage</h4>
+      <button class="panel-toggle-btn" title="Toggle panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="18 15 12 9 6 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="panel-content">
+      <div id="usage-content" style="margin-top: 8px;">Loading...</div>
+    </div>
   </div>
 
   <div id="token-dist">
-    <h4>Workload Distribution</h4>
-    <div id="token-dist-content">Loading...</div>
+    <div class="panel-header" onclick="toggleDesktopPanel('token-dist')">
+      <h4>Workload Distribution</h4>
+      <button class="panel-toggle-btn" title="Toggle panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="18 15 12 9 6 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="panel-content">
+      <div id="token-dist-content" style="margin-top: 8px;">Loading...</div>
+    </div>
   </div>
 
-  <!-- Mobile panel toggle script -->
+  <!-- Panel toggle scripts -->
   <script>
-    // Panel toggle state
+    // Desktop panel collapse toggle
+    function toggleDesktopPanel(panelId) {
+      const panel = document.getElementById(panelId);
+      if (panel) {
+        panel.classList.toggle('panel-collapsed');
+      }
+    }
+    window.toggleDesktopPanel = toggleDesktopPanel;
+
+    // Mobile panel toggle state
     const panelState = {
       info: false,
       projects: false,
