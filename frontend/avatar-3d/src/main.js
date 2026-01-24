@@ -26,9 +26,9 @@ function isNightTime() {
   return hour >= 18 || hour < 6;
 }
 
-// Camera
+// Camera - CCTV style from corner of ceiling
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(8, 6, 12);
+camera.position.set(-22, 14, -22); // Back-left corner, near ceiling
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -3761,7 +3761,7 @@ function updateProjectButtonActive(activeProject) {
 
 // SVG icons for buttons
 const icons = {
-  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
+  cctv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
   target: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
   building: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><path d="M9 22v-4h6v4"/><line x1="8" y1="6" x2="8" y2="6"/><line x1="16" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="8" y2="10"/><line x1="16" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="8" y2="14"/><line x1="16" y1="14" x2="16" y2="14"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>',
@@ -3776,7 +3776,7 @@ function updateProjectButtons() {
   const container = document.getElementById('project-buttons');
   if (!container) return;
 
-  let html = `<button data-project="overview" onclick="window.focusOnProject('overview')">${icons.home} Overview</button>`;
+  let html = `<button data-project="overview" onclick="window.focusOnProject('overview')">${icons.cctv} CCTV</button>`;
   html += `<button data-project="birdseye" onclick="window.focusOnProject('birdseye')">${icons.target} Bird's Eye</button>`;
   html += `<button data-project="outdoor" onclick="window.focusOnProject('outdoor')">${icons.building} Outdoor</button>`;
   html += `<button data-project="bossmode" onclick="window.toggleBossMode()" id="bossmode-btn">${icons.play} Boss Mode</button>`;
