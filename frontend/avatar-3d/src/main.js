@@ -151,10 +151,11 @@ const touchState = {
   touchStartX: 0,
   touchStartY: 0,
   hasMoved: false,
-  // Double-tap detection state
+  // Multi-tap detection state (double-tap to move, triple-tap to reset)
   lastTapTime: 0,
   lastTapX: 0,
-  lastTapY: 0
+  lastTapY: 0,
+  tapCount: 0
 };
 
 // Tap-to-move state
@@ -173,6 +174,54 @@ const tapPoint = new THREE.Vector2();
 const tapIndicator = createTapIndicator();
 scene.add(tapIndicator);
 tapIndicator.visible = false;
+
+// Path line from camera to destination
+const pathLine = createPathLine();
+scene.add(pathLine);
+pathLine.visible = false;
+
+function createPathLine() {
+  const material = new THREE.LineDashedMaterial({
+    color: 0x2a73ea,
+    dashSize: 0.3,
+    gapSize: 0.2,
+    transparent: true,
+    opacity: 0.6
+  });
+  const geometry = new THREE.BufferGeometry();
+  // Initialize with dummy points (will be updated)
+  const positions = new Float32Array(6); // 2 points x 3 components
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const line = new THREE.Line(geometry, material);
+  line.computeLineDistances();
+  return line;
+}
+
+function updatePathLine(startPos, endPos) {
+  const positions = pathLine.geometry.attributes.position.array;
+  positions[0] = startPos.x;
+  positions[1] = 0.1; // Slightly above ground
+  positions[2] = startPos.z;
+  positions[3] = endPos.x;
+  positions[4] = 0.1;
+  positions[5] = endPos.z;
+  pathLine.geometry.attributes.position.needsUpdate = true;
+  pathLine.computeLineDistances();
+}
+
+// Reset camera to overview position (triggered by triple-tap)
+function resetCameraToOverview() {
+  // Cancel any ongoing tap-to-move
+  tapMoveState.isMoving = false;
+  tapMoveState.targetPosition = null;
+  tapIndicator.visible = false;
+  pathLine.visible = false;
+
+  // Use the focusOnProject function if available for smooth animation
+  if (window.focusOnProject) {
+    window.focusOnProject('overview');
+  }
+}
 
 function createTapIndicator() {
   const group = new THREE.Group();
@@ -323,25 +372,40 @@ renderer.domElement.addEventListener('touchend', (e) => {
     const isTap = tapDuration < 300 && !touchState.hasMoved;
 
     if (isTap) {
-      // Check for double tap
+      // Check for multi-tap (double-tap to move, triple-tap to reset)
       const timeSinceLastTap = now - touchState.lastTapTime;
       const distanceFromLastTap = Math.sqrt(
         Math.pow(touchState.touchStartX - touchState.lastTapX, 2) +
         Math.pow(touchState.touchStartY - touchState.lastTapY, 2)
       );
 
-      // Double tap: two taps within 400ms and 50 pixels of each other
+      // Check if this tap is part of a sequence (within 400ms and 50 pixels)
       if (timeSinceLastTap < 400 && distanceFromLastTap < 50) {
-        // Handle double-tap-to-move
-        handleTapToMove(touchState.touchStartX, touchState.touchStartY);
-        // Reset last tap to prevent triple-tap triggering another move
-        touchState.lastTapTime = 0;
+        touchState.tapCount++;
+
+        if (touchState.tapCount === 2) {
+          // Double tap - move to location
+          if (navigator.vibrate) {
+            navigator.vibrate(50);
+          }
+          handleTapToMove(touchState.touchStartX, touchState.touchStartY);
+        } else if (touchState.tapCount >= 3) {
+          // Triple tap - reset to overview
+          if (navigator.vibrate) {
+            navigator.vibrate([50, 50, 50]); // Three short vibrations
+          }
+          resetCameraToOverview();
+          touchState.tapCount = 0;
+        }
       } else {
-        // Record this tap for potential double-tap
-        touchState.lastTapTime = now;
-        touchState.lastTapX = touchState.touchStartX;
-        touchState.lastTapY = touchState.touchStartY;
+        // Start new tap sequence
+        touchState.tapCount = 1;
       }
+
+      // Record this tap for potential multi-tap
+      touchState.lastTapTime = now;
+      touchState.lastTapX = touchState.touchStartX;
+      touchState.lastTapY = touchState.touchStartY;
     }
 
     touchState.isDragging = false;
@@ -390,6 +454,10 @@ function handleTapToMove(screenX, screenY) {
 
     // Animate indicator scale
     tapIndicator.scale.set(0.5, 0.5, 0.5);
+
+    // Show path line from camera to destination
+    updatePathLine(camera.position, intersectPoint);
+    pathLine.visible = true;
   }
 }
 
@@ -410,6 +478,7 @@ function updateTapToMove(delta) {
     tapMoveState.isMoving = false;
     tapMoveState.targetPosition = null;
     tapIndicator.visible = false;
+    pathLine.visible = false;
     return;
   }
 
@@ -419,6 +488,9 @@ function updateTapToMove(delta) {
 
   camera.position.x += dx * moveRatio;
   camera.position.z += dz * moveRatio;
+
+  // Update path line to follow camera position
+  updatePathLine(camera.position, targetPos);
 
   // Update camera yaw to face movement direction
   const targetYaw = Math.atan2(dx, dz);
