@@ -2714,11 +2714,24 @@ function createZzzGroup() {
   return group;
 }
 
+// Simple hash function for deterministic animal type selection
+function hashString(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash);
+}
+
 function createAvatarAtWorkstation(instanceData, workstation, zoneWsIndex) {
   if (!workstation) return null;
 
-  // Alternate between cow and horse
-  const animalType = zoneWsIndex % 2 === 0 ? 'cow' : 'horse';
+  // Use project name hash to deterministically pick animal type
+  const projectName = instanceData.projectName || 'Unknown';
+  const hash = hashString(projectName);
+  const animalType = hash % 2 === 0 ? 'cow' : 'horse';
 
   const robotAnimal = createRobotWithAnimalHead(
     workstation.position.x,
