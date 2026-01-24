@@ -3707,7 +3707,7 @@ window.focusOnProject = function(projectName) {
 
   if (projectName === 'birdseye') {
     // Bird's eye view - looking straight down from ceiling at office center
-    cameraTargetPosition = new THREE.Vector3(5, 30, 5); // High above office center
+    cameraTargetPosition = new THREE.Vector3(5, 45, 5); // Higher above office center for full view
     cameraTargetYaw = Math.PI; // Facing south (toward front of office)
     cameraTargetPitch = -Math.PI / 2 + 0.05; // Almost straight down (-90 deg)
     cameraAnimating = true;
