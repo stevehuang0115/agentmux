@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [react()],
@@ -47,11 +46,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
-      input: {
-        main: resolve(__dirname, 'index.html'),
-        factory: resolve(__dirname, 'avatar-3d/index.html'),
-      },
-    },
   },
 });

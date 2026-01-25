@@ -80,3 +80,6 @@ export interface ApiResponse<T = any> {
   error?: string;
   message?: string;
 }
+
+// Re-export factory types
+export * from './factory.types';

@@ -1,5 +1,11 @@
+/**
+ * Tests for Factory page.
+ *
+ * Tests the main factory visualization page with R3F FactoryScene.
+ */
+
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { Factory } from './Factory';
@@ -29,6 +35,15 @@ vi.mock('@/contexts/SidebarContext', () => ({
 // Mock lucide-react
 vi.mock('lucide-react', () => ({
   ArrowLeft: () => <svg data-testid="arrow-left-icon" />,
+}));
+
+// Mock FactoryScene component
+vi.mock('@/components/Factory3D', () => ({
+  FactoryScene: ({ showStats, className }: { showStats?: boolean; className?: string }) => (
+    <div data-testid="factory-scene" data-show-stats={showStats} className={className}>
+      Factory Scene Mock
+    </div>
+  ),
 }));
 
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -69,18 +84,16 @@ describe('Factory Page', () => {
       expect(screen.getByTestId('arrow-left-icon')).toBeInTheDocument();
     });
 
-    it('should render the iframe with correct attributes', () => {
+    it('should render the FactoryScene component', () => {
       render(
         <TestWrapper>
           <Factory />
         </TestWrapper>
       );
 
-      const iframe = screen.getByTitle('AgentMux Factory');
-      expect(iframe).toBeInTheDocument();
-      expect(iframe).toHaveAttribute('src', '/avatar-3d/');
-      expect(iframe).toHaveClass('w-full', 'h-full', 'border-0');
-      expect(iframe).toHaveAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope');
+      const factoryScene = screen.getByTestId('factory-scene');
+      expect(factoryScene).toBeInTheDocument();
+      expect(factoryScene).toHaveClass('w-full', 'h-full');
     });
 
     it('should render the container with correct positioning classes', () => {
@@ -90,7 +103,8 @@ describe('Factory Page', () => {
         </TestWrapper>
       );
 
-      const container = screen.getByTitle('AgentMux Factory').parentElement;
+      const factoryScene = screen.getByTestId('factory-scene');
+      const container = factoryScene.parentElement;
       expect(container).toHaveClass('fixed', 'inset-0', 'bg-background-dark');
     });
   });
@@ -173,17 +187,6 @@ describe('Factory Page', () => {
       expect(backButton).toHaveTextContent('Back to Dashboard');
     });
 
-    it('should have titled iframe for screen readers', () => {
-      render(
-        <TestWrapper>
-          <Factory />
-        </TestWrapper>
-      );
-
-      const iframe = screen.getByTitle('AgentMux Factory');
-      expect(iframe).toBeInTheDocument();
-    });
-
     it('should support keyboard navigation for back button', () => {
       render(
         <TestWrapper>
@@ -254,7 +257,8 @@ describe('Factory Page', () => {
         </TestWrapper>
       );
 
-      const container = screen.getByTitle('AgentMux Factory').parentElement;
+      const factoryScene = screen.getByTestId('factory-scene');
+      const container = factoryScene.parentElement;
       expect(container).toHaveClass('md:left-16');
     });
   });
@@ -283,16 +287,15 @@ describe('Factory Page', () => {
       expect(mockExpandSidebar).toHaveBeenCalledTimes(1);
     });
 
-    it('should maintain iframe connection to 3D factory visualization', () => {
+    it('should render FactoryScene with correct props', () => {
       render(
         <TestWrapper>
           <Factory />
         </TestWrapper>
       );
 
-      const iframe = screen.getByTitle('AgentMux Factory') as HTMLIFrameElement;
-      // iframe.src gets resolved relative to jsdom's base URL (http://localhost:3000 by default)
-      expect(iframe.getAttribute('src')).toBe('/avatar-3d/');
+      const factoryScene = screen.getByTestId('factory-scene');
+      expect(factoryScene).toHaveClass('w-full', 'h-full');
     });
   });
 });
