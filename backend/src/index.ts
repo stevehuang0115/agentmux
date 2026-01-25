@@ -217,8 +217,9 @@ export class AgentMuxServer {
 		});
 
 		// Static files for frontend (after API routes)
-		// When compiled, __dirname is dist/backend, so we need to go up to project root
-		const projectRoot = path.resolve(__dirname, '../../../..');
+		// __dirname is backend/src/ in dev mode (tsx) or backend/dist/ in compiled mode
+		// We need to go up 2 levels to reach the project root (agentmux/)
+		const projectRoot = path.resolve(__dirname, '../..');
 		const frontendPath = path.join(projectRoot, 'frontend/dist');
 		this.app.use(express.static(frontendPath));
 
