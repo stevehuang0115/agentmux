@@ -173,5 +173,3 @@ export const RabbitHead: React.FC<RabbitHeadProps> = ({ headRotation }) => {
     </group>
   );
 };
-
-export default RabbitHead;

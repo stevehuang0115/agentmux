@@ -167,5 +167,3 @@ const HorseEye: React.FC<{ position: [number, number, number] }> = ({
     </group>
   );
 };
-
-export default HorseHead;

@@ -13,6 +13,9 @@ import {
   easeInOutCubic,
   calculateZonePosition,
   calculateWorkstationPositions,
+  calculateViewDirection,
+  calculateMoveDirection,
+  calculateRightDirection,
 } from './factory.utils';
 import { FACTORY_CONSTANTS } from '../types/factory.types';
 
@@ -302,6 +305,118 @@ describe('Factory Utils', () => {
         expect(pos.x).toBe(zoneX + expected[i].x);
         expect(pos.z).toBe(zoneZ + expected[i].z);
       });
+    });
+  });
+
+  describe('calculateViewDirection', () => {
+    it('should return unit vector for any yaw/pitch', () => {
+      const dir = calculateViewDirection(0, 0);
+      const length = Math.sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+      expect(length).toBeCloseTo(1, 5);
+    });
+
+    it('should point along positive Z when yaw=0, pitch=0', () => {
+      const dir = calculateViewDirection(0, 0);
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.y).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(1, 5);
+    });
+
+    it('should point along positive X when yaw=PI/2, pitch=0', () => {
+      const dir = calculateViewDirection(Math.PI / 2, 0);
+      expect(dir.x).toBeCloseTo(1, 5);
+      expect(dir.y).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('should point up when pitch=PI/2', () => {
+      const dir = calculateViewDirection(0, Math.PI / 2);
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.y).toBeCloseTo(1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('should point down when pitch=-PI/2', () => {
+      const dir = calculateViewDirection(0, -Math.PI / 2);
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.y).toBeCloseTo(-1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('should have reduced horizontal component when pitched', () => {
+      const flat = calculateViewDirection(0, 0);
+      const pitched = calculateViewDirection(0, Math.PI / 4);
+
+      // Z component should be smaller when pitched up
+      expect(Math.abs(pitched.z)).toBeLessThan(Math.abs(flat.z));
+    });
+  });
+
+  describe('calculateMoveDirection', () => {
+    it('should always have y=0 (ground plane)', () => {
+      const dir1 = calculateMoveDirection(0);
+      const dir2 = calculateMoveDirection(Math.PI / 4);
+      const dir3 = calculateMoveDirection(Math.PI);
+
+      expect(dir1.y).toBe(0);
+      expect(dir2.y).toBe(0);
+      expect(dir3.y).toBe(0);
+    });
+
+    it('should point along positive Z when yaw=0', () => {
+      const dir = calculateMoveDirection(0);
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(1, 5);
+    });
+
+    it('should point along positive X when yaw=PI/2', () => {
+      const dir = calculateMoveDirection(Math.PI / 2);
+      expect(dir.x).toBeCloseTo(1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('should have unit length on XZ plane', () => {
+      const dir = calculateMoveDirection(Math.PI / 6);
+      const length = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+      expect(length).toBeCloseTo(1, 5);
+    });
+  });
+
+  describe('calculateRightDirection', () => {
+    it('should always have y=0 (ground plane)', () => {
+      const dir1 = calculateRightDirection(0);
+      const dir2 = calculateRightDirection(Math.PI / 4);
+
+      expect(dir1.y).toBe(0);
+      expect(dir2.y).toBe(0);
+    });
+
+    it('should be perpendicular to move direction', () => {
+      const yaw = Math.PI / 6;
+      const move = calculateMoveDirection(yaw);
+      const right = calculateRightDirection(yaw);
+
+      // Dot product should be 0 for perpendicular vectors
+      const dot = move.x * right.x + move.z * right.z;
+      expect(dot).toBeCloseTo(0, 5);
+    });
+
+    it('should point along positive X when yaw=0', () => {
+      const dir = calculateRightDirection(0);
+      expect(dir.x).toBeCloseTo(1, 5);
+      expect(dir.z).toBeCloseTo(0, 5);
+    });
+
+    it('should point along negative Z when yaw=PI/2', () => {
+      const dir = calculateRightDirection(Math.PI / 2);
+      expect(dir.x).toBeCloseTo(0, 5);
+      expect(dir.z).toBeCloseTo(-1, 5);
+    });
+
+    it('should have unit length on XZ plane', () => {
+      const dir = calculateRightDirection(Math.PI / 3);
+      const length = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+      expect(length).toBeCloseTo(1, 5);
     });
   });
 });

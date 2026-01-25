@@ -182,5 +182,3 @@ export const TigerHead: React.FC<TigerHeadProps> = ({ headRotation }) => {
     </group>
   );
 };
-
-export default TigerHead;

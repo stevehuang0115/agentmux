@@ -156,5 +156,3 @@ const Eye: React.FC<{ position: [number, number, number] }> = ({
     </group>
   );
 };
-
-export default CowHead;

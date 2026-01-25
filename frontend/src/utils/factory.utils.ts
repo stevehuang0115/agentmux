@@ -143,3 +143,49 @@ export function calculateWorkstationPositions(
     z: zoneZ + pos.z,
   }));
 }
+
+/**
+ * Calculates 3D view direction vector from yaw and pitch angles.
+ * Used for camera look direction and zoom.
+ *
+ * @param yaw - Horizontal rotation angle in radians
+ * @param pitch - Vertical rotation angle in radians
+ * @returns THREE.Vector3 representing the view direction
+ */
+export function calculateViewDirection(yaw: number, pitch: number): THREE.Vector3 {
+  return new THREE.Vector3(
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch)
+  );
+}
+
+/**
+ * Calculates horizontal movement direction from yaw angle.
+ * Used for WASD ground movement (ignores pitch).
+ *
+ * @param yaw - Horizontal rotation angle in radians
+ * @returns THREE.Vector3 representing the forward direction on the ground plane
+ */
+export function calculateMoveDirection(yaw: number): THREE.Vector3 {
+  return new THREE.Vector3(
+    Math.sin(yaw),
+    0,
+    Math.cos(yaw)
+  );
+}
+
+/**
+ * Calculates the right movement direction from yaw angle.
+ * Used for strafing movement (A/D keys).
+ *
+ * @param yaw - Horizontal rotation angle in radians
+ * @returns THREE.Vector3 representing the right direction on the ground plane
+ */
+export function calculateRightDirection(yaw: number): THREE.Vector3 {
+  return new THREE.Vector3(
+    Math.sin(yaw + Math.PI / 2),
+    0,
+    Math.cos(yaw + Math.PI / 2)
+  );
+}

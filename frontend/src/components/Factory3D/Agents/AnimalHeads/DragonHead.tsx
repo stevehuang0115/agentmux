@@ -147,5 +147,3 @@ export const DragonHead: React.FC<DragonHeadProps> = ({ headRotation }) => {
     </group>
   );
 };
-
-export default DragonHead;

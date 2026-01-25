@@ -16,6 +16,9 @@ import {
   AnimalType,
   MODEL_PATHS,
   RobotAnimation,
+  Workstation,
+  ActivityMode,
+  CoffeeBreakMode,
 } from '../../../types/factory.types';
 import { CowHead, HorseHead, DragonHead, TigerHead, RabbitHead } from './AnimalHeads';
 import { SpeechBubble } from './SpeechBubble';
@@ -23,6 +26,38 @@ import { ZzzIndicator } from './ZzzIndicator';
 
 // Preload the robot model
 useGLTF.preload(MODEL_PATHS.ROBOT);
+
+// ====== ANIMATION TYPES ======
+
+/**
+ * Local animation state for a single robot agent.
+ * Tracks current animation, activity mode, and timing.
+ */
+interface LocalAnimationState {
+  currentAction: RobotAnimation;
+  activityMode: ActivityMode;
+  modeStartTime: number;
+  modeDuration: number;
+  typingOffset: number;
+  coffeeBreakState: LocalCoffeeBreakState;
+}
+
+/**
+ * Coffee break sub-state for walking animation.
+ */
+interface LocalCoffeeBreakState {
+  mode: CoffeeBreakMode;
+  modeStartTime: number;
+  modeDuration: number;
+  walkAngle: number;
+  walkRadius: number;
+}
+
+/**
+ * Type for animation actions from useAnimations hook.
+ * Maps animation names to THREE.AnimationAction objects.
+ */
+type AnimationActions = Record<string, THREE.AnimationAction | null>;
 
 // ====== SINGLE ROBOT AGENT ======
 
@@ -59,14 +94,14 @@ const SingleAgent: React.FC<SingleAgentProps> = ({ agent }) => {
   const { actions, mixer } = useAnimations(animations, clonedScene);
 
   // Animation state
-  const animationState = useRef({
-    currentAction: 'Idle' as RobotAnimation,
+  const animationState = useRef<LocalAnimationState>({
+    currentAction: 'Idle',
     activityMode: 'typing',
     modeStartTime: 0,
     modeDuration: 5 + Math.random() * 10,
     typingOffset: Math.random() * Math.PI * 2,
     coffeeBreakState: {
-      mode: 'drinking' as 'drinking' | 'walking',
+      mode: 'drinking',
       modeStartTime: 0,
       modeDuration: 8 + Math.random() * 12,
       walkAngle: 0,
@@ -198,22 +233,30 @@ const AnimalHead: React.FC<AnimalHeadProps> = ({ type }) => {
 
 /**
  * Updates animation for actively working agent.
+ *
+ * @param group - The agent's main group
+ * @param headGroup - The head group for rotation
+ * @param workstation - Workstation data with position
+ * @param anim - Local animation state
+ * @param t - Current elapsed time
+ * @param delta - Time since last frame
+ * @param actions - Animation actions from useAnimations
  */
 function updateWorkingAnimation(
   group: THREE.Group,
   headGroup: THREE.Group | null,
-  workstation: any,
-  anim: any,
+  workstation: Workstation,
+  anim: LocalAnimationState,
   t: number,
   delta: number,
-  actions: any
-) {
+  actions: AnimationActions
+): void {
   const fastT = t * 4;
   const medT = t * 1.5;
 
   // Switch activity modes
   if (t - anim.modeStartTime > anim.modeDuration) {
-    const modes = ['typing', 'typing', 'typing', 'thinking', 'reading'];
+    const modes: ActivityMode[] = ['typing', 'typing', 'typing', 'thinking', 'reading'];
     anim.activityMode = modes[Math.floor(Math.random() * modes.length)];
     anim.modeStartTime = t;
     anim.modeDuration = 3 + Math.random() * 8;
@@ -250,16 +293,24 @@ function updateWorkingAnimation(
 
 /**
  * Updates animation for coffee break.
+ *
+ * @param group - The agent's main group
+ * @param headGroup - The head group for rotation
+ * @param workstation - Workstation data with position
+ * @param anim - Local animation state
+ * @param t - Current elapsed time
+ * @param delta - Time since last frame
+ * @param actions - Animation actions from useAnimations
  */
 function updateCoffeeBreakAnimation(
   group: THREE.Group,
   headGroup: THREE.Group | null,
-  workstation: any,
-  anim: any,
+  workstation: Workstation,
+  anim: LocalAnimationState,
   t: number,
   delta: number,
-  actions: any
-) {
+  actions: AnimationActions
+): void {
   const coffee = anim.coffeeBreakState;
 
   // Switch between drinking and walking
@@ -315,15 +366,22 @@ function updateCoffeeBreakAnimation(
 
 /**
  * Updates animation for sleeping agent.
+ *
+ * @param group - The agent's main group
+ * @param headGroup - The head group for rotation
+ * @param workstation - Workstation data with position
+ * @param anim - Local animation state
+ * @param t - Current elapsed time
+ * @param actions - Animation actions from useAnimations
  */
 function updateSleepingAnimation(
   group: THREE.Group,
   headGroup: THREE.Group | null,
-  workstation: any,
-  anim: any,
+  workstation: Workstation,
+  anim: LocalAnimationState,
   t: number,
-  actions: any
-) {
+  actions: AnimationActions
+): void {
   // Lying on floor
   const restX = workstation.position.x + 1.5;
   const restZ = workstation.position.z + 1.0;
@@ -347,12 +405,16 @@ function updateSleepingAnimation(
 
 /**
  * Helper to switch between animations smoothly.
+ *
+ * @param actions - Animation actions from useAnimations
+ * @param anim - Local animation state to update
+ * @param targetAction - Target animation to switch to
  */
 function switchAnimation(
-  actions: any,
-  anim: any,
+  actions: AnimationActions,
+  anim: LocalAnimationState,
   targetAction: RobotAnimation
-) {
+): void {
   if (anim.currentAction !== targetAction && actions[targetAction]) {
     const prevAction = actions[anim.currentAction];
     const nextAction = actions[targetAction];
@@ -390,5 +452,3 @@ export const Agents: React.FC = () => {
     </group>
   );
 };
-
-export default Agents;

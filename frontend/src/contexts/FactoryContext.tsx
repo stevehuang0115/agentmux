@@ -28,6 +28,11 @@ import {
   ZONE_COLORS,
 } from '../types/factory.types';
 import { factoryService } from '../services/factory.service';
+import {
+  getAnimalTypeForProject,
+  isNightTime,
+  createInitialCameraState,
+} from '../utils/factory.utils';
 
 // ====== CONTEXT TYPE ======
 
@@ -67,72 +72,6 @@ interface FactoryContextType {
 // ====== CONTEXT ======
 
 const FactoryContext = createContext<FactoryContextType | undefined>(undefined);
-
-// ====== HELPER FUNCTIONS ======
-
-/**
- * Determines animal type based on project name hash.
- * Provides consistent animal assignment per project.
- *
- * @param projectName - Name of the project
- * @param index - Workstation index for variation
- * @returns Animal type for the agent
- */
-function getAnimalTypeForProject(projectName: string, index: number): AnimalType {
-  // Hash the project name for consistent assignment
-  let hash = 0;
-  for (let i = 0; i < projectName.length; i++) {
-    const char = projectName.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-
-  // Use absolute value and add index for variation
-  const combinedHash = Math.abs(hash) + index;
-  const animals: AnimalType[] = ['cow', 'horse', 'dragon', 'tiger', 'rabbit'];
-  return animals[combinedHash % animals.length];
-}
-
-/**
- * Check if it should be night based on local time (6 PM - 6 AM)
- *
- * @returns True if current time is between 6 PM and 6 AM
- */
-function isNightTime(): boolean {
-  const hour = new Date().getHours();
-  return hour >= 18 || hour < 6;
-}
-
-/**
- * Creates initial camera state
- *
- * @returns Default camera state
- */
-function createInitialCameraState(): CameraState {
-  const { DEFAULT_POSITION } = FACTORY_CONSTANTS.CAMERA;
-  const position = new THREE.Vector3(
-    DEFAULT_POSITION.x,
-    DEFAULT_POSITION.y,
-    DEFAULT_POSITION.z
-  );
-  const target = new THREE.Vector3(0, 1, 0);
-
-  // Calculate initial yaw/pitch to look at target
-  const toTarget = target.clone().sub(position);
-  const yaw = Math.atan2(toTarget.x, toTarget.z);
-  const pitch = Math.atan2(
-    toTarget.y,
-    Math.sqrt(toTarget.x * toTarget.x + toTarget.z * toTarget.z)
-  );
-
-  return {
-    yaw,
-    pitch,
-    position,
-    target,
-    isAnimating: false,
-  };
-}
 
 // ====== PROVIDER ======
 

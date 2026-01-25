@@ -10,6 +10,11 @@ import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
 import { FACTORY_CONSTANTS } from '../../../types/factory.types';
+import {
+  calculateViewDirection,
+  calculateMoveDirection,
+  calculateRightDirection,
+} from '../../../utils/factory.utils';
 
 const { CAMERA } = FACTORY_CONSTANTS;
 
@@ -65,11 +70,7 @@ export const CameraController: React.FC = () => {
 
   // Update camera direction from yaw/pitch
   const updateCameraDirection = useCallback(() => {
-    const direction = new THREE.Vector3(
-      Math.sin(yawRef.current) * Math.cos(pitchRef.current),
-      Math.sin(pitchRef.current),
-      Math.cos(yawRef.current) * Math.cos(pitchRef.current)
-    );
+    const direction = calculateViewDirection(yawRef.current, pitchRef.current);
     const target = threeCamera.position.clone().add(direction);
     threeCamera.lookAt(target);
   }, [threeCamera]);
@@ -180,12 +181,7 @@ export const CameraController: React.FC = () => {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
 
-      const forward = new THREE.Vector3(
-        Math.sin(yawRef.current) * Math.cos(pitchRef.current),
-        Math.sin(pitchRef.current),
-        Math.cos(yawRef.current) * Math.cos(pitchRef.current)
-      );
-
+      const forward = calculateViewDirection(yawRef.current, pitchRef.current);
       const zoomAmount = e.deltaY < 0 ? CAMERA.ZOOM_SPEED : -CAMERA.ZOOM_SPEED;
       threeCamera.position.addScaledVector(forward, zoomAmount);
     };
@@ -259,12 +255,7 @@ export const CameraController: React.FC = () => {
         const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
         const delta = currentDistance - touchState.initialPinchDistance;
 
-        const forward = new THREE.Vector3(
-          Math.sin(yawRef.current) * Math.cos(pitchRef.current),
-          Math.sin(pitchRef.current),
-          Math.cos(yawRef.current) * Math.cos(pitchRef.current)
-        );
-
+        const forward = calculateViewDirection(yawRef.current, pitchRef.current);
         threeCamera.position.addScaledVector(forward, delta * 0.02);
         touchState.initialPinchDistance = currentDistance;
       }
@@ -336,16 +327,8 @@ export const CameraController: React.FC = () => {
     // Manual keyboard movement
     const moveSpeed = CAMERA.MOVE_SPEED * delta;
 
-    const forward = new THREE.Vector3(
-      Math.sin(yawRef.current),
-      0,
-      Math.cos(yawRef.current)
-    );
-    const right = new THREE.Vector3(
-      Math.sin(yawRef.current + Math.PI / 2),
-      0,
-      Math.cos(yawRef.current + Math.PI / 2)
-    );
+    const forward = calculateMoveDirection(yawRef.current);
+    const right = calculateRightDirection(yawRef.current);
 
     if (keys.forward) {
       threeCamera.position.addScaledVector(forward, moveSpeed);
@@ -369,5 +352,3 @@ export const CameraController: React.FC = () => {
 
   return null;
 };
-
-export default CameraController;
