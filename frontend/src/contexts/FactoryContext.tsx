@@ -267,6 +267,34 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           startLookAt: prev.target.clone(),
         },
       }));
+    } else if (target === 'birdseye') {
+      // Bird's eye view - high above looking straight down
+      setCamera((prev) => ({
+        ...prev,
+        isAnimating: true,
+        animationTarget: {
+          position: new THREE.Vector3(0, 35, 0.1), // High above center
+          lookAt: new THREE.Vector3(0, 0, 0), // Looking at center
+          duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
+          startTime: Date.now(),
+          startPosition: prev.position.clone(),
+          startLookAt: prev.target.clone(),
+        },
+      }));
+    } else if (target === 'outdoor') {
+      // Outdoor view - from outside looking at the building
+      setCamera((prev) => ({
+        ...prev,
+        isAnimating: true,
+        animationTarget: {
+          position: new THREE.Vector3(-30, 8, -30), // Outside the building
+          lookAt: new THREE.Vector3(0, 2, 0), // Looking at building center
+          duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
+          startTime: Date.now(),
+          startPosition: prev.position.clone(),
+          startLookAt: prev.target.clone(),
+        },
+      }));
     } else {
       // Find zone for project
       const zone = zones.get(target);

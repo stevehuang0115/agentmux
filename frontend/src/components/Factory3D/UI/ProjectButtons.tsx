@@ -50,6 +50,22 @@ export const ProjectButtons: React.FC = () => {
         Overview
       </button>
 
+      {/* Bird's Eye view button */}
+      <button
+        onClick={() => setCameraTarget('birdseye')}
+        className="px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-sm font-medium text-text-primary"
+      >
+        Bird's Eye
+      </button>
+
+      {/* Outdoor view button */}
+      <button
+        onClick={() => setCameraTarget('outdoor')}
+        className="px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-sm font-medium text-text-primary"
+      >
+        Outdoor
+      </button>
+
       {/* Boss mode toggle */}
       <button
         onClick={toggleBossMode}

@@ -37,18 +37,20 @@ class FactoryService {
         `${API_BASE}/factory/state`
       );
 
+      // Check if response is valid JSON with success field
+      // (HTML fallback pages won't have this structure)
+      if (
+        typeof response.data !== 'object' ||
+        response.data === null ||
+        !('success' in response.data)
+      ) {
+        // Response is not valid API JSON, fall back to legacy endpoints
+        return this.buildFactoryStateFromLegacyEndpoints();
+      }
+
       if (!response.data.success || !response.data.data) {
-        // Return empty state if no data
-        return {
-          agents: [],
-          projects: [],
-          stats: {
-            activeCount: 0,
-            idleCount: 0,
-            dormantCount: 0,
-            totalTokens: 0,
-          },
-        };
+        // API returned error or no data, fall back to legacy endpoints
+        return this.buildFactoryStateFromLegacyEndpoints();
       }
 
       return response.data.data;
