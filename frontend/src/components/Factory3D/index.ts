@@ -5,7 +5,7 @@
  */
 
 // Main scene component
-export { FactoryScene, default } from './FactoryScene';
+export { FactoryScene } from './FactoryScene';
 
 // Environment components
 export { Lighting } from './Environment/Lighting';

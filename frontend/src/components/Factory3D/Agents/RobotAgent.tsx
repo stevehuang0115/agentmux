@@ -127,6 +127,28 @@ const SingleAgent: React.FC<SingleAgentProps> = ({ agent }) => {
     }
   }, [actions]);
 
+  // Cleanup animation mixer and cloned scene resources on unmount
+  useEffect(() => {
+    return () => {
+      // Stop all animations and dispose mixer
+      if (mixer) {
+        mixer.stopAllAction();
+      }
+
+      // Dispose cloned scene resources to prevent memory leaks
+      clonedScene.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry?.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach((mat) => mat.dispose());
+          } else if (child.material) {
+            child.material.dispose();
+          }
+        }
+      });
+    };
+  }, [mixer, clonedScene]);
+
   // Main animation loop
   useFrame((state, delta) => {
     if (!groupRef.current || !workstation) return;

@@ -374,23 +374,42 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     return () => clearInterval(interval);
   }, [bossModeState.isActive, bossModeState.targetDuration, setCameraTarget]);
 
-  const value: FactoryContextType = {
-    agents,
-    zones,
-    camera,
-    setCameraTarget,
-    lightingMode,
-    setLightingMode,
-    isNightMode,
-    bossModeState,
-    toggleBossMode,
-    stats,
-    projects,
-    isLoading,
-    error,
-    refreshData,
-    updateCamera,
-  };
+  // Memoize context value to prevent unnecessary re-renders of consumers
+  const value = useMemo<FactoryContextType>(
+    () => ({
+      agents,
+      zones,
+      camera,
+      setCameraTarget,
+      lightingMode,
+      setLightingMode,
+      isNightMode,
+      bossModeState,
+      toggleBossMode,
+      stats,
+      projects,
+      isLoading,
+      error,
+      refreshData,
+      updateCamera,
+    }),
+    [
+      agents,
+      zones,
+      camera,
+      setCameraTarget,
+      lightingMode,
+      isNightMode,
+      bossModeState,
+      toggleBossMode,
+      stats,
+      projects,
+      isLoading,
+      error,
+      refreshData,
+      updateCamera,
+    ]
+  );
 
   return (
     <FactoryContext.Provider value={value}>

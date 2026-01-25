@@ -5,7 +5,7 @@
  * It sets up the Canvas, providers, and renders all 3D components.
  */
 
-import React, { Suspense, useEffect, useRef } from 'react';
+import React, { Suspense, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { Stats, Preload, AdaptiveDpr, AdaptiveEvents } from '@react-three/drei';
 import * as THREE from 'three';
@@ -37,6 +37,64 @@ import { CameraController } from './Camera/CameraController';
 import { InfoPanel } from './UI/InfoPanel';
 import { ProjectButtons } from './UI/ProjectButtons';
 import { LightingToggle } from './UI/LightingToggle';
+
+// ====== ERROR BOUNDARY ======
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+/**
+ * SceneErrorBoundary - Catches errors in 3D scene and shows fallback UI.
+ *
+ * Prevents the entire application from crashing if a 3D component
+ * throws an error during render.
+ */
+class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    console.error('3D Scene Error:', error, errorInfo);
+  }
+
+  render(): ReactNode {
+    if (this.state.hasError) {
+      return (
+        this.props.fallback || (
+          <div className="flex items-center justify-center h-full bg-gray-900 text-white">
+            <div className="text-center p-8">
+              <h2 className="text-xl font-bold mb-2">3D Scene Error</h2>
+              <p className="text-gray-400 mb-4">
+                Unable to load the factory visualization.
+              </p>
+              <button
+                className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700"
+                onClick={() => this.setState({ hasError: false, error: null })}
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // ====== SCENE SETUP ======
 
@@ -164,51 +222,51 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
 
   return (
     <FactoryProvider>
-      <div className={`relative w-full h-full ${className}`}>
-        {/* 3D Canvas */}
-        <Canvas
-          shadows
-          dpr={[1, 2]}
-          camera={{
-            fov: CAMERA.FOV,
-            near: CAMERA.NEAR,
-            far: CAMERA.FAR,
-            position: [
-              CAMERA.DEFAULT_POSITION.x,
-              CAMERA.DEFAULT_POSITION.y,
-              CAMERA.DEFAULT_POSITION.z,
-            ],
-          }}
-          gl={{
-            antialias: true,
-            alpha: false,
-            powerPreference: 'high-performance',
-          }}
-        >
-          {/* Performance optimizations */}
-          <AdaptiveDpr pixelated />
-          <AdaptiveEvents />
+      <SceneErrorBoundary>
+        <div className={`relative w-full h-full ${className}`}>
+          {/* 3D Canvas */}
+          <Canvas
+            shadows
+            dpr={[1, 2]}
+            camera={{
+              fov: CAMERA.FOV,
+              near: CAMERA.NEAR,
+              far: CAMERA.FAR,
+              position: [
+                CAMERA.DEFAULT_POSITION.x,
+                CAMERA.DEFAULT_POSITION.y,
+                CAMERA.DEFAULT_POSITION.z,
+              ],
+            }}
+            gl={{
+              antialias: true,
+              alpha: false,
+              powerPreference: 'high-performance',
+            }}
+          >
+            {/* Performance optimizations */}
+            <AdaptiveDpr pixelated />
+            <AdaptiveEvents />
 
-          {/* Loading boundary */}
-          <Suspense fallback={<LoadingFallback />}>
-            <SceneContent />
-          </Suspense>
+            {/* Loading boundary */}
+            <Suspense fallback={<LoadingFallback />}>
+              <SceneContent />
+            </Suspense>
 
-          {/* Performance stats (dev only) */}
-          {showStats && <Stats />}
-        </Canvas>
+            {/* Performance stats (dev only) */}
+            {showStats && <Stats />}
+          </Canvas>
 
-        {/* UI Overlay */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="pointer-events-auto">
-            <InfoPanel />
-            <ProjectButtons />
-            <LightingToggle />
+          {/* UI Overlay */}
+          <div className="absolute inset-0 pointer-events-none">
+            <div className="pointer-events-auto">
+              <InfoPanel />
+              <ProjectButtons />
+              <LightingToggle />
+            </div>
           </div>
         </div>
-      </div>
+      </SceneErrorBoundary>
     </FactoryProvider>
   );
 };
-
-export default FactoryScene;

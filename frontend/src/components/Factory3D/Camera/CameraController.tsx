@@ -68,6 +68,10 @@ export const CameraController: React.FC = () => {
   const yawRef = useRef(cameraState.yaw);
   const pitchRef = useRef(cameraState.pitch);
 
+  // Pre-allocated vectors to reduce GC pressure during animation
+  const tempLookAt = useRef(new THREE.Vector3());
+  const tempDirection = useRef(new THREE.Vector3());
+
   // Update camera direction from yaw/pitch
   const updateCameraDirection = useCallback(() => {
     const direction = calculateViewDirection(yawRef.current, pitchRef.current);
@@ -304,18 +308,17 @@ export const CameraController: React.FC = () => {
         eased
       );
 
-      // Interpolate look-at
-      const currentLookAt = new THREE.Vector3().lerpVectors(
-        anim.startLookAt,
-        anim.lookAt,
-        eased
-      );
-      threeCamera.lookAt(currentLookAt);
+      // Interpolate look-at using pre-allocated vector
+      tempLookAt.current.lerpVectors(anim.startLookAt, anim.lookAt, eased);
+      threeCamera.lookAt(tempLookAt.current);
 
-      // Update yaw/pitch from new orientation
-      const direction = currentLookAt.clone().sub(threeCamera.position).normalize();
-      yawRef.current = Math.atan2(direction.x, direction.z);
-      pitchRef.current = Math.asin(direction.y);
+      // Update yaw/pitch from new orientation using pre-allocated vector
+      tempDirection.current
+        .copy(tempLookAt.current)
+        .sub(threeCamera.position)
+        .normalize();
+      yawRef.current = Math.atan2(tempDirection.current.x, tempDirection.current.z);
+      pitchRef.current = Math.asin(tempDirection.current.y);
 
       if (progress >= 1) {
         updateCamera({ isAnimating: false, animationTarget: undefined });
