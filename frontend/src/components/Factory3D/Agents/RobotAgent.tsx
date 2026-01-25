@@ -19,6 +19,7 @@ import {
   Workstation,
   ActivityMode,
   CoffeeBreakMode,
+  FACTORY_CONSTANTS,
 } from '../../../types/factory.types';
 import { CowHead, HorseHead, DragonHead, TigerHead, RabbitHead } from './AnimalHeads';
 import { SpeechBubble } from './SpeechBubble';
@@ -61,7 +62,11 @@ type AnimationActions = Record<string, THREE.AnimationAction | null>;
 
 // ====== SINGLE ROBOT AGENT ======
 
+/**
+ * Props for SingleAgent component.
+ */
 interface SingleAgentProps {
+  /** Agent data including position, status, and animation state */
   agent: FactoryAgent;
 }
 
@@ -73,7 +78,6 @@ interface SingleAgentProps {
 const SingleAgent: React.FC<SingleAgentProps> = ({ agent }) => {
   const groupRef = useRef<THREE.Group>(null);
   const headGroupRef = useRef<THREE.Group>(null);
-  const { camera } = useFactory();
 
   // Load robot model
   const { scene, animations } = useGLTF(MODEL_PATHS.ROBOT);
@@ -204,7 +208,7 @@ const SingleAgent: React.FC<SingleAgentProps> = ({ agent }) => {
       rotation={[0, Math.PI, 0]}
     >
       {/* Robot body */}
-      <primitive object={clonedScene} scale={0.5} />
+      <primitive object={clonedScene} scale={FACTORY_CONSTANTS.AGENT.ROBOT_SCALE} />
 
       {/* Animal head */}
       <group ref={headGroupRef} position={[0, 1.0, 0]}>
@@ -289,7 +293,7 @@ function updateWorkingAnimation(
   const typingBob = anim.activityMode === 'typing' ? Math.sin(fastT * 2) * 0.005 : 0;
   group.position.x = workstation.position.x + breathSway;
   group.position.y = typingBob;
-  group.position.z = workstation.position.z + 0.45;
+  group.position.z = workstation.position.z + FACTORY_CONSTANTS.AGENT.WORKSTATION_OFFSET;
   group.rotation.y = Math.PI;
 
   // Head movement
@@ -441,9 +445,10 @@ function switchAnimation(
     const prevAction = actions[anim.currentAction];
     const nextAction = actions[targetAction];
 
-    if (prevAction) prevAction.fadeOut(0.5);
+    const fadeDuration = FACTORY_CONSTANTS.AGENT.ANIMATION_FADE_DURATION;
+    if (prevAction) prevAction.fadeOut(fadeDuration);
     if (nextAction) {
-      nextAction.reset().fadeIn(0.5).play();
+      nextAction.reset().fadeIn(fadeDuration).play();
     }
     anim.currentAction = targetAction;
   }

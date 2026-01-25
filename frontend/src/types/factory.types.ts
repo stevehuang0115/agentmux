@@ -401,6 +401,14 @@ export const FACTORY_CONSTANTS = {
     MAX_PITCH: Math.PI / 2 - 0.1,
     MOVE_SPEED: 15,
     ZOOM_SPEED: 0.5,
+    MOUSE_SENSITIVITY: 0.005,
+    TOUCH_SENSITIVITY: 0.008,
+  },
+  /** Agent/robot configuration */
+  AGENT: {
+    ROBOT_SCALE: 0.5,
+    WORKSTATION_OFFSET: 0.45,
+    ANIMATION_FADE_DURATION: 0.5,
   },
   /** Wall dimensions */
   WALLS: {

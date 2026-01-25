@@ -18,6 +18,10 @@ import {
 
 const { CAMERA } = FACTORY_CONSTANTS;
 
+/**
+ * Tracks keyboard input state for camera movement.
+ * Each property represents whether that direction key is currently pressed.
+ */
 interface KeyState {
   forward: boolean;
   backward: boolean;
@@ -27,9 +31,15 @@ interface KeyState {
   down: boolean;
 }
 
+/**
+ * Tracks mouse state for camera rotation.
+ */
 interface MouseState {
+  /** Whether the user is currently dragging to rotate */
   isDragging: boolean;
+  /** Last recorded X position for delta calculation */
   lastX: number;
+  /** Last recorded Y position for delta calculation */
   lastY: number;
 }
 
@@ -68,9 +78,11 @@ export const CameraController: React.FC = () => {
   const yawRef = useRef(cameraState.yaw);
   const pitchRef = useRef(cameraState.pitch);
 
-  // Pre-allocated vectors to reduce GC pressure during animation
+  // Pre-allocated vectors to reduce GC pressure during animation and movement
   const tempLookAt = useRef(new THREE.Vector3());
   const tempDirection = useRef(new THREE.Vector3());
+  const tempForward = useRef(new THREE.Vector3());
+  const tempRight = useRef(new THREE.Vector3());
 
   // Update camera direction from yaw/pitch
   const updateCameraDirection = useCallback(() => {
@@ -170,10 +182,10 @@ export const CameraController: React.FC = () => {
       const deltaX = e.clientX - mouseState.current.lastX;
       const deltaY = e.clientY - mouseState.current.lastY;
 
-      yawRef.current -= deltaX * 0.005;
+      yawRef.current -= deltaX * CAMERA.MOUSE_SENSITIVITY;
       pitchRef.current = Math.max(
         CAMERA.MIN_PITCH,
-        Math.min(CAMERA.MAX_PITCH, pitchRef.current - deltaY * 0.005)
+        Math.min(CAMERA.MAX_PITCH, pitchRef.current - deltaY * CAMERA.MOUSE_SENSITIVITY)
       );
 
       updateCameraDirection();
@@ -245,10 +257,10 @@ export const CameraController: React.FC = () => {
         const deltaX = e.touches[0].clientX - touchState.lastX;
         const deltaY = e.touches[0].clientY - touchState.lastY;
 
-        yawRef.current += deltaX * 0.008;
+        yawRef.current += deltaX * CAMERA.TOUCH_SENSITIVITY;
         pitchRef.current = Math.max(
           CAMERA.MIN_PITCH,
-          Math.min(CAMERA.MAX_PITCH, pitchRef.current + deltaY * 0.008)
+          Math.min(CAMERA.MAX_PITCH, pitchRef.current + deltaY * CAMERA.TOUCH_SENSITIVITY)
         );
 
         updateCameraDirection();
@@ -327,23 +339,34 @@ export const CameraController: React.FC = () => {
       return; // Skip manual controls during animation
     }
 
-    // Manual keyboard movement
+    // Manual keyboard movement - use pre-allocated vectors
     const moveSpeed = CAMERA.MOVE_SPEED * delta;
 
-    const forward = calculateMoveDirection(yawRef.current);
-    const right = calculateRightDirection(yawRef.current);
+    // Calculate forward direction (horizontal only for ground movement)
+    tempForward.current.set(
+      Math.sin(yawRef.current),
+      0,
+      Math.cos(yawRef.current)
+    );
+
+    // Calculate right direction (perpendicular to forward)
+    tempRight.current.set(
+      Math.sin(yawRef.current + Math.PI / 2),
+      0,
+      Math.cos(yawRef.current + Math.PI / 2)
+    );
 
     if (keys.forward) {
-      threeCamera.position.addScaledVector(forward, moveSpeed);
+      threeCamera.position.addScaledVector(tempForward.current, moveSpeed);
     }
     if (keys.backward) {
-      threeCamera.position.addScaledVector(forward, -moveSpeed);
+      threeCamera.position.addScaledVector(tempForward.current, -moveSpeed);
     }
     if (keys.left) {
-      threeCamera.position.addScaledVector(right, -moveSpeed);
+      threeCamera.position.addScaledVector(tempRight.current, -moveSpeed);
     }
     if (keys.right) {
-      threeCamera.position.addScaledVector(right, moveSpeed);
+      threeCamera.position.addScaledVector(tempRight.current, moveSpeed);
     }
     if (keys.up) {
       threeCamera.position.y += moveSpeed;
