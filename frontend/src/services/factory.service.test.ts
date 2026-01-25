@@ -100,6 +100,195 @@ describe('FactoryService', () => {
       expect(result.projects).toHaveLength(0);
       expect(result.stats.activeCount).toBe(0);
     });
+
+    it('should return empty state when API returns success=false', async () => {
+      mockedAxios.get = vi.fn().mockResolvedValue({
+        data: { success: false, error: 'Not authorized' },
+      });
+
+      const result = await factoryService.getFactoryState();
+
+      expect(result.agents).toHaveLength(0);
+      expect(result.projects).toHaveLength(0);
+    });
+  });
+
+  describe('buildFactoryStateFromLegacyEndpoints (via getFactoryState fallback)', () => {
+    it('should map inactive agentStatus to dormant', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'Team',
+              currentProject: 'Project',
+              members: [{
+                id: '1',
+                name: 'Agent',
+                sessionName: 'session',
+                agentStatus: 'inactive',
+                workingStatus: 'idle',
+              }],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents[0].status).toBe('dormant');
+    });
+
+    it('should map active agentStatus with in_progress workingStatus to active', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'Team',
+              currentProject: 'Project',
+              members: [{
+                id: '1',
+                name: 'Agent',
+                sessionName: 'session',
+                agentStatus: 'active',
+                workingStatus: 'in_progress',
+              }],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents[0].status).toBe('active');
+      expect(result.agents[0].cpuPercent).toBe(50);
+      expect(result.agents[0].activity).toBe('Working...');
+    });
+
+    it('should map active agentStatus with idle workingStatus to idle', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'Team',
+              currentProject: 'Project',
+              members: [{
+                id: '1',
+                name: 'Agent',
+                sessionName: 'session',
+                agentStatus: 'active',
+                workingStatus: 'idle',
+              }],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents[0].status).toBe('idle');
+      expect(result.agents[0].cpuPercent).toBe(0);
+      expect(result.agents[0].activity).toBeUndefined();
+    });
+
+    it('should use team name when currentProject is missing', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'My Team',
+              members: [{
+                id: '1',
+                name: 'Agent',
+                sessionName: 'session',
+                agentStatus: 'active',
+                workingStatus: 'idle',
+              }],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents[0].projectName).toBe('My Team');
+      expect(result.projects).toContain('My Team');
+    });
+
+    it('should use Unassigned when both currentProject and name are missing', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              members: [{
+                id: '1',
+                name: 'Agent',
+                sessionName: 'session',
+                agentStatus: 'active',
+                workingStatus: 'idle',
+              }],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents[0].projectName).toBe('Unassigned');
+    });
+
+    it('should handle teams with no members array', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'Empty Team',
+              currentProject: 'Project',
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents).toHaveLength(0);
+      expect(result.projects).toContain('Project');
+    });
+
+    it('should correctly count agent statuses in stats', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: {
+            success: true,
+            data: [{
+              name: 'Team',
+              currentProject: 'Project',
+              members: [
+                { id: '1', name: 'A1', sessionName: 's1', agentStatus: 'active', workingStatus: 'in_progress' },
+                { id: '2', name: 'A2', sessionName: 's2', agentStatus: 'active', workingStatus: 'idle' },
+                { id: '3', name: 'A3', sessionName: 's3', agentStatus: 'inactive', workingStatus: 'idle' },
+              ],
+            }],
+          },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.stats.activeCount).toBe(1);
+      expect(result.stats.idleCount).toBe(1);
+      expect(result.stats.dormantCount).toBe(1);
+    });
+
+    it('should handle empty teams array', async () => {
+      mockedAxios.get = vi.fn()
+        .mockRejectedValueOnce(new Error('Not found'))
+        .mockResolvedValueOnce({
+          data: { success: true, data: [] },
+        });
+
+      const result = await factoryService.getFactoryState();
+      expect(result.agents).toHaveLength(0);
+      expect(result.projects).toHaveLength(0);
+    });
   });
 
   describe('getUsageStats', () => {
