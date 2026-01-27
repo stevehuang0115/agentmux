@@ -457,22 +457,31 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       const wanderRadiusX = config.wanderRadiusX ?? DEFAULT_WANDER.radiusX;
       const wanderMinZ = workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ);
       const wanderMaxZ = workstation.position.z + (config.wanderMaxZ ?? DEFAULT_WANDER.maxZ);
+      const ownWsX = workstation.position.x;
+      const ownWsZ = workstation.position.z;
+
+      // Helper to generate unblocked random target
+      const generateUnblockedTarget = () => {
+        const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
+        const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+        return getUnblockedTarget(rawX, rawZ, walkState.currentPos.x, walkState.currentPos.z, ownWsX, ownWsZ, allWorkstations);
+      };
 
       if (!walkState.initialized) {
         walkState.currentPos.x = workstation.position.x;
         walkState.currentPos.z = wanderMinZ;
-        walkState.targetPos.x =
-          workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
-        walkState.targetPos.z = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+        const target = generateUnblockedTarget();
+        walkState.targetPos.x = target.x;
+        walkState.targetPos.z = target.z;
         walkState.initialized = true;
       }
 
       if (walkState.wasWorking) {
         walkState.currentPos.x = workstation.position.x;
         walkState.currentPos.z = wanderMinZ;
-        walkState.targetPos.x =
-          workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
-        walkState.targetPos.z = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+        const target = generateUnblockedTarget();
+        walkState.targetPos.x = target.x;
+        walkState.targetPos.z = target.z;
         walkState.wasWorking = false;
       }
 
@@ -487,16 +496,28 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         transitionToAnimation(actions, animName, walkState);
 
         const moveAmount = Math.min(speed * delta, distance);
-        walkState.currentPos.x += (dx / distance) * moveAmount;
-        walkState.currentPos.z += (dz / distance) * moveAmount;
+        const nextX = walkState.currentPos.x + (dx / distance) * moveAmount;
+        const nextZ = walkState.currentPos.z + (dz / distance) * moveAmount;
+
+        // Check if next position would be blocked
+        if (!isBlockedByWorkstation(nextX, nextZ, ownWsX, ownWsZ, allWorkstations)) {
+          walkState.currentPos.x = nextX;
+          walkState.currentPos.z = nextZ;
+        } else {
+          // Blocked - pick new target
+          const target = generateUnblockedTarget();
+          walkState.targetPos.x = target.x;
+          walkState.targetPos.z = target.z;
+        }
 
         const targetRotation = Math.atan2(dx, dz);
         const rotationDiff = normalizeRotationDiff(targetRotation - groupRef.current.rotation.y);
         groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
       } else {
-        walkState.targetPos.x =
-          workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
-        walkState.targetPos.z = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+        // Arrived at target - pick new one
+        const target = generateUnblockedTarget();
+        walkState.targetPos.x = target.x;
+        walkState.targetPos.z = target.z;
       }
 
       groupRef.current.position.x = walkState.currentPos.x;
