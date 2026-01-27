@@ -21,16 +21,13 @@ import {
   CoffeeBreakMode,
   FACTORY_CONSTANTS,
 } from '../../../types/factory.types';
-import { CowHead, HorseHead, DragonHead, TigerHead, RabbitHead } from './AnimalHeads';
+import { CowHead, HorseHead, TigerHead, RabbitHead } from './AnimalHeads';
 import { SpeechBubble } from './SpeechBubble';
 import { ZzzIndicator } from './ZzzIndicator';
 import { CowAgent } from './CowAgent';
 import { HorseAgent } from './HorseAgent';
 import { TigerAgent } from './TigerAgent';
 import { RabbitAgent } from './RabbitAgent';
-
-// Module load confirmation
-console.log('[RobotAgent.tsx] Module loaded');
 
 // Preload the robot and animal models
 useGLTF.preload(MODEL_PATHS.ROBOT);
@@ -254,8 +251,6 @@ const AnimalHead: React.FC<AnimalHeadProps> = ({ type }) => {
       return <CowHead />;
     case 'horse':
       return <HorseHead />;
-    case 'dragon':
-      return <DragonHead />;
     case 'tiger':
       return <TigerHead />;
     case 'rabbit':
@@ -478,20 +473,6 @@ export const Agents: React.FC = () => {
   const { agents } = useFactory();
 
   const agentArray = useMemo(() => Array.from(agents.values()), [agents]);
-
-  // Immediate render-time logging
-  console.log('[Agents RENDER] agents size:', agents.size, 'agentArray length:', agentArray.length);
-
-  // Debug logging
-  useEffect(() => {
-    console.log('[Agents] === DEBUG START ===');
-    console.log('[Agents] Total agents:', agentArray.length);
-    console.log('[Agents] Agents map size:', agents.size);
-    agentArray.forEach((agent) => {
-      console.log(`[Agents] Agent: ${agent.id}, type: ${agent.animalType}, status: ${agent.status}, project: "${agent.projectName}", wsIndex: ${agent.workstationIndex}, zoneIndex: ${agent.zoneIndex}, pos: (${agent.basePosition.x.toFixed(1)}, ${agent.basePosition.z.toFixed(1)})`);
-    });
-    console.log('[Agents] === DEBUG END ===');
-  }, [agentArray, agents]);
 
   return (
     <group>

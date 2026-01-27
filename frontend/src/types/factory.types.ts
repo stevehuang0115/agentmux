@@ -11,7 +11,7 @@ import * as THREE from 'three';
  * Animal head types available for robot agents.
  * Determined by project name hash for consistent appearance.
  */
-export type AnimalType = 'cow' | 'horse' | 'dragon' | 'tiger' | 'rabbit';
+export type AnimalType = 'cow' | 'horse' | 'tiger' | 'rabbit';
 
 /**
  * Agent operational status levels
