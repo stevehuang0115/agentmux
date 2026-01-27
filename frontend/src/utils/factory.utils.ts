@@ -8,11 +8,33 @@ import * as THREE from 'three';
 import { AnimalType, CameraState, FACTORY_CONSTANTS } from '../types/factory.types';
 
 /**
+ * Simple hash function for string to number conversion.
+ * Uses djb2 algorithm for better distribution.
+ *
+ * @param str - Input string to hash
+ * @returns Positive integer hash value
+ */
+function hashString(str: string): number {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) ^ str.charCodeAt(i);
+  }
+  return Math.abs(hash);
+}
+
+/**
+ * Available animal types with models.
+ * All animals have consistent height (2.0 units) and Mixamo animations.
+ */
+const AVAILABLE_ANIMALS: AnimalType[] = ['cow', 'horse', 'tiger', 'rabbit'];
+
+/**
  * Determines animal type based on project name hash.
  * Provides consistent animal assignment per project.
+ * Uses all available animal models (cow, horse, tiger, rabbit).
  *
  * @param projectName - Name of the project
- * @param index - Workstation index for variation
+ * @param index - Workstation index (unused, kept for API compatibility)
  * @returns Animal type for the agent
  *
  * @example
@@ -22,18 +44,12 @@ import { AnimalType, CameraState, FACTORY_CONSTANTS } from '../types/factory.typ
  * ```
  */
 export function getAnimalTypeForProject(projectName: string, index: number): AnimalType {
-  // Hash the project name for consistent assignment
-  let hash = 0;
-  for (let i = 0; i < projectName.length; i++) {
-    const char = projectName.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
+  // Use project name hash to determine animal type
+  // This ensures all agents in the same project have the same animal type
+  const hash = hashString(projectName);
+  const animalIndex = hash % AVAILABLE_ANIMALS.length;
 
-  // Use absolute value and add index for variation
-  const combinedHash = Math.abs(hash) + index;
-  const animals: AnimalType[] = ['cow', 'horse', 'dragon', 'tiger', 'rabbit'];
-  return animals[combinedHash % animals.length];
+  return AVAILABLE_ANIMALS[animalIndex];
 }
 
 /**
@@ -60,13 +76,10 @@ export function isNightTime(hour?: number): boolean {
  * @returns Default camera state with position, target, yaw, and pitch
  */
 export function createInitialCameraState(): CameraState {
-  const { DEFAULT_POSITION } = FACTORY_CONSTANTS.CAMERA;
-  const position = new THREE.Vector3(
-    DEFAULT_POSITION.x,
-    DEFAULT_POSITION.y,
-    DEFAULT_POSITION.z
-  );
-  const target = new THREE.Vector3(0, 1, 0);
+  // CCTV-style view from upper floor corner, looking down diagonally
+  // Position in back-left corner of upper floor, high up (inside building bounds)
+  const position = new THREE.Vector3(-28, 22, -18);
+  const target = new THREE.Vector3(15, 2, 10); // Looking diagonally down at ground floor
 
   // Calculate initial yaw/pitch to look at target
   const toTarget = target.clone().sub(position);

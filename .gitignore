@@ -110,3 +110,14 @@ specs/
 TODO.md
 docker-compose.yml
 Dockerfile
+
+# 3D Models - Only include optimized *-fixed.glb files and RobotExpressive.glb
+# Exclude original, animated, and intermediate files
+frontend/public/models/**/*-original.glb
+frontend/public/models/**/*-animated.glb
+frontend/public/models/**/*.fbx
+frontend/public/models/**/actions/
+frontend/public/models/**/*.py
+frontend/public/models/**/*.sh
+# Exclude any .glb in subdirectories that isn't *-fixed.glb
+frontend/public/models/cow/cow.glb

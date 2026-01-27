@@ -38,10 +38,8 @@ export const InfoPanel: React.FC = () => {
   }
 
   return (
-    <div className="absolute top-4 left-4 bg-surface-dark/90 backdrop-blur-sm rounded-lg p-4 border border-border-dark min-w-[160px]">
-      <h3 className="text-sm font-semibold text-text-primary mb-3">
-        Agent Status
-      </h3>
+    <div className="absolute top-16 left-4 bg-surface-dark/90 backdrop-blur-sm rounded-lg p-3 border border-border-dark min-w-[140px] shadow-lg">
+      {/* Removed header - stats are self-explanatory */}
 
       <div className="space-y-2">
         {/* Active */}

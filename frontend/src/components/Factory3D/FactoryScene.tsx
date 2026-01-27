@@ -26,9 +26,14 @@ import { ConveyorBelt } from './Office/ConveyorBelt';
 // Interaction zones
 import { BreakRoom } from './InteractionZones/BreakRoom';
 import { PokerTable } from './InteractionZones/PokerTable';
+import { Stage } from './InteractionZones/Stage';
+import { Lounge } from './InteractionZones/Lounge';
 
 // Agent components
 import { Agents } from './Agents/RobotAgent';
+import { FakeAudience } from './Agents/FakeAudience';
+import { SteveJobsNPC } from './Agents/SteveJobsNPC';
+import { SundarPichaiNPC } from './Agents/SundarPichaiNPC';
 
 // Camera components
 import { CameraController } from './Camera/CameraController';
@@ -48,6 +53,7 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+  retryCount: number;
 }
 
 /**
@@ -59,10 +65,10 @@ interface ErrorBoundaryState {
 class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, retryCount: 0 };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { hasError: true, error };
   }
 
@@ -80,9 +86,18 @@ class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
               <p className="text-gray-400 mb-4">
                 Unable to load the factory visualization.
               </p>
+              {this.state.error && (
+                <p className="text-red-400 text-sm mb-4 max-w-md break-words">
+                  {this.state.error.message}
+                </p>
+              )}
               <button
                 className="px-4 py-2 bg-blue-600 rounded hover:bg-blue-700"
-                onClick={() => this.setState({ hasError: false, error: null })}
+                onClick={() => this.setState((prev) => ({
+                  hasError: false,
+                  error: null,
+                  retryCount: prev.retryCount + 1,
+                }))}
               >
                 Retry
               </button>
@@ -92,7 +107,13 @@ class SceneErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryStat
       );
     }
 
-    return this.props.children;
+    // Use retryCount as key to force full remount of Canvas on retry
+    // This ensures a fresh WebGL context is created
+    return (
+      <div key={this.state.retryCount} className="w-full h-full">
+        {this.props.children}
+      </div>
+    );
   }
 }
 
@@ -177,9 +198,20 @@ const SceneContent: React.FC = () => {
       {/* Interaction zones */}
       <BreakRoom />
       <PokerTable />
+      <Stage />
+      <Lounge />
 
       {/* Agents */}
       <Agents />
+
+      {/* Fake audience for stage */}
+      <FakeAudience />
+
+      {/* Steve Jobs NPC - wanders around checking on agents */}
+      <SteveJobsNPC />
+
+      {/* Sundar Pichai NPC - walks around talking to agents */}
+      <SundarPichaiNPC />
 
       {/* Camera controls */}
       <CameraController />
@@ -242,6 +274,19 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               antialias: true,
               alpha: false,
               powerPreference: 'high-performance',
+              // Enable context restoration for WebGL context loss recovery
+              preserveDrawingBuffer: true,
+            }}
+            onCreated={({ gl }) => {
+              // Handle WebGL context loss gracefully
+              const canvas = gl.domElement;
+              canvas.addEventListener('webglcontextlost', (e) => {
+                e.preventDefault();
+                console.warn('WebGL context lost. Click Retry to restore.');
+              });
+              canvas.addEventListener('webglcontextrestored', () => {
+                console.log('WebGL context restored.');
+              });
             }}
           >
             {/* Performance optimizations */}

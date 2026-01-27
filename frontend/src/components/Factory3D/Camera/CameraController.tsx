@@ -52,12 +52,13 @@ interface MouseState {
  * - Scroll wheel for zoom
  * - Touch support for mobile
  * - Smooth camera animation transitions
+ * - Boss mode orbit control
  *
  * @returns null (modifies camera directly)
  */
 export const CameraController: React.FC = () => {
   const { camera: threeCamera, gl } = useThree();
-  const { camera: cameraState, updateCamera } = useFactory();
+  const { camera: cameraState, updateCamera, bossModeState } = useFactory();
 
   // Refs for input state
   const keyState = useRef<KeyState>({
@@ -304,6 +305,23 @@ export const CameraController: React.FC = () => {
   useFrame((state, delta) => {
     const keys = keyState.current;
 
+    // Handle boss mode orbit - camera follows the orbit position from state
+    if (bossModeState.isActive) {
+      // Apply camera position and target from state
+      threeCamera.position.copy(cameraState.position);
+      threeCamera.lookAt(cameraState.target);
+
+      // Update yaw/pitch refs from current camera orientation
+      tempDirection.current
+        .copy(cameraState.target)
+        .sub(cameraState.position)
+        .normalize();
+      yawRef.current = Math.atan2(tempDirection.current.x, tempDirection.current.z);
+      pitchRef.current = Math.asin(tempDirection.current.y);
+
+      return; // Skip other controls during boss mode
+    }
+
     // Handle camera animation (from focus transitions)
     if (cameraState.isAnimating && cameraState.animationTarget) {
       const anim = cameraState.animationTarget;
@@ -363,10 +381,10 @@ export const CameraController: React.FC = () => {
       threeCamera.position.addScaledVector(tempForward.current, -moveSpeed);
     }
     if (keys.left) {
-      threeCamera.position.addScaledVector(tempRight.current, -moveSpeed);
+      threeCamera.position.addScaledVector(tempRight.current, moveSpeed);
     }
     if (keys.right) {
-      threeCamera.position.addScaledVector(tempRight.current, moveSpeed);
+      threeCamera.position.addScaledVector(tempRight.current, -moveSpeed);
     }
     if (keys.up) {
       threeCamera.position.y += moveSpeed;

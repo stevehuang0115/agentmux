@@ -24,9 +24,19 @@ import {
 import { CowHead, HorseHead, DragonHead, TigerHead, RabbitHead } from './AnimalHeads';
 import { SpeechBubble } from './SpeechBubble';
 import { ZzzIndicator } from './ZzzIndicator';
+import { CowAgent } from './CowAgent';
+import { HorseAgent } from './HorseAgent';
+import { TigerAgent } from './TigerAgent';
+import { RabbitAgent } from './RabbitAgent';
 
-// Preload the robot model
+// Module load confirmation
+console.log('[RobotAgent.tsx] Module loaded');
+
+// Preload the robot and animal models
 useGLTF.preload(MODEL_PATHS.ROBOT);
+useGLTF.preload(MODEL_PATHS.HORSE);
+useGLTF.preload(MODEL_PATHS.TIGER);
+useGLTF.preload(MODEL_PATHS.RABBIT);
 
 // ====== ANIMATION TYPES ======
 
@@ -210,8 +220,8 @@ const SingleAgent: React.FC<SingleAgentProps> = ({ agent }) => {
       {/* Robot body */}
       <primitive object={clonedScene} scale={FACTORY_CONSTANTS.AGENT.ROBOT_SCALE} />
 
-      {/* Animal head */}
-      <group ref={headGroupRef} position={[0, 1.0, 0]}>
+      {/* Animal head - positioned on top of robot, scaled up to match legacy */}
+      <group ref={headGroupRef} position={[0, 1.4, 0]} scale={3.5}>
         <AnimalHead type={agent.animalType} />
       </group>
 
@@ -469,13 +479,45 @@ export const Agents: React.FC = () => {
 
   const agentArray = useMemo(() => Array.from(agents.values()), [agents]);
 
+  // Immediate render-time logging
+  console.log('[Agents RENDER] agents size:', agents.size, 'agentArray length:', agentArray.length);
+
+  // Debug logging
+  useEffect(() => {
+    console.log('[Agents] === DEBUG START ===');
+    console.log('[Agents] Total agents:', agentArray.length);
+    console.log('[Agents] Agents map size:', agents.size);
+    agentArray.forEach((agent) => {
+      console.log(`[Agents] Agent: ${agent.id}, type: ${agent.animalType}, status: ${agent.status}, project: "${agent.projectName}", wsIndex: ${agent.workstationIndex}, zoneIndex: ${agent.zoneIndex}, pos: (${agent.basePosition.x.toFixed(1)}, ${agent.basePosition.z.toFixed(1)})`);
+    });
+    console.log('[Agents] === DEBUG END ===');
+  }, [agentArray, agents]);
+
   return (
     <group>
-      <Suspense fallback={null}>
-        {agentArray.map((agent) => (
-          <SingleAgent key={agent.id} agent={agent} />
-        ))}
-      </Suspense>
+      {agentArray.map((agent) => {
+        // Wrap each agent in its own Suspense so one agent's issue doesn't affect others
+        const AgentComponent = (() => {
+          switch (agent.animalType) {
+            case 'cow':
+              return <CowAgent agent={agent} />;
+            case 'horse':
+              return <HorseAgent agent={agent} />;
+            case 'tiger':
+              return <TigerAgent agent={agent} />;
+            case 'rabbit':
+              return <RabbitAgent agent={agent} />;
+            default:
+              return <SingleAgent agent={agent} />;
+          }
+        })();
+
+        return (
+          <Suspense key={agent.id} fallback={null}>
+            {AgentComponent}
+          </Suspense>
+        );
+      })}
     </group>
   );
 };

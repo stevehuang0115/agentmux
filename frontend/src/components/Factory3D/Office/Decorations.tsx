@@ -1,15 +1,19 @@
 /**
- * Decorations - Office decorations like plants, whiteboard, clocks.
+ * Decorations - Apple-style modern office decorations.
  *
- * Adds visual interest and realism to the factory environment.
+ * Minimalist, clean design with items properly mounted on walls.
+ * Inspired by Apple store aesthetics - white, aluminum, glass.
  */
 
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
+import { FACTORY_CONSTANTS } from '../../../types/factory.types';
 
-// ====== POTTED PLANT ======
+const { WALLS } = FACTORY_CONSTANTS;
+
+// ====== MODERN POTTED PLANT ======
 
 interface PottedPlantProps {
   position: [number, number, number];
@@ -17,42 +21,42 @@ interface PottedPlantProps {
 }
 
 /**
- * PottedPlant - Decorative plant in a pot.
+ * Modern minimalist plant in white ceramic pot - Apple store style.
  */
 const PottedPlant: React.FC<PottedPlantProps> = ({ position, size = 1 }) => {
   const { isNightMode } = useFactory();
-  const leafColor = isNightMode ? 0x1a4d1a : 0x2e8b2e;
+  const leafColor = isNightMode ? 0x2d5a2d : 0x4a9a4a;
 
   return (
     <group position={position} scale={[size, size, size]}>
-      {/* Pot */}
-      <mesh position={[0, 0.15, 0]} castShadow>
-        <cylinderGeometry args={[0.2, 0.15, 0.3, 12]} />
-        <meshStandardMaterial color={0x8b4513} roughness={0.8} />
+      {/* Modern white ceramic pot */}
+      <mesh position={[0, 0.25, 0]} castShadow>
+        <cylinderGeometry args={[0.25, 0.2, 0.5, 16]} />
+        <meshStandardMaterial color={0xf5f5f5} roughness={0.3} />
       </mesh>
 
       {/* Soil */}
-      <mesh position={[0, 0.28, 0]}>
-        <cylinderGeometry args={[0.18, 0.18, 0.05, 12]} />
+      <mesh position={[0, 0.48, 0]}>
+        <cylinderGeometry args={[0.22, 0.22, 0.05, 16]} />
         <meshStandardMaterial color={0x3d2817} roughness={0.9} />
       </mesh>
 
-      {/* Plant leaves */}
-      {[0, 60, 120, 180, 240, 300].map((angle, i) => (
+      {/* Modern fiddle leaf fig style plant */}
+      {[0, 72, 144, 216, 288].map((angle, i) => (
         <mesh
           key={i}
           position={[
-            Math.sin((angle * Math.PI) / 180) * 0.1,
-            0.4 + i * 0.05,
-            Math.cos((angle * Math.PI) / 180) * 0.1,
+            Math.sin((angle * Math.PI) / 180) * 0.15,
+            0.7 + i * 0.12,
+            Math.cos((angle * Math.PI) / 180) * 0.15,
           ]}
-          rotation={[0.3, (angle * Math.PI) / 180, 0]}
+          rotation={[0.4 + i * 0.1, (angle * Math.PI) / 180, 0]}
         >
-          <planeGeometry args={[0.15, 0.3]} />
+          <planeGeometry args={[0.25, 0.4]} />
           <meshStandardMaterial
             color={leafColor}
             side={THREE.DoubleSide}
-            roughness={0.8}
+            roughness={0.6}
           />
         </mesh>
       ))}
@@ -60,89 +64,59 @@ const PottedPlant: React.FC<PottedPlantProps> = ({ position, size = 1 }) => {
   );
 };
 
-// ====== WATER COOLER ======
+// ====== WALL-MOUNTED DISPLAY ======
 
-interface WaterCoolerProps {
+interface WallDisplayProps {
   position: [number, number, number];
+  rotation?: number;
+  width?: number;
+  height?: number;
 }
 
 /**
- * WaterCooler - Office water cooler.
+ * Modern wall-mounted display - thin aluminum frame with screen.
+ * Properly mounted flush against wall.
  */
-const WaterCooler: React.FC<WaterCoolerProps> = ({ position }) => {
+const WallDisplay: React.FC<WallDisplayProps> = ({
+  position,
+  rotation = 0,
+  width = 3,
+  height = 1.8,
+}) => {
+  const { isNightMode } = useFactory();
+
   return (
-    <group position={position}>
-      {/* Base cabinet */}
-      <mesh position={[0, 0.4, 0]} castShadow>
-        <boxGeometry args={[0.4, 0.8, 0.4]} />
-        <meshStandardMaterial color={0xdddddd} roughness={0.3} />
+    <group position={position} rotation={[0, rotation, 0]}>
+      {/* Thin aluminum frame */}
+      <mesh castShadow>
+        <boxGeometry args={[width + 0.1, height + 0.1, 0.03]} />
+        <meshStandardMaterial color={0xc0c0c0} metalness={0.8} roughness={0.2} />
       </mesh>
 
-      {/* Water tank */}
-      <mesh position={[0, 1.1, 0]}>
-        <cylinderGeometry args={[0.12, 0.12, 0.5, 16]} />
+      {/* Screen */}
+      <mesh position={[0, 0, 0.02]}>
+        <boxGeometry args={[width, height, 0.01]} />
         <meshStandardMaterial
-          color={0x88ccff}
-          transparent
-          opacity={0.6}
-          roughness={0.1}
+          color={isNightMode ? 0x1a1a2e : 0x2a2a3e}
+          emissive={isNightMode ? 0x111122 : 0x000000}
+          emissiveIntensity={0.5}
         />
       </mesh>
 
-      {/* Tap area */}
-      <mesh position={[0, 0.7, 0.18]}>
-        <boxGeometry args={[0.15, 0.08, 0.05]} />
-        <meshStandardMaterial color={0x666666} metalness={0.8} />
+      {/* Apple logo placeholder - simple circle */}
+      <mesh position={[0, 0, 0.025]}>
+        <circleGeometry args={[0.15, 32]} />
+        <meshStandardMaterial
+          color={0xffffff}
+          transparent
+          opacity={0.3}
+        />
       </mesh>
     </group>
   );
 };
 
-// ====== WHITEBOARD ======
-
-interface WhiteboardProps {
-  position: [number, number, number];
-  rotation?: number;
-}
-
-/**
- * Whiteboard - Wall-mounted whiteboard.
- */
-const Whiteboard: React.FC<WhiteboardProps> = ({ position, rotation = 0 }) => {
-  return (
-    <group position={position} rotation={[0, rotation, 0]}>
-      {/* Board */}
-      <mesh castShadow receiveShadow>
-        <boxGeometry args={[3, 1.5, 0.05]} />
-        <meshStandardMaterial color={0xf5f5f5} roughness={0.2} />
-      </mesh>
-
-      {/* Frame */}
-      <mesh position={[0, 0, -0.03]}>
-        <boxGeometry args={[3.1, 1.6, 0.02]} />
-        <meshStandardMaterial color={0x888888} metalness={0.5} />
-      </mesh>
-
-      {/* Marker tray */}
-      <mesh position={[0, -0.85, 0.1]}>
-        <boxGeometry args={[1, 0.08, 0.15]} />
-        <meshStandardMaterial color={0x666666} />
-      </mesh>
-
-      {/* Markers */}
-      {[-0.3, 0, 0.3].map((x, i) => (
-        <mesh key={i} position={[x, -0.83, 0.15]} rotation={[0, 0, Math.PI / 2]}>
-          <cylinderGeometry args={[0.02, 0.02, 0.12, 8]} />
-          <meshStandardMaterial
-            color={[0xff0000, 0x0000ff, 0x00aa00][i]}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
-};
-
-// ====== WALL CLOCK ======
+// ====== WALL CLOCK - MINIMAL DESIGN ======
 
 interface WallClockProps {
   position: [number, number, number];
@@ -150,7 +124,8 @@ interface WallClockProps {
 }
 
 /**
- * WallClock - Analog clock with animated hands.
+ * Minimal wall clock - Apple-style with clean face.
+ * Mounted flush against wall.
  */
 const WallClock: React.FC<WallClockProps> = ({ position, rotation = 0 }) => {
   const hourHandRef = useRef<THREE.Mesh>(null);
@@ -176,124 +151,156 @@ const WallClock: React.FC<WallClockProps> = ({ position, rotation = 0 }) => {
 
   return (
     <group position={position} rotation={[0, rotation, 0]}>
-      {/* Clock face */}
+      {/* Clean white face */}
       <mesh>
-        <circleGeometry args={[0.3, 32]} />
-        <meshStandardMaterial color={0xffffff} />
+        <circleGeometry args={[0.4, 64]} />
+        <meshStandardMaterial color={0xffffff} roughness={0.3} />
       </mesh>
 
-      {/* Frame */}
-      <mesh position={[0, 0, -0.02]}>
-        <ringGeometry args={[0.28, 0.32, 32]} />
-        <meshStandardMaterial color={0x333333} metalness={0.6} />
+      {/* Thin aluminum rim */}
+      <mesh position={[0, 0, -0.01]}>
+        <ringGeometry args={[0.38, 0.42, 64]} />
+        <meshStandardMaterial color={0xc0c0c0} metalness={0.8} roughness={0.2} />
       </mesh>
 
-      {/* Hour markers */}
+      {/* Minimal hour markers - just dots */}
       {Array.from({ length: 12 }, (_, i) => {
         const angle = (i * Math.PI) / 6;
+        const isMainHour = i % 3 === 0;
         return (
           <mesh
             key={i}
-            position={[Math.sin(angle) * 0.22, Math.cos(angle) * 0.22, 0.01]}
+            position={[Math.sin(angle) * 0.32, Math.cos(angle) * 0.32, 0.01]}
           >
-            <circleGeometry args={[0.02, 8]} />
+            <circleGeometry args={[isMainHour ? 0.02 : 0.01, 8]} />
             <meshStandardMaterial color={0x333333} />
           </mesh>
         );
       })}
 
       {/* Hour hand */}
-      <mesh ref={hourHandRef} position={[0, 0.06, 0.02]}>
-        <boxGeometry args={[0.02, 0.12, 0.01]} />
+      <mesh ref={hourHandRef} position={[0, 0.08, 0.02]}>
+        <boxGeometry args={[0.02, 0.16, 0.01]} />
         <meshStandardMaterial color={0x333333} />
       </mesh>
 
       {/* Minute hand */}
-      <mesh ref={minuteHandRef} position={[0, 0.08, 0.02]}>
-        <boxGeometry args={[0.015, 0.18, 0.01]} />
+      <mesh ref={minuteHandRef} position={[0, 0.12, 0.02]}>
+        <boxGeometry args={[0.015, 0.24, 0.01]} />
         <meshStandardMaterial color={0x333333} />
       </mesh>
 
-      {/* Second hand */}
-      <mesh ref={secondHandRef} position={[0, 0.1, 0.02]}>
-        <boxGeometry args={[0.008, 0.22, 0.005]} />
-        <meshStandardMaterial color={0xff0000} />
+      {/* Second hand - orange accent */}
+      <mesh ref={secondHandRef} position={[0, 0.12, 0.02]}>
+        <boxGeometry args={[0.008, 0.28, 0.005]} />
+        <meshStandardMaterial color={0xff6600} />
       </mesh>
 
-      {/* Center dot */}
+      {/* Center cap */}
       <mesh position={[0, 0, 0.03]}>
-        <circleGeometry args={[0.015, 16]} />
+        <circleGeometry args={[0.02, 16]} />
         <meshStandardMaterial color={0x333333} />
       </mesh>
     </group>
   );
 };
 
-// ====== FILING CABINET ======
+// ====== MODERN PENDANT LIGHT ======
 
-interface FilingCabinetProps {
+interface PendantLightProps {
   position: [number, number, number];
 }
 
 /**
- * FilingCabinet - Metal filing cabinet with drawers.
+ * Modern pendant light - minimal dome shape.
  */
-const FilingCabinet: React.FC<FilingCabinetProps> = ({ position }) => {
-  return (
-    <group position={position}>
-      {/* Cabinet body */}
-      <mesh position={[0, 0.6, 0]} castShadow>
-        <boxGeometry args={[0.5, 1.2, 0.6]} />
-        <meshStandardMaterial color={0x666666} metalness={0.5} roughness={0.4} />
-      </mesh>
-
-      {/* Drawer faces */}
-      {[0.2, 0.6, 1.0].map((y, i) => (
-        <group key={i}>
-          <mesh position={[0, y, 0.31]}>
-            <boxGeometry args={[0.45, 0.35, 0.02]} />
-            <meshStandardMaterial color={0x555555} metalness={0.6} />
-          </mesh>
-          {/* Handle */}
-          <mesh position={[0, y, 0.33]}>
-            <boxGeometry args={[0.15, 0.02, 0.02]} />
-            <meshStandardMaterial color={0x888888} metalness={0.8} />
-          </mesh>
-        </group>
-      ))}
-    </group>
-  );
-};
-
-// ====== CEILING LIGHT FIXTURE ======
-
-interface CeilingLightProps {
-  position: [number, number, number];
-}
-
-/**
- * CeilingLight - Overhead fluorescent light fixture.
- */
-const CeilingLight: React.FC<CeilingLightProps> = ({ position }) => {
+const PendantLight: React.FC<PendantLightProps> = ({ position }) => {
   const { isNightMode } = useFactory();
 
   return (
     <group position={position}>
-      {/* Fixture housing */}
-      <mesh>
-        <boxGeometry args={[1.5, 0.1, 0.5]} />
-        <meshStandardMaterial color={0xdddddd} roughness={0.3} />
+      {/* Cord */}
+      <mesh position={[0, 0.5, 0]}>
+        <cylinderGeometry args={[0.02, 0.02, 1, 8]} />
+        <meshStandardMaterial color={0x333333} />
       </mesh>
 
-      {/* Light panel */}
-      <mesh position={[0, -0.06, 0]}>
-        <boxGeometry args={[1.4, 0.02, 0.4]} />
+      {/* Dome shade - white aluminum */}
+      <mesh rotation={[Math.PI, 0, 0]}>
+        <coneGeometry args={[0.4, 0.25, 32, 1, true]} />
         <meshStandardMaterial
-          color={0xffffee}
-          emissive={0xffffee}
-          emissiveIntensity={isNightMode ? 0.8 : 0.2}
+          color={0xf5f5f5}
+          side={THREE.DoubleSide}
+          roughness={0.3}
         />
       </mesh>
+
+      {/* Light bulb glow */}
+      <mesh position={[0, -0.1, 0]}>
+        <sphereGeometry args={[0.08, 16, 16]} />
+        <meshStandardMaterial
+          color={0xffffee}
+          emissive={0xffffcc}
+          emissiveIntensity={isNightMode ? 2 : 0.5}
+        />
+      </mesh>
+    </group>
+  );
+};
+
+// ====== MODERN FLOOR LAMP ======
+
+interface FloorLampProps {
+  position: [number, number, number];
+}
+
+/**
+ * Modern arc floor lamp - Apple store style.
+ */
+const FloorLamp: React.FC<FloorLampProps> = ({ position }) => {
+  const { isNightMode } = useFactory();
+
+  return (
+    <group position={position}>
+      {/* Heavy base */}
+      <mesh position={[0, 0.05, 0]} castShadow>
+        <cylinderGeometry args={[0.3, 0.35, 0.1, 32]} />
+        <meshStandardMaterial color={0xc0c0c0} metalness={0.8} roughness={0.2} />
+      </mesh>
+
+      {/* Vertical pole */}
+      <mesh position={[0, 1.0, 0]} castShadow>
+        <cylinderGeometry args={[0.025, 0.025, 1.9, 16]} />
+        <meshStandardMaterial color={0xc0c0c0} metalness={0.8} roughness={0.2} />
+      </mesh>
+
+      {/* Curved arc section */}
+      <mesh position={[0.3, 1.9, 0]} rotation={[0, 0, Math.PI / 6]} castShadow>
+        <cylinderGeometry args={[0.025, 0.025, 0.8, 16]} />
+        <meshStandardMaterial color={0xc0c0c0} metalness={0.8} roughness={0.2} />
+      </mesh>
+
+      {/* Dome shade */}
+      <group position={[0.6, 1.7, 0]}>
+        <mesh rotation={[Math.PI, 0, 0]}>
+          <coneGeometry args={[0.25, 0.15, 32, 1, true]} />
+          <meshStandardMaterial
+            color={0xf5f5f5}
+            side={THREE.DoubleSide}
+            roughness={0.3}
+          />
+        </mesh>
+
+        {/* Light glow */}
+        <mesh position={[0, -0.05, 0]}>
+          <sphereGeometry args={[0.06, 16, 16]} />
+          <meshStandardMaterial
+            color={0xffffee}
+            emissive={0xffffcc}
+            emissiveIntensity={isNightMode ? 1.5 : 0.3}
+          />
+        </mesh>
+      </group>
     </group>
   );
 };
@@ -301,66 +308,84 @@ const CeilingLight: React.FC<CeilingLightProps> = ({ position }) => {
 // ====== DECORATIONS ======
 
 /**
- * Decorations - All office decorations.
+ * Decorations - Apple-style modern office decorations.
  *
- * Places plants, water coolers, whiteboards, clocks,
- * filing cabinets, and ceiling lights throughout the office.
+ * All items properly placed - plants on floor near walls,
+ * displays and clocks mounted on walls, pendant lights from ceiling.
  *
  * @returns JSX element with all decorations
  */
 export const Decorations: React.FC = () => {
-  // Plant positions
+  const wallHeight = WALLS.HEIGHT;
+
+  // Plant positions - against walls, on floor
   const plantPositions = useMemo<[number, number, number, number][]>(() => [
-    [-22, 0, -15, 1.2],
-    [22, 0, -15, 1.0],
-    [-22, 0, 5, 0.9],
-    [22, 0, 5, 1.1],
-    [-22, 0, 15, 1.0],
-    [22, 0, 15, 1.2],
+    // Along back wall
+    [WALLS.BACK_X + 2, 0, WALLS.LEFT_Z + 3, 1.5],
+    [WALLS.FRONT_X - 2, 0, WALLS.LEFT_Z + 3, 1.3],
+    // Along side walls
+    [WALLS.BACK_X + 2, 0, 0, 1.4],
+    [WALLS.FRONT_X - 2, 0, 0, 1.2],
+    // Near entrance
+    [WALLS.BACK_X + 2, 0, WALLS.RIGHT_Z - 3, 1.5],
+    [WALLS.FRONT_X - 2, 0, WALLS.RIGHT_Z - 3, 1.3],
   ], []);
 
-  // Ceiling light positions
-  const ceilingLightPositions = useMemo<[number, number, number][]>(() => [
-    [-14, 3.9, 8],
-    [0, 3.9, 8],
-    [14, 3.9, 8],
-    [-14, 3.9, -2],
-    [0, 3.9, -2],
-    [14, 3.9, -2],
-    [-14, 3.9, -12],
-    [0, 3.9, -12],
-    [14, 3.9, -12],
+  // Pendant light positions - hanging from ceiling
+  const pendantPositions = useMemo<[number, number, number][]>(() => [
+    // Grid of pendant lights across the space
+    [-14, wallHeight - 1, 8],
+    [0, wallHeight - 1, 8],
+    [14, wallHeight - 1, 8],
+    [-14, wallHeight - 1, -4],
+    [0, wallHeight - 1, -4],
+    [14, wallHeight - 1, -4],
+    [-14, wallHeight - 1, -16],
+    [0, wallHeight - 1, -16],
+    [14, wallHeight - 1, -16],
+  ], [wallHeight]);
+
+  // Floor lamp positions - near corners and seating areas
+  const floorLampPositions = useMemo<[number, number, number][]>(() => [
+    [WALLS.BACK_X + 4, 0, WALLS.LEFT_Z + 5],
+    [WALLS.FRONT_X - 4, 0, WALLS.LEFT_Z + 5],
+    [WALLS.BACK_X + 4, 0, 12],
+    [WALLS.FRONT_X - 4, 0, 12],
   ], []);
 
   return (
     <group>
-      {/* Potted plants */}
+      {/* Modern potted plants */}
       {plantPositions.map(([x, y, z, size], i) => (
         <PottedPlant key={`plant-${i}`} position={[x, y, z]} size={size} />
       ))}
 
-      {/* Water coolers */}
-      <WaterCooler position={[-23, 0, 0]} />
-      <WaterCooler position={[23, 0, 0]} />
+      {/* Wall displays - mounted on back wall */}
+      <WallDisplay
+        position={[0, wallHeight / 2, WALLS.LEFT_Z + 0.2]}
+        rotation={0}
+        width={4}
+        height={2.5}
+      />
 
-      {/* Whiteboards on walls */}
-      <Whiteboard position={[0, 2.5, -17.7]} rotation={0} />
-      <Whiteboard position={[-25.7, 2.5, -5]} rotation={Math.PI / 2} />
-      <Whiteboard position={[25.7, 2.5, 5]} rotation={-Math.PI / 2} />
+      {/* Wall clocks - mounted on side walls */}
+      <WallClock
+        position={[WALLS.BACK_X + 0.2, wallHeight * 0.6, 8]}
+        rotation={Math.PI / 2}
+      />
+      <WallClock
+        position={[WALLS.FRONT_X - 0.2, wallHeight * 0.6, -8]}
+        rotation={-Math.PI / 2}
+      />
 
-      {/* Wall clocks */}
-      <WallClock position={[-25.7, 3, 10]} rotation={Math.PI / 2} />
-      <WallClock position={[25.7, 3, -10]} rotation={-Math.PI / 2} />
+      {/* Pendant lights from ceiling */}
+      {pendantPositions.map((pos, i) => (
+        <PendantLight key={`pendant-${i}`} position={pos} />
+      ))}
 
-      {/* Filing cabinets */}
-      <FilingCabinet position={[-23, 0, -10]} />
-      <FilingCabinet position={[23, 0, -10]} />
-      <FilingCabinet position={[-23, 0, 10]} />
-      <FilingCabinet position={[23, 0, 10]} />
-
-      {/* Ceiling lights */}
-      {ceilingLightPositions.map((pos, i) => (
-        <CeilingLight key={`light-${i}`} position={pos} />
+      {/* Modern floor lamps */}
+      {floorLampPositions.map((pos, i) => (
+        <FloorLamp key={`lamp-${i}`} position={pos} />
       ))}
     </group>
   );

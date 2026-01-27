@@ -6,7 +6,7 @@
 
 import React, { useMemo } from 'react';
 import { useFactory } from '../../../contexts/FactoryContext';
-import { ZONE_COLORS } from '../../../types/factory.types';
+import { ZONE_COLORS, BossModeType } from '../../../types/factory.types';
 
 /**
  * ProjectButtons - Project navigation buttons.
@@ -26,6 +26,10 @@ export const ProjectButtons: React.FC = () => {
     setCameraTarget,
     bossModeState,
     toggleBossMode,
+    setBossModeType,
+    bossNextTarget,
+    bossPrevTarget,
+    getCurrentTargetName,
   } = useFactory();
 
   // Build button data
@@ -41,58 +45,128 @@ export const ProjectButtons: React.FC = () => {
   }, [projects, zones]);
 
   return (
-    <div className="absolute top-4 right-4 flex flex-col gap-2">
-      {/* Overview button */}
-      <button
-        onClick={() => setCameraTarget('overview')}
-        className="px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-sm font-medium text-text-primary"
-      >
-        Overview
-      </button>
+    <div className="absolute top-4 right-4 flex flex-col gap-2 max-w-[180px]">
+      {/* Camera Controls Section */}
+      <div className="bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark p-2 shadow-lg">
+        <div className="grid grid-cols-2 gap-1.5">
+          {/* Overview button */}
+          <button
+            onClick={() => setCameraTarget('overview')}
+            className="px-2 py-1.5 bg-surface-dark hover:bg-primary/20 rounded border border-transparent hover:border-primary/50 transition-all text-xs font-medium text-text-primary"
+          >
+            Overview
+          </button>
 
-      {/* Bird's Eye view button */}
-      <button
-        onClick={() => setCameraTarget('birdseye')}
-        className="px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-sm font-medium text-text-primary"
-      >
-        Bird's Eye
-      </button>
+          {/* Bird's Eye view button */}
+          <button
+            onClick={() => setCameraTarget('birdseye')}
+            className="px-2 py-1.5 bg-surface-dark hover:bg-primary/20 rounded border border-transparent hover:border-primary/50 transition-all text-xs font-medium text-text-primary"
+          >
+            Bird's Eye
+          </button>
 
-      {/* Outdoor view button */}
-      <button
-        onClick={() => setCameraTarget('outdoor')}
-        className="px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-sm font-medium text-text-primary"
-      >
-        Outdoor
-      </button>
+          {/* Outdoor view button */}
+          <button
+            onClick={() => setCameraTarget('outdoor')}
+            className="px-2 py-1.5 bg-surface-dark hover:bg-primary/20 rounded border border-transparent hover:border-primary/50 transition-all text-xs font-medium text-text-primary"
+          >
+            Outdoor
+          </button>
 
-      {/* Boss mode toggle */}
-      <button
-        onClick={toggleBossMode}
-        className={`px-3 py-2 rounded-lg border transition-all text-sm font-medium ${
-          bossModeState.isActive
-            ? 'bg-primary/20 border-primary text-primary'
-            : 'bg-surface-dark/90 backdrop-blur-sm border-border-dark hover:border-primary/50 text-text-muted'
-        }`}
-      >
-        {bossModeState.isActive ? 'Stop Tour' : 'Boss Mode'}
-      </button>
+          {/* Upper floor test button */}
+          <button
+            onClick={() => setCameraTarget('upperfloor')}
+            className="px-2 py-1.5 bg-surface-dark hover:bg-yellow-500/20 rounded border border-transparent hover:border-yellow-500/50 transition-all text-xs font-medium text-text-primary"
+          >
+            Upper Floor
+          </button>
 
-      {/* Divider */}
-      {buttons.length > 0 && (
-        <div className="border-t border-border-dark my-1" />
+          {/* Boss mode toggle */}
+          <button
+            onClick={toggleBossMode}
+            className={`px-2 py-1.5 rounded border transition-all text-xs font-medium ${
+              bossModeState.isActive
+                ? 'bg-primary/30 border-primary text-primary'
+                : 'bg-surface-dark hover:bg-primary/20 border-transparent hover:border-primary/50 text-text-muted'
+            }`}
+          >
+            {bossModeState.isActive ? 'Stop' : 'Boss Mode'}
+          </button>
+        </div>
+      </div>
+
+      {/* Boss Mode Controls - shown when active */}
+      {bossModeState.isActive && (
+        <div className="bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-primary/50 p-2 shadow-lg">
+          {/* Current target name */}
+          <div className="text-center mb-2 px-2">
+            <span className="text-[10px] text-text-muted uppercase tracking-wide">Viewing</span>
+            <div className="text-sm font-medium text-primary truncate">
+              {getCurrentTargetName() || 'Loading...'}
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {bossModeState.currentTargetIndex + 1} / {bossModeState.targets.length}
+            </div>
+          </div>
+
+          {/* Auto/Manual toggle */}
+          <div className="flex gap-1 mb-2">
+            <button
+              onClick={() => setBossModeType('auto')}
+              className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-all ${
+                bossModeState.mode === 'auto'
+                  ? 'bg-primary text-white'
+                  : 'bg-surface-dark hover:bg-primary/20 text-text-muted'
+              }`}
+            >
+              Auto
+            </button>
+            <button
+              onClick={() => setBossModeType('manual')}
+              className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-all ${
+                bossModeState.mode === 'manual'
+                  ? 'bg-primary text-white'
+                  : 'bg-surface-dark hover:bg-primary/20 text-text-muted'
+              }`}
+            >
+              Manual
+            </button>
+          </div>
+
+          {/* Navigation buttons */}
+          <div className="flex gap-1">
+            <button
+              onClick={bossPrevTarget}
+              className="flex-1 px-3 py-1.5 bg-surface-dark hover:bg-primary/20 rounded border border-transparent hover:border-primary/50 transition-all text-xs font-medium text-text-primary"
+            >
+              ← Prev
+            </button>
+            <button
+              onClick={bossNextTarget}
+              className="flex-1 px-3 py-1.5 bg-surface-dark hover:bg-primary/20 rounded border border-transparent hover:border-primary/50 transition-all text-xs font-medium text-text-primary"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
       )}
 
-      {/* Project buttons */}
-      {buttons.map((btn) => (
-        <ProjectButton
-          key={btn.projectName}
-          projectName={btn.projectName}
-          color={btn.color}
-          agentCount={btn.agentCount}
-          onClick={() => setCameraTarget(btn.projectName)}
-        />
-      ))}
+      {/* Project Buttons Section - scrollable */}
+      {buttons.length > 0 && (
+        <div className="bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark shadow-lg overflow-hidden">
+          <div className="max-h-[280px] overflow-y-auto scrollbar-thin scrollbar-thumb-border-dark scrollbar-track-transparent p-1.5 space-y-1">
+            {buttons.map((btn) => (
+              <ProjectButton
+                key={btn.projectName}
+                projectName={btn.projectName}
+                color={btn.color}
+                agentCount={btn.agentCount}
+                onClick={() => setCameraTarget(btn.projectName)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -118,30 +192,30 @@ const ProjectButton: React.FC<ProjectButtonProps> = ({
 
   // Truncate long names
   const displayName =
-    projectName.length > 15
-      ? projectName.substring(0, 14) + '...'
+    projectName.length > 12
+      ? projectName.substring(0, 11) + '…'
       : projectName;
 
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-2 px-3 py-2 bg-surface-dark/90 backdrop-blur-sm rounded-lg border border-border-dark hover:border-primary/50 hover:bg-surface-dark transition-all text-left"
+      className="flex items-center gap-2 px-2 py-1.5 w-full bg-transparent hover:bg-primary/10 rounded border border-transparent hover:border-primary/30 transition-all text-left"
       title={projectName}
     >
       {/* Color indicator */}
       <div
-        className="w-3 h-3 rounded-full flex-shrink-0"
+        className="w-2.5 h-2.5 rounded-full flex-shrink-0"
         style={{ backgroundColor: cssColor }}
       />
 
       {/* Project name */}
-      <span className="text-sm text-text-primary flex-1 truncate">
+      <span className="text-xs text-text-primary flex-1 truncate">
         {displayName}
       </span>
 
       {/* Agent count badge */}
       {agentCount > 0 && (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-primary/20 text-primary">
+        <span className="text-[10px] px-1 py-0.5 rounded bg-primary/20 text-primary font-medium">
           {agentCount}
         </span>
       )}
