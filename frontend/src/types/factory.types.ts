@@ -57,8 +57,10 @@ export interface FactoryAgent {
   animalType: AnimalType;
   /** Current interaction zone activity if in break area */
   interactionState?: AgentInteractionState;
-  /** Base 3D position */
+  /** Base 3D position (workstation) */
   basePosition: THREE.Vector3;
+  /** Current 3D position (updated as agent moves) */
+  currentPosition?: THREE.Vector3;
   /** Agent's tmux session name */
   sessionName?: string;
   /** Agent display name */

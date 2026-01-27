@@ -224,7 +224,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   useAgentAnimation(agent, actions, config.animationConfig);
 
   // Get workstation and idle destination state from context
-  const { zones, getIdleActivity, isStagePerformer, getCouchPositionIndex } = useFactory();
+  const { zones, getIdleActivity, isStagePerformer, getCouchPositionIndex, updateAgentPosition } = useFactory();
 
   // Get this agent's idle activity destination
   const idleActivity = getIdleActivity(agent.id);
@@ -415,6 +415,9 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       groupRef.current.position.y = AGENT_Y_OFFSET;
       groupRef.current.position.z = walkState.currentPos.z;
     }
+
+    // Report current position to context for boss mode tracking
+    updateAgentPosition(agent.id, groupRef.current.position);
   });
 
   return (

@@ -102,6 +102,8 @@ interface FactoryContextType {
   isStagePerformer: (agentId: string) => boolean;
   /** Get couch position index for an agent (-1 if not on couch) */
   getCouchPositionIndex: (agentId: string) => number;
+  /** Update an agent's current position (called by agent components) */
+  updateAgentPosition: (agentId: string, position: THREE.Vector3) => void;
 }
 
 // ====== CONTEXT ======
@@ -402,16 +404,17 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const generateBossModeTargets = useCallback((): BossModeTarget[] => {
     const targets: BossModeTarget[] = [];
 
-    // Add all agents as targets
+    // Add all agents as targets - use currentPosition if available, fallback to basePosition
     agents.forEach((agent) => {
+      const pos = agent.currentPosition || agent.basePosition;
       targets.push({
         id: agent.id,
         name: agent.name || agent.sessionName || agent.id,
         type: 'agent',
         position: {
-          x: agent.basePosition.x,
-          y: agent.basePosition.y,
-          z: agent.basePosition.z,
+          x: pos.x,
+          y: pos.y,
+          z: pos.z,
         },
       });
     });
@@ -569,6 +572,32 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const getCouchPositionIndex = useCallback((agentId: string): number => {
     return idleDestinations.couchAgentIds.indexOf(agentId);
   }, [idleDestinations.couchAgentIds]);
+
+  /**
+   * Update an agent's current position (called by agent components during animation)
+   */
+  const updateAgentPosition = useCallback((agentId: string, position: THREE.Vector3) => {
+    setAgents((prev) => {
+      const agent = prev.get(agentId);
+      if (!agent) return prev;
+
+      // Only update if position has changed significantly (avoid unnecessary updates)
+      const currentPos = agent.currentPosition;
+      if (currentPos &&
+          Math.abs(currentPos.x - position.x) < 0.01 &&
+          Math.abs(currentPos.y - position.y) < 0.01 &&
+          Math.abs(currentPos.z - position.z) < 0.01) {
+        return prev;
+      }
+
+      const newAgents = new Map(prev);
+      newAgents.set(agentId, {
+        ...agent,
+        currentPosition: position.clone(),
+      });
+      return newAgents;
+    });
+  }, []);
 
   // Initial data fetch
   useEffect(() => {
@@ -772,6 +801,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       getIdleActivity,
       isStagePerformer,
       getCouchPositionIndex,
+      updateAgentPosition,
     }),
     [
       agents,
@@ -796,6 +826,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       getIdleActivity,
       isStagePerformer,
       getCouchPositionIndex,
+      updateAgentPosition,
     ]
   );
 
