@@ -474,6 +474,10 @@ export const FACTORY_CONSTANTS = {
       { x: 2, z: 0, rotation: -Math.PI / 2 },
     ],
   },
+  /** Mini kitchen with snacks/food - left corridor, between lounge (couches) and break room (circle table) */
+  KITCHEN: {
+    POSITION: { x: -27, y: 0, z: 3 },  // By the window, left wall corridor between lounge and break room
+  },
   /** Animation timing */
   ANIMATION: {
     FOCUS_DURATION: 1500,

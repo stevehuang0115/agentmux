@@ -11,16 +11,23 @@
  * base component with their specific configurations.
  */
 
-import React, { useRef, useEffect, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useRef, useEffect, useMemo, useCallback } from 'react';
+import { useFrame, ThreeEvent } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 import { useFactory } from '../../../contexts/FactoryContext';
 import { FactoryAgent, FACTORY_CONSTANTS } from '../../../types/factory.types';
 import { SpeechBubble } from './SpeechBubble';
+import { ThinkingBubble, AGENT_THOUGHTS } from './ThinkingBubble';
 import { ZzzIndicator } from './ZzzIndicator';
 import { useAgentAnimation, AnimationConfig } from './useAgentAnimation';
+import {
+  STATIC_OBSTACLES,
+  isInsideObstacle,
+  clampToWalls,
+  isPositionClear,
+} from '../../../utils/factoryCollision';
 
 /**
  * Configuration for a specific agent type
@@ -48,11 +55,11 @@ export interface AgentConfig {
   wanderMaxZ?: number;
 }
 
-/** Default wander area configuration */
+/** Default wander area configuration - wide area across the factory floor */
 const DEFAULT_WANDER = {
-  radiusX: 3.0,
-  minZ: 2.5,
-  maxZ: 5.0,
+  radiusX: 12.0,
+  minZ: -3.0,
+  maxZ: 8.0,
 };
 
 /**
@@ -156,6 +163,9 @@ function calculateMovement(
 
 // Y offset - Mixamo models have origin at feet level, so no offset needed
 const AGENT_Y_OFFSET = 0;
+
+// Y offset when sitting on couch - raise agent to sit on top of couch
+const COUCH_SEAT_HEIGHT = 0.35;
 
 // Fixed scale: All Mixamo models are 2.0 units, target is 4.0 units
 const MODEL_SCALE = 2.0;
@@ -286,10 +296,16 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     return clone;
   }, [gltf.scene, agent.id]);
 
-  // Remove ALL position tracks from animations to disable root motion
+  // Remove root motion (Hips position track) from animations
+  // Only the root bone's position track is removed to prevent world-space drift;
+  // other bones' position tracks are preserved for correct skeletal animation.
   const processedAnimations = useMemo(() => {
     return gltf.animations.map((clip) => {
-      const tracks = clip.tracks.filter((track) => !track.name.endsWith('.position'));
+      const tracks = clip.tracks.filter((track) => {
+        const isRootPositionTrack =
+          track.name.includes('Hips') && track.name.endsWith('.position');
+        return !isRootPositionTrack;
+      });
       return new THREE.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
     });
   }, [gltf.animations]);
@@ -301,17 +317,40 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   useAgentAnimation(agent, actions, config.animationConfig);
 
   // Get workstation and idle destination state from context
-  const { zones, getIdleActivity, isStagePerformer, getCouchPositionIndex, updateAgentPosition } = useFactory();
+  const {
+    zones,
+    getIdleActivity,
+    isStagePerformer,
+    getCouchPositionIndex,
+    getBreakRoomSeatIndex,
+    getPokerSeatIndex,
+    getKitchenSeatIndex,
+    updateAgentPosition,
+    hoveredEntityId,
+    selectedEntityId,
+    setHoveredEntity,
+    selectEntity,
+    entityConversations,
+  } = useFactory();
+
+  const isHovered = hoveredEntityId === agent.id;
+  const isSelected = selectedEntityId === agent.id;
 
   // Get this agent's idle activity destination
   const idleActivity = getIdleActivity(agent.id);
   const isOnStage = isStagePerformer(agent.id);
   const couchIndex = getCouchPositionIndex(agent.id);
+  const breakRoomSeatIndex = getBreakRoomSeatIndex(agent.id);
+  const pokerSeatIndex = getPokerSeatIndex(agent.id);
+  const kitchenSeatIndex = getKitchenSeatIndex(agent.id);
 
-  // Get stage and lounge positions from constants
+  // Get zone positions from constants
   const stagePos = FACTORY_CONSTANTS.STAGE.POSITION;
   const loungePos = FACTORY_CONSTANTS.LOUNGE.POSITION;
   const couchPositions = FACTORY_CONSTANTS.LOUNGE.COUCH_POSITIONS;
+  const breakRoomPos = FACTORY_CONSTANTS.BREAK_ROOM.POSITION;
+  const pokerTablePos = FACTORY_CONSTANTS.POKER_TABLE.POSITION;
+  const kitchenPos = FACTORY_CONSTANTS.KITCHEN.POSITION;
 
   const zone = useMemo(() => zones.get(agent.projectName), [zones, agent.projectName]);
 
@@ -330,6 +369,29 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     });
     return positions;
   }, [zones]);
+
+  // Pointer event handlers
+  const handlePointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHoveredEntity(agent.id);
+    document.body.style.cursor = 'pointer';
+  }, [agent.id, setHoveredEntity]);
+
+  const handlePointerOut = useCallback(() => {
+    setHoveredEntity(null);
+    document.body.style.cursor = 'default';
+  }, [setHoveredEntity]);
+
+  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    selectEntity(agent.id);
+  }, [agent.id, selectEntity]);
+
+  // Circle indicator color based on hover/select state
+  const circleColor = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x4488ff;
+  const circleOpacity = isSelected ? 1.0 : isHovered ? 0.9 : 0.6;
+  const circleEmissive = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x000000;
+  const circleEmissiveIntensity = isSelected ? 0.8 : isHovered ? 0.5 : 0;
 
   // Cleanup on unmount
   useEffect(() => {
@@ -356,6 +418,13 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     const walkState = walkingStateRef.current;
     const isActuallyWorking = agent.status === 'active';
     const isIdle = agent.status === 'idle';
+
+    // Pause on hover - freeze movement and play idle animation
+    if (isHovered) {
+      transitionToAnimation(actions, 'Breathing idle', walkState, 0.3, 0.3);
+      updateAgentPosition(agent.id, groupRef.current.position);
+      return;
+    }
 
     // Handle stage performance when idle
     if (isIdle && idleActivity === 'stage' && isOnStage) {
@@ -414,11 +483,13 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         const targetRotation = Math.atan2(dx, dz);
         groupRef.current.rotation.y +=
           (targetRotation - groupRef.current.rotation.y) * Math.min(1, delta * 5);
+        // Walking to couch - stay on ground
+        groupRef.current.position.y = AGENT_Y_OFFSET;
       } else {
         groupRef.current.rotation.y = couch.rotation;
+        // Sitting on couch - raise to seat height
+        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
       }
-
-      groupRef.current.position.y = AGENT_Y_OFFSET;
 
       if (distance < 0.5) {
         transitionToAnimation(actions, config.sitAnimation, walkState);
@@ -426,7 +497,102 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       return;
     }
 
-    // Sync position when returning from stage/couch
+    // Handle break room visit when idle
+    if (isIdle && idleActivity === 'break_room' && breakRoomSeatIndex >= 0) {
+      walkState.wasOnStage = true;
+      // 4 seats at angles 0, 90, 180, 270 around center, distance 1.3
+      const seatAngle = (breakRoomSeatIndex * Math.PI) / 2;
+      const targetX = breakRoomPos.x + Math.sin(seatAngle) * 1.3;
+      const targetZ = breakRoomPos.z + Math.cos(seatAngle) * 1.3;
+      const brDx = targetX - groupRef.current.position.x;
+      const brDz = targetZ - groupRef.current.position.z;
+      const brDist = Math.sqrt(brDx * brDx + brDz * brDz);
+
+      if (brDist > 0.5) {
+        const shouldRun = brDist > config.runThreshold;
+        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
+        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
+        const moveAmount = Math.min(speed * delta, brDist);
+        groupRef.current.position.x += (brDx / brDist) * moveAmount;
+        groupRef.current.position.z += (brDz / brDist) * moveAmount;
+        rotateTowards(groupRef.current, Math.atan2(brDx, brDz), delta, 5);
+        groupRef.current.position.y = AGENT_Y_OFFSET;
+      } else {
+        const faceAngle = Math.atan2(breakRoomPos.x - targetX, breakRoomPos.z - targetZ);
+        rotateTowards(groupRef.current, faceAngle, delta, 3);
+        transitionToAnimation(actions, config.sitAnimation, walkState);
+        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
+      }
+      updateAgentPosition(agent.id, groupRef.current.position);
+      return;
+    }
+
+    // Handle poker table visit when idle
+    if (isIdle && idleActivity === 'poker_table' && pokerSeatIndex >= 0) {
+      walkState.wasOnStage = true;
+      // 4 seats at angles 0, 90, 180, 270 around center, distance 1.8
+      const seatAngle = (pokerSeatIndex * Math.PI) / 2;
+      const targetX = pokerTablePos.x + Math.sin(seatAngle) * 1.8;
+      const targetZ = pokerTablePos.z + Math.cos(seatAngle) * 1.8;
+      const ptDx = targetX - groupRef.current.position.x;
+      const ptDz = targetZ - groupRef.current.position.z;
+      const ptDist = Math.sqrt(ptDx * ptDx + ptDz * ptDz);
+
+      if (ptDist > 0.5) {
+        const shouldRun = ptDist > config.runThreshold;
+        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
+        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
+        const moveAmount = Math.min(speed * delta, ptDist);
+        groupRef.current.position.x += (ptDx / ptDist) * moveAmount;
+        groupRef.current.position.z += (ptDz / ptDist) * moveAmount;
+        rotateTowards(groupRef.current, Math.atan2(ptDx, ptDz), delta, 5);
+        groupRef.current.position.y = AGENT_Y_OFFSET;
+      } else {
+        const faceAngle = Math.atan2(pokerTablePos.x - targetX, pokerTablePos.z - targetZ);
+        rotateTowards(groupRef.current, faceAngle, delta, 3);
+        transitionToAnimation(actions, config.sitAnimation, walkState);
+        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
+      }
+      updateAgentPosition(agent.id, groupRef.current.position);
+      return;
+    }
+
+    // Handle kitchen visit when idle
+    if (isIdle && idleActivity === 'kitchen' && kitchenSeatIndex >= 0) {
+      walkState.wasOnStage = true;
+      // 5 bar stool positions: 3 front (z+1.8), 2 back (z-1.8)
+      const kitchenSeats = [
+        { x: -1, z: 1.8, rot: Math.PI },
+        { x: 0, z: 1.8, rot: Math.PI },
+        { x: 1, z: 1.8, rot: Math.PI },
+        { x: -0.5, z: -1.8, rot: 0 },
+        { x: 0.5, z: -1.8, rot: 0 },
+      ];
+      const seat = kitchenSeats[kitchenSeatIndex % kitchenSeats.length];
+      const targetX = kitchenPos.x + seat.x;
+      const targetZ = kitchenPos.z + seat.z;
+      const kDx = targetX - groupRef.current.position.x;
+      const kDz = targetZ - groupRef.current.position.z;
+      const kDist = Math.sqrt(kDx * kDx + kDz * kDz);
+
+      if (kDist > 0.5) {
+        const shouldRun = kDist > config.runThreshold;
+        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
+        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
+        const moveAmount = Math.min(speed * delta, kDist);
+        groupRef.current.position.x += (kDx / kDist) * moveAmount;
+        groupRef.current.position.z += (kDz / kDist) * moveAmount;
+        rotateTowards(groupRef.current, Math.atan2(kDx, kDz), delta, 5);
+      } else {
+        rotateTowards(groupRef.current, seat.rot, delta, 3);
+        transitionToAnimation(actions, 'Breathing idle', walkState);
+      }
+      groupRef.current.position.y = AGENT_Y_OFFSET;
+      updateAgentPosition(agent.id, groupRef.current.position);
+      return;
+    }
+
+    // Sync position when returning from stage/couch/zone
     if (walkState.wasOnStage) {
       walkState.currentPos.x = groupRef.current.position.x;
       walkState.currentPos.z = groupRef.current.position.z;
@@ -447,8 +613,15 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       walkState.currentPos.x = groupRef.current.position.x;
       walkState.currentPos.z = groupRef.current.position.z;
 
-      // Play working animation
-      transitionToAnimation(actions, config.animationConfig.working, walkState);
+      // Force typing animation - check if the action is actually running
+      // (useAgentAnimation hook may override it, so we re-apply every frame if needed)
+      const typingAnim = config.animationConfig.working;
+      const typingAction = actions?.[typingAnim];
+      if (typingAction && !typingAction.isRunning()) {
+        Object.values(actions!).forEach((action) => action?.fadeOut(0.3));
+        typingAction.reset().fadeIn(0.3).play();
+      }
+      walkState.currentAnim = typingAnim;
       return;
     }
 
@@ -460,11 +633,19 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       const ownWsX = workstation.position.x;
       const ownWsZ = workstation.position.z;
 
-      // Helper to generate unblocked random target
+      // Helper to generate unblocked random target (checks workstations, static obstacles, and walls)
       const generateUnblockedTarget = () => {
-        const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
-        const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
-        return getUnblockedTarget(rawX, rawZ, walkState.currentPos.x, walkState.currentPos.z, ownWsX, ownWsZ, allWorkstations);
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
+          const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+          const candidate = getUnblockedTarget(rawX, rawZ, walkState.currentPos.x, walkState.currentPos.z, ownWsX, ownWsZ, allWorkstations);
+          // Also check against static obstacles (conveyor belt) and walls
+          if (isPositionClear(candidate.x, candidate.z, STATIC_OBSTACLES)) {
+            return candidate;
+          }
+        }
+        // Fallback: stay near own workstation
+        return { x: ownWsX, z: wanderMinZ };
       };
 
       if (!walkState.initialized) {
@@ -499,8 +680,13 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         const nextX = walkState.currentPos.x + (dx / distance) * moveAmount;
         const nextZ = walkState.currentPos.z + (dz / distance) * moveAmount;
 
-        // Check if next position would be blocked
-        if (!isBlockedByWorkstation(nextX, nextZ, ownWsX, ownWsZ, allWorkstations)) {
+        // Check if next position would be blocked by workstations, conveyor belt, or walls
+        const blockedByWs = isBlockedByWorkstation(nextX, nextZ, ownWsX, ownWsZ, allWorkstations);
+        const blockedByObstacle = isInsideObstacle(nextX, nextZ, STATIC_OBSTACLES);
+        const clamped = clampToWalls(nextX, nextZ);
+        const outsideWalls = Math.abs(clamped.x - nextX) > 0.01 || Math.abs(clamped.z - nextZ) > 0.01;
+
+        if (!blockedByWs && !blockedByObstacle && !outsideWalls) {
           walkState.currentPos.x = nextX;
           walkState.currentPos.z = nextZ;
         } else {
@@ -534,19 +720,47 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       ref={groupRef}
       position={[agent.basePosition.x, AGENT_Y_OFFSET, agent.basePosition.z]}
       rotation={[0, Math.PI, 0]}
+      onPointerOver={handlePointerOver}
+      onPointerOut={handlePointerOut}
+      onClick={handleClick}
     >
-      {/* Blue circle indicator under agent */}
+      {/* Circle indicator under agent - glows on hover/select */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -AGENT_Y_OFFSET + 0.1, 0]}>
-        <circleGeometry args={[1.2, 32]} />
-        <meshStandardMaterial color={0x4488ff} transparent opacity={0.6} />
+        <circleGeometry args={[isHovered || isSelected ? 0.85 : 0.7, 32]} />
+        <meshStandardMaterial
+          color={circleColor}
+          emissive={circleEmissive}
+          emissiveIntensity={circleEmissiveIntensity}
+          transparent
+          opacity={circleOpacity}
+        />
       </mesh>
 
       {/* Agent model */}
       <primitive object={clonedScene} scale={MODEL_SCALE} />
 
-      {/* Speech bubble */}
-      {agent.status === 'active' && agent.cpuPercent > 10 && agent.activity && (
+      {/* Conversation speech bubble - highest priority */}
+      {(() => {
+        const convo = entityConversations.get(agent.id);
+        if (convo?.currentLine) {
+          return <SpeechBubble text={convo.currentLine} yOffset={3.5} variant="conversation" />;
+        }
+        return null;
+      })()}
+
+      {/* Speech bubble - shown when actively working (only if not in conversation) */}
+      {!entityConversations.get(agent.id)?.currentLine &&
+        agent.status === 'active' && agent.cpuPercent > 10 && agent.activity && (
         <SpeechBubble text={agent.activity} yOffset={3.2} />
+      )}
+
+      {/* Thinking bubble - shown on hover/selection, only if not in conversation */}
+      {!entityConversations.has(agent.id) &&
+        agent.status === 'idle' && (isHovered || isSelected) && (
+        <ThinkingBubble
+          thoughts={AGENT_THOUGHTS[idleActivity] || AGENT_THOUGHTS.wander}
+          yOffset={3.5}
+        />
       )}
 
       {/* Sleeping indicator - only when resting on couch */}

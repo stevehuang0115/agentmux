@@ -12,6 +12,7 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   ReactNode,
 } from 'react';
 import * as THREE from 'three';
@@ -36,12 +37,109 @@ import {
   createInitialCameraState,
 } from '../utils/factory.utils';
 
+// ====== PROXIMITY CONVERSATION CONSTANTS ======
+
+/** Distance threshold for triggering conversations */
+const PROXIMITY_THRESHOLD = 5.0;
+/** Duration before switching from greetings to small talk */
+const GREETING_PHASE_MS = 5000;
+/** Duration of each speaking turn during greetings */
+const GREETING_TURN_MS = 2000;
+/** Duration of each speaking turn during small talk */
+const TALK_TURN_MS = 3500;
+/** How often to check proximity */
+const PROXIMITY_CHECK_MS = 500;
+
+/** Quick greetings for short encounters */
+const GREETINGS = [
+  'Hey!', 'Hi!', 'Hello!', "What's up?", 'Hey there!',
+  'Yo!', 'Hi there!', 'Howdy!', 'Sup!', "What's good?",
+];
+
+/** Office small talk conversation pairs [speaker A, speaker B] */
+const SMALL_TALK_PAIRS: ReadonlyArray<[string, string]> = [
+  ["How's your project going?", "Pretty good, making progress!"],
+  ["Taking a break?", "Yeah, needed one!"],
+  ["The boss seems happy today", "Ha, let's hope it lasts!"],
+  ["Did you see that demo?", "Yeah, it was impressive!"],
+  ["Coffee break?", "Always down for coffee!"],
+  ["Any blockers?", "Nah, smooth sailing!"],
+  ["Working late tonight?", "Hope not!"],
+  ["Nice code review earlier", "Thanks, yours too!"],
+  ["Tried the new API yet?", "Yeah, it's way faster!"],
+  ["Stand-up was short today", "Best kind of stand-up!"],
+  ["PR looks good to me", "Thanks for reviewing!"],
+  ["Lunch plans?", "Thinking tacos, you in?"],
+];
+
+// ====== NPC-SPECIFIC CONVERSATION LINES ======
+
+/** Steve Jobs greetings (used when Steve is the speaker) */
+const STEVE_JOBS_GREETINGS = [
+  'One more thing...', 'Hey, got a minute?', 'Think different!',
+  'You know what...', "Let's talk!",
+];
+
+/** Steve Jobs small talk [Steve's line, partner's response] */
+const STEVE_JOBS_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["Is it insanely great yet?", "Getting close!"],
+  ["Simplicity is the ultimate sophistication", "Totally agree!"],
+  ["Focus on what truly matters", "Good advice!"],
+  ["Design is how it works", "So true!"],
+  ["Let's put a dent in the universe", "I'm in!"],
+  ["Real artists ship", "Shipping soon!"],
+  ["Innovation needs courage", "You're right!"],
+  ["Stay hungry, stay foolish", "Always!"],
+  ["The journey is the reward", "Love that!"],
+  ["Quality over quantity, always", "Agreed!"],
+];
+
+/** Sundar Pichai greetings (used when Sundar is the speaker) */
+const SUNDAR_PICHAI_GREETINGS = [
+  'Hey team!', 'Good to see you!', "How's everything?",
+  'Quick sync?', "Let's connect!",
+];
+
+/** Sundar Pichai small talk [Sundar's line, partner's response] */
+const SUNDAR_PICHAI_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["AI is reshaping everything", "It really is!"],
+  ["Let's think about scale", "Good point!"],
+  ["User trust is our foundation", "Absolutely!"],
+  ["Have you tried Gemini yet?", "It's impressive!"],
+  ["Cloud-first, always", "Makes sense!"],
+  ["Openness drives innovation", "So true!"],
+  ["Let's make tech accessible to all", "Great vision!"],
+  ["Data tells the real story", "Facts!"],
+  ["10x thinking, not 10%", "Love that mindset!"],
+  ["What's the user impact?", "Significant!"],
+];
+
+/** Map NPC IDs to their specific conversation data */
+const NPC_CONVERSATION_DATA: Record<string, { greetings: string[]; smallTalk: ReadonlyArray<[string, string]> }> = {
+  'steve-jobs-npc': { greetings: STEVE_JOBS_GREETINGS, smallTalk: STEVE_JOBS_SMALL_TALK },
+  'sundar-pichai-npc': { greetings: SUNDAR_PICHAI_GREETINGS, smallTalk: SUNDAR_PICHAI_SMALL_TALK },
+};
+
+/**
+ * Proximity conversation state for a single entity
+ */
+export interface ProximityConversation {
+  /** ID of the conversation partner */
+  partnerId: string;
+  /** When proximity was first detected */
+  startTime: number;
+  /** Whether the conversation has moved to small talk phase */
+  isLongDuration: boolean;
+  /** The speech line this entity should currently display (null = listening) */
+  currentLine: string | null;
+}
+
 // ====== CONTEXT TYPE ======
 
 /**
  * Idle activity types for agents when not working
  */
-export type IdleActivity = 'wander' | 'couch' | 'stage';
+export type IdleActivity = 'wander' | 'couch' | 'stage' | 'break_room' | 'poker_table' | 'kitchen';
 
 /**
  * Idle destinations state - tracks where each idle agent should go
@@ -53,6 +151,12 @@ interface IdleDestinationsState {
   stagePerformerId: string | null;
   /** IDs of agents on couches */
   couchAgentIds: string[];
+  /** IDs of agents at break room table */
+  breakRoomAgentIds: string[];
+  /** IDs of agents at poker table */
+  pokerAgentIds: string[];
+  /** IDs of agents at kitchen counter */
+  kitchenAgentIds: string[];
 }
 
 interface FactoryContextType {
@@ -102,12 +206,30 @@ interface FactoryContextType {
   isStagePerformer: (agentId: string) => boolean;
   /** Get couch position index for an agent (-1 if not on couch) */
   getCouchPositionIndex: (agentId: string) => number;
+  /** Get seat index at break room (-1 if not there) */
+  getBreakRoomSeatIndex: (agentId: string) => number;
+  /** Get seat index at poker table (-1 if not there) */
+  getPokerSeatIndex: (agentId: string) => number;
+  /** Get seat index at kitchen counter (-1 if not there) */
+  getKitchenSeatIndex: (agentId: string) => number;
   /** Update an agent's current position (called by agent components) */
   updateAgentPosition: (agentId: string, position: THREE.Vector3) => void;
   /** Update an NPC's current position (called by NPC components) */
   updateNpcPosition: (npcId: string, position: THREE.Vector3) => void;
   /** Map of NPC ID to current position */
   npcPositions: Map<string, THREE.Vector3>;
+  /** Currently hovered entity ID (agent or NPC) */
+  hoveredEntityId: string | null;
+  /** Currently selected entity ID (agent or NPC) */
+  selectedEntityId: string | null;
+  /** Set the hovered entity (null to clear) */
+  setHoveredEntity: (id: string | null) => void;
+  /** Select an entity - activates boss mode manual and focuses camera */
+  selectEntity: (id: string) => void;
+  /** Clear the current selection and exit boss mode */
+  clearSelection: () => void;
+  /** Active proximity conversations keyed by entity ID */
+  entityConversations: Map<string, ProximityConversation>;
 }
 
 // ====== CONTEXT ======
@@ -162,10 +284,20 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     destinations: new Map(),
     stagePerformerId: null,
     couchAgentIds: [],
+    breakRoomAgentIds: [],
+    pokerAgentIds: [],
+    kitchenAgentIds: [],
   });
 
   // NPC positions state - tracks current positions of NPCs for boss mode
   const [npcPositions, setNpcPositions] = useState<Map<string, THREE.Vector3>>(new Map());
+
+  // Hover and selection state
+  const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
+  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+
+  // Proximity conversation state
+  const [entityConversations, setEntityConversations] = useState<Map<string, ProximityConversation>>(new Map());
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -572,6 +704,27 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   }, [idleDestinations.couchAgentIds]);
 
   /**
+   * Get break room seat index for an agent (-1 if not there)
+   */
+  const getBreakRoomSeatIndex = useCallback((agentId: string): number => {
+    return idleDestinations.breakRoomAgentIds.indexOf(agentId);
+  }, [idleDestinations.breakRoomAgentIds]);
+
+  /**
+   * Get poker table seat index for an agent (-1 if not there)
+   */
+  const getPokerSeatIndex = useCallback((agentId: string): number => {
+    return idleDestinations.pokerAgentIds.indexOf(agentId);
+  }, [idleDestinations.pokerAgentIds]);
+
+  /**
+   * Get kitchen counter seat index for an agent (-1 if not there)
+   */
+  const getKitchenSeatIndex = useCallback((agentId: string): number => {
+    return idleDestinations.kitchenAgentIds.indexOf(agentId);
+  }, [idleDestinations.kitchenAgentIds]);
+
+  /**
    * Update an agent's current position (called by agent components during animation)
    */
   const updateAgentPosition = useCallback((agentId: string, position: THREE.Vector3) => {
@@ -617,6 +770,50 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     });
   }, []);
 
+  /**
+   * Set the hovered entity ID (or null to clear hover)
+   */
+  const setHoveredEntity = useCallback((id: string | null) => {
+    setHoveredEntityId(id);
+  }, []);
+
+  /**
+   * Select an entity - activates boss mode manual and focuses camera on it
+   */
+  const selectEntity = useCallback((id: string) => {
+    setSelectedEntityId(id);
+
+    // Generate targets and activate boss mode manual focused on selected entity
+    const targets = generateBossModeTargets();
+    const targetIndex = targets.findIndex((t) => t.id === id);
+
+    setBossModeState({
+      isActive: true,
+      mode: 'manual',
+      currentTargetIndex: Math.max(targetIndex, 0),
+      targets,
+      timeAtTarget: 0,
+      targetDuration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+      orbitAngle: 0,
+      orbitRadius: 6,
+      orbitHeight: 4,
+    });
+  }, [generateBossModeTargets]);
+
+  /**
+   * Clear the current selection and exit boss mode
+   */
+  const clearSelection = useCallback(() => {
+    setSelectedEntityId(null);
+    setBossModeState((prev) => ({
+      ...prev,
+      isActive: false,
+      targets: [],
+      orbitAngle: 0,
+    }));
+    setCameraTarget('overview');
+  }, [setCameraTarget]);
+
   // Initial data fetch
   useEffect(() => {
     refreshData();
@@ -641,6 +838,12 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   }, [lightingMode]);
 
   // Boss mode orbit animation - continuously orbits around current target
+  // Use refs to access latest positions without re-running effect
+  const agentsRef = useRef(agents);
+  const npcPositionsRef = useRef(npcPositions);
+  agentsRef.current = agents;
+  npcPositionsRef.current = npcPositions;
+
   useEffect(() => {
     if (!bossModeState.isActive) return;
     if (bossModeState.targets.length === 0) return;
@@ -671,19 +874,36 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           nextIndex = (prev.currentTargetIndex + 1) % prev.targets.length;
         }
 
-        // Calculate camera position on orbit
-        const targetPos = prev.targets[nextIndex]?.position || target.position;
-        const camX = targetPos.x + prev.orbitRadius * Math.cos(newAngle);
-        const camZ = targetPos.z + prev.orbitRadius * Math.sin(newAngle);
-        const camY = targetPos.y + prev.orbitHeight;
+        const nextTarget = prev.targets[nextIndex] || target;
+
+        // Get LIVE position for the target (not the stale position from targets array)
+        let livePos = nextTarget.position;
+        if (nextTarget.type === 'npc') {
+          // Look up live NPC position
+          const npcPos = npcPositionsRef.current.get(nextTarget.id);
+          if (npcPos) {
+            livePos = { x: npcPos.x, y: npcPos.y, z: npcPos.z };
+          }
+        } else if (nextTarget.type === 'agent') {
+          // Look up live agent position
+          const agent = agentsRef.current.get(nextTarget.id);
+          if (agent?.currentPosition) {
+            livePos = { x: agent.currentPosition.x, y: agent.currentPosition.y, z: agent.currentPosition.z };
+          }
+        }
+
+        // Calculate camera position on orbit using live position
+        const camX = livePos.x + prev.orbitRadius * Math.cos(newAngle);
+        const camZ = livePos.z + prev.orbitRadius * Math.sin(newAngle);
+        const camY = livePos.y + prev.orbitHeight;
 
         // Update camera position directly
         setCamera((camPrev) => {
           const newPosition = new THREE.Vector3(camX, camY, camZ);
           const newTarget = new THREE.Vector3(
-            targetPos.x,
-            targetPos.y + 2, // Look at head height
-            targetPos.z
+            livePos.x,
+            livePos.y + 2, // Look at head height
+            livePos.z
           );
 
           return {
@@ -719,6 +939,10 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     const MAX_COUCH_AGENTS = 4; // Maximum agents on couches
 
     const assignIdleDestinations = () => {
+      const MAX_BREAK_ROOM_AGENTS = 4;
+      const MAX_POKER_AGENTS = 4;
+      const MAX_KITCHEN_AGENTS = 5;
+
       // Get all idle agents
       const idleAgents = Array.from(agents.values()).filter(
         (agent) => agent.status === 'idle'
@@ -730,6 +954,9 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           destinations: new Map(),
           stagePerformerId: null,
           couchAgentIds: [],
+          breakRoomAgentIds: [],
+          pokerAgentIds: [],
+          kitchenAgentIds: [],
         });
         return;
       }
@@ -737,6 +964,9 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       const newDestinations = new Map<string, IdleActivity>();
       let newStagePerformerId: string | null = null;
       const newCouchAgentIds: string[] = [];
+      const newBreakRoomAgentIds: string[] = [];
+      const newPokerAgentIds: string[] = [];
+      const newKitchenAgentIds: string[] = [];
 
       // Keep existing assignments for agents still idle, clear for non-idle
       idleAgents.forEach((agent) => {
@@ -749,23 +979,35 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
             newStagePerformerId = agent.id;
           } else if (existingDest === 'couch') {
             newCouchAgentIds.push(agent.id);
+          } else if (existingDest === 'break_room') {
+            newBreakRoomAgentIds.push(agent.id);
+          } else if (existingDest === 'poker_table') {
+            newPokerAgentIds.push(agent.id);
+          } else if (existingDest === 'kitchen') {
+            newKitchenAgentIds.push(agent.id);
           }
         } else {
           // New idle agent - assign random destination
-          // Probabilities: 50% wander, 25% couch, 25% stage
+          // Spread across all zones: ~15% each for specific zones, ~25% wander
           const rand = Math.random();
           let activity: IdleActivity;
 
-          if (rand < 0.25 && !newStagePerformerId) {
-            // Stage (only if no one on stage yet)
+          if (rand < 0.12 && !newStagePerformerId) {
             activity = 'stage';
             newStagePerformerId = agent.id;
-          } else if (rand < 0.5 && newCouchAgentIds.length < MAX_COUCH_AGENTS) {
-            // Couch (if space available)
+          } else if (rand < 0.27 && newCouchAgentIds.length < MAX_COUCH_AGENTS) {
             activity = 'couch';
             newCouchAgentIds.push(agent.id);
+          } else if (rand < 0.42 && newBreakRoomAgentIds.length < MAX_BREAK_ROOM_AGENTS) {
+            activity = 'break_room';
+            newBreakRoomAgentIds.push(agent.id);
+          } else if (rand < 0.57 && newPokerAgentIds.length < MAX_POKER_AGENTS) {
+            activity = 'poker_table';
+            newPokerAgentIds.push(agent.id);
+          } else if (rand < 0.72 && newKitchenAgentIds.length < MAX_KITCHEN_AGENTS) {
+            activity = 'kitchen';
+            newKitchenAgentIds.push(agent.id);
           } else {
-            // Default to wandering
             activity = 'wander';
           }
 
@@ -782,6 +1024,9 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           destinations: newDestinations,
           stagePerformerId: newStagePerformerId,
           couchAgentIds: newCouchAgentIds,
+          breakRoomAgentIds: newBreakRoomAgentIds,
+          pokerAgentIds: newPokerAgentIds,
+          kitchenAgentIds: newKitchenAgentIds,
         });
       }
     };
@@ -792,6 +1037,185 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
     return () => clearInterval(interval);
   }, [agents, idleDestinations.destinations]);
+
+  // Proximity conversation detection
+  // Uses refs to read latest positions without re-running the effect
+  const conversationStartTimesRef = useRef<Map<string, number>>(new Map());
+
+  useEffect(() => {
+    /**
+     * Simple hash of a string to produce a stable integer
+     */
+    const hashString = (s: string): number =>
+      s.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+
+    const checkProximity = () => {
+      const currentAgents = agentsRef.current;
+      const currentNpcPositions = npcPositionsRef.current;
+
+      // Collect all entity positions (exclude working agents)
+      const entities: Array<{ id: string; x: number; z: number }> = [];
+
+      currentAgents.forEach((agent) => {
+        if (agent.status === 'active') return; // working agents don't chat
+        const pos = agent.currentPosition || agent.basePosition;
+        entities.push({ id: agent.id, x: pos.x, z: pos.z });
+      });
+
+      currentNpcPositions.forEach((pos, id) => {
+        entities.push({ id, x: pos.x, z: pos.z });
+      });
+
+      if (entities.length < 2) {
+        if (entityConversations.size > 0) {
+          conversationStartTimesRef.current.clear();
+          setEntityConversations(new Map());
+        }
+        return;
+      }
+
+      // For each entity, find mutual-closest neighbor within threshold
+      const closestNeighbor = new Map<string, string>();
+
+      for (let i = 0; i < entities.length; i++) {
+        let minDist = Infinity;
+        let closestId = '';
+        for (let j = 0; j < entities.length; j++) {
+          if (i === j) continue;
+          const dx = entities[i].x - entities[j].x;
+          const dz = entities[i].z - entities[j].z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          if (dist < minDist && dist < PROXIMITY_THRESHOLD) {
+            minDist = dist;
+            closestId = entities[j].id;
+          }
+        }
+        if (closestId) {
+          closestNeighbor.set(entities[i].id, closestId);
+        }
+      }
+
+      // Build mutual pairs
+      const newConvos = new Map<string, ProximityConversation>();
+      const paired = new Set<string>();
+      const now = Date.now();
+      const startTimes = conversationStartTimesRef.current;
+      const activeKeys = new Set<string>();
+
+      closestNeighbor.forEach((neighborId, entityId) => {
+        if (paired.has(entityId)) return;
+        // Check mutual: neighbor's closest must be this entity
+        if (closestNeighbor.get(neighborId) !== entityId) return;
+
+        paired.add(entityId);
+        paired.add(neighborId);
+
+        const pairKey = [entityId, neighborId].sort().join(':');
+        activeKeys.add(pairKey);
+
+        // Get or create start time
+        let startTime = startTimes.get(pairKey);
+        if (startTime === undefined) {
+          startTime = now;
+          startTimes.set(pairKey, startTime);
+        }
+
+        const elapsed = now - startTime;
+        const isLong = elapsed >= GREETING_PHASE_MS;
+        const ids = [entityId, neighborId].sort();
+
+        // Detect if an NPC is in this pair for character-specific lines
+        const npcId = ids.find((id) => id in NPC_CONVERSATION_DATA) || null;
+        const npcData = npcId ? NPC_CONVERSATION_DATA[npcId] : null;
+
+        if (!isLong) {
+          // Greeting phase: quick turn-based greetings
+          const turnIndex = Math.floor(elapsed / GREETING_TURN_MS);
+          const isFirstTurn = turnIndex % 2 === 0;
+          const speakerId = isFirstTurn ? ids[0] : ids[1];
+
+          // NPC uses their own greetings; others use generic
+          const activeGreetings = (npcData && speakerId === npcId) ? npcData.greetings : GREETINGS;
+          const greetIdx = (hashString(speakerId) + turnIndex) % activeGreetings.length;
+
+          newConvos.set(ids[0], {
+            partnerId: ids[1],
+            startTime,
+            isLongDuration: false,
+            currentLine: speakerId === ids[0] ? activeGreetings[greetIdx] : null,
+          });
+          newConvos.set(ids[1], {
+            partnerId: ids[0],
+            startTime,
+            isLongDuration: false,
+            currentLine: speakerId === ids[1] ? activeGreetings[greetIdx] : null,
+          });
+        } else {
+          // Small talk phase: turn-based conversation pairs
+          const talkElapsed = elapsed - GREETING_PHASE_MS;
+          const turnIndex = Math.floor(talkElapsed / TALK_TURN_MS);
+          const isFirstSpeaker = turnIndex % 2 === 0;
+
+          if (npcData && npcId) {
+            // NPC-specific small talk: NPC always says [0], partner says [1]
+            const pairIndex = Math.floor(turnIndex / 2) % npcData.smallTalk.length;
+            const talkPair = npcData.smallTalk[pairIndex];
+            const npcSortedIdx = ids.indexOf(npcId);
+
+            newConvos.set(ids[0], {
+              partnerId: ids[1],
+              startTime,
+              isLongDuration: true,
+              currentLine: isFirstSpeaker
+                ? (npcSortedIdx === 0 ? talkPair[0] : talkPair[1])
+                : null,
+            });
+            newConvos.set(ids[1], {
+              partnerId: ids[0],
+              startTime,
+              isLongDuration: true,
+              currentLine: !isFirstSpeaker
+                ? (npcSortedIdx === 1 ? talkPair[0] : talkPair[1])
+                : null,
+            });
+          } else {
+            // Generic small talk
+            const pairIndex = Math.floor(turnIndex / 2) % SMALL_TALK_PAIRS.length;
+
+            newConvos.set(ids[0], {
+              partnerId: ids[1],
+              startTime,
+              isLongDuration: true,
+              currentLine: isFirstSpeaker ? SMALL_TALK_PAIRS[pairIndex][0] : null,
+            });
+            newConvos.set(ids[1], {
+              partnerId: ids[0],
+              startTime,
+              isLongDuration: true,
+              currentLine: !isFirstSpeaker ? SMALL_TALK_PAIRS[pairIndex][1] : null,
+            });
+          }
+        }
+      });
+
+      // Clean up stale start times
+      startTimes.forEach((_, key) => {
+        if (!activeKeys.has(key)) startTimes.delete(key);
+      });
+
+      // Only update state if conversations actually changed
+      const serialize = (m: Map<string, ProximityConversation>) =>
+        JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
+
+      if (serialize(newConvos) !== serialize(entityConversations)) {
+        setEntityConversations(newConvos);
+      }
+    };
+
+    checkProximity();
+    const interval = setInterval(checkProximity, PROXIMITY_CHECK_MS);
+    return () => clearInterval(interval);
+  }, []); // Uses refs for position data, no deps needed
 
   // Memoize context value to prevent unnecessary re-renders of consumers
   const value = useMemo<FactoryContextType>(
@@ -819,9 +1243,18 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       getIdleActivity,
       isStagePerformer,
       getCouchPositionIndex,
+      getBreakRoomSeatIndex,
+      getPokerSeatIndex,
+      getKitchenSeatIndex,
       updateAgentPosition,
       updateNpcPosition,
       npcPositions,
+      hoveredEntityId,
+      selectedEntityId,
+      setHoveredEntity,
+      selectEntity,
+      clearSelection,
+      entityConversations,
     }),
     [
       agents,
@@ -846,9 +1279,18 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       getIdleActivity,
       isStagePerformer,
       getCouchPositionIndex,
+      getBreakRoomSeatIndex,
+      getPokerSeatIndex,
+      getKitchenSeatIndex,
       updateAgentPosition,
       updateNpcPosition,
       npcPositions,
+      hoveredEntityId,
+      selectedEntityId,
+      setHoveredEntity,
+      selectEntity,
+      clearSelection,
+      entityConversations,
     ]
   );
 

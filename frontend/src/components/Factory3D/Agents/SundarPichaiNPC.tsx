@@ -5,8 +5,8 @@
  * and generally managing the factory floor.
  */
 
-import React, { useRef, useEffect, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import { useFrame, ThreeEvent } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
@@ -15,6 +15,16 @@ import {
   MODEL_PATHS,
   FACTORY_CONSTANTS,
 } from '../../../types/factory.types';
+import { ThinkingBubble, SUNDAR_PICHAI_THOUGHTS } from './ThinkingBubble';
+import { SpeechBubble } from './SpeechBubble';
+import {
+  STATIC_OBSTACLES,
+  getWorkstationObstacles,
+  getSafePosition,
+  getRandomClearPosition,
+  isPositionClear,
+  Obstacle,
+} from '../../../utils/factoryCollision';
 
 // Preload the Sundar Pichai model
 useGLTF.preload(MODEL_PATHS.SUNDAR_PICHAI);
@@ -22,7 +32,7 @@ useGLTF.preload(MODEL_PATHS.SUNDAR_PICHAI);
 /**
  * NPC behavior states
  */
-type NPCState = 'wandering' | 'talking_to_agent' | 'presenting' | 'walking_circle' | 'walking_to_target';
+type NPCState = 'wandering' | 'talking_to_agent' | 'presenting' | 'walking_circle' | 'visiting_kitchen' | 'walking_to_target';
 
 /**
  * Animation names available in the Sundar Pichai model
@@ -39,7 +49,7 @@ const SUNDAR_ANIMATIONS = {
 interface NPCTarget {
   x: number;
   z: number;
-  type: 'agent' | 'stage' | 'center' | 'random';
+  type: 'agent' | 'stage' | 'center' | 'kitchen' | 'random';
   duration?: number;
 }
 
@@ -48,6 +58,9 @@ interface NPCTarget {
  */
 export const SundarPichaiNPC: React.FC = () => {
   const groupRef = useRef<THREE.Group>(null);
+  // Track display state for thinking bubble (only re-renders when state changes)
+  const [displayState, setDisplayState] = useState<NPCState>('wandering');
+  const lastDisplayStateRef = useRef<NPCState>('wandering');
 
   // NPC state
   const stateRef = useRef<{
@@ -92,7 +105,7 @@ export const SundarPichaiNPC: React.FC = () => {
       }
     });
 
-    const scale = 2.0;
+    const scale = 3.6; // 1.5x current size (was 2.4)
     return { clonedScene: clone, modelScale: scale };
   }, [gltf.scene]);
 
@@ -123,25 +136,80 @@ export const SundarPichaiNPC: React.FC = () => {
   }, [actions]);
 
   // Get factory context
-  const { agents, updateNpcPosition } = useFactory();
+  const {
+    agents,
+    zones,
+    updateNpcPosition,
+    hoveredEntityId,
+    selectedEntityId,
+    setHoveredEntity,
+    selectEntity,
+    entityConversations,
+  } = useFactory();
+
+  const NPC_ID = 'sundar-pichai-npc';
+  const isHovered = hoveredEntityId === NPC_ID;
+  const isSelected = selectedEntityId === NPC_ID;
+
+  // Compute all obstacles (static + workstations)
+  const allObstacles = useMemo<Obstacle[]>(() => {
+    return [...STATIC_OBSTACLES, ...getWorkstationObstacles(zones)];
+  }, [zones]);
 
   // Get useful positions from constants
   const stagePos = FACTORY_CONSTANTS.STAGE.POSITION;
+  const kitchenPos = FACTORY_CONSTANTS.KITCHEN.POSITION;
 
-  // Helper to find a random agent to talk to
+  // Helper to find a random agent to talk to (stand outside workstation area)
   const findAgentToTalkTo = useMemo(() => {
     return () => {
       const agentList = Array.from(agents.values());
       if (agentList.length === 0) return null;
       const randomAgent = agentList[Math.floor(Math.random() * agentList.length)];
+      // Stand 3 units away from the agent (outside workstation obstacle)
+      const targetX = randomAgent.basePosition.x + 3.0;
+      const targetZ = randomAgent.basePosition.z + 3.0;
+      // Validate target is clear; if not, try alternate offset
+      if (isPositionClear(targetX, targetZ, allObstacles)) {
+        return { x: targetX, z: targetZ, type: 'agent' as const, duration: 5 + Math.random() * 5 };
+      }
+      const altX = randomAgent.basePosition.x - 3.0;
+      const altZ = randomAgent.basePosition.z + 3.0;
+      if (isPositionClear(altX, altZ, allObstacles)) {
+        return { x: altX, z: altZ, type: 'agent' as const, duration: 5 + Math.random() * 5 };
+      }
+      // Fallback: stand further away
       return {
-        x: randomAgent.basePosition.x + 1.5,
-        z: randomAgent.basePosition.z + 1.5,
+        x: randomAgent.basePosition.x,
+        z: randomAgent.basePosition.z + 4.0,
         type: 'agent' as const,
         duration: 5 + Math.random() * 5,
       };
     };
-  }, [agents]);
+  }, [agents, allObstacles]);
+
+  // Pointer event handlers
+  const handlePointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
+    e.stopPropagation();
+    setHoveredEntity(NPC_ID);
+    document.body.style.cursor = 'pointer';
+  }, [setHoveredEntity]);
+
+  const handlePointerOut = useCallback(() => {
+    setHoveredEntity(null);
+    document.body.style.cursor = 'default';
+  }, [setHoveredEntity]);
+
+  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
+    e.stopPropagation();
+    selectEntity(NPC_ID);
+  }, [selectEntity]);
+
+  // Circle indicator color based on hover/select state
+  const circleColor = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x44aa44;
+  const circleOpacity = isSelected ? 1.0 : isHovered ? 0.9 : 0.6;
+  const circleEmissive = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x000000;
+  const circleEmissiveIntensity = isSelected ? 0.8 : isHovered ? 0.5 : 0;
 
   // Cleanup on unmount
   useEffect(() => {
@@ -169,10 +237,26 @@ export const SundarPichaiNPC: React.FC = () => {
     const npcState = stateRef.current;
     const currentTime = state.clock.elapsedTime;
 
-    // Initialize position
+    // Pause on hover - freeze movement and play idle animation
+    if (isHovered) {
+      const idleAction = actions?.[SUNDAR_ANIMATIONS.TALKING];
+      if (idleAction && !idleAction.isRunning()) {
+        Object.values(actions).forEach(action => action?.fadeOut(0.3));
+        idleAction.reset().fadeIn(0.3).play();
+      }
+      // Still apply position and report
+      groupRef.current.position.x = npcState.currentPos.x;
+      groupRef.current.position.y = 0;
+      groupRef.current.position.z = npcState.currentPos.z;
+      updateNpcPosition('sundar-pichai-npc', groupRef.current.position);
+      return;
+    }
+
+    // Initialize position at a clear spot
     if (!npcState.initialized) {
-      npcState.currentPos = { x: 10, z: 0 };
-      groupRef.current.position.set(10, 0, 0);
+      const start = getRandomClearPosition(allObstacles, 10, 10, 10, 0);
+      npcState.currentPos = { x: start.x, z: start.z };
+      groupRef.current.position.set(start.x, 0, start.z);
       npcState.initialized = true;
       npcState.lastDecisionTime = currentTime;
     }
@@ -184,15 +268,15 @@ export const SundarPichaiNPC: React.FC = () => {
 
       const rand = Math.random();
 
-      if (rand < 0.40) {
-        // 40% - Talk to an agent
+      if (rand < 0.35) {
+        // 35% - Talk to an agent
         const agentTarget = findAgentToTalkTo();
         if (agentTarget) {
           npcState.target = agentTarget;
           npcState.currentState = 'walking_to_target';
         }
-      } else if (rand < 0.55) {
-        // 15% - Go to stage area for presentation
+      } else if (rand < 0.47) {
+        // 12% - Go to stage area for presentation
         npcState.target = {
           x: stagePos.x - 2,
           z: stagePos.z,
@@ -200,8 +284,8 @@ export const SundarPichaiNPC: React.FC = () => {
           duration: 8 + Math.random() * 5,
         };
         npcState.currentState = 'walking_to_target';
-      } else if (rand < 0.70) {
-        // 15% - Walk in circle at center
+      } else if (rand < 0.59) {
+        // 12% - Walk in circle at center
         npcState.target = {
           x: 0,
           z: 0,
@@ -209,12 +293,26 @@ export const SundarPichaiNPC: React.FC = () => {
           duration: 10 + Math.random() * 5,
         };
         npcState.currentState = 'walking_to_target';
-      } else {
-        // 30% - Random wander
-        const wanderRange = 20;
+      } else if (rand < 0.74) {
+        // 15% - Visit the kitchen for a snack/coffee
+        const kitchenOffsets = [
+          { x: -1, z: 1.8 }, { x: 0, z: 1.8 }, { x: 1, z: 1.8 },
+          { x: -0.5, z: -1.8 }, { x: 0.5, z: -1.8 },
+        ];
+        const spot = kitchenOffsets[Math.floor(Math.random() * kitchenOffsets.length)];
         npcState.target = {
-          x: (Math.random() - 0.5) * wanderRange * 2,
-          z: (Math.random() - 0.5) * wanderRange * 2,
+          x: kitchenPos.x + spot.x,
+          z: kitchenPos.z + spot.z,
+          type: 'kitchen',
+          duration: 6 + Math.random() * 8,
+        };
+        npcState.currentState = 'walking_to_target';
+      } else {
+        // 26% - Random wander to a clear position
+        const wanderTarget = getRandomClearPosition(allObstacles);
+        npcState.target = {
+          x: wanderTarget.x,
+          z: wanderTarget.z,
           type: 'random',
           duration: 3 + Math.random() * 3,
         };
@@ -232,8 +330,23 @@ export const SundarPichaiNPC: React.FC = () => {
         // Walking to target
         const speed = 2.0;
         const moveAmount = Math.min(speed * delta, distance);
-        npcState.currentPos.x += (dx / distance) * moveAmount;
-        npcState.currentPos.z += (dz / distance) * moveAmount;
+        const newX = npcState.currentPos.x + (dx / distance) * moveAmount;
+        const newZ = npcState.currentPos.z + (dz / distance) * moveAmount;
+
+        // Collision check - avoid obstacles and walls
+        const oldX = npcState.currentPos.x;
+        const oldZ = npcState.currentPos.z;
+        const safe = getSafePosition(newX, newZ, oldX, oldZ, allObstacles);
+        npcState.currentPos.x = safe.x;
+        npcState.currentPos.z = safe.z;
+
+        // If stuck (position barely changed), abandon target and pick a new one
+        if (Math.abs(safe.x - oldX) < 0.01 &&
+            Math.abs(safe.z - oldZ) < 0.01 &&
+            distance > 2) {
+          npcState.target = null;
+          npcState.lastDecisionTime = 0;
+        }
 
         // Face movement direction
         const targetRotation = Math.atan2(dx, dz);
@@ -262,6 +375,17 @@ export const SundarPichaiNPC: React.FC = () => {
             talkAction.reset().fadeIn(0.3).play();
           }
           npcState.currentState = 'talking_to_agent';
+        } else if (targetType === 'kitchen') {
+          // Visiting kitchen - talking animation (chatting while getting food)
+          const talkAction = actions?.[SUNDAR_ANIMATIONS.TALKING];
+          if (talkAction && !talkAction.isRunning()) {
+            Object.values(actions).forEach(action => action?.fadeOut(0.3));
+            talkAction.reset().fadeIn(0.3).play();
+          }
+          // Face the counter
+          const toCounter = Math.atan2(kitchenPos.x - npcState.currentPos.x, kitchenPos.z - npcState.currentPos.z);
+          groupRef.current.rotation.y = toCounter;
+          npcState.currentState = 'visiting_kitchen';
         } else if (targetType === 'stage') {
           // Present at stage
           const talkAction = actions?.[SUNDAR_ANIMATIONS.TALKING];
@@ -310,17 +434,54 @@ export const SundarPichaiNPC: React.FC = () => {
 
     // Report position to context for boss mode tracking
     updateNpcPosition('sundar-pichai-npc', groupRef.current.position);
+
+    // Update display state for thinking bubble (only when state changes)
+    if (npcState.currentState !== lastDisplayStateRef.current) {
+      lastDisplayStateRef.current = npcState.currentState;
+      setDisplayState(npcState.currentState);
+    }
   });
 
+  // Get thoughts based on current NPC state
+  const currentThoughts = useMemo(() => {
+    return SUNDAR_PICHAI_THOUGHTS[displayState] || SUNDAR_PICHAI_THOUGHTS.wandering;
+  }, [displayState]);
+
   return (
-    <group ref={groupRef} position={[10, 0, 0]}>
-      {/* Green circle indicator under NPC */}
+    <group
+      ref={groupRef}
+      position={[10, 0, 0]}
+      onPointerOver={handlePointerOver}
+      onPointerOut={handlePointerOut}
+      onClick={handleClick}
+    >
+      {/* Circle indicator under NPC - glows on hover/select */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.1, 0]}>
-        <circleGeometry args={[1.2, 32]} />
-        <meshStandardMaterial color={0x44aa44} transparent opacity={0.6} />
+        <circleGeometry args={[isHovered || isSelected ? 0.85 : 0.7, 32]} />
+        <meshStandardMaterial
+          color={circleColor}
+          emissive={circleEmissive}
+          emissiveIntensity={circleEmissiveIntensity}
+          transparent
+          opacity={circleOpacity}
+        />
       </mesh>
 
       <primitive object={clonedScene} scale={modelScale} />
+
+      {/* Conversation speech bubble - highest priority */}
+      {(() => {
+        const convo = entityConversations.get(NPC_ID);
+        if (convo?.currentLine) {
+          return <SpeechBubble text={convo.currentLine} yOffset={6.0} variant="conversation" />;
+        }
+        return null;
+      })()}
+
+      {/* Thinking bubble - shown on hover/selection, only if not in conversation */}
+      {!entityConversations.has(NPC_ID) && (isHovered || isSelected) && (
+        <ThinkingBubble thoughts={currentThoughts} yOffset={6.0} />
+      )}
     </group>
   );
 };

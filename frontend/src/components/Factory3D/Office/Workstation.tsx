@@ -97,6 +97,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
         codeLineRefs={codeLineRefs}
       />
 
+      {/* Desk drink - shows when agent is idle */}
+      {agent?.status === 'idle' && (
+        <DeskDrink type={workstation.index % 3 === 0 ? 'soda' : 'coffee'} />
+      )}
+
       {/* Status indicator */}
       <mesh
         ref={indicatorRef}
@@ -253,6 +258,58 @@ const Laptop: React.FC<LaptopProps> = ({ isActive, displayRef, codeLineRefs }) =
       <mesh position={[0, 0.801, 0]} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[0.8, 0.4]} />
         <meshStandardMaterial color={0x222222} roughness={0.8} />
+      </mesh>
+    </group>
+  );
+};
+
+/**
+ * DeskDrink - Coffee cup or soda can on the desk for idle agents.
+ */
+interface DeskDrinkProps {
+  type: 'coffee' | 'soda';
+}
+
+const DeskDrink: React.FC<DeskDrinkProps> = ({ type }) => {
+  if (type === 'coffee') {
+    return (
+      <group position={[0.55, 0.78, 0.2]}>
+        {/* Coffee cup body */}
+        <mesh position={[0, 0.08, 0]}>
+          <cylinderGeometry args={[0.06, 0.05, 0.14, 12]} />
+          <meshStandardMaterial color={0xffffff} roughness={0.4} />
+        </mesh>
+        {/* Coffee liquid (dark brown top) */}
+        <mesh position={[0, 0.15, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[0.055, 12]} />
+          <meshStandardMaterial color={0x3e2723} />
+        </mesh>
+        {/* Cup handle */}
+        <mesh position={[0.08, 0.08, 0]} rotation={[0, 0, Math.PI / 2]}>
+          <torusGeometry args={[0.03, 0.008, 8, 12, Math.PI]} />
+          <meshStandardMaterial color={0xffffff} roughness={0.4} />
+        </mesh>
+      </group>
+    );
+  }
+
+  // Soda can
+  return (
+    <group position={[0.55, 0.78, 0.2]}>
+      {/* Can body */}
+      <mesh position={[0, 0.07, 0]}>
+        <cylinderGeometry args={[0.035, 0.035, 0.12, 12]} />
+        <meshStandardMaterial color={0xcc0000} metalness={0.6} roughness={0.3} />
+      </mesh>
+      {/* Can top */}
+      <mesh position={[0, 0.13, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[0.035, 12]} />
+        <meshStandardMaterial color={0xcccccc} metalness={0.8} roughness={0.2} />
+      </mesh>
+      {/* White stripe/label */}
+      <mesh position={[0, 0.07, 0]}>
+        <cylinderGeometry args={[0.036, 0.036, 0.04, 12]} />
+        <meshStandardMaterial color={0xffffff} roughness={0.4} />
       </mesh>
     </group>
   );

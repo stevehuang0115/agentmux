@@ -17,6 +17,8 @@ interface SpeechBubbleProps {
   yOffset?: number;
   /** Maximum characters before truncation */
   maxChars?: number;
+  /** Visual variant: 'work' (dark) or 'conversation' (white) */
+  variant?: 'work' | 'conversation';
 }
 
 /**
@@ -39,7 +41,13 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
   text,
   yOffset = 3.0,
   maxChars = 50,
+  variant = 'work',
 }) => {
+  const isConversation = variant === 'conversation';
+  const bgColor = isConversation ? 0xffffff : 0x1a1a2e;
+  const borderColor = isConversation ? 0xcccccc : 0x4a90d9;
+  const textColor = isConversation ? '#222222' : '#ffffff';
+  const dotColor = isConversation ? 0x4a90d9 : 0x4ade80;
   const groupRef = useRef<THREE.Group>(null);
 
   // Truncate long text
@@ -80,7 +88,7 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
   return (
     <Billboard follow lockX={false} lockY={false} lockZ={false}>
       <group ref={groupRef} position={[0, yOffset, 0]}>
-        {/* Main bubble - dark semi-transparent */}
+        {/* Main bubble background */}
         <RoundedBox
           args={[dimensions.width, dimensions.height, 0.08]}
           radius={0.12}
@@ -88,7 +96,7 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
           position={[0, 0, 0]}
         >
           <meshBasicMaterial
-            color={0x1a1a2e}
+            color={bgColor}
             transparent
             opacity={0.92}
           />
@@ -102,7 +110,7 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
           position={[0, 0, -0.02]}
         >
           <meshBasicMaterial
-            color={0x4a90d9}
+            color={borderColor}
             transparent
             opacity={0.3}
           />
@@ -124,7 +132,7 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
             />
           </bufferGeometry>
           <meshBasicMaterial
-            color={0x1a1a2e}
+            color={bgColor}
             transparent
             opacity={0.92}
             side={THREE.DoubleSide}
@@ -147,7 +155,7 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
             />
           </bufferGeometry>
           <meshBasicMaterial
-            color={0x4a90d9}
+            color={borderColor}
             transparent
             opacity={0.3}
             side={THREE.DoubleSide}
@@ -157,14 +165,14 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
         {/* Activity indicator dot */}
         <mesh position={[-dimensions.width / 2 + 0.25, 0, 0.05]}>
           <circleGeometry args={[0.08, 16]} />
-          <meshBasicMaterial color={0x4ade80} />
+          <meshBasicMaterial color={dotColor} />
         </mesh>
 
-        {/* Text - light color for contrast */}
+        {/* Text */}
         <Text
           position={[0.1, 0, 0.05]}
           fontSize={0.18}
-          color="#ffffff"
+          color={textColor}
           anchorX="center"
           anchorY="middle"
           maxWidth={dimensions.width - 0.8}
