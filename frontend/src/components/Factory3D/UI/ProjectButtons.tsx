@@ -73,14 +73,6 @@ export const ProjectButtons: React.FC = () => {
             Outdoor
           </button>
 
-          {/* Upper floor test button */}
-          <button
-            onClick={() => setCameraTarget('upperfloor')}
-            className="px-2 py-1.5 bg-surface-dark hover:bg-yellow-500/20 rounded border border-transparent hover:border-yellow-500/50 transition-all text-xs font-medium text-text-primary"
-          >
-            Upper Floor
-          </button>
-
           {/* Boss mode toggle */}
           <button
             onClick={toggleBossMode}

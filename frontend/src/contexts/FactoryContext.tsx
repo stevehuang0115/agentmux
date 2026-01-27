@@ -319,13 +319,13 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         },
       }));
     } else if (target === 'birdseye') {
-      // Bird's eye view - high above looking straight down
+      // Bird's eye view - high above with slight angle to see the factory floor
       setCamera((prev) => ({
         ...prev,
         isAnimating: true,
         animationTarget: {
-          position: new THREE.Vector3(0, 35, 0.1), // High above center
-          lookAt: new THREE.Vector3(0, 0, 0), // Looking at center
+          position: new THREE.Vector3(0, 40, 15), // High above, slightly in front
+          lookAt: new THREE.Vector3(-5, 0, -5), // Looking at factory center
           duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
           startTime: Date.now(),
           startPosition: prev.position.clone(),
@@ -341,21 +341,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         animationTarget: {
           position: new THREE.Vector3(0, 18, 55), // In front of building, elevated
           lookAt: new THREE.Vector3(0, 18, 22), // Looking at the neon sign on front
-          duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
-          startTime: Date.now(),
-          startPosition: prev.position.clone(),
-          startLookAt: prev.target.clone(),
-        },
-      }));
-    } else if (target === 'upperfloor') {
-      // Upper floor test view - inside the upper floor looking down at ground floor
-      // This position is inside the building bounds to test floor separator hiding
-      setCamera((prev) => ({
-        ...prev,
-        isAnimating: true,
-        animationTarget: {
-          position: new THREE.Vector3(0, 18, 10), // Inside upper floor (y=18, z=10 inside bounds)
-          lookAt: new THREE.Vector3(0, 12, -5), // Looking at the floor separator
           duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
           startTime: Date.now(),
           startPosition: prev.position.clone(),

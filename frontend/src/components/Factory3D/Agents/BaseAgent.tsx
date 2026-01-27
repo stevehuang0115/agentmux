@@ -160,6 +160,83 @@ const AGENT_Y_OFFSET = 0;
 // Fixed scale: All Mixamo models are 2.0 units, target is 4.0 units
 const MODEL_SCALE = 2.0;
 
+// Workstation blocker radius - agents can't enter other agents' workstation areas
+const WORKSTATION_BLOCKER_RADIUS = 2.0;
+
+/**
+ * Check if a position is blocked by another agent's workstation
+ *
+ * @param x - X position to check
+ * @param z - Z position to check
+ * @param ownWorkstationX - This agent's workstation X
+ * @param ownWorkstationZ - This agent's workstation Z
+ * @param allWorkstations - Array of all workstation positions
+ * @returns true if position is blocked
+ */
+function isBlockedByWorkstation(
+  x: number,
+  z: number,
+  ownWorkstationX: number,
+  ownWorkstationZ: number,
+  allWorkstations: Array<{ x: number; z: number }>
+): boolean {
+  for (const ws of allWorkstations) {
+    // Skip own workstation
+    if (Math.abs(ws.x - ownWorkstationX) < 0.1 && Math.abs(ws.z - ownWorkstationZ) < 0.1) {
+      continue;
+    }
+    // Check distance to this workstation
+    const dx = x - ws.x;
+    const dz = z - ws.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < WORKSTATION_BLOCKER_RADIUS * WORKSTATION_BLOCKER_RADIUS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Get a position that avoids blocked workstations
+ * Tries the target position first, then adjusts if blocked
+ */
+function getUnblockedTarget(
+  targetX: number,
+  targetZ: number,
+  currentX: number,
+  currentZ: number,
+  ownWorkstationX: number,
+  ownWorkstationZ: number,
+  allWorkstations: Array<{ x: number; z: number }>
+): { x: number; z: number } {
+  // If target is not blocked, use it
+  if (!isBlockedByWorkstation(targetX, targetZ, ownWorkstationX, ownWorkstationZ, allWorkstations)) {
+    return { x: targetX, z: targetZ };
+  }
+
+  // Target is blocked - try to find an alternative direction
+  // Move perpendicular to the blocked direction
+  const dx = targetX - currentX;
+  const dz = targetZ - currentZ;
+  const angle = Math.atan2(dz, dx);
+
+  // Try 90 degrees left and right
+  const alternatives = [
+    { x: currentX + Math.cos(angle + Math.PI / 2) * 2, z: currentZ + Math.sin(angle + Math.PI / 2) * 2 },
+    { x: currentX + Math.cos(angle - Math.PI / 2) * 2, z: currentZ + Math.sin(angle - Math.PI / 2) * 2 },
+    { x: currentX - dx * 0.5, z: currentZ - dz * 0.5 }, // Back up
+  ];
+
+  for (const alt of alternatives) {
+    if (!isBlockedByWorkstation(alt.x, alt.z, ownWorkstationX, ownWorkstationZ, allWorkstations)) {
+      return alt;
+    }
+  }
+
+  // All blocked - stay in place
+  return { x: currentX, z: currentZ };
+}
+
 /**
  * BaseAgent - Generic agent with animations and movement.
  *
@@ -242,6 +319,17 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     if (!zone) return null;
     return zone.workstations[agent.workstationIndex];
   }, [zone, agent.workstationIndex]);
+
+  // Collect all workstation positions for blocker logic
+  const allWorkstations = useMemo(() => {
+    const positions: Array<{ x: number; z: number }> = [];
+    zones.forEach((z) => {
+      z.workstations.forEach((ws) => {
+        positions.push({ x: ws.position.x, z: ws.position.z });
+      });
+    });
+    return positions;
+  }, [zones]);
 
   // Cleanup on unmount
   useEffect(() => {
