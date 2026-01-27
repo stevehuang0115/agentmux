@@ -27,14 +27,14 @@ describe('Factory Utils', () => {
       expect(animal1).toBe(animal2);
     });
 
-    it('should return different animal types for different indices', () => {
-      // With 5 animals, different indices should give different animals for most projects
+    it('should return same animal type for same project regardless of index', () => {
+      // All agents in the same project should have the same animal type
       const animals = new Set<string>();
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 10; i++) {
         animals.add(getAnimalTypeForProject('TestProject', i));
       }
-      // Should have at least 2 different animals across 5 indices
-      expect(animals.size).toBeGreaterThanOrEqual(2);
+      // All indices should return the same animal for the same project
+      expect(animals.size).toBe(1);
     });
 
     it('should return different animal types for different project names', () => {
@@ -48,27 +48,27 @@ describe('Factory Utils', () => {
 
     it('should handle empty project name', () => {
       const animal = getAnimalTypeForProject('', 0);
-      expect(['cow', 'horse', 'dragon', 'tiger', 'rabbit']).toContain(animal);
+      expect(['cow', 'horse', 'tiger', 'rabbit']).toContain(animal);
     });
 
     it('should handle special characters in project name', () => {
       const animal = getAnimalTypeForProject('Project-With_Special.Chars!', 0);
-      expect(['cow', 'horse', 'dragon', 'tiger', 'rabbit']).toContain(animal);
+      expect(['cow', 'horse', 'tiger', 'rabbit']).toContain(animal);
     });
 
     it('should handle unicode characters in project name', () => {
       const animal = getAnimalTypeForProject('项目名称', 0);
-      expect(['cow', 'horse', 'dragon', 'tiger', 'rabbit']).toContain(animal);
+      expect(['cow', 'horse', 'tiger', 'rabbit']).toContain(animal);
     });
 
     it('should handle very long project names', () => {
       const longName = 'A'.repeat(1000);
       const animal = getAnimalTypeForProject(longName, 0);
-      expect(['cow', 'horse', 'dragon', 'tiger', 'rabbit']).toContain(animal);
+      expect(['cow', 'horse', 'tiger', 'rabbit']).toContain(animal);
     });
 
     it('should return valid animal type for all possible inputs', () => {
-      const validAnimals = ['cow', 'horse', 'dragon', 'tiger', 'rabbit'];
+      const validAnimals = ['cow', 'horse', 'tiger', 'rabbit'];
       // Test 100 random-ish project names
       for (let i = 0; i < 100; i++) {
         const projectName = `Project${i}Test${i * 17}`;
@@ -77,7 +77,7 @@ describe('Factory Utils', () => {
       }
     });
 
-    it('should distribute animals across all 5 types', () => {
+    it('should distribute animals across all 4 types', () => {
       const animalCounts: Record<string, number> = {};
       // Test many project names to verify distribution
       for (let i = 0; i < 500; i++) {
@@ -85,10 +85,10 @@ describe('Factory Utils', () => {
         animalCounts[animal] = (animalCounts[animal] || 0) + 1;
       }
       // Each animal type should appear at least once
-      expect(Object.keys(animalCounts)).toHaveLength(5);
-      // Each animal should have at least 20 occurrences (roughly uniform)
+      expect(Object.keys(animalCounts)).toHaveLength(4);
+      // Each animal should have at least 50 occurrences (roughly uniform with 4 animals)
       Object.values(animalCounts).forEach((count) => {
-        expect(count).toBeGreaterThan(20);
+        expect(count).toBeGreaterThan(50);
       });
     });
   });
@@ -146,12 +146,13 @@ describe('Factory Utils', () => {
       expect(state.position.z).toBe(DEFAULT_POSITION.z);
     });
 
-    it('should create camera state with target at origin+y', () => {
+    it('should create camera state with target looking at factory floor', () => {
       const state = createInitialCameraState();
 
-      expect(state.target.x).toBe(0);
-      expect(state.target.y).toBe(1);
-      expect(state.target.z).toBe(0);
+      // Target should be at ground floor level, looking into the factory
+      expect(state.target.x).toBe(15);
+      expect(state.target.y).toBe(2);
+      expect(state.target.z).toBe(10);
     });
 
     it('should set isAnimating to false', () => {
