@@ -11,7 +11,7 @@ import * as THREE from 'three';
  * Animal head types available for robot agents.
  * Determined by project name hash for consistent appearance.
  */
-export type AnimalType = 'cow' | 'horse' | 'dragon' | 'tiger' | 'rabbit';
+export type AnimalType = 'cow' | 'horse' | 'tiger' | 'rabbit';
 
 /**
  * Agent operational status levels
@@ -194,19 +194,19 @@ export interface LightingConfig {
  */
 export const LIGHTING_CONFIGS: Record<'day' | 'night', LightingConfig> = {
   day: {
-    background: 0x87ceeb,
-    fog: 0x87ceeb,
-    wallColor: 0xe8e4de,
-    floorColor: 0x5a5a6a,
-    ambientIntensity: 0.6,
-    sunIntensity: 1.5,
+    background: 0xe8f4fc,    // Light blue sky - Apple style
+    fog: 0xe8f4fc,
+    wallColor: 0xf5f5f7,     // Apple's signature light gray
+    floorColor: 0x8a8a8a,    // Modern concrete gray
+    ambientIntensity: 0.7,
+    sunIntensity: 1.2,
   },
   night: {
-    background: 0x0a0a1a,
-    fog: 0x0a0a1a,
-    wallColor: 0x2a2a35,
-    floorColor: 0x1a1a25,
-    ambientIntensity: 0.1,
+    background: 0x0a0a12,
+    fog: 0x0a0a12,
+    wallColor: 0x1a1a1f,
+    floorColor: 0x1a1a20,
+    ambientIntensity: 0.15,
     sunIntensity: 0.0,
   },
 } as const;
@@ -333,14 +333,36 @@ export interface CoffeeBreakState {
 // ====== BOSS MODE TYPES ======
 
 /**
+ * Boss mode navigation mode
+ */
+export type BossModeType = 'auto' | 'manual';
+
+/**
+ * Boss mode target - agent or special location
+ */
+export interface BossModeTarget {
+  id: string;
+  name: string;
+  type: 'agent' | 'npc' | 'location';
+  position: { x: number; y: number; z: number };
+}
+
+/**
  * Boss mode auto-tour state
  */
 export interface BossModeState {
   isActive: boolean;
+  mode: BossModeType;
   currentTargetIndex: number;
-  targets: CameraFocusTarget[];
+  targets: BossModeTarget[];
   timeAtTarget: number;
   targetDuration: number;
+  /** Current orbit angle in radians for 360-degree rotation */
+  orbitAngle: number;
+  /** Orbit radius around target */
+  orbitRadius: number;
+  /** Orbit height above target */
+  orbitHeight: number;
 }
 
 // ====== INTERACTION ZONE TYPES ======
@@ -392,10 +414,10 @@ export const FACTORY_CONSTANTS = {
   ] as const,
   /** Camera defaults */
   CAMERA: {
-    DEFAULT_POSITION: { x: -22, y: 22, z: -22 },
+    DEFAULT_POSITION: { x: -28, y: 22, z: -18 },  // CCTV-style from upper floor corner (Overview mode)
     FOV: 60,
     NEAR: 0.1,
-    FAR: 100,
+    FAR: 150,  // Increased for taller building
     LOOK_SENSITIVITY: 0.002,
     MIN_PITCH: -Math.PI / 2 + 0.1,
     MAX_PITCH: Math.PI / 2 - 0.1,
@@ -407,24 +429,48 @@ export const FACTORY_CONSTANTS = {
   /** Agent/robot configuration */
   AGENT: {
     ROBOT_SCALE: 0.5,
-    WORKSTATION_OFFSET: 0.45,
+    WORKSTATION_OFFSET: 0.8,  // Matches chair position at z=0.8 relative to workstation
     ANIMATION_FADE_DURATION: 0.5,
   },
-  /** Wall dimensions */
+  /** Wall dimensions - expanded factory with tall ceiling (2-3 floors) */
   WALLS: {
-    HEIGHT: 4,
+    HEIGHT: 12,     // Tall ceiling like Apple store (3 floors)
     THICKNESS: 0.3,
-    BACK_X: -26,
-    LEFT_Z: -18,
-    RIGHT_Z: 18,
-    FRONT_X: 26,
+    BACK_X: -32,    // Expanded from -26
+    LEFT_Z: -22,    // Expanded from -18
+    RIGHT_Z: 22,    // Expanded from 18
+    FRONT_X: 32,    // Expanded from 26
   },
-  /** Interaction zones */
+  /** Interaction zones - positioned at edges with clearance from walls and office zones */
   BREAK_ROOM: {
-    POSITION: { x: -18, y: 0, z: 16 },
+    POSITION: { x: -26, y: 0, z: -14 },  // Far left, back area
   },
   POKER_TABLE: {
-    POSITION: { x: 18, y: 0, z: 16 },
+    POSITION: { x: 26, y: 0, z: -14 },  // Far right, back area
+  },
+  /** Stage for dancing/singing - right side, facing agents */
+  STAGE: {
+    POSITION: { x: 26, y: 0, z: 4 },  // Right side, facing left towards agents
+    WIDTH: 8,
+    DEPTH: 5,
+    HEIGHT: 0.4,
+    ROTATION: -Math.PI / 2,  // Rotated to face left (towards agents)
+    /** Audience viewing positions in front of stage */
+    AUDIENCE_POSITIONS: [
+      { x: 18, z: 2 },
+      { x: 18, z: 6 },
+      { x: 20, z: 0 },
+      { x: 20, z: 4 },
+      { x: 20, z: 8 },
+    ],
+  },
+  /** Lounge with couches for sleeping/sitting - left front corner */
+  LOUNGE: {
+    POSITION: { x: -26, y: 0, z: 14 },  // Far left, front area
+    COUCH_POSITIONS: [
+      { x: -2, z: 0, rotation: Math.PI / 2 },
+      { x: 2, z: 0, rotation: -Math.PI / 2 },
+    ],
   },
   /** Animation timing */
   ANIMATION: {
@@ -439,8 +485,62 @@ export const FACTORY_CONSTANTS = {
 } as const;
 
 /**
- * Model paths
+ * Model paths - Local models in public/models/
  */
 export const MODEL_PATHS = {
   ROBOT: '/models/RobotExpressive.glb',
+  COW: '/models/cow/cow-fixed.glb?v=3',  // Model with 1K textures, no Draco compression
+  HORSE: '/models/horse/horse-fixed.glb',  // Horse model with animations and 1K textures
+  TIGER: '/models/tiger/tiger-fixed.glb',  // Tiger model with animations and 1K textures
+  RABBIT: '/models/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
+  STEVE_JOBS: '/models/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
+  SUNDAR_PICHAI: '/models/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
+} as const;
+
+/**
+ * Animation name mappings for different models
+ */
+export const ANIMATION_NAMES = {
+  /** Cow model animation names from Mixamo */
+  COW: {
+    IDLE: 'Idle',
+    WALKING: 'Walking',
+    TYPING: 'Typing',
+    SITTING: 'Sitting',
+    DANCE: 'Dance',
+  },
+  /** Horse model animation names from Mixamo */
+  HORSE: {
+    IDLE: 'Breathing idle',
+    WALKING: 'Walking',
+    TYPING: 'Typing',
+    SITTING: 'Sitting',
+    TALKING: 'Talking',
+  },
+  /** Tiger model animation names from Mixamo */
+  TIGER: {
+    IDLE: 'Breathing idle',
+    WALKING: 'Running',
+    TYPING: 'Typing',
+    SITTING: 'Sitting',
+    DANCE: 'Salsa dancing',
+  },
+  /** Rabbit model animation names from Mixamo */
+  RABBIT: {
+    IDLE: 'Sitting',
+    WALKING: 'Walking',
+    TYPING: 'Pilot flips switches',
+    SITTING: 'Sitting',
+    DANCE: 'Salsa dancing',
+    JUMP: 'Jumping',
+  },
+  /** Robot model animation names */
+  ROBOT: {
+    IDLE: 'Idle',
+    WALKING: 'Walking',
+    DANCE: 'Dance',
+    WAVE: 'Wave',
+    YES: 'Yes',
+    NO: 'No',
+  },
 } as const;

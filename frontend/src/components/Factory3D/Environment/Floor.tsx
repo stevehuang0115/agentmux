@@ -44,7 +44,7 @@ export const Floor: React.FC = () => {
       position={[0, 0, 0]}
       receiveShadow
     >
-      <planeGeometry args={[60, 50]} />
+      <planeGeometry args={[70, 50]} />
       <meshStandardMaterial
         color={floorColor}
         roughness={0.9}

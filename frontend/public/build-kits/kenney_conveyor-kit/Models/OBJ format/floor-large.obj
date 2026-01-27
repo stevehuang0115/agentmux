@@ -1,0 +1,30 @@
+# Created by Kenney (www.kenney.nl)
+
+mtllib floor-large.mtl
+
+g floor-large
+
+v 1 0 -1 1 1 1
+v 1 2.406371E-16 1 1 1 1
+v -1 0 -1 1 1 1
+v -1 2.406371E-16 1 1 1 1
+
+vn 0 1 0
+
+vt 0.28125 0.125
+
+usemtl colormap
+
+f 3/1/1 2/1/1 1/1/1
+f 2/1/1 3/1/1 4/1/1
+
+g floor-large
+
+
+
+
+usemtl colormap
+
+f 3/1/1 2/1/1 1/1/1
+f 2/1/1 3/1/1 4/1/1
+

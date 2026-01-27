@@ -63,15 +63,15 @@ export const LightingToggle: React.FC = () => {
   return (
     <button
       onClick={handleToggle}
-      className={`absolute bottom-4 right-4 flex items-center gap-2 px-3 py-2 rounded-lg border transition-all ${
+      className={`absolute bottom-4 right-16 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border shadow-lg transition-all z-10 ${
         lightingMode === 'night' || (lightingMode === 'auto' && isNightMode)
-          ? 'bg-indigo-900/80 border-indigo-500/50 text-indigo-200'
-          : 'bg-amber-100/90 border-amber-400/50 text-amber-900'
+          ? 'bg-indigo-900/90 border-indigo-500/50 text-indigo-200'
+          : 'bg-amber-100/95 border-amber-400/50 text-amber-900'
       }`}
-      title="Toggle lighting mode"
+      title="Toggle lighting mode (Day/Night/Auto)"
     >
       {getIcon()}
-      <span className="text-sm font-medium">{getLabel()}</span>
+      <span className="text-xs font-medium">{getLabel()}</span>
     </button>
   );
 };

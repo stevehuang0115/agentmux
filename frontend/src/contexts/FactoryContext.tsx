@@ -21,6 +21,8 @@ import {
   CameraState,
   LightingMode,
   BossModeState,
+  BossModeTarget,
+  BossModeType,
   FactoryStats,
   CameraFocusTarget,
   AnimalType,
@@ -35,6 +37,23 @@ import {
 } from '../utils/factory.utils';
 
 // ====== CONTEXT TYPE ======
+
+/**
+ * Idle activity types for agents when not working
+ */
+export type IdleActivity = 'wander' | 'couch' | 'stage';
+
+/**
+ * Idle destinations state - tracks where each idle agent should go
+ */
+interface IdleDestinationsState {
+  /** Map of agent ID to their idle activity */
+  destinations: Map<string, IdleActivity>;
+  /** ID of the agent currently on stage (only one at a time) */
+  stagePerformerId: string | null;
+  /** IDs of agents on couches */
+  couchAgentIds: string[];
+}
 
 interface FactoryContextType {
   /** Map of agent ID to agent data */
@@ -55,6 +74,14 @@ interface FactoryContextType {
   bossModeState: BossModeState;
   /** Toggle boss mode on/off */
   toggleBossMode: () => void;
+  /** Set boss mode type (auto/manual) */
+  setBossModeType: (mode: BossModeType) => void;
+  /** Navigate to next target in boss mode */
+  bossNextTarget: () => void;
+  /** Navigate to previous target in boss mode */
+  bossPrevTarget: () => void;
+  /** Get current target name */
+  getCurrentTargetName: () => string;
   /** Factory statistics */
   stats: FactoryStats;
   /** List of project names */
@@ -67,6 +94,14 @@ interface FactoryContextType {
   refreshData: () => Promise<void>;
   /** Update camera state directly */
   updateCamera: (updates: Partial<CameraState>) => void;
+  /** Idle destinations state */
+  idleDestinations: IdleDestinationsState;
+  /** Get the idle activity for an agent */
+  getIdleActivity: (agentId: string) => IdleActivity;
+  /** Check if an agent is the stage performer */
+  isStagePerformer: (agentId: string) => boolean;
+  /** Get couch position index for an agent (-1 if not on couch) */
+  getCouchPositionIndex: (agentId: string) => number;
 }
 
 // ====== CONTEXT ======
@@ -97,20 +132,31 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const [cameraTarget, setCameraTargetState] = useState<CameraFocusTarget>('overview');
 
   // Lighting state
-  const [lightingMode, setLightingMode] = useState<LightingMode>('auto');
+  const [lightingMode, setLightingMode] = useState<LightingMode>('day');
 
   // Boss mode state
   const [bossModeState, setBossModeState] = useState<BossModeState>({
     isActive: false,
+    mode: 'auto',
     currentTargetIndex: 0,
     targets: [],
     timeAtTarget: 0,
     targetDuration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+    orbitAngle: 0,
+    orbitRadius: 6,
+    orbitHeight: 4,
   });
 
   // Loading and error state
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Idle destinations state - randomized activities for idle agents
+  const [idleDestinations, setIdleDestinations] = useState<IdleDestinationsState>({
+    destinations: new Map(),
+    stagePerformerId: null,
+    couchAgentIds: [],
+  });
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -153,40 +199,36 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
       // Create zones from unique projects
       const newZones = new Map<string, OfficeZone>();
-      const projectSet = new Set<string>();
-      let zoneIndex = 0;
 
-      state.agents.forEach((agentData) => {
-        if (!projectSet.has(agentData.projectName)) {
-          projectSet.add(agentData.projectName);
+      // Collect unique project names and sort alphabetically for consistent zone positions
+      const projectNames = [...new Set(state.agents.map((a) => a.projectName))].sort();
 
-          // Calculate zone position
-          const zonesPerRow = FACTORY_CONSTANTS.ZONE.ZONES_PER_ROW;
-          const row = Math.floor(zoneIndex / zonesPerRow);
-          const col = zoneIndex % zonesPerRow;
+      // Create zones in alphabetical order
+      projectNames.forEach((projectName, zoneIndex) => {
+        // Calculate zone position
+        const zonesPerRow = FACTORY_CONSTANTS.ZONE.ZONES_PER_ROW;
+        const row = Math.floor(zoneIndex / zonesPerRow);
+        const col = zoneIndex % zonesPerRow;
 
-          const zoneX =
-            FACTORY_CONSTANTS.ZONE.START_X +
-            col * (FACTORY_CONSTANTS.ZONE.WIDTH + FACTORY_CONSTANTS.ZONE.GAP_X);
-          const zoneZ =
-            FACTORY_CONSTANTS.ZONE.START_Z -
-            row * (FACTORY_CONSTANTS.ZONE.DEPTH + FACTORY_CONSTANTS.ZONE.GAP_Z);
+        const zoneX =
+          FACTORY_CONSTANTS.ZONE.START_X +
+          col * (FACTORY_CONSTANTS.ZONE.WIDTH + FACTORY_CONSTANTS.ZONE.GAP_X);
+        const zoneZ =
+          FACTORY_CONSTANTS.ZONE.START_Z -
+          row * (FACTORY_CONSTANTS.ZONE.DEPTH + FACTORY_CONSTANTS.ZONE.GAP_Z);
 
-          newZones.set(agentData.projectName, {
-            projectName: agentData.projectName,
-            zoneIndex,
-            zoneX,
-            zoneZ,
-            color: ZONE_COLORS[zoneIndex % ZONE_COLORS.length],
-            workstations: FACTORY_CONSTANTS.WORKSTATION_POSITIONS.map((pos, i) => ({
-              position: { x: zoneX + pos.x, z: zoneZ + pos.z },
-              index: zoneIndex * 4 + i,
-              isActive: false,
-            })),
-          });
-
-          zoneIndex++;
-        }
+        newZones.set(projectName, {
+          projectName,
+          zoneIndex,
+          zoneX,
+          zoneZ,
+          color: ZONE_COLORS[zoneIndex % ZONE_COLORS.length],
+          workstations: FACTORY_CONSTANTS.WORKSTATION_POSITIONS.map((pos, i) => ({
+            position: { x: zoneX + pos.x, z: zoneZ + pos.z },
+            index: zoneIndex * 4 + i,
+            isActive: false,
+          })),
+        });
       });
 
       // Create agents with positions
@@ -229,9 +271,19 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         newAgents.set(agentData.id, agent);
       });
 
+      // Debug logging
+      console.log('[FactoryContext] === REFRESH DATA ===');
+      console.log('[FactoryContext] Zones created:', newZones.size);
+      console.log('[FactoryContext] Zone names:', Array.from(newZones.keys()));
+      console.log('[FactoryContext] Agents created:', newAgents.size);
+      newAgents.forEach((agent, id) => {
+        console.log(`[FactoryContext] Agent ${id}: project="${agent.projectName}", type=${agent.animalType}, wsIndex=${agent.workstationIndex}`);
+      });
+      console.log('[FactoryContext] === END REFRESH ===');
+
       setZones(newZones);
       setAgents(newAgents);
-      setProjects(Array.from(projectSet));
+      setProjects(projectNames);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch factory state');
@@ -250,17 +302,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
     // Calculate target position and look-at based on target
     if (target === 'overview') {
-      const { DEFAULT_POSITION } = FACTORY_CONSTANTS.CAMERA;
+      // CCTV-style view from upper floor corner, looking down diagonally
+      // Position in back-left corner of upper floor, high up
       setCamera((prev) => ({
         ...prev,
         isAnimating: true,
         animationTarget: {
-          position: new THREE.Vector3(
-            DEFAULT_POSITION.x,
-            DEFAULT_POSITION.y,
-            DEFAULT_POSITION.z
-          ),
-          lookAt: new THREE.Vector3(0, 1, 0),
+          position: new THREE.Vector3(-28, 22, -18), // Upper floor corner (inside building bounds)
+          lookAt: new THREE.Vector3(15, 2, 10), // Looking diagonally down at ground floor
           duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
           startTime: Date.now(),
           startPosition: prev.position.clone(),
@@ -282,13 +331,29 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         },
       }));
     } else if (target === 'outdoor') {
-      // Outdoor view - from outside looking at the building
+      // Outdoor view - from outside looking at the building front with neon logo
+      // Building front is at z=22, logo is at height ~21 (totalHeight - 3)
       setCamera((prev) => ({
         ...prev,
         isAnimating: true,
         animationTarget: {
-          position: new THREE.Vector3(-30, 8, -30), // Outside the building
-          lookAt: new THREE.Vector3(0, 2, 0), // Looking at building center
+          position: new THREE.Vector3(0, 18, 55), // In front of building, elevated
+          lookAt: new THREE.Vector3(0, 18, 22), // Looking at the neon sign on front
+          duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
+          startTime: Date.now(),
+          startPosition: prev.position.clone(),
+          startLookAt: prev.target.clone(),
+        },
+      }));
+    } else if (target === 'upperfloor') {
+      // Upper floor test view - inside the upper floor looking down at ground floor
+      // This position is inside the building bounds to test floor separator hiding
+      setCamera((prev) => ({
+        ...prev,
+        isAnimating: true,
+        animationTarget: {
+          position: new THREE.Vector3(0, 18, 10), // Inside upper floor (y=18, z=10 inside bounds)
+          lookAt: new THREE.Vector3(0, 12, -5), // Looking at the floor separator
           duration: FACTORY_CONSTANTS.ANIMATION.FOCUS_DURATION,
           startTime: Date.now(),
           startPosition: prev.position.clone(),
@@ -332,6 +397,76 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   }, []);
 
   /**
+   * Generate boss mode targets from current agents + Steve Jobs NPC
+   */
+  const generateBossModeTargets = useCallback((): BossModeTarget[] => {
+    const targets: BossModeTarget[] = [];
+
+    // Add all agents as targets
+    agents.forEach((agent) => {
+      targets.push({
+        id: agent.id,
+        name: agent.name || agent.sessionName || agent.id,
+        type: 'agent',
+        position: {
+          x: agent.basePosition.x,
+          y: agent.basePosition.y,
+          z: agent.basePosition.z,
+        },
+      });
+    });
+
+    // Add Steve Jobs NPC as a target
+    targets.push({
+      id: 'steve-jobs-npc',
+      name: 'Steve Jobs',
+      type: 'npc',
+      position: { x: 0, y: 0, z: 5 }, // Default position, will update dynamically
+    });
+
+    // Add Sundar Pichai NPC as a target
+    targets.push({
+      id: 'sundar-pichai-npc',
+      name: 'Sundar Pichai',
+      type: 'npc',
+      position: { x: 10, y: 0, z: 0 }, // Default position, will update dynamically
+    });
+
+    return targets;
+  }, [agents]);
+
+  /**
+   * Focus camera on a boss mode target
+   */
+  const focusOnBossModeTarget = useCallback((target: BossModeTarget) => {
+    // Calculate camera position based on target
+    const cameraOffset = { x: -4, y: 4, z: 4 };
+    const newPosition = new THREE.Vector3(
+      target.position.x + cameraOffset.x,
+      target.position.y + cameraOffset.y,
+      target.position.z + cameraOffset.z
+    );
+    const lookAt = new THREE.Vector3(
+      target.position.x,
+      target.position.y + 1.5, // Look at agent head height
+      target.position.z
+    );
+
+    setCamera((prev) => ({
+      ...prev,
+      isAnimating: true,
+      animationTarget: {
+        position: newPosition,
+        lookAt,
+        duration: 1500,
+        startTime: Date.now(),
+        startPosition: prev.position.clone(),
+        startLookAt: prev.target.clone(),
+      },
+    }));
+  }, []);
+
+  /**
    * Toggles boss mode auto-tour
    */
   const toggleBossMode = useCallback(() => {
@@ -339,20 +474,101 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       if (prev.isActive) {
         // Turning off - reset to overview
         setCameraTarget('overview');
-        return { ...prev, isActive: false };
+        return {
+          ...prev,
+          isActive: false,
+          targets: [],
+          orbitAngle: 0,
+        };
       } else {
-        // Turning on - start tour
-        const targets: CameraFocusTarget[] = ['overview', ...projects];
+        // Turning on - generate targets from agents + Steve Jobs
+        const targets = generateBossModeTargets();
         return {
           isActive: true,
+          mode: 'auto',
           currentTargetIndex: 0,
           targets,
           timeAtTarget: 0,
           targetDuration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+          orbitAngle: 0,
+          orbitRadius: 6,
+          orbitHeight: 4,
         };
       }
     });
-  }, [projects, setCameraTarget]);
+  }, [generateBossModeTargets, setCameraTarget]);
+
+  /**
+   * Set boss mode type (auto/manual)
+   */
+  const setBossModeType = useCallback((mode: BossModeType) => {
+    setBossModeState((prev) => ({ ...prev, mode }));
+  }, []);
+
+  /**
+   * Navigate to next target in boss mode
+   */
+  const bossNextTarget = useCallback(() => {
+    setBossModeState((prev) => {
+      if (!prev.isActive || prev.targets.length === 0) return prev;
+      const nextIndex = (prev.currentTargetIndex + 1) % prev.targets.length;
+      return {
+        ...prev,
+        currentTargetIndex: nextIndex,
+        orbitAngle: 0, // Reset orbit angle for new target
+        timeAtTarget: 0,
+      };
+    });
+  }, []);
+
+  /**
+   * Navigate to previous target in boss mode
+   */
+  const bossPrevTarget = useCallback(() => {
+    setBossModeState((prev) => {
+      if (!prev.isActive || prev.targets.length === 0) return prev;
+      const prevIndex = prev.currentTargetIndex === 0
+        ? prev.targets.length - 1
+        : prev.currentTargetIndex - 1;
+      return {
+        ...prev,
+        currentTargetIndex: prevIndex,
+        orbitAngle: 0, // Reset orbit angle for new target
+        timeAtTarget: 0,
+      };
+    });
+  }, []);
+
+  /**
+   * Get current target name
+   */
+  const getCurrentTargetName = useCallback((): string => {
+    if (!bossModeState.isActive || bossModeState.targets.length === 0) {
+      return '';
+    }
+    return bossModeState.targets[bossModeState.currentTargetIndex]?.name || '';
+  }, [bossModeState]);
+
+  /**
+   * Get the idle activity for an agent
+   */
+  const getIdleActivity = useCallback((agentId: string): IdleActivity => {
+    return idleDestinations.destinations.get(agentId) || 'wander';
+  }, [idleDestinations.destinations]);
+
+  /**
+   * Check if an agent is the stage performer
+   */
+  const isStagePerformer = useCallback((agentId: string): boolean => {
+    return idleDestinations.stagePerformerId === agentId;
+  }, [idleDestinations.stagePerformerId]);
+
+  /**
+   * Get couch position index for an agent (-1 if not on couch)
+   */
+  const getCouchPositionIndex = useCallback((agentId: string): number => {
+    return idleDestinations.couchAgentIds.indexOf(agentId);
+  }, [idleDestinations.couchAgentIds]);
 
   // Initial data fetch
   useEffect(() => {
@@ -377,30 +593,158 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     return () => clearInterval(interval);
   }, [lightingMode]);
 
-  // Boss mode tour logic
+  // Boss mode orbit animation - continuously orbits around current target
   useEffect(() => {
     if (!bossModeState.isActive) return;
+    if (bossModeState.targets.length === 0) return;
 
-    const interval = setInterval(() => {
+    const orbitSpeed = 0.3; // Radians per second
+    const autoSwitchAfterRotation = bossModeState.mode === 'auto';
+    let lastTime = performance.now();
+    let animationFrameId: number;
+
+    const animate = () => {
+      const now = performance.now();
+      const delta = (now - lastTime) / 1000; // Convert to seconds
+      lastTime = now;
+
       setBossModeState((prev) => {
-        const nextIndex = (prev.currentTargetIndex + 1) % prev.targets.length;
-        const nextTarget = prev.targets[nextIndex];
-        setCameraTarget(nextTarget);
+        if (!prev.isActive || prev.targets.length === 0) return prev;
+
+        const target = prev.targets[prev.currentTargetIndex];
+        if (!target) return prev;
+
+        // Update orbit angle
+        let newAngle = prev.orbitAngle + orbitSpeed * delta;
+
+        // Check if we've completed a full rotation in auto mode
+        let nextIndex = prev.currentTargetIndex;
+        if (autoSwitchAfterRotation && newAngle >= Math.PI * 2) {
+          newAngle = 0;
+          nextIndex = (prev.currentTargetIndex + 1) % prev.targets.length;
+        }
+
+        // Calculate camera position on orbit
+        const targetPos = prev.targets[nextIndex]?.position || target.position;
+        const camX = targetPos.x + prev.orbitRadius * Math.cos(newAngle);
+        const camZ = targetPos.z + prev.orbitRadius * Math.sin(newAngle);
+        const camY = targetPos.y + prev.orbitHeight;
+
+        // Update camera position directly
+        setCamera((camPrev) => {
+          const newPosition = new THREE.Vector3(camX, camY, camZ);
+          const newTarget = new THREE.Vector3(
+            targetPos.x,
+            targetPos.y + 2, // Look at head height
+            targetPos.z
+          );
+
+          return {
+            ...camPrev,
+            position: newPosition,
+            target: newTarget,
+            isAnimating: false,
+          };
+        });
+
         return {
           ...prev,
+          orbitAngle: newAngle,
           currentTargetIndex: nextIndex,
-          timeAtTarget: 0,
         };
       });
-    }, bossModeState.targetDuration);
 
-    // Focus on first target
-    if (bossModeState.targets.length > 0) {
-      setCameraTarget(bossModeState.targets[bossModeState.currentTargetIndex]);
-    }
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [bossModeState.isActive, bossModeState.mode, bossModeState.targets.length]);
+
+  // Idle destinations management - assign random activities to idle agents
+  useEffect(() => {
+    const DESTINATION_CHECK_INTERVAL = 5000; // Check every 5 seconds
+    const MAX_COUCH_AGENTS = 4; // Maximum agents on couches
+
+    const assignIdleDestinations = () => {
+      // Get all idle agents
+      const idleAgents = Array.from(agents.values()).filter(
+        (agent) => agent.status === 'idle'
+      );
+
+      if (idleAgents.length === 0) {
+        // Clear all destinations if no idle agents
+        setIdleDestinations({
+          destinations: new Map(),
+          stagePerformerId: null,
+          couchAgentIds: [],
+        });
+        return;
+      }
+
+      const newDestinations = new Map<string, IdleActivity>();
+      let newStagePerformerId: string | null = null;
+      const newCouchAgentIds: string[] = [];
+
+      // Keep existing assignments for agents still idle, clear for non-idle
+      idleAgents.forEach((agent) => {
+        const existingDest = idleDestinations.destinations.get(agent.id);
+
+        if (existingDest) {
+          // Keep existing assignment
+          newDestinations.set(agent.id, existingDest);
+          if (existingDest === 'stage') {
+            newStagePerformerId = agent.id;
+          } else if (existingDest === 'couch') {
+            newCouchAgentIds.push(agent.id);
+          }
+        } else {
+          // New idle agent - assign random destination
+          // Probabilities: 50% wander, 25% couch, 25% stage
+          const rand = Math.random();
+          let activity: IdleActivity;
+
+          if (rand < 0.25 && !newStagePerformerId) {
+            // Stage (only if no one on stage yet)
+            activity = 'stage';
+            newStagePerformerId = agent.id;
+          } else if (rand < 0.5 && newCouchAgentIds.length < MAX_COUCH_AGENTS) {
+            // Couch (if space available)
+            activity = 'couch';
+            newCouchAgentIds.push(agent.id);
+          } else {
+            // Default to wandering
+            activity = 'wander';
+          }
+
+          newDestinations.set(agent.id, activity);
+        }
+      });
+
+      // Only update if something changed
+      const currentDestStr = JSON.stringify(Array.from(idleDestinations.destinations.entries()));
+      const newDestStr = JSON.stringify(Array.from(newDestinations.entries()));
+
+      if (currentDestStr !== newDestStr) {
+        setIdleDestinations({
+          destinations: newDestinations,
+          stagePerformerId: newStagePerformerId,
+          couchAgentIds: newCouchAgentIds,
+        });
+      }
+    };
+
+    // Run check immediately and then on interval
+    assignIdleDestinations();
+    const interval = setInterval(assignIdleDestinations, DESTINATION_CHECK_INTERVAL);
 
     return () => clearInterval(interval);
-  }, [bossModeState.isActive, bossModeState.targetDuration, setCameraTarget]);
+  }, [agents, idleDestinations.destinations]);
 
   // Memoize context value to prevent unnecessary re-renders of consumers
   const value = useMemo<FactoryContextType>(
@@ -414,12 +758,20 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       isNightMode,
       bossModeState,
       toggleBossMode,
+      setBossModeType,
+      bossNextTarget,
+      bossPrevTarget,
+      getCurrentTargetName,
       stats,
       projects,
       isLoading,
       error,
       refreshData,
       updateCamera,
+      idleDestinations,
+      getIdleActivity,
+      isStagePerformer,
+      getCouchPositionIndex,
     }),
     [
       agents,
@@ -430,12 +782,20 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       isNightMode,
       bossModeState,
       toggleBossMode,
+      setBossModeType,
+      bossNextTarget,
+      bossPrevTarget,
+      getCurrentTargetName,
       stats,
       projects,
       isLoading,
       error,
       refreshData,
       updateCamera,
+      idleDestinations,
+      getIdleActivity,
+      isStagePerformer,
+      getCouchPositionIndex,
     ]
   );
 

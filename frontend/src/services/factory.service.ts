@@ -61,19 +61,21 @@ class FactoryService {
   }
 
   /**
-   * Builds factory state from legacy endpoints when /factory/state doesn't exist.
-   * Falls back to fetching from /teams endpoint.
+   * Builds factory state by merging data from multiple sources:
+   * 1. AgentMux teams (managed agents - Claude, Gemini, Codex, etc.)
+   * 2. Claude Code processes (standalone processes outside AgentMux)
    *
-   * @returns Promise resolving to factory state
+   * @returns Promise resolving to merged factory state
    */
   private async buildFactoryStateFromLegacyEndpoints(): Promise<FactoryStateResponse> {
+    const agents: FactoryAgentResponse[] = [];
+    const projectSet = new Set<string>();
+    const seenIds = new Set<string>();
+
+    // 1. Fetch AgentMux managed teams
     try {
-      // Try to get teams and build agent list
       const teamsResponse = await axios.get<ApiResponse<any[]>>(`${API_BASE}/teams`);
       const teams = teamsResponse.data.data || [];
-
-      const agents: FactoryAgentResponse[] = [];
-      const projectSet = new Set<string>();
 
       teams.forEach((team: any) => {
         const projectName = team.currentProject || team.name || 'Unassigned';
@@ -81,6 +83,7 @@ class FactoryService {
 
         if (team.members) {
           team.members.forEach((member: any) => {
+            seenIds.add(member.id);
             agents.push({
               id: member.id,
               sessionName: member.sessionName,
@@ -94,36 +97,80 @@ class FactoryService {
           });
         }
       });
-
-      return {
-        agents,
-        projects: Array.from(projectSet),
-        stats: {
-          activeCount: agents.filter((a) => a.status === 'active').length,
-          idleCount: agents.filter((a) => a.status === 'idle').length,
-          dormantCount: agents.filter((a) => a.status === 'dormant').length,
-          totalTokens: 0,
-        },
-      };
     } catch {
-      return {
-        agents: [],
-        projects: [],
-        stats: {
-          activeCount: 0,
-          idleCount: 0,
-          dormantCount: 0,
-          totalTokens: 0,
-        },
-      };
+      // Teams endpoint failed, continue with Claude instances
     }
+
+    // 2. Fetch standalone Claude Code processes
+    try {
+      // Note: This endpoint returns data directly, not wrapped in {success, data}
+      const response = await axios.get<{
+        totalInstances: number;
+        activeCount: number;
+        idleCount: number;
+        dormantCount: number;
+        totalSessionTokens: number;
+        instances: Array<{
+          id: string;
+          pid: string;
+          projectName: string;
+          projectPath: string;
+          cpuPercent: number;
+          status: 'active' | 'idle';
+          activity?: string;
+          lastTool?: string;
+          sessionTokens?: number;
+          color?: string;
+        }>;
+      }>(`${API_BASE}/factory/claude-instances`);
+
+      const instancesData = response.data;
+      if (instancesData?.instances) {
+        instancesData.instances.forEach((instance) => {
+          // Skip if already added from teams (avoid duplicates)
+          if (seenIds.has(instance.id)) {
+            return;
+          }
+
+          const projectName = instance.projectName || 'Unknown';
+          projectSet.add(projectName);
+
+          agents.push({
+            id: instance.id,
+            sessionName: `claude-${instance.pid}`,
+            name: projectName,
+            projectName,
+            status: instance.status === 'active' ? 'active' : 'idle',
+            cpuPercent: instance.cpuPercent,
+            activity: instance.activity,
+            sessionTokens: instance.sessionTokens || 0,
+          });
+        });
+      }
+    } catch {
+      // Claude instances endpoint failed, continue with what we have
+    }
+
+    // Calculate stats from merged agents
+    const stats = {
+      activeCount: agents.filter((a) => a.status === 'active').length,
+      idleCount: agents.filter((a) => a.status === 'idle').length,
+      dormantCount: agents.filter((a) => a.status === 'dormant').length,
+      totalTokens: agents.reduce((sum, a) => sum + (a.sessionTokens || 0), 0),
+    };
+
+    return {
+      agents,
+      projects: Array.from(projectSet),
+      stats,
+    };
   }
 
   /**
    * Maps backend agent status to factory visualization status.
    *
-   * @param agentStatus - Agent connection status
-   * @param workingStatus - Agent working status
+   * @param agentStatus - Agent connection status (active, inactive, activating)
+   * @param workingStatus - Agent working status (idle, in_progress)
    * @returns Mapped status for factory visualization
    */
   private mapAgentStatus(

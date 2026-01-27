@@ -173,9 +173,11 @@ const Cloud: React.FC<CloudProps> = ({ position, speed = 0.5 }) => {
  * @returns JSX element with all outdoor objects
  */
 export const OutdoorScenery: React.FC = () => {
-  // Tree positions around the building
+  const { isNightMode } = useFactory();
+
+  // Tree positions around the building - many more trees for denser forest
   const treePositions = useMemo<[number, number, number, number][]>(() => [
-    // Back row
+    // Back row - close
     [-35, 0, -25, 4],
     [-28, 0, -28, 3.5],
     [-20, 0, -26, 4.5],
@@ -187,44 +189,156 @@ export const OutdoorScenery: React.FC = () => {
     [28, 0, -25, 4.5],
     [35, 0, -27, 3],
 
-    // Left side
+    // Back row - middle distance
+    [-40, 0, -40, 5],
+    [-32, 0, -42, 4.5],
+    [-24, 0, -38, 5.5],
+    [-16, 0, -44, 4],
+    [-8, 0, -40, 5.2],
+    [0, 0, -42, 4.8],
+    [8, 0, -38, 5],
+    [16, 0, -44, 4.5],
+    [24, 0, -40, 5.5],
+    [32, 0, -42, 4],
+    [40, 0, -38, 5.2],
+
+    // Back row - far distance
+    [-45, 0, -55, 6],
+    [-35, 0, -58, 5.5],
+    [-25, 0, -52, 6.5],
+    [-15, 0, -60, 5],
+    [-5, 0, -55, 6.2],
+    [5, 0, -58, 5.8],
+    [15, 0, -52, 6],
+    [25, 0, -60, 5.5],
+    [35, 0, -55, 6.5],
+    [45, 0, -58, 5],
+
+    // Very far back
+    [-50, 0, -70, 7],
+    [-30, 0, -75, 6.5],
+    [-10, 0, -72, 7.5],
+    [10, 0, -70, 6],
+    [30, 0, -75, 7.2],
+    [50, 0, -72, 6.8],
+
+    // Left side - dense
     [-35, 0, -15, 3.5],
     [-38, 0, -5, 4],
     [-35, 0, 5, 3.8],
     [-38, 0, 15, 4.2],
+    [-42, 0, -20, 4.5],
+    [-45, 0, -10, 5],
+    [-42, 0, 0, 4.8],
+    [-45, 0, 10, 5.2],
+    [-50, 0, -15, 5.5],
+    [-50, 0, 5, 5],
 
-    // Right side
+    // Right side - dense
     [35, 0, -15, 4],
     [38, 0, -5, 3.5],
     [35, 0, 5, 4.2],
     [38, 0, 15, 3.8],
+    [42, 0, -20, 4.5],
+    [45, 0, -10, 5],
+    [42, 0, 0, 4.8],
+    [45, 0, 10, 5.2],
+    [50, 0, -15, 5.5],
+    [50, 0, 5, 5],
+
+    // Fill gaps
+    [-25, 0, -32, 3.8],
+    [-10, 0, -33, 4.2],
+    [10, 0, -32, 3.5],
+    [25, 0, -33, 4],
   ], []);
 
-  // House positions
+  // House positions - more houses scattered around
   const housePositions = useMemo<[number, number, number, number][]>(() => [
+    // Back area
     [-32, 0, -35, 0.2],
     [-15, 0, -38, -0.1],
     [5, 0, -36, 0.3],
     [25, 0, -38, -0.2],
+
+    // Far back area
+    [-40, 0, -50, 0.4],
+    [-20, 0, -52, -0.3],
+    [0, 0, -48, 0.1],
+    [20, 0, -52, -0.1],
+    [40, 0, -50, 0.2],
+
+    // Very far
+    [-35, 0, -65, 0.5],
+    [0, 0, -68, 0],
+    [35, 0, -65, -0.4],
+
+    // Left side
     [-40, 0, -10, Math.PI / 2],
+    [-48, 0, -25, Math.PI / 2 + 0.2],
+    [-45, 0, 8, Math.PI / 2 - 0.1],
+
+    // Right side
     [40, 0, 0, -Math.PI / 2],
+    [48, 0, -20, -Math.PI / 2 + 0.2],
+    [45, 0, 12, -Math.PI / 2 - 0.1],
   ], []);
 
-  // Cloud positions
+  // Cloud positions - more clouds to fill sky
   const cloudPositions = useMemo<[number, number, number, number][]>(() => [
     [-20, 15, -30, 0.3],
     [10, 18, -25, 0.5],
     [30, 14, -35, 0.4],
     [-35, 16, 0, 0.35],
     [35, 17, 10, 0.45],
+    [-50, 20, -40, 0.25],
+    [50, 19, -50, 0.55],
+    [0, 22, -60, 0.3],
+    [-30, 21, -55, 0.4],
+    [30, 20, -65, 0.35],
+    [-15, 17, -45, 0.45],
+    [15, 19, -55, 0.3],
   ], []);
+
+  // Sky color
+  const skyColor = isNightMode ? 0x1a1a2e : 0x87ceeb;
+  const grassColor = isNightMode ? 0x2a4a2f : 0x4a7c4f;
+  const hillColor = isNightMode ? 0x3a5a3f : 0x5a8c5f;
 
   return (
     <group>
-      {/* Ground plane outside building */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, -30]} receiveShadow>
-        <planeGeometry args={[100, 40]} />
-        <meshStandardMaterial color={0x4a7c4f} roughness={0.9} />
+      {/* Sky backdrop - large curved plane behind everything */}
+      <mesh position={[0, 20, -100]} receiveShadow={false}>
+        <planeGeometry args={[300, 100]} />
+        <meshBasicMaterial color={skyColor} side={THREE.DoubleSide} />
+      </mesh>
+
+      {/* Ground plane outside building - extended */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, -50]} receiveShadow>
+        <planeGeometry args={[200, 150]} />
+        <meshStandardMaterial color={grassColor} roughness={0.9} />
+      </mesh>
+
+      {/* Rolling hills in the distance */}
+      <mesh position={[-30, 2, -80]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[25, 32]} />
+        <meshStandardMaterial color={hillColor} roughness={0.9} />
+      </mesh>
+      <mesh position={[30, 3, -85]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[30, 32]} />
+        <meshStandardMaterial color={hillColor} roughness={0.9} />
+      </mesh>
+      <mesh position={[0, 4, -90]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[35, 32]} />
+        <meshStandardMaterial color={hillColor} roughness={0.9} />
+      </mesh>
+      <mesh position={[-50, 2, -75]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[20, 32]} />
+        <meshStandardMaterial color={hillColor} roughness={0.9} />
+      </mesh>
+      <mesh position={[50, 2.5, -78]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[22, 32]} />
+        <meshStandardMaterial color={hillColor} roughness={0.9} />
       </mesh>
 
       {/* Trees */}
