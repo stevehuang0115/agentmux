@@ -104,6 +104,10 @@ interface FactoryContextType {
   getCouchPositionIndex: (agentId: string) => number;
   /** Update an agent's current position (called by agent components) */
   updateAgentPosition: (agentId: string, position: THREE.Vector3) => void;
+  /** Update an NPC's current position (called by NPC components) */
+  updateNpcPosition: (npcId: string, position: THREE.Vector3) => void;
+  /** Map of NPC ID to current position */
+  npcPositions: Map<string, THREE.Vector3>;
 }
 
 // ====== CONTEXT ======
@@ -159,6 +163,9 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     stagePerformerId: null,
     couchAgentIds: [],
   });
+
+  // NPC positions state - tracks current positions of NPCs for boss mode
+  const [npcPositions, setNpcPositions] = useState<Map<string, THREE.Vector3>>(new Map());
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -404,24 +411,30 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       });
     });
 
-    // Add Steve Jobs NPC as a target
+    // Add Steve Jobs NPC as a target (use tracked position or default)
+    const stevePos = npcPositions.get('steve-jobs-npc');
     targets.push({
       id: 'steve-jobs-npc',
       name: 'Steve Jobs',
       type: 'npc',
-      position: { x: 0, y: 0, z: 5 }, // Default position, will update dynamically
+      position: stevePos
+        ? { x: stevePos.x, y: stevePos.y, z: stevePos.z }
+        : { x: 0, y: 0, z: 5 },
     });
 
-    // Add Sundar Pichai NPC as a target
+    // Add Sundar Pichai NPC as a target (use tracked position or default)
+    const sundarPos = npcPositions.get('sundar-pichai-npc');
     targets.push({
       id: 'sundar-pichai-npc',
       name: 'Sundar Pichai',
       type: 'npc',
-      position: { x: 10, y: 0, z: 0 }, // Default position, will update dynamically
+      position: sundarPos
+        ? { x: sundarPos.x, y: sundarPos.y, z: sundarPos.z }
+        : { x: 10, y: 0, z: 0 },
     });
 
     return targets;
-  }, [agents]);
+  }, [agents, npcPositions]);
 
   /**
    * Focus camera on a boss mode target
@@ -581,6 +594,26 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         currentPosition: position.clone(),
       });
       return newAgents;
+    });
+  }, []);
+
+  /**
+   * Update an NPC's current position (called by NPC components during animation)
+   */
+  const updateNpcPosition = useCallback((npcId: string, position: THREE.Vector3) => {
+    setNpcPositions((prev) => {
+      const currentPos = prev.get(npcId);
+      // Only update if position has changed significantly
+      if (currentPos &&
+          Math.abs(currentPos.x - position.x) < 0.01 &&
+          Math.abs(currentPos.y - position.y) < 0.01 &&
+          Math.abs(currentPos.z - position.z) < 0.01) {
+        return prev;
+      }
+
+      const newMap = new Map(prev);
+      newMap.set(npcId, position.clone());
+      return newMap;
     });
   }, []);
 
@@ -787,6 +820,8 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       isStagePerformer,
       getCouchPositionIndex,
       updateAgentPosition,
+      updateNpcPosition,
+      npcPositions,
     }),
     [
       agents,
@@ -812,6 +847,8 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       isStagePerformer,
       getCouchPositionIndex,
       updateAgentPosition,
+      updateNpcPosition,
+      npcPositions,
     ]
   );
 

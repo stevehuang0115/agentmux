@@ -131,7 +131,7 @@ export const SteveJobsNPC: React.FC = () => {
   }, [actions, gltf.animations]);
 
   // Get factory context
-  const { agents, zones, isStagePerformer } = useFactory();
+  const { agents, zones, isStagePerformer, updateNpcPosition } = useFactory();
 
   // Get useful positions from constants
   const stagePos = FACTORY_CONSTANTS.STAGE.POSITION;
@@ -327,15 +327,23 @@ export const SteveJobsNPC: React.FC = () => {
       }
     }
 
-    // Apply position - Y offset to keep feet on ground (model origin is at center)
-    const yOffset = 2.0; // Raise model so feet are on ground
+    // Apply position - keep feet on ground (y=0)
     groupRef.current.position.x = npcState.currentPos.x;
-    groupRef.current.position.y = yOffset;
+    groupRef.current.position.y = 0;
     groupRef.current.position.z = npcState.currentPos.z;
+
+    // Report position to context for boss mode tracking
+    updateNpcPosition('steve-jobs-npc', groupRef.current.position);
   });
 
   return (
-    <group ref={groupRef} position={[0, 2.0, 5]}>
+    <group ref={groupRef} position={[0, 0, 5]}>
+      {/* Green circle indicator under NPC */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.1, 0]}>
+        <circleGeometry args={[1.2, 32]} />
+        <meshStandardMaterial color={0x44aa44} transparent opacity={0.6} />
+      </mesh>
+
       <primitive object={clonedScene} scale={modelScale} />
     </group>
   );
