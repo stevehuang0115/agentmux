@@ -5,11 +5,10 @@
  * and occasionally sits on the couch to rest.
  */
 
-import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
-import { useFrame, ThreeEvent } from '@react-three/fiber';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
+import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
-import { SkeletonUtils } from 'three-stdlib';
 import { useFactory } from '../../../contexts/FactoryContext';
 import {
   MODEL_PATHS,
@@ -17,6 +16,7 @@ import {
 } from '../../../types/factory.types';
 import { ThinkingBubble, STEVE_JOBS_THOUGHTS } from './ThinkingBubble';
 import { SpeechBubble } from './SpeechBubble';
+import { useEntityInteraction } from './useEntityInteraction';
 import {
   STATIC_OBSTACLES,
   getWorkstationObstacles,
@@ -25,6 +25,12 @@ import {
   getRandomClearPosition,
   Obstacle,
 } from '../../../utils/factoryCollision';
+import {
+  cloneAndFixMaterials,
+  removeRootMotion,
+  disposeScene,
+  getCircleIndicatorStyle,
+} from '../../../utils/threeHelpers';
 
 // Preload the Steve Jobs model
 useGLTF.preload(MODEL_PATHS.STEVE_JOBS);
@@ -88,56 +94,21 @@ export const SteveJobsNPC: React.FC = () => {
   // Load Steve Jobs model
   const gltf = useGLTF(MODEL_PATHS.STEVE_JOBS);
 
-  // Clone scene for this instance
-  const { clonedScene, modelScale } = useMemo(() => {
-    const clone = SkeletonUtils.clone(gltf.scene);
+  // Clone scene with fixed materials
+  const clonedScene = useMemo(() => cloneAndFixMaterials(gltf.scene), [gltf.scene]);
+  const modelScale = 3.6;
 
-    // Fix materials for better visibility
-    clone.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        if (child.material) {
-          child.material = (child.material as THREE.Material).clone();
-        }
-        const mat = child.material as THREE.MeshStandardMaterial;
-        if (mat && mat.isMeshStandardMaterial) {
-          mat.metalnessMap = null;
-          mat.roughnessMap = null;
-          mat.metalness = 0.0;
-          mat.roughness = 0.7;
-          mat.needsUpdate = true;
-        }
-      }
-    });
-
-    // Scale for the model - adjust based on actual model size
-    // Assuming Mixamo standard ~2.0 units, target ~4.0 units (human scale)
-    const scale = 3.6; // 1.5x current size (was 2.4)
-
-    return { clonedScene: clone, modelScale: scale };
-  }, [gltf.scene]);
-
-  // Remove root motion from animations
-  const processedAnimations = useMemo(() => {
-    return gltf.animations.map((clip) => {
-      const tracks = clip.tracks.filter((track) => {
-        const isRootPositionTrack = track.name.includes('Hips') && track.name.endsWith('.position');
-        return !isRootPositionTrack;
-      });
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
-    });
-  }, [gltf.animations]);
+  // Remove root motion to prevent world-space drift
+  const processedAnimations = useMemo(
+    () => removeRootMotion(gltf.animations),
+    [gltf.animations]
+  );
 
   // Setup animations
   const { actions, mixer } = useAnimations(processedAnimations, clonedScene);
 
   // Log available animations on mount and start with idle animation
   useEffect(() => {
-    const animationNames = Object.keys(actions);
-    console.log('[SteveJobsNPC] Available animations:', animationNames.join(', '));
-    console.log('[SteveJobsNPC] Animation count:', animationNames.length);
-    // Also log the raw GLTF animation names
-    console.log('[SteveJobsNPC] Raw GLTF animations:', gltf.animations.map(a => a.name).join(', '));
-
     // Start with Standing Clap as idle animation to avoid T-pose
     const idleAction = actions?.[STEVE_ANIMATIONS.STANDING_CLAP];
     if (idleAction) {
@@ -151,16 +122,12 @@ export const SteveJobsNPC: React.FC = () => {
     zones,
     isStagePerformer,
     updateNpcPosition,
-    hoveredEntityId,
-    selectedEntityId,
-    setHoveredEntity,
-    selectEntity,
     entityConversations,
   } = useFactory();
 
-  const NPC_ID = 'steve-jobs-npc';
-  const isHovered = hoveredEntityId === NPC_ID;
-  const isSelected = selectedEntityId === NPC_ID;
+  const NPC_ID = FACTORY_CONSTANTS.NPC_IDS.STEVE_JOBS;
+  const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
+    useEntityInteraction(NPC_ID);
 
   // Compute all obstacles (static + workstations)
   const allObstacles = useMemo<Obstacle[]>(() => {
@@ -208,43 +175,12 @@ export const SteveJobsNPC: React.FC = () => {
     return Array.from(agents.values()).some(a => a.status === 'idle' && isStagePerformer(a.id));
   }, [agents, isStagePerformer]);
 
-  // Pointer event handlers
-  const handlePointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    setHoveredEntity(NPC_ID);
-    document.body.style.cursor = 'pointer';
-  }, [setHoveredEntity]);
-
-  const handlePointerOut = useCallback(() => {
-    setHoveredEntity(null);
-    document.body.style.cursor = 'default';
-  }, [setHoveredEntity]);
-
-  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation();
-    selectEntity(NPC_ID);
-  }, [selectEntity]);
-
-  // Circle indicator color based on hover/select state
-  const circleColor = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x44aa44;
-  const circleOpacity = isSelected ? 1.0 : isHovered ? 0.9 : 0.6;
-  const circleEmissive = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x000000;
-  const circleEmissiveIntensity = isSelected ? 0.8 : isHovered ? 0.5 : 0;
+  // Circle indicator styling from shared utility
+  const circleStyle = getCircleIndicatorStyle(isSelected, isHovered, 0x44aa44);
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      clonedScene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry?.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((mat) => mat.dispose());
-          } else if (child.material) {
-            child.material.dispose();
-          }
-        }
-      });
-    };
+    return () => disposeScene(clonedScene);
   }, [clonedScene]);
 
   // Animation loop
@@ -486,14 +422,19 @@ export const SteveJobsNPC: React.FC = () => {
       onClick={handleClick}
     >
       {/* Circle indicator under NPC - glows on hover/select */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.1, 0]}>
-        <circleGeometry args={[isHovered || isSelected ? 0.85 : 0.7, 32]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, FACTORY_CONSTANTS.CIRCLE_INDICATOR.Y_OFFSET, 0]}>
+        <circleGeometry args={[
+          isHovered || isSelected
+            ? FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_ACTIVE
+            : FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_DEFAULT,
+          FACTORY_CONSTANTS.CIRCLE_INDICATOR.SEGMENTS,
+        ]} />
         <meshStandardMaterial
-          color={circleColor}
-          emissive={circleEmissive}
-          emissiveIntensity={circleEmissiveIntensity}
+          color={circleStyle.color}
+          emissive={circleStyle.emissive}
+          emissiveIntensity={circleStyle.emissiveIntensity}
           transparent
-          opacity={circleOpacity}
+          opacity={circleStyle.opacity}
         />
       </mesh>
 

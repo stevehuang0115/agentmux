@@ -6,15 +6,15 @@
  * the factory floor randomly.
  */
 
-import React, { useRef, useMemo, useState, useCallback } from 'react';
-import { useFrame, ThreeEvent } from '@react-three/fiber';
+import React, { useRef, useMemo, useState } from 'react';
+import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
-import { SkeletonUtils } from 'three-stdlib';
 import { MODEL_PATHS, FACTORY_CONSTANTS } from '../../../types/factory.types';
 import { useFactory } from '../../../contexts/FactoryContext';
 import { ThinkingBubble } from './ThinkingBubble';
 import { SpeechBubble } from './SpeechBubble';
+import { useEntityInteraction } from './useEntityInteraction';
 import {
   STATIC_OBSTACLES,
   getWorkstationObstacles,
@@ -22,6 +22,12 @@ import {
   getRandomClearPosition,
   Obstacle,
 } from '../../../utils/factoryCollision';
+import {
+  cloneAndFixMaterials,
+  removeRootMotion,
+  disposeScene,
+  getCircleIndicatorStyle,
+} from '../../../utils/threeHelpers';
 
 const { STAGE } = FACTORY_CONSTANTS;
 
@@ -97,33 +103,13 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
   const gltf = useGLTF(modelPath);
 
   // Hover/select state from context
-  const { hoveredEntityId, selectedEntityId, setHoveredEntity, selectEntity, updateNpcPosition, entityConversations } = useFactory();
+  const { updateNpcPosition, entityConversations } = useFactory();
   const entityId = `fake-audience-${index}`;
-  const isHovered = hoveredEntityId === entityId;
-  const isSelected = selectedEntityId === entityId;
+  const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
+    useEntityInteraction(entityId);
 
-  // Pointer event handlers
-  const handlePointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    setHoveredEntity(entityId);
-    document.body.style.cursor = 'pointer';
-  }, [entityId, setHoveredEntity]);
-
-  const handlePointerOut = useCallback(() => {
-    setHoveredEntity(null);
-    document.body.style.cursor = 'default';
-  }, [setHoveredEntity]);
-
-  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation();
-    selectEntity(entityId);
-  }, [entityId, selectEntity]);
-
-  // Circle indicator color based on hover/select state
-  const circleColor = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x808080;
-  const circleOpacity = isSelected ? 1.0 : isHovered ? 0.9 : 0.6;
-  const circleEmissive = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x000000;
-  const circleEmissiveIntensity = isSelected ? 0.8 : isHovered ? 0.5 : 0;
+  // Circle indicator styling from shared utility
+  const circleStyle = getCircleIndicatorStyle(isSelected, isHovered, 0x808080);
 
   // Kitchen position for kitchen visits
   const kitchenPos = FACTORY_CONSTANTS.KITCHEN.POSITION;
@@ -151,58 +137,21 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
     kitchenStartTime: 0,
   });
 
-  // Clone scene for this instance
-  const { clonedScene, modelScale } = useMemo(() => {
-    const clone = SkeletonUtils.clone(gltf.scene);
+  // Clone scene with fixed materials
+  const clonedScene = useMemo(() => cloneAndFixMaterials(gltf.scene), [gltf.scene]);
+  const modelScale = 2.0;
 
-    // Fix materials for better visibility
-    clone.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        if (child.material) {
-          child.material = (child.material as THREE.Material).clone();
-        }
-        const mat = child.material as THREE.MeshStandardMaterial;
-        if (mat && mat.isMeshStandardMaterial) {
-          mat.metalnessMap = null;
-          mat.roughnessMap = null;
-          mat.metalness = 0.0;
-          mat.roughness = 0.7;
-          mat.needsUpdate = true;
-        }
-      }
-    });
-
-    return { clonedScene: clone, modelScale: 2.0 };
-  }, [gltf.scene]);
-
-  // Remove root motion from animations
-  const processedAnimations = useMemo(() => {
-    return gltf.animations.map((clip) => {
-      const tracks = clip.tracks.filter((track) => {
-        const isRootPositionTrack =
-          track.name.includes('Hips') && track.name.endsWith('.position');
-        return !isRootPositionTrack;
-      });
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
-    });
-  }, [gltf.animations]);
+  // Remove root motion to prevent world-space drift
+  const processedAnimations = useMemo(
+    () => removeRootMotion(gltf.animations),
+    [gltf.animations]
+  );
 
   const { actions, mixer } = useAnimations(processedAnimations, clonedScene);
 
   // Cleanup on unmount
   React.useEffect(() => {
-    return () => {
-      clonedScene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry?.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((mat) => mat.dispose());
-          } else if (child.material) {
-            child.material.dispose();
-          }
-        }
-      });
-    };
+    return () => disposeScene(clonedScene);
   }, [clonedScene]);
 
   useFrame((state, delta) => {
@@ -464,13 +413,18 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
     >
       {/* Circle indicator under fake audience member - glows on hover/select */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
-        <circleGeometry args={[isHovered || isSelected ? 0.85 : 0.7, 32]} />
+        <circleGeometry args={[
+          isHovered || isSelected
+            ? FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_ACTIVE
+            : FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_DEFAULT,
+          FACTORY_CONSTANTS.CIRCLE_INDICATOR.SEGMENTS,
+        ]} />
         <meshStandardMaterial
-          color={circleColor}
-          emissive={circleEmissive}
-          emissiveIntensity={circleEmissiveIntensity}
+          color={circleStyle.color}
+          emissive={circleStyle.emissive}
+          emissiveIntensity={circleStyle.emissiveIntensity}
           transparent
-          opacity={circleOpacity}
+          opacity={circleStyle.opacity}
         />
       </mesh>
       <primitive object={clonedScene} scale={modelScale} />

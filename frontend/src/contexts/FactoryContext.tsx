@@ -412,16 +412,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         newAgents.set(agentData.id, agent);
       });
 
-      // Debug logging
-      console.log('[FactoryContext] === REFRESH DATA ===');
-      console.log('[FactoryContext] Zones created:', newZones.size);
-      console.log('[FactoryContext] Zone names:', Array.from(newZones.keys()));
-      console.log('[FactoryContext] Agents created:', newAgents.size);
-      newAgents.forEach((agent, id) => {
-        console.log(`[FactoryContext] Agent ${id}: project="${agent.projectName}", type=${agent.animalType}, wsIndex=${agent.workstationIndex}`);
-      });
-      console.log('[FactoryContext] === END REFRESH ===');
-
       setZones(newZones);
       setAgents(newAgents);
       setProjects(projectNames);

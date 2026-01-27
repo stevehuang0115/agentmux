@@ -477,6 +477,14 @@ export const FACTORY_CONSTANTS = {
   /** Mini kitchen with snacks/food - left corridor, between lounge (couches) and break room (circle table) */
   KITCHEN: {
     POSITION: { x: -27, y: 0, z: 3 },  // By the window, left wall corridor between lounge and break room
+    /** Seat positions relative to kitchen center (bar stools facing counter) */
+    SEAT_POSITIONS: [
+      { x: -1, z: 1.8, rotation: Math.PI },
+      { x: 0, z: 1.8, rotation: Math.PI },
+      { x: 1, z: 1.8, rotation: Math.PI },
+      { x: -0.5, z: -1.8, rotation: 0 },
+      { x: 0.5, z: -1.8, rotation: 0 },
+    ],
   },
   /** Animation timing */
   ANIMATION: {
@@ -487,6 +495,33 @@ export const FACTORY_CONSTANTS = {
   API: {
     POLL_INTERVAL: 5000,
     USAGE_POLL_INTERVAL: 30000,
+  },
+  /** Movement and interaction constants shared across agent/NPC components */
+  MOVEMENT: {
+    /** Distance at which a character is considered to have arrived at target */
+    ARRIVAL_DISTANCE: 0.5,
+    /** Movement distance below this threshold per tick means the entity is stuck */
+    STUCK_THRESHOLD: 0.01,
+    /** Minimum distance from target to consider stuck (avoids false positives near target) */
+    STUCK_MIN_DISTANCE: 2,
+    /** Interpolation speed for smooth Y-axis rotation */
+    ROTATION_LERP_SPEED: 5,
+    /** Default crossfade duration for animation transitions (seconds) */
+    ANIMATION_FADE_DURATION: 0.3,
+    /** Y offset for seated position on couches */
+    COUCH_SEAT_HEIGHT: 0.35,
+  },
+  /** Circle indicator under entities for hover/select feedback */
+  CIRCLE_INDICATOR: {
+    RADIUS_DEFAULT: 0.7,
+    RADIUS_ACTIVE: 0.85,
+    SEGMENTS: 32,
+    Y_OFFSET: 0.1,
+  },
+  /** NPC entity IDs */
+  NPC_IDS: {
+    STEVE_JOBS: 'steve-jobs-npc',
+    SUNDAR_PICHAI: 'sundar-pichai-npc',
   },
 } as const;
 

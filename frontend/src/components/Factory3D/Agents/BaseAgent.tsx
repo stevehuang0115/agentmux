@@ -11,23 +11,31 @@
  * base component with their specific configurations.
  */
 
-import React, { useRef, useEffect, useMemo, useCallback } from 'react';
-import { useFrame, ThreeEvent } from '@react-three/fiber';
+import React, { useRef, useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
-import { SkeletonUtils } from 'three-stdlib';
 import { useFactory } from '../../../contexts/FactoryContext';
 import { FactoryAgent, FACTORY_CONSTANTS } from '../../../types/factory.types';
 import { SpeechBubble } from './SpeechBubble';
 import { ThinkingBubble, AGENT_THOUGHTS } from './ThinkingBubble';
 import { ZzzIndicator } from './ZzzIndicator';
 import { useAgentAnimation, AnimationConfig } from './useAgentAnimation';
+import { useEntityInteraction } from './useEntityInteraction';
 import {
   STATIC_OBSTACLES,
   isInsideObstacle,
   clampToWalls,
   isPositionClear,
 } from '../../../utils/factoryCollision';
+import {
+  cloneAndFixMaterials,
+  removeRootMotion,
+  disposeScene,
+  normalizeRotationDiff,
+  rotateTowards,
+  getCircleIndicatorStyle,
+} from '../../../utils/threeHelpers';
 
 /**
  * Configuration for a specific agent type
@@ -111,27 +119,7 @@ function transitionToAnimation(
   walkState.currentAnim = targetAnim;
 }
 
-/**
- * Normalize rotation difference to [-PI, PI] range
- */
-function normalizeRotationDiff(diff: number): number {
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return diff;
-}
-
-/**
- * Smoothly rotate towards a target rotation
- */
-function rotateTowards(
-  group: THREE.Group,
-  targetRotation: number,
-  delta: number,
-  speed: number = 3
-): void {
-  const diff = normalizeRotationDiff(targetRotation - group.rotation.y);
-  group.rotation.y += diff * Math.min(1, delta * speed);
-}
+// normalizeRotationDiff and rotateTowards imported from threeHelpers
 
 /**
  * Calculate movement towards a target position
@@ -269,46 +257,17 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   // Load model with animations
   const gltf = useGLTF(config.modelPath);
 
-  // Clone scene for this instance
-  const clonedScene = useMemo(() => {
-    const clone = SkeletonUtils.clone(gltf.scene);
+  // Clone scene for this instance with fixed materials
+  const clonedScene = useMemo(
+    () => cloneAndFixMaterials(gltf.scene),
+    [gltf.scene, agent.id]
+  );
 
-    // Fix materials for better visibility
-    clone.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
-        // Clone the material to avoid shared reference issues
-        if (child.material) {
-          child.material = (child.material as THREE.Material).clone();
-        }
-        const mat = child.material as THREE.MeshStandardMaterial;
-
-        // Fix material for better visibility in scene lighting
-        if (mat && mat.isMeshStandardMaterial) {
-          mat.metalnessMap = null;
-          mat.roughnessMap = null;
-          mat.metalness = 0.0;
-          mat.roughness = 0.7;
-          mat.needsUpdate = true;
-        }
-      }
-    });
-
-    return clone;
-  }, [gltf.scene, agent.id]);
-
-  // Remove root motion (Hips position track) from animations
-  // Only the root bone's position track is removed to prevent world-space drift;
-  // other bones' position tracks are preserved for correct skeletal animation.
-  const processedAnimations = useMemo(() => {
-    return gltf.animations.map((clip) => {
-      const tracks = clip.tracks.filter((track) => {
-        const isRootPositionTrack =
-          track.name.includes('Hips') && track.name.endsWith('.position');
-        return !isRootPositionTrack;
-      });
-      return new THREE.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
-    });
-  }, [gltf.animations]);
+  // Remove root motion to prevent world-space drift
+  const processedAnimations = useMemo(
+    () => removeRootMotion(gltf.animations),
+    [gltf.animations]
+  );
 
   // Setup animations with root motion disabled
   const { actions, mixer } = useAnimations(processedAnimations, clonedScene);
@@ -326,15 +285,11 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     getPokerSeatIndex,
     getKitchenSeatIndex,
     updateAgentPosition,
-    hoveredEntityId,
-    selectedEntityId,
-    setHoveredEntity,
-    selectEntity,
     entityConversations,
   } = useFactory();
 
-  const isHovered = hoveredEntityId === agent.id;
-  const isSelected = selectedEntityId === agent.id;
+  const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
+    useEntityInteraction(agent.id);
 
   // Get this agent's idle activity destination
   const idleActivity = getIdleActivity(agent.id);
@@ -370,43 +325,12 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     return positions;
   }, [zones]);
 
-  // Pointer event handlers
-  const handlePointerOver = useCallback((e: ThreeEvent<PointerEvent>) => {
-    e.stopPropagation();
-    setHoveredEntity(agent.id);
-    document.body.style.cursor = 'pointer';
-  }, [agent.id, setHoveredEntity]);
-
-  const handlePointerOut = useCallback(() => {
-    setHoveredEntity(null);
-    document.body.style.cursor = 'default';
-  }, [setHoveredEntity]);
-
-  const handleClick = useCallback((e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation();
-    selectEntity(agent.id);
-  }, [agent.id, selectEntity]);
-
-  // Circle indicator color based on hover/select state
-  const circleColor = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x4488ff;
-  const circleOpacity = isSelected ? 1.0 : isHovered ? 0.9 : 0.6;
-  const circleEmissive = isSelected ? 0xffaa00 : isHovered ? 0x66ccff : 0x000000;
-  const circleEmissiveIntensity = isSelected ? 0.8 : isHovered ? 0.5 : 0;
+  // Circle indicator styling from shared utility
+  const circleStyle = getCircleIndicatorStyle(isSelected, isHovered, 0x4488ff);
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
-      clonedScene.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry?.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((mat) => mat.dispose());
-          } else if (child.material) {
-            child.material.dispose();
-          }
-        }
-      });
-    };
+    return () => disposeScene(clonedScene);
   }, [clonedScene]);
 
   // Animation loop - position and animation updates
@@ -725,14 +649,19 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       onClick={handleClick}
     >
       {/* Circle indicator under agent - glows on hover/select */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -AGENT_Y_OFFSET + 0.1, 0]}>
-        <circleGeometry args={[isHovered || isSelected ? 0.85 : 0.7, 32]} />
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -AGENT_Y_OFFSET + FACTORY_CONSTANTS.CIRCLE_INDICATOR.Y_OFFSET, 0]}>
+        <circleGeometry args={[
+          isHovered || isSelected
+            ? FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_ACTIVE
+            : FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_DEFAULT,
+          FACTORY_CONSTANTS.CIRCLE_INDICATOR.SEGMENTS,
+        ]} />
         <meshStandardMaterial
-          color={circleColor}
-          emissive={circleEmissive}
-          emissiveIntensity={circleEmissiveIntensity}
+          color={circleStyle.color}
+          emissive={circleStyle.emissive}
+          emissiveIntensity={circleStyle.emissiveIntensity}
           transparent
-          opacity={circleOpacity}
+          opacity={circleStyle.opacity}
         />
       </mesh>
 
