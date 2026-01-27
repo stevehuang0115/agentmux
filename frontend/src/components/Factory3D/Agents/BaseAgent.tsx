@@ -40,7 +40,20 @@ export interface AgentConfig {
   danceAnimation: string;
   /** Sit animation name for lounge */
   sitAnimation: string;
+  /** Wander area X radius (side-to-side) */
+  wanderRadiusX?: number;
+  /** Minimum Z offset from workstation for wandering */
+  wanderMinZ?: number;
+  /** Maximum Z offset from workstation for wandering */
+  wanderMaxZ?: number;
 }
+
+/** Default wander area configuration */
+const DEFAULT_WANDER = {
+  radiusX: 3.0,
+  minZ: 2.5,
+  maxZ: 5.0,
+};
 
 /**
  * Props for BaseAgent component
@@ -65,7 +78,8 @@ interface WalkingState {
 }
 
 /**
- * Fade out all actions and fade in the target animation
+ * Fade out all actions and fade in the target animation.
+ * Falls back to 'Idle' animation if target not found.
  */
 function transitionToAnimation(
   actions: Record<string, THREE.AnimationAction | null> | undefined,
@@ -76,12 +90,27 @@ function transitionToAnimation(
 ): void {
   if (!actions || walkState.currentAnim === targetAnim) return;
 
-  const targetAction = actions[targetAnim];
+  let targetAction = actions[targetAnim];
+
+  // Fallback to Idle if target animation not found
+  if (!targetAction && targetAnim !== 'Idle') {
+    targetAction = actions['Idle'] ?? actions['Breathing idle'] ?? null;
+  }
+
   if (!targetAction) return;
 
   Object.values(actions).forEach((action) => action?.fadeOut(fadeOutDuration));
   targetAction.reset().fadeIn(fadeInDuration).play();
   walkState.currentAnim = targetAnim;
+}
+
+/**
+ * Normalize rotation difference to [-PI, PI] range
+ */
+function normalizeRotationDiff(diff: number): number {
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  return diff;
 }
 
 /**
@@ -93,7 +122,36 @@ function rotateTowards(
   delta: number,
   speed: number = 3
 ): void {
-  group.rotation.y += (targetRotation - group.rotation.y) * Math.min(1, delta * speed);
+  const diff = normalizeRotationDiff(targetRotation - group.rotation.y);
+  group.rotation.y += diff * Math.min(1, delta * speed);
+}
+
+/**
+ * Calculate movement towards a target position
+ */
+interface MovementResult {
+  dx: number;
+  dz: number;
+  distance: number;
+  moveAmount: number;
+  targetRotation: number;
+}
+
+function calculateMovement(
+  currentX: number,
+  currentZ: number,
+  targetX: number,
+  targetZ: number,
+  speed: number,
+  delta: number
+): MovementResult {
+  const dx = targetX - currentX;
+  const dz = targetZ - currentZ;
+  const distance = Math.sqrt(dx * dx + dz * dz);
+  const moveAmount = Math.min(speed * delta, distance);
+  const targetRotation = Math.atan2(dx, dz);
+
+  return { dx, dz, distance, moveAmount, targetRotation };
 }
 
 // Y offset - Mixamo models have origin at feet level, so no offset needed
@@ -308,9 +366,9 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Idle wandering behavior
     if (isIdle) {
-      const wanderRadiusX = 3.0;
-      const wanderMinZ = workstation.position.z + 2.5;
-      const wanderMaxZ = workstation.position.z + 5.0;
+      const wanderRadiusX = config.wanderRadiusX ?? DEFAULT_WANDER.radiusX;
+      const wanderMinZ = workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ);
+      const wanderMaxZ = workstation.position.z + (config.wanderMaxZ ?? DEFAULT_WANDER.maxZ);
 
       if (!walkState.initialized) {
         walkState.currentPos.x = workstation.position.x;
@@ -345,9 +403,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         walkState.currentPos.z += (dz / distance) * moveAmount;
 
         const targetRotation = Math.atan2(dx, dz);
-        let rotationDiff = targetRotation - groupRef.current.rotation.y;
-        while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-        while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
+        const rotationDiff = normalizeRotationDiff(targetRotation - groupRef.current.rotation.y);
         groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
       } else {
         walkState.targetPos.x =
