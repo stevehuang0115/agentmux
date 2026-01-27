@@ -28,6 +28,7 @@ import { BreakRoom } from './InteractionZones/BreakRoom';
 import { PokerTable } from './InteractionZones/PokerTable';
 import { Stage } from './InteractionZones/Stage';
 import { Lounge } from './InteractionZones/Lounge';
+import { MiniKitchen } from './InteractionZones/MiniKitchen';
 
 // Agent components
 import { Agents } from './Agents/RobotAgent';
@@ -200,6 +201,7 @@ const SceneContent: React.FC = () => {
       <PokerTable />
       <Stage />
       <Lounge />
+      <MiniKitchen />
 
       {/* Agents */}
       <Agents />
