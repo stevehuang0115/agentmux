@@ -30,6 +30,7 @@ import {
   removeRootMotion,
   disposeScene,
   getCircleIndicatorStyle,
+  rotateTowards,
 } from '../../../utils/threeHelpers';
 
 // Preload the Sundar Pichai model
@@ -237,11 +238,8 @@ export const SundarPichaiNPC: React.FC = () => {
         npcState.currentState = 'walking_to_target';
       } else if (rand < 0.74) {
         // 15% - Visit the kitchen for a snack/coffee
-        const kitchenOffsets = [
-          { x: -1, z: 1.8 }, { x: 0, z: 1.8 }, { x: 1, z: 1.8 },
-          { x: -0.5, z: -1.8 }, { x: 0.5, z: -1.8 },
-        ];
-        const spot = kitchenOffsets[Math.floor(Math.random() * kitchenOffsets.length)];
+        const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
+        const spot = seatPositions[Math.floor(Math.random() * seatPositions.length)];
         npcState.target = {
           x: kitchenPos.x + spot.x,
           z: kitchenPos.z + spot.z,
@@ -291,12 +289,7 @@ export const SundarPichaiNPC: React.FC = () => {
         }
 
         // Face movement direction
-        const targetRotation = Math.atan2(dx, dz);
-        const currentRotation = groupRef.current.rotation.y;
-        let rotationDiff = targetRotation - currentRotation;
-        while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-        while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-        groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
+        rotateTowards(groupRef.current, Math.atan2(dx, dz), delta, 5);
 
         // Play walking animation
         const walkAction = actions?.[SUNDAR_ANIMATIONS.WALKING];

@@ -119,8 +119,6 @@ function transitionToAnimation(
   walkState.currentAnim = targetAnim;
 }
 
-// normalizeRotationDiff and rotateTowards imported from threeHelpers
-
 /**
  * Calculate movement towards a target position
  */
@@ -484,15 +482,8 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     // Handle kitchen visit when idle
     if (isIdle && idleActivity === 'kitchen' && kitchenSeatIndex >= 0) {
       walkState.wasOnStage = true;
-      // 5 bar stool positions: 3 front (z+1.8), 2 back (z-1.8)
-      const kitchenSeats = [
-        { x: -1, z: 1.8, rot: Math.PI },
-        { x: 0, z: 1.8, rot: Math.PI },
-        { x: 1, z: 1.8, rot: Math.PI },
-        { x: -0.5, z: -1.8, rot: 0 },
-        { x: 0.5, z: -1.8, rot: 0 },
-      ];
-      const seat = kitchenSeats[kitchenSeatIndex % kitchenSeats.length];
+      const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
+      const seat = seatPositions[kitchenSeatIndex % seatPositions.length];
       const targetX = kitchenPos.x + seat.x;
       const targetZ = kitchenPos.z + seat.z;
       const kDx = targetX - groupRef.current.position.x;
@@ -508,7 +499,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         groupRef.current.position.z += (kDz / kDist) * moveAmount;
         rotateTowards(groupRef.current, Math.atan2(kDx, kDz), delta, 5);
       } else {
-        rotateTowards(groupRef.current, seat.rot, delta, 3);
+        rotateTowards(groupRef.current, seat.rotation, delta, 3);
         transitionToAnimation(actions, 'Breathing idle', walkState);
       }
       groupRef.current.position.y = AGENT_Y_OFFSET;

@@ -27,6 +27,7 @@ import {
   removeRootMotion,
   disposeScene,
   getCircleIndicatorStyle,
+  rotateTowards,
 } from '../../../utils/threeHelpers';
 
 const { STAGE } = FACTORY_CONSTANTS;
@@ -213,12 +214,7 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
         s.currentPos.z = safe.z;
 
         // Face movement direction
-        const targetRotation = Math.atan2(dx, dz);
-        const currentRotation = groupRef.current.rotation.y;
-        let rotationDiff = targetRotation - currentRotation;
-        while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-        while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-        groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
+        rotateTowards(groupRef.current, Math.atan2(dx, dz), delta, 5);
 
         // Walking animation
         const walkAction = actions?.['Walking'];
@@ -279,12 +275,7 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
             s.lastDecisionTime = 0;
           }
 
-          const targetRotation = Math.atan2(dx, dz);
-          const currentRotation = groupRef.current.rotation.y;
-          let rotationDiff = targetRotation - currentRotation;
-          while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-          while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-          groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
+          rotateTowards(groupRef.current, Math.atan2(dx, dz), delta, 5);
 
           const walkAction = actions?.['Walking'];
           if (walkAction && !walkAction.isRunning()) {
@@ -316,11 +307,8 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
 
           // 25% chance to visit kitchen, 75% random wander
           if (Math.random() < 0.25) {
-            const kitchenOffsets = [
-              { x: -1, z: 1.8 }, { x: 0, z: 1.8 }, { x: 1, z: 1.8 },
-              { x: -0.5, z: -1.8 }, { x: 0.5, z: -1.8 },
-            ];
-            const spot = kitchenOffsets[Math.floor(Math.random() * kitchenOffsets.length)];
+            const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
+            const spot = seatPositions[Math.floor(Math.random() * seatPositions.length)];
             s.targetPos.x = kitchenPos.x + spot.x;
             s.targetPos.z = kitchenPos.z + spot.z;
             s.currentState = 'walking_to_kitchen';
@@ -356,12 +344,7 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
           }
 
           // Face movement direction
-          const targetRotation = Math.atan2(dx, dz);
-          const currentRotation = groupRef.current.rotation.y;
-          let rotationDiff = targetRotation - currentRotation;
-          while (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-          while (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-          groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
+          rotateTowards(groupRef.current, Math.atan2(dx, dz), delta, 5);
 
           // Walking animation
           const walkAction = actions?.['Walking'];
