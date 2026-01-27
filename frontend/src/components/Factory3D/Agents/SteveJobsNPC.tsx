@@ -36,6 +36,9 @@ import {
 // Preload the Steve Jobs model
 useGLTF.preload(MODEL_PATHS.STEVE_JOBS);
 
+/** Fixed scale for NPC models */
+const NPC_MODEL_SCALE = 3.6;
+
 /**
  * NPC behavior states
  */
@@ -97,7 +100,6 @@ export const SteveJobsNPC: React.FC = () => {
 
   // Clone scene with fixed materials
   const clonedScene = useMemo(() => cloneAndFixMaterials(gltf.scene), [gltf.scene]);
-  const modelScale = 3.6;
 
   // Remove root motion to prevent world-space drift
   const processedAnimations = useMemo(
@@ -108,9 +110,8 @@ export const SteveJobsNPC: React.FC = () => {
   // Setup animations
   const { actions, mixer } = useAnimations(processedAnimations, clonedScene);
 
-  // Log available animations on mount and start with idle animation
+  // Start with idle animation to avoid T-pose
   useEffect(() => {
-    // Start with Standing Clap as idle animation to avoid T-pose
     const idleAction = actions?.[STEVE_ANIMATIONS.STANDING_CLAP];
     if (idleAction) {
       idleAction.reset().play();
@@ -388,7 +389,7 @@ export const SteveJobsNPC: React.FC = () => {
 
     // Apply position - raise to couch seat height when resting
     groupRef.current.position.x = npcState.currentPos.x;
-    groupRef.current.position.y = npcState.currentState === 'resting' ? 0.35 : 0;
+    groupRef.current.position.y = npcState.currentState === 'resting' ? FACTORY_CONSTANTS.MOVEMENT.COUCH_SEAT_HEIGHT : 0;
     groupRef.current.position.z = npcState.currentPos.z;
 
     // Report position to context for boss mode tracking
@@ -431,7 +432,7 @@ export const SteveJobsNPC: React.FC = () => {
         />
       </mesh>
 
-      <primitive object={clonedScene} scale={modelScale} />
+      <primitive object={clonedScene} scale={NPC_MODEL_SCALE} />
 
       {/* Conversation speech bubble - highest priority */}
       {(() => {

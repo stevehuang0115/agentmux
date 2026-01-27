@@ -257,7 +257,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
   // Camera state
   const [camera, setCamera] = useState<CameraState>(createInitialCameraState);
-  const [cameraTarget, setCameraTargetState] = useState<CameraFocusTarget>('overview');
 
   // Lighting state
   const [lightingMode, setLightingMode] = useState<LightingMode>('day');
@@ -429,8 +428,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
    * @param target - Project name to focus on, or 'overview' for default view
    */
   const setCameraTarget = useCallback((target: CameraFocusTarget) => {
-    setCameraTargetState(target);
-
     // Calculate target position and look-at based on target
     if (target === 'overview') {
       // CCTV-style view from upper floor corner, looking down diagonally
@@ -828,11 +825,13 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   }, [lightingMode]);
 
   // Boss mode orbit animation - continuously orbits around current target
-  // Use refs to access latest positions without re-running effect
+  // Use refs to access latest state without re-running effects
   const agentsRef = useRef(agents);
   const npcPositionsRef = useRef(npcPositions);
+  const entityConversationsRef = useRef(entityConversations);
   agentsRef.current = agents;
   npcPositionsRef.current = npcPositions;
+  entityConversationsRef.current = entityConversations;
 
   useEffect(() => {
     if (!bossModeState.isActive) return;
@@ -1057,7 +1056,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       });
 
       if (entities.length < 2) {
-        if (entityConversations.size > 0) {
+        if (entityConversationsRef.current.size > 0) {
           conversationStartTimesRef.current.clear();
           setEntityConversations(new Map());
         }
@@ -1197,7 +1196,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       const serialize = (m: Map<string, ProximityConversation>) =>
         JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
 
-      if (serialize(newConvos) !== serialize(entityConversations)) {
+      if (serialize(newConvos) !== serialize(entityConversationsRef.current)) {
         setEntityConversations(newConvos);
       }
     };

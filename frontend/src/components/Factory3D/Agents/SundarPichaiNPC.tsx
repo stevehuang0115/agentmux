@@ -36,6 +36,9 @@ import {
 // Preload the Sundar Pichai model
 useGLTF.preload(MODEL_PATHS.SUNDAR_PICHAI);
 
+/** Fixed scale for NPC models */
+const NPC_MODEL_SCALE = 3.6;
+
 /**
  * NPC behavior states
  */
@@ -93,7 +96,6 @@ export const SundarPichaiNPC: React.FC = () => {
 
   // Clone scene with fixed materials
   const clonedScene = useMemo(() => cloneAndFixMaterials(gltf.scene), [gltf.scene]);
-  const modelScale = 3.6;
 
   // Remove root motion to prevent world-space drift
   const processedAnimations = useMemo(
@@ -104,9 +106,8 @@ export const SundarPichaiNPC: React.FC = () => {
   // Setup animations
   const { actions, mixer } = useAnimations(processedAnimations, clonedScene);
 
-  // Log available animations on mount and start with idle animation
+  // Start with idle animation to avoid T-pose
   useEffect(() => {
-    // Start with Talking as idle animation to avoid T-pose
     const idleAction = actions?.[SUNDAR_ANIMATIONS.TALKING];
     if (idleAction) {
       idleAction.reset().play();
@@ -407,7 +408,7 @@ export const SundarPichaiNPC: React.FC = () => {
         />
       </mesh>
 
-      <primitive object={clonedScene} scale={modelScale} />
+      <primitive object={clonedScene} scale={NPC_MODEL_SCALE} />
 
       {/* Conversation speech bubble - highest priority */}
       {(() => {

@@ -129,7 +129,7 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
   }>({
     currentState: 'wandering',
     currentPos: { x: audiencePosition.x - 10 + index * 3, z: audiencePosition.z + index * 2 },
-    targetPos: { x: 0, z: 0 },
+    targetPos: { x: audiencePosition.x - 10 + index * 3, z: audiencePosition.z + index * 2 },
     initialized: false,
     lastDecisionTime: 0,
     stateDuration: 0,
@@ -395,7 +395,7 @@ const FakeAudienceMember: React.FC<FakeAudienceMemberProps> = ({
       onClick={handleClick}
     >
       {/* Circle indicator under fake audience member - glows on hover/select */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, FACTORY_CONSTANTS.CIRCLE_INDICATOR.Y_OFFSET, 0]}>
         <circleGeometry args={[
           isHovered || isSelected
             ? FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_ACTIVE

@@ -88,7 +88,7 @@ interface WalkingState {
   targetPos: { x: number; z: number };
   initialized: boolean;
   wasWorking: boolean;
-  wasOnStage: boolean;
+  wasAtDestination: boolean;
   currentAnim: string;
 }
 
@@ -119,39 +119,8 @@ function transitionToAnimation(
   walkState.currentAnim = targetAnim;
 }
 
-/**
- * Calculate movement towards a target position
- */
-interface MovementResult {
-  dx: number;
-  dz: number;
-  distance: number;
-  moveAmount: number;
-  targetRotation: number;
-}
-
-function calculateMovement(
-  currentX: number,
-  currentZ: number,
-  targetX: number,
-  targetZ: number,
-  speed: number,
-  delta: number
-): MovementResult {
-  const dx = targetX - currentX;
-  const dz = targetZ - currentZ;
-  const distance = Math.sqrt(dx * dx + dz * dz);
-  const moveAmount = Math.min(speed * delta, distance);
-  const targetRotation = Math.atan2(dx, dz);
-
-  return { dx, dz, distance, moveAmount, targetRotation };
-}
-
-// Y offset - Mixamo models have origin at feet level, so no offset needed
-const AGENT_Y_OFFSET = 0;
-
 // Y offset when sitting on couch - raise agent to sit on top of couch
-const COUCH_SEAT_HEIGHT = 0.35;
+const COUCH_SEAT_HEIGHT = FACTORY_CONSTANTS.MOVEMENT.COUCH_SEAT_HEIGHT;
 
 // Fixed scale: All Mixamo models are 2.0 units, target is 4.0 units
 const MODEL_SCALE = 2.0;
@@ -248,7 +217,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     targetPos: { x: 0, z: 0 },
     initialized: false,
     wasWorking: false,
-    wasOnStage: false,
+    wasAtDestination: false,
     currentAnim: '',
   });
 
@@ -258,7 +227,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   // Clone scene for this instance with fixed materials
   const clonedScene = useMemo(
     () => cloneAndFixMaterials(gltf.scene),
-    [gltf.scene, agent.id]
+    [gltf.scene]
   );
 
   // Remove root motion to prevent world-space drift
@@ -350,7 +319,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Handle stage performance when idle
     if (isIdle && idleActivity === 'stage' && isOnStage) {
-      walkState.wasOnStage = true;
+      walkState.wasAtDestination = true;
       const dx = stagePos.x - groupRef.current.position.x;
       const dz = stagePos.z - groupRef.current.position.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
@@ -373,7 +342,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
       // Set Y position based on arrival
       groupRef.current.position.y =
-        distance < 0.5 ? FACTORY_CONSTANTS.STAGE.HEIGHT + AGENT_Y_OFFSET : AGENT_Y_OFFSET;
+        distance < 0.5 ? FACTORY_CONSTANTS.STAGE.HEIGHT : 0;
 
       // Play dance animation when arrived
       if (distance < 0.5) {
@@ -384,7 +353,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Handle lounge rest when idle
     if (isIdle && idleActivity === 'couch' && couchIndex >= 0 && couchPositions[couchIndex]) {
-      walkState.wasOnStage = true;
+      walkState.wasAtDestination = true;
       const couch = couchPositions[couchIndex];
       const targetX = loungePos.x + couch.x;
       const targetZ = loungePos.z + couch.z;
@@ -406,7 +375,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         groupRef.current.rotation.y +=
           (targetRotation - groupRef.current.rotation.y) * Math.min(1, delta * 5);
         // Walking to couch - stay on ground
-        groupRef.current.position.y = AGENT_Y_OFFSET;
+        groupRef.current.position.y = 0;
       } else {
         groupRef.current.rotation.y = couch.rotation;
         // Sitting on couch - raise to seat height
@@ -421,7 +390,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Handle break room visit when idle
     if (isIdle && idleActivity === 'break_room' && breakRoomSeatIndex >= 0) {
-      walkState.wasOnStage = true;
+      walkState.wasAtDestination = true;
       // 4 seats at angles 0, 90, 180, 270 around center, distance 1.3
       const seatAngle = (breakRoomSeatIndex * Math.PI) / 2;
       const targetX = breakRoomPos.x + Math.sin(seatAngle) * 1.3;
@@ -438,7 +407,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         groupRef.current.position.x += (brDx / brDist) * moveAmount;
         groupRef.current.position.z += (brDz / brDist) * moveAmount;
         rotateTowards(groupRef.current, Math.atan2(brDx, brDz), delta, 5);
-        groupRef.current.position.y = AGENT_Y_OFFSET;
+        groupRef.current.position.y = 0;
       } else {
         const faceAngle = Math.atan2(breakRoomPos.x - targetX, breakRoomPos.z - targetZ);
         rotateTowards(groupRef.current, faceAngle, delta, 3);
@@ -451,7 +420,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Handle poker table visit when idle
     if (isIdle && idleActivity === 'poker_table' && pokerSeatIndex >= 0) {
-      walkState.wasOnStage = true;
+      walkState.wasAtDestination = true;
       // 4 seats at angles 0, 90, 180, 270 around center, distance 1.8
       const seatAngle = (pokerSeatIndex * Math.PI) / 2;
       const targetX = pokerTablePos.x + Math.sin(seatAngle) * 1.8;
@@ -468,7 +437,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         groupRef.current.position.x += (ptDx / ptDist) * moveAmount;
         groupRef.current.position.z += (ptDz / ptDist) * moveAmount;
         rotateTowards(groupRef.current, Math.atan2(ptDx, ptDz), delta, 5);
-        groupRef.current.position.y = AGENT_Y_OFFSET;
+        groupRef.current.position.y = 0;
       } else {
         const faceAngle = Math.atan2(pokerTablePos.x - targetX, pokerTablePos.z - targetZ);
         rotateTowards(groupRef.current, faceAngle, delta, 3);
@@ -481,7 +450,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
 
     // Handle kitchen visit when idle
     if (isIdle && idleActivity === 'kitchen' && kitchenSeatIndex >= 0) {
-      walkState.wasOnStage = true;
+      walkState.wasAtDestination = true;
       const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
       const seat = seatPositions[kitchenSeatIndex % seatPositions.length];
       const targetX = kitchenPos.x + seat.x;
@@ -502,16 +471,16 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         rotateTowards(groupRef.current, seat.rotation, delta, 3);
         transitionToAnimation(actions, 'Breathing idle', walkState);
       }
-      groupRef.current.position.y = AGENT_Y_OFFSET;
+      groupRef.current.position.y = 0;
       updateAgentPosition(agent.id, groupRef.current.position);
       return;
     }
 
     // Sync position when returning from stage/couch/zone
-    if (walkState.wasOnStage) {
+    if (walkState.wasAtDestination) {
       walkState.currentPos.x = groupRef.current.position.x;
       walkState.currentPos.z = groupRef.current.position.z;
-      walkState.wasOnStage = false;
+      walkState.wasAtDestination = false;
       const wanderRadius = 2.0;
       walkState.targetPos.x = walkState.currentPos.x + (Math.random() - 0.5) * wanderRadius * 2;
       walkState.targetPos.z = walkState.currentPos.z + (Math.random() - 0.5) * wanderRadius;
@@ -520,7 +489,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     // Working state - position at workstation
     if (isActuallyWorking) {
       groupRef.current.position.x = workstation.position.x;
-      groupRef.current.position.y = AGENT_Y_OFFSET;
+      groupRef.current.position.y = 0;
       groupRef.current.position.z =
         workstation.position.z + FACTORY_CONSTANTS.AGENT.WORKSTATION_OFFSET;
       groupRef.current.rotation.y = Math.PI;
@@ -622,7 +591,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       }
 
       groupRef.current.position.x = walkState.currentPos.x;
-      groupRef.current.position.y = AGENT_Y_OFFSET;
+      groupRef.current.position.y = 0;
       groupRef.current.position.z = walkState.currentPos.z;
     }
 
@@ -633,14 +602,14 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   return (
     <group
       ref={groupRef}
-      position={[agent.basePosition.x, AGENT_Y_OFFSET, agent.basePosition.z]}
+      position={[agent.basePosition.x, 0, agent.basePosition.z]}
       rotation={[0, Math.PI, 0]}
       onPointerOver={handlePointerOver}
       onPointerOut={handlePointerOut}
       onClick={handleClick}
     >
       {/* Circle indicator under agent - glows on hover/select */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -AGENT_Y_OFFSET + FACTORY_CONSTANTS.CIRCLE_INDICATOR.Y_OFFSET, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, FACTORY_CONSTANTS.CIRCLE_INDICATOR.Y_OFFSET, 0]}>
         <circleGeometry args={[
           isHovered || isSelected
             ? FACTORY_CONSTANTS.CIRCLE_INDICATOR.RADIUS_ACTIVE
