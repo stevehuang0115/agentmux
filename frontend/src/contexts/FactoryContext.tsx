@@ -36,6 +36,7 @@ import {
   isNightTime,
   createInitialCameraState,
 } from '../utils/factory.utils';
+import { buildEntityPositionMap } from '../utils/factoryCollision';
 
 // ====== PROXIMITY CONVERSATION CONSTANTS ======
 
@@ -312,6 +313,8 @@ interface FactoryContextType {
   sendEntityCommand: (entityId: string, command: EntityCommand) => void;
   /** Consume (read + delete) a pending command for an entity. Used in useFrame loops. */
   consumeEntityCommand: (entityId: string) => EntityCommand | null;
+  /** Pre-built entity position map for collision checks (updated each render, read from useFrame) */
+  entityPositionMapRef: React.MutableRefObject<Map<string, { x: number; z: number }>>;
 }
 
 // ====== CONTEXT ======
@@ -1073,6 +1076,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   npcPositionsRef.current = npcPositions;
   entityConversationsRef.current = entityConversations;
 
+  // Pre-built entity position map for collision checks.
+  // Built once per render (when agents/npcPositions change) instead of once per entity per frame.
+  const entityPositionMapRef = useRef<Map<string, { x: number; z: number }>>(new Map());
+  entityPositionMapRef.current = useMemo(
+    () => buildEntityPositionMap(agents, npcPositions),
+    [agents, npcPositions]
+  );
+
   useEffect(() => {
     if (!bossModeState.isActive) return;
     if (bossModeState.targets.length === 0) return;
@@ -1420,6 +1431,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      entityPositionMapRef,
     }),
     [
       agents,

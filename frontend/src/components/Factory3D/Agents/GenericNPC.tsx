@@ -23,7 +23,6 @@ import {
   getSafePosition,
   getRandomClearPosition,
   isBlockedByEntity,
-  buildEntityPositionMap,
   Obstacle,
 } from '../../../utils/factoryCollision';
 import {
@@ -224,6 +223,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
     isStageOccupied,
     stagePerformerRef,
     consumeEntityCommand,
+    entityPositionMapRef,
   } = useFactory();
 
   const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
@@ -378,6 +378,9 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
         const faceAngle = Math.atan2(pokerTablePos.x - targetX, pokerTablePos.z - targetZ);
         return { x: targetX, z: targetZ, arrivalAnim: idleAnimation, arrivalRot: faceAngle };
       }
+
+      // Note: go_to_stage is intentionally omitted — all NPC weight profiles set stage: 0.
+      // BaseAgent handles stage claiming for worker agents.
 
       case 'wander':
       default: {
@@ -572,8 +575,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
         safeZ = safe.z;
       }
       // Entity-to-entity collision: don't move into another entity's space
-      const entityPositions = buildEntityPositionMap(agents, npcPositions);
-      if (isBlockedByEntity(safeX, safeZ, npcId, entityPositions)) {
+      if (isBlockedByEntity(safeX, safeZ, npcId, entityPositionMapRef.current)) {
         safeX = oldX;
         safeZ = oldZ;
       }

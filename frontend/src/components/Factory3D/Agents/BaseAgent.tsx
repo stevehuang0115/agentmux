@@ -28,7 +28,6 @@ import {
   clampToWalls,
   isPositionClear,
   isBlockedByEntity,
-  buildEntityPositionMap,
 } from '../../../utils/factoryCollision';
 import {
   cloneAndFixMaterials,
@@ -258,6 +257,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     isStageOccupied,
     stagePerformerRef,
     consumeEntityCommand,
+    entityPositionMapRef,
   } = useFactory();
 
   const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
@@ -646,8 +646,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         const blockedByObstacle = isInsideObstacle(nextX, nextZ, STATIC_OBSTACLES);
         const clamped = clampToWalls(nextX, nextZ);
         const outsideWalls = !isOutdoorStep && (Math.abs(clamped.x - nextX) > 0.01 || Math.abs(clamped.z - nextZ) > 0.01);
-        const entityPositions = buildEntityPositionMap(allAgents, npcPositions);
-        const blockedByEntity = isBlockedByEntity(nextX, nextZ, agent.id, entityPositions);
+        const blockedByEntity = isBlockedByEntity(nextX, nextZ, agent.id, entityPositionMapRef.current);
 
         if (!blockedByWs && !blockedByObstacle && !outsideWalls && !blockedByEntity) {
           groupRef.current.position.x = nextX;

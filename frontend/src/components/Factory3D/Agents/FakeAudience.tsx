@@ -23,7 +23,6 @@ import {
   getSafePosition,
   getRandomClearPosition,
   isBlockedByEntity,
-  buildEntityPositionMap,
   Obstacle,
 } from '../../../utils/factoryCollision';
 import {
@@ -48,6 +47,46 @@ const NPC_STAGE_THRESHOLD = 4.0;
 
 // Use the centralized step-to-thought-key mapping from agentPlanTypes
 const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
+
+/** Audience-specific thought categories (hoisted to module level to avoid re-creation) */
+const AUDIENCE_THOUGHTS: Record<string, string[]> = {
+  wander: [
+    'Just looking around',
+    'Nice office!',
+    'Where is everyone?',
+    'Taking a stroll',
+    'Exploring the factory',
+  ],
+  couch: [
+    'Time to relax...',
+    'The couch looks comfy',
+    'Need a quick rest',
+  ],
+  kitchen: [
+    'Snack time!',
+    'I smell coffee!',
+    'Mmm, pizza!',
+    'This coffee is great',
+    'Love the donuts!',
+  ],
+  break_room: [
+    'Coffee break!',
+    'Need some caffeine',
+    'Taking five minutes',
+  ],
+  poker_table: [
+    'All in!',
+    'Read my poker face',
+    'Bluffing time!',
+  ],
+  stage: [
+    'Great show!',
+    'Amazing!',
+    'Encore!',
+    'Love it!',
+    'Bravo!',
+  ],
+};
 
 /**
  * Walking state for an audience member, persisted across frames via ref
@@ -148,6 +187,7 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
     getSeatOccupancy,
     isStageOccupied,
     consumeEntityCommand,
+    entityPositionMapRef,
   } = useFactory();
 
   // Hover/select interaction
@@ -546,8 +586,7 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
         safeZ = safe.z;
       }
       // Entity-to-entity collision: don't move into another entity's space
-      const entityPositions = buildEntityPositionMap(agents, npcPositions);
-      if (isBlockedByEntity(safeX, safeZ, entityId, entityPositions)) {
+      if (isBlockedByEntity(safeX, safeZ, entityId, entityPositionMapRef.current)) {
         safeX = oldX;
         safeZ = oldZ;
       }
@@ -641,50 +680,8 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
     : 'wander';
 
-  // Import AGENT_THOUGHTS lazily via the ThinkingBubble's exported map
-  // (ThinkingBubble accepts a thoughts array, we pass the matching category)
-  const currentThoughts = useMemo(() => {
-    // Use inline thought arrays matching AGENT_THOUGHTS categories
-    const AUDIENCE_THOUGHTS: Record<string, string[]> = {
-      wander: [
-        'Just looking around',
-        'Nice office!',
-        'Where is everyone?',
-        'Taking a stroll',
-        'Exploring the factory',
-      ],
-      couch: [
-        'Time to relax...',
-        'The couch looks comfy',
-        'Need a quick rest',
-      ],
-      kitchen: [
-        'Snack time!',
-        'I smell coffee!',
-        'Mmm, pizza!',
-        'This coffee is great',
-        'Love the donuts!',
-      ],
-      break_room: [
-        'Coffee break!',
-        'Need some caffeine',
-        'Taking five minutes',
-      ],
-      poker_table: [
-        'All in!',
-        'Read my poker face',
-        'Bluffing time!',
-      ],
-      stage: [
-        'Great show!',
-        'Amazing!',
-        'Encore!',
-        'Love it!',
-        'Bravo!',
-      ],
-    };
-    return AUDIENCE_THOUGHTS[thoughtKey] || AUDIENCE_THOUGHTS.wander;
-  }, [thoughtKey]);
+  // Select the matching thought category from the hoisted AUDIENCE_THOUGHTS constant
+  const currentThoughts = AUDIENCE_THOUGHTS[thoughtKey] || AUDIENCE_THOUGHTS.wander;
 
   return (
     <group
