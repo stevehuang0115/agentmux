@@ -10,6 +10,12 @@
 import { FACTORY_CONSTANTS } from '../types/factory.types';
 
 /**
+ * Pre-compiled regex for matching fake audience entity IDs.
+ * Format: fake-audience-{number}
+ */
+const FAKE_AUDIENCE_REGEX = /^fake-audience-(\d+)$/;
+
+/**
  * Mapping of NPC entity IDs to display names
  */
 const NPC_DISPLAY_NAMES: Record<string, string> = {
@@ -71,7 +77,7 @@ export function resolveEntityName(
   }
 
   // Fake audience members
-  const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
+  const audienceMatch = entityId.match(FAKE_AUDIENCE_REGEX);
   if (audienceMatch) {
     return `Audience Member ${Number(audienceMatch[1]) + 1}`;
   }
@@ -96,7 +102,7 @@ export function isNPC(entityId: string): boolean {
  * @returns true if the entityId matches the fake-audience pattern
  */
 export function isFakeAudience(entityId: string): boolean {
-  return /^fake-audience-\d+$/.test(entityId);
+  return FAKE_AUDIENCE_REGEX.test(entityId);
 }
 
 /**

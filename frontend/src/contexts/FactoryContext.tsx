@@ -43,6 +43,8 @@ import { buildEntityPositionMap } from '../utils/factoryCollision';
 
 /** Distance threshold for triggering conversations */
 const PROXIMITY_THRESHOLD = 5.0;
+/** Squared threshold for efficient distance comparisons (avoids sqrt) */
+const PROXIMITY_THRESHOLD_SQUARED = PROXIMITY_THRESHOLD * PROXIMITY_THRESHOLD;
 /** Duration before switching from greetings to small talk */
 const GREETING_PHASE_MS = 5000;
 /** Duration of each speaking turn during greetings */
@@ -1420,15 +1422,16 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       const closestNeighbor = new Map<string, string>();
 
       for (let i = 0; i < entities.length; i++) {
-        let minDist = Infinity;
+        let minDistSq = Infinity;
         let closestId = '';
         for (let j = 0; j < entities.length; j++) {
           if (i === j) continue;
           const dx = entities[i].x - entities[j].x;
           const dz = entities[i].z - entities[j].z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < minDist && dist < PROXIMITY_THRESHOLD) {
-            minDist = dist;
+          const distSq = dx * dx + dz * dz;
+          // Compare squared distances to avoid expensive sqrt calls
+          if (distSq < minDistSq && distSq < PROXIMITY_THRESHOLD_SQUARED) {
+            minDistSq = distSq;
             closestId = entities[j].id;
           }
         }
