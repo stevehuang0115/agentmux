@@ -235,6 +235,26 @@ export const WEB_CONSTANTS = {
 		TERMINAL: '/api/terminal',
 		/** Task management endpoints */
 		TASKS: '/api/tasks',
+		/** Factory SSE endpoint */
+		FACTORY_SSE: '/api/factory/sse',
+	},
+
+	/**
+	 * SSE (Server-Sent Events) configuration
+	 */
+	SSE: {
+		/** Backend polling interval in milliseconds (3 seconds) */
+		POLL_INTERVAL: 3000,
+		/** Heartbeat interval in milliseconds (30 seconds) */
+		HEARTBEAT_INTERVAL: 30000,
+		/** Maximum reconnection attempts before fallback to polling */
+		MAX_RECONNECT_ATTEMPTS: 5,
+		/** Base delay between reconnection attempts (1 second) */
+		BASE_RECONNECT_DELAY: 1000,
+		/** Maximum reconnection delay (30 seconds) */
+		MAX_RECONNECT_DELAY: 30000,
+		/** Fallback polling interval when SSE fails (5 seconds) */
+		FALLBACK_POLL_INTERVAL: 5000,
 	},
 } as const;
 

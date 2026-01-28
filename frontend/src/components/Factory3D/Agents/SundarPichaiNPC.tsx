@@ -30,6 +30,22 @@ const SUNDAR_ANIMATIONS = {
 } as const;
 
 /**
+ * Map thought patterns to specific animations.
+ * When a thought contains any of these patterns, the corresponding animation plays.
+ */
+const SUNDAR_THOUGHT_ANIMATIONS: Record<string, string[]> = {
+  [SUNDAR_ANIMATIONS.WALK_IN_CIRCLE]: [
+    'gemini',
+    'thinking',
+    'strategic',
+    'processing',
+    'what if',
+    'deep',
+    'planning',
+  ],
+};
+
+/**
  * SundarPichaiNPC - Wandering NPC that manages the factory using
  * a plan-based multi-step behavior system.
  *
@@ -50,6 +66,7 @@ export const SundarPichaiNPC: React.FC = () => {
       initialPosition={{ x: 10, z: 0 }}
       circleColor={0x44aa44}
       walkCircleAnimation={SUNDAR_ANIMATIONS.WALK_IN_CIRCLE}
+      thoughtAnimationMap={SUNDAR_THOUGHT_ANIMATIONS}
     />
   );
 };

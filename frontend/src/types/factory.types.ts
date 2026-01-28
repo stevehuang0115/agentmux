@@ -546,6 +546,13 @@ export const FACTORY_CONSTANTS = {
     JENSEN_HUANG: 'jensen-huang-npc',
     STEVE_HUANG: 'steve-huang-npc',
   },
+  /** Conveyor belt and proximity settings */
+  CONVEYOR: {
+    /** Z-coordinate of the conveyor belt */
+    BELT_Z: -14,
+    /** Distance threshold for conveyor proximity reaction */
+    PROXIMITY_THRESHOLD: 4,
+  },
 } as const;
 
 /**

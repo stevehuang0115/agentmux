@@ -26,7 +26,28 @@ useGLTF.preload(MODEL_PATHS.JENSEN_HUANG);
 const JENSEN_ANIMATIONS = {
   WALKING: 'Brutal to happy walking',
   IDLE: 'Talking',
+  DANCE: 'Dancing',
+  SITTING: 'Sitting',
 } as const;
+
+/**
+ * Map thought patterns to specific animations.
+ * When a thought contains any of these patterns, the corresponding animation plays.
+ */
+const JENSEN_THOUGHT_ANIMATIONS: Record<string, string[]> = {
+  [JENSEN_ANIMATIONS.DANCE]: [
+    'stock',
+    'nvda',
+    'buys',
+    'buying',
+    'sold out',
+    'crushing',
+    'all time high',
+    'up again',
+    'everyone buys',
+    'they all',
+  ],
+};
 
 /**
  * JensenHuangNPC - Jensen Huang character that spawns inside the building
@@ -45,6 +66,7 @@ export const JensenHuangNPC: React.FC = () => {
       circleColor={0x44aa44}
       scale={3.25}
       modelYOffset={0}
+      thoughtAnimationMap={JENSEN_THOUGHT_ANIMATIONS}
     />
   );
 };

@@ -77,6 +77,10 @@ vi.mock('./Office/ConveyorBelt', () => ({
   ConveyorBelt: () => <div data-testid="conveyor-belt" />,
 }));
 
+vi.mock('./Office/TokenCubePile', () => ({
+  TokenCubePile: () => <div data-testid="token-cube-pile" />,
+}));
+
 vi.mock('./InteractionZones/BreakRoom', () => ({
   BreakRoom: () => <div data-testid="break-room" />,
 }));

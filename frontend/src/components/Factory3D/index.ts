@@ -17,6 +17,7 @@ export { OutdoorScenery } from './Environment/OutdoorScenery';
 export { OfficeZones } from './Office/OfficeZone';
 export { Workstation } from './Office/Workstation';
 export { ConveyorBelt } from './Office/ConveyorBelt';
+export { TokenCubePile } from './Office/TokenCubePile';
 export { Decorations } from './Office/Decorations';
 
 // Interaction zones

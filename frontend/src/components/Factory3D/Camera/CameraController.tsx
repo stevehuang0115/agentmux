@@ -58,7 +58,7 @@ interface MouseState {
  */
 export const CameraController: React.FC = () => {
   const { camera: threeCamera, gl } = useThree();
-  const { camera: cameraState, updateCamera, bossModeState } = useFactory();
+  const { camera: cameraState, updateCamera, bossModeState, clearSelection } = useFactory();
 
   // Refs for input state
   const keyState = useRef<KeyState>({
@@ -117,8 +117,13 @@ export const CameraController: React.FC = () => {
           keyState.current.up = true;
           break;
         case 'e':
-        case 'shift':
           keyState.current.down = true;
+          break;
+        case 'escape':
+          // ESC key deselects agent in boss mode
+          if (bossModeState.isActive) {
+            clearSelection();
+          }
           break;
       }
     };
@@ -146,7 +151,6 @@ export const CameraController: React.FC = () => {
           keyState.current.up = false;
           break;
         case 'e':
-        case 'shift':
           keyState.current.down = false;
           break;
       }
@@ -159,7 +163,7 @@ export const CameraController: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []);
+  }, [bossModeState.isActive, clearSelection]);
 
   // Mouse event handlers
   useEffect(() => {
