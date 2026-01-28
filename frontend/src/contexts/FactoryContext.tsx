@@ -1248,6 +1248,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     }
   }, [sseLoading, sseData]);
 
+  // Handle SSE errors - set loading to false and propagate error
+  useEffect(() => {
+    if (sseError && !sseLoading) {
+      setIsLoading(false);
+      setError(sseError);
+    }
+  }, [sseError, sseLoading]);
+
   // Update night mode when in auto mode
   useEffect(() => {
     if (lightingMode !== 'auto') return;
