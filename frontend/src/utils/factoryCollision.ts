@@ -95,15 +95,12 @@ export function isInsideObstacle(x: number, z: number, obstacles: Obstacle[]): b
   return false;
 }
 
-/** Reusable position object for internal clampToWalls calls */
-const _tempPosition = { x: 0, z: 0 };
-
 /**
  * Clamp a position to stay within wall boundaries.
  *
  * @param x - World X position
  * @param z - World Z position
- * @param out - Optional output object to avoid allocation (uses internal temp if not provided)
+ * @param out - Optional output object to avoid allocation (creates new object if not provided)
  * @returns Clamped position (same as out if provided)
  */
 export function clampToWalls(
@@ -117,7 +114,14 @@ export function clampToWalls(
   return result;
 }
 
-/** Reusable temp objects for getSafePosition to avoid per-frame allocations */
+/**
+ * INTERNAL: Reusable temp objects for getSafePosition to avoid per-frame allocations.
+ *
+ * IMPORTANT: These are for single-threaded, non-recursive use only.
+ * Do NOT call getSafePosition recursively or from multiple concurrent
+ * useFrame callbacks in the same synchronous tick, as the temp objects
+ * will be overwritten.
+ */
 const _safePosClamped = { x: 0, z: 0 };
 const _safePosSlideX = { x: 0, z: 0 };
 const _safePosSlideZ = { x: 0, z: 0 };

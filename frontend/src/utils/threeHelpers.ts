@@ -22,19 +22,29 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 export function cloneAndFixMaterials(scene: THREE.Object3D): THREE.Object3D {
   const clone = SkeletonUtils.clone(scene);
 
-  clone.traverse((child) => {
-    if (child instanceof THREE.Mesh) {
-      if (child.material) {
-        child.material = (child.material as THREE.Material).clone();
-      }
-      const mat = child.material as THREE.MeshStandardMaterial;
+  /**
+   * Fix a single material's metalness/roughness for better visibility.
+   */
+  const fixMaterial = (mat: THREE.Material): THREE.Material => {
+    const cloned = mat.clone();
+    if ((cloned as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+      const stdMat = cloned as THREE.MeshStandardMaterial;
+      stdMat.metalnessMap = null;
+      stdMat.roughnessMap = null;
+      stdMat.metalness = 0.0;
+      stdMat.roughness = 0.7;
+      stdMat.needsUpdate = true;
+    }
+    return cloned;
+  };
 
-      if (mat && mat.isMeshStandardMaterial) {
-        mat.metalnessMap = null;
-        mat.roughnessMap = null;
-        mat.metalness = 0.0;
-        mat.roughness = 0.7;
-        mat.needsUpdate = true;
+  clone.traverse((child) => {
+    if (child instanceof THREE.Mesh && child.material) {
+      // Handle both single materials and material arrays
+      if (Array.isArray(child.material)) {
+        child.material = child.material.map(fixMaterial);
+      } else {
+        child.material = fixMaterial(child.material);
       }
     }
   });

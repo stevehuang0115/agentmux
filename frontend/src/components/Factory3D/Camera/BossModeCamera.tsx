@@ -53,7 +53,7 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
   onCycleComplete,
 }) => {
   const { camera } = useThree();
-  const { agents, zones, projects } = useFactory();
+  const { agents, zones } = useFactory();
   const stateRef = useRef({
     isActive: false,
     currentViewpointIndex: 0,
@@ -165,13 +165,17 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     });
 
     return result;
-  }, [agents, zones, projects]);
+  }, [agents, zones]);
 
   // Initialize boss mode
   useEffect(() => {
     const state = stateRef.current;
 
     if (active && !state.isActive) {
+      // Don't activate boss mode without viewpoints
+      if (viewpoints.length === 0) {
+        return;
+      }
       // Starting boss mode
       state.isActive = true;
       state.currentViewpointIndex = 0;
@@ -184,10 +188,9 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       state.startLookAt.copy(camera.position).add(state.tempDirection.multiplyScalar(10));
       state.currentLookAt.copy(state.startLookAt);
 
-      if (viewpoints.length > 0) {
-        state.targetPosition.copy(viewpoints[0].position);
-        state.targetLookAt.copy(viewpoints[0].lookAt);
-      }
+      // Set first viewpoint target (safe: early return guarantees non-empty viewpoints)
+      state.targetPosition.copy(viewpoints[0].position);
+      state.targetLookAt.copy(viewpoints[0].lookAt);
     } else if (!active && state.isActive) {
       // Stopping boss mode
       state.isActive = false;
