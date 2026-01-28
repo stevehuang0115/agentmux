@@ -14,6 +14,12 @@ import * as THREE from 'three';
 export type AnimalType = 'cow' | 'horse' | 'tiger' | 'rabbit';
 
 /**
+ * Pet types available in the factory.
+ * These are companion animals that wander around the factory.
+ */
+export type PetType = 'bulldog' | 'puppy' | 'roboticdog' | 'shibainu';
+
+/**
  * Agent operational status levels
  */
 export type AgentStatus = 'active' | 'idle' | 'dormant';
@@ -550,20 +556,34 @@ export const FACTORY_CONSTANTS = {
 
 /**
  * Model paths - Local models in public/models/
+ *
+ * Organized into categories:
+ * - employees/  - Animal agents (workstation workers)
+ * - guests/     - NPC visitors
+ * - pets/       - Pet animals (dogs, etc.)
+ * - objects/    - Non-character items
  */
 export const MODEL_PATHS = {
-  ROBOT: '/models/RobotExpressive.glb',
-  COW: '/models/cow/cow-fixed.glb?v=3',  // Model with 1K textures, no Draco compression
-  HORSE: '/models/horse/horse-fixed.glb',  // Horse model with animations and 1K textures
-  TIGER: '/models/tiger/tiger-fixed.glb',  // Tiger model with animations and 1K textures
-  RABBIT: '/models/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
-  STEVE_JOBS: '/models/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
-  SUNDAR_PICHAI: '/models/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
-  CYBERTRUCK: '/models/cybertruck/model.glb',  // Cybertruck model (compressed from 28MB to 630KB)
-  ELON_MUSK: '/models/elonmusk/model.glb',  // Elon Musk NPC with Walking, Disappointed, Dancing, Yelling
-  MARK_ZUCKERBERG: '/models/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
-  JENSEN_HUANG: '/models/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
-  STEVE_HUANG: '/models/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
+  // Employees - Animal agents
+  ROBOT: '/models/employees/robot/RobotExpressive.glb',
+  COW: '/models/employees/cow/cow-fixed.glb?v=3',
+  HORSE: '/models/employees/horse/horse-fixed.glb',
+  TIGER: '/models/employees/tiger/tiger-fixed.glb',
+  RABBIT: '/models/employees/rabbit/rabbit-fixed.glb',
+  // Guests - NPC visitors
+  STEVE_JOBS: '/models/guests/stevejobs/model.glb',
+  SUNDAR_PICHAI: '/models/guests/sundarpichai/model.glb',
+  ELON_MUSK: '/models/guests/elonmusk/model.glb',
+  MARK_ZUCKERBERG: '/models/guests/markzuckerberg/model.glb',
+  JENSEN_HUANG: '/models/guests/jensenhuang/model.glb?v=2',
+  STEVE_HUANG: '/models/guests/stevehuang/model.glb?v=2',
+  // Pets - Dog companions
+  BULLDOG: '/models/pets/bulldog/model.glb',
+  PUPPY: '/models/pets/puppy/model.glb',
+  ROBOTIC_DOG: '/models/pets/roboticdog/original.glb',
+  SHIBA_INU: '/models/pets/shibainu/model.glb',
+  // Objects
+  CYBERTRUCK: '/models/objects/cybertruck/model.glb',
 } as const;
 
 /**
@@ -611,5 +631,34 @@ export const ANIMATION_NAMES = {
     WAVE: 'Wave',
     YES: 'Yes',
     NO: 'No',
+  },
+  /**
+   * Pet animation names - actual GLB animation names
+   * Models without animations use procedural animation fallback in BasePet.tsx
+   */
+  BULLDOG: {
+    // No animations in model - uses procedural animation
+    HAS_ANIMATIONS: false,
+  },
+  PUPPY: {
+    // Actual animation names from Armature|PuppyALL_* set
+    HAS_ANIMATIONS: true,
+    IDLE: 'Armature|PuppyALL_IdleEnergetic',
+    WALKING: 'Armature|PuppyALL_Walk',
+    RUNNING: 'Armature|PuppyALL_Run',
+    SITTING: 'Armature|PuppyALL_IdleLayDown',
+  },
+  ROBOTIC_DOG: {
+    // C4D camera/object animations only - uses procedural animation
+    HAS_ANIMATIONS: false,
+  },
+  SHIBA_INU: {
+    // Actual animation names from 0|0|* set (no walk/run animations)
+    HAS_ANIMATIONS: true,
+    IDLE: '0|0|standing_0',
+    SITTING: '0|0|sitting_0',
+    SHAKE: '0|0|shake_0',
+    ROLLOVER: '0|0|rollover_0',
+    PLAY_DEAD: '0|0|play_dead_0',
   },
 } as const;

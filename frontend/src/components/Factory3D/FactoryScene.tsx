@@ -40,6 +40,9 @@ import { MarkZuckerbergNPC } from './Agents/MarkZuckerbergNPC';
 import { JensenHuangNPC } from './Agents/JensenHuangNPC';
 import { SteveHuangNPC } from './Agents/SteveHuangNPC';
 
+// Pet components
+import { RoboticDogPet } from './Pets';
+
 // Camera components
 import { CameraController } from './Camera/CameraController';
 
@@ -183,6 +186,8 @@ const LoadingFallback: React.FC = () => {
  * SceneContent - All 3D content rendered inside the Canvas
  */
 const SceneContent: React.FC = () => {
+  const { showNPCAgents, showGuestAgents, showObjects, showPets } = useFactory();
+
   return (
     <>
       {/* Scene configuration */}
@@ -231,6 +236,15 @@ const SceneContent: React.FC = () => {
 
       {/* Steve Huang NPC - builder/architect of AgentMux */}
       <SteveHuangNPC />
+
+      {/* Pets - robotic dogs that wander around the factory */}
+      {showPets && (
+        <>
+          <RoboticDogPet id="roboticdog-1" initialPosition={[8, 0, 5]} />
+          <RoboticDogPet id="roboticdog-2" initialPosition={[-5, 0, 8]} />
+          <RoboticDogPet id="roboticdog-3" initialPosition={[0, 0, -5]} />
+        </>
+      )}
 
       {/* Camera controls */}
       <CameraController />

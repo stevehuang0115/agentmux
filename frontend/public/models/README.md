@@ -270,20 +270,30 @@ clone.traverse((child) => {
 ```
 public/models/
 ├── README.md                    # This file
-├── RobotExpressive.glb          # Default robot model
-├── combine-animations.py        # Script to merge animations
-├── cow/
-│   ├── cow-original.glb         # Raw Hunyuan output (34MB, 4K textures)
-│   ├── cow-fixed.glb            # Optimized (4MB, 1K textures)
-│   ├── cow.fbx                  # FBX for Mixamo upload
-│   ├── cow-idle.fbx             # Mixamo animations
-│   ├── cow-walking.fbx
-│   ├── cow-typing.fbx
-│   ├── cow-sitting.fbx
-│   ├── cow-animated.glb         # Combined with animations
-│   └── fix-cow-textures.py      # Texture optimization script
-└── horse/                       # Another character (example)
-    └── ...
+├── employees/                   # Animal agents (workstation workers)
+│   ├── cow/
+│   │   ├── cow-original.glb     # Raw Hunyuan output (34MB, 4K textures)
+│   │   ├── cow-fixed.glb        # Optimized (4MB, 1K textures)
+│   │   ├── cow-animated.glb     # Combined with animations
+│   │   └── actions/             # Mixamo animation FBX files
+│   ├── horse/
+│   ├── tiger/
+│   ├── rabbit/
+│   └── robot/
+│       └── RobotExpressive.glb  # Default robot model
+├── guests/                      # NPC visitors
+│   ├── stevejobs/
+│   ├── sundarpichai/
+│   ├── elonmusk/
+│   ├── markzuckerberg/
+│   ├── jensenhuang/
+│   └── stevehuang/
+├── objects/                     # Non-character items
+│   └── cybertruck/
+└── scripts/                     # Utility scripts
+    ├── combine-animations.py    # Merge animations into single GLB
+    ├── glb-to-fbx.py           # Convert GLB to FBX for Mixamo
+    └── optimize-glb.sh         # Optimize model file size
 ```
 
 ---

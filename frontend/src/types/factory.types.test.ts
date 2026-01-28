@@ -107,8 +107,25 @@ describe('Factory Types', () => {
   });
 
   describe('MODEL_PATHS', () => {
-    it('should have robot model path', () => {
-      expect(MODEL_PATHS.ROBOT).toBe('/models/RobotExpressive.glb');
+    it('should have robot model path in employees folder', () => {
+      expect(MODEL_PATHS.ROBOT).toBe('/models/employees/robot/RobotExpressive.glb');
+    });
+
+    it('should have employee models in employees folder', () => {
+      expect(MODEL_PATHS.COW).toContain('/models/employees/cow/');
+      expect(MODEL_PATHS.HORSE).toContain('/models/employees/horse/');
+      expect(MODEL_PATHS.TIGER).toContain('/models/employees/tiger/');
+      expect(MODEL_PATHS.RABBIT).toContain('/models/employees/rabbit/');
+    });
+
+    it('should have guest models in guests folder', () => {
+      expect(MODEL_PATHS.STEVE_JOBS).toContain('/models/guests/');
+      expect(MODEL_PATHS.ELON_MUSK).toContain('/models/guests/');
+      expect(MODEL_PATHS.JENSEN_HUANG).toContain('/models/guests/');
+    });
+
+    it('should have object models in objects folder', () => {
+      expect(MODEL_PATHS.CYBERTRUCK).toContain('/models/objects/');
     });
   });
 
