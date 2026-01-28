@@ -5,8 +5,7 @@
  * with a modern dark tooltip-style appearance.
  */
 
-import React, { useRef, useMemo } from 'react';
-import { useFrame } from '@react-three/fiber';
+import React, { useMemo } from 'react';
 import { Billboard, Text, RoundedBox } from '@react-three/drei';
 import * as THREE from 'three';
 
@@ -48,7 +47,6 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
   const borderColor = isConversation ? 0xcccccc : 0x4a90d9;
   const textColor = isConversation ? '#222222' : '#ffffff';
   const dotColor = isConversation ? 0x4a90d9 : 0x4ade80;
-  const groupRef = useRef<THREE.Group>(null);
 
   // Truncate long text
   const displayText = useMemo(() => {
@@ -75,19 +73,11 @@ export const SpeechBubble: React.FC<SpeechBubbleProps> = ({
     return { width, height };
   }, [displayText]);
 
-  // Gentle floating animation
-  useFrame((state) => {
-    if (groupRef.current) {
-      const t = state.clock.elapsedTime;
-      groupRef.current.position.y = yOffset + Math.sin(t * 1.5) * 0.03;
-    }
-  });
-
   if (!text) return null;
 
   return (
     <Billboard follow lockX={false} lockY={false} lockZ={false}>
-      <group ref={groupRef} position={[0, yOffset, 0]}>
+      <group position={[0, yOffset, 0]}>
         {/* Main bubble background */}
         <RoundedBox
           args={[dimensions.width, dimensions.height, 0.08]}
