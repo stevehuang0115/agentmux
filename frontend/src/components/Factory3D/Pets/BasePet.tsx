@@ -10,7 +10,8 @@ import React, { useRef, useMemo, useEffect, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
-import { PetType } from '../../../types/factory.types';
+
+import { PetType, PetConfig, WanderBounds, FACTORY_CONSTANTS } from '../../../types/factory.types';
 import { cloneAndFixMaterials, rotateTowards } from '../../../utils/threeHelpers';
 import {
   WALL_BOUNDS,
@@ -19,44 +20,15 @@ import {
   clampToWalls,
 } from '../../../utils/factoryCollision';
 
+// Re-export types for convenience
+export type { PetConfig, WanderBounds };
+
+// ====== TIMING CONSTANTS ======
+
+const { INITIAL_IDLE_DURATION, IDLE_DURATION, WALK_DURATION } = FACTORY_CONSTANTS.PET.TIMING;
+const { STUCK_CHECK_ATTEMPTS } = FACTORY_CONSTANTS.PET.MOVEMENT;
+
 // ====== TYPES ======
-
-/**
- * Wander area bounds for a pet
- */
-export interface WanderBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
-
-/**
- * Configuration for a pet type
- */
-export interface PetConfig {
-  /** Path to the GLB model */
-  modelPath: string;
-  /** Scale factor for the model */
-  scale: number;
-  /** Walking speed (units per second) */
-  walkSpeed: number;
-  /** Running speed (units per second) */
-  runSpeed: number;
-  /** Y offset for ground placement */
-  groundOffset: number;
-  /** Model rotation [x, y, z] in radians (for fixing model orientation) */
-  modelRotation?: [number, number, number];
-  /** Custom wander bounds (optional - uses factory bounds if not set) */
-  wanderBounds?: WanderBounds;
-  /** Animation names (optional - uses procedural if not available) */
-  animations?: {
-    idle?: string;
-    walk?: string;
-    run?: string;
-    sit?: string;
-  };
-}
 
 /**
  * Props for BasePet component
@@ -111,11 +83,6 @@ export const BasePet: React.FC<BasePetProps> = ({
   const walkingTimeRef = useRef<number>(0); // Track walking duration
   const isFirstIdleRef = useRef<boolean>(true); // Track if first idle
 
-  // Fixed timing constants (in seconds)
-  const INITIAL_IDLE_DURATION = 2; // 2 seconds for first idle
-  const IDLE_DURATION = 1.5; // 1.5 seconds for subsequent idles
-  const WALK_DURATION = 2.5; // 2.5 seconds walking
-
   // Procedural animation state
   const proceduralState = useRef({
     bobPhase: Math.random() * Math.PI * 2,
@@ -157,7 +124,7 @@ export const BasePet: React.FC<BasePetProps> = ({
       x = WALL_BOUNDS.minX + Math.random() * (WALL_BOUNDS.maxX - WALL_BOUNDS.minX);
       z = WALL_BOUNDS.minZ + Math.random() * (WALL_BOUNDS.maxZ - WALL_BOUNDS.minZ);
       attempts++;
-    } while (isInsideObstacle(x, z, STATIC_OBSTACLES) && attempts < 10);
+    } while (isInsideObstacle(x, z, STATIC_OBSTACLES) && attempts < STUCK_CHECK_ATTEMPTS);
 
     const clamped = clampToWalls(x, z);
     return reusableVectors.current.wanderTarget.set(clamped.x, config.groundOffset, clamped.z);

@@ -137,3 +137,73 @@ export function getCircleIndicatorStyle(
   }
   return { color: defaultColor, opacity: 0.6, emissive: 0x000000, emissiveIntensity: 0 };
 }
+
+// ====== EASING FUNCTIONS ======
+
+/**
+ * Cubic ease-in-out function for smooth camera transitions.
+ *
+ * Starts slow, speeds up in the middle, and slows down at the end.
+ * Common for camera movements and UI animations.
+ *
+ * @param t - Progress value from 0 to 1
+ * @returns Eased value from 0 to 1
+ */
+export function easeInOutCubic(t: number): number {
+  return t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
+ * Linear interpolation helper.
+ *
+ * @param start - Start value
+ * @param end - End value
+ * @param t - Progress from 0 to 1
+ * @returns Interpolated value
+ */
+export function lerp(start: number, end: number, t: number): number {
+  return start + (end - start) * t;
+}
+
+/**
+ * Quadratic ease-out for smooth deceleration.
+ *
+ * Starts fast and slows down at the end.
+ * Good for physics-like movements.
+ *
+ * @param t - Progress value from 0 to 1
+ * @returns Eased value from 0 to 1
+ */
+export function easeOutQuad(t: number): number {
+  return 1 - (1 - t) * (1 - t);
+}
+
+/**
+ * Create a camera viewpoint configuration.
+ *
+ * @param name - Viewpoint display name
+ * @param position - Camera position [x, y, z]
+ * @param lookAt - Target position [x, y, z]
+ * @param duration - Duration in milliseconds
+ * @returns Viewpoint configuration object
+ */
+export function createViewpoint(
+  name: string,
+  position: [number, number, number],
+  lookAt: [number, number, number],
+  duration: number
+): {
+  name: string;
+  position: THREE.Vector3;
+  lookAt: THREE.Vector3;
+  duration: number;
+} {
+  return {
+    name,
+    position: new THREE.Vector3(...position),
+    lookAt: new THREE.Vector3(...lookAt),
+    duration,
+  };
+}

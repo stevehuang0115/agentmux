@@ -315,6 +315,22 @@ interface FactoryContextType {
   consumeEntityCommand: (entityId: string) => EntityCommand | null;
   /** Pre-built entity position map for collision checks (updated each render, read from useFrame) */
   entityPositionMapRef: React.MutableRefObject<Map<string, { x: number; z: number }>>;
+  /** Visibility toggle: Show NPC agents (fake audience) */
+  showNPCAgents: boolean;
+  /** Visibility toggle: Set NPC agents visibility */
+  setShowNPCAgents: (show: boolean) => void;
+  /** Visibility toggle: Show guest agents (celebrity NPCs) */
+  showGuestAgents: boolean;
+  /** Visibility toggle: Set guest agents visibility */
+  setShowGuestAgents: (show: boolean) => void;
+  /** Visibility toggle: Show objects (Cybertruck, etc.) */
+  showObjects: boolean;
+  /** Visibility toggle: Set objects visibility */
+  setShowObjects: (show: boolean) => void;
+  /** Visibility toggle: Show pets (robotic dogs, etc.) */
+  showPets: boolean;
+  /** Visibility toggle: Set pets visibility */
+  setShowPets: (show: boolean) => void;
 }
 
 // ====== CONTEXT ======
@@ -362,6 +378,12 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   // Loading and error state
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Visibility toggle state
+  const [showNPCAgents, setShowNPCAgents] = useState(true);
+  const [showGuestAgents, setShowGuestAgents] = useState(true);
+  const [showObjects, setShowObjects] = useState(true);
+  const [showPets, setShowPets] = useState(true);
 
   // Seat occupancy ref - tracks which seats are taken at each area (no re-renders)
   const seatOccupancyRef = useRef<SeatOccupancyMap>(new Map([
@@ -1432,6 +1454,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       sendEntityCommand,
       consumeEntityCommand,
       entityPositionMapRef,
+      showNPCAgents,
+      setShowNPCAgents,
+      showGuestAgents,
+      setShowGuestAgents,
+      showObjects,
+      setShowObjects,
+      showPets,
+      setShowPets,
     }),
     [
       agents,
@@ -1472,6 +1502,10 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      showNPCAgents,
+      showGuestAgents,
+      showObjects,
+      showPets,
     ]
   );
 

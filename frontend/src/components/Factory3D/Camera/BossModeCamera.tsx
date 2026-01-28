@@ -5,11 +5,16 @@
  * focusing on different zones and agents. Useful for demos or monitoring.
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+
 import { useFactory } from '../../../contexts/FactoryContext';
 import { FACTORY_CONSTANTS } from '../../../types/factory.types';
+import { easeInOutCubic } from '../../../utils/threeHelpers';
+
+// Extract commonly used constants
+const { BOSS_MODE_INTERVAL, BOSS_MODE_TRANSITION } = FACTORY_CONSTANTS.ANIMATION;
 
 /**
  * Props for BossModeCamera component.
@@ -61,24 +66,24 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     currentLookAt: new THREE.Vector3(),
   });
 
-  // Generate viewpoints based on current factory state
-  const generateViewpoints = useCallback((): Viewpoint[] => {
-    const viewpoints: Viewpoint[] = [];
+  // Generate viewpoints based on current factory state (memoized for performance)
+  const viewpoints = useMemo((): Viewpoint[] => {
+    const result: Viewpoint[] = [];
 
     // Overview shot
-    viewpoints.push({
+    result.push({
       name: 'Overview',
       position: new THREE.Vector3(-25, 20, -25),
       lookAt: new THREE.Vector3(0, 0, 5),
-      duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+      duration: BOSS_MODE_INTERVAL,
     });
 
     // Zone views
     const projectList = Array.from(zones.keys());
-    projectList.forEach((projectName, index) => {
+    projectList.forEach((projectName) => {
       const zone = zones.get(projectName);
       if (zone) {
-        viewpoints.push({
+        result.push({
           name: `Zone: ${projectName}`,
           position: new THREE.Vector3(
             zone.zoneX - 5,
@@ -90,13 +95,13 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
             1,
             zone.zoneZ
           ),
-          duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+          duration: BOSS_MODE_INTERVAL,
         });
       }
     });
 
     // Break room view
-    viewpoints.push({
+    result.push({
       name: 'Break Room',
       position: new THREE.Vector3(
         FACTORY_CONSTANTS.BREAK_ROOM.POSITION.x - 6,
@@ -108,11 +113,11 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
         1,
         FACTORY_CONSTANTS.BREAK_ROOM.POSITION.z
       ),
-      duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL * 0.75,
+      duration: BOSS_MODE_INTERVAL * 0.75,
     });
 
     // Poker table view
-    viewpoints.push({
+    result.push({
       name: 'Poker Table',
       position: new THREE.Vector3(
         FACTORY_CONSTANTS.POKER_TABLE.POSITION.x + 6,
@@ -124,7 +129,7 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
         1,
         FACTORY_CONSTANTS.POKER_TABLE.POSITION.z
       ),
-      duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL * 0.75,
+      duration: BOSS_MODE_INTERVAL * 0.75,
     });
 
     // Active agent close-ups
@@ -132,7 +137,7 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       (a) => a.status === 'active' && a.cpuPercent > 10
     );
     activeAgents.slice(0, 3).forEach((agent) => {
-      viewpoints.push({
+      result.push({
         name: `Agent: ${agent.name}`,
         position: new THREE.Vector3(
           agent.basePosition.x - 2,
@@ -144,19 +149,19 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
           1.5,
           agent.basePosition.z
         ),
-        duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL * 0.5,
+        duration: BOSS_MODE_INTERVAL * 0.5,
       });
     });
 
     // Final wide shot
-    viewpoints.push({
+    result.push({
       name: 'Final Overview',
       position: new THREE.Vector3(25, 25, 25),
       lookAt: new THREE.Vector3(0, 0, 5),
-      duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+      duration: BOSS_MODE_INTERVAL,
     });
 
-    return viewpoints;
+    return result;
   }, [agents, zones, projects]);
 
   // Initialize boss mode
@@ -177,7 +182,6 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       state.startLookAt.copy(camera.position).add(direction.multiplyScalar(10));
       state.currentLookAt.copy(state.startLookAt);
 
-      const viewpoints = generateViewpoints();
       if (viewpoints.length > 0) {
         state.targetPosition.copy(viewpoints[0].position);
         state.targetLookAt.copy(viewpoints[0].lookAt);
@@ -186,20 +190,18 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       // Stopping boss mode
       state.isActive = false;
     }
-  }, [active, camera, generateViewpoints]);
+  }, [active, camera, viewpoints]);
 
   // Animate camera
   useFrame(() => {
     const state = stateRef.current;
     if (!state.isActive) return;
-
-    const viewpoints = generateViewpoints();
     if (viewpoints.length === 0) return;
 
     const currentViewpoint = viewpoints[state.currentViewpointIndex];
     const now = performance.now();
     const elapsed = now - state.viewpointStartTime;
-    const transitionDuration = 2000; // 2 seconds for camera movement
+    const transitionDuration = BOSS_MODE_TRANSITION;
     const holdDuration = currentViewpoint.duration - transitionDuration;
 
     if (elapsed < transitionDuration) {
@@ -248,14 +250,5 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
 
   return null;
 };
-
-/**
- * Easing function for smooth camera transitions.
- */
-function easeInOutCubic(t: number): number {
-  return t < 0.5
-    ? 4 * t * t * t
-    : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
 
 export default BossModeCamera;

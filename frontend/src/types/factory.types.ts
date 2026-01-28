@@ -498,6 +498,29 @@ export const FACTORY_CONSTANTS = {
   ANIMATION: {
     FOCUS_DURATION: 1500,
     BOSS_MODE_INTERVAL: 8000,
+    BOSS_MODE_TRANSITION: 2000, // Camera transition duration in ms
+  },
+  /** Pet timing and movement */
+  PET: {
+    TIMING: {
+      INITIAL_IDLE_DURATION: 2,    // seconds - first idle is longer
+      IDLE_DURATION: 1.5,          // seconds - subsequent idles
+      WALK_DURATION: 2.5,          // seconds - walking between waypoints
+    },
+    MOVEMENT: {
+      STUCK_CHECK_ATTEMPTS: 10,    // Max attempts to find valid wander target
+    },
+  },
+  /** Speech bubble configuration */
+  SPEECH_BUBBLE: {
+    CHAR_WIDTH: 0.12,
+    MIN_WIDTH: 2.0,
+    MAX_WIDTH: 5.0,
+    PADDING: 0.6,
+    HEIGHT: 0.7,
+    BORDER_RADIUS: 0.12,
+    FLOAT_AMPLITUDE: 0.03,
+    FLOAT_FREQUENCY: 1.5,
   },
   /** API polling */
   API: {
@@ -553,6 +576,71 @@ export const FACTORY_CONSTANTS = {
     STEVE_HUANG: 'steve-huang-npc',
   },
 } as const;
+
+// ====== SPEECH BUBBLE THEMES ======
+
+/**
+ * Speech bubble visual themes for different contexts.
+ */
+export const SPEECH_BUBBLE_THEMES = {
+  work: {
+    bgColor: 0x1a1a2e,
+    borderColor: 0x4a90d9,
+    textColor: '#ffffff',
+    dotColor: 0x4ade80,
+    bgOpacity: 0.92,
+    borderOpacity: 0.3,
+  },
+  conversation: {
+    bgColor: 0xffffff,
+    borderColor: 0xcccccc,
+    textColor: '#222222',
+    dotColor: 0x4a90d9,
+    bgOpacity: 0.92,
+    borderOpacity: 0.3,
+  },
+} as const;
+
+export type SpeechBubbleVariant = keyof typeof SPEECH_BUBBLE_THEMES;
+
+// ====== PET CONFIGURATION TYPES ======
+
+/**
+ * Wander area bounds for a pet.
+ */
+export interface WanderBounds {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+/**
+ * Configuration for a pet type.
+ */
+export interface PetConfig {
+  /** Path to the GLB model */
+  modelPath: string;
+  /** Scale factor for the model */
+  scale: number;
+  /** Walking speed (units per second) */
+  walkSpeed: number;
+  /** Running speed (units per second) */
+  runSpeed: number;
+  /** Y offset for ground placement */
+  groundOffset: number;
+  /** Model rotation [x, y, z] in radians (for fixing model orientation) */
+  modelRotation?: [number, number, number];
+  /** Custom wander bounds (optional - uses factory bounds if not set) */
+  wanderBounds?: WanderBounds;
+  /** Animation names (optional - uses procedural if not available) */
+  animations?: {
+    idle?: string;
+    walk?: string;
+    run?: string;
+    sit?: string;
+  };
+}
 
 /**
  * Model paths - Local models in public/models/

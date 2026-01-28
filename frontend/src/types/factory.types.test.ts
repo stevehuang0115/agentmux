@@ -82,12 +82,12 @@ describe('Factory Types', () => {
       expect(FACTORY_CONSTANTS.CAMERA).toBeDefined();
       expect(FACTORY_CONSTANTS.CAMERA.FOV).toBe(60);
       expect(FACTORY_CONSTANTS.CAMERA.NEAR).toBe(0.1);
-      expect(FACTORY_CONSTANTS.CAMERA.FAR).toBe(100);
+      expect(FACTORY_CONSTANTS.CAMERA.FAR).toBe(150);
     });
 
     it('should have wall dimensions', () => {
       expect(FACTORY_CONSTANTS.WALLS).toBeDefined();
-      expect(FACTORY_CONSTANTS.WALLS.HEIGHT).toBe(4);
+      expect(FACTORY_CONSTANTS.WALLS.HEIGHT).toBe(12);
     });
 
     it('should have interaction zone positions', () => {
