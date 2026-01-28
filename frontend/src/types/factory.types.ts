@@ -223,6 +223,8 @@ export interface FactoryStats {
   idleCount: number;
   dormantCount: number;
   totalTokens: number;
+  /** Per-project token distribution (computed client-side) */
+  tokensByProject?: TokenDistribution[];
 }
 
 /**
@@ -518,10 +520,31 @@ export const FACTORY_CONSTANTS = {
     SEGMENTS: 32,
     Y_OFFSET: 0.1,
   },
+  /** Outdoor recreation - pickleball court position (in front of building, left side) */
+  PICKLEBALL: {
+    POSITION: { x: -18, y: 0, z: 42 },
+  },
+  /** Outdoor recreation - golf putting green position (in front of building, right side) */
+  GOLF: {
+    POSITION: { x: 18, y: 0, z: 42 },
+  },
+  /** Outdoor recreation - park bench positions along walkway */
+  OUTDOOR_BENCH: {
+    POSITIONS: [
+      { x: -4, z: 30, rotation: Math.PI / 2 },
+      { x: 4, z: 30, rotation: -Math.PI / 2 },
+      { x: -4, z: 36, rotation: Math.PI / 2 },
+      { x: 4, z: 36, rotation: -Math.PI / 2 },
+    ],
+  },
   /** NPC entity IDs */
   NPC_IDS: {
     STEVE_JOBS: 'steve-jobs-npc',
     SUNDAR_PICHAI: 'sundar-pichai-npc',
+    ELON_MUSK: 'elon-musk-npc',
+    MARK_ZUCKERBERG: 'mark-zuckerberg-npc',
+    JENSEN_HUANG: 'jensen-huang-npc',
+    STEVE_HUANG: 'steve-huang-npc',
   },
 } as const;
 
@@ -536,6 +559,11 @@ export const MODEL_PATHS = {
   RABBIT: '/models/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
   STEVE_JOBS: '/models/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
   SUNDAR_PICHAI: '/models/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
+  CYBERTRUCK: '/models/cybertruck/model.glb',  // Cybertruck model (compressed from 28MB to 630KB)
+  ELON_MUSK: '/models/elonmusk/model.glb',  // Elon Musk NPC with Walking, Disappointed, Dancing, Yelling
+  MARK_ZUCKERBERG: '/models/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
+  JENSEN_HUANG: '/models/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
+  STEVE_HUANG: '/models/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
 } as const;
 
 /**

@@ -223,11 +223,20 @@ const NeonLetter: React.FC<{
         shape.holes.push(holeA);
         break;
       case 'G':
-        shape.absarc(0, 0, 0.45, 0.3, Math.PI * 2 - 0.3, false);
-        shape.lineTo(0.3, -0.15);
-        shape.lineTo(0.1, -0.15);
-        shape.lineTo(0.1, 0);
-        shape.absarc(0, 0, 0.25, 0, Math.PI * 2 - 0.5, true);
+        // Block-style G: C-shape (gap on upper-right) with horizontal bar at midline.
+        // Single polygon with CW notch for the inner bay (same technique as E).
+        shape.moveTo(-0.3, -0.5);    // outer bottom-left
+        shape.lineTo(-0.3, 0.5);     // outer top-left
+        shape.lineTo(0.3, 0.5);      // outer top-right
+        shape.lineTo(0.3, 0.35);     // gap corner top (enter inner bay)
+        shape.lineTo(-0.15, 0.35);   // inner top-left
+        shape.lineTo(-0.15, -0.35);  // inner bottom-left
+        shape.lineTo(0.15, -0.35);   // inner bottom-right
+        shape.lineTo(0.15, -0.08);   // inner right wall up to bar bottom
+        shape.lineTo(0, -0.08);      // bar tip bottom
+        shape.lineTo(0, 0.08);       // bar tip top
+        shape.lineTo(0.3, 0.08);     // bar top to outer wall (exit inner bay)
+        shape.lineTo(0.3, -0.5);     // outer bottom-right
         shape.closePath();
         break;
       case 'E':
@@ -287,11 +296,13 @@ const NeonLetter: React.FC<{
       case 'U':
         shape.moveTo(-0.3, 0.5);
         shape.lineTo(-0.3, -0.2);
-        shape.absarc(0, -0.2, 0.3, Math.PI, 0, true);
+        // Outer bottom arc: CCW from π to 0 (goes through bottom, y=-0.5)
+        shape.absarc(0, -0.2, 0.3, Math.PI, 0, false);
         shape.lineTo(0.3, 0.5);
         shape.lineTo(0.15, 0.5);
         shape.lineTo(0.15, -0.2);
-        shape.absarc(0, -0.2, 0.15, 0, Math.PI, false);
+        // Inner bottom arc: CW from 0 to π (goes through bottom, y=-0.35)
+        shape.absarc(0, -0.2, 0.15, 0, Math.PI, true);
         shape.lineTo(-0.15, 0.5);
         shape.closePath();
         break;
@@ -390,6 +401,80 @@ const NeonSign: React.FC<{
           glowColor={neonColor}
         />
       ))}
+    </group>
+  );
+};
+
+/**
+ * Wall-mounted TV on exterior front wall, facing the outdoor area.
+ * Turns on with animated game visuals when agents are nearby.
+ */
+const WallTV: React.FC = () => {
+  const { isNightMode } = useFactory();
+  const screenRef = useRef<THREE.Mesh>(null);
+  const isOnRef = useRef(false);
+
+  // TV position in world space (exterior of front wall, facing +Z)
+  const tvX = 18;
+  const tvZ = WALLS.RIGHT_Z + 0.5;
+  const detectionRadius = 12;
+
+  // Check proximity of any entity and animate screen
+  useFrame((state) => {
+    if (!screenRef.current) return;
+
+    // Check if camera (or any viewer) is near the TV area
+    const camX = state.camera.position.x;
+    const camZ = state.camera.position.z;
+    const dx = camX - tvX;
+    const dz = camZ - tvZ;
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    const shouldBeOn = dist < detectionRadius;
+    isOnRef.current = shouldBeOn;
+
+    const mat = screenRef.current.material as THREE.MeshStandardMaterial;
+    if (shouldBeOn) {
+      // Animated game screen - cycling colors to simulate a game display
+      const t = state.clock.elapsedTime;
+      const r = Math.sin(t * 1.5) * 0.3 + 0.3;
+      const g = Math.sin(t * 2.0 + 1) * 0.3 + 0.5;
+      const b = Math.sin(t * 1.2 + 2) * 0.2 + 0.7;
+      mat.color.setRGB(r, g, b);
+      mat.emissive.setRGB(r * 0.6, g * 0.6, b * 0.6);
+      mat.emissiveIntensity = isNightMode ? 2.0 : 1.2;
+    } else {
+      // Off state - dark screen
+      mat.color.setHex(0x111118);
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+    }
+  });
+
+  return (
+    <group position={[tvX, 6, tvZ]}>
+      {/* TV bezel / frame */}
+      <mesh castShadow>
+        <boxGeometry args={[4.2, 2.7, 0.15]} />
+        <meshStandardMaterial color={0x111111} roughness={0.4} metalness={0.6} />
+      </mesh>
+
+      {/* Screen surface - faces +Z (outward) */}
+      <mesh ref={screenRef} position={[0, 0, 0.08]}>
+        <planeGeometry args={[3.8, 2.3]} />
+        <meshStandardMaterial
+          color={0x111118}
+          emissive={0x000000}
+          emissiveIntensity={0}
+          roughness={0.1}
+          metalness={0.0}
+        />
+      </mesh>
+
+      {/* Wall mount bracket - toward the wall (-Z) */}
+      <mesh position={[0, 0, -0.15]} castShadow>
+        <boxGeometry args={[1.0, 0.6, 0.2]} />
+        <meshStandardMaterial color={0x333333} roughness={0.5} metalness={0.7} />
+      </mesh>
     </group>
   );
 };
@@ -560,6 +645,8 @@ const UpperFloor: React.FC<{
 export const Walls: React.FC = () => {
   const { camera } = useThree();
   const floorSeparatorRef = useRef<THREE.Mesh>(null);
+  const roofRef = useRef<THREE.Mesh>(null);
+  const upperFloorGroupRef = useRef<THREE.Group>(null);
 
   const factoryWidth = WALLS.FRONT_X - WALLS.BACK_X;
   const factoryDepth = WALLS.RIGHT_Z - WALLS.LEFT_Z;
@@ -570,23 +657,29 @@ export const Walls: React.FC = () => {
   const windowHeight = wallHeight - 1;
   const windowY = 0;
 
-  // Track camera position to hide floor separator (ceiling) when inside the building
-  // Using direct mesh visibility for immediate updates without React re-render
+  // Track camera position to hide structural elements for clear views.
+  // Floor separator hidden when camera is inside the building.
+  // Roof and upper floor hidden when camera is above the building (bird's eye view).
   useFrame(() => {
-    if (!floorSeparatorRef.current) return;
-
     const pos = camera.position;
     // Check if camera is inside the building bounds (X and Z)
     const isInsideX = pos.x > WALLS.BACK_X && pos.x < WALLS.FRONT_X;
     const isInsideZ = pos.z > WALLS.LEFT_Z && pos.z < WALLS.RIGHT_Z;
 
-    // Hide the floor separator when camera is inside either floor
-    // Ground floor: 0 < Y < wallHeight (12)
-    // Upper floor: wallHeight < Y < totalHeight (24)
+    // Hide the floor separator when camera is inside either floor or above (bird's eye)
     const isInsideBuilding = isInsideX && isInsideZ && pos.y > 0 && pos.y < totalHeight;
+    const isAboveBuilding = pos.y > totalHeight;
+    if (floorSeparatorRef.current) {
+      floorSeparatorRef.current.visible = !isInsideBuilding && !isAboveBuilding;
+    }
 
-    // Set mesh visibility - hidden when inside building
-    floorSeparatorRef.current.visible = !isInsideBuilding;
+    // Hide roof and upper floor when camera is above the building (bird's eye)
+    if (roofRef.current) {
+      roofRef.current.visible = !isAboveBuilding;
+    }
+    if (upperFloorGroupRef.current) {
+      upperFloorGroupRef.current.visible = !isAboveBuilding;
+    }
   });
 
   const sideWindowConfigs: WindowConfig[] = useMemo(() => [
@@ -698,16 +791,19 @@ export const Walls: React.FC = () => {
       </mesh>
 
       {/* ===== UPPER FLOOR (3 floors) ===== */}
-      <UpperFloor
-        baseY={wallHeight}
-        height={upperFloorHeight}
-        factoryWidth={factoryWidth}
-        factoryDepth={factoryDepth}
-      />
+      <group ref={upperFloorGroupRef}>
+        <UpperFloor
+          baseY={wallHeight}
+          height={upperFloorHeight}
+          factoryWidth={factoryWidth}
+          factoryDepth={factoryDepth}
+        />
+      </group>
 
       {/* ===== ROOF ===== */}
-      {/* Roof structure */}
+      {/* Roof structure - hidden when camera is above building (bird's eye view) */}
       <mesh
+        ref={roofRef}
         position={[0, totalHeight + 0.5, 0]}
         receiveShadow
         castShadow
@@ -716,20 +812,17 @@ export const Walls: React.FC = () => {
         <meshStandardMaterial color={0x888888} metalness={0.3} roughness={0.6} />
       </mesh>
 
-      {/* ===== NEON SIGN ===== */}
-      {/* AgentMux logo on front of building */}
-      <NeonSign
-        position={[0, totalHeight - 3, WALLS.RIGHT_Z + 0.5]}
-        rotation={[0, 0, 0]}
-        scale={1.8}
-      />
+      {/* ===== WALL TV ===== */}
+      <WallTV />
 
-      {/* Secondary sign on side */}
+      {/* ===== NEON SIGN ===== */}
+      {/* AgentMux logo - rooftop sign above building */}
       <NeonSign
-        position={[WALLS.FRONT_X + 0.5, totalHeight - 3, 0]}
-        rotation={[0, -Math.PI / 2, 0]}
+        position={[0, totalHeight + 2, WALLS.RIGHT_Z + 0.5]}
+        rotation={[0, 0, 0]}
         scale={1.5}
       />
+
     </group>
   );
 };

@@ -7,8 +7,10 @@
 
 import React, { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
+import { MODEL_PATHS } from '../../../types/factory.types';
 
 // ====== TREE COMPONENT ======
 
@@ -162,6 +164,310 @@ const Cloud: React.FC<CloudProps> = ({ position, speed = 0.5 }) => {
   );
 };
 
+// ====== WALKWAY COMPONENT ======
+
+/**
+ * Concrete walkway extending from the building entrance.
+ */
+const Walkway: React.FC = () => {
+  const { isNightMode } = useFactory();
+  const concreteColor = isNightMode ? 0x555560 : 0xbbbbc0;
+
+  return (
+    <group>
+      {/* Main walkway from entrance straight out */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 38]} receiveShadow>
+        <planeGeometry args={[6, 34]} />
+        <meshStandardMaterial color={concreteColor} roughness={0.85} />
+      </mesh>
+      {/* Cross path connecting courts */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 42]} receiveShadow>
+        <planeGeometry args={[48, 4]} />
+        <meshStandardMaterial color={concreteColor} roughness={0.85} />
+      </mesh>
+    </group>
+  );
+};
+
+// ====== PICKLEBALL COURT COMPONENT ======
+
+/**
+ * Pickleball court with colored surface, white lines, and center net.
+ */
+const PickleballCourt: React.FC = () => {
+  const { isNightMode } = useFactory();
+  const courtBlue = isNightMode ? 0x1a3050 : 0x2a6090;
+  const courtGreen = isNightMode ? 0x1a4030 : 0x2a7050;
+  const lineColor = 0xffffff;
+
+  return (
+    <group position={[-18, 0, 42]}>
+      {/* Surround area - green (thin box to avoid z-fighting with grass) */}
+      <mesh position={[0, 0.04, 0]} receiveShadow castShadow>
+        <boxGeometry args={[16, 0.08, 23]} />
+        <meshStandardMaterial color={courtGreen} roughness={0.7} />
+      </mesh>
+
+      {/* Court surface - blue playing area (on top of green surround) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.09, 0]} receiveShadow>
+        <planeGeometry args={[13, 20]} />
+        <meshStandardMaterial color={courtBlue} roughness={0.7} />
+      </mesh>
+
+      {/* Court lines - sidelines */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[-6.5, 0.10, 0]}>
+        <planeGeometry args={[0.08, 20]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[6.5, 0.10, 0]}>
+        <planeGeometry args={[0.08, 20]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      {/* Baselines */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.10, -10]}>
+        <planeGeometry args={[13, 0.08]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.10, 10]}>
+        <planeGeometry args={[13, 0.08]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      {/* Kitchen lines (non-volley zone) */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.10, -3.5]}>
+        <planeGeometry args={[13, 0.08]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.10, 3.5]}>
+        <planeGeometry args={[13, 0.08]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+      {/* Center line */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.10, 0]}>
+        <planeGeometry args={[0.08, 7]} />
+        <meshStandardMaterial color={lineColor} />
+      </mesh>
+
+      {/* Net */}
+      <mesh position={[0, 0.85, 0]}>
+        <boxGeometry args={[13.5, 0.9, 0.05]} />
+        <meshStandardMaterial color={0x222222} transparent opacity={0.7} />
+      </mesh>
+      {/* Net posts */}
+      <mesh position={[-6.8, 0.5, 0]} castShadow>
+        <cylinderGeometry args={[0.06, 0.06, 1.0, 8]} />
+        <meshStandardMaterial color={0x888888} metalness={0.6} roughness={0.3} />
+      </mesh>
+      <mesh position={[6.8, 0.5, 0]} castShadow>
+        <cylinderGeometry args={[0.06, 0.06, 1.0, 8]} />
+        <meshStandardMaterial color={0x888888} metalness={0.6} roughness={0.3} />
+      </mesh>
+    </group>
+  );
+};
+
+// ====== GOLF PUTTING GREEN COMPONENT ======
+
+/**
+ * Miniature golf putting green with sand bunker and flag pins.
+ */
+const GolfGreen: React.FC = () => {
+  const { isNightMode } = useFactory();
+  const greenColor = isNightMode ? 0x1a4a20 : 0x2a8a30;
+  const sandColor = isNightMode ? 0x8a7a50 : 0xd4c47a;
+  const flagPoleColor = 0xcccccc;
+
+  const flagPositions: [number, number, number][] = [
+    [-2, 0, -3],
+    [3, 0, 1],
+    [-1, 0, 4],
+  ];
+
+  return (
+    <group position={[18, 0.03, 42]}>
+      {/* Putting green surface - oval shape approximated with circle */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <circleGeometry args={[9, 32]} />
+        <meshStandardMaterial color={greenColor} roughness={0.6} />
+      </mesh>
+
+      {/* Sand bunker */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[5, -0.01, -4]}>
+        <circleGeometry args={[3, 16]} />
+        <meshStandardMaterial color={sandColor} roughness={0.95} />
+      </mesh>
+
+      {/* Flag pins */}
+      {flagPositions.map(([fx, fy, fz], i) => (
+        <group key={`flag-${i}`} position={[fx, fy, fz]}>
+          {/* Hole */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+            <circleGeometry args={[0.15, 16]} />
+            <meshStandardMaterial color={0x111111} />
+          </mesh>
+          {/* Pole */}
+          <mesh position={[0, 0.6, 0]}>
+            <cylinderGeometry args={[0.03, 0.03, 1.2, 6]} />
+            <meshStandardMaterial color={flagPoleColor} metalness={0.5} roughness={0.3} />
+          </mesh>
+          {/* Flag */}
+          <mesh position={[0.2, 1.05, 0]}>
+            <planeGeometry args={[0.4, 0.25]} />
+            <meshStandardMaterial
+              color={0xff3333}
+              side={THREE.DoubleSide}
+              emissive={0xff3333}
+              emissiveIntensity={0.2}
+            />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+};
+
+// ====== GARDEN BED COMPONENT ======
+
+/**
+ * Garden bed with colorful flowers and small bushes.
+ */
+const GardenBed: React.FC<{
+  position: [number, number, number];
+  mirror?: boolean;
+}> = ({ position, mirror = false }) => {
+  const { isNightMode } = useFactory();
+  const soilColor = isNightMode ? 0x3a2a1a : 0x6a4a2a;
+  const flowerColors = [0xff6688, 0xffaa33, 0xaa55ff, 0xff4466, 0xffdd44];
+  const bushColor = isNightMode ? 0x1a4a1a : 0x2a7a2a;
+  const scale = mirror ? -1 : 1;
+
+  return (
+    <group position={position} scale={[scale, 1, 1]}>
+      {/* Soil bed */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.05, 0]} receiveShadow>
+        <planeGeometry args={[6, 4]} />
+        <meshStandardMaterial color={soilColor} roughness={0.95} />
+      </mesh>
+      {/* Raised border */}
+      <mesh position={[0, 0.15, 0]} receiveShadow>
+        <boxGeometry args={[6.2, 0.3, 4.2]} />
+        <meshStandardMaterial color={0x8a7a6a} roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 0.15, 0]}>
+        <boxGeometry args={[5.8, 0.35, 3.8]} />
+        <meshStandardMaterial color={soilColor} roughness={0.95} />
+      </mesh>
+
+      {/* Flowers - small colorful spheres */}
+      {[
+        [-2, 0.4, -1], [-1, 0.35, -1.2], [0, 0.4, -0.8],
+        [1, 0.35, -1], [2, 0.4, -1.1],
+        [-1.5, 0.4, 0.5], [0, 0.35, 0.8], [1.5, 0.4, 0.3],
+        [-0.5, 0.4, 1.2], [0.8, 0.35, 1],
+      ].map(([fx, fy, fz], i) => (
+        <mesh key={`flower-${i}`} position={[fx, fy, fz]} castShadow>
+          <sphereGeometry args={[0.18, 8, 8]} />
+          <meshStandardMaterial
+            color={flowerColors[i % flowerColors.length]}
+            emissive={flowerColors[i % flowerColors.length]}
+            emissiveIntensity={isNightMode ? 0.3 : 0.1}
+          />
+        </mesh>
+      ))}
+
+      {/* Small bushes */}
+      <mesh position={[-2.2, 0.5, 0]} castShadow>
+        <sphereGeometry args={[0.5, 8, 8]} />
+        <meshStandardMaterial color={bushColor} roughness={0.8} />
+      </mesh>
+      <mesh position={[2.2, 0.45, 0.3]} castShadow>
+        <sphereGeometry args={[0.4, 8, 8]} />
+        <meshStandardMaterial color={bushColor} roughness={0.8} />
+      </mesh>
+    </group>
+  );
+};
+
+// ====== PARK BENCH COMPONENT ======
+
+/**
+ * Simple park bench with seat and backrest.
+ */
+const ParkBench: React.FC<{
+  position: [number, number, number];
+  rotation?: number;
+}> = ({ position, rotation = 0 }) => {
+  const { isNightMode } = useFactory();
+  const woodColor = isNightMode ? 0x3a2a1a : 0x8b5e3c;
+  const metalColor = isNightMode ? 0x444450 : 0x666670;
+
+  return (
+    <group position={position} rotation={[0, rotation, 0]}>
+      {/* Seat slats */}
+      <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+        <boxGeometry args={[2.0, 0.08, 0.6]} />
+        <meshStandardMaterial color={woodColor} roughness={0.8} />
+      </mesh>
+      {/* Backrest */}
+      <mesh position={[0, 0.9, -0.25]} rotation={[0.15, 0, 0]} castShadow>
+        <boxGeometry args={[2.0, 0.5, 0.08]} />
+        <meshStandardMaterial color={woodColor} roughness={0.8} />
+      </mesh>
+      {/* Legs */}
+      {[-0.8, 0.8].map((lx, i) => (
+        <group key={`leg-${i}`}>
+          <mesh position={[lx, 0.25, 0.2]} castShadow>
+            <boxGeometry args={[0.06, 0.5, 0.06]} />
+            <meshStandardMaterial color={metalColor} metalness={0.6} roughness={0.4} />
+          </mesh>
+          <mesh position={[lx, 0.25, -0.2]} castShadow>
+            <boxGeometry args={[0.06, 0.5, 0.06]} />
+            <meshStandardMaterial color={metalColor} metalness={0.6} roughness={0.4} />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+};
+
+// ====== CYBERTRUCK COMPONENT ======
+
+/** Preload cybertruck model */
+useGLTF.preload(MODEL_PATHS.CYBERTRUCK);
+
+/** Scale factor — native model is ~1 unit long due to baked micro-scale */
+const CYBERTRUCK_SCALE = 6.5;
+
+/**
+ * Cybertruck loaded from GLB model.
+ * Compressed from 28MB to 630KB (texture + mesh optimization).
+ */
+const CyberTruck: React.FC<{
+  position: [number, number, number];
+  rotation?: number;
+}> = ({ position, rotation = 0 }) => {
+  const gltf = useGLTF(MODEL_PATHS.CYBERTRUCK);
+
+  const clonedScene = useMemo(() => {
+    const clone = gltf.scene.clone(true);
+    clone.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    return clone;
+  }, [gltf.scene]);
+
+  return (
+    <group position={position} rotation={[0, rotation, 0]}>
+      <primitive
+        object={clonedScene}
+        scale={[CYBERTRUCK_SCALE, CYBERTRUCK_SCALE, CYBERTRUCK_SCALE]}
+      />
+    </group>
+  );
+};
+
 // ====== OUTDOOR SCENERY ======
 
 /**
@@ -251,6 +557,24 @@ export const OutdoorScenery: React.FC = () => {
     [-10, 0, -33, 4.2],
     [10, 0, -32, 3.5],
     [25, 0, -33, 4],
+
+    // Front area trees (Z > 24, in front of building)
+    [-35, 0, 26, 4],
+    [-30, 0, 30, 3.5],
+    [-38, 0, 35, 4.5],
+    [-32, 0, 40, 3.8],
+    [-40, 0, 45, 4.2],
+    [35, 0, 26, 3.8],
+    [30, 0, 30, 4],
+    [38, 0, 35, 4.5],
+    [32, 0, 40, 3.5],
+    [40, 0, 45, 4.2],
+    // Far front
+    [-25, 0, 55, 5],
+    [-10, 0, 52, 4.5],
+    [10, 0, 54, 4.8],
+    [25, 0, 52, 5.2],
+    [0, 0, 58, 5],
   ], []);
 
   // House positions - more houses scattered around
@@ -313,9 +637,9 @@ export const OutdoorScenery: React.FC = () => {
         <meshBasicMaterial color={skyColor} side={THREE.DoubleSide} />
       </mesh>
 
-      {/* Ground plane outside building - extended */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, -50]} receiveShadow>
-        <planeGeometry args={[200, 150]} />
+      {/* Ground plane outside building - extended to cover front outdoor area */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, -20]} receiveShadow>
+        <planeGeometry args={[200, 200]} />
         <meshStandardMaterial color={grassColor} roughness={0.9} />
       </mesh>
 
@@ -355,6 +679,29 @@ export const OutdoorScenery: React.FC = () => {
       {cloudPositions.map(([x, y, z, speed], i) => (
         <Cloud key={`cloud-${i}`} position={[x, y, z]} speed={speed} />
       ))}
+
+      {/* ===== OUTDOOR RECREATION AREA ===== */}
+      {/* Walkway from entrance */}
+      <Walkway />
+
+      {/* Pickleball court - left side */}
+      <PickleballCourt />
+
+      {/* Golf putting green - right side */}
+      <GolfGreen />
+
+      {/* Garden beds flanking entrance */}
+      <GardenBed position={[-12, 0, 26]} />
+      <GardenBed position={[12, 0, 26]} mirror />
+
+      {/* Park benches along walkways */}
+      <ParkBench position={[-4, 0, 30]} rotation={Math.PI / 2} />
+      <ParkBench position={[4, 0, 30]} rotation={-Math.PI / 2} />
+      <ParkBench position={[-4, 0, 36]} rotation={Math.PI / 2} />
+      <ParkBench position={[4, 0, 36]} rotation={-Math.PI / 2} />
+
+      {/* Cybertruck parked on the main walkway */}
+      <CyberTruck position={[0, 0, 50]} rotation={0} />
     </group>
   );
 };

@@ -261,6 +261,30 @@ export const AGENT_THOUGHTS: Record<string, string[]> = {
     'Making some coffee',
     'Snack time!',
   ],
+  pickleball: [
+    'Pickleball time!',
+    'Nice serve!',
+    'Dink shot!',
+    'Game on!',
+    'Love the outdoors',
+    'Kitchen line rally!',
+  ],
+  golf: [
+    'Putting practice!',
+    'Read the green...',
+    'Fore!',
+    'Birdie putt!',
+    'Nice chip!',
+    'Almost a hole-in-one!',
+  ],
+  sit_outdoor: [
+    'Fresh air is nice',
+    'Enjoying the sunshine',
+    'Peaceful out here',
+    'Good to be outside',
+    'Nice breeze today',
+    'Taking in the view',
+  ],
 };
 
 /**
@@ -350,6 +374,211 @@ export const SUNDAR_PICHAI_THOUGHTS: Record<string, string[]> = {
     "Let's see what's next",
     'Heading over',
     'Time to check in',
+  ],
+};
+
+/**
+ * Thoughts for Elon Musk NPC based on behavior state
+ */
+export const ELON_MUSK_THOUGHTS: Record<string, string[]> = {
+  wandering: [
+    'TSLA up 5% today!',
+    'Tesla stock is mooning!',
+    'Starship launch soon...',
+    'SpaceX landing failed...',
+    'Ugh, rapid unscheduled',
+    'Mars colony by 2030!',
+    'Need more Starlinks',
+    'Full self driving soon',
+    'The Cybertruck sells!',
+    'X is the everything app',
+    'First principles only',
+    'Boring tunnel progress?',
+    'Neuralink update...',
+    'TSLA to the moon!',
+    'SpaceX booster caught!',
+    'Stock looking good today',
+  ],
+  talking_to_agent: [
+    'Ship it yesterday!',
+    'Is this 10x better?',
+    'Move faster, come on!',
+    'This needs more urgency',
+    'First principles, think!',
+    'Are we on Mars yet?',
+    'Tesla needs this done',
+    'SpaceX pace, people!',
+  ],
+  visiting_kitchen: [
+    'Quick Diet Coke break',
+    'No time, grabbing coffee',
+    'Back to the factory',
+    'Fuel up, ship more',
+  ],
+  watching_stage: [
+    'This could help Tesla',
+    'SpaceX could use this!',
+    'Interesting tech demo',
+    'Think bigger though!',
+    'Not disruptive enough',
+  ],
+};
+
+/**
+ * Thoughts for Mark Zuckerberg NPC based on behavior state
+ */
+export const MARK_ZUCKERBERG_THOUGHTS: Record<string, string[]> = {
+  wandering: [
+    'Is this VR or real?',
+    'Where are my glasses?',
+    'The metaverse is real!',
+    'Llama 4 training soon',
+    'Meta Quest is the future',
+    "Can't see without headset",
+    'VR world looks better',
+    'Reality is overrated',
+    'Llama beats GPT now!',
+    'Open source AI wins!',
+    'Meta AI is shipping!',
+    'Need better VR lenses',
+    'The glasses are blurry',
+    'Metaverse rendering...',
+    'Is this AR or VR?',
+    'Horizon Worlds update',
+    'Llama needs more GPUs',
+    'Zuck mode: activated',
+  ],
+  talking_to_agent: [
+    'Try the Quest headset!',
+    'Have you used Llama?',
+    'VR meeting instead?',
+    "What's the Llama score?",
+    'Build for the metaverse',
+    'Open source this!',
+    'Meta AI can help here',
+    'Put this in VR!',
+  ],
+  visiting_kitchen: [
+    'Sweet Baby Rays time!',
+    'BBQ sauce on everything',
+    'Smoking some meats',
+    'Refueling for VR',
+  ],
+  watching_stage: [
+    'This needs VR mode!',
+    'Put this in metaverse',
+    'Llama could do this',
+    'Ship it on Quest!',
+    'Great engagement!',
+  ],
+};
+
+/**
+ * Thoughts for Jensen Huang NPC based on behavior state
+ */
+export const JENSEN_HUANG_THOUGHTS: Record<string, string[]> = {
+  wandering: [
+    'Everyone buys my GPUs!',
+    'NVDA up again today!',
+    'The more you buy...',
+    '...the more you save!',
+    'CUDA runs the world!',
+    'H100s sold out again!',
+    'Blackwell is crushing it',
+    'AI needs more GPUs!',
+    'Stock at all time high!',
+    'Every company needs us',
+    'Leather jacket: on',
+    'GPU shortage = demand!',
+    'Training runs need me',
+    'Inference at scale baby!',
+    'They all use my chips',
+    'NVIDIA is the platform',
+    'Data centers love us!',
+    'Cloud needs more GPUs!',
+  ],
+  talking_to_agent: [
+    'Using CUDA, right?',
+    'Need more H100s?',
+    'GPU utilization good?',
+    'Buy more GPUs!',
+    'NVIDIA powers this!',
+    'Tensor cores maxed?',
+    'More compute = better',
+    'Accelerate everything!',
+  ],
+  presenting: [
+    'One more GPU reveal!',
+    'NVIDIA is the future!',
+    'AI runs on our chips',
+    'Blackwell architecture!',
+    'The roadmap is amazing',
+  ],
+  visiting_kitchen: [
+    'Even the oven has GPUs',
+    'Quick fuel, more GPUs',
+    'Cooking with CUDA cores',
+    'Kitchen break, stock up',
+  ],
+  watching_stage: [
+    'Bet that runs on NVIDIA',
+    'Needs more GPU power!',
+    'Great demo, our chips?',
+    'Standing ovation!',
+    'I love this industry!',
+  ],
+};
+
+/**
+ * Thoughts for Steve Huang NPC (builder/architect) based on behavior state
+ */
+export const STEVE_HUANG_THOUGHTS: Record<string, string[]> = {
+  wandering: [
+    'Wow, look at AgentMux go!',
+    'I created all of this...',
+    'What a beautiful creation',
+    'My vision, brought to life',
+    'AgentMux is my masterpiece',
+    'This factory is incredible',
+    'Look at what we built!',
+    'Every agent, every detail...',
+    'From idea to reality',
+    'This is beyond what I imagined',
+    'AgentMux changes everything',
+    'I can\'t believe how far we\'ve come',
+    'This is just the beginning',
+    'What a great company',
+  ],
+  talking_to_agent: [
+    'I made you, you know',
+    'How\'s my creation doing?',
+    'You make me proud!',
+    'Keep building great things',
+    'This is what I envisioned',
+    'You\'re the heart of AgentMux',
+    'Amazing work, keep going!',
+    'Built with love, running with purpose',
+  ],
+  visiting_kitchen: [
+    'Even creators need coffee',
+    'Quick break, then more building',
+    'Fueling the vision',
+    'Grabbing a bite',
+  ],
+  watching_stage: [
+    'Look at them perform!',
+    'AgentMux talent on display',
+    'This is what it\'s all about',
+    'Incredible team!',
+  ],
+  playing_golf: [
+    'Fore!',
+    'Nice putt!',
+    'Even founders need a break',
+    'Golf clears the mind',
+    'Back to building after this',
+    'Love this putting green',
+    'Great day for golf',
   ],
 };
 
