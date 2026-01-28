@@ -33,12 +33,11 @@ import {
   cloneAndFixMaterials,
   removeRootMotion,
   disposeScene,
-  normalizeRotationDiff,
   rotateTowards,
   getCircleIndicatorStyle,
 } from '../../../utils/threeHelpers';
 import { useAgentPlan } from './useAgentPlan';
-import { WORKER_AGENT_WEIGHTS, PlanStep, PlanStepType, STEP_TYPE_TO_SEAT_AREA, OUTDOOR_STEP_TYPES, DEFAULT_STEP_THOUGHT_KEY } from './agentPlanTypes';
+import { WORKER_AGENT_WEIGHTS, PlanStep, PlanStepType, OUTDOOR_STEP_TYPES, DEFAULT_STEP_THOUGHT_KEY } from './agentPlanTypes';
 import { getRandomDuration } from './planGenerator';
 
 /**
@@ -89,7 +88,6 @@ interface BaseAgentProps {
  */
 interface WalkingState {
   currentPos: { x: number; z: number };
-  targetPos: { x: number; z: number };
   initialized: boolean;
   wasWorking: boolean;
   currentAnim: string;
@@ -209,7 +207,6 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   // Walking state refs - persist across frames without causing re-renders
   const walkingStateRef = useRef<WalkingState>({
     currentPos: { x: 0, z: 0 },
-    targetPos: { x: 0, z: 0 },
     initialized: false,
     wasWorking: false,
     currentAnim: '',
@@ -250,7 +247,6 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     entityConversations,
     claimSeat,
     releaseSeat,
-    getSeatIndex,
     getSeatOccupancy,
     claimStage,
     releaseStage,
@@ -663,9 +659,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
         }
         // else: for destination steps, just keep trying to reach target
 
-        const targetRotation = Math.atan2(dx, dz);
-        const rotationDiff = normalizeRotationDiff(targetRotation - groupRef.current.rotation.y);
-        groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
+        rotateTowards(groupRef.current, Math.atan2(dx, dz), delta, 5);
 
         walkState.currentPos.x = groupRef.current.position.x;
         walkState.currentPos.z = groupRef.current.position.z;

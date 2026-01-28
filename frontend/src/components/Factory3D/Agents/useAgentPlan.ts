@@ -12,7 +12,6 @@ import {
   PlanStep,
   PlanStepType,
   PersonalityWeights,
-  STEP_TYPE_TO_SEAT_AREA,
 } from './agentPlanTypes.js';
 import { generatePlan, PlanGenerationOptions } from './planGenerator.js';
 
@@ -73,10 +72,6 @@ export interface UseAgentPlanReturn {
    * @returns true if arrived and duration has passed
    */
   isDurationElapsed: (elapsedTime: number) => boolean;
-  /**
-   * Get the seat area key for the current step (if it's a seated step)
-   */
-  getCurrentSeatArea: () => string | null;
   /**
    * Store the previous plan when interrupted by stage events
    */
@@ -240,15 +235,6 @@ export function useAgentPlan(
     return (elapsedTime - plan.arrivalTime) >= step.duration;
   }, []);
 
-  /**
-   * Get the seat area key for the current step
-   */
-  const getCurrentSeatArea = useCallback((): string | null => {
-    const step = getCurrentStep();
-    if (!step) return null;
-    return STEP_TYPE_TO_SEAT_AREA[step.type] ?? null;
-  }, [getCurrentStep]);
-
   return {
     planRef,
     getCurrentStep,
@@ -261,7 +247,6 @@ export function useAgentPlan(
     displayStepType,
     markArrival,
     isDurationElapsed,
-    getCurrentSeatArea,
     savedPlanRef,
   };
 }

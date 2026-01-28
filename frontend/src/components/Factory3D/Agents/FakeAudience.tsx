@@ -45,6 +45,9 @@ useGLTF.preload(MODEL_PATHS.HORSE);
 /** Distance from stage center to consider an NPC "on stage" */
 const NPC_STAGE_THRESHOLD = 4.0;
 
+/** Fixed scale for audience member models (matches BaseAgent MODEL_SCALE) */
+const AUDIENCE_MODEL_SCALE = 2.0;
+
 // Use the centralized step-to-thought-key mapping from agentPlanTypes
 const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
 
@@ -234,7 +237,6 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
 
   // Clone scene with fixed materials
   const clonedScene = useMemo(() => cloneAndFixMaterials(gltf.scene), [gltf.scene]);
-  const modelScale = 2.0;
 
   // Remove root motion to prevent world-space drift
   const processedAnimations = useMemo(
@@ -707,7 +709,7 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
           opacity={circleStyle.opacity}
         />
       </mesh>
-      <primitive object={clonedScene} scale={modelScale} />
+      <primitive object={clonedScene} scale={AUDIENCE_MODEL_SCALE} />
 
       {/* Conversation speech bubble - highest priority */}
       {(() => {

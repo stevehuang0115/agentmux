@@ -309,12 +309,4 @@ describe('useAgentPlan', () => {
     });
   });
 
-  describe('getCurrentSeatArea', () => {
-    it('should return null when no plan exists', () => {
-      const { result } = renderHook(() =>
-        useAgentPlan('test-agent', WORKER_AGENT_WEIGHTS)
-      );
-      expect(result.current.getCurrentSeatArea()).toBeNull();
-    });
-  });
 });
