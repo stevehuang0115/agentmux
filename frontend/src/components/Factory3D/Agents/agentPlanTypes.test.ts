@@ -11,11 +11,16 @@ import {
   WORKER_AGENT_WEIGHTS,
   STEVE_JOBS_WEIGHTS,
   SUNDAR_PICHAI_WEIGHTS,
+  ELON_MUSK_WEIGHTS,
+  MARK_ZUCKERBERG_WEIGHTS,
+  JENSEN_HUANG_WEIGHTS,
+  STEVE_HUANG_WEIGHTS,
   FAKE_AUDIENCE_WEIGHTS,
   STEP_DURATION_RANGES,
   WEIGHT_KEY_TO_STEP_TYPE,
   SEATED_STEP_TYPES,
   STEP_TYPE_TO_SEAT_AREA,
+  OUTDOOR_STEP_TYPES,
 } from './agentPlanTypes';
 
 describe('agentPlanTypes', () => {
@@ -87,12 +92,87 @@ describe('agentPlanTypes', () => {
     });
   });
 
+  describe('ELON_MUSK_WEIGHTS', () => {
+    it('should have check_agent and outdoor weights', () => {
+      expect(ELON_MUSK_WEIGHTS.check_agent).toBeGreaterThan(0);
+      expect(ELON_MUSK_WEIGHTS.pickleball).toBeGreaterThan(0);
+      expect(ELON_MUSK_WEIGHTS.golf).toBeGreaterThan(0);
+      expect(ELON_MUSK_WEIGHTS.sit_outdoor).toBeGreaterThan(0);
+    });
+
+    it('should not perform on stage (weight 0)', () => {
+      expect(ELON_MUSK_WEIGHTS.stage).toBe(0);
+    });
+  });
+
+  describe('MARK_ZUCKERBERG_WEIGHTS', () => {
+    it('should have check_agent and golf as top activities', () => {
+      expect(MARK_ZUCKERBERG_WEIGHTS.check_agent).toBeGreaterThan(0);
+      expect(MARK_ZUCKERBERG_WEIGHTS.golf).toBeGreaterThan(0);
+    });
+
+    it('should not perform on stage (weight 0)', () => {
+      expect(MARK_ZUCKERBERG_WEIGHTS.stage).toBe(0);
+    });
+  });
+
+  describe('JENSEN_HUANG_WEIGHTS', () => {
+    it('should have check_agent as highest weight', () => {
+      expect(JENSEN_HUANG_WEIGHTS.check_agent).toBeGreaterThan(JENSEN_HUANG_WEIGHTS.kitchen);
+      expect(JENSEN_HUANG_WEIGHTS.check_agent).toBeGreaterThan(JENSEN_HUANG_WEIGHTS.wander);
+    });
+
+    it('should have present weight for presentations', () => {
+      expect(JENSEN_HUANG_WEIGHTS.present).toBeGreaterThan(0);
+    });
+
+    it('should not perform on stage (weight 0)', () => {
+      expect(JENSEN_HUANG_WEIGHTS.stage).toBe(0);
+    });
+  });
+
+  describe('STEVE_HUANG_WEIGHTS', () => {
+    it('should have golf as a top outdoor activity', () => {
+      expect(STEVE_HUANG_WEIGHTS.golf).toBeGreaterThan(STEVE_HUANG_WEIGHTS.kitchen);
+    });
+
+    it('should have check_agent weight', () => {
+      expect(STEVE_HUANG_WEIGHTS.check_agent).toBeGreaterThan(0);
+    });
+
+    it('should not perform on stage (weight 0)', () => {
+      expect(STEVE_HUANG_WEIGHTS.stage).toBe(0);
+    });
+  });
+
+  describe('all NPC weights should have required base fields', () => {
+    const allWeights: [string, PersonalityWeights][] = [
+      ['ELON_MUSK', ELON_MUSK_WEIGHTS],
+      ['MARK_ZUCKERBERG', MARK_ZUCKERBERG_WEIGHTS],
+      ['JENSEN_HUANG', JENSEN_HUANG_WEIGHTS],
+      ['STEVE_HUANG', STEVE_HUANG_WEIGHTS],
+    ];
+
+    for (const [name, weights] of allWeights) {
+      it(`${name} should have all required base weight fields`, () => {
+        expect(weights.kitchen).toBeDefined();
+        expect(weights.couch).toBeDefined();
+        expect(weights.break_room).toBeDefined();
+        expect(weights.poker_table).toBeDefined();
+        expect(weights.stage).toBeDefined();
+        expect(weights.watch_stage).toBeDefined();
+        expect(weights.wander).toBeDefined();
+      });
+    }
+  });
+
   describe('STEP_DURATION_RANGES', () => {
     it('should have ranges for all step types', () => {
       const allTypes: PlanStepType[] = [
         'go_to_workstation', 'go_to_kitchen', 'go_to_couch', 'go_to_break_room',
         'go_to_poker_table', 'go_to_stage', 'watch_stage', 'wander',
         'check_agent', 'present', 'walk_circle',
+        'go_to_pickleball', 'go_to_golf', 'sit_outdoor',
       ];
 
       for (const type of allTypes) {
@@ -116,6 +196,30 @@ describe('agentPlanTypes', () => {
       expect(WEIGHT_KEY_TO_STEP_TYPE['check_agent']).toBe('check_agent');
       expect(WEIGHT_KEY_TO_STEP_TYPE['present']).toBe('present');
       expect(WEIGHT_KEY_TO_STEP_TYPE['walk_circle']).toBe('walk_circle');
+    });
+
+    it('should map outdoor weight keys to valid step types', () => {
+      expect(WEIGHT_KEY_TO_STEP_TYPE['pickleball']).toBe('go_to_pickleball');
+      expect(WEIGHT_KEY_TO_STEP_TYPE['golf']).toBe('go_to_golf');
+      expect(WEIGHT_KEY_TO_STEP_TYPE['sit_outdoor']).toBe('sit_outdoor');
+    });
+  });
+
+  describe('OUTDOOR_STEP_TYPES', () => {
+    it('should contain all outdoor step types', () => {
+      expect(OUTDOOR_STEP_TYPES.has('go_to_pickleball')).toBe(true);
+      expect(OUTDOOR_STEP_TYPES.has('go_to_golf')).toBe(true);
+      expect(OUTDOOR_STEP_TYPES.has('sit_outdoor')).toBe(true);
+    });
+
+    it('should not contain indoor step types', () => {
+      expect(OUTDOOR_STEP_TYPES.has('wander')).toBe(false);
+      expect(OUTDOOR_STEP_TYPES.has('go_to_kitchen')).toBe(false);
+      expect(OUTDOOR_STEP_TYPES.has('go_to_stage')).toBe(false);
+    });
+
+    it('should have exactly 3 outdoor types', () => {
+      expect(OUTDOOR_STEP_TYPES.size).toBe(3);
     });
   });
 

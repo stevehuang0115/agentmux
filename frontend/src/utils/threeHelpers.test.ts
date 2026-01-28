@@ -1,8 +1,8 @@
 /**
- * Tests for shared Three.js helper utilities.
+ * Unit tests for pure helper functions in threeHelpers.ts.
  *
- * Tests rotation normalization, circle indicator styling, and
- * the pure function signatures of scene helpers.
+ * Only the functions that do not require Three.js scene objects are
+ * covered here: normalizeRotationDiff and getCircleIndicatorStyle.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -11,102 +11,190 @@ import {
   getCircleIndicatorStyle,
 } from './threeHelpers';
 
-describe('Three.js Helpers', () => {
-  // ------ normalizeRotationDiff ------
+/* -------------------------------------------------------------------------- */
+/*  normalizeRotationDiff                                                     */
+/* -------------------------------------------------------------------------- */
 
-  describe('normalizeRotationDiff', () => {
-    it('should return 0 for zero diff', () => {
-      expect(normalizeRotationDiff(0)).toBe(0);
+describe('normalizeRotationDiff', () => {
+  const PI = Math.PI;
+
+  it('returns 0 unchanged', () => {
+    expect(normalizeRotationDiff(0)).toBe(0);
+  });
+
+  it('returns values already inside (-PI, PI) unchanged', () => {
+    expect(normalizeRotationDiff(1)).toBe(1);
+    expect(normalizeRotationDiff(-1)).toBe(-1);
+    expect(normalizeRotationDiff(0.5)).toBe(0.5);
+    expect(normalizeRotationDiff(-2.5)).toBe(-2.5);
+  });
+
+  // Boundary: exactly PI and -PI are within the range (loop condition is strict)
+  it('returns exactly PI unchanged (boundary)', () => {
+    expect(normalizeRotationDiff(PI)).toBe(PI);
+  });
+
+  it('returns exactly -PI unchanged (boundary)', () => {
+    expect(normalizeRotationDiff(-PI)).toBe(-PI);
+  });
+
+  // Wrapping positive values
+  it('wraps 2*PI to approximately 0', () => {
+    expect(normalizeRotationDiff(2 * PI)).toBeCloseTo(0, 10);
+  });
+
+  it('wraps 3*PI to approximately PI (one full wrap)', () => {
+    expect(normalizeRotationDiff(3 * PI)).toBeCloseTo(PI, 10);
+  });
+
+  it('wraps 4*PI to approximately 0 (two full wraps)', () => {
+    expect(normalizeRotationDiff(4 * PI)).toBeCloseTo(0, 10);
+  });
+
+  it('wraps a value slightly above PI', () => {
+    const input = PI + 0.1;
+    const expected = -PI + 0.1;
+    expect(normalizeRotationDiff(input)).toBeCloseTo(expected, 10);
+  });
+
+  // Wrapping negative values
+  it('wraps -2*PI to approximately 0', () => {
+    expect(normalizeRotationDiff(-2 * PI)).toBeCloseTo(0, 10);
+  });
+
+  it('wraps -3*PI to approximately -PI', () => {
+    expect(normalizeRotationDiff(-3 * PI)).toBeCloseTo(-PI, 10);
+  });
+
+  it('wraps -4*PI to approximately 0', () => {
+    expect(normalizeRotationDiff(-4 * PI)).toBeCloseTo(0, 10);
+  });
+
+  it('wraps a value slightly below -PI', () => {
+    const input = -PI - 0.1;
+    const expected = PI - 0.1;
+    expect(normalizeRotationDiff(input)).toBeCloseTo(expected, 10);
+  });
+
+  // Large magnitudes
+  it('normalizes a large positive value', () => {
+    const input = 10 * PI + 0.5;
+    expect(normalizeRotationDiff(input)).toBeCloseTo(0.5, 10);
+  });
+
+  it('normalizes a large negative value', () => {
+    const input = -10 * PI - 0.5;
+    expect(normalizeRotationDiff(input)).toBeCloseTo(-0.5, 10);
+  });
+
+  // Fractional multiples of PI
+  it('handles PI/2 (already in range)', () => {
+    expect(normalizeRotationDiff(PI / 2)).toBeCloseTo(PI / 2, 10);
+  });
+
+  it('handles -PI/2 (already in range)', () => {
+    expect(normalizeRotationDiff(-PI / 2)).toBeCloseTo(-PI / 2, 10);
+  });
+
+  it('handles 1.5*PI by wrapping to -0.5*PI', () => {
+    expect(normalizeRotationDiff(1.5 * PI)).toBeCloseTo(-0.5 * PI, 10);
+  });
+
+  it('handles -1.5*PI by wrapping to 0.5*PI', () => {
+    expect(normalizeRotationDiff(-1.5 * PI)).toBeCloseTo(0.5 * PI, 10);
+  });
+
+  // Property-based sweep: result is always in [-PI, PI]
+  it('always returns a value in [-PI, PI] for a sweep of inputs', () => {
+    for (let i = -20; i <= 20; i += 0.7) {
+      const result = normalizeRotationDiff(i);
+      expect(result).toBeGreaterThanOrEqual(-PI);
+      expect(result).toBeLessThanOrEqual(PI);
+    }
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/*  getCircleIndicatorStyle                                                   */
+/* -------------------------------------------------------------------------- */
+
+describe('getCircleIndicatorStyle', () => {
+  describe('selected state', () => {
+    it('returns the selected style when selected but not hovered', () => {
+      const style = getCircleIndicatorStyle(true, false);
+      expect(style).toEqual({
+        color: 0xffaa00,
+        opacity: 1.0,
+        emissive: 0xffaa00,
+        emissiveIntensity: 0.8,
+      });
     });
 
-    it('should pass through values already in [-PI, PI]', () => {
-      expect(normalizeRotationDiff(1)).toBe(1);
-      expect(normalizeRotationDiff(-1)).toBe(-1);
-      expect(normalizeRotationDiff(Math.PI)).toBe(Math.PI);
-    });
-
-    it('should normalize values greater than PI', () => {
-      const result = normalizeRotationDiff(Math.PI + 1);
-      expect(result).toBeCloseTo(-Math.PI + 1, 10);
-    });
-
-    it('should normalize values less than -PI', () => {
-      const result = normalizeRotationDiff(-Math.PI - 1);
-      expect(result).toBeCloseTo(Math.PI - 1, 10);
-    });
-
-    it('should normalize 2*PI to approximately 0', () => {
-      const result = normalizeRotationDiff(Math.PI * 2);
-      expect(Math.abs(result)).toBeLessThan(0.001);
-    });
-
-    it('should normalize -2*PI to approximately 0', () => {
-      const result = normalizeRotationDiff(-Math.PI * 2);
-      expect(Math.abs(result)).toBeLessThan(0.001);
-    });
-
-    it('should handle large positive values', () => {
-      const result = normalizeRotationDiff(Math.PI * 6 + 0.5);
-      expect(result).toBeCloseTo(0.5, 10);
-    });
-
-    it('should handle large negative values', () => {
-      const result = normalizeRotationDiff(-Math.PI * 6 - 0.5);
-      expect(result).toBeCloseTo(-0.5, 10);
-    });
-
-    it('should always return value in [-PI, PI] range', () => {
-      for (let i = -20; i <= 20; i += 0.7) {
-        const result = normalizeRotationDiff(i);
-        expect(result).toBeGreaterThanOrEqual(-Math.PI);
-        expect(result).toBeLessThanOrEqual(Math.PI);
-      }
+    it('returns the selected style when both selected and hovered (selected takes priority)', () => {
+      const style = getCircleIndicatorStyle(true, true);
+      expect(style).toEqual({
+        color: 0xffaa00,
+        opacity: 1.0,
+        emissive: 0xffaa00,
+        emissiveIntensity: 0.8,
+      });
     });
   });
 
-  // ------ getCircleIndicatorStyle ------
-
-  describe('getCircleIndicatorStyle', () => {
-    it('should return selected style when isSelected=true', () => {
-      const style = getCircleIndicatorStyle(true, false);
-      expect(style.color).toBe(0xffaa00);
-      expect(style.opacity).toBe(1.0);
-      expect(style.emissive).toBe(0xffaa00);
-      expect(style.emissiveIntensity).toBe(0.8);
-    });
-
-    it('should return hovered style when isHovered=true and not selected', () => {
+  describe('hovered state', () => {
+    it('returns the hovered style when hovered but not selected', () => {
       const style = getCircleIndicatorStyle(false, true);
+      expect(style).toEqual({
+        color: 0x66ccff,
+        opacity: 0.9,
+        emissive: 0x66ccff,
+        emissiveIntensity: 0.5,
+      });
+    });
+  });
+
+  describe('default state', () => {
+    it('returns the default style with the built-in default color', () => {
+      const style = getCircleIndicatorStyle(false, false);
+      expect(style).toEqual({
+        color: 0x4488ff,
+        opacity: 0.6,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
+      });
+    });
+
+    it('uses a custom default color when provided', () => {
+      const customColor = 0xff0000;
+      const style = getCircleIndicatorStyle(false, false, customColor);
+      expect(style).toEqual({
+        color: customColor,
+        opacity: 0.6,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
+      });
+    });
+
+    it('ignores the custom default color when selected', () => {
+      const style = getCircleIndicatorStyle(true, false, 0xff0000);
+      expect(style.color).toBe(0xffaa00);
+    });
+
+    it('ignores the custom default color when hovered', () => {
+      const style = getCircleIndicatorStyle(false, true, 0xff0000);
       expect(style.color).toBe(0x66ccff);
-      expect(style.opacity).toBe(0.9);
-      expect(style.emissive).toBe(0x66ccff);
-      expect(style.emissiveIntensity).toBe(0.5);
     });
+  });
 
-    it('should prioritize selected over hovered', () => {
-      const style = getCircleIndicatorStyle(true, true);
-      expect(style.color).toBe(0xffaa00); // Selected color
-    });
-
-    it('should return default style with custom color', () => {
-      const style = getCircleIndicatorStyle(false, false, 0x44aa44);
-      expect(style.color).toBe(0x44aa44);
-      expect(style.opacity).toBe(0.6);
-      expect(style.emissive).toBe(0x000000);
-      expect(style.emissiveIntensity).toBe(0);
-    });
-
-    it('should use blue default color when no custom color', () => {
+  describe('return shape', () => {
+    it('always returns an object with exactly four numeric keys', () => {
       const style = getCircleIndicatorStyle(false, false);
-      expect(style.color).toBe(0x4488ff);
-    });
+      const keys = Object.keys(style).sort();
+      expect(keys).toEqual(['color', 'emissive', 'emissiveIntensity', 'opacity']);
 
-    it('should always return all four properties', () => {
-      const style = getCircleIndicatorStyle(false, false);
-      expect(style).toHaveProperty('color');
-      expect(style).toHaveProperty('opacity');
-      expect(style).toHaveProperty('emissive');
-      expect(style).toHaveProperty('emissiveIntensity');
+      for (const key of keys) {
+        expect(typeof style[key as keyof typeof style]).toBe('number');
+      }
     });
   });
 });
