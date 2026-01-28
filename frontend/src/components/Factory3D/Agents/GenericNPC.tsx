@@ -51,10 +51,6 @@ const CROSSFADE_DURATION = 0.3;
 /** Probability that the NPC will interrupt its plan to watch a stage performer */
 const STAGE_REACTION_PROBABILITY = 0.6;
 
-/** Conveyor belt proximity zone for special thoughts */
-const CONVEYOR_BELT_Z = -14;
-const CONVEYOR_PROXIMITY_THRESHOLD = 4;
-
 /**
  * Standard mapping from plan step types to thought category keys.
  */
@@ -717,7 +713,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wandering'
     : 'wandering';
 
-  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - CONVEYOR_BELT_Z) < CONVEYOR_PROXIMITY_THRESHOLD;
+  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - FACTORY_CONSTANTS.CONVEYOR.BELT_Z) < FACTORY_CONSTANTS.CONVEYOR.PROXIMITY_THRESHOLD;
   const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
 
   /**

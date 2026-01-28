@@ -133,10 +133,6 @@ const MODEL_SCALE = 2.0;
 // Workstation blocker radius - agents can't enter other agents' workstation areas
 const WORKSTATION_BLOCKER_RADIUS = 2.0;
 
-// Conveyor belt proximity zone for special thoughts
-const CONVEYOR_BELT_Z = -14;
-const CONVEYOR_PROXIMITY_THRESHOLD = 4; // Distance in Z direction to trigger conveyor thoughts
-
 /**
  * Check if a position is blocked by another agent's workstation
  */
@@ -755,7 +751,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
     : 'wander';
 
-  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - CONVEYOR_BELT_Z) < CONVEYOR_PROXIMITY_THRESHOLD;
+  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - FACTORY_CONSTANTS.CONVEYOR.BELT_Z) < FACTORY_CONSTANTS.CONVEYOR.PROXIMITY_THRESHOLD;
   const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
 
   return (

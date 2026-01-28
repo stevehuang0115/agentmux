@@ -48,10 +48,6 @@ const NPC_STAGE_THRESHOLD = 4.0;
 /** Fixed scale for audience member models (matches BaseAgent MODEL_SCALE) */
 const AUDIENCE_MODEL_SCALE = 2.0;
 
-// Conveyor belt proximity zone for special thoughts
-const CONVEYOR_BELT_Z = -14;
-const CONVEYOR_PROXIMITY_THRESHOLD = 4;
-
 // Use the centralized step-to-thought-key mapping from agentPlanTypes
 const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
 
@@ -732,7 +728,7 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
     : 'wander';
 
-  const isNearConveyor = Math.abs(walkStateRef.current.currentPos.z - CONVEYOR_BELT_Z) < CONVEYOR_PROXIMITY_THRESHOLD;
+  const isNearConveyor = Math.abs(walkStateRef.current.currentPos.z - FACTORY_CONSTANTS.CONVEYOR.BELT_Z) < FACTORY_CONSTANTS.CONVEYOR.PROXIMITY_THRESHOLD;
   const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
 
   // Select the matching thought category from the hoisted AUDIENCE_THOUGHTS constant

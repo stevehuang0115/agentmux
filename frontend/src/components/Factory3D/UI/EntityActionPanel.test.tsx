@@ -8,98 +8,71 @@
  */
 
 import { describe, it, expect } from 'vitest';
-
-// ====== ENTITY NAME RESOLUTION (duplicated from component for testing) ======
-
-/**
- * Resolves a display name for an entity ID (mirrors component logic)
- */
-function resolveEntityName(
-  entityId: string,
-  agents: Map<string, { name?: string; sessionName?: string }>
-): string {
-  const agent = agents.get(entityId);
-  if (agent) {
-    return agent.name || agent.sessionName || entityId;
-  }
-  // Known NPCs
-  if (entityId === 'steve-jobs-npc') return 'Steve Jobs';
-  if (entityId === 'sundar-pichai-npc') return 'Sundar Pichai';
-  if (entityId === 'elon-musk-npc') return 'Elon Musk';
-  if (entityId === 'mark-zuckerberg-npc') return 'Mark Zuckerberg';
-  if (entityId === 'jensen-huang-npc') return 'Jensen Huang';
-  if (entityId === 'steve-huang-npc') return 'Steve Huang';
-
-  const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
-  if (audienceMatch) {
-    return `Audience Member ${Number(audienceMatch[1]) + 1}`;
-  }
-  return entityId;
-}
+import { resolveEntityName, NameableAgent } from '../../../utils/entityHelpers';
 
 // ====== TESTS ======
 
 describe('EntityActionPanel', () => {
   describe('resolveEntityName', () => {
     it('returns agent name when entity is in agents map', () => {
-      const agents = new Map([
+      const agents = new Map<string, NameableAgent>([
         ['agent-1', { name: 'Builder Bot', sessionName: 'session-1' }],
       ]);
       expect(resolveEntityName('agent-1', agents)).toBe('Builder Bot');
     });
 
     it('falls back to sessionName if name is missing', () => {
-      const agents = new Map([
+      const agents = new Map<string, NameableAgent>([
         ['agent-2', { sessionName: 'my-session' }],
       ]);
       expect(resolveEntityName('agent-2', agents)).toBe('my-session');
     });
 
     it('falls back to entityId if both name and sessionName are missing', () => {
-      const agents = new Map([
+      const agents = new Map<string, NameableAgent>([
         ['agent-3', {}],
       ]);
       expect(resolveEntityName('agent-3', agents)).toBe('agent-3');
     });
 
     it('returns "Steve Jobs" for steve-jobs-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('steve-jobs-npc', agents)).toBe('Steve Jobs');
     });
 
     it('returns "Sundar Pichai" for sundar-pichai-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('sundar-pichai-npc', agents)).toBe('Sundar Pichai');
     });
 
     it('returns "Elon Musk" for elon-musk-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('elon-musk-npc', agents)).toBe('Elon Musk');
     });
 
     it('returns "Mark Zuckerberg" for mark-zuckerberg-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('mark-zuckerberg-npc', agents)).toBe('Mark Zuckerberg');
     });
 
     it('returns "Jensen Huang" for jensen-huang-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('jensen-huang-npc', agents)).toBe('Jensen Huang');
     });
 
     it('returns "Steve Huang" for steve-huang-npc', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('steve-huang-npc', agents)).toBe('Steve Huang');
     });
 
     it('returns "Audience Member N" for fake audience entities', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('fake-audience-0', agents)).toBe('Audience Member 1');
       expect(resolveEntityName('fake-audience-4', agents)).toBe('Audience Member 5');
     });
 
     it('returns raw entityId for unknown entities', () => {
-      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      const agents = new Map<string, NameableAgent>();
       expect(resolveEntityName('unknown-entity', agents)).toBe('unknown-entity');
     });
   });

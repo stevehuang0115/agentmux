@@ -9,6 +9,7 @@
 import React from 'react';
 import { X } from 'lucide-react';
 import { useFactory } from '../../../contexts/FactoryContext';
+import { resolveEntityName } from '../../../utils/entityHelpers';
 import type { PlanStepType } from '../Agents/agentPlanTypes';
 
 // ====== ACTION DEFINITIONS ======
@@ -38,42 +39,6 @@ const ENTITY_ACTIONS: ActionDef[] = [
   { label: 'Golf', stepType: 'go_to_golf', icon: '⛳' },
   { label: 'Sit Outside', stepType: 'sit_outdoor', icon: '🪑' },
 ];
-
-// ====== NAME RESOLUTION ======
-
-/**
- * Resolves a display name for an entity ID.
- *
- * @param entityId - The entity ID to resolve
- * @param agents - Agent map from context
- * @returns Human-readable entity name
- */
-function resolveEntityName(
-  entityId: string,
-  agents: Map<string, { name?: string; sessionName?: string }>
-): string {
-  // Check agents map
-  const agent = agents.get(entityId);
-  if (agent) {
-    return agent.name || agent.sessionName || entityId;
-  }
-
-  // Known NPCs
-  if (entityId === 'steve-jobs-npc') return 'Steve Jobs';
-  if (entityId === 'sundar-pichai-npc') return 'Sundar Pichai';
-  if (entityId === 'elon-musk-npc') return 'Elon Musk';
-  if (entityId === 'mark-zuckerberg-npc') return 'Mark Zuckerberg';
-  if (entityId === 'jensen-huang-npc') return 'Jensen Huang';
-  if (entityId === 'steve-huang-npc') return 'Steve Huang';
-
-  // Fake audience members
-  const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
-  if (audienceMatch) {
-    return `Audience Member ${Number(audienceMatch[1]) + 1}`;
-  }
-
-  return entityId;
-}
 
 // ====== COMPONENT ======
 
