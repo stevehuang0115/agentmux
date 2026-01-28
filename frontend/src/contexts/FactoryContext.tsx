@@ -26,10 +26,10 @@ import {
   BossModeType,
   FactoryStats,
   CameraFocusTarget,
-  AnimalType,
   FACTORY_CONSTANTS,
   ZONE_COLORS,
 } from '../types/factory.types';
+import type { EntityCommand } from '../components/Factory3D/Agents/agentPlanTypes';
 import { factoryService } from '../services/factory.service';
 import {
   getAnimalTypeForProject,
@@ -49,6 +49,10 @@ const GREETING_TURN_MS = 2000;
 const TALK_TURN_MS = 3500;
 /** How often to check proximity */
 const PROXIMITY_CHECK_MS = 500;
+/** Maximum conversation turns before entities move on */
+const MAX_CONVERSATION_TURNS = 10;
+/** Cooldown after a conversation ends before the same pair can chat again */
+const CONVERSATION_COOLDOWN_MS = 30000;
 
 /** Quick greetings for short encounters */
 const GREETINGS = [
@@ -114,10 +118,94 @@ const SUNDAR_PICHAI_SMALL_TALK: ReadonlyArray<[string, string]> = [
   ["What's the user impact?", "Significant!"],
 ];
 
+/** Elon Musk greetings */
+const ELON_MUSK_GREETINGS = [
+  'TSLA to the moon!', 'Hey, quick question!', 'First principles!',
+  'Yo, got a sec?', 'Let me tell you...',
+];
+
+/** Elon Musk small talk [Elon's line, partner's response] */
+const ELON_MUSK_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["Tesla stock is up today!", "Nice, congrats!"],
+  ["SpaceX launch was amazing!", "That was incredible!"],
+  ["Starship blew up again...", "Oh no! Next time!"],
+  ["Rapid unscheduled disassembly", "Ha, classic!"],
+  ["Full self driving, almost there", "Can't wait to try it!"],
+  ["We're going to Mars!", "When do we leave?"],
+  ["The Cybertruck is selling!", "It's wild looking!"],
+  ["X is the everything app now", "That's ambitious!"],
+  ["Need to ship this 10x faster", "On it!"],
+  ["Boring tunnels under the factory?", "That'd be cool!"],
+];
+
+/** Mark Zuckerberg greetings */
+const MARK_ZUCKERBERG_GREETINGS = [
+  'Hey, try this headset!', 'Is this VR or real?', 'Meta connect!',
+  'Quick, put on Quest!', 'Open source everything!',
+];
+
+/** Mark Zuckerberg small talk [Mark's line, partner's response] */
+const MARK_ZUCKERBERG_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["Have you tried Meta Quest?", "Not yet, is it good?"],
+  ["The metaverse is the future!", "Interesting vision!"],
+  ["Llama 4 is crushing benchmarks", "That's impressive!"],
+  ["I can't see clearly, VR blur", "Maybe take the headset off?"],
+  ["Everything should be in VR", "Even this meeting?"],
+  ["Wait, is this real or virtual?", "It's real, Zuck!"],
+  ["Open source AI wins every time", "Agreed!"],
+  ["Sweet Baby Rays is the best", "Ha, you and BBQ sauce!"],
+  ["Llama beats the competition", "The benchmarks look great!"],
+  ["We should do this in the metaverse", "Let's stay in reality!"],
+];
+
+/** Jensen Huang greetings */
+const JENSEN_HUANG_GREETINGS = [
+  'GPU goes brrr!', 'Hey, need compute?', 'CUDA powers all!',
+  'The more you buy...', 'Accelerated computing!',
+];
+
+/** Jensen Huang small talk [Jensen's line, partner's response] */
+const JENSEN_HUANG_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["Everyone's buying our GPUs!", "Business is booming!"],
+  ["NVDA stock, all time high!", "Incredible run!"],
+  ["H100s are sold out again!", "The demand is insane!"],
+  ["You using CUDA for this?", "Of course!"],
+  ["The more you buy, more you save!", "Great sales pitch!"],
+  ["AI needs more compute power", "Always more GPUs!"],
+  ["Blackwell is our best chip yet", "The benchmarks are wild!"],
+  ["Every data center needs us", "You're not wrong!"],
+  ["Leather jacket weather today", "Looking sharp, Jensen!"],
+  ["Inference at scale is everything", "Totally agree!"],
+];
+
+/** Steve Huang greetings */
+const STEVE_HUANG_GREETINGS = [
+  'Hey, how are things?', "What's going on?", 'Just checking in!',
+  'Hey there!', 'How goes it?',
+];
+
+/** Steve Huang small talk [Steve's line, partner's response] */
+const STEVE_HUANG_SMALL_TALK: ReadonlyArray<[string, string]> = [
+  ["How's everything going?", "Going great, thanks!"],
+  ["I built this whole factory", "It's amazing!"],
+  ["AgentMux is coming along", "Looks awesome!"],
+  ["Need anything from me?", "We're good, thanks!"],
+  ["Just making the rounds", "Good to see you!"],
+  ["The codebase is looking clean", "Thanks for the review!"],
+  ["Nice weather for golf later", "Sounds fun!"],
+  ["Keep up the great work", "Will do!"],
+  ["Any feedback for me?", "Everything's solid!"],
+  ["Love seeing the progress", "Team's crushing it!"],
+];
+
 /** Map NPC IDs to their specific conversation data */
 const NPC_CONVERSATION_DATA: Record<string, { greetings: string[]; smallTalk: ReadonlyArray<[string, string]> }> = {
   'steve-jobs-npc': { greetings: STEVE_JOBS_GREETINGS, smallTalk: STEVE_JOBS_SMALL_TALK },
   'sundar-pichai-npc': { greetings: SUNDAR_PICHAI_GREETINGS, smallTalk: SUNDAR_PICHAI_SMALL_TALK },
+  'elon-musk-npc': { greetings: ELON_MUSK_GREETINGS, smallTalk: ELON_MUSK_SMALL_TALK },
+  'mark-zuckerberg-npc': { greetings: MARK_ZUCKERBERG_GREETINGS, smallTalk: MARK_ZUCKERBERG_SMALL_TALK },
+  'jensen-huang-npc': { greetings: JENSEN_HUANG_GREETINGS, smallTalk: JENSEN_HUANG_SMALL_TALK },
+  'steve-huang-npc': { greetings: STEVE_HUANG_GREETINGS, smallTalk: STEVE_HUANG_SMALL_TALK },
 };
 
 /**
@@ -137,27 +225,9 @@ export interface ProximityConversation {
 // ====== CONTEXT TYPE ======
 
 /**
- * Idle activity types for agents when not working
+ * Seat occupancy tracking - maps area name to set of entity IDs occupying seats
  */
-export type IdleActivity = 'wander' | 'couch' | 'stage' | 'break_room' | 'poker_table' | 'kitchen';
-
-/**
- * Idle destinations state - tracks where each idle agent should go
- */
-interface IdleDestinationsState {
-  /** Map of agent ID to their idle activity */
-  destinations: Map<string, IdleActivity>;
-  /** ID of the agent currently on stage (only one at a time) */
-  stagePerformerId: string | null;
-  /** IDs of agents on couches */
-  couchAgentIds: string[];
-  /** IDs of agents at break room table */
-  breakRoomAgentIds: string[];
-  /** IDs of agents at poker table */
-  pokerAgentIds: string[];
-  /** IDs of agents at kitchen counter */
-  kitchenAgentIds: string[];
-}
+export type SeatOccupancyMap = Map<string, Set<string>>;
 
 interface FactoryContextType {
   /** Map of agent ID to agent data */
@@ -198,20 +268,28 @@ interface FactoryContextType {
   refreshData: () => Promise<void>;
   /** Update camera state directly */
   updateCamera: (updates: Partial<CameraState>) => void;
-  /** Idle destinations state */
-  idleDestinations: IdleDestinationsState;
-  /** Get the idle activity for an agent */
-  getIdleActivity: (agentId: string) => IdleActivity;
-  /** Check if an agent is the stage performer */
-  isStagePerformer: (agentId: string) => boolean;
-  /** Get couch position index for an agent (-1 if not on couch) */
-  getCouchPositionIndex: (agentId: string) => number;
-  /** Get seat index at break room (-1 if not there) */
-  getBreakRoomSeatIndex: (agentId: string) => number;
-  /** Get seat index at poker table (-1 if not there) */
-  getPokerSeatIndex: (agentId: string) => number;
-  /** Get seat index at kitchen counter (-1 if not there) */
-  getKitchenSeatIndex: (agentId: string) => number;
+  /** Claim a seat in an area for an entity. Returns the seat index, or -1 if full. */
+  claimSeat: (area: string, entityId: string) => number;
+  /** Release a seat in an area for an entity */
+  releaseSeat: (area: string, entityId: string) => void;
+  /** Check if a seated area is at capacity */
+  isAreaFull: (area: string) => boolean;
+  /** Get the seat index for an entity in an area (-1 if not seated) */
+  getSeatIndex: (area: string, entityId: string) => number;
+  /** Get the current seat occupancy count for an area */
+  getSeatOccupancy: () => Record<string, number>;
+  /** Claim the stage for a performer. Returns true if successful. */
+  claimStage: (entityId: string) => boolean;
+  /** Release the stage */
+  releaseStage: (entityId: string) => void;
+  /** Check if the stage is occupied */
+  isStageOccupied: () => boolean;
+  /** Get the current stage performer ID (null if empty) */
+  getStagePerformerId: () => string | null;
+  /** Ref to the stage performer ID (for synchronous reads in useFrame) */
+  stagePerformerRef: React.MutableRefObject<string | null>;
+  /** Ref to seat occupancy map (for synchronous reads in useFrame) */
+  seatOccupancyRef: React.MutableRefObject<SeatOccupancyMap>;
   /** Update an agent's current position (called by agent components) */
   updateAgentPosition: (agentId: string, position: THREE.Vector3) => void;
   /** Update an NPC's current position (called by NPC components) */
@@ -230,6 +308,10 @@ interface FactoryContextType {
   clearSelection: () => void;
   /** Active proximity conversations keyed by entity ID */
   entityConversations: Map<string, ProximityConversation>;
+  /** Send a command to override an entity's current plan */
+  sendEntityCommand: (entityId: string, command: EntityCommand) => void;
+  /** Consume (read + delete) a pending command for an entity. Used in useFrame loops. */
+  consumeEntityCommand: (entityId: string) => EntityCommand | null;
 }
 
 // ====== CONTEXT ======
@@ -278,15 +360,24 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Idle destinations state - randomized activities for idle agents
-  const [idleDestinations, setIdleDestinations] = useState<IdleDestinationsState>({
-    destinations: new Map(),
-    stagePerformerId: null,
-    couchAgentIds: [],
-    breakRoomAgentIds: [],
-    pokerAgentIds: [],
-    kitchenAgentIds: [],
-  });
+  // Seat occupancy ref - tracks which seats are taken at each area (no re-renders)
+  const seatOccupancyRef = useRef<SeatOccupancyMap>(new Map([
+    ['couch', new Set<string>()],
+    ['break_room', new Set<string>()],
+    ['poker_table', new Set<string>()],
+    ['kitchen', new Set<string>()],
+  ]));
+
+  // Stage performer ref - tracks who is currently performing (no re-renders)
+  const stagePerformerRef = useRef<string | null>(null);
+
+  /** Seat capacity limits per area */
+  const SEAT_CAPACITY: Record<string, number> = {
+    couch: 2,
+    break_room: 4,
+    poker_table: 4,
+    kitchen: 5,
+  };
 
   // NPC positions state - tracks current positions of NPCs for boss mode
   const [npcPositions, setNpcPositions] = useState<Map<string, THREE.Vector3>>(new Map());
@@ -297,6 +388,28 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
   // Proximity conversation state
   const [entityConversations, setEntityConversations] = useState<Map<string, ProximityConversation>>(new Map());
+
+  // Entity command channel - ref-based for synchronous consumption in useFrame
+  const entityCommandRef = useRef<Map<string, EntityCommand>>(new Map());
+
+  /**
+   * Queue a command for an entity, overriding its current plan
+   */
+  const sendEntityCommand = useCallback((entityId: string, command: EntityCommand) => {
+    entityCommandRef.current.set(entityId, command);
+  }, []);
+
+  /**
+   * Consume (read + delete) a pending command for an entity.
+   * Called from entity useFrame loops.
+   */
+  const consumeEntityCommand = useCallback((entityId: string): EntityCommand | null => {
+    const command = entityCommandRef.current.get(entityId) ?? null;
+    if (command) {
+      entityCommandRef.current.delete(entityId);
+    }
+    return command;
+  }, []);
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -311,6 +424,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     let idleCount = 0;
     let dormantCount = 0;
     let totalTokens = 0;
+    const projectTokenMap = new Map<string, number>();
 
     agents.forEach((agent) => {
       switch (agent.status) {
@@ -325,10 +439,26 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           break;
       }
       totalTokens += agent.sessionTokens;
+      projectTokenMap.set(
+        agent.projectName,
+        (projectTokenMap.get(agent.projectName) || 0) + agent.sessionTokens,
+      );
     });
 
-    return { activeCount, idleCount, dormantCount, totalTokens };
-  }, [agents]);
+    // Build per-project token distribution sorted by tokens descending
+    const tokensByProject = Array.from(projectTokenMap.entries())
+      .map(([projectName, tokens], i) => {
+        const zone = zones.get(projectName);
+        return {
+          projectName,
+          tokens,
+          color: zone?.color || ZONE_COLORS[i % ZONE_COLORS.length],
+        };
+      })
+      .sort((a, b) => b.tokens - a.tokens);
+
+    return { activeCount, idleCount, dormantCount, totalTokens, tokensByProject };
+  }, [agents, zones]);
 
   /**
    * Fetches factory state from API and updates local state
@@ -552,6 +682,65 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         : { x: 10, y: 0, z: 0 },
     });
 
+    // Add Jensen Huang NPC as a target
+    const jensenPos = npcPositions.get('jensen-huang-npc');
+    targets.push({
+      id: 'jensen-huang-npc',
+      name: 'Jensen Huang',
+      type: 'npc',
+      position: jensenPos
+        ? { x: jensenPos.x, y: jensenPos.y, z: jensenPos.z }
+        : { x: -5, y: 0, z: 5 },
+    });
+
+    // Add Elon Musk NPC as a target
+    const elonPos = npcPositions.get('elon-musk-npc');
+    targets.push({
+      id: 'elon-musk-npc',
+      name: 'Elon Musk',
+      type: 'npc',
+      position: elonPos
+        ? { x: elonPos.x, y: elonPos.y, z: elonPos.z }
+        : { x: 4, y: 0, z: 50 },
+    });
+
+    // Add Mark Zuckerberg NPC as a target
+    const markPos = npcPositions.get('mark-zuckerberg-npc');
+    targets.push({
+      id: 'mark-zuckerberg-npc',
+      name: 'Mark Zuckerberg',
+      type: 'npc',
+      position: markPos
+        ? { x: markPos.x, y: markPos.y, z: markPos.z }
+        : { x: 18, y: 0, z: 38 },
+    });
+
+    // Add Steve Huang NPC as a target
+    const steveHuangPos = npcPositions.get('steve-huang-npc');
+    targets.push({
+      id: 'steve-huang-npc',
+      name: 'Steve Huang',
+      type: 'npc',
+      position: steveHuangPos
+        ? { x: steveHuangPos.x, y: steveHuangPos.y, z: steveHuangPos.z }
+        : { x: 16, y: 0, z: 44 },
+    });
+
+    // Add fake audience members as targets
+    const audiencePositions = FACTORY_CONSTANTS.STAGE.AUDIENCE_POSITIONS;
+    audiencePositions.forEach((_, idx) => {
+      const audienceId = `fake-audience-${idx}`;
+      const audiencePos = npcPositions.get(audienceId);
+      targets.push({
+        id: audienceId,
+        name: `Audience ${idx + 1}`,
+        type: 'npc',
+        position: audiencePos
+          ? { x: audiencePos.x, y: audiencePos.y, z: audiencePos.z }
+          : { x: audiencePositions[idx].x, y: 0, z: audiencePositions[idx].z },
+      });
+    });
+
     return targets;
   }, [agents, npcPositions]);
 
@@ -559,8 +748,11 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
    * Focus camera on a boss mode target
    */
   const focusOnBossModeTarget = useCallback((target: BossModeTarget) => {
-    // Calculate camera position based on target
-    const cameraOffset = { x: -4, y: 4, z: 4 };
+    // Use wider offset for NPC targets (taller models need more camera distance)
+    const isNpc = target.type === 'npc';
+    const cameraOffset = isNpc
+      ? { x: -7, y: 7, z: 7 }
+      : { x: -4, y: 4, z: 4 };
     const newPosition = new THREE.Vector3(
       target.position.x + cameraOffset.x,
       target.position.y + cameraOffset.y,
@@ -670,46 +862,94 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   }, [bossModeState]);
 
   /**
-   * Get the idle activity for an agent
+   * Claim a seat in an area for an entity.
+   * Returns the seat index (0-based), or -1 if the area is full.
    */
-  const getIdleActivity = useCallback((agentId: string): IdleActivity => {
-    return idleDestinations.destinations.get(agentId) || 'wander';
-  }, [idleDestinations.destinations]);
+  const claimSeat = useCallback((area: string, entityId: string): number => {
+    const seats = seatOccupancyRef.current.get(area);
+    if (!seats) return -1;
+    // Already claimed
+    if (seats.has(entityId)) {
+      return Array.from(seats).indexOf(entityId);
+    }
+    const capacity = SEAT_CAPACITY[area] ?? 0;
+    if (seats.size >= capacity) return -1;
+    seats.add(entityId);
+    return Array.from(seats).indexOf(entityId);
+  }, []);
 
   /**
-   * Check if an agent is the stage performer
+   * Release a seat in an area for an entity
    */
-  const isStagePerformer = useCallback((agentId: string): boolean => {
-    return idleDestinations.stagePerformerId === agentId;
-  }, [idleDestinations.stagePerformerId]);
+  const releaseSeat = useCallback((area: string, entityId: string): void => {
+    const seats = seatOccupancyRef.current.get(area);
+    if (seats) {
+      seats.delete(entityId);
+    }
+  }, []);
 
   /**
-   * Get couch position index for an agent (-1 if not on couch)
+   * Check if a seated area is at capacity
    */
-  const getCouchPositionIndex = useCallback((agentId: string): number => {
-    return idleDestinations.couchAgentIds.indexOf(agentId);
-  }, [idleDestinations.couchAgentIds]);
+  const isAreaFull = useCallback((area: string): boolean => {
+    const seats = seatOccupancyRef.current.get(area);
+    if (!seats) return true;
+    return seats.size >= (SEAT_CAPACITY[area] ?? 0);
+  }, []);
 
   /**
-   * Get break room seat index for an agent (-1 if not there)
+   * Get the seat index for an entity in an area (-1 if not seated)
    */
-  const getBreakRoomSeatIndex = useCallback((agentId: string): number => {
-    return idleDestinations.breakRoomAgentIds.indexOf(agentId);
-  }, [idleDestinations.breakRoomAgentIds]);
+  const getSeatIndex = useCallback((area: string, entityId: string): number => {
+    const seats = seatOccupancyRef.current.get(area);
+    if (!seats || !seats.has(entityId)) return -1;
+    return Array.from(seats).indexOf(entityId);
+  }, []);
 
   /**
-   * Get poker table seat index for an agent (-1 if not there)
+   * Get current seat occupancy counts for plan generation
    */
-  const getPokerSeatIndex = useCallback((agentId: string): number => {
-    return idleDestinations.pokerAgentIds.indexOf(agentId);
-  }, [idleDestinations.pokerAgentIds]);
+  const getSeatOccupancy = useCallback((): Record<string, number> => {
+    const result: Record<string, number> = {};
+    seatOccupancyRef.current.forEach((seats, area) => {
+      result[area] = seats.size;
+    });
+    return result;
+  }, []);
 
   /**
-   * Get kitchen counter seat index for an agent (-1 if not there)
+   * Claim the stage for a performer. Returns true if successful.
    */
-  const getKitchenSeatIndex = useCallback((agentId: string): number => {
-    return idleDestinations.kitchenAgentIds.indexOf(agentId);
-  }, [idleDestinations.kitchenAgentIds]);
+  const claimStage = useCallback((entityId: string): boolean => {
+    if (stagePerformerRef.current !== null && stagePerformerRef.current !== entityId) {
+      return false;
+    }
+    stagePerformerRef.current = entityId;
+    return true;
+  }, []);
+
+  /**
+   * Release the stage
+   */
+  const releaseStage = useCallback((entityId: string): void => {
+    if (stagePerformerRef.current === entityId) {
+      stagePerformerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Check if the stage is occupied
+   */
+  const isStageOccupied = useCallback((): boolean => {
+    return stagePerformerRef.current !== null;
+  }, []);
+
+  /**
+   * Get the current stage performer ID
+   */
+  const getStagePerformerId = useCallback((): string | null => {
+    return stagePerformerRef.current;
+  }, []);
 
   /**
    * Update an agent's current position (called by agent components during animation)
@@ -881,10 +1121,15 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
           }
         }
 
+        // Use wider orbit for NPC targets (taller models need more camera distance)
+        const isNpcTarget = nextTarget.type === 'npc';
+        const effectiveRadius = isNpcTarget ? prev.orbitRadius + 4 : prev.orbitRadius;
+        const effectiveHeight = isNpcTarget ? prev.orbitHeight + 3 : prev.orbitHeight;
+
         // Calculate camera position on orbit using live position
-        const camX = livePos.x + prev.orbitRadius * Math.cos(newAngle);
-        const camZ = livePos.z + prev.orbitRadius * Math.sin(newAngle);
-        const camY = livePos.y + prev.orbitHeight;
+        const camX = livePos.x + effectiveRadius * Math.cos(newAngle);
+        const camZ = livePos.z + effectiveRadius * Math.sin(newAngle);
+        const camY = livePos.y + effectiveHeight;
 
         // Update camera position directly
         setCamera((camPrev) => {
@@ -922,114 +1167,10 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     };
   }, [bossModeState.isActive, bossModeState.mode, bossModeState.targets.length]);
 
-  // Idle destinations management - assign random activities to idle agents
-  useEffect(() => {
-    const DESTINATION_CHECK_INTERVAL = 5000; // Check every 5 seconds
-    const MAX_COUCH_AGENTS = 4; // Maximum agents on couches
-
-    const assignIdleDestinations = () => {
-      const MAX_BREAK_ROOM_AGENTS = 4;
-      const MAX_POKER_AGENTS = 4;
-      const MAX_KITCHEN_AGENTS = 5;
-
-      // Get all idle agents
-      const idleAgents = Array.from(agents.values()).filter(
-        (agent) => agent.status === 'idle'
-      );
-
-      if (idleAgents.length === 0) {
-        // Clear all destinations if no idle agents
-        setIdleDestinations({
-          destinations: new Map(),
-          stagePerformerId: null,
-          couchAgentIds: [],
-          breakRoomAgentIds: [],
-          pokerAgentIds: [],
-          kitchenAgentIds: [],
-        });
-        return;
-      }
-
-      const newDestinations = new Map<string, IdleActivity>();
-      let newStagePerformerId: string | null = null;
-      const newCouchAgentIds: string[] = [];
-      const newBreakRoomAgentIds: string[] = [];
-      const newPokerAgentIds: string[] = [];
-      const newKitchenAgentIds: string[] = [];
-
-      // Keep existing assignments for agents still idle, clear for non-idle
-      idleAgents.forEach((agent) => {
-        const existingDest = idleDestinations.destinations.get(agent.id);
-
-        if (existingDest) {
-          // Keep existing assignment
-          newDestinations.set(agent.id, existingDest);
-          if (existingDest === 'stage') {
-            newStagePerformerId = agent.id;
-          } else if (existingDest === 'couch') {
-            newCouchAgentIds.push(agent.id);
-          } else if (existingDest === 'break_room') {
-            newBreakRoomAgentIds.push(agent.id);
-          } else if (existingDest === 'poker_table') {
-            newPokerAgentIds.push(agent.id);
-          } else if (existingDest === 'kitchen') {
-            newKitchenAgentIds.push(agent.id);
-          }
-        } else {
-          // New idle agent - assign random destination
-          // Spread across all zones: ~15% each for specific zones, ~25% wander
-          const rand = Math.random();
-          let activity: IdleActivity;
-
-          if (rand < 0.12 && !newStagePerformerId) {
-            activity = 'stage';
-            newStagePerformerId = agent.id;
-          } else if (rand < 0.27 && newCouchAgentIds.length < MAX_COUCH_AGENTS) {
-            activity = 'couch';
-            newCouchAgentIds.push(agent.id);
-          } else if (rand < 0.42 && newBreakRoomAgentIds.length < MAX_BREAK_ROOM_AGENTS) {
-            activity = 'break_room';
-            newBreakRoomAgentIds.push(agent.id);
-          } else if (rand < 0.57 && newPokerAgentIds.length < MAX_POKER_AGENTS) {
-            activity = 'poker_table';
-            newPokerAgentIds.push(agent.id);
-          } else if (rand < 0.72 && newKitchenAgentIds.length < MAX_KITCHEN_AGENTS) {
-            activity = 'kitchen';
-            newKitchenAgentIds.push(agent.id);
-          } else {
-            activity = 'wander';
-          }
-
-          newDestinations.set(agent.id, activity);
-        }
-      });
-
-      // Only update if something changed
-      const currentDestStr = JSON.stringify(Array.from(idleDestinations.destinations.entries()));
-      const newDestStr = JSON.stringify(Array.from(newDestinations.entries()));
-
-      if (currentDestStr !== newDestStr) {
-        setIdleDestinations({
-          destinations: newDestinations,
-          stagePerformerId: newStagePerformerId,
-          couchAgentIds: newCouchAgentIds,
-          breakRoomAgentIds: newBreakRoomAgentIds,
-          pokerAgentIds: newPokerAgentIds,
-          kitchenAgentIds: newKitchenAgentIds,
-        });
-      }
-    };
-
-    // Run check immediately and then on interval
-    assignIdleDestinations();
-    const interval = setInterval(assignIdleDestinations, DESTINATION_CHECK_INTERVAL);
-
-    return () => clearInterval(interval);
-  }, [agents, idleDestinations.destinations]);
-
   // Proximity conversation detection
   // Uses refs to read latest positions without re-running the effect
   const conversationStartTimesRef = useRef<Map<string, number>>(new Map());
+  const conversationCooldownRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     /**
@@ -1091,15 +1232,21 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       const startTimes = conversationStartTimesRef.current;
       const activeKeys = new Set<string>();
 
+      const cooldowns = conversationCooldownRef.current;
+
       closestNeighbor.forEach((neighborId, entityId) => {
         if (paired.has(entityId)) return;
         // Check mutual: neighbor's closest must be this entity
         if (closestNeighbor.get(neighborId) !== entityId) return;
 
+        const pairKey = [entityId, neighborId].sort().join(':');
+
+        // Skip pairs on cooldown (recently finished a conversation)
+        const cooldownUntil = cooldowns.get(pairKey);
+        if (cooldownUntil && now < cooldownUntil) return;
+
         paired.add(entityId);
         paired.add(neighborId);
-
-        const pairKey = [entityId, neighborId].sort().join(':');
         activeKeys.add(pairKey);
 
         // Get or create start time
@@ -1111,6 +1258,24 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
 
         const elapsed = now - startTime;
         const isLong = elapsed >= GREETING_PHASE_MS;
+
+        // Count total turns and end conversation if max reached
+        const greetingTurns = Math.min(
+          Math.ceil(GREETING_PHASE_MS / GREETING_TURN_MS),
+          Math.floor(elapsed / GREETING_TURN_MS) + 1
+        );
+        const smallTalkTurns = isLong
+          ? Math.floor((elapsed - GREETING_PHASE_MS) / TALK_TURN_MS) + 1
+          : 0;
+        const totalTurns = greetingTurns + smallTalkTurns;
+
+        if (totalTurns > MAX_CONVERSATION_TURNS) {
+          // Conversation exceeded max turns - end it and put on cooldown
+          startTimes.delete(pairKey);
+          cooldowns.set(pairKey, now + CONVERSATION_COOLDOWN_MS);
+          activeKeys.delete(pairKey);
+          return;
+        }
         const ids = [entityId, neighborId].sort();
 
         // Detect if an NPC is in this pair for character-specific lines
@@ -1192,6 +1357,11 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         if (!activeKeys.has(key)) startTimes.delete(key);
       });
 
+      // Clean up expired cooldowns
+      cooldowns.forEach((until, key) => {
+        if (now >= until) cooldowns.delete(key);
+      });
+
       // Only update state if conversations actually changed
       const serialize = (m: Map<string, ProximityConversation>) =>
         JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
@@ -1228,13 +1398,17 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       error,
       refreshData,
       updateCamera,
-      idleDestinations,
-      getIdleActivity,
-      isStagePerformer,
-      getCouchPositionIndex,
-      getBreakRoomSeatIndex,
-      getPokerSeatIndex,
-      getKitchenSeatIndex,
+      claimSeat,
+      releaseSeat,
+      isAreaFull,
+      getSeatIndex,
+      getSeatOccupancy,
+      claimStage,
+      releaseStage,
+      isStageOccupied,
+      getStagePerformerId,
+      stagePerformerRef,
+      seatOccupancyRef,
       updateAgentPosition,
       updateNpcPosition,
       npcPositions,
@@ -1244,6 +1418,8 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       selectEntity,
       clearSelection,
       entityConversations,
+      sendEntityCommand,
+      consumeEntityCommand,
     }),
     [
       agents,
@@ -1264,13 +1440,15 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       error,
       refreshData,
       updateCamera,
-      idleDestinations,
-      getIdleActivity,
-      isStagePerformer,
-      getCouchPositionIndex,
-      getBreakRoomSeatIndex,
-      getPokerSeatIndex,
-      getKitchenSeatIndex,
+      claimSeat,
+      releaseSeat,
+      isAreaFull,
+      getSeatIndex,
+      getSeatOccupancy,
+      claimStage,
+      releaseStage,
+      isStageOccupied,
+      getStagePerformerId,
       updateAgentPosition,
       updateNpcPosition,
       npcPositions,
@@ -1280,6 +1458,8 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       selectEntity,
       clearSelection,
       entityConversations,
+      sendEntityCommand,
+      consumeEntityCommand,
     ]
   );
 

@@ -42,6 +42,7 @@ export function cloneAndFixMaterials(scene: THREE.Object3D): THREE.Object3D {
   return clone;
 }
 
+
 /**
  * Remove root motion (Hips position track) from animation clips.
  *
@@ -62,6 +63,7 @@ export function removeRootMotion(animations: THREE.AnimationClip[]): THREE.Anima
     return new THREE.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode);
   });
 }
+
 
 /**
  * Dispose all geometry and materials in a scene graph.

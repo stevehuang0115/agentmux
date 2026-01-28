@@ -35,6 +35,10 @@ import { Agents } from './Agents/RobotAgent';
 import { FakeAudience } from './Agents/FakeAudience';
 import { SteveJobsNPC } from './Agents/SteveJobsNPC';
 import { SundarPichaiNPC } from './Agents/SundarPichaiNPC';
+import { ElonMuskNPC } from './Agents/ElonMuskNPC';
+import { MarkZuckerbergNPC } from './Agents/MarkZuckerbergNPC';
+import { JensenHuangNPC } from './Agents/JensenHuangNPC';
+import { SteveHuangNPC } from './Agents/SteveHuangNPC';
 
 // Camera components
 import { CameraController } from './Camera/CameraController';
@@ -43,6 +47,7 @@ import { CameraController } from './Camera/CameraController';
 import { InfoPanel } from './UI/InfoPanel';
 import { ProjectButtons } from './UI/ProjectButtons';
 import { LightingToggle } from './UI/LightingToggle';
+import { EntityActionPanel } from './UI/EntityActionPanel';
 
 // ====== ERROR BOUNDARY ======
 
@@ -215,6 +220,18 @@ const SceneContent: React.FC = () => {
       {/* Sundar Pichai NPC - walks around talking to agents */}
       <SundarPichaiNPC />
 
+      {/* Elon Musk NPC - outdoor near cybertruck */}
+      <ElonMuskNPC />
+
+      {/* Mark Zuckerberg NPC - near golf court */}
+      <MarkZuckerbergNPC />
+
+      {/* Jensen Huang NPC - inside the building */}
+      <JensenHuangNPC />
+
+      {/* Steve Huang NPC - builder/architect of AgentMux */}
+      <SteveHuangNPC />
+
       {/* Camera controls */}
       <CameraController />
 
@@ -253,6 +270,7 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
   className = '',
 }) => {
   const { CAMERA } = FACTORY_CONSTANTS;
+  const statsParentRef = useRef<HTMLDivElement>(null);
 
   return (
     <FactoryProvider>
@@ -300,8 +318,8 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               <SceneContent />
             </Suspense>
 
-            {/* Performance stats (dev only) */}
-            {showStats && <Stats />}
+            {/* Performance stats (dev only) - mounted into bottom-left container */}
+            {showStats && <Stats parent={statsParentRef} />}
           </Canvas>
 
           {/* UI Overlay */}
@@ -310,8 +328,12 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               <InfoPanel />
               <ProjectButtons />
               <LightingToggle />
+              <EntityActionPanel />
             </div>
           </div>
+
+          {/* FPS stats container - bottom left */}
+          {showStats && <div ref={statsParentRef} className="absolute bottom-0 left-0 z-50" />}
         </div>
       </SceneErrorBoundary>
     </FactoryProvider>

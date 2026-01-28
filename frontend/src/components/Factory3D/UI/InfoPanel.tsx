@@ -87,6 +87,58 @@ export const InfoPanel: React.FC = () => {
           </span>
         </div>
       )}
+
+      {/* Per-project token distribution */}
+      {stats.tokensByProject && stats.tokensByProject.length > 0 && stats.totalTokens > 0 && (
+        <>
+          <div className="border-t border-border-dark my-3" />
+          <div className="text-[10px] text-text-muted uppercase tracking-wide mb-2">
+            Tokens by Project
+          </div>
+
+          {/* Stacked bar */}
+          <div className="flex h-2 rounded-full overflow-hidden mb-2">
+            {stats.tokensByProject.map((entry) => {
+              const pct = stats.totalTokens > 0 ? (entry.tokens / stats.totalTokens) * 100 : 0;
+              const cssColor = `#${entry.color.toString(16).padStart(6, '0')}`;
+              return (
+                <div
+                  key={entry.projectName}
+                  style={{ width: `${pct}%`, backgroundColor: cssColor }}
+                  title={`${entry.projectName}: ${formatNumber(entry.tokens)}`}
+                />
+              );
+            })}
+          </div>
+
+          {/* Per-project rows */}
+          <div className="space-y-1">
+            {stats.tokensByProject.map((entry) => {
+              const cssColor = `#${entry.color.toString(16).padStart(6, '0')}`;
+              const pct = stats.totalTokens > 0
+                ? Math.round((entry.tokens / stats.totalTokens) * 100)
+                : 0;
+              return (
+                <div key={entry.projectName} className="flex items-center gap-1.5">
+                  <div
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: cssColor }}
+                  />
+                  <span className="text-[10px] text-text-muted flex-1 truncate">
+                    {entry.projectName}
+                  </span>
+                  <span className="text-[10px] text-text-muted">
+                    {pct}%
+                  </span>
+                  <span className="text-[10px] text-text-primary font-medium">
+                    {formatNumber(entry.tokens)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 };

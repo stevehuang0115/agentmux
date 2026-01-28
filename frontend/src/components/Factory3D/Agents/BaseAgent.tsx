@@ -4,8 +4,8 @@
  * Provides the common functionality for all agent types including:
  * - Model loading and cloning
  * - Animation management
- * - Movement and positioning
- * - Status-based behavior (working, idle, stage, lounge)
+ * - Plan-based multi-step behavior (kitchen, couch, stage, wander, etc.)
+ * - Conversation interrupts (pause/resume plan)
  *
  * Individual agent components (CowAgent, TigerAgent, etc.) use this
  * base component with their specific configurations.
@@ -27,6 +27,8 @@ import {
   isInsideObstacle,
   clampToWalls,
   isPositionClear,
+  isBlockedByEntity,
+  buildEntityPositionMap,
 } from '../../../utils/factoryCollision';
 import {
   cloneAndFixMaterials,
@@ -36,6 +38,9 @@ import {
   rotateTowards,
   getCircleIndicatorStyle,
 } from '../../../utils/threeHelpers';
+import { useAgentPlan } from './useAgentPlan';
+import { WORKER_AGENT_WEIGHTS, PlanStep, PlanStepType, STEP_TYPE_TO_SEAT_AREA, OUTDOOR_STEP_TYPES } from './agentPlanTypes';
+import { getRandomDuration } from './planGenerator';
 
 /**
  * Configuration for a specific agent type
@@ -88,8 +93,11 @@ interface WalkingState {
   targetPos: { x: number; z: number };
   initialized: boolean;
   wasWorking: boolean;
-  wasAtDestination: boolean;
   currentAnim: string;
+  /** The step type that owns the current seat claim (for releasing on step change) */
+  claimedSeatArea: string | null;
+  /** Whether we've arrived at the current step's target */
+  arrived: boolean;
 }
 
 /**
@@ -130,13 +138,6 @@ const WORKSTATION_BLOCKER_RADIUS = 2.0;
 
 /**
  * Check if a position is blocked by another agent's workstation
- *
- * @param x - X position to check
- * @param z - Z position to check
- * @param ownWorkstationX - This agent's workstation X
- * @param ownWorkstationZ - This agent's workstation Z
- * @param allWorkstations - Array of all workstation positions
- * @returns true if position is blocked
  */
 function isBlockedByWorkstation(
   x: number,
@@ -146,11 +147,9 @@ function isBlockedByWorkstation(
   allWorkstations: Array<{ x: number; z: number }>
 ): boolean {
   for (const ws of allWorkstations) {
-    // Skip own workstation
     if (Math.abs(ws.x - ownWorkstationX) < 0.1 && Math.abs(ws.z - ownWorkstationZ) < 0.1) {
       continue;
     }
-    // Check distance to this workstation
     const dx = x - ws.x;
     const dz = z - ws.z;
     const distSq = dx * dx + dz * dz;
@@ -163,7 +162,6 @@ function isBlockedByWorkstation(
 
 /**
  * Get a position that avoids blocked workstations
- * Tries the target position first, then adjusts if blocked
  */
 function getUnblockedTarget(
   targetX: number,
@@ -174,22 +172,18 @@ function getUnblockedTarget(
   ownWorkstationZ: number,
   allWorkstations: Array<{ x: number; z: number }>
 ): { x: number; z: number } {
-  // If target is not blocked, use it
   if (!isBlockedByWorkstation(targetX, targetZ, ownWorkstationX, ownWorkstationZ, allWorkstations)) {
     return { x: targetX, z: targetZ };
   }
 
-  // Target is blocked - try to find an alternative direction
-  // Move perpendicular to the blocked direction
   const dx = targetX - currentX;
   const dz = targetZ - currentZ;
   const angle = Math.atan2(dz, dx);
 
-  // Try 90 degrees left and right
   const alternatives = [
     { x: currentX + Math.cos(angle + Math.PI / 2) * 2, z: currentZ + Math.sin(angle + Math.PI / 2) * 2 },
     { x: currentX + Math.cos(angle - Math.PI / 2) * 2, z: currentZ + Math.sin(angle - Math.PI / 2) * 2 },
-    { x: currentX - dx * 0.5, z: currentZ - dz * 0.5 }, // Back up
+    { x: currentX - dx * 0.5, z: currentZ - dz * 0.5 },
   ];
 
   for (const alt of alternatives) {
@@ -198,12 +192,28 @@ function getUnblockedTarget(
     }
   }
 
-  // All blocked - stay in place
   return { x: currentX, z: currentZ };
 }
 
 /**
- * BaseAgent - Generic agent with animations and movement.
+ * Map from PlanStepType to ThinkingBubble thought category
+ */
+const STEP_TYPE_TO_THOUGHT_KEY: Partial<Record<PlanStepType, string>> = {
+  wander: 'wander',
+  go_to_couch: 'couch',
+  go_to_stage: 'stage',
+  go_to_break_room: 'break_room',
+  go_to_poker_table: 'poker_table',
+  go_to_kitchen: 'kitchen',
+  watch_stage: 'wander',
+  go_to_workstation: 'wander',
+  go_to_pickleball: 'pickleball',
+  go_to_golf: 'golf',
+  sit_outdoor: 'sit_outdoor',
+};
+
+/**
+ * BaseAgent - Generic agent with plan-based behavior and animations.
  *
  * @param agent - Agent data from context
  * @param config - Configuration for this specific agent type
@@ -217,9 +227,13 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     targetPos: { x: 0, z: 0 },
     initialized: false,
     wasWorking: false,
-    wasAtDestination: false,
     currentAnim: '',
+    claimedSeatArea: null,
+    arrived: false,
   });
+
+  // Track whether the plan was paused by a conversation
+  const wasPausedRef = useRef(false);
 
   // Load model with animations
   const gltf = useGLTF(config.modelPath);
@@ -242,29 +256,29 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   // Use the animation hook for dynamic animation management
   useAgentAnimation(agent, actions, config.animationConfig);
 
-  // Get workstation and idle destination state from context
+  // Get context functions
   const {
+    agents: allAgents,
     zones,
-    getIdleActivity,
-    isStagePerformer,
-    getCouchPositionIndex,
-    getBreakRoomSeatIndex,
-    getPokerSeatIndex,
-    getKitchenSeatIndex,
+    npcPositions,
     updateAgentPosition,
     entityConversations,
+    claimSeat,
+    releaseSeat,
+    getSeatIndex,
+    getSeatOccupancy,
+    claimStage,
+    releaseStage,
+    isStageOccupied,
+    stagePerformerRef,
+    consumeEntityCommand,
   } = useFactory();
 
   const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
     useEntityInteraction(agent.id);
 
-  // Get this agent's idle activity destination
-  const idleActivity = getIdleActivity(agent.id);
-  const isOnStage = isStagePerformer(agent.id);
-  const couchIndex = getCouchPositionIndex(agent.id);
-  const breakRoomSeatIndex = getBreakRoomSeatIndex(agent.id);
-  const pokerSeatIndex = getPokerSeatIndex(agent.id);
-  const kitchenSeatIndex = getKitchenSeatIndex(agent.id);
+  // Plan-based behavior system
+  const plan = useAgentPlan(agent.id, WORKER_AGENT_WEIGHTS);
 
   // Get zone positions from constants
   const stagePos = FACTORY_CONSTANTS.STAGE.POSITION;
@@ -273,6 +287,9 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   const breakRoomPos = FACTORY_CONSTANTS.BREAK_ROOM.POSITION;
   const pokerTablePos = FACTORY_CONSTANTS.POKER_TABLE.POSITION;
   const kitchenPos = FACTORY_CONSTANTS.KITCHEN.POSITION;
+  const pickleballPos = FACTORY_CONSTANTS.PICKLEBALL.POSITION;
+  const golfPos = FACTORY_CONSTANTS.GOLF.POSITION;
+  const outdoorBenchPositions = FACTORY_CONSTANTS.OUTDOOR_BENCH.POSITIONS;
 
   const zone = useMemo(() => zones.get(agent.projectName), [zones, agent.projectName]);
 
@@ -295,13 +312,174 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   // Circle indicator styling from shared utility
   const circleStyle = getCircleIndicatorStyle(isSelected, isHovered, 0x4488ff);
 
-  // Cleanup on unmount
+  // Cleanup on unmount - release any seats/stage claims
   useEffect(() => {
-    return () => disposeScene(clonedScene);
-  }, [clonedScene]);
+    return () => {
+      disposeScene(clonedScene);
+      const ws = walkingStateRef.current;
+      if (ws.claimedSeatArea) {
+        releaseSeat(ws.claimedSeatArea, agent.id);
+      }
+      releaseStage(agent.id);
+    };
+  }, [clonedScene, agent.id, releaseSeat, releaseStage]);
+
+  /**
+   * Compute target position for a plan step.
+   * Claims seats as needed and sets step target/animation/rotation.
+   */
+  const computeStepTarget = (step: PlanStep, walkState: WalkingState): { x: number; z: number; arrivalY: number; arrivalAnim: string; arrivalRot?: number } | null => {
+    if (!workstation) return null;
+
+    const ownWsX = workstation.position.x;
+    const ownWsZ = workstation.position.z;
+
+    switch (step.type) {
+      case 'go_to_workstation':
+        return {
+          x: workstation.position.x,
+          z: workstation.position.z + FACTORY_CONSTANTS.AGENT.WORKSTATION_OFFSET,
+          arrivalY: 0,
+          arrivalAnim: 'Breathing idle',
+          arrivalRot: Math.PI,
+        };
+
+      case 'go_to_stage': {
+        // Try to claim stage
+        if (!claimStage(agent.id)) {
+          return null; // Stage occupied, skip this step
+        }
+        return {
+          x: stagePos.x,
+          z: stagePos.z,
+          arrivalY: FACTORY_CONSTANTS.STAGE.HEIGHT,
+          arrivalAnim: config.danceAnimation,
+          arrivalRot: -Math.PI / 2,
+        };
+      }
+
+      case 'go_to_couch': {
+        const seatIdx = claimSeat('couch', agent.id);
+        if (seatIdx < 0 || !couchPositions[seatIdx]) return null;
+        walkState.claimedSeatArea = 'couch';
+        const couch = couchPositions[seatIdx];
+        return {
+          x: loungePos.x + couch.x,
+          z: loungePos.z + couch.z,
+          arrivalY: COUCH_SEAT_HEIGHT,
+          arrivalAnim: config.sitAnimation,
+          arrivalRot: couch.rotation,
+        };
+      }
+
+      case 'go_to_break_room': {
+        const seatIdx = claimSeat('break_room', agent.id);
+        if (seatIdx < 0) return null;
+        walkState.claimedSeatArea = 'break_room';
+        const seatAngle = (seatIdx * Math.PI) / 2;
+        const targetX = breakRoomPos.x + Math.sin(seatAngle) * 1.3;
+        const targetZ = breakRoomPos.z + Math.cos(seatAngle) * 1.3;
+        const faceAngle = Math.atan2(breakRoomPos.x - targetX, breakRoomPos.z - targetZ);
+        return {
+          x: targetX,
+          z: targetZ,
+          arrivalY: COUCH_SEAT_HEIGHT,
+          arrivalAnim: config.sitAnimation,
+          arrivalRot: faceAngle,
+        };
+      }
+
+      case 'go_to_poker_table': {
+        const seatIdx = claimSeat('poker_table', agent.id);
+        if (seatIdx < 0) return null;
+        walkState.claimedSeatArea = 'poker_table';
+        const seatAngle = (seatIdx * Math.PI) / 2;
+        const targetX = pokerTablePos.x + Math.sin(seatAngle) * 1.8;
+        const targetZ = pokerTablePos.z + Math.cos(seatAngle) * 1.8;
+        const faceAngle = Math.atan2(pokerTablePos.x - targetX, pokerTablePos.z - targetZ);
+        return {
+          x: targetX,
+          z: targetZ,
+          arrivalY: COUCH_SEAT_HEIGHT,
+          arrivalAnim: config.sitAnimation,
+          arrivalRot: faceAngle,
+        };
+      }
+
+      case 'go_to_kitchen': {
+        const seatIdx = claimSeat('kitchen', agent.id);
+        if (seatIdx < 0) return null;
+        walkState.claimedSeatArea = 'kitchen';
+        const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
+        const seat = seatPositions[seatIdx % seatPositions.length];
+        return {
+          x: kitchenPos.x + seat.x,
+          z: kitchenPos.z + seat.z,
+          arrivalY: 0,
+          arrivalAnim: 'Breathing idle',
+          arrivalRot: seat.rotation,
+        };
+      }
+
+      case 'watch_stage': {
+        const positions = FACTORY_CONSTANTS.STAGE.AUDIENCE_POSITIONS;
+        const pos = positions[Math.floor(Math.random() * positions.length)];
+        return {
+          x: pos.x,
+          z: pos.z,
+          arrivalY: 0,
+          arrivalAnim: 'Breathing idle',
+          arrivalRot: Math.PI / 2,
+        };
+      }
+
+      case 'go_to_pickleball': {
+        // Walk to pickleball court with slight random offset
+        const px = pickleballPos.x + (Math.random() - 0.5) * 6;
+        const pz = pickleballPos.z + (Math.random() - 0.5) * 8;
+        return { x: px, z: pz, arrivalY: 0, arrivalAnim: 'Breathing idle' };
+      }
+
+      case 'go_to_golf': {
+        // Walk to golf putting green with slight random offset
+        const gx = golfPos.x + (Math.random() - 0.5) * 6;
+        const gz = golfPos.z + (Math.random() - 0.5) * 6;
+        return { x: gx, z: gz, arrivalY: 0, arrivalAnim: 'Breathing idle' };
+      }
+
+      case 'sit_outdoor': {
+        // Pick a random outdoor bench
+        const bench = outdoorBenchPositions[Math.floor(Math.random() * outdoorBenchPositions.length)];
+        return {
+          x: bench.x,
+          z: bench.z,
+          arrivalY: 0,
+          arrivalAnim: config.sitAnimation,
+          arrivalRot: bench.rotation,
+        };
+      }
+
+      case 'wander':
+      default: {
+        const wanderRadiusX = config.wanderRadiusX ?? DEFAULT_WANDER.radiusX;
+        const wanderMinZ = workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ);
+        const wanderMaxZ = workstation.position.z + (config.wanderMaxZ ?? DEFAULT_WANDER.maxZ);
+
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
+          const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+          const candidate = getUnblockedTarget(rawX, rawZ, walkState.currentPos.x, walkState.currentPos.z, ownWsX, ownWsZ, allWorkstations);
+          if (isPositionClear(candidate.x, candidate.z, STATIC_OBSTACLES)) {
+            return { x: candidate.x, z: candidate.z, arrivalY: 0, arrivalAnim: 'Breathing idle' };
+          }
+        }
+        return { x: ownWsX, z: workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ), arrivalY: 0, arrivalAnim: 'Breathing idle' };
+      }
+    }
+  };
 
   // Animation loop - position and animation updates
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
     if (!groupRef.current || !workstation) return;
 
     mixer?.update(delta);
@@ -309,196 +487,63 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     const walkState = walkingStateRef.current;
     const isActuallyWorking = agent.status === 'active';
     const isIdle = agent.status === 'idle';
+    const elapsed = state.clock.elapsedTime;
 
     // Pause on hover - freeze movement and play idle animation
-    if (isHovered) {
+    if (isHovered && !isSelected) {
       transitionToAnimation(actions, 'Breathing idle', walkState, 0.3, 0.3);
       updateAgentPosition(agent.id, groupRef.current.position);
       return;
     }
 
-    // Handle stage performance when idle
-    if (isIdle && idleActivity === 'stage' && isOnStage) {
-      walkState.wasAtDestination = true;
-      const dx = stagePos.x - groupRef.current.position.x;
-      const dz = stagePos.z - groupRef.current.position.z;
-      const distance = Math.sqrt(dx * dx + dz * dz);
-
-      if (distance > 0.1) {
-        const shouldRun = distance > config.runThreshold;
-        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
-        const animName = shouldRun ? 'Running' : 'Walking';
-        transitionToAnimation(actions, animName, walkState);
-
-        const moveAmount = Math.min(speed * delta, distance);
-        groupRef.current.position.x += (dx / distance) * moveAmount;
-        groupRef.current.position.z += (dz / distance) * moveAmount;
-        const targetRotation = Math.atan2(dx, dz);
-        groupRef.current.rotation.y +=
-          (targetRotation - groupRef.current.rotation.y) * Math.min(1, delta * 5);
-      } else {
-        rotateTowards(groupRef.current, -Math.PI / 2, delta); // Face audience
+    // Check for external commands FIRST, regardless of status.
+    // This ensures commands from EntityActionPanel override both idle and working states.
+    const command = consumeEntityCommand(agent.id);
+    let hasCommand = false;
+    if (command) {
+      if (walkState.claimedSeatArea) {
+        releaseSeat(walkState.claimedSeatArea, agent.id);
+        walkState.claimedSeatArea = null;
       }
-
-      // Set Y position based on arrival
-      groupRef.current.position.y =
-        distance < 0.5 ? FACTORY_CONSTANTS.STAGE.HEIGHT : 0;
-
-      // Play dance animation when arrived
-      if (distance < 0.5) {
-        transitionToAnimation(actions, config.danceAnimation, walkState);
-      }
-      return;
+      releaseStage(agent.id);
+      plan.planRef.current = {
+        steps: [{
+          type: command.stepType,
+          duration: getRandomDuration(command.stepType),
+        }],
+        currentStepIndex: 0,
+        paused: false,
+        arrivalTime: null,
+        commanded: true,
+      };
+      walkState.arrived = false;
+      walkState.wasWorking = false;
+      wasPausedRef.current = false;
+      hasCommand = true;
     }
 
-    // Handle lounge rest when idle
-    if (isIdle && idleActivity === 'couch' && couchIndex >= 0 && couchPositions[couchIndex]) {
-      walkState.wasAtDestination = true;
-      const couch = couchPositions[couchIndex];
-      const targetX = loungePos.x + couch.x;
-      const targetZ = loungePos.z + couch.z;
+    // Check if there's an active commanded plan (persists across frames)
+    const currentPlanIsCommanded = plan.planRef.current?.commanded ?? false;
 
-      const dx = targetX - groupRef.current.position.x;
-      const dz = targetZ - groupRef.current.position.z;
-      const distance = Math.sqrt(dx * dx + dz * dz);
-
-      if (distance > 0.1) {
-        const shouldRun = distance > config.runThreshold;
-        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
-        const animName = shouldRun ? 'Running' : 'Walking';
-        transitionToAnimation(actions, animName, walkState);
-
-        const moveAmount = Math.min(speed * delta, distance);
-        groupRef.current.position.x += (dx / distance) * moveAmount;
-        groupRef.current.position.z += (dz / distance) * moveAmount;
-        const targetRotation = Math.atan2(dx, dz);
-        groupRef.current.rotation.y +=
-          (targetRotation - groupRef.current.rotation.y) * Math.min(1, delta * 5);
-        // Walking to couch - stay on ground
-        groupRef.current.position.y = 0;
-      } else {
-        groupRef.current.rotation.y = couch.rotation;
-        // Sitting on couch - raise to seat height
-        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
+    // Working state - position at workstation (skip if commanded)
+    if (isActuallyWorking && !hasCommand && !currentPlanIsCommanded) {
+      // Release any seats/stage when returning to work
+      if (walkState.claimedSeatArea) {
+        releaseSeat(walkState.claimedSeatArea, agent.id);
+        walkState.claimedSeatArea = null;
       }
+      releaseStage(agent.id);
 
-      if (distance < 0.5) {
-        transitionToAnimation(actions, config.sitAnimation, walkState);
-      }
-      return;
-    }
-
-    // Handle break room visit when idle
-    if (isIdle && idleActivity === 'break_room' && breakRoomSeatIndex >= 0) {
-      walkState.wasAtDestination = true;
-      // 4 seats at angles 0, 90, 180, 270 around center, distance 1.3
-      const seatAngle = (breakRoomSeatIndex * Math.PI) / 2;
-      const targetX = breakRoomPos.x + Math.sin(seatAngle) * 1.3;
-      const targetZ = breakRoomPos.z + Math.cos(seatAngle) * 1.3;
-      const brDx = targetX - groupRef.current.position.x;
-      const brDz = targetZ - groupRef.current.position.z;
-      const brDist = Math.sqrt(brDx * brDx + brDz * brDz);
-
-      if (brDist > 0.5) {
-        const shouldRun = brDist > config.runThreshold;
-        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
-        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
-        const moveAmount = Math.min(speed * delta, brDist);
-        groupRef.current.position.x += (brDx / brDist) * moveAmount;
-        groupRef.current.position.z += (brDz / brDist) * moveAmount;
-        rotateTowards(groupRef.current, Math.atan2(brDx, brDz), delta, 5);
-        groupRef.current.position.y = 0;
-      } else {
-        const faceAngle = Math.atan2(breakRoomPos.x - targetX, breakRoomPos.z - targetZ);
-        rotateTowards(groupRef.current, faceAngle, delta, 3);
-        transitionToAnimation(actions, config.sitAnimation, walkState);
-        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
-      }
-      updateAgentPosition(agent.id, groupRef.current.position);
-      return;
-    }
-
-    // Handle poker table visit when idle
-    if (isIdle && idleActivity === 'poker_table' && pokerSeatIndex >= 0) {
-      walkState.wasAtDestination = true;
-      // 4 seats at angles 0, 90, 180, 270 around center, distance 1.8
-      const seatAngle = (pokerSeatIndex * Math.PI) / 2;
-      const targetX = pokerTablePos.x + Math.sin(seatAngle) * 1.8;
-      const targetZ = pokerTablePos.z + Math.cos(seatAngle) * 1.8;
-      const ptDx = targetX - groupRef.current.position.x;
-      const ptDz = targetZ - groupRef.current.position.z;
-      const ptDist = Math.sqrt(ptDx * ptDx + ptDz * ptDz);
-
-      if (ptDist > 0.5) {
-        const shouldRun = ptDist > config.runThreshold;
-        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
-        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
-        const moveAmount = Math.min(speed * delta, ptDist);
-        groupRef.current.position.x += (ptDx / ptDist) * moveAmount;
-        groupRef.current.position.z += (ptDz / ptDist) * moveAmount;
-        rotateTowards(groupRef.current, Math.atan2(ptDx, ptDz), delta, 5);
-        groupRef.current.position.y = 0;
-      } else {
-        const faceAngle = Math.atan2(pokerTablePos.x - targetX, pokerTablePos.z - targetZ);
-        rotateTowards(groupRef.current, faceAngle, delta, 3);
-        transitionToAnimation(actions, config.sitAnimation, walkState);
-        groupRef.current.position.y = COUCH_SEAT_HEIGHT;
-      }
-      updateAgentPosition(agent.id, groupRef.current.position);
-      return;
-    }
-
-    // Handle kitchen visit when idle
-    if (isIdle && idleActivity === 'kitchen' && kitchenSeatIndex >= 0) {
-      walkState.wasAtDestination = true;
-      const seatPositions = FACTORY_CONSTANTS.KITCHEN.SEAT_POSITIONS;
-      const seat = seatPositions[kitchenSeatIndex % seatPositions.length];
-      const targetX = kitchenPos.x + seat.x;
-      const targetZ = kitchenPos.z + seat.z;
-      const kDx = targetX - groupRef.current.position.x;
-      const kDz = targetZ - groupRef.current.position.z;
-      const kDist = Math.sqrt(kDx * kDx + kDz * kDz);
-
-      if (kDist > 0.5) {
-        const shouldRun = kDist > config.runThreshold;
-        const speed = shouldRun ? config.runSpeed : config.walkSpeed;
-        transitionToAnimation(actions, shouldRun ? 'Running' : 'Walking', walkState);
-        const moveAmount = Math.min(speed * delta, kDist);
-        groupRef.current.position.x += (kDx / kDist) * moveAmount;
-        groupRef.current.position.z += (kDz / kDist) * moveAmount;
-        rotateTowards(groupRef.current, Math.atan2(kDx, kDz), delta, 5);
-      } else {
-        rotateTowards(groupRef.current, seat.rotation, delta, 3);
-        transitionToAnimation(actions, 'Breathing idle', walkState);
-      }
-      groupRef.current.position.y = 0;
-      updateAgentPosition(agent.id, groupRef.current.position);
-      return;
-    }
-
-    // Sync position when returning from stage/couch/zone
-    if (walkState.wasAtDestination) {
-      walkState.currentPos.x = groupRef.current.position.x;
-      walkState.currentPos.z = groupRef.current.position.z;
-      walkState.wasAtDestination = false;
-      const wanderRadius = 2.0;
-      walkState.targetPos.x = walkState.currentPos.x + (Math.random() - 0.5) * wanderRadius * 2;
-      walkState.targetPos.z = walkState.currentPos.z + (Math.random() - 0.5) * wanderRadius;
-    }
-
-    // Working state - position at workstation
-    if (isActuallyWorking) {
       groupRef.current.position.x = workstation.position.x;
       groupRef.current.position.y = 0;
       groupRef.current.position.z =
         workstation.position.z + FACTORY_CONSTANTS.AGENT.WORKSTATION_OFFSET;
       groupRef.current.rotation.y = Math.PI;
       walkState.wasWorking = true;
+      walkState.arrived = false;
       walkState.currentPos.x = groupRef.current.position.x;
       walkState.currentPos.z = groupRef.current.position.z;
 
-      // Force typing animation - check if the action is actually running
-      // (useAgentAnimation hook may override it, so we re-apply every frame if needed)
       const typingAnim = config.animationConfig.working;
       const typingAction = actions?.[typingAnim];
       if (typingAction && !typingAction.isRunning()) {
@@ -509,95 +554,184 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       return;
     }
 
-    // Idle wandering behavior
-    if (isIdle) {
-      const wanderRadiusX = config.wanderRadiusX ?? DEFAULT_WANDER.radiusX;
-      const wanderMinZ = workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ);
-      const wanderMaxZ = workstation.position.z + (config.wanderMaxZ ?? DEFAULT_WANDER.maxZ);
-      const ownWsX = workstation.position.x;
-      const ownWsZ = workstation.position.z;
+    // Idle behavior (or commanded override) - plan-based system
+    if (isIdle || hasCommand || currentPlanIsCommanded) {
 
-      // Helper to generate unblocked random target (checks workstations, static obstacles, and walls)
-      const generateUnblockedTarget = () => {
-        for (let attempt = 0; attempt < 10; attempt++) {
-          const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
-          const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
-          const candidate = getUnblockedTarget(rawX, rawZ, walkState.currentPos.x, walkState.currentPos.z, ownWsX, ownWsZ, allWorkstations);
-          // Also check against static obstacles (conveyor belt) and walls
-          if (isPositionClear(candidate.x, candidate.z, STATIC_OBSTACLES)) {
-            return candidate;
+      const inConversation = entityConversations.has(agent.id);
+      const isCommanded = plan.planRef.current?.commanded ?? false;
+
+      // Handle conversation interrupt (skip for commanded plans)
+      if (inConversation && !plan.isPaused() && !isCommanded) {
+        plan.pause();
+        wasPausedRef.current = true;
+        transitionToAnimation(actions, 'Breathing idle', walkState);
+      } else if (!inConversation && wasPausedRef.current) {
+        plan.resume();
+        wasPausedRef.current = false;
+        walkState.arrived = false; // Re-approach target after conversation
+      }
+
+      // If paused (in conversation), idle and face the partner
+      if (plan.isPaused()) {
+        const convo = entityConversations.get(agent.id);
+        if (convo) {
+          // Look up partner position
+          const partnerAgent = allAgents.get(convo.partnerId);
+          const partnerNpc = npcPositions.get(convo.partnerId);
+          const partnerPos = partnerAgent?.currentPosition || partnerAgent?.basePosition || partnerNpc;
+          if (partnerPos) {
+            const toPartner = Math.atan2(
+              partnerPos.x - walkState.currentPos.x,
+              partnerPos.z - walkState.currentPos.z
+            );
+            rotateTowards(groupRef.current, toPartner, delta, 5);
           }
         }
-        // Fallback: stay near own workstation
-        return { x: ownWsX, z: wanderMinZ };
-      };
-
-      if (!walkState.initialized) {
-        walkState.currentPos.x = workstation.position.x;
-        walkState.currentPos.z = wanderMinZ;
-        const target = generateUnblockedTarget();
-        walkState.targetPos.x = target.x;
-        walkState.targetPos.z = target.z;
-        walkState.initialized = true;
+        updateAgentPosition(agent.id, groupRef.current.position);
+        return;
       }
 
-      if (walkState.wasWorking) {
-        walkState.currentPos.x = workstation.position.x;
-        walkState.currentPos.z = wanderMinZ;
-        const target = generateUnblockedTarget();
-        walkState.targetPos.x = target.x;
-        walkState.targetPos.z = target.z;
+      // Initialize plan if needed (first idle frame or after working)
+      if (!plan.planRef.current) {
+        plan.newPlan({
+          stageOccupied: isStageOccupied(),
+          seatOccupancy: getSeatOccupancy(),
+        });
         walkState.wasWorking = false;
+        walkState.arrived = false;
       }
 
-      const dx = walkState.targetPos.x - walkState.currentPos.x;
-      const dz = walkState.targetPos.z - walkState.currentPos.z;
+      // Get current step
+      const step = plan.getCurrentStep();
+      if (!step) {
+        // Plan exhausted or empty - generate new one
+        plan.newPlan({
+          stageOccupied: isStageOccupied(),
+          seatOccupancy: getSeatOccupancy(),
+        });
+        walkState.arrived = false;
+        updateAgentPosition(agent.id, groupRef.current.position);
+        return;
+      }
+
+      // Compute target if not set
+      if (!step.target) {
+        const target = computeStepTarget(step, walkState);
+        if (!target) {
+          // Can't execute this step (e.g., area full) - skip it
+          if (walkState.claimedSeatArea) {
+            releaseSeat(walkState.claimedSeatArea, agent.id);
+            walkState.claimedSeatArea = null;
+          }
+          releaseStage(agent.id);
+          plan.advanceStep();
+          walkState.arrived = false;
+          updateAgentPosition(agent.id, groupRef.current.position);
+          return;
+        }
+        step.target = { x: target.x, z: target.z };
+        step.arrivalY = target.arrivalY;
+        step.arrivalAnimation = target.arrivalAnim;
+        step.arrivalRotation = target.arrivalRot;
+      }
+
+      // Move toward target
+      const dx = step.target.x - groupRef.current.position.x;
+      const dz = step.target.z - groupRef.current.position.z;
       const distance = Math.sqrt(dx * dx + dz * dz);
 
-      if (distance > 0.3) {
+      if (!walkState.arrived && distance > 0.5) {
+        // Walking to target
+        groupRef.current.position.y = 0;
         const shouldRun = distance > config.runThreshold;
         const speed = shouldRun ? config.runSpeed : config.walkSpeed;
         const animName = shouldRun ? 'Running' : 'Walking';
         transitionToAnimation(actions, animName, walkState);
 
         const moveAmount = Math.min(speed * delta, distance);
-        const nextX = walkState.currentPos.x + (dx / distance) * moveAmount;
-        const nextZ = walkState.currentPos.z + (dz / distance) * moveAmount;
+        const nextX = groupRef.current.position.x + (dx / distance) * moveAmount;
+        const nextZ = groupRef.current.position.z + (dz / distance) * moveAmount;
 
-        // Check if next position would be blocked by workstations, conveyor belt, or walls
+        // Collision check - skip wall clamping for outdoor step types
+        const ownWsX = workstation.position.x;
+        const ownWsZ = workstation.position.z;
+        const isOutdoorStep = OUTDOOR_STEP_TYPES.has(step.type);
         const blockedByWs = isBlockedByWorkstation(nextX, nextZ, ownWsX, ownWsZ, allWorkstations);
         const blockedByObstacle = isInsideObstacle(nextX, nextZ, STATIC_OBSTACLES);
         const clamped = clampToWalls(nextX, nextZ);
-        const outsideWalls = Math.abs(clamped.x - nextX) > 0.01 || Math.abs(clamped.z - nextZ) > 0.01;
+        const outsideWalls = !isOutdoorStep && (Math.abs(clamped.x - nextX) > 0.01 || Math.abs(clamped.z - nextZ) > 0.01);
+        const entityPositions = buildEntityPositionMap(allAgents, npcPositions);
+        const blockedByEntity = isBlockedByEntity(nextX, nextZ, agent.id, entityPositions);
 
-        if (!blockedByWs && !blockedByObstacle && !outsideWalls) {
-          walkState.currentPos.x = nextX;
-          walkState.currentPos.z = nextZ;
-        } else {
-          // Blocked - pick new target
-          const target = generateUnblockedTarget();
-          walkState.targetPos.x = target.x;
-          walkState.targetPos.z = target.z;
+        if (!blockedByWs && !blockedByObstacle && !outsideWalls && !blockedByEntity) {
+          groupRef.current.position.x = nextX;
+          groupRef.current.position.z = nextZ;
+        } else if (step.type === 'wander') {
+          // For wander steps, pick new target on collision
+          const wanderRadiusX = config.wanderRadiusX ?? DEFAULT_WANDER.radiusX;
+          const wanderMinZ = workstation.position.z + (config.wanderMinZ ?? DEFAULT_WANDER.minZ);
+          const wanderMaxZ = workstation.position.z + (config.wanderMaxZ ?? DEFAULT_WANDER.maxZ);
+          const rawX = workstation.position.x + (Math.random() - 0.5) * wanderRadiusX * 2;
+          const rawZ = wanderMinZ + Math.random() * (wanderMaxZ - wanderMinZ);
+          const newTarget = getUnblockedTarget(rawX, rawZ, groupRef.current.position.x, groupRef.current.position.z, ownWsX, ownWsZ, allWorkstations);
+          step.target = { x: newTarget.x, z: newTarget.z };
         }
+        // else: for destination steps, just keep trying to reach target
 
         const targetRotation = Math.atan2(dx, dz);
         const rotationDiff = normalizeRotationDiff(targetRotation - groupRef.current.rotation.y);
         groupRef.current.rotation.y += rotationDiff * Math.min(1, delta * 5);
-      } else {
-        // Arrived at target - pick new one
-        const target = generateUnblockedTarget();
-        walkState.targetPos.x = target.x;
-        walkState.targetPos.z = target.z;
-      }
 
-      groupRef.current.position.x = walkState.currentPos.x;
-      groupRef.current.position.y = 0;
-      groupRef.current.position.z = walkState.currentPos.z;
+        walkState.currentPos.x = groupRef.current.position.x;
+        walkState.currentPos.z = groupRef.current.position.z;
+      } else if (!walkState.arrived) {
+        // Just arrived at target
+        walkState.arrived = true;
+        plan.markArrival(elapsed);
+
+        if (step.arrivalAnimation) {
+          transitionToAnimation(actions, step.arrivalAnimation, walkState);
+        }
+        if (step.arrivalRotation !== undefined) {
+          groupRef.current.rotation.y = step.arrivalRotation;
+        }
+        if (step.arrivalY !== undefined) {
+          groupRef.current.position.y = step.arrivalY;
+        }
+      } else {
+        // At destination, waiting for duration
+        if (step.arrivalRotation !== undefined) {
+          rotateTowards(groupRef.current, step.arrivalRotation, delta, 3);
+        }
+
+        // Check if duration has elapsed
+        if (plan.isDurationElapsed(elapsed)) {
+          // Release seat/stage
+          if (walkState.claimedSeatArea) {
+            releaseSeat(walkState.claimedSeatArea, agent.id);
+            walkState.claimedSeatArea = null;
+          }
+          if (step.type === 'go_to_stage') {
+            releaseStage(agent.id);
+          }
+
+          // Reset Y to ground before moving to next step
+          groupRef.current.position.y = 0;
+
+          plan.advanceStep();
+          walkState.arrived = false;
+        }
+      }
     }
 
     // Report current position to context for boss mode tracking
     updateAgentPosition(agent.id, groupRef.current.position);
   });
+
+  // Get thought key for ThinkingBubble based on current plan step
+  const thoughtKey = plan.displayStepType
+    ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
+    : 'wander';
 
   return (
     <group
@@ -647,13 +781,13 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       {!entityConversations.has(agent.id) &&
         agent.status === 'idle' && (isHovered || isSelected) && (
         <ThinkingBubble
-          thoughts={AGENT_THOUGHTS[idleActivity] || AGENT_THOUGHTS.wander}
+          thoughts={AGENT_THOUGHTS[thoughtKey] || AGENT_THOUGHTS.wander}
           yOffset={3.5}
         />
       )}
 
       {/* Sleeping indicator - only when resting on couch */}
-      {agent.status === 'idle' && idleActivity === 'couch' && <ZzzIndicator yOffset={4.0} />}
+      {agent.status === 'idle' && plan.displayStepType === 'go_to_couch' && <ZzzIndicator yOffset={4.0} />}
     </group>
   );
 };

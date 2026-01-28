@@ -63,7 +63,7 @@ export const LightingToggle: React.FC = () => {
   return (
     <button
       onClick={handleToggle}
-      className={`absolute bottom-4 right-16 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border shadow-lg transition-all z-10 ${
+      className={`absolute top-4 right-[200px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border shadow-lg transition-all z-10 ${
         lightingMode === 'night' || (lightingMode === 'auto' && isNightMode)
           ? 'bg-indigo-900/90 border-indigo-500/50 text-indigo-200'
           : 'bg-amber-100/95 border-amber-400/50 text-amber-900'

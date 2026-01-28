@@ -40,8 +40,13 @@ export const STATIC_OBSTACLES: Obstacle[] = [
   // Conveyor belt: group at (0, 0, -14), 16 units long (X), ~1.2 units wide (Z)
   // Add padding for character width
   { minX: -8.5, maxX: 8.5, minZ: -15.5, maxZ: -12.5 },
-  // Mini kitchen: group at (-27, 0, 3), rotated 90° to face window. Footprint 5 wide (X) × 10 deep (Z)
-  { minX: -29.5, maxX: -24.5, minZ: -2.5, maxZ: 8.5 },
+  // Mini kitchen at (-27, 0, 3) - split into 3 zones so stool seats remain accessible.
+  // Back area (behind back stools at z=1.2)
+  { minX: -29.5, maxX: -24.5, minZ: -2.5, maxZ: 0.5 },
+  // Counter center (between back stools at z=1.2 and front stools at z=4.8)
+  { minX: -29.5, maxX: -24.5, minZ: 1.8, maxZ: 4.2 },
+  // Appliance area (beyond front stools, towards wall)
+  { minX: -29.5, maxX: -24.5, minZ: 5.5, maxZ: 8.5 },
 ];
 
 // ====== DYNAMIC OBSTACLE COMPUTATION ======
@@ -162,6 +167,61 @@ export function isPositionClear(x: number, z: number, obstacles: Obstacle[]): bo
     return false;
   }
   return !isInsideObstacle(x, z, obstacles);
+}
+
+// ====== ENTITY-TO-ENTITY COLLISION ======
+
+/** Minimum distance between entities to prevent overlap */
+export const ENTITY_BLOCKER_RADIUS = 1.5;
+
+/**
+ * Check if a position is too close to any tracked entity (NPC or agent).
+ * Each entity's own position is excluded from the check.
+ *
+ * @param x - Desired X position
+ * @param z - Desired Z position
+ * @param ownId - ID of the entity being moved (excluded from check)
+ * @param entityPositions - Map of entity ID to position (x, z)
+ * @returns true if the position is blocked by another entity
+ */
+export function isBlockedByEntity(
+  x: number,
+  z: number,
+  ownId: string,
+  entityPositions: Map<string, { x: number; z: number }>
+): boolean {
+  const radiusSq = ENTITY_BLOCKER_RADIUS * ENTITY_BLOCKER_RADIUS;
+  for (const [id, pos] of entityPositions) {
+    if (id === ownId) continue;
+    const dx = x - pos.x;
+    const dz = z - pos.z;
+    if (dx * dx + dz * dz < radiusSq) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build a combined map of all entity positions (agents + NPCs) for collision checks.
+ *
+ * @param agents - Map of agent ID to agent data with position
+ * @param npcPositions - Map of NPC ID to tracked position
+ * @returns Combined map of entity ID to {x, z} position
+ */
+export function buildEntityPositionMap(
+  agents: Map<string, { currentPosition?: { x: number; z: number }; basePosition: { x: number; z: number } }>,
+  npcPositions: Map<string, { x: number; z: number }>
+): Map<string, { x: number; z: number }> {
+  const positions = new Map<string, { x: number; z: number }>();
+  agents.forEach((agent, id) => {
+    const pos = agent.currentPosition || agent.basePosition;
+    positions.set(id, { x: pos.x, z: pos.z });
+  });
+  npcPositions.forEach((pos, id) => {
+    positions.set(id, { x: pos.x, z: pos.z });
+  });
+  return positions;
 }
 
 /**
