@@ -96,6 +96,12 @@ export const BasePet: React.FC<BasePetProps> = ({
     offset: new THREE.Vector3(),
   });
 
+  // Reusable position object for clampToWalls to avoid allocation
+  const tempClampPos = useRef({ x: 0, z: 0 });
+
+  // Track mount state for safe timeout cleanup
+  const isMountedRef = useRef(true);
+
   // Initialize position only once on mount
   useEffect(() => {
     if (groupRef.current) {
@@ -126,8 +132,13 @@ export const BasePet: React.FC<BasePetProps> = ({
       attempts++;
     } while (isInsideObstacle(x, z, STATIC_OBSTACLES) && attempts < STUCK_CHECK_ATTEMPTS);
 
-    const clamped = clampToWalls(x, z);
-    return reusableVectors.current.wanderTarget.set(clamped.x, config.groundOffset, clamped.z);
+    // Use out-parameter to avoid allocation
+    clampToWalls(x, z, tempClampPos.current);
+    return reusableVectors.current.wanderTarget.set(
+      tempClampPos.current.x,
+      config.groundOffset,
+      tempClampPos.current.z
+    );
   };
 
   // Schedule next movement after idle period
@@ -141,6 +152,9 @@ export const BasePet: React.FC<BasePetProps> = ({
     isFirstIdleRef.current = false; // After first idle, use shorter duration
 
     moveTimeoutRef.current = setTimeout(() => {
+      // Skip if component unmounted during timeout
+      if (!isMountedRef.current) return;
+
       // If following an agent, try to move toward them
       if (followAgentId && agentPositions?.has(followAgentId)) {
         const agentPos = agentPositions.get(followAgentId)!;
@@ -164,8 +178,10 @@ export const BasePet: React.FC<BasePetProps> = ({
 
   // Start wandering on mount
   useEffect(() => {
+    isMountedRef.current = true;
     scheduleNextMove();
     return () => {
+      isMountedRef.current = false;
       if (moveTimeoutRef.current) {
         clearTimeout(moveTimeoutRef.current);
       }
@@ -179,8 +195,8 @@ export const BasePet: React.FC<BasePetProps> = ({
     const group = groupRef.current;
     const model = modelRef.current;
 
-    // Update animation mixer
-    if (mixer) {
+    // Update animation mixer (validate delta to prevent NaN issues)
+    if (mixer && Number.isFinite(delta) && delta > 0) {
       mixer.update(delta);
     }
 
@@ -194,8 +210,10 @@ export const BasePet: React.FC<BasePetProps> = ({
         setIsMoving(false);
         setTargetPosition(null);
 
-        // Stop all animations and optionally play idle
-        Object.values(actions).forEach((action) => action?.fadeOut(0.3));
+        // Stop all animations and optionally play idle (use for...in to avoid array allocation)
+        for (const key in actions) {
+          actions[key]?.fadeOut(0.3);
+        }
         if (hasAnimations && config.animations?.idle && actions[config.animations.idle]) {
           actions[config.animations.idle]?.reset().fadeIn(0.3).play();
         }
@@ -220,13 +238,13 @@ export const BasePet: React.FC<BasePetProps> = ({
           const moveX = direction.x * speed * delta;
           const moveZ = direction.z * speed * delta;
 
-          // Move to new position
+          // Move to new position (use out-parameter to avoid allocation)
           const newX = currentPos.x + moveX;
           const newZ = currentPos.z + moveZ;
-          const clamped = clampToWalls(newX, newZ);
+          clampToWalls(newX, newZ, tempClampPos.current);
 
-          group.position.x = clamped.x;
-          group.position.z = clamped.z;
+          group.position.x = tempClampPos.current.x;
+          group.position.z = tempClampPos.current.z;
 
           // Calculate target rotation and rotate toward it
           const targetRotation = Math.atan2(
@@ -243,7 +261,10 @@ export const BasePet: React.FC<BasePetProps> = ({
         if (hasWalkAnimation) {
           // Use skeletal walk animation
           if (!actions[animName]?.isRunning()) {
-            Object.values(actions).forEach((action) => action?.fadeOut(0.2));
+            // Use for...in to avoid array allocation from Object.values
+            for (const key in actions) {
+              actions[key]?.fadeOut(0.2);
+            }
             actions[animName]?.reset().fadeIn(0.2).play();
           }
         } else {

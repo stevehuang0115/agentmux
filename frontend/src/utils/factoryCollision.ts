@@ -95,19 +95,33 @@ export function isInsideObstacle(x: number, z: number, obstacles: Obstacle[]): b
   return false;
 }
 
+/** Reusable position object for internal clampToWalls calls */
+const _tempPosition = { x: 0, z: 0 };
+
 /**
  * Clamp a position to stay within wall boundaries.
  *
  * @param x - World X position
  * @param z - World Z position
- * @returns Clamped position
+ * @param out - Optional output object to avoid allocation (uses internal temp if not provided)
+ * @returns Clamped position (same as out if provided)
  */
-export function clampToWalls(x: number, z: number): { x: number; z: number } {
-  return {
-    x: Math.max(WALL_BOUNDS.minX, Math.min(WALL_BOUNDS.maxX, x)),
-    z: Math.max(WALL_BOUNDS.minZ, Math.min(WALL_BOUNDS.maxZ, z)),
-  };
+export function clampToWalls(
+  x: number,
+  z: number,
+  out?: { x: number; z: number }
+): { x: number; z: number } {
+  const result = out || { x: 0, z: 0 };
+  result.x = Math.max(WALL_BOUNDS.minX, Math.min(WALL_BOUNDS.maxX, x));
+  result.z = Math.max(WALL_BOUNDS.minZ, Math.min(WALL_BOUNDS.maxZ, z));
+  return result;
 }
+
+/** Reusable temp objects for getSafePosition to avoid per-frame allocations */
+const _safePosClamped = { x: 0, z: 0 };
+const _safePosSlideX = { x: 0, z: 0 };
+const _safePosSlideZ = { x: 0, z: 0 };
+const _safePosFallback = { x: 0, z: 0 };
 
 /**
  * Get a safe position that avoids obstacles and stays within walls.
@@ -118,37 +132,50 @@ export function clampToWalls(x: number, z: number): { x: number; z: number } {
  * @param currentX - Current X position (fallback)
  * @param currentZ - Current Z position (fallback)
  * @param obstacles - All obstacle rectangles to avoid
- * @returns Safe position
+ * @param out - Optional output object to avoid allocation
+ * @returns Safe position (same as out if provided)
  */
 export function getSafePosition(
   newX: number,
   newZ: number,
   currentX: number,
   currentZ: number,
-  obstacles: Obstacle[]
+  obstacles: Obstacle[],
+  out?: { x: number; z: number }
 ): { x: number; z: number } {
-  // First clamp to walls
-  const clamped = clampToWalls(newX, newZ);
+  const result = out || { x: 0, z: 0 };
+
+  // First clamp to walls (using internal temp)
+  clampToWalls(newX, newZ, _safePosClamped);
 
   // Then check obstacles
-  if (!isInsideObstacle(clamped.x, clamped.z, obstacles)) {
-    return clamped;
+  if (!isInsideObstacle(_safePosClamped.x, _safePosClamped.z, obstacles)) {
+    result.x = _safePosClamped.x;
+    result.z = _safePosClamped.z;
+    return result;
   }
 
   // Try sliding along X axis only
-  const slideX = clampToWalls(clamped.x, currentZ);
-  if (!isInsideObstacle(slideX.x, slideX.z, obstacles)) {
-    return slideX;
+  clampToWalls(_safePosClamped.x, currentZ, _safePosSlideX);
+  if (!isInsideObstacle(_safePosSlideX.x, _safePosSlideX.z, obstacles)) {
+    result.x = _safePosSlideX.x;
+    result.z = _safePosSlideX.z;
+    return result;
   }
 
   // Try sliding along Z axis only
-  const slideZ = clampToWalls(currentX, clamped.z);
-  if (!isInsideObstacle(slideZ.x, slideZ.z, obstacles)) {
-    return slideZ;
+  clampToWalls(currentX, _safePosClamped.z, _safePosSlideZ);
+  if (!isInsideObstacle(_safePosSlideZ.x, _safePosSlideZ.z, obstacles)) {
+    result.x = _safePosSlideZ.x;
+    result.z = _safePosSlideZ.z;
+    return result;
   }
 
   // All blocked - stay in place
-  return clampToWalls(currentX, currentZ);
+  clampToWalls(currentX, currentZ, _safePosFallback);
+  result.x = _safePosFallback.x;
+  result.z = _safePosFallback.z;
+  return result;
 }
 
 /**
@@ -161,9 +188,13 @@ export function getSafePosition(
  * @returns true if the position is clear
  */
 export function isPositionClear(x: number, z: number, obstacles: Obstacle[]): boolean {
-  const clamped = clampToWalls(x, z);
-  // Check the position was actually clamped (was outside walls)
-  if (Math.abs(clamped.x - x) > 0.01 || Math.abs(clamped.z - z) > 0.01) {
+  // Inline bounds check to avoid object allocation
+  if (
+    x < WALL_BOUNDS.minX ||
+    x > WALL_BOUNDS.maxX ||
+    z < WALL_BOUNDS.minZ ||
+    z > WALL_BOUNDS.maxZ
+  ) {
     return false;
   }
   return !isInsideObstacle(x, z, obstacles);

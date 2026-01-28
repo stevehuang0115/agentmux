@@ -64,6 +64,9 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     targetPosition: new THREE.Vector3(),
     targetLookAt: new THREE.Vector3(),
     currentLookAt: new THREE.Vector3(),
+    // Reusable vectors to avoid allocation in hot paths
+    swayPosition: new THREE.Vector3(),
+    tempDirection: new THREE.Vector3(),
   });
 
   // Generate viewpoints based on current factory state (memoized for performance)
@@ -176,10 +179,9 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       state.viewpointStartTime = performance.now();
       state.startPosition.copy(camera.position);
 
-      // Calculate initial lookAt from camera direction
-      const direction = new THREE.Vector3();
-      camera.getWorldDirection(direction);
-      state.startLookAt.copy(camera.position).add(direction.multiplyScalar(10));
+      // Calculate initial lookAt from camera direction (reuse tempDirection)
+      camera.getWorldDirection(state.tempDirection);
+      state.startLookAt.copy(camera.position).add(state.tempDirection.multiplyScalar(10));
       state.currentLookAt.copy(state.startLookAt);
 
       if (viewpoints.length > 0) {
@@ -221,13 +223,13 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       );
       camera.lookAt(state.currentLookAt);
     } else if (elapsed < currentViewpoint.duration) {
-      // Holding at viewpoint with subtle movement
+      // Holding at viewpoint with subtle movement (reuse swayPosition)
       const holdProgress = (elapsed - transitionDuration) / holdDuration;
       const sway = Math.sin(holdProgress * Math.PI * 2) * 0.1;
 
-      const swayPosition = state.targetPosition.clone();
-      swayPosition.x += sway;
-      camera.position.copy(swayPosition);
+      state.swayPosition.copy(state.targetPosition);
+      state.swayPosition.x += sway;
+      camera.position.copy(state.swayPosition);
       camera.lookAt(state.targetLookAt);
     } else {
       // Move to next viewpoint
