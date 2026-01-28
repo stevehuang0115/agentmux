@@ -5,7 +5,7 @@
  * focusing on different zones and agents. Useful for demos or monitoring.
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
@@ -59,14 +59,26 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     targetPosition: new THREE.Vector3(),
     targetLookAt: new THREE.Vector3(),
     currentLookAt: new THREE.Vector3(),
+    swayPosition: new THREE.Vector3(), // Reusable vector for sway calculation
   });
 
-  // Generate viewpoints based on current factory state
-  const generateViewpoints = useCallback((): Viewpoint[] => {
-    const viewpoints: Viewpoint[] = [];
+  // Generate viewpoints based on current factory state - memoized to avoid recreation every frame
+  // Only regenerate when zones or active agents actually change
+  const activeAgentIds = useMemo(() => {
+    return Array.from(agents.values())
+      .filter((a) => a.status === 'active' && a.cpuPercent > 10)
+      .slice(0, 3)
+      .map((a) => a.id)
+      .join(',');
+  }, [agents]);
+
+  const zoneKeys = useMemo(() => Array.from(zones.keys()).join(','), [zones]);
+
+  const viewpoints = useMemo((): Viewpoint[] => {
+    const result: Viewpoint[] = [];
 
     // Overview shot
-    viewpoints.push({
+    result.push({
       name: 'Overview',
       position: new THREE.Vector3(-25, 20, -25),
       lookAt: new THREE.Vector3(0, 0, 5),
@@ -74,29 +86,17 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     });
 
     // Zone views
-    const projectList = Array.from(zones.keys());
-    projectList.forEach((projectName, index) => {
-      const zone = zones.get(projectName);
-      if (zone) {
-        viewpoints.push({
-          name: `Zone: ${projectName}`,
-          position: new THREE.Vector3(
-            zone.zoneX - 5,
-            8,
-            zone.zoneZ + 5
-          ),
-          lookAt: new THREE.Vector3(
-            zone.zoneX,
-            1,
-            zone.zoneZ
-          ),
-          duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
-        });
-      }
+    zones.forEach((zone, projectName) => {
+      result.push({
+        name: `Zone: ${projectName}`,
+        position: new THREE.Vector3(zone.zoneX - 5, 8, zone.zoneZ + 5),
+        lookAt: new THREE.Vector3(zone.zoneX, 1, zone.zoneZ),
+        duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
+      });
     });
 
     // Break room view
-    viewpoints.push({
+    result.push({
       name: 'Break Room',
       position: new THREE.Vector3(
         FACTORY_CONSTANTS.BREAK_ROOM.POSITION.x - 6,
@@ -112,7 +112,7 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
     });
 
     // Poker table view
-    viewpoints.push({
+    result.push({
       name: 'Poker Table',
       position: new THREE.Vector3(
         FACTORY_CONSTANTS.POKER_TABLE.POSITION.x + 6,
@@ -132,32 +132,24 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       (a) => a.status === 'active' && a.cpuPercent > 10
     );
     activeAgents.slice(0, 3).forEach((agent) => {
-      viewpoints.push({
+      result.push({
         name: `Agent: ${agent.name}`,
-        position: new THREE.Vector3(
-          agent.basePosition.x - 2,
-          3,
-          agent.basePosition.z + 2
-        ),
-        lookAt: new THREE.Vector3(
-          agent.basePosition.x,
-          1.5,
-          agent.basePosition.z
-        ),
+        position: new THREE.Vector3(agent.basePosition.x - 2, 3, agent.basePosition.z + 2),
+        lookAt: new THREE.Vector3(agent.basePosition.x, 1.5, agent.basePosition.z),
         duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL * 0.5,
       });
     });
 
     // Final wide shot
-    viewpoints.push({
+    result.push({
       name: 'Final Overview',
       position: new THREE.Vector3(25, 25, 25),
       lookAt: new THREE.Vector3(0, 0, 5),
       duration: FACTORY_CONSTANTS.ANIMATION.BOSS_MODE_INTERVAL,
     });
 
-    return viewpoints;
-  }, [agents, zones, projects]);
+    return result;
+  }, [zoneKeys, activeAgentIds, agents, zones]);
 
   // Initialize boss mode
   useEffect(() => {
@@ -177,7 +169,6 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       state.startLookAt.copy(camera.position).add(direction.multiplyScalar(10));
       state.currentLookAt.copy(state.startLookAt);
 
-      const viewpoints = generateViewpoints();
       if (viewpoints.length > 0) {
         state.targetPosition.copy(viewpoints[0].position);
         state.targetLookAt.copy(viewpoints[0].lookAt);
@@ -186,14 +177,12 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       // Stopping boss mode
       state.isActive = false;
     }
-  }, [active, camera, generateViewpoints]);
+  }, [active, camera, viewpoints]);
 
-  // Animate camera
+  // Animate camera - uses memoized viewpoints (no regeneration every frame)
   useFrame(() => {
     const state = stateRef.current;
     if (!state.isActive) return;
-
-    const viewpoints = generateViewpoints();
     if (viewpoints.length === 0) return;
 
     const currentViewpoint = viewpoints[state.currentViewpointIndex];
@@ -219,13 +208,13 @@ export const BossModeCamera: React.FC<BossModeCameraProps> = ({
       );
       camera.lookAt(state.currentLookAt);
     } else if (elapsed < currentViewpoint.duration) {
-      // Holding at viewpoint with subtle movement
+      // Holding at viewpoint with subtle movement - reuse swayPosition vector
       const holdProgress = (elapsed - transitionDuration) / holdDuration;
       const sway = Math.sin(holdProgress * Math.PI * 2) * 0.1;
 
-      const swayPosition = state.targetPosition.clone();
-      swayPosition.x += sway;
-      camera.position.copy(swayPosition);
+      state.swayPosition.copy(state.targetPosition);
+      state.swayPosition.x += sway;
+      camera.position.copy(state.swayPosition);
       camera.lookAt(state.targetLookAt);
     } else {
       // Move to next viewpoint
