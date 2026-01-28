@@ -123,6 +123,8 @@ export interface GenericNPCProps {
   modelYOffset?: number;
   /** Speech/thinking bubble Y offset (default: 6.0) */
   bubbleYOffset?: number;
+  /** Animation to play for the walk_circle step type (defaults to idleAnimation) */
+  walkCircleAnimation?: string;
 }
 
 /**
@@ -144,6 +146,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
   scale = DEFAULT_NPC_SCALE,
   modelYOffset = 0,
   bubbleYOffset = 6.0,
+  walkCircleAnimation,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
 
@@ -279,6 +282,14 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
           z: stagePos.z,
           arrivalAnim: idleAnimation,
           arrivalRot: -Math.PI / 2,
+        };
+      }
+
+      case 'walk_circle': {
+        return {
+          x: 0,
+          z: 0,
+          arrivalAnim: walkCircleAnimation || idleAnimation,
         };
       }
 

@@ -34,7 +34,7 @@ import {
   rotateTowards,
 } from '../../../utils/threeHelpers';
 import { useAgentPlan } from './useAgentPlan';
-import { FAKE_AUDIENCE_WEIGHTS, PlanStep, PlanStepType, OUTDOOR_STEP_TYPES } from './agentPlanTypes';
+import { FAKE_AUDIENCE_WEIGHTS, PlanStep, PlanStepType, OUTDOOR_STEP_TYPES, DEFAULT_STEP_THOUGHT_KEY } from './agentPlanTypes';
 import { getRandomDuration } from './planGenerator';
 
 const { STAGE } = FACTORY_CONSTANTS;
@@ -46,23 +46,8 @@ useGLTF.preload(MODEL_PATHS.HORSE);
 /** Distance from stage center to consider an NPC "on stage" */
 const NPC_STAGE_THRESHOLD = 4.0;
 
-/**
- * Map from PlanStepType to ThinkingBubble thought category key.
- * Uses AGENT_THOUGHTS keys from ThinkingBubble.
- */
-const STEP_TYPE_TO_THOUGHT_KEY: Partial<Record<PlanStepType, string>> = {
-  wander: 'wander',
-  go_to_couch: 'couch',
-  go_to_kitchen: 'kitchen',
-  go_to_break_room: 'break_room',
-  go_to_poker_table: 'poker_table',
-  watch_stage: 'wander',
-  go_to_stage: 'stage',
-  go_to_workstation: 'wander',
-  go_to_pickleball: 'pickleball',
-  go_to_golf: 'golf',
-  sit_outdoor: 'sit_outdoor',
-};
+// Use the centralized step-to-thought-key mapping from agentPlanTypes
+const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
 
 /**
  * Walking state for an audience member, persisted across frames via ref

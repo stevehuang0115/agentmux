@@ -319,6 +319,30 @@ export const STEP_TYPE_TO_SEAT_AREA: Partial<Record<PlanStepType, string>> = {
   go_to_kitchen: 'kitchen',
 } as const;
 
+// ====== STEP TYPE TO THOUGHT KEY MAPPING ======
+
+/**
+ * Default mapping from PlanStepType to ThinkingBubble thought category key.
+ * Used by NPC and agent components to select the correct thought pool.
+ * Components can override individual mappings for NPC-specific thought categories.
+ */
+export const DEFAULT_STEP_THOUGHT_KEY: Partial<Record<PlanStepType, string>> = {
+  wander: 'wander',
+  go_to_couch: 'couch',
+  go_to_stage: 'stage',
+  go_to_break_room: 'break_room',
+  go_to_poker_table: 'poker_table',
+  go_to_kitchen: 'kitchen',
+  watch_stage: 'wander',
+  go_to_workstation: 'wander',
+  go_to_pickleball: 'pickleball',
+  go_to_golf: 'golf',
+  sit_outdoor: 'sit_outdoor',
+  check_agent: 'wander',
+  present: 'wander',
+  walk_circle: 'wander',
+};
+
 // ====== OUTDOOR STEP TYPES ======
 
 /**

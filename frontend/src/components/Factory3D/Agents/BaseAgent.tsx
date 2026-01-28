@@ -39,7 +39,7 @@ import {
   getCircleIndicatorStyle,
 } from '../../../utils/threeHelpers';
 import { useAgentPlan } from './useAgentPlan';
-import { WORKER_AGENT_WEIGHTS, PlanStep, PlanStepType, STEP_TYPE_TO_SEAT_AREA, OUTDOOR_STEP_TYPES } from './agentPlanTypes';
+import { WORKER_AGENT_WEIGHTS, PlanStep, PlanStepType, STEP_TYPE_TO_SEAT_AREA, OUTDOOR_STEP_TYPES, DEFAULT_STEP_THOUGHT_KEY } from './agentPlanTypes';
 import { getRandomDuration } from './planGenerator';
 
 /**
@@ -195,22 +195,8 @@ function getUnblockedTarget(
   return { x: currentX, z: currentZ };
 }
 
-/**
- * Map from PlanStepType to ThinkingBubble thought category
- */
-const STEP_TYPE_TO_THOUGHT_KEY: Partial<Record<PlanStepType, string>> = {
-  wander: 'wander',
-  go_to_couch: 'couch',
-  go_to_stage: 'stage',
-  go_to_break_room: 'break_room',
-  go_to_poker_table: 'poker_table',
-  go_to_kitchen: 'kitchen',
-  watch_stage: 'wander',
-  go_to_workstation: 'wander',
-  go_to_pickleball: 'pickleball',
-  go_to_golf: 'golf',
-  sit_outdoor: 'sit_outdoor',
-};
+// Use the centralized step-to-thought-key mapping from agentPlanTypes
+const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
 
 /**
  * BaseAgent - Generic agent with plan-based behavior and animations.

@@ -21,6 +21,7 @@ import {
   SEATED_STEP_TYPES,
   STEP_TYPE_TO_SEAT_AREA,
   OUTDOOR_STEP_TYPES,
+  DEFAULT_STEP_THOUGHT_KEY,
 } from './agentPlanTypes';
 
 describe('agentPlanTypes', () => {
@@ -248,6 +249,41 @@ describe('agentPlanTypes', () => {
     it('should not map non-seated types', () => {
       expect(STEP_TYPE_TO_SEAT_AREA['wander']).toBeUndefined();
       expect(STEP_TYPE_TO_SEAT_AREA['go_to_stage']).toBeUndefined();
+    });
+  });
+
+  describe('DEFAULT_STEP_THOUGHT_KEY', () => {
+    it('should map common step types to thought keys', () => {
+      expect(DEFAULT_STEP_THOUGHT_KEY['wander']).toBe('wander');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_couch']).toBe('couch');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_kitchen']).toBe('kitchen');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_break_room']).toBe('break_room');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_poker_table']).toBe('poker_table');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_stage']).toBe('stage');
+    });
+
+    it('should map outdoor step types to thought keys', () => {
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_pickleball']).toBe('pickleball');
+      expect(DEFAULT_STEP_THOUGHT_KEY['go_to_golf']).toBe('golf');
+      expect(DEFAULT_STEP_THOUGHT_KEY['sit_outdoor']).toBe('sit_outdoor');
+    });
+
+    it('should map NPC-only step types to fallback thought keys', () => {
+      expect(DEFAULT_STEP_THOUGHT_KEY['check_agent']).toBe('wander');
+      expect(DEFAULT_STEP_THOUGHT_KEY['present']).toBe('wander');
+      expect(DEFAULT_STEP_THOUGHT_KEY['walk_circle']).toBe('wander');
+    });
+
+    it('should have a mapping for all defined PlanStepType values', () => {
+      const allTypes: PlanStepType[] = [
+        'go_to_workstation', 'go_to_kitchen', 'go_to_couch', 'go_to_break_room',
+        'go_to_poker_table', 'go_to_stage', 'watch_stage', 'wander',
+        'check_agent', 'present', 'walk_circle',
+        'go_to_pickleball', 'go_to_golf', 'sit_outdoor',
+      ];
+      for (const type of allTypes) {
+        expect(DEFAULT_STEP_THOUGHT_KEY[type]).toBeDefined();
+      }
     });
   });
 
