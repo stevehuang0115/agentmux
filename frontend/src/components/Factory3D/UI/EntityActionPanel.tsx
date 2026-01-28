@@ -17,16 +17,17 @@ import type { PlanStepType } from '../Agents/agentPlanTypes';
  * Action button configuration
  */
 interface ActionDef {
-  /** Display label on the button */
+  /** Display label on the button (used for tooltip) */
   label: string;
-  /** Plan step type to command */
-  stepType: PlanStepType;
+  /** Plan step type to command (null for freestyle mode) */
+  stepType: PlanStepType | null;
   /** Emoji icon for the button */
   icon: string;
 }
 
 /** Available actions for entity command panel */
 const ENTITY_ACTIONS: ActionDef[] = [
+  { label: 'Freestyle Control', stepType: null, icon: '🕹️' },
   { label: 'Perform on Stage', stepType: 'go_to_stage', icon: '🎤' },
   { label: 'Eat Food', stepType: 'go_to_kitchen', icon: '🍕' },
   { label: 'Take a Break', stepType: 'go_to_couch', icon: '🛋️' },
@@ -60,6 +61,10 @@ function resolveEntityName(
   // Known NPCs
   if (entityId === 'steve-jobs-npc') return 'Steve Jobs';
   if (entityId === 'sundar-pichai-npc') return 'Sundar Pichai';
+  if (entityId === 'elon-musk-npc') return 'Elon Musk';
+  if (entityId === 'mark-zuckerberg-npc') return 'Mark Zuckerberg';
+  if (entityId === 'jensen-huang-npc') return 'Jensen Huang';
+  if (entityId === 'steve-huang-npc') return 'Steve Huang';
 
   // Fake audience members
   const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
@@ -76,7 +81,7 @@ function resolveEntityName(
  * EntityActionPanel - Displays action buttons when an entity is selected in boss mode.
  *
  * Positioned at the bottom-center of the viewport. Shows the entity name
- * and 6 action buttons that override the entity's current plan.
+ * and action buttons that override the entity's current plan.
  *
  * @returns JSX element or null if no entity is selected / boss mode is inactive
  */
@@ -87,12 +92,39 @@ export const EntityActionPanel: React.FC = () => {
     bossModeState,
     sendEntityCommand,
     clearSelection,
+    freestyleMode,
+    setFreestyleMode,
+    getActiveEntityAction,
+    clearActiveEntityAction,
   } = useFactory();
 
   // Only render when an entity is selected and boss mode is active
   if (!selectedEntityId || !bossModeState.isActive) return null;
 
   const entityName = resolveEntityName(selectedEntityId, agents);
+  const currentActiveAction = getActiveEntityAction(selectedEntityId);
+
+  const handleActionClick = (action: ActionDef) => {
+    if (action.stepType === null) {
+      // Toggle freestyle mode
+      setFreestyleMode(!freestyleMode);
+      // Clear any active action when entering freestyle
+      if (!freestyleMode) {
+        clearActiveEntityAction(selectedEntityId);
+      }
+    } else {
+      // Check if this action is already active (toggle off)
+      if (currentActiveAction === action.stepType) {
+        // Cancel the action - clear active state and send wander command to reset
+        clearActiveEntityAction(selectedEntityId);
+        sendEntityCommand(selectedEntityId, { stepType: 'wander' });
+      } else {
+        // Send new command and disable freestyle mode
+        setFreestyleMode(false);
+        sendEntityCommand(selectedEntityId, { stepType: action.stepType });
+      }
+    }
+  };
 
   return (
     <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
@@ -111,21 +143,29 @@ export const EntityActionPanel: React.FC = () => {
           </button>
         </div>
 
-        {/* Action buttons row */}
+        {/* Action buttons row - emoji only */}
         <div className="flex gap-2">
-          {ENTITY_ACTIONS.map((action) => (
-            <button
-              key={action.stepType}
-              onClick={() =>
-                sendEntityCommand(selectedEntityId, { stepType: action.stepType })
-              }
-              className="flex flex-col items-center gap-1 px-3 py-2 rounded-md bg-gray-800/80 hover:bg-gray-700 border border-gray-600/50 hover:border-gray-500 transition-all text-gray-200 hover:text-white"
-              title={action.label}
-            >
-              <span className="text-base leading-none">{action.icon}</span>
-              <span className="text-[10px] whitespace-nowrap">{action.label}</span>
-            </button>
-          ))}
+          {ENTITY_ACTIONS.map((action) => {
+            const isFreestyle = action.stepType === null;
+            const isActive = isFreestyle
+              ? freestyleMode
+              : currentActiveAction === action.stepType;
+
+            return (
+              <button
+                key={action.stepType ?? 'freestyle'}
+                onClick={() => handleActionClick(action)}
+                className={`flex items-center justify-center w-12 h-12 rounded-md border transition-all ${
+                  isActive
+                    ? 'bg-blue-600 hover:bg-blue-500 border-blue-400'
+                    : 'bg-gray-800/80 hover:bg-gray-700 border-gray-600/50 hover:border-gray-500'
+                }`}
+                title={action.label}
+              >
+                <span className="text-2xl leading-none">{action.icon}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

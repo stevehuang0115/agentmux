@@ -22,8 +22,14 @@ function resolveEntityName(
   if (agent) {
     return agent.name || agent.sessionName || entityId;
   }
+  // Known NPCs
   if (entityId === 'steve-jobs-npc') return 'Steve Jobs';
   if (entityId === 'sundar-pichai-npc') return 'Sundar Pichai';
+  if (entityId === 'elon-musk-npc') return 'Elon Musk';
+  if (entityId === 'mark-zuckerberg-npc') return 'Mark Zuckerberg';
+  if (entityId === 'jensen-huang-npc') return 'Jensen Huang';
+  if (entityId === 'steve-huang-npc') return 'Steve Huang';
+
   const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
   if (audienceMatch) {
     return `Audience Member ${Number(audienceMatch[1]) + 1}`;
@@ -66,6 +72,26 @@ describe('EntityActionPanel', () => {
       expect(resolveEntityName('sundar-pichai-npc', agents)).toBe('Sundar Pichai');
     });
 
+    it('returns "Elon Musk" for elon-musk-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('elon-musk-npc', agents)).toBe('Elon Musk');
+    });
+
+    it('returns "Mark Zuckerberg" for mark-zuckerberg-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('mark-zuckerberg-npc', agents)).toBe('Mark Zuckerberg');
+    });
+
+    it('returns "Jensen Huang" for jensen-huang-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('jensen-huang-npc', agents)).toBe('Jensen Huang');
+    });
+
+    it('returns "Steve Huang" for steve-huang-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('steve-huang-npc', agents)).toBe('Steve Huang');
+    });
+
     it('returns "Audience Member N" for fake audience entities', () => {
       const agents = new Map<string, { name?: string; sessionName?: string }>();
       expect(resolveEntityName('fake-audience-0', agents)).toBe('Audience Member 1');
@@ -80,25 +106,35 @@ describe('EntityActionPanel', () => {
 
   describe('ENTITY_ACTIONS', () => {
     // Re-define locally to test structure without importing React component
-    const ENTITY_ACTIONS = [
+    // stepType can be null for freestyle mode
+    const ENTITY_ACTIONS: Array<{ label: string; stepType: string | null; icon: string }> = [
+      { label: 'Freestyle Control', stepType: null, icon: '🕹️' },
       { label: 'Perform on Stage', stepType: 'go_to_stage', icon: '🎤' },
       { label: 'Eat Food', stepType: 'go_to_kitchen', icon: '🍕' },
       { label: 'Take a Break', stepType: 'go_to_couch', icon: '🛋️' },
       { label: 'Play Poker', stepType: 'go_to_poker_table', icon: '🃏' },
       { label: 'Hang Out', stepType: 'go_to_break_room', icon: '☕' },
       { label: 'Wander', stepType: 'wander', icon: '🚶' },
+      { label: 'Pickleball', stepType: 'go_to_pickleball', icon: '🏓' },
+      { label: 'Golf', stepType: 'go_to_golf', icon: '⛳' },
+      { label: 'Sit Outside', stepType: 'sit_outdoor', icon: '🪑' },
     ];
 
-    it('has exactly 6 action buttons', () => {
-      expect(ENTITY_ACTIONS).toHaveLength(6);
+    it('has exactly 10 action buttons', () => {
+      expect(ENTITY_ACTIONS).toHaveLength(10);
     });
 
-    it('each action has label, stepType, and icon', () => {
+    it('each action has label and icon', () => {
       for (const action of ENTITY_ACTIONS) {
         expect(action.label).toBeTruthy();
-        expect(action.stepType).toBeTruthy();
         expect(action.icon).toBeTruthy();
       }
+    });
+
+    it('freestyle action has null stepType', () => {
+      const freestyleAction = ENTITY_ACTIONS.find(a => a.label === 'Freestyle Control');
+      expect(freestyleAction).toBeDefined();
+      expect(freestyleAction?.stepType).toBeNull();
     });
 
     it('has unique step types', () => {

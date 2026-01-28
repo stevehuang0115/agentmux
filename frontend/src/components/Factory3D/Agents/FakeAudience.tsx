@@ -48,6 +48,10 @@ const NPC_STAGE_THRESHOLD = 4.0;
 /** Fixed scale for audience member models (matches BaseAgent MODEL_SCALE) */
 const AUDIENCE_MODEL_SCALE = 2.0;
 
+// Conveyor belt proximity zone for special thoughts
+const CONVEYOR_BELT_Z = -14;
+const CONVEYOR_PROXIMITY_THRESHOLD = 4;
+
 // Use the centralized step-to-thought-key mapping from agentPlanTypes
 const STEP_TYPE_TO_THOUGHT_KEY = DEFAULT_STEP_THOUGHT_KEY;
 
@@ -59,6 +63,15 @@ const AUDIENCE_THOUGHTS: Record<string, string[]> = {
     'Where is everyone?',
     'Taking a stroll',
     'Exploring the factory',
+  ],
+  conveyor: [
+    'Wow, great production!',
+    'Look at those deliveries!',
+    'Shipping code so fast!',
+    'Amazing output today!',
+    'The factory is humming!',
+    'Great momentum here!',
+    'Tokens flying by!',
   ],
   couch: [
     'Time to relax...',
@@ -191,6 +204,10 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
     isStageOccupied,
     consumeEntityCommand,
     entityPositionMapRef,
+    freestyleMode,
+    consumeFreestyleMoveTarget,
+    selectedEntityId,
+    clearActiveEntityAction,
   } = useFactory();
 
   // Hover/select interaction
@@ -417,6 +434,32 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
         steps: [{
           type: command.stepType,
           duration: getRandomDuration(command.stepType),
+        }],
+        currentStepIndex: 0,
+        paused: false,
+        arrivalTime: null,
+        commanded: true,
+      };
+      walkState.arrived = false;
+      wasPausedRef.current = false;
+      groupRef.current.position.y = 0;
+    }
+
+    // Check for freestyle movement target (double-click control)
+    const isThisMemberSelected = selectedEntityId === entityId;
+    const freestyleMoveTarget = isThisMemberSelected && freestyleMode ? consumeFreestyleMoveTarget() : null;
+    if (freestyleMoveTarget) {
+      if (walkState.claimedSeatArea) {
+        releaseSeat(walkState.claimedSeatArea, entityId);
+        walkState.claimedSeatArea = null;
+      }
+      waitingForStageRef.current = false;
+      plan.planRef.current = {
+        steps: [{
+          type: 'wander',
+          duration: 999, // Stay indefinitely until another command
+          target: { x: freestyleMoveTarget.x, z: freestyleMoveTarget.z },
+          arrivalAnimation: 'Breathing idle',
         }],
         currentStepIndex: 0,
         paused: false,
@@ -665,7 +708,13 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
         // Reset Y to ground before moving to next step
         groupRef.current.position.y = 0;
 
+        // Check if this was a commanded plan before advancing
+        const wasCommanded = plan.planRef.current?.commanded ?? false;
         plan.advanceStep();
+        // Clear active action UI state when commanded plan completes
+        if (wasCommanded) {
+          clearActiveEntityAction(entityId);
+        }
         walkState.arrived = false;
       }
 
@@ -678,9 +727,13 @@ const AudienceMember: React.FC<AudienceMemberProps> = ({
   });
 
   // Get thought key for ThinkingBubble based on current plan step
-  const thoughtKey = plan.displayStepType
+  // Override with 'conveyor' if near the conveyor belt
+  const baseThoughtKey = plan.displayStepType
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
     : 'wander';
+
+  const isNearConveyor = Math.abs(walkStateRef.current.currentPos.z - CONVEYOR_BELT_Z) < CONVEYOR_PROXIMITY_THRESHOLD;
+  const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
 
   // Select the matching thought category from the hoisted AUDIENCE_THOUGHTS constant
   const currentThoughts = AUDIENCE_THOUGHTS[thoughtKey] || AUDIENCE_THOUGHTS.wander;

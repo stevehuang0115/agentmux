@@ -8,7 +8,7 @@
  * Used by all character-specific NPC wrapper components (ElonMuskNPC, etc.).
  */
 
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useCallback } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
@@ -51,6 +51,10 @@ const CROSSFADE_DURATION = 0.3;
 /** Probability that the NPC will interrupt its plan to watch a stage performer */
 const STAGE_REACTION_PROBABILITY = 0.6;
 
+/** Conveyor belt proximity zone for special thoughts */
+const CONVEYOR_BELT_Z = -14;
+const CONVEYOR_PROXIMITY_THRESHOLD = 4;
+
 /**
  * Standard mapping from plan step types to thought category keys.
  */
@@ -82,6 +86,7 @@ interface NPCWalkingState {
 
 /**
  * Crossfade to a target animation, fading out all others.
+ * Falls back to common idle animations if the target is not found.
  */
 function transitionToAnimation(
   actions: Record<string, THREE.AnimationAction | null> | undefined,
@@ -89,8 +94,32 @@ function transitionToAnimation(
   walkState: NPCWalkingState
 ): void {
   if (!actions || walkState.currentAnim === targetAnim) return;
-  const targetAction = actions[targetAnim];
+
+  let targetAction = actions[targetAnim];
+
+  // If requested animation doesn't exist, try common fallbacks
+  if (!targetAction) {
+    // For walking-like animations, try alternatives
+    if (targetAnim.toLowerCase().includes('walk') || targetAnim.toLowerCase().includes('run')) {
+      targetAction =
+        actions['Walking'] ??
+        actions['Talking'] ?? // Mark Zuckerberg uses Talking for walking
+        actions['Brutal to happy walking'] ?? // Jensen Huang
+        null;
+    }
+    // For any animation, try generic idle fallbacks
+    if (!targetAction) {
+      targetAction =
+        actions['Idle'] ??
+        actions['Breathing idle'] ??
+        actions['Talking'] ??
+        actions['Look around'] ??
+        null;
+    }
+  }
+
   if (!targetAction) return;
+
   Object.values(actions).forEach((action) => action?.fadeOut(CROSSFADE_DURATION));
   targetAction.reset().fadeIn(CROSSFADE_DURATION).play();
   walkState.currentAnim = targetAnim;
@@ -124,6 +153,12 @@ export interface GenericNPCProps {
   bubbleYOffset?: number;
   /** Animation to play for the walk_circle step type (defaults to idleAnimation) */
   walkCircleAnimation?: string;
+  /**
+   * Map of thought text patterns to animation names.
+   * When a thought contains any of the pattern strings, the specified animation plays.
+   * Format: { animationName: [pattern1, pattern2, ...] }
+   */
+  thoughtAnimationMap?: Record<string, string[]>;
 }
 
 /**
@@ -146,6 +181,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
   modelYOffset = 0,
   bubbleYOffset = 6.0,
   walkCircleAnimation,
+  thoughtAnimationMap,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
 
@@ -159,6 +195,9 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
   });
 
   const wasPausedRef = useRef(false);
+
+  // Ref to track thought-based animation override (null = no override)
+  const thoughtAnimOverrideRef = useRef<string | null>(null);
 
   // Load model
   const gltf = useGLTF(modelPath);
@@ -224,6 +263,10 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
     stagePerformerRef,
     consumeEntityCommand,
     entityPositionMapRef,
+    freestyleMode,
+    consumeFreestyleMoveTarget,
+    selectedEntityId,
+    clearActiveEntityAction,
   } = useFactory();
 
   const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
@@ -438,6 +481,31 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
       groupRef.current.position.y = modelYOffset;
     }
 
+    // Check for freestyle movement target (double-click control)
+    const isThisNpcSelected = selectedEntityId === npcId;
+    const freestyleMoveTarget = isThisNpcSelected && freestyleMode ? consumeFreestyleMoveTarget() : null;
+    if (freestyleMoveTarget) {
+      if (walkState.claimedSeatArea) {
+        releaseSeat(walkState.claimedSeatArea, npcId);
+        walkState.claimedSeatArea = null;
+      }
+      plan.planRef.current = {
+        steps: [{
+          type: 'wander',
+          duration: 999, // Stay indefinitely until another command
+          target: { x: freestyleMoveTarget.x, z: freestyleMoveTarget.z },
+          arrivalAnimation: idleAnimation,
+        }],
+        currentStepIndex: 0,
+        paused: false,
+        arrivalTime: null,
+        commanded: true,
+      };
+      walkState.arrived = false;
+      wasPausedRef.current = false;
+      groupRef.current.position.y = modelYOffset;
+    }
+
     const isCommanded = plan.planRef.current?.commanded ?? false;
 
     // Conversation interrupt handling
@@ -624,7 +692,13 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
           releaseSeat(walkState.claimedSeatArea, npcId);
           walkState.claimedSeatArea = null;
         }
+        // Check if this was a commanded plan before advancing
+        const wasCommanded = plan.planRef.current?.commanded ?? false;
         plan.advanceStep();
+        // Clear active action UI state when commanded plan completes
+        if (wasCommanded) {
+          clearActiveEntityAction(npcId);
+        }
         walkState.arrived = false;
       }
     }
@@ -638,9 +712,44 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
   });
 
   // Get thought key for ThinkingBubble
-  const thoughtKey = plan.displayStepType
+  // Override with 'conveyor' if near the conveyor belt
+  const baseThoughtKey = plan.displayStepType
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wandering'
     : 'wandering';
+
+  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - CONVEYOR_BELT_Z) < CONVEYOR_PROXIMITY_THRESHOLD;
+  const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
+
+  /**
+   * Handle thought change - check if the thought matches any pattern in thoughtAnimationMap
+   * and trigger the appropriate animation override.
+   */
+  const handleThoughtChange = useCallback(
+    (thought: string) => {
+      if (!thoughtAnimationMap || !actions) {
+        thoughtAnimOverrideRef.current = null;
+        return;
+      }
+
+      const lowerThought = thought.toLowerCase();
+
+      // Check each animation's patterns
+      for (const [animationName, patterns] of Object.entries(thoughtAnimationMap)) {
+        for (const pattern of patterns) {
+          if (lowerThought.includes(pattern.toLowerCase())) {
+            // Found a match - set override and transition to animation
+            thoughtAnimOverrideRef.current = animationName;
+            transitionToAnimation(actions, animationName, walkingStateRef.current);
+            return;
+          }
+        }
+      }
+
+      // No match - clear override (animation will return to normal on next movement update)
+      thoughtAnimOverrideRef.current = null;
+    },
+    [thoughtAnimationMap, actions]
+  );
 
   return (
     <group
@@ -683,6 +792,7 @@ export const GenericNPC: React.FC<GenericNPCProps> = ({
         <ThinkingBubble
           thoughts={thoughts[thoughtKey] || thoughts.wandering}
           yOffset={bubbleYOffset}
+          onThoughtChange={thoughtAnimationMap ? handleThoughtChange : undefined}
         />
       )}
     </group>

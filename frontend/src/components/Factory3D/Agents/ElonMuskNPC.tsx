@@ -26,7 +26,23 @@ useGLTF.preload(MODEL_PATHS.ELON_MUSK);
 const ELON_ANIMATIONS = {
   WALKING: 'Walking',
   IDLE: 'Yelling',
+  SAD: 'Disappointed',
+  DANCE: 'Dancing',
 } as const;
+
+/**
+ * Map thought patterns to specific animations.
+ * When a thought contains any of these patterns, the corresponding animation plays.
+ */
+const ELON_THOUGHT_ANIMATIONS: Record<string, string[]> = {
+  [ELON_ANIMATIONS.SAD]: [
+    'failed',
+    'blew up',
+    'exploded',
+    'rapid unscheduled',
+    'ugh',
+  ],
+};
 
 /**
  * ElonMuskNPC - Elon Musk character that spawns near the cybertruck
@@ -45,6 +61,7 @@ export const ElonMuskNPC: React.FC = () => {
       circleColor={0xaa4444}
       scale={3.4}
       modelYOffset={2.0}
+      thoughtAnimationMap={ELON_THOUGHT_ANIMATIONS}
     />
   );
 };

@@ -29,8 +29,9 @@ import {
   FACTORY_CONSTANTS,
   ZONE_COLORS,
 } from '../types/factory.types';
-import type { EntityCommand } from '../components/Factory3D/Agents/agentPlanTypes';
+import type { EntityCommand, PlanStepType } from '../components/Factory3D/Agents/agentPlanTypes';
 import { factoryService } from '../services/factory.service';
+import { useFactorySSE } from '../hooks/useFactorySSE';
 import {
   getAnimalTypeForProject,
   isNightTime,
@@ -265,6 +266,8 @@ interface FactoryContextType {
   isLoading: boolean;
   /** Error message if any */
   error: string | null;
+  /** SSE connection status */
+  connectionStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'fallback';
   /** Refresh factory data from API */
   refreshData: () => Promise<void>;
   /** Update camera state directly */
@@ -313,8 +316,34 @@ interface FactoryContextType {
   sendEntityCommand: (entityId: string, command: EntityCommand) => void;
   /** Consume (read + delete) a pending command for an entity. Used in useFrame loops. */
   consumeEntityCommand: (entityId: string) => EntityCommand | null;
+  /** Get the currently active action for an entity */
+  getActiveEntityAction: (entityId: string) => PlanStepType | null;
+  /** Clear the active action for an entity (called when action completes or is canceled) */
+  clearActiveEntityAction: (entityId: string) => void;
   /** Pre-built entity position map for collision checks (updated each render, read from useFrame) */
   entityPositionMapRef: React.MutableRefObject<Map<string, { x: number; z: number }>>;
+  /** Whether freestyle control mode is active for the selected entity */
+  freestyleMode: boolean;
+  /** Toggle freestyle control mode */
+  setFreestyleMode: (active: boolean) => void;
+  /** Target position for freestyle movement (set by double-click) */
+  freestyleMoveTarget: { x: number; z: number } | null;
+  /** Set the freestyle movement target */
+  setFreestyleMoveTarget: (target: { x: number; z: number } | null) => void;
+  /** Consume (read + clear) the freestyle move target. Used in useFrame loops. */
+  consumeFreestyleMoveTarget: () => { x: number; z: number } | null;
+  /** Whether to show NPC agents (fake audience) */
+  showNPCAgents: boolean;
+  /** Toggle NPC agents visibility */
+  setShowNPCAgents: (show: boolean) => void;
+  /** Whether to show guest agents (Steve Jobs, Sundar, etc.) */
+  showGuestAgents: boolean;
+  /** Toggle guest agents visibility */
+  setShowGuestAgents: (show: boolean) => void;
+  /** Whether to show additional objects (Cybertruck, etc.) */
+  showObjects: boolean;
+  /** Toggle objects visibility */
+  setShowObjects: (show: boolean) => void;
 }
 
 // ====== CONTEXT ======
@@ -359,7 +388,15 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     orbitHeight: 4,
   });
 
-  // Loading and error state
+  // SSE hook for real-time updates
+  const {
+    data: sseData,
+    isLoading: sseLoading,
+    connectionStatus,
+    error: sseError,
+  } = useFactorySSE();
+
+  // Loading and error state (derived from SSE hook)
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -395,11 +432,21 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   // Entity command channel - ref-based for synchronous consumption in useFrame
   const entityCommandRef = useRef<Map<string, EntityCommand>>(new Map());
 
+  // Active entity actions - tracks which action button is currently active per entity
+  const [activeEntityActions, setActiveEntityActions] = useState<Map<string, PlanStepType>>(new Map());
+
   /**
-   * Queue a command for an entity, overriding its current plan
+   * Queue a command for an entity, overriding its current plan.
+   * Also sets the action as active for UI feedback.
    */
   const sendEntityCommand = useCallback((entityId: string, command: EntityCommand) => {
     entityCommandRef.current.set(entityId, command);
+    // Set this action as active
+    setActiveEntityActions((prev) => {
+      const next = new Map(prev);
+      next.set(entityId, command.stepType);
+      return next;
+    });
   }, []);
 
   /**
@@ -413,6 +460,67 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     }
     return command;
   }, []);
+
+  /**
+   * Get the currently active action for an entity
+   */
+  const getActiveEntityAction = useCallback((entityId: string): PlanStepType | null => {
+    return activeEntityActions.get(entityId) ?? null;
+  }, [activeEntityActions]);
+
+  /**
+   * Clear the active action for an entity (called when action completes or is canceled)
+   */
+  const clearActiveEntityAction = useCallback((entityId: string) => {
+    setActiveEntityActions((prev) => {
+      const next = new Map(prev);
+      next.delete(entityId);
+      return next;
+    });
+  }, []);
+
+  // Freestyle control mode state
+  const [freestyleMode, setFreestyleModeState] = useState(false);
+  const freestyleMoveTargetRef = useRef<{ x: number; z: number } | null>(null);
+  const [freestyleMoveTarget, setFreestyleMoveTargetState] = useState<{ x: number; z: number } | null>(null);
+
+  /**
+   * Toggle freestyle control mode
+   */
+  const setFreestyleMode = useCallback((active: boolean) => {
+    setFreestyleModeState(active);
+    if (!active) {
+      // Clear move target when disabling freestyle mode
+      freestyleMoveTargetRef.current = null;
+      setFreestyleMoveTargetState(null);
+    }
+  }, []);
+
+  /**
+   * Set the freestyle movement target (used by double-click handler)
+   */
+  const setFreestyleMoveTarget = useCallback((target: { x: number; z: number } | null) => {
+    freestyleMoveTargetRef.current = target;
+    setFreestyleMoveTargetState(target);
+  }, []);
+
+  /**
+   * Consume (read + clear) the freestyle move target.
+   * Called from entity useFrame loops.
+   */
+  const consumeFreestyleMoveTarget = useCallback((): { x: number; z: number } | null => {
+    const target = freestyleMoveTargetRef.current;
+    if (target) {
+      freestyleMoveTargetRef.current = null;
+      setFreestyleMoveTargetState(null);
+    }
+    return target;
+  }, []);
+
+  // Visibility toggle state
+  const [showNPCAgents, setShowNPCAgents] = useState(true);
+  const [showGuestAgents, setShowGuestAgents] = useState(true);
+  const [showObjects, setShowObjects] = useState(true);
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -1044,16 +1152,101 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     setCameraTarget('overview');
   }, [setCameraTarget]);
 
-  // Initial data fetch
+  // Process SSE data when it arrives
   useEffect(() => {
-    refreshData();
-  }, [refreshData]);
+    if (!sseData) return;
 
-  // Poll for updates
+    // Create zones from unique projects
+    const newZones = new Map<string, OfficeZone>();
+
+    // Collect unique project names and sort alphabetically for consistent zone positions
+    const projectNames = [...new Set(sseData.agents.map((a) => a.projectName))].sort();
+
+    // Create zones in alphabetical order
+    projectNames.forEach((projectName, zoneIndex) => {
+      // Calculate zone position
+      const zonesPerRow = FACTORY_CONSTANTS.ZONE.ZONES_PER_ROW;
+      const row = Math.floor(zoneIndex / zonesPerRow);
+      const col = zoneIndex % zonesPerRow;
+
+      const zoneX =
+        FACTORY_CONSTANTS.ZONE.START_X +
+        col * (FACTORY_CONSTANTS.ZONE.WIDTH + FACTORY_CONSTANTS.ZONE.GAP_X);
+      const zoneZ =
+        FACTORY_CONSTANTS.ZONE.START_Z -
+        row * (FACTORY_CONSTANTS.ZONE.DEPTH + FACTORY_CONSTANTS.ZONE.GAP_Z);
+
+      newZones.set(projectName, {
+        projectName,
+        zoneIndex,
+        zoneX,
+        zoneZ,
+        color: ZONE_COLORS[zoneIndex % ZONE_COLORS.length],
+        workstations: FACTORY_CONSTANTS.WORKSTATION_POSITIONS.map((pos, i) => ({
+          position: { x: zoneX + pos.x, z: zoneZ + pos.z },
+          index: zoneIndex * 4 + i,
+          isActive: false,
+        })),
+      });
+    });
+
+    // Create agents with positions
+    const newAgents = new Map<string, FactoryAgent>();
+    const projectAgentCounts = new Map<string, number>();
+
+    sseData.agents.forEach((agentData) => {
+      const zone = newZones.get(agentData.projectName);
+      if (!zone) return;
+
+      const agentIndex = projectAgentCounts.get(agentData.projectName) || 0;
+      projectAgentCounts.set(agentData.projectName, agentIndex + 1);
+
+      const workstationIndex = agentIndex % 4;
+      const workstation = zone.workstations[workstationIndex];
+      if (!workstation) return;
+
+      workstation.assignedAgentId = agentData.id;
+      workstation.isActive = agentData.status === 'active';
+
+      // Preserve currentPosition from existing agent if available
+      const existingAgent = agents.get(agentData.id);
+
+      const agent: FactoryAgent = {
+        id: agentData.id,
+        projectName: agentData.projectName,
+        status: agentData.status,
+        cpuPercent: agentData.cpuPercent,
+        activity: agentData.activity,
+        sessionTokens: agentData.sessionTokens || 0,
+        zoneIndex: zone.zoneIndex,
+        workstationIndex,
+        animalType: getAnimalTypeForProject(agentData.projectName, agentIndex),
+        basePosition: new THREE.Vector3(
+          workstation.position.x,
+          0,
+          workstation.position.z + 0.45
+        ),
+        currentPosition: existingAgent?.currentPosition,
+        sessionName: agentData.sessionName,
+        name: agentData.name,
+      };
+
+      newAgents.set(agentData.id, agent);
+    });
+
+    setZones(newZones);
+    setAgents(newAgents);
+    setProjects(projectNames);
+    setIsLoading(false);
+    setError(sseError);
+  }, [sseData, sseError]);
+
+  // Sync loading state from SSE hook
   useEffect(() => {
-    const interval = setInterval(refreshData, FACTORY_CONSTANTS.API.POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [refreshData]);
+    if (!sseLoading && sseData) {
+      setIsLoading(false);
+    }
+  }, [sseLoading, sseData]);
 
   // Update night mode when in auto mode
   useEffect(() => {
@@ -1407,6 +1600,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       projects,
       isLoading,
       error,
+      connectionStatus,
       refreshData,
       updateCamera,
       claimSeat,
@@ -1431,7 +1625,20 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      getActiveEntityAction,
+      clearActiveEntityAction,
       entityPositionMapRef,
+      freestyleMode,
+      setFreestyleMode,
+      freestyleMoveTarget,
+      setFreestyleMoveTarget,
+      consumeFreestyleMoveTarget,
+      showNPCAgents,
+      setShowNPCAgents,
+      showGuestAgents,
+      setShowGuestAgents,
+      showObjects,
+      setShowObjects,
     }),
     [
       agents,
@@ -1450,6 +1657,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       projects,
       isLoading,
       error,
+      connectionStatus,
       refreshData,
       updateCamera,
       claimSeat,
@@ -1472,6 +1680,13 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      getActiveEntityAction,
+      clearActiveEntityAction,
+      freestyleMode,
+      freestyleMoveTarget,
+      showNPCAgents,
+      showGuestAgents,
+      showObjects,
     ]
   );
 
