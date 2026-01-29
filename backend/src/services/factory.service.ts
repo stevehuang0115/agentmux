@@ -12,6 +12,8 @@ import { promisify } from 'util';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import axios from 'axios';
+import { WEB_CONSTANTS } from '../../../config/constants.js';
 
 const execAsync = promisify(exec);
 
@@ -77,6 +79,35 @@ export interface UsageStatsResponse {
 		date: string;
 		tokens: number;
 	}>;
+}
+
+/**
+ * Combined factory agent data (from both teams and Claude processes)
+ */
+export interface FactoryAgent {
+	id: string;
+	sessionName: string;
+	name: string;
+	projectName: string;
+	status: 'active' | 'idle' | 'dormant';
+	cpuPercent: number;
+	activity?: string;
+	sessionTokens: number;
+}
+
+/**
+ * Combined factory state response (teams + Claude instances)
+ */
+export interface FactoryStateResponse {
+	timestamp: string;
+	agents: FactoryAgent[];
+	projects: string[];
+	stats: {
+		activeCount: number;
+		idleCount: number;
+		dormantCount: number;
+		totalTokens: number;
+	};
 }
 
 /**
@@ -154,6 +185,124 @@ export class FactoryService {
 			totalSessionTokens,
 			instances,
 		};
+	}
+
+	/**
+	 * Get combined factory state from both AgentMux teams and Claude processes.
+	 * This merges data from:
+	 * 1. AgentMux teams (managed agents)
+	 * 2. Standalone Claude Code processes
+	 *
+	 * @returns Promise resolving to combined factory state
+	 */
+	async getFactoryState(): Promise<FactoryStateResponse> {
+		const agents: FactoryAgent[] = [];
+		const projectSet = new Set<string>();
+		const seenIds = new Set<string>();
+
+		// 1. Fetch AgentMux managed teams
+		try {
+			const backendPort = process.env.WEB_PORT || WEB_CONSTANTS.PORTS.BACKEND;
+			const teamsResponse = await axios.get<{ success: boolean; data: Array<{
+				name: string;
+				currentProject?: string;
+				members?: Array<{
+					id: string;
+					sessionName: string;
+					name: string;
+					agentStatus: string;
+					workingStatus: string;
+				}>;
+			}> }>(`http://localhost:${backendPort}/api/teams`, { timeout: 2000 });
+
+			const teams = teamsResponse.data.data || [];
+
+			teams.forEach((team) => {
+				const projectName = team.currentProject || team.name || 'Unassigned';
+				projectSet.add(projectName);
+
+				if (team.members) {
+					team.members.forEach((member) => {
+						seenIds.add(member.id);
+						agents.push({
+							id: member.id,
+							sessionName: member.sessionName,
+							name: member.name,
+							projectName,
+							status: this.mapTeamMemberStatus(member.agentStatus, member.workingStatus),
+							cpuPercent: member.workingStatus === 'in_progress' ? 50 : 0,
+							activity: member.workingStatus === 'in_progress' ? 'Working...' : undefined,
+							sessionTokens: 0,
+						});
+					});
+				}
+			});
+		} catch {
+			// Teams endpoint failed or not available, continue with Claude instances
+		}
+
+		// 2. Fetch standalone Claude Code processes
+		try {
+			const claudeInstances = await this.getClaudeInstances();
+
+			claudeInstances.instances.forEach((instance) => {
+				// Skip if already added from teams (avoid duplicates)
+				if (seenIds.has(instance.id)) {
+					return;
+				}
+
+				const projectName = instance.projectName || 'Unknown';
+				projectSet.add(projectName);
+
+				agents.push({
+					id: instance.id,
+					sessionName: `claude-${instance.pid}`,
+					name: projectName,
+					projectName,
+					status: instance.status,
+					cpuPercent: instance.cpuPercent,
+					activity: instance.activity,
+					sessionTokens: instance.sessionTokens,
+				});
+			});
+		} catch {
+			// Claude instances detection failed, continue with what we have
+		}
+
+		// Calculate stats from merged agents
+		const stats = {
+			activeCount: agents.filter((a) => a.status === 'active').length,
+			idleCount: agents.filter((a) => a.status === 'idle').length,
+			dormantCount: agents.filter((a) => a.status === 'dormant').length,
+			totalTokens: agents.reduce((sum, a) => sum + (a.sessionTokens || 0), 0),
+		};
+
+		return {
+			timestamp: new Date().toISOString(),
+			agents,
+			projects: Array.from(projectSet),
+			stats,
+		};
+	}
+
+	/**
+	 * Maps team member status to factory visualization status
+	 *
+	 * @param agentStatus - Agent connection status (active, inactive, activating)
+	 * @param workingStatus - Agent working status (idle, in_progress)
+	 * @returns Mapped status for factory visualization
+	 */
+	private mapTeamMemberStatus(
+		agentStatus: string,
+		workingStatus: string
+	): 'active' | 'idle' | 'dormant' {
+		if (agentStatus === 'inactive') {
+			return 'dormant';
+		}
+		if (workingStatus === 'in_progress') {
+			return 'active';
+		}
+		return 'idle';
 	}
 
 	/**

@@ -3,9 +3,14 @@
  *
  * Boxes represent "products" from each project team. Active projects
  * produce more boxes, and each box uses the project's zone color.
+ *
+ * Performance optimizations:
+ * - Shared geometries for belt structure (single GPU upload)
+ * - Material cache by color for product boxes
+ * - Proper disposal on unmount
  */
 
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useEffect } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
@@ -15,6 +20,24 @@ interface BoxData {
   color: number;
   size: number;
 }
+
+// ====== SHARED GEOMETRIES (created once, reused) ======
+const sharedGeometries = {
+  beltSurface: new THREE.BoxGeometry(16, 0.1, 1.2),
+  beltRail: new THREE.BoxGeometry(16, 0.05, 0.08),
+  roller: new THREE.CylinderGeometry(0.3, 0.3, 1.2, 16),
+  supportLeg: new THREE.BoxGeometry(0.15, 0.5, 0.15),
+  // Default box size - individual boxes may scale
+  productBox: new THREE.BoxGeometry(1, 1, 1),
+};
+
+// ====== SHARED MATERIALS (created once, reused) ======
+const sharedMaterials = {
+  beltSurface: new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.6, roughness: 0.4 }),
+  beltRail: new THREE.MeshStandardMaterial({ color: 0x666666, metalness: 0.8 }),
+  roller: new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.7 }),
+  supportLeg: new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.5 }),
+};
 
 /** Boxes per active agent on the belt */
 const BOXES_PER_AGENT = 2;
@@ -43,6 +66,27 @@ const IDLE_BOX_COLOR = 0x666666;
 export const ConveyorBelt: React.FC = () => {
   const { agents, zones } = useFactory();
   const boxRefs = useRef<THREE.Mesh[]>([]);
+
+  // Material cache for product boxes by color
+  const boxMaterialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+
+  // Get or create material for a product box color
+  const getBoxMaterial = (color: number): THREE.MeshStandardMaterial => {
+    let material = boxMaterialCache.current.get(color);
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({ color, roughness: 0.7 });
+      boxMaterialCache.current.set(color, material);
+    }
+    return material;
+  };
+
+  // Cleanup box materials on unmount (shared geometries/materials are module-level)
+  useEffect(() => {
+    return () => {
+      boxMaterialCache.current.forEach((mat) => mat.dispose());
+      boxMaterialCache.current.clear();
+    };
+  }, []);
 
   // Build a stable key based on agent statuses only (not positions)
   // This prevents box regeneration on every position update
@@ -118,47 +162,57 @@ export const ConveyorBelt: React.FC = () => {
 
   return (
     <group position={[0, 0, -14]}>
-      {/* Belt surface */}
-      <mesh position={[0, 0.5, 0]} receiveShadow>
-        <boxGeometry args={[16, 0.1, 1.2]} />
-        <meshStandardMaterial color={0x333333} metalness={0.6} roughness={0.4} />
-      </mesh>
+      {/* Belt surface - using shared geometry and material */}
+      <mesh
+        position={[0, 0.5, 0]}
+        geometry={sharedGeometries.beltSurface}
+        material={sharedMaterials.beltSurface}
+        receiveShadow
+      />
 
-      {/* Belt rails */}
-      <mesh position={[0, 0.55, 0.55]}>
-        <boxGeometry args={[16, 0.05, 0.08]} />
-        <meshStandardMaterial color={0x666666} metalness={0.8} />
-      </mesh>
-      <mesh position={[0, 0.55, -0.55]}>
-        <boxGeometry args={[16, 0.05, 0.08]} />
-        <meshStandardMaterial color={0x666666} metalness={0.8} />
-      </mesh>
+      {/* Belt rails - using shared geometry and material */}
+      <mesh
+        position={[0, 0.55, 0.55]}
+        geometry={sharedGeometries.beltRail}
+        material={sharedMaterials.beltRail}
+      />
+      <mesh
+        position={[0, 0.55, -0.55]}
+        geometry={sharedGeometries.beltRail}
+        material={sharedMaterials.beltRail}
+      />
 
-      {/* Belt rollers at ends */}
-      <mesh position={[-7.5, 0.5, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <cylinderGeometry args={[0.3, 0.3, 1.2, 16]} />
-        <meshStandardMaterial color={0x444444} metalness={0.7} />
-      </mesh>
-      <mesh position={[7.5, 0.5, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <cylinderGeometry args={[0.3, 0.3, 1.2, 16]} />
-        <meshStandardMaterial color={0x444444} metalness={0.7} />
-      </mesh>
+      {/* Belt rollers at ends - using shared geometry and material */}
+      <mesh
+        position={[-7.5, 0.5, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+        geometry={sharedGeometries.roller}
+        material={sharedMaterials.roller}
+      />
+      <mesh
+        position={[7.5, 0.5, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+        geometry={sharedGeometries.roller}
+        material={sharedMaterials.roller}
+      />
 
-      {/* Support legs */}
+      {/* Support legs - using shared geometry and material */}
       {[-6, -2, 2, 6].map((x, i) => (
         <group key={i} position={[x, 0, 0]}>
-          <mesh position={[0, 0.25, 0.4]}>
-            <boxGeometry args={[0.15, 0.5, 0.15]} />
-            <meshStandardMaterial color={0x555555} metalness={0.5} />
-          </mesh>
-          <mesh position={[0, 0.25, -0.4]}>
-            <boxGeometry args={[0.15, 0.5, 0.15]} />
-            <meshStandardMaterial color={0x555555} metalness={0.5} />
-          </mesh>
+          <mesh
+            position={[0, 0.25, 0.4]}
+            geometry={sharedGeometries.supportLeg}
+            material={sharedMaterials.supportLeg}
+          />
+          <mesh
+            position={[0, 0.25, -0.4]}
+            geometry={sharedGeometries.supportLeg}
+            material={sharedMaterials.supportLeg}
+          />
         </group>
       ))}
 
-      {/* Animated product boxes */}
+      {/* Animated product boxes - using shared geometry with scale, cached materials */}
       {boxes.map((box, i) => (
         <mesh
           key={`${i}-${box.color}`}
@@ -166,11 +220,11 @@ export const ConveyorBelt: React.FC = () => {
             if (el) boxRefs.current[i] = el;
           }}
           position={[box.offset, 0.6 + box.size / 2, 0]}
+          scale={[box.size, box.size, box.size]}
+          geometry={sharedGeometries.productBox}
+          material={getBoxMaterial(box.color)}
           castShadow
-        >
-          <boxGeometry args={[box.size, box.size, box.size]} />
-          <meshStandardMaterial color={box.color} roughness={0.7} />
-        </mesh>
+        />
       ))}
     </group>
   );

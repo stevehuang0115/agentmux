@@ -29,19 +29,22 @@ import {
   FACTORY_CONSTANTS,
   ZONE_COLORS,
 } from '../types/factory.types';
-import type { EntityCommand } from '../components/Factory3D/Agents/agentPlanTypes';
+import type { EntityCommand, PlanStepType } from '../components/Factory3D/Agents/agentPlanTypes';
 import { factoryService } from '../services/factory.service';
+import { useFactorySSE } from '../hooks/useFactorySSE';
 import {
   getAnimalTypeForProject,
   isNightTime,
   createInitialCameraState,
 } from '../utils/factory.utils';
-import { buildEntityPositionMap } from '../utils/factoryCollision';
+import { updateEntityPositionMapInPlace } from '../utils/factoryCollision';
 
 // ====== PROXIMITY CONVERSATION CONSTANTS ======
 
 /** Distance threshold for triggering conversations */
 const PROXIMITY_THRESHOLD = 5.0;
+/** Squared threshold for efficient distance comparisons (avoids sqrt) */
+const PROXIMITY_THRESHOLD_SQUARED = PROXIMITY_THRESHOLD * PROXIMITY_THRESHOLD;
 /** Duration before switching from greetings to small talk */
 const GREETING_PHASE_MS = 5000;
 /** Duration of each speaking turn during greetings */
@@ -265,6 +268,8 @@ interface FactoryContextType {
   isLoading: boolean;
   /** Error message if any */
   error: string | null;
+  /** SSE connection status */
+  connectionStatus: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'fallback';
   /** Refresh factory data from API */
   refreshData: () => Promise<void>;
   /** Update camera state directly */
@@ -313,23 +318,37 @@ interface FactoryContextType {
   sendEntityCommand: (entityId: string, command: EntityCommand) => void;
   /** Consume (read + delete) a pending command for an entity. Used in useFrame loops. */
   consumeEntityCommand: (entityId: string) => EntityCommand | null;
+  /** Get the currently active action for an entity */
+  getActiveEntityAction: (entityId: string) => PlanStepType | null;
+  /** Clear the active action for an entity (called when action completes or is canceled) */
+  clearActiveEntityAction: (entityId: string) => void;
   /** Pre-built entity position map for collision checks (updated each render, read from useFrame) */
   entityPositionMapRef: React.MutableRefObject<Map<string, { x: number; z: number }>>;
-  /** Visibility toggle: Show NPC agents (fake audience) */
+  /** Whether freestyle control mode is active for the selected entity */
+  freestyleMode: boolean;
+  /** Toggle freestyle control mode */
+  setFreestyleMode: (active: boolean) => void;
+  /** Target position for freestyle movement (set by double-click) */
+  freestyleMoveTarget: { x: number; z: number } | null;
+  /** Set the freestyle movement target */
+  setFreestyleMoveTarget: (target: { x: number; z: number } | null) => void;
+  /** Consume (read + clear) the freestyle move target. Used in useFrame loops. */
+  consumeFreestyleMoveTarget: () => { x: number; z: number } | null;
+  /** Whether to show NPC agents (fake audience) */
   showNPCAgents: boolean;
-  /** Visibility toggle: Set NPC agents visibility */
+  /** Toggle NPC agents visibility */
   setShowNPCAgents: (show: boolean) => void;
-  /** Visibility toggle: Show guest agents (celebrity NPCs) */
+  /** Whether to show guest agents (Steve Jobs, Sundar, etc.) */
   showGuestAgents: boolean;
-  /** Visibility toggle: Set guest agents visibility */
+  /** Toggle guest agents visibility */
   setShowGuestAgents: (show: boolean) => void;
-  /** Visibility toggle: Show objects (Cybertruck, etc.) */
+  /** Whether to show additional objects (Cybertruck, etc.) */
   showObjects: boolean;
-  /** Visibility toggle: Set objects visibility */
+  /** Toggle objects visibility */
   setShowObjects: (show: boolean) => void;
-  /** Visibility toggle: Show pets (robotic dogs, etc.) */
+  /** Whether to show pets (robotic dogs, etc.) */
   showPets: boolean;
-  /** Visibility toggle: Set pets visibility */
+  /** Toggle pets visibility */
   setShowPets: (show: boolean) => void;
 }
 
@@ -375,7 +394,15 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     orbitHeight: 4,
   });
 
-  // Loading and error state
+  // SSE hook for real-time updates
+  const {
+    data: sseData,
+    isLoading: sseLoading,
+    connectionStatus,
+    error: sseError,
+  } = useFactorySSE();
+
+  // Loading and error state (derived from SSE hook)
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -417,11 +444,21 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   // Entity command channel - ref-based for synchronous consumption in useFrame
   const entityCommandRef = useRef<Map<string, EntityCommand>>(new Map());
 
+  // Active entity actions - tracks which action button is currently active per entity
+  const [activeEntityActions, setActiveEntityActions] = useState<Map<string, PlanStepType>>(new Map());
+
   /**
-   * Queue a command for an entity, overriding its current plan
+   * Queue a command for an entity, overriding its current plan.
+   * Also sets the action as active for UI feedback.
    */
   const sendEntityCommand = useCallback((entityId: string, command: EntityCommand) => {
     entityCommandRef.current.set(entityId, command);
+    // Set this action as active
+    setActiveEntityActions((prev) => {
+      const next = new Map(prev);
+      next.set(entityId, command.stepType);
+      return next;
+    });
   }, []);
 
   /**
@@ -434,6 +471,62 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityCommandRef.current.delete(entityId);
     }
     return command;
+  }, []);
+
+  /**
+   * Get the currently active action for an entity
+   */
+  const getActiveEntityAction = useCallback((entityId: string): PlanStepType | null => {
+    return activeEntityActions.get(entityId) ?? null;
+  }, [activeEntityActions]);
+
+  /**
+   * Clear the active action for an entity (called when action completes or is canceled)
+   */
+  const clearActiveEntityAction = useCallback((entityId: string) => {
+    setActiveEntityActions((prev) => {
+      const next = new Map(prev);
+      next.delete(entityId);
+      return next;
+    });
+  }, []);
+
+  // Freestyle control mode state
+  const [freestyleMode, setFreestyleModeState] = useState(false);
+  const freestyleMoveTargetRef = useRef<{ x: number; z: number } | null>(null);
+  const [freestyleMoveTarget, setFreestyleMoveTargetState] = useState<{ x: number; z: number } | null>(null);
+
+  /**
+   * Toggle freestyle control mode
+   */
+  const setFreestyleMode = useCallback((active: boolean) => {
+    setFreestyleModeState(active);
+    if (!active) {
+      // Clear move target when disabling freestyle mode
+      freestyleMoveTargetRef.current = null;
+      setFreestyleMoveTargetState(null);
+    }
+  }, []);
+
+  /**
+   * Set the freestyle movement target (used by double-click handler)
+   */
+  const setFreestyleMoveTarget = useCallback((target: { x: number; z: number } | null) => {
+    freestyleMoveTargetRef.current = target;
+    setFreestyleMoveTargetState(target);
+  }, []);
+
+  /**
+   * Consume (read + clear) the freestyle move target.
+   * Called from entity useFrame loops.
+   */
+  const consumeFreestyleMoveTarget = useCallback((): { x: number; z: number } | null => {
+    const target = freestyleMoveTargetRef.current;
+    if (target) {
+      freestyleMoveTargetRef.current = null;
+      setFreestyleMoveTargetState(null);
+    }
+    return target;
   }, []);
 
   // Computed night mode based on lighting mode and time
@@ -1066,16 +1159,109 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     setCameraTarget('overview');
   }, [setCameraTarget]);
 
-  // Initial data fetch
+  // Process SSE data when it arrives
   useEffect(() => {
-    refreshData();
-  }, [refreshData]);
+    if (!sseData) return;
 
-  // Poll for updates
+    // Create zones from unique projects
+    const newZones = new Map<string, OfficeZone>();
+
+    // Collect unique project names and sort alphabetically for consistent zone positions
+    const projectNames = [...new Set(sseData.agents.map((a) => a.projectName))].sort();
+
+    // Create zones in alphabetical order
+    projectNames.forEach((projectName, zoneIndex) => {
+      // Calculate zone position
+      const zonesPerRow = FACTORY_CONSTANTS.ZONE.ZONES_PER_ROW;
+      const row = Math.floor(zoneIndex / zonesPerRow);
+      const col = zoneIndex % zonesPerRow;
+
+      const zoneX =
+        FACTORY_CONSTANTS.ZONE.START_X +
+        col * (FACTORY_CONSTANTS.ZONE.WIDTH + FACTORY_CONSTANTS.ZONE.GAP_X);
+      const zoneZ =
+        FACTORY_CONSTANTS.ZONE.START_Z -
+        row * (FACTORY_CONSTANTS.ZONE.DEPTH + FACTORY_CONSTANTS.ZONE.GAP_Z);
+
+      newZones.set(projectName, {
+        projectName,
+        zoneIndex,
+        zoneX,
+        zoneZ,
+        color: ZONE_COLORS[zoneIndex % ZONE_COLORS.length],
+        workstations: FACTORY_CONSTANTS.WORKSTATION_POSITIONS.map((pos, i) => ({
+          position: { x: zoneX + pos.x, z: zoneZ + pos.z },
+          index: zoneIndex * 4 + i,
+          isActive: false,
+        })),
+      });
+    });
+
+    // Create agents with positions
+    const newAgents = new Map<string, FactoryAgent>();
+    const projectAgentCounts = new Map<string, number>();
+
+    sseData.agents.forEach((agentData) => {
+      const zone = newZones.get(agentData.projectName);
+      if (!zone) return;
+
+      const agentIndex = projectAgentCounts.get(agentData.projectName) || 0;
+      projectAgentCounts.set(agentData.projectName, agentIndex + 1);
+
+      const workstationIndex = agentIndex % 4;
+      const workstation = zone.workstations[workstationIndex];
+      if (!workstation) return;
+
+      workstation.assignedAgentId = agentData.id;
+      workstation.isActive = agentData.status === 'active';
+
+      // Preserve currentPosition from existing agent if available
+      const existingAgent = agents.get(agentData.id);
+
+      const agent: FactoryAgent = {
+        id: agentData.id,
+        projectName: agentData.projectName,
+        status: agentData.status,
+        cpuPercent: agentData.cpuPercent,
+        activity: agentData.activity,
+        sessionTokens: agentData.sessionTokens || 0,
+        zoneIndex: zone.zoneIndex,
+        workstationIndex,
+        animalType: getAnimalTypeForProject(agentData.projectName, agentIndex),
+        basePosition: new THREE.Vector3(
+          workstation.position.x,
+          0,
+          workstation.position.z + 0.45
+        ),
+        currentPosition: existingAgent?.currentPosition,
+        sessionName: agentData.sessionName,
+        name: agentData.name,
+      };
+
+      newAgents.set(agentData.id, agent);
+    });
+
+    setZones(newZones);
+    setAgents(newAgents);
+    setProjects(projectNames);
+    setIsLoading(false);
+    setError(sseError);
+  }, [sseData, sseError]);
+
+  // Sync loading state from SSE hook
   useEffect(() => {
-    const interval = setInterval(refreshData, FACTORY_CONSTANTS.API.POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [refreshData]);
+    if (!sseLoading && sseData) {
+      setIsLoading(false);
+    }
+  }, [sseLoading, sseData]);
+
+  // Handle SSE errors - set loading to false and propagate error
+  useEffect(() => {
+    if (sseError && !sseLoading) {
+      setIsLoading(false);
+      setError(sseError);
+    }
+  }, [sseError, sseLoading]);
 
   // Update night mode when in auto mode
   useEffect(() => {
@@ -1099,12 +1285,12 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   entityConversationsRef.current = entityConversations;
 
   // Pre-built entity position map for collision checks.
-  // Built once per render (when agents/npcPositions change) instead of once per entity per frame.
+  // Uses stable Map reference with incremental in-place updates for performance.
+  // Only creates new position objects for new entities; updates existing ones in-place.
   const entityPositionMapRef = useRef<Map<string, { x: number; z: number }>>(new Map());
-  entityPositionMapRef.current = useMemo(
-    () => buildEntityPositionMap(agents, npcPositions),
-    [agents, npcPositions]
-  );
+  useEffect(() => {
+    updateEntityPositionMapInPlace(entityPositionMapRef.current, agents, npcPositions);
+  }, [agents, npcPositions]);
 
   useEffect(() => {
     if (!bossModeState.isActive) return;
@@ -1238,21 +1424,52 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       }
 
       // For each entity, find mutual-closest neighbor within threshold
+      // Use spatial hashing for O(n) instead of O(n²) complexity
       const closestNeighbor = new Map<string, string>();
+      const cellSize = PROXIMITY_THRESHOLD;
+      const grid = new Map<string, number[]>();
 
+      // Build spatial hash grid
       for (let i = 0; i < entities.length; i++) {
-        let minDist = Infinity;
+        const cellX = Math.floor(entities[i].x / cellSize);
+        const cellZ = Math.floor(entities[i].z / cellSize);
+        const key = `${cellX},${cellZ}`;
+        let cell = grid.get(key);
+        if (!cell) {
+          cell = [];
+          grid.set(key, cell);
+        }
+        cell.push(i);
+      }
+
+      // Find closest neighbor checking only adjacent cells
+      for (let i = 0; i < entities.length; i++) {
+        let minDistSq = Infinity;
         let closestId = '';
-        for (let j = 0; j < entities.length; j++) {
-          if (i === j) continue;
-          const dx = entities[i].x - entities[j].x;
-          const dz = entities[i].z - entities[j].z;
-          const dist = Math.sqrt(dx * dx + dz * dz);
-          if (dist < minDist && dist < PROXIMITY_THRESHOLD) {
-            minDist = dist;
-            closestId = entities[j].id;
+        const cellX = Math.floor(entities[i].x / cellSize);
+        const cellZ = Math.floor(entities[i].z / cellSize);
+
+        // Check 3x3 neighborhood of cells
+        for (let dcx = -1; dcx <= 1; dcx++) {
+          for (let dcz = -1; dcz <= 1; dcz++) {
+            const neighborKey = `${cellX + dcx},${cellZ + dcz}`;
+            const neighborIndices = grid.get(neighborKey);
+            if (!neighborIndices) continue;
+
+            for (const j of neighborIndices) {
+              if (i === j) continue;
+              const dx = entities[i].x - entities[j].x;
+              const dz = entities[i].z - entities[j].z;
+              const distSq = dx * dx + dz * dz;
+              // Compare squared distances to avoid expensive sqrt calls
+              if (distSq < minDistSq && distSq < PROXIMITY_THRESHOLD_SQUARED) {
+                minDistSq = distSq;
+                closestId = entities[j].id;
+              }
+            }
           }
         }
+
         if (closestId) {
           closestNeighbor.set(entities[i].id, closestId);
         }
@@ -1396,10 +1613,25 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       });
 
       // Only update state if conversations actually changed
-      const serialize = (m: Map<string, ProximityConversation>) =>
-        JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
+      // Use fast comparison instead of JSON serialization:
+      // Compare size first, then check if each entry matches
+      const currentConvos = entityConversationsRef.current;
+      let hasChanged = newConvos.size !== currentConvos.size;
 
-      if (serialize(newConvos) !== serialize(entityConversationsRef.current)) {
+      if (!hasChanged) {
+        // Same size - check if contents match
+        for (const [key, newConvo] of newConvos) {
+          const current = currentConvos.get(key);
+          if (!current ||
+              current.currentLine !== newConvo.currentLine ||
+              current.isLongDuration !== newConvo.isLongDuration) {
+            hasChanged = true;
+            break;
+          }
+        }
+      }
+
+      if (hasChanged) {
         setEntityConversations(newConvos);
       }
     };
@@ -1429,6 +1661,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       projects,
       isLoading,
       error,
+      connectionStatus,
       refreshData,
       updateCamera,
       claimSeat,
@@ -1453,7 +1686,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      getActiveEntityAction,
+      clearActiveEntityAction,
       entityPositionMapRef,
+      freestyleMode,
+      setFreestyleMode,
+      freestyleMoveTarget,
+      setFreestyleMoveTarget,
+      consumeFreestyleMoveTarget,
       showNPCAgents,
       setShowNPCAgents,
       showGuestAgents,
@@ -1469,6 +1709,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       camera,
       setCameraTarget,
       lightingMode,
+      setLightingMode,
       isNightMode,
       bossModeState,
       toggleBossMode,
@@ -1480,6 +1721,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       projects,
       isLoading,
       error,
+      connectionStatus,
       refreshData,
       updateCamera,
       claimSeat,
@@ -1502,6 +1744,10 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      getActiveEntityAction,
+      clearActiveEntityAction,
+      freestyleMode,
+      freestyleMoveTarget,
       showNPCAgents,
       showGuestAgents,
       showObjects,

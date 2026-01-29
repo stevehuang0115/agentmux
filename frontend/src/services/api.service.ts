@@ -1,15 +1,62 @@
+/**
+ * API Service - Centralized API client for AgentMux backend.
+ *
+ * Provides methods for interacting with projects, teams, tickets, and tasks.
+ * Includes caching and request deduplication for frequently accessed data.
+ */
+
 import axios from 'axios';
 import { Project, Team, Ticket, ApiResponse } from '../types';
 
+/** Base URL for all API requests */
 const API_BASE = '/api';
 
+/** Cache TTL in milliseconds (2 minutes) */
+const TEAMS_CACHE_TTL = 2 * 60 * 1000;
+
+/**
+ * Simple cache entry with TTL tracking
+ */
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+/**
+ * API Service class providing centralized access to backend endpoints.
+ *
+ * Features:
+ * - Type-safe API responses
+ * - Caching for frequently accessed data (teams)
+ * - Request deduplication to prevent concurrent duplicate requests
+ * - Consistent error handling
+ */
 class ApiService {
-  // Project methods
+  /** Teams cache for reducing redundant API calls */
+  private teamsCache: CacheEntry<Team[]> | null = null;
+  /** In-flight promise for request deduplication */
+  private teamsCachePromise: Promise<Team[]> | null = null;
+
+  // ============ Project Methods ============
+
+  /**
+   * Fetches all projects.
+   *
+   * @returns Promise resolving to array of projects
+   * @throws Error if the request fails
+   */
   async getProjects(): Promise<Project[]> {
     const response = await axios.get<ApiResponse<Project[]>>(`${API_BASE}/projects`);
     return response.data.data || [];
   }
 
+  /**
+   * Fetches a single project by ID.
+   *
+   * @param id - Project ID
+   * @returns Promise resolving to the project
+   * @throws Error if project not found or request fails
+   */
   async getProject(id: string): Promise<Project> {
     const response = await axios.get<ApiResponse<Project>>(`${API_BASE}/projects/${id}`);
     if (!response.data.success || !response.data.data) {
@@ -18,6 +65,15 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Creates a new project.
+   *
+   * @param path - File system path for the project
+   * @param name - Optional project name (defaults to folder name)
+   * @param description - Optional project description
+   * @returns Promise resolving to the created project
+   * @throws Error if creation fails
+   */
   async createProject(path: string, name?: string, description?: string): Promise<Project> {
     const response = await axios.post<ApiResponse<Project>>(`${API_BASE}/projects`, {
       path,
@@ -30,8 +86,16 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Starts a project with the specified teams.
+   *
+   * @param projectId - ID of the project to start
+   * @param teamIds - Array of team IDs to assign to the project
+   * @returns Promise resolving to success message
+   * @throws Error if start fails
+   */
   async startProject(projectId: string, teamIds: string[]): Promise<{ message: string }> {
-    const response = await axios.post<ApiResponse<any>>(`${API_BASE}/projects/${projectId}/start`, {
+    const response = await axios.post<ApiResponse<unknown>>(`${API_BASE}/projects/${projectId}/start`, {
       teamIds
     });
     if (!response.data.success) {
@@ -42,12 +106,22 @@ class ApiService {
     };
   }
 
+  /**
+   * Assigns teams to a project, organizing them by role.
+   *
+   * Converts team IDs to role-based assignments using the first member's role
+   * as the team's primary role.
+   *
+   * @param projectId - ID of the project
+   * @param teamIds - Array of team IDs to assign
+   * @throws Error if assignment fails
+   */
   async assignTeamsToProject(projectId: string, teamIds: string[]): Promise<void> {
     // Backend expects teamAssignments format based on integration tests
     // Convert team IDs to team assignments by role (get roles from team members)
     const teams = await this.getTeams();
     const teamAssignments: Record<string, string[]> = {};
-    
+
     teamIds.forEach(teamId => {
       const team = teams.find(t => t.id === teamId);
       if (team && team.members.length > 0) {
@@ -59,7 +133,7 @@ class ApiService {
         teamAssignments[primaryRole].push(teamId);
       }
     });
-    
+
     const response = await axios.post<ApiResponse<void>>(`${API_BASE}/projects/${projectId}/assign-teams`, {
       teamAssignments
     });
@@ -68,12 +142,70 @@ class ApiService {
     }
   }
 
-  // Team methods
-  async getTeams(): Promise<Team[]> {
-    const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
-    return response.data.data || [];
+  // ============ Team Methods ============
+
+  /**
+   * Get all teams with caching and request deduplication.
+   *
+   * Caches results for 2 minutes to reduce redundant API calls.
+   * Deduplicates concurrent requests to prevent multiple in-flight fetches.
+   *
+   * @param forceRefresh - If true, bypasses cache and fetches fresh data
+   * @returns Promise resolving to array of teams
+   */
+  async getTeams(forceRefresh = false): Promise<Team[]> {
+    // Check if cache is valid
+    if (!forceRefresh && this.teamsCache) {
+      const age = Date.now() - this.teamsCache.timestamp;
+      if (age < TEAMS_CACHE_TTL) {
+        return this.teamsCache.data;
+      }
+    }
+
+    // If a request is already in flight, return the same promise (deduplication)
+    if (this.teamsCachePromise) {
+      return this.teamsCachePromise;
+    }
+
+    // Create new fetch promise
+    this.teamsCachePromise = (async () => {
+      try {
+        const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
+        const teams = response.data.data || [];
+
+        // Update cache
+        this.teamsCache = {
+          data: teams,
+          timestamp: Date.now(),
+        };
+
+        return teams;
+      } finally {
+        // Clear in-flight promise
+        this.teamsCachePromise = null;
+      }
+    })();
+
+    return this.teamsCachePromise;
   }
 
+  /**
+   * Invalidate the teams cache.
+   *
+   * Call this after creating, updating, or deleting teams to ensure
+   * subsequent calls fetch fresh data.
+   */
+  invalidateTeamsCache(): void {
+    this.teamsCache = null;
+  }
+
+  /**
+   * Fetches a single team by ID.
+   *
+   * @param id - Team ID
+   * @returns Promise resolving to the team
+   * @throws Error if team not found or request fails
+   */
   async getTeam(id: string): Promise<Team> {
     const response = await axios.get<ApiResponse<Team>>(`${API_BASE}/teams/${id}`);
     if (!response.data.success || !response.data.data) {
@@ -82,21 +214,47 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Creates a new team.
+   *
+   * Automatically invalidates the teams cache after successful creation.
+   *
+   * @param team - Team data (without auto-generated fields)
+   * @returns Promise resolving to the created team
+   * @throws Error if creation fails
+   */
   async createTeam(team: Omit<Team, 'id' | 'createdAt' | 'updatedAt' | 'sessionName'>): Promise<Team> {
     const response = await axios.post<ApiResponse<Team>>(`${API_BASE}/teams`, team);
     if (!response.data.success || !response.data.data) {
       throw new Error(response.data.error || 'Failed to create team');
     }
+    this.invalidateTeamsCache();
     return response.data.data;
   }
 
+  /**
+   * Deletes a team.
+   *
+   * Automatically invalidates the teams cache after successful deletion.
+   *
+   * @param id - Team ID to delete
+   * @throws Error if deletion fails
+   */
   async deleteTeam(id: string): Promise<void> {
     const response = await axios.delete<ApiResponse<void>>(`${API_BASE}/teams/${id}`);
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to delete team');
     }
+    this.invalidateTeamsCache();
   }
 
+  /**
+   * Unassigns a team from a project.
+   *
+   * @param projectId - ID of the project
+   * @param teamId - ID of the team to unassign
+   * @throws Error if unassignment fails
+   */
   async unassignTeamFromProject(projectId: string, teamId: string): Promise<void> {
     const response = await axios.post<ApiResponse<void>>(`${API_BASE}/projects/${projectId}/unassign-team`, {
       teamId
@@ -106,12 +264,27 @@ class ApiService {
     }
   }
 
-  // Ticket methods
+  // ============ Ticket Methods ============
+
+  /**
+   * Fetches all tickets for a project.
+   *
+   * @param projectId - Project ID
+   * @returns Promise resolving to array of tickets
+   */
   async getProjectTickets(projectId: string): Promise<Ticket[]> {
     const response = await axios.get<ApiResponse<Ticket[]>>(`${API_BASE}/projects/${projectId}/tickets`);
     return response.data.data || [];
   }
 
+  /**
+   * Creates a new ticket in a project.
+   *
+   * @param projectId - ID of the project
+   * @param ticket - Ticket data (without auto-generated fields)
+   * @returns Promise resolving to the created ticket
+   * @throws Error if creation fails
+   */
   async createTicket(projectId: string, ticket: Omit<Ticket, 'id' | 'createdAt' | 'updatedAt'>): Promise<Ticket> {
     const response = await axios.post<ApiResponse<Ticket>>(`${API_BASE}/projects/${projectId}/tickets`, ticket);
     if (!response.data.success || !response.data.data) {
@@ -120,6 +293,14 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Updates an existing ticket.
+   *
+   * @param id - Ticket ID
+   * @param updates - Partial ticket data to update
+   * @returns Promise resolving to the updated ticket
+   * @throws Error if update fails
+   */
   async updateTicket(id: string, updates: Partial<Ticket>): Promise<Ticket> {
     const response = await axios.patch<ApiResponse<Ticket>>(`${API_BASE}/tickets/${id}`, updates);
     if (!response.data.success || !response.data.data) {
@@ -128,6 +309,13 @@ class ApiService {
     return response.data.data;
   }
 
+  /**
+   * Deletes a ticket from a project.
+   *
+   * @param projectId - ID of the project
+   * @param ticketId - ID of the ticket to delete
+   * @throws Error if deletion fails
+   */
   async deleteTicket(projectId: string, ticketId: string): Promise<void> {
     const response = await axios.delete<ApiResponse<void>>(`${API_BASE}/projects/${projectId}/tickets/${ticketId}`);
     if (!response.data.success) {
@@ -135,26 +323,65 @@ class ApiService {
     }
   }
 
-  // Task methods (from markdown files)
+  // ============ Task Methods (from markdown files) ============
+
+  /**
+   * Fetches all tasks for a project.
+   *
+   * Tasks are parsed from markdown files in the project's tasks directory.
+   * Note: Returns any[] as task structure is dynamic and parsed from markdown.
+   *
+   * @param projectId - Project ID
+   * @returns Promise resolving to array of tasks
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getAllTasks(projectId: string): Promise<any[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks`);
     return response.data.data || [];
   }
 
+  /**
+   * Fetches all milestones for a project.
+   *
+   * @param projectId - Project ID
+   * @returns Promise resolving to array of milestones
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getMilestones(projectId: string): Promise<any[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/milestones`);
     return response.data.data || [];
   }
 
+  /**
+   * Fetches tasks filtered by status.
+   *
+   * @param projectId - Project ID
+   * @param status - Task status to filter by (e.g., 'open', 'in_progress', 'done')
+   * @returns Promise resolving to array of tasks with the specified status
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getTasksByStatus(projectId: string, status: string): Promise<any[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks/status/${status}`);
     return response.data.data || [];
   }
 
+  /**
+   * Fetches tasks filtered by milestone.
+   *
+   * @param projectId - Project ID
+   * @param milestoneId - Milestone ID to filter by
+   * @returns Promise resolving to array of tasks in the specified milestone
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async getTasksByMilestone(projectId: string, milestoneId: string): Promise<any[]> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks/milestone/${milestoneId}`);
     return response.data.data || [];
   }
 }
 
+/** Singleton instance of the API service */
 export const apiService = new ApiService();

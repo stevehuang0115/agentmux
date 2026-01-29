@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, FolderOpen, Play, Unlock, Link2, Inbox } from 'lucide-react';
-import { Project } from '../../types';
+import { Play, Link2, Inbox } from 'lucide-react';
 import {
   Button,
   FormPopup,
@@ -13,6 +12,7 @@ import {
 } from '../UI';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
 import { inProgressTasksService } from '../../services/in-progress-tasks.service';
+import { apiService } from '../../services/api.service';
 import { logSilentError } from '../../utils/error-handling';
 
 export const TasksView: React.FC<TasksViewProps> = ({
@@ -48,6 +48,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
   const milestonesGridRef = useRef<HTMLDivElement>(null);
   const [visibleCounts, setVisibleCounts] = useState<{open: number; in_progress: number; done: number; blocked: number}>({ open: 20, in_progress: 20, done: 20, blocked: 20 });
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // Filter tickets based on selected milestone or completed
   const filteredTickets = selectedMilestoneFilter
@@ -88,23 +89,36 @@ export const TasksView: React.FC<TasksViewProps> = ({
   // Get available milestones for filter chips and form dropdown
   const availableMilestones = Object.keys(tasksByMilestone);
 
-  // Load task assignment data when tickets change
+  // Load task assignment data when tickets change (parallel fetching for efficiency)
   useEffect(() => {
     const loadAssignmentData = async () => {
-      const assignments = new Map();
+      // Filter tickets with file paths and fetch assignments in parallel
+      const ticketsWithPaths = tickets.filter(t => t.filePath);
 
-      for (const ticket of tickets) {
-        if (ticket.filePath) {
-          try {
-            const assignmentDetails = await inProgressTasksService.getTaskAssignedMemberDetails(ticket.filePath);
-            if (assignmentDetails.memberName || assignmentDetails.sessionName) {
-              assignments.set(ticket.id, assignmentDetails);
-            }
-          } catch (error) {
-            console.debug('No assignment data found for task:', ticket.id);
-          }
-        }
+      if (ticketsWithPaths.length === 0) {
+        setTaskAssignments(new Map());
+        return;
       }
+
+      const assignmentPromises = ticketsWithPaths.map(async (ticket) => {
+        try {
+          const details = await inProgressTasksService.getTaskAssignedMemberDetails(ticket.filePath);
+          if (details.memberName || details.sessionName) {
+            return { id: ticket.id, details };
+          }
+          return null;
+        } catch {
+          // Silent failure for individual assignment lookups
+          return null;
+        }
+      });
+
+      const results = await Promise.all(assignmentPromises);
+      const assignments = new Map(
+        results
+          .filter((r): r is { id: string; details: typeof r extends { details: infer D } ? D : never } => r !== null)
+          .map(r => [r.id, r.details])
+      );
 
       setTaskAssignments(assignments);
     };
@@ -118,10 +132,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
   useEffect(() => {
     const loadAvatars = async () => {
       try {
-        const resp = await fetch('/api/teams');
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const teams = data.success ? (data.data || []) : (data || []);
+        // Use cached apiService.getTeams() to reduce redundant API calls
+        const teams = await apiService.getTeams();
         const map: Record<string, string> = {};
         teams.forEach((team: any) => {
           (team.members || []).forEach((m: any) => {
@@ -174,6 +186,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
 
   // Handle Create Task
   const handleCreateTask = async () => {
+    setErrorMessage(null);
     try {
       const response = await fetch(`/api/projects/${project.id}/tasks`, {
         method: 'POST',
@@ -195,17 +208,21 @@ export const TasksView: React.FC<TasksViewProps> = ({
         });
         onTicketsUpdate(); // Refresh tasks
       } else {
-        const error = await response.text();
-        console.error('Failed to create task: ' + error);
+        const errorText = await response.text();
+        const message = `Failed to create task: ${errorText || 'Unknown error'}`;
+        setErrorMessage(message);
+        logSilentError(new Error(message), { context: `Create task for project ${project.id}` });
       }
     } catch (error) {
-      console.error('Error creating task:', error);
-      console.error('Failed to create task');
+      const message = error instanceof Error ? error.message : 'Failed to create task';
+      setErrorMessage(message);
+      logSilentError(error, { context: `Create task for project ${project.id}` });
     }
   };
 
   // Handle Create Milestone
   const handleCreateMilestone = async () => {
+    setErrorMessage(null);
     try {
       const response = await fetch(`/api/projects/${project.id}/milestones`, {
         method: 'POST',
@@ -223,18 +240,33 @@ export const TasksView: React.FC<TasksViewProps> = ({
         });
         onTicketsUpdate(); // Refresh tasks
       } else {
-        const error = await response.text();
-        console.error('Failed to create milestone: ' + error);
+        const errorText = await response.text();
+        const message = `Failed to create milestone: ${errorText || 'Unknown error'}`;
+        setErrorMessage(message);
+        logSilentError(new Error(message), { context: `Create milestone for project ${project.id}` });
       }
     } catch (error) {
-      console.error('Error creating milestone:', error);
-      console.error('Failed to create milestone');
+      const message = error instanceof Error ? error.message : 'Failed to create milestone';
+      setErrorMessage(message);
+      logSilentError(error, { context: `Create milestone for project ${project.id}` });
     }
   };
 
   return (
     <div className="tasks-view">
-      
+      {/* Error banner */}
+      {errorMessage && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center justify-between">
+          <span className="text-red-400 text-sm">{errorMessage}</span>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-red-400 hover:text-red-300 text-sm"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Milestone filter chips (prototype style) */}
       <div className="mb-4">
         <div className="flex items-center gap-2">

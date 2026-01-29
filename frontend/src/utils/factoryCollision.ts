@@ -260,6 +260,66 @@ export function buildEntityPositionMap(
 }
 
 /**
+ * Incrementally update an entity position map in-place.
+ * Only updates entries that have changed, removes deleted entities,
+ * and adds new entities. Avoids creating new position objects when unchanged.
+ *
+ * @param existing - The existing map to update in-place
+ * @param agents - Map of agent ID to agent data with position
+ * @param npcPositions - Map of NPC ID to tracked position
+ */
+export function updateEntityPositionMapInPlace(
+  existing: Map<string, { x: number; z: number }>,
+  agents: Map<string, { currentPosition?: { x: number; z: number }; basePosition: { x: number; z: number } }>,
+  npcPositions: Map<string, { x: number; z: number }>
+): void {
+  // Track which IDs are still valid
+  const validIds = new Set<string>();
+
+  // Update agent positions
+  agents.forEach((agent, id) => {
+    validIds.add(id);
+    const pos = agent.currentPosition || agent.basePosition;
+    const existingPos = existing.get(id);
+
+    if (existingPos) {
+      // Update existing entry in-place only if changed
+      if (existingPos.x !== pos.x || existingPos.z !== pos.z) {
+        existingPos.x = pos.x;
+        existingPos.z = pos.z;
+      }
+    } else {
+      // New entity - create entry
+      existing.set(id, { x: pos.x, z: pos.z });
+    }
+  });
+
+  // Update NPC positions
+  npcPositions.forEach((pos, id) => {
+    validIds.add(id);
+    const existingPos = existing.get(id);
+
+    if (existingPos) {
+      // Update existing entry in-place only if changed
+      if (existingPos.x !== pos.x || existingPos.z !== pos.z) {
+        existingPos.x = pos.x;
+        existingPos.z = pos.z;
+      }
+    } else {
+      // New entity - create entry
+      existing.set(id, { x: pos.x, z: pos.z });
+    }
+  });
+
+  // Remove deleted entities
+  existing.forEach((_, id) => {
+    if (!validIds.has(id)) {
+      existing.delete(id);
+    }
+  });
+}
+
+/**
  * Generate a random position within wall bounds that is not inside any obstacle.
  * Tries up to maxAttempts times, then returns a fallback at factory center.
  *

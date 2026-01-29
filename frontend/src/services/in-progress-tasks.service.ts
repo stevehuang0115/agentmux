@@ -3,6 +3,7 @@
  */
 
 import { TeamMember } from '../types';
+import { apiService } from './api.service';
 
 export interface InProgressTask {
   id: string;
@@ -89,24 +90,8 @@ class InProgressTasksService {
         return {};
       }
 
-      // Fetch team data to get member details
-      const teamsResponse = await fetch('/api/teams');
-      if (!teamsResponse.ok) {
-        return {
-          sessionName: inProgressTask.assignedSessionName
-        };
-      }
-
-      const teamsData = await teamsResponse.json();
-      const teams = teamsData.success ? teamsData.data : teamsData.teams || [];
-
-      // Ensure teams is an array
-      if (!Array.isArray(teams)) {
-        console.warn('Teams data is not an array:', teams);
-        return {
-          sessionName: inProgressTask.assignedSessionName
-        };
-      }
+      // Fetch team data to get member details (using cached apiService)
+      const teams = await apiService.getTeams();
 
       // Find the team member
       for (const team of teams) {
