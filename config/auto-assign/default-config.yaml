@@ -1,0 +1,74 @@
+# Auto-Assignment Configuration
+# This file defines the default auto-assignment settings for AgentMux.
+# Copy this to your project's .agentmux/config/auto-assign.yaml to customize.
+
+# Enable/disable auto-assignment
+enabled: true
+
+# Assignment Strategy Configuration
+strategy:
+  # How tasks are prioritized: fifo, priority, deadline, custom
+  prioritization: priority
+
+  # Role matching rules
+  # Each rule defines which task types a role can handle
+  roleMatching:
+    - role: developer
+      taskTypes: [feature, fix, refactor, test, implement]
+      priority: 1
+
+    - role: frontend-developer
+      taskTypes: [feature, fix, ui, component, style, frontend]
+      priority: 1
+
+    - role: backend-developer
+      taskTypes: [feature, fix, api, service, database, backend]
+      priority: 1
+
+    - role: qa
+      taskTypes: [test, review, verify, qa]
+      priority: 1
+      exclusive: true  # Only QA can handle these tasks
+
+    - role: tester
+      taskTypes: [test, review, verify]
+      priority: 2
+
+    - role: pm
+      taskTypes: [planning, review, coordination, documentation]
+      priority: 1
+
+    - role: tpm
+      taskTypes: [planning, coordination, tracking]
+      priority: 1
+
+    - role: pgm
+      taskTypes: [planning, management, coordination]
+      priority: 1
+
+    - role: designer
+      taskTypes: [design, ui, ux, mockup]
+      priority: 1
+      exclusive: true
+
+  # Load balancing settings
+  loadBalancing:
+    enabled: true
+    maxConcurrentTasks: 1      # One task per agent at a time
+    preferIdleAgents: true     # Prioritize assigning to idle agents
+
+  # Dependency handling
+  dependencies:
+    respectBlocking: true       # Don't assign blocked tasks
+    waitForDependencies: true   # Wait for dependencies to complete
+
+# Notification settings
+notifications:
+  notifyOnIdle: true            # Notify when agent becomes idle
+  idleThresholdMinutes: 5       # Wait this long before idle notification
+  notifyOnNoTasks: true         # Notify when no tasks available
+
+# Rate limits
+limits:
+  maxAssignmentsPerDay: 50      # Max assignments per agent per day
+  cooldownBetweenTasks: 60      # Seconds to wait between task assignments
