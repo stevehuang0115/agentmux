@@ -300,14 +300,19 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
   const { CAMERA } = FACTORY_CONSTANTS;
   const statsParentRef = useRef<HTMLDivElement>(null);
 
+  // Detect mobile devices for performance adjustments
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent
+  );
+
   return (
     <FactoryProvider>
       <SceneErrorBoundary>
         <div className={`relative w-full h-full ${className}`}>
           {/* 3D Canvas */}
           <Canvas
-            shadows
-            dpr={[1, 2]}
+            shadows={!isMobile} // Disable shadows on mobile for performance
+            dpr={isMobile ? [1, 1.5] : [1, 2]} // Lower max DPR on mobile
             camera={{
               fov: CAMERA.FOV,
               near: CAMERA.NEAR,
@@ -319,11 +324,13 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               ],
             }}
             gl={{
-              antialias: true,
+              antialias: !isMobile, // Disable antialiasing on mobile for performance
               alpha: false,
-              powerPreference: 'high-performance',
+              powerPreference: isMobile ? 'default' : 'high-performance',
               // Enable context restoration for WebGL context loss recovery
               preserveDrawingBuffer: true,
+              // Mobile-specific: limit precision for better compatibility
+              ...(isMobile && { precision: 'mediump' }),
             }}
             onCreated={({ gl }) => {
               // Handle WebGL context loss gracefully

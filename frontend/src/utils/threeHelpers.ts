@@ -20,22 +20,50 @@ import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
  * @returns A deep clone with fixed materials
  */
 export function cloneAndFixMaterials(scene: THREE.Object3D): THREE.Object3D {
-  const clone = SkeletonUtils.clone(scene);
+  // Use try-catch for the skeleton clone operation (can fail on mobile)
+  let clone: THREE.Object3D;
+  try {
+    clone = SkeletonUtils.clone(scene);
+  } catch (err) {
+    console.warn('SkeletonUtils.clone failed, using basic clone:', err);
+    // Fallback to basic clone if skeleton clone fails (mobile compatibility)
+    clone = scene.clone(true);
+  }
 
   /**
    * Fix a single material's metalness/roughness for better visibility.
+   * Handles edge cases where material may not be clonable (mobile WebGL).
    */
   const fixMaterial = (mat: THREE.Material): THREE.Material => {
-    const cloned = mat.clone();
-    if ((cloned as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
-      const stdMat = cloned as THREE.MeshStandardMaterial;
-      stdMat.metalnessMap = null;
-      stdMat.roughnessMap = null;
-      stdMat.metalness = 0.0;
-      stdMat.roughness = 0.7;
-      stdMat.needsUpdate = true;
+    // Defensive check - some mobile WebGL contexts may have malformed materials
+    if (!mat || typeof mat.clone !== 'function') {
+      console.warn('Material without clone method encountered, using fallback');
+      return new THREE.MeshStandardMaterial({
+        color: 0x888888,
+        metalness: 0.0,
+        roughness: 0.7,
+      });
     }
-    return cloned;
+
+    try {
+      const cloned = mat.clone();
+      if ((cloned as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+        const stdMat = cloned as THREE.MeshStandardMaterial;
+        stdMat.metalnessMap = null;
+        stdMat.roughnessMap = null;
+        stdMat.metalness = 0.0;
+        stdMat.roughness = 0.7;
+        stdMat.needsUpdate = true;
+      }
+      return cloned;
+    } catch (err) {
+      console.warn('Material clone failed, using fallback:', err);
+      return new THREE.MeshStandardMaterial({
+        color: 0x888888,
+        metalness: 0.0,
+        roughness: 0.7,
+      });
+    }
   };
 
   clone.traverse((child) => {
