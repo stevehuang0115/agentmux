@@ -178,3 +178,6 @@ export interface StartupConfig {
 
 // Re-export memory types
 export * from './memory.types.js';
+
+// Re-export continuation types
+export * from './continuation.types.js';

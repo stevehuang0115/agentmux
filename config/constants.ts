@@ -663,6 +663,111 @@ export const MEMORY_CONSTANTS = {
   },
 } as const;
 
+// ========================= CONTINUATION SYSTEM =========================
+
+/**
+ * Continuation system configuration for automatic agent continuation
+ */
+export const CONTINUATION_CONSTANTS = {
+  /**
+   * Detection thresholds
+   */
+  DETECTION: {
+    /** Number of idle poll cycles before triggering continuation check */
+    IDLE_CYCLES_BEFORE_CHECK: 2,
+    /** Minutes without MCP calls before heartbeat is considered stale */
+    STALE_THRESHOLD_MINUTES: 30,
+    /** Milliseconds between activity poll checks */
+    ACTIVITY_POLL_INTERVAL_MS: 120000, // 2 minutes
+  },
+
+  /**
+   * Event handling configuration
+   */
+  EVENTS: {
+    /** Debounce time for events (ms) */
+    DEBOUNCE_MS: 5000,
+    /** Deduplication window (ms) */
+    DEDUP_WINDOW_MS: 10000,
+    /** Cleanup interval for recent events (ms) */
+    CLEANUP_INTERVAL_MS: 60000,
+  },
+
+  /**
+   * Iteration limits
+   */
+  ITERATIONS: {
+    /** Default maximum iterations per task */
+    DEFAULT_MAX: 10,
+    /** Absolute maximum iterations (hard limit) */
+    ABSOLUTE_MAX: 50,
+    /** Warning threshold (percentage of max) */
+    WARNING_THRESHOLD: 0.8,
+  },
+
+  /**
+   * Timeouts
+   */
+  TIMEOUTS: {
+    /** Timeout for output analysis (ms) */
+    ANALYSIS_MS: 10000,
+    /** Timeout for action execution (ms) */
+    ACTION_MS: 30000,
+    /** Timeout for prompt injection (ms) */
+    PROMPT_INJECTION_MS: 15000,
+  },
+
+  /**
+   * Output analysis patterns
+   */
+  PATTERNS: {
+    /** Patterns indicating task completion */
+    COMPLETION: [
+      'task completed',
+      'task done',
+      'successfully completed',
+      'implementation complete',
+      'all tests pass',
+      'ready for review',
+    ],
+    /** Patterns indicating agent is waiting */
+    WAITING: [
+      'waiting for',
+      'awaiting',
+      'blocked by',
+      'need input',
+      'please provide',
+      'let me know',
+    ],
+    /** Patterns indicating errors */
+    ERROR: [
+      'error:',
+      'failed:',
+      'exception:',
+      'cannot',
+      'unable to',
+      'permission denied',
+    ],
+  },
+
+  /**
+   * Confidence thresholds for analysis
+   */
+  CONFIDENCE: {
+    /** Minimum confidence to take action */
+    ACTION_THRESHOLD: 0.6,
+    /** High confidence threshold */
+    HIGH: 0.8,
+    /** Medium confidence threshold */
+    MEDIUM: 0.5,
+    /** Low confidence threshold */
+    LOW: 0.3,
+  },
+} as const;
+
+/** Shorthand for debounce value */
+export const EVENT_DEBOUNCE_MS = CONTINUATION_CONSTANTS.EVENTS.DEBOUNCE_MS;
+
 // ========================= TYPE HELPERS =========================
 
 /**
