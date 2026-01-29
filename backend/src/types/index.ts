@@ -184,3 +184,6 @@ export * from './continuation.types.js';
 
 // Re-export quality gate types
 export * from './quality-gate.types.js';
+
+// Re-export SOP types
+export * from './sop.types.js';
