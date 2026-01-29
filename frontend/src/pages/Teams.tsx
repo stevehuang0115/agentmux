@@ -42,7 +42,7 @@ export const Teams: React.FC = () => {
 
   useEffect(() => {
     filterTeams();
-  }, [teams, searchQuery, statusFilter]);
+  }, [teams, searchQuery, statusFilter, projectFilter]);
 
   const fetchTeams = async () => {
     try {
@@ -259,10 +259,14 @@ export const Teams: React.FC = () => {
               onClick={() => handleTeamClick(team)}
               onViewTeam={(id) => navigate(`/teams/${id}`)}
               onEditTeam={(id) => navigate(`/teams/${id}?edit=true`)}
-              onDeleteTeam={(id) => {
+              onDeleteTeam={async (id) => {
                 if (window.confirm('Are you sure you want to delete this team?')) {
-                  // Add delete functionality here
-                  console.log('Delete team:', id);
+                  try {
+                    await apiService.deleteTeam(id);
+                    setTeams(prev => prev.filter(t => t.id !== id));
+                  } catch (error) {
+                    showError('Failed to delete team: ' + (error instanceof Error ? error.message : 'Unknown error'));
+                  }
                 }
               }}
             />

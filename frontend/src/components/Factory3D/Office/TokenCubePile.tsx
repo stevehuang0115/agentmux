@@ -14,10 +14,6 @@ import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
 
-/** Cube size range */
-const CUBE_SIZE_MIN = 0.3;
-const CUBE_SIZE_MAX = 0.5;
-
 /** Position constants */
 const PILE_Z_START = -15.5; // Just behind conveyor belt (belt is at Z=-14)
 const PILE_Z_END = -18.5; // Near the back wall
