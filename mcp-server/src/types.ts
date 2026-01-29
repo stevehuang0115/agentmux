@@ -115,6 +115,20 @@ export interface AcceptTaskParams {
 export interface CompleteTaskParams {
   absoluteTaskPath: string;
   sessionName: string;
+  /** Skip quality gates (not recommended) */
+  skipGates?: boolean;
+  /** Summary of what was accomplished */
+  summary?: string;
+}
+
+/**
+ * Parameters for the check_quality_gates tool
+ */
+export interface CheckQualityGatesParams {
+  /** Specific gates to run (default: all) */
+  gates?: string[];
+  /** Skip optional gates */
+  skipOptional?: boolean;
 }
 
 export interface ReadTaskParams {

@@ -59,8 +59,11 @@ import {
   InProgressTask,
   RememberToolParams,
   RecallToolParams,
-  RecordLearningToolParams
+  RecordLearningToolParams,
+  CheckQualityGatesParams,
 } from './types.js';
+import { QualityGateService } from '../../backend/src/services/quality/quality-gate.service.js';
+import { GateResult } from '../../backend/src/types/quality-gate.types.js';
 
 
 export class AgentMuxMCPServer {
@@ -70,6 +73,7 @@ export class AgentMuxMCPServer {
   private agentRole: string;
   private sessionAdapter: SessionAdapter;
   private memoryService: MemoryService;
+  private qualityGateService: QualityGateService;
   private requestQueue: Map<string, number> = new Map();
   private lastCleanup: number = Date.now();
 
@@ -86,6 +90,9 @@ export class AgentMuxMCPServer {
 
     // Initialize MemoryService
     this.memoryService = MemoryService.getInstance();
+
+    // Initialize QualityGateService
+    this.qualityGateService = QualityGateService.getInstance();
 
     // Debug log session name
     logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
@@ -1033,8 +1040,68 @@ export class AgentMuxMCPServer {
     }
   }
 
+  /**
+   * Format a failure message for quality gates
+   *
+   * @param failedGates - Array of failed gate results
+   * @returns Formatted failure message
+   */
+  private formatGateFailureMessage(failedGates: GateResult[]): string {
+    let message = `❌ Quality gates failed. Please fix the following issues:\n\n`;
+
+    for (const gate of failedGates) {
+      message += `## ${gate.name} (FAILED)\n`;
+      message += `\`\`\`\n${gate.output.substring(0, 1000)}\n\`\`\`\n\n`;
+    }
+
+    message += `\n**Instructions:**\n`;
+    message += `1. Review the errors above\n`;
+    message += `2. Fix the issues in your code\n`;
+    message += `3. Run the checks locally to verify\n`;
+    message += `4. Call complete_task again when all checks pass\n`;
+
+    return message;
+  }
+
   async completeTask(params: CompleteTaskParams): Promise<MCPToolResult> {
     try {
+      logger.info(`[complete_task] Called with params:`, {
+        taskPath: params.absoluteTaskPath,
+        sessionName: params.sessionName,
+        skipGates: params.skipGates,
+      });
+
+      // Run quality gates unless skipped
+      if (!params.skipGates) {
+        logger.info(`[complete_task] Running quality gates for project: ${this.projectPath}`);
+
+        const gateResults = await this.qualityGateService.runAllGates(this.projectPath);
+
+        logger.info(`[complete_task] Gate results:`, {
+          allRequiredPassed: gateResults.allRequiredPassed,
+          allPassed: gateResults.allPassed,
+          summary: gateResults.summary,
+        });
+
+        if (!gateResults.allRequiredPassed) {
+          // Gates failed - return failure with details
+          const failedGates = gateResults.results.filter(r => !r.passed && r.required);
+
+          return {
+            content: [{
+              type: 'text',
+              text: this.formatGateFailureMessage(failedGates)
+            }],
+            isError: true
+          };
+        }
+
+        logger.info(`[complete_task] All quality gates passed`);
+      } else {
+        logger.warn(`[complete_task] Quality gates skipped (not recommended)`);
+      }
+
+      // Gates passed (or skipped) - proceed with task completion
       const response = await fetch(`${this.apiBaseUrl}/api/task-management/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1065,10 +1132,20 @@ export class AgentMuxMCPServer {
       // Success case - remove task from in_progress_tasks.json
       await this.removeTaskFromInProgressTracking(params.absoluteTaskPath);
 
+      // Build success message
+      let successMessage = `✅ Task completed successfully!`;
+      if (params.summary) {
+        successMessage += `\n\n📝 Summary: ${params.summary}`;
+      }
+      if (!params.skipGates) {
+        successMessage += `\n\n✅ All quality gates passed (typecheck, tests, build)`;
+      }
+      successMessage += `\n\n${result.message || 'Task moved to done folder and removed from tracking'}`;
+
       return {
         content: [{
           type: 'text',
-          text: `✅ Task completed successfully: ${result.message || 'Task moved to done folder and removed from tracking'}`
+          text: successMessage
         }]
       };
     } catch (error) {
@@ -1076,6 +1153,67 @@ export class AgentMuxMCPServer {
         content: [{
           type: 'text',
           text: `Error completing task: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Check quality gates without completing the task
+   *
+   * @param params - Parameters for the check
+   * @returns Gate check results
+   */
+  async checkQualityGates(params: CheckQualityGatesParams): Promise<MCPToolResult> {
+    try {
+      logger.info(`[check_quality_gates] Running gates for project: ${this.projectPath}`);
+
+      const gateResults = await this.qualityGateService.runAllGates(this.projectPath, {
+        gateNames: params.gates,
+        skipOptional: params.skipOptional,
+      });
+
+      // Format summary
+      const summary = gateResults.results.map(r =>
+        `${r.passed ? '✅' : '❌'} ${r.name}: ${r.passed ? 'PASSED' : 'FAILED'}${r.skipped ? ' (skipped)' : ''} (${r.duration}ms)`
+      ).join('\n');
+
+      // Build response message
+      let message = gateResults.allRequiredPassed
+        ? `✅ All required quality gates passed!\n\n`
+        : `❌ Some quality gates failed:\n\n`;
+
+      message += `## Results\n${summary}\n\n`;
+      message += `## Summary\n`;
+      message += `- Total: ${gateResults.summary.total}\n`;
+      message += `- Passed: ${gateResults.summary.passed}\n`;
+      message += `- Failed: ${gateResults.summary.failed}\n`;
+      message += `- Skipped: ${gateResults.summary.skipped}\n`;
+      message += `- Duration: ${gateResults.duration}ms\n`;
+
+      // Include failure details for failed gates
+      const failedGates = gateResults.results.filter(r => !r.passed && !r.skipped);
+      if (failedGates.length > 0) {
+        message += `\n## Failure Details\n`;
+        for (const gate of failedGates) {
+          message += `\n### ${gate.name}\n`;
+          message += `\`\`\`\n${gate.output.substring(0, 500)}\n\`\`\`\n`;
+        }
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: message
+        }],
+        isError: !gateResults.allRequiredPassed
+      };
+    } catch (error) {
+      return {
+        content: [{
+          type: 'text',
+          text: `Error checking quality gates: ${error instanceof Error ? error.message : 'Unknown error'}`
         }],
         isError: true
       };
@@ -2704,6 +2842,9 @@ Please respond promptly with either acceptance or delegation.`;
                 case 'complete_task':
                   result = await this.completeTask(toolArgs);
                   break;
+                case 'check_quality_gates':
+                  result = await this.checkQualityGates(toolArgs);
+                  break;
                 case 'read_task':
                   result = await this.readTask(toolArgs);
                   break;
@@ -2919,15 +3060,42 @@ Please respond promptly with either acceptance or delegation.`;
       },
       {
         name: 'complete_task',
-        description: 'Mark task as completed and move to done folder',
+        description: `Mark task as completed after verifying quality gates pass.
+
+This tool will:
+1. Run all required quality gates (typecheck, tests, build)
+2. If all gates pass, move the task to done
+3. If gates fail, return the failures for you to fix
+
+**Important:** Do not call this until you believe ALL gates will pass.
+Run tests and typecheck locally first.`,
         inputSchema: {
           type: 'object',
           properties: {
             absoluteTaskPath: { type: 'string', description: 'Absolute path to current task file' },
             sessionName: { type: 'string', description: 'Session name of the team member completing the task' },
-            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
+            teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' },
+            skipGates: { type: 'boolean', description: 'Skip quality gates (not recommended)', default: false },
+            summary: { type: 'string', description: 'Summary of what was accomplished' }
           },
           required: ['absoluteTaskPath', 'sessionName']
+        }
+      },
+      {
+        name: 'check_quality_gates',
+        description: `Run quality gates without completing the task.
+
+Use this to verify your code will pass before calling complete_task.
+Saves time by catching issues early.
+
+Gates checked: typecheck, tests, build, lint (optional)`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            gates: { type: 'array', items: { type: 'string' }, description: 'Specific gates to run (default: all)' },
+            skipOptional: { type: 'boolean', description: 'Skip optional gates like lint', default: false }
+          },
+          required: []
         }
       },
       {
