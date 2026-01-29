@@ -8,3 +8,13 @@
  */
 
 export { ContinuationEventEmitter } from './continuation-events.service.js';
+export {
+  OutputAnalyzer,
+  type CompletionSignals,
+  type ErrorSignals,
+  type WaitingSignals,
+  type AnalyzeParams,
+} from './output-analyzer.service.js';
+
+// Re-export patterns for extensibility
+export * from './patterns/index.js';
