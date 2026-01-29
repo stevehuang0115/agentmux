@@ -7,6 +7,7 @@
  */
 
 export { AgentMemoryService, type IAgentMemoryService, type TaskCompletionMetrics } from './agent-memory.service.js';
+export { ProjectMemoryService, type IProjectMemoryService, type SearchResults } from './project-memory.service.js';
 
 // Re-export memory types for convenience
 export type {
