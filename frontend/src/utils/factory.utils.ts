@@ -43,7 +43,7 @@ const AVAILABLE_ANIMALS: AnimalType[] = ['cow', 'horse', 'tiger', 'rabbit'];
  * // Returns same animal type for same project name
  * ```
  */
-export function getAnimalTypeForProject(projectName: string, index: number): AnimalType {
+export function getAnimalTypeForProject(projectName: string, _index: number): AnimalType {
   // Use project name hash to determine animal type
   // This ensures all agents in the same project have the same animal type
   const hash = hashString(projectName);

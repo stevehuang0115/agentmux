@@ -43,3 +43,6 @@ export type { ToggleProps } from './Toggle';
 
 export { Popup, FormPopup, ConfirmPopup } from './Popup';
 export type { PopupProps, FormPopupProps, ConfirmPopupProps } from './Popup';
+
+export { Avatar, AvatarGroup } from './Avatar';
+export type { AvatarProps, AvatarGroupProps, AvatarSize } from './Avatar';
