@@ -22,6 +22,7 @@ import { OutdoorScenery } from './Environment/OutdoorScenery';
 import { OfficeZones } from './Office/OfficeZone';
 import { Decorations } from './Office/Decorations';
 import { ConveyorBelt } from './Office/ConveyorBelt';
+import { TokenCubePile } from './Office/TokenCubePile';
 
 // Interaction zones
 import { BreakRoom } from './InteractionZones/BreakRoom';
@@ -46,11 +47,15 @@ import { RoboticDogPet } from './Pets';
 // Camera components
 import { CameraController } from './Camera/CameraController';
 
+// Scene components
+import { DoubleClickHandler } from './Scene/DoubleClickHandler';
+
 // UI components (overlay)
 import { InfoPanel } from './UI/InfoPanel';
 import { ProjectButtons } from './UI/ProjectButtons';
 import { LightingToggle } from './UI/LightingToggle';
 import { EntityActionPanel } from './UI/EntityActionPanel';
+import { VisibilityToggles } from './UI/VisibilityToggles';
 
 // ====== ERROR BOUNDARY ======
 
@@ -199,12 +204,16 @@ const SceneContent: React.FC = () => {
       {/* Environment */}
       <Floor />
       <Walls />
-      <OutdoorScenery />
+      <OutdoorScenery showObjects={showObjects} />
+
+      {/* Double-click handler for freestyle movement and camera control */}
+      <DoubleClickHandler />
 
       {/* Office content */}
       <OfficeZones />
       <Decorations />
       <ConveyorBelt />
+      <TokenCubePile />
 
       {/* Interaction zones */}
       <BreakRoom />
@@ -217,25 +226,30 @@ const SceneContent: React.FC = () => {
       <Agents />
 
       {/* Fake audience for stage */}
-      <FakeAudience />
+      {showNPCAgents && <FakeAudience />}
 
-      {/* Steve Jobs NPC - wanders around checking on agents */}
-      <SteveJobsNPC />
+      {/* Guest NPCs - celebrity characters */}
+      {showGuestAgents && (
+        <>
+          {/* Steve Jobs NPC - wanders around checking on agents */}
+          <SteveJobsNPC />
 
-      {/* Sundar Pichai NPC - walks around talking to agents */}
-      <SundarPichaiNPC />
+          {/* Sundar Pichai NPC - walks around talking to agents */}
+          <SundarPichaiNPC />
 
-      {/* Elon Musk NPC - outdoor near cybertruck */}
-      <ElonMuskNPC />
+          {/* Elon Musk NPC - outdoor near cybertruck */}
+          <ElonMuskNPC />
 
-      {/* Mark Zuckerberg NPC - near golf court */}
-      <MarkZuckerbergNPC />
+          {/* Mark Zuckerberg NPC - near golf court */}
+          <MarkZuckerbergNPC />
 
-      {/* Jensen Huang NPC - inside the building */}
-      <JensenHuangNPC />
+          {/* Jensen Huang NPC - inside the building */}
+          <JensenHuangNPC />
 
-      {/* Steve Huang NPC - builder/architect of AgentMux */}
-      <SteveHuangNPC />
+          {/* Steve Huang NPC - builder/architect of AgentMux */}
+          <SteveHuangNPC />
+        </>
+      )}
 
       {/* Pets - robotic dogs that wander around the factory */}
       {showPets && (
@@ -343,6 +357,7 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               <ProjectButtons />
               <LightingToggle />
               <EntityActionPanel />
+              <VisibilityToggles />
             </div>
           </div>
 
