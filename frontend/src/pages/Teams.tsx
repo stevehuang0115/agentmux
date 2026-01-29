@@ -46,35 +46,29 @@ export const Teams: React.FC = () => {
 
   const fetchTeams = async () => {
     try {
-      const response = await fetch('/api/teams');
-      if (response.ok) {
-        const result = await response.json();
-        // Handle API response structure that includes success/data fields
-        let teamsData = result.success ? (result.data || []) : (result || []);
-        // Ensure teamsData is an array
-        teamsData = Array.isArray(teamsData) ? teamsData : [];
+      // Use cached apiService.getTeams() to reduce redundant API calls
+      const teamsData = await apiService.getTeams();
 
-        // Avatar choices for migration
-        const avatarChoices = [
-          'https://picsum.photos/seed/1/64',
-          'https://picsum.photos/seed/2/64',
-          'https://picsum.photos/seed/3/64',
-          'https://picsum.photos/seed/4/64',
-          'https://picsum.photos/seed/5/64',
-          'https://picsum.photos/seed/6/64',
-        ];
+      // Avatar choices for migration
+      const avatarChoices = [
+        'https://picsum.photos/seed/1/64',
+        'https://picsum.photos/seed/2/64',
+        'https://picsum.photos/seed/3/64',
+        'https://picsum.photos/seed/4/64',
+        'https://picsum.photos/seed/5/64',
+        'https://picsum.photos/seed/6/64',
+      ];
 
-        // Migrate teams without avatars for backward compatibility
-        const migratedTeams = teamsData.map(team => ({
-          ...team,
-          members: team.members.map((member: any, index: number) => ({
-            ...member,
-            avatar: member.avatar || avatarChoices[index % avatarChoices.length]
-          }))
-        }));
+      // Migrate teams without avatars for backward compatibility
+      const migratedTeams = teamsData.map(team => ({
+        ...team,
+        members: team.members.map((member: any, index: number) => ({
+          ...member,
+          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+        }))
+      }));
 
-        setTeams(migratedTeams);
-      }
+      setTeams(migratedTeams);
     } catch (error) {
       console.error('Error fetching teams:', error);
       setTeams([]); // Set empty array on error

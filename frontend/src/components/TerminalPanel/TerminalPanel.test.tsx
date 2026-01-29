@@ -1,6 +1,5 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TerminalPanel } from './TerminalPanel';
 import { useTerminal } from '../../contexts/TerminalContext';
@@ -9,6 +8,52 @@ import { webSocketService } from '../../services/websocket.service';
 // Mock the context and service
 vi.mock('../../contexts/TerminalContext');
 vi.mock('../../services/websocket.service');
+
+// Mock react-router-dom
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', () => ({
+  useNavigate: () => mockNavigate,
+}));
+
+// Mock xterm.js
+const mockXtermInstance = {
+  write: vi.fn(),
+  clear: vi.fn(),
+  dispose: vi.fn(),
+  open: vi.fn(),
+  loadAddon: vi.fn(),
+  onData: vi.fn(),
+  scrollToBottom: vi.fn(),
+};
+
+vi.mock('xterm', () => ({
+  Terminal: vi.fn(() => mockXtermInstance),
+}));
+
+const mockFitAddonInstance = {
+  fit: vi.fn(),
+  proposeDimensions: vi.fn().mockReturnValue({ cols: 80, rows: 24 }),
+};
+
+vi.mock('xterm-addon-fit', () => ({
+  FitAddon: vi.fn(() => mockFitAddonInstance),
+}));
+
+vi.mock('xterm-addon-web-links', () => ({
+  WebLinksAddon: vi.fn(() => ({})),
+}));
+
+// Mock xterm CSS
+vi.mock('xterm/css/xterm.css', () => ({}));
+
+// Mock ResizeObserver
+const mockResizeObserverInstance = {
+  observe: vi.fn(),
+  unobserve: vi.fn(),
+  disconnect: vi.fn(),
+};
+const mockResizeObserver = vi.fn(() => mockResizeObserverInstance);
+global.ResizeObserver = mockResizeObserver as any;
 
 // Mock fetch globally
 global.fetch = vi.fn();
@@ -23,7 +68,19 @@ describe('TerminalPanel', () => {
   beforeEach(() => {
     // Reset mocks
     vi.clearAllMocks();
-    
+
+    // Reset xterm mock instance methods
+    mockXtermInstance.write.mockClear();
+    mockXtermInstance.clear.mockClear();
+    mockXtermInstance.dispose.mockClear();
+    mockXtermInstance.open.mockClear();
+    mockXtermInstance.loadAddon.mockClear();
+    mockXtermInstance.onData.mockClear();
+    mockXtermInstance.scrollToBottom.mockClear();
+
+    // Reset fit addon mock
+    mockFitAddonInstance.fit.mockClear();
+
     // Mock TerminalContext
     mockUseTerminal.mockReturnValue({
       isTerminalOpen: true,
@@ -43,6 +100,7 @@ describe('TerminalPanel', () => {
     mockWebSocketService.subscribeToSession = vi.fn();
     mockWebSocketService.unsubscribeFromSession = vi.fn();
     mockWebSocketService.sendInput = vi.fn();
+    mockWebSocketService.resizeTerminal = vi.fn();
     mockWebSocketService.getConnectionState = vi.fn().mockReturnValue('connected');
 
     // Mock fetch for terminal sessions
@@ -50,10 +108,9 @@ describe('TerminalPanel', () => {
       ok: true,
       json: () => Promise.resolve({
         success: true,
-        data: [
-          { sessionName: 'agentmux-orc' },
-          { sessionName: 'agentmux-dev' },
-        ]
+        data: {
+          sessions: ['agentmux-orc', 'agentmux-dev']
+        }
       })
     });
   });
@@ -63,43 +120,57 @@ describe('TerminalPanel', () => {
   });
 
   describe('Component Rendering', () => {
-    it('renders terminal panel when open', () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+    it('renders terminal panel when open', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       expect(screen.getByText('Terminal')).toBeInTheDocument();
-      expect(screen.getByText('Live')).toBeInTheDocument();
       expect(screen.getByRole('combobox')).toBeInTheDocument();
     });
 
-    it('applies correct CSS classes when open', () => {
-      const { container } = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      const panel = container.firstChild as HTMLElement;
-      
-      expect(panel).toHaveClass('terminal-side-panel', 'open');
+    it('applies translate-x-0 when open', async () => {
+      let container: HTMLElement;
+      await act(async () => {
+        const result = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+        container = result.container;
+      });
+      const panel = container!.firstChild as HTMLElement;
+
+      expect(panel).toHaveClass('translate-x-0');
     });
 
-    it('applies correct CSS classes when closed', () => {
-      const { container } = render(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
-      const panel = container.firstChild as HTMLElement;
-      
-      expect(panel).toHaveClass('terminal-side-panel', 'closed');
+    it('applies translate-x-full when closed', async () => {
+      let container: HTMLElement;
+      await act(async () => {
+        const result = render(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
+        container = result.container;
+      });
+      const panel = container!.firstChild as HTMLElement;
+
+      expect(panel).toHaveClass('translate-x-full');
     });
 
     it('shows connection status correctly', async () => {
+      // Mock the connect to not resolve immediately
+      mockWebSocketService.connect.mockImplementation(() => new Promise(() => {}));
       mockWebSocketService.getConnectionState.mockReturnValue('connecting');
-      
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
-      await waitFor(() => {
-        expect(screen.getByText('Connecting...')).toBeInTheDocument();
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
       });
+
+      // The status should show "Connecting..." initially
+      expect(screen.getByText('Connecting...')).toBeInTheDocument();
     });
 
     it('shows error banner when there is an error', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       // Simulate error state
-      act(() => {
+      await act(async () => {
         const errorHandler = mockWebSocketService.on.mock.calls.find(
           call => call[0] === 'error'
         )?.[1];
@@ -113,6 +184,50 @@ describe('TerminalPanel', () => {
         expect(screen.getByText('Retry')).toBeInTheDocument();
       });
     });
+
+    it('shows empty state when no sessions available', async () => {
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { sessions: [] }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('No Terminal Sessions Available')).toBeInTheDocument();
+        expect(screen.getByText('Go to Orchestrator')).toBeInTheDocument();
+      });
+    });
+
+    it('navigates to orchestrator when button clicked in empty state', async () => {
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: { sessions: [] }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Go to Orchestrator')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Go to Orchestrator'));
+      });
+
+      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockNavigate).toHaveBeenCalledWith('/teams/orchestrator');
+    });
   });
 
   describe('Keyboard Event Handling', () => {
@@ -124,8 +239,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends Enter key as carriage return', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'Enter' });
       });
@@ -134,8 +251,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends Escape key correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'Escape' });
       });
@@ -144,8 +263,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends Tab key correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'Tab' });
       });
@@ -154,8 +275,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends Ctrl+C correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'c', ctrlKey: true });
       });
@@ -164,8 +287,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends Ctrl+L correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'l', ctrlKey: true });
       });
@@ -174,8 +299,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends arrow keys correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'ArrowUp' });
       });
@@ -198,8 +325,10 @@ describe('TerminalPanel', () => {
     });
 
     it('sends printable characters correctly', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'a' });
       });
@@ -208,8 +337,10 @@ describe('TerminalPanel', () => {
     });
 
     it('does not handle keys when terminal is not open', async () => {
-      render(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'Enter' });
       });
@@ -218,10 +349,21 @@ describe('TerminalPanel', () => {
     });
 
     it('does not handle keys when not connected', async () => {
+      // Mock disconnected state
       mockWebSocketService.getConnectionState.mockReturnValue('disconnected');
-      
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      mockWebSocketService.isConnected.mockReturnValue(false);
+      // Make connect hang to keep the status as disconnected
+      mockWebSocketService.connect.mockImplementation(() => new Promise(() => {}));
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      // Wait a bit for the component to settle
+      await act(async () => {
+        await new Promise(r => setTimeout(r, 50));
+      });
+
       await act(async () => {
         fireEvent.keyDown(document, { key: 'Enter' });
       });
@@ -232,8 +374,10 @@ describe('TerminalPanel', () => {
 
   describe('WebSocket Integration', () => {
     it('initializes WebSocket connection when panel opens', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await waitFor(() => {
         expect(mockWebSocketService.connect).toHaveBeenCalled();
         expect(mockWebSocketService.on).toHaveBeenCalledWith('terminal_output', expect.any(Function));
@@ -243,18 +387,26 @@ describe('TerminalPanel', () => {
     });
 
     it('subscribes to selected session', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await waitFor(() => {
         expect(mockWebSocketService.subscribeToSession).toHaveBeenCalledWith('agentmux-orc');
       });
     });
 
     it('unsubscribes and disconnects when panel closes', async () => {
-      const { rerender } = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
-      rerender(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
-      
+      let rerender: (ui: React.ReactElement) => void;
+      await act(async () => {
+        const result = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+        rerender = result.rerender;
+      });
+
+      await act(async () => {
+        rerender!(<TerminalPanel isOpen={false} onClose={mockOnClose} />);
+      });
+
       await waitFor(() => {
         expect(mockWebSocketService.unsubscribeFromSession).toHaveBeenCalled();
         expect(mockWebSocketService.disconnect).toHaveBeenCalled();
@@ -262,45 +414,39 @@ describe('TerminalPanel', () => {
       });
     });
 
-    it('handles terminal output updates', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
-      const outputData = {
-        sessionName: 'agentmux-orc',
-        content: 'test output'
-      };
-
-      act(() => {
-        const outputHandler = mockWebSocketService.on.mock.calls.find(
-          call => call[0] === 'terminal_output'
-        )?.[1];
-        if (outputHandler) {
-          outputHandler(outputData);
-        }
+    it('registers terminal_output handler', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
       });
 
       await waitFor(() => {
-        expect(screen.getByText('test output')).toBeInTheDocument();
+        const outputHandler = mockWebSocketService.on.mock.calls.find(
+          call => call[0] === 'terminal_output'
+        )?.[1];
+        expect(outputHandler).toBeDefined();
       });
+
+      // Verify the handler is registered
+      expect(mockWebSocketService.on).toHaveBeenCalledWith('terminal_output', expect.any(Function));
     });
   });
 
   describe('Session Management', () => {
     it('loads available sessions on initialization', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/terminal/sessions');
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
       });
 
       await waitFor(() => {
-        expect(screen.getByDisplayValue('Orchestrator')).toBeInTheDocument();
+        expect(global.fetch).toHaveBeenCalledWith('/api/terminal/sessions');
       });
     });
 
     it('switches sessions when dropdown changes', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await waitFor(() => {
         const select = screen.getByRole('combobox');
         fireEvent.change(select, { target: { value: 'agentmux-dev' } });
@@ -311,20 +457,26 @@ describe('TerminalPanel', () => {
   });
 
   describe('Close Functionality', () => {
-    it('calls onClose when close button is clicked', () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+    it('calls onClose when close button is clicked', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       const closeButton = screen.getByLabelText('Close Terminal');
-      fireEvent.click(closeButton);
-      
+      await act(async () => {
+        fireEvent.click(closeButton);
+      });
+
       expect(mockOnClose).toHaveBeenCalled();
     });
 
-    it('calls onClose when retry button is clicked after error', async () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+    it('retries connection when retry button is clicked after error', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       // Simulate error state
-      act(() => {
+      await act(async () => {
         const errorHandler = mockWebSocketService.on.mock.calls.find(
           call => call[0] === 'error'
         )?.[1];
@@ -334,8 +486,11 @@ describe('TerminalPanel', () => {
       });
 
       await waitFor(() => {
-        const retryButton = screen.getByText('Retry');
-        fireEvent.click(retryButton);
+        expect(screen.getByText('Retry')).toBeInTheDocument();
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Retry'));
       });
 
       expect(mockWebSocketService.connect).toHaveBeenCalledTimes(2);
@@ -343,19 +498,14 @@ describe('TerminalPanel', () => {
   });
 
   describe('Focus Management', () => {
-    it('focuses terminal panel when opened', async () => {
-      const { container } = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      const panel = container.firstChild as HTMLElement;
-      
-      await waitFor(() => {
-        expect(panel).toHaveFocus();
+    it('panel has correct tabIndex and outline styles', async () => {
+      let container: HTMLElement;
+      await act(async () => {
+        const result = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+        container = result.container;
       });
-    });
+      const panel = container!.firstChild as HTMLElement;
 
-    it('panel has correct tabIndex and outline styles', () => {
-      const { container } = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      const panel = container.firstChild as HTMLElement;
-      
       expect(panel).toHaveAttribute('tabIndex', '0');
       expect(panel).toHaveStyle('outline: none');
     });
@@ -364,9 +514,11 @@ describe('TerminalPanel', () => {
   describe('Error Handling', () => {
     it('handles WebSocket connection errors gracefully', async () => {
       mockWebSocketService.connect.mockRejectedValue(new Error('Connection failed'));
-      
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       await waitFor(() => {
         expect(screen.getByText(/Failed to connect/)).toBeInTheDocument();
       });
@@ -374,38 +526,61 @@ describe('TerminalPanel', () => {
 
     it('handles session loading errors gracefully', async () => {
       (global.fetch as any).mockRejectedValue(new Error('Fetch failed'));
-      
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
       // Should still render without crashing
       expect(screen.getByText('Terminal')).toBeInTheDocument();
     });
   });
 
-  describe('Scrolling Behavior', () => {
-    it('tracks user scrolling state', () => {
-      render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
-      
-      const terminalOutput = screen.getByRole('textbox');
-      
-      // Mock scrolling event
-      Object.defineProperty(terminalOutput, 'scrollHeight', {
-        value: 1000,
-        writable: true
-      });
-      Object.defineProperty(terminalOutput, 'scrollTop', {
-        value: 500,
-        writable: true
-      });
-      Object.defineProperty(terminalOutput, 'clientHeight', {
-        value: 400,
-        writable: true
+  describe('xterm.js Integration', () => {
+    it('initializes xterm when panel opens with sessions', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
       });
 
-      fireEvent.scroll(terminalOutput);
-      
-      // Should track that user is scrolling (not at bottom)
-      // This is tested by the internal state behavior
+      // Wait for sessions to load
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/terminal/sessions');
+      });
+
+      // xterm should be initialized after sessions are loaded
+      await waitFor(() => {
+        expect(mockXtermInstance.open).toHaveBeenCalled();
+        expect(mockXtermInstance.loadAddon).toHaveBeenCalled();
+        expect(mockFitAddonInstance.fit).toHaveBeenCalled();
+      });
+    });
+
+    it('sets up resize observer for terminal container', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        expect(mockResizeObserver).toHaveBeenCalled();
+      });
+    });
+
+    it('disposes xterm on cleanup', async () => {
+      let unmount: () => void;
+      await act(async () => {
+        const result = render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+        unmount = result.unmount;
+      });
+
+      await waitFor(() => {
+        expect(mockXtermInstance.open).toHaveBeenCalled();
+      });
+
+      await act(async () => {
+        unmount!();
+      });
+
+      expect(mockXtermInstance.dispose).toHaveBeenCalled();
     });
   });
 });

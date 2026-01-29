@@ -85,11 +85,11 @@ export const CameraController: React.FC = () => {
   const tempForward = useRef(new THREE.Vector3());
   const tempRight = useRef(new THREE.Vector3());
 
-  // Update camera direction from yaw/pitch
+  // Update camera direction from yaw/pitch (uses pre-allocated vectors)
   const updateCameraDirection = useCallback(() => {
-    const direction = calculateViewDirection(yawRef.current, pitchRef.current);
-    const target = threeCamera.position.clone().add(direction);
-    threeCamera.lookAt(target);
+    calculateViewDirection(yawRef.current, pitchRef.current, tempDirection.current);
+    tempLookAt.current.copy(threeCamera.position).add(tempDirection.current);
+    threeCamera.lookAt(tempLookAt.current);
   }, [threeCamera]);
 
   // Keyboard event handlers
@@ -202,9 +202,10 @@ export const CameraController: React.FC = () => {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
 
-      const forward = calculateViewDirection(yawRef.current, pitchRef.current);
+      // Use pre-allocated tempForward to avoid GC in scroll handler
+      calculateViewDirection(yawRef.current, pitchRef.current, tempForward.current);
       const zoomAmount = e.deltaY < 0 ? CAMERA.ZOOM_SPEED : -CAMERA.ZOOM_SPEED;
-      threeCamera.position.addScaledVector(forward, zoomAmount);
+      threeCamera.position.addScaledVector(tempForward.current, zoomAmount);
     };
 
     canvas.addEventListener('mousedown', handleMouseDown);
@@ -276,8 +277,9 @@ export const CameraController: React.FC = () => {
         const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
         const delta = currentDistance - touchState.initialPinchDistance;
 
-        const forward = calculateViewDirection(yawRef.current, pitchRef.current);
-        threeCamera.position.addScaledVector(forward, delta * 0.02);
+        // Use pre-allocated tempForward to avoid GC in pinch handler
+        calculateViewDirection(yawRef.current, pitchRef.current, tempForward.current);
+        threeCamera.position.addScaledVector(tempForward.current, delta * 0.02);
         touchState.initialPinchDistance = currentDistance;
       }
     };

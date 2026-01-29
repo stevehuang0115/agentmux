@@ -13,6 +13,7 @@ import {
 } from '../UI';
 import { TasksViewProps, TaskColumnProps, TaskFormData, MilestoneFormData } from './types';
 import { inProgressTasksService } from '../../services/in-progress-tasks.service';
+import { apiService } from '../../services/api.service';
 import { logSilentError } from '../../utils/error-handling';
 
 export const TasksView: React.FC<TasksViewProps> = ({
@@ -118,10 +119,8 @@ export const TasksView: React.FC<TasksViewProps> = ({
   useEffect(() => {
     const loadAvatars = async () => {
       try {
-        const resp = await fetch('/api/teams');
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const teams = data.success ? (data.data || []) : (data || []);
+        // Use cached apiService.getTeams() to reduce redundant API calls
+        const teams = await apiService.getTeams();
         const map: Record<string, string> = {};
         teams.forEach((team: any) => {
           (team.members || []).forEach((m: any) => {

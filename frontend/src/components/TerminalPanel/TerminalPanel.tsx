@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Terminal, X, Monitor, Users, AlertCircle } from 'lucide-react';
+import { Terminal as TerminalIcon, X, AlertCircle, Play } from 'lucide-react';
+import { Terminal } from 'xterm';
+import { FitAddon } from 'xterm-addon-fit';
+import { WebLinksAddon } from 'xterm-addon-web-links';
+import 'xterm/css/xterm.css';
+import { useNavigate } from 'react-router-dom';
 import { useTerminal } from '../../contexts/TerminalContext';
 import { webSocketService } from '../../services/websocket.service';
 import { Button, IconButton } from '../UI';
@@ -19,8 +24,8 @@ interface TerminalPanelProps {
 }
 
 export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose }) => {
+  const navigate = useNavigate();
   const { selectedSession, setSelectedSession } = useTerminal();
-  const [terminalOutput, setTerminalOutput] = useState<string>('');
   const [availableSessions, setAvailableSessions] = useState<TerminalSession[]>([
     {
       id: 'agentmux-orc',
@@ -29,12 +34,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       type: 'orchestrator'
     }
   ]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error'>('disconnected');
   const [error, setError] = useState<string | null>(null);
-  const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const terminalOutputRef = useRef<HTMLPreElement>(null);
+  const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalPanelRef = useRef<HTMLDivElement>(null);
+  const xtermRef = useRef<Terminal | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const [xtermInitialized, setXtermInitialized] = useState(false);
   const currentSubscription = useRef<string | null>(null);
   const sessionSwitchTimeout = useRef<NodeJS.Timeout | null>(null);
   const sessionPendingRetryRef = useRef<NodeJS.Timeout | null>(null);
@@ -67,6 +75,102 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     }
   }, []);
 
+  // Initialize xterm.js terminal
+  useEffect(() => {
+    // Only initialize when panel is open and container is ready
+    if (!isOpen || xtermInitialized) return;
+
+    // Wait for container to be available
+    const container = terminalContainerRef.current;
+    if (!container) return;
+
+    const term = new Terminal({
+      cursorBlink: true,
+      cursorStyle: 'block',
+      fontSize: 14,
+      fontFamily: '"Fira Code", Menlo, Monaco, "Courier New", monospace',
+      theme: {
+        background: '#111721',
+        foreground: '#f6f7f8',
+        cursor: '#2a73ea',
+        black: '#111721',
+        red: '#ef4444',
+        green: '#10b981',
+        yellow: '#f59e0b',
+        blue: '#2a73ea',
+        magenta: '#8b5cf6',
+        cyan: '#06b6d4',
+        white: '#f6f7f8',
+        brightBlack: '#313a48',
+        brightRed: '#f87171',
+        brightGreen: '#34d399',
+        brightYellow: '#fbbf24',
+        brightBlue: '#60a5fa',
+        brightMagenta: '#a78bfa',
+        brightCyan: '#22d3ee',
+        brightWhite: '#ffffff',
+      },
+      scrollback: 10000,
+      convertEol: true,
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.loadAddon(new WebLinksAddon());
+
+    term.open(container);
+    fitAddon.fit();
+
+    xtermRef.current = term;
+    fitAddonRef.current = fitAddon;
+
+    // Handle user input - use ref to always get current session
+    term.onData((data) => {
+      if (webSocketService.isConnected() && selectedSessionRef.current) {
+        webSocketService.sendInput(selectedSessionRef.current, data);
+      }
+    });
+
+    // Handle resize
+    const handleResize = () => {
+      if (fitAddonRef.current && xtermRef.current) {
+        fitAddonRef.current.fit();
+        const dimensions = fitAddonRef.current.proposeDimensions();
+        if (dimensions && selectedSessionRef.current) {
+          webSocketService.resizeTerminal(selectedSessionRef.current, dimensions.cols, dimensions.rows);
+        }
+      }
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
+
+    setXtermInitialized(true);
+
+    return () => {
+      resizeObserver.disconnect();
+      term.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
+      setXtermInitialized(false);
+    };
+  }, [isOpen, sessionsLoaded, availableSessions.length]);
+
+  // Write terminal output to xterm
+  const writeToXterm = useCallback((data: string) => {
+    if (xtermRef.current) {
+      xtermRef.current.write(data);
+    }
+  }, []);
+
+  // Clear xterm and write new content
+  const replaceXtermContent = useCallback((data: string) => {
+    if (xtermRef.current) {
+      xtermRef.current.clear();
+      xtermRef.current.write(data);
+    }
+  }, []);
+
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
     // WebSocket message structure: data is the payload containing TerminalOutput
@@ -75,7 +179,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     const dataContent = data?.content || data?.payload?.content;
 
     if (data && dataSessionName === selectedSessionRef.current) {
-      setTerminalOutput(dataContent || '');
+      // Write to xterm.js for proper escape sequence handling
+      replaceXtermContent(dataContent || '');
 
       // Clear loading state when we receive terminal output
       setLoading(false);
@@ -83,16 +188,12 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       // Clear session switch timeout since we got content
       clearSessionTimeouts();
 
-      // Auto-scroll to bottom if user hasn't manually scrolled up
-      if (!isUserScrolling) {
-        setTimeout(() => {
-          if (terminalOutputRef.current) {
-            terminalOutputRef.current.scrollTop = terminalOutputRef.current.scrollHeight;
-          }
-        }, 10);
+      // Auto-scroll to bottom
+      if (xtermRef.current) {
+        xtermRef.current.scrollToBottom();
       }
     }
-  }, [isUserScrolling, clearSessionTimeouts]);
+  }, [clearSessionTimeouts, replaceXtermContent]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     console.log('handleInitialTerminalState received data:', data);
@@ -104,7 +205,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     if (data && dataSessionName === selectedSessionRef.current) {
       console.log('Session name matches, setting terminal output:', dataContent?.substring(0, 100));
-      setTerminalOutput(dataContent || '');
+      // Write to xterm.js for proper escape sequence handling
+      replaceXtermContent(dataContent || '');
       setLoading(false);
 
       // Clear session timeouts since we got the response
@@ -112,7 +214,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     } else {
       console.log('Session name mismatch or no data. Data sessionName:', dataSessionName, 'Expected:', selectedSessionRef.current);
     }
-  }, [clearSessionTimeouts]);
+  }, [clearSessionTimeouts, replaceXtermContent]);
 
   const handleConnectionError = useCallback((data: any) => {
     setError(data.error || 'WebSocket connection error');
@@ -136,7 +238,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     }
 
     console.log('Session pending, will retry subscription:', dataSessionName);
-    setTerminalOutput('# Session is being created, please wait...\n# This may take a few moments while the agent starts up.\n');
+    replaceXtermContent('# Session is being created, please wait...\r\n# This may take a few moments while the agent starts up.\r\n');
     setLoading(true);
 
     // Clear existing timeouts before starting new retry logic
@@ -155,7 +257,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       // Check if we've exceeded max retries
       if (retryAttempt >= maxRetries) {
         setLoading(false);
-        setTerminalOutput(`# Session "${selectedSessionRef.current}" is taking longer than expected to start.\n# The orchestrator may still be initializing.\n# Try refreshing the page or check the backend logs.\n`);
+        replaceXtermContent(`# Session "${selectedSessionRef.current}" is taking longer than expected to start.\r\n# The orchestrator may still be initializing.\r\n# Try refreshing the page or check the backend logs.\r\n`);
         return;
       }
 
@@ -326,7 +428,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     // Disconnect WebSocket
     webSocketService.disconnect();
     setConnectionStatus('disconnected');
-    setTerminalOutput('');
+    if (xtermRef.current) {
+      xtermRef.current.clear();
+    }
     setError(null);
     setLoading(false);
   };
@@ -378,7 +482,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     // Subscribe to new session
     setLoading(true);
     setError(null);
-    setTerminalOutput('# Connecting to terminal session...\n# Fetching live terminal output...\n');
+    replaceXtermContent('# Connecting to terminal session...\r\n# Fetching live terminal output...\r\n');
 
     console.log(`Subscribing to session: ${sessionName}, WebSocket connected: ${webSocketService.isConnected()}`);
     webSocketService.subscribeToSession(sessionName);
@@ -390,7 +494,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       if (sessionName === selectedSessionRef.current) {
         console.warn(`Session switch timeout for ${sessionName}, clearing loading state`);
         setLoading(false);
-        setTerminalOutput(`# Connection timeout for session: ${sessionName}\n# No response from server after 10 seconds.\n# Try refreshing the page or selecting a different session.\n`);
+        replaceXtermContent(`# Connection timeout for session: ${sessionName}\r\n# No response from server after 10 seconds.\r\n# Try refreshing the page or selecting a different session.\r\n`);
       }
       sessionSwitchTimeout.current = null;
     }, 10000);
@@ -405,6 +509,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       const sessionsResponse = await fetch('/api/terminal/sessions');
       if (!sessionsResponse.ok) {
         console.error('Failed to fetch terminal sessions:', sessionsResponse.status);
+        setSessionsLoaded(true);
         return;
       }
 
@@ -431,9 +536,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
         console.log('Available sessions:', sessions);
         setAvailableSessions(sessions);
+      } else {
+        setAvailableSessions([]);
       }
+      setSessionsLoaded(true);
     } catch (error) {
       console.error('Error loading available sessions:', error);
+      setSessionsLoaded(true);
     }
   };
 
@@ -448,12 +557,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     } else {
       setError('Not connected to terminal service');
     }
-  };
-
-  const handleScroll = (e: React.UIEvent<HTMLPreElement>) => {
-    const element = e.currentTarget;
-    const isAtBottom = element.scrollHeight - element.scrollTop === element.clientHeight;
-    setIsUserScrolling(!isAtBottom);
   };
 
   const retryConnection = () => {
@@ -575,7 +678,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     >
       <div className="flex items-center justify-between p-4 border-b border-border-dark">
         <div className="flex items-center space-x-3">
-          <Terminal className="w-5 h-5 text-text-secondary-dark" />
+          <TerminalIcon className="w-5 h-5 text-text-secondary-dark" />
           <span className="font-medium text-text-primary-dark">Terminal</span>
           <div className="flex items-center space-x-2">
             <div className={`w-2 h-2 rounded-full ${
@@ -634,17 +737,38 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         )}
 
         <div className="flex-1 overflow-hidden">
-          <pre
-            ref={terminalOutputRef}
-            className="h-full w-full p-4 bg-background-dark font-mono text-sm text-text-primary-dark overflow-y-scroll overflow-x-auto whitespace-pre-wrap break-words"
-            onScroll={handleScroll}
-            style={{ maxHeight: '100%', minHeight: '100%' }}
-          >
-            {connectionStatus === 'connected' ? terminalOutput :
-             connectionStatus === 'connecting' ? '# Connecting to terminal session...\n# Please wait...' :
-             connectionStatus === 'error' ? '# Connection Error\n# Please check your connection and try again.' :
-             '# Terminal Disconnected\n# Open terminal panel to connect'}
-          </pre>
+          {/* Show empty state when no sessions available */}
+          {sessionsLoaded && availableSessions.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+              <div className="w-16 h-16 rounded-full bg-surface-dark border border-border-dark flex items-center justify-center mb-4">
+                <TerminalIcon className="w-8 h-8 text-text-secondary-dark" />
+              </div>
+              <h3 className="text-lg font-medium text-text-primary-dark mb-2">
+                No Terminal Sessions Available
+              </h3>
+              <p className="text-sm text-text-secondary-dark mb-6 max-w-sm">
+                The orchestrator is not running. Start the orchestrator to enable terminal sessions for your agents.
+              </p>
+              <Button
+                onClick={() => {
+                  onClose();
+                  navigate('/teams/orchestrator');
+                }}
+                variant="primary"
+                size="default"
+                className="flex items-center space-x-2"
+              >
+                <Play className="w-4 h-4" />
+                <span>Go to Orchestrator</span>
+              </Button>
+            </div>
+          ) : (
+            <div
+              ref={terminalContainerRef}
+              className="h-full w-full bg-background-dark"
+              style={{ minHeight: '100%' }}
+            />
+          )}
         </div>
 
         {loading && connectionStatus === 'connected' && (

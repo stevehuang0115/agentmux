@@ -3,7 +3,21 @@ import { Project, Team, Ticket, ApiResponse } from '../types';
 
 const API_BASE = '/api';
 
+/** Cache TTL in milliseconds (2 minutes) */
+const TEAMS_CACHE_TTL = 2 * 60 * 1000;
+
+/**
+ * Simple cache entry with TTL tracking
+ */
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
 class ApiService {
+  // Teams cache for reducing redundant API calls
+  private teamsCache: CacheEntry<Team[]> | null = null;
+  private teamsCachePromise: Promise<Team[]> | null = null;
   // Project methods
   async getProjects(): Promise<Project[]> {
     const response = await axios.get<ApiResponse<Project[]>>(`${API_BASE}/projects`);
@@ -69,9 +83,55 @@ class ApiService {
   }
 
   // Team methods
-  async getTeams(): Promise<Team[]> {
-    const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
-    return response.data.data || [];
+  /**
+   * Get all teams with caching and request deduplication.
+   * Caches results for 2 minutes to reduce redundant API calls.
+   * Deduplicates concurrent requests to prevent multiple in-flight fetches.
+   *
+   * @param forceRefresh - If true, bypasses cache and fetches fresh data
+   * @returns Promise resolving to array of teams
+   */
+  async getTeams(forceRefresh = false): Promise<Team[]> {
+    // Check if cache is valid
+    if (!forceRefresh && this.teamsCache) {
+      const age = Date.now() - this.teamsCache.timestamp;
+      if (age < TEAMS_CACHE_TTL) {
+        return this.teamsCache.data;
+      }
+    }
+
+    // If a request is already in flight, return the same promise (deduplication)
+    if (this.teamsCachePromise) {
+      return this.teamsCachePromise;
+    }
+
+    // Create new fetch promise
+    this.teamsCachePromise = (async () => {
+      try {
+        const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
+        const teams = response.data.data || [];
+
+        // Update cache
+        this.teamsCache = {
+          data: teams,
+          timestamp: Date.now(),
+        };
+
+        return teams;
+      } finally {
+        // Clear in-flight promise
+        this.teamsCachePromise = null;
+      }
+    })();
+
+    return this.teamsCachePromise;
+  }
+
+  /**
+   * Invalidate the teams cache. Call this after creating, updating, or deleting teams.
+   */
+  invalidateTeamsCache(): void {
+    this.teamsCache = null;
   }
 
   async getTeam(id: string): Promise<Team> {
@@ -87,6 +147,7 @@ class ApiService {
     if (!response.data.success || !response.data.data) {
       throw new Error(response.data.error || 'Failed to create team');
     }
+    this.invalidateTeamsCache();
     return response.data.data;
   }
 
@@ -95,6 +156,7 @@ class ApiService {
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to delete team');
     }
+    this.invalidateTeamsCache();
   }
 
   async unassignTeamFromProject(projectId: string, teamId: string): Promise<void> {

@@ -3,9 +3,15 @@
  *
  * The more tokens a project uses, the more cubes are piled up in that project's
  * section of the factory floor (between the conveyor belt and the back wall).
+ *
+ * Performance optimizations:
+ * - Shared BoxGeometry for all cubes (single GPU upload)
+ * - Materials cached by color (reused across cubes)
+ * - Proper disposal on unmount
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
+import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
 
 /** Cube size range */
@@ -33,6 +39,9 @@ interface CubeData {
   color: number;
 }
 
+/** Standard cube size for consistent stacking */
+const CUBE_SIZE = 0.4;
+
 /**
  * TokenCubePile - Displays piled cubes representing token usage per project.
  *
@@ -45,7 +54,38 @@ interface CubeData {
  * @returns JSX element with cube pile meshes
  */
 export const TokenCubePile: React.FC = () => {
-  const { stats, zones } = useFactory();
+  const { stats } = useFactory();
+
+  // Shared geometry for all cubes - created once, reused
+  const geometry = useMemo(() => {
+    return new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
+  }, []);
+
+  // Material cache by color - avoids creating duplicate materials
+  const materialCache = useRef<Map<number, THREE.MeshStandardMaterial>>(new Map());
+
+  // Get or create material for a given color
+  const getMaterial = (color: number): THREE.MeshStandardMaterial => {
+    let material = materialCache.current.get(color);
+    if (!material) {
+      material = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.6,
+        metalness: 0.1,
+      });
+      materialCache.current.set(color, material);
+    }
+    return material;
+  };
+
+  // Cleanup geometry and materials on unmount
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      materialCache.current.forEach((mat) => mat.dispose());
+      materialCache.current.clear();
+    };
+  }, [geometry]);
 
   const cubes = useMemo<CubeData[]>(() => {
     const result: CubeData[] = [];
@@ -57,9 +97,8 @@ export const TokenCubePile: React.FC = () => {
     const totalWidth = PILE_X_END - PILE_X_START;
     const projectWidth = totalWidth / Math.max(tokensByProject.length, 1);
 
-    // Fixed cube size for neat stacking
-    const cubeSize = 0.4;
-    const spacing = cubeSize * 1.1; // Small gap between cubes
+    // Use constant cube size for neat stacking
+    const spacing = CUBE_SIZE * 1.1; // Small gap between cubes
 
     tokensByProject.forEach((project, projectIndex) => {
       const { tokens, color } = project;
@@ -106,11 +145,11 @@ export const TokenCubePile: React.FC = () => {
 
           const x = projectXCenter - gridWidth / 2 + col * spacing;
           const z = pileZCenter - gridDepth / 2 + row * spacing;
-          const y = cubeSize / 2 + layer * spacing;
+          const y = CUBE_SIZE / 2 + layer * spacing;
 
           result.push({
             position: [x, y, z],
-            size: cubeSize,
+            size: CUBE_SIZE,
             color,
           });
 
@@ -135,16 +174,11 @@ export const TokenCubePile: React.FC = () => {
         <mesh
           key={i}
           position={cube.position}
+          geometry={geometry}
+          material={getMaterial(cube.color)}
           castShadow
           receiveShadow
-        >
-          <boxGeometry args={[cube.size, cube.size, cube.size]} />
-          <meshStandardMaterial
-            color={cube.color}
-            roughness={0.6}
-            metalness={0.1}
-          />
-        </mesh>
+        />
       ))}
     </group>
   );

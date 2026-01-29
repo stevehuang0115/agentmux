@@ -163,14 +163,18 @@ export function calculateWorkstationPositions(
  *
  * @param yaw - Horizontal rotation angle in radians
  * @param pitch - Vertical rotation angle in radians
+ * @param out - Optional output vector to reuse (avoids allocation)
  * @returns THREE.Vector3 representing the view direction
  */
-export function calculateViewDirection(yaw: number, pitch: number): THREE.Vector3 {
-  return new THREE.Vector3(
-    Math.sin(yaw) * Math.cos(pitch),
-    Math.sin(pitch),
-    Math.cos(yaw) * Math.cos(pitch)
-  );
+export function calculateViewDirection(
+  yaw: number,
+  pitch: number,
+  out?: THREE.Vector3
+): THREE.Vector3 {
+  const x = Math.sin(yaw) * Math.cos(pitch);
+  const y = Math.sin(pitch);
+  const z = Math.cos(yaw) * Math.cos(pitch);
+  return out ? out.set(x, y, z) : new THREE.Vector3(x, y, z);
 }
 
 /**
@@ -178,14 +182,13 @@ export function calculateViewDirection(yaw: number, pitch: number): THREE.Vector
  * Used for WASD ground movement (ignores pitch).
  *
  * @param yaw - Horizontal rotation angle in radians
+ * @param out - Optional output vector to reuse (avoids allocation)
  * @returns THREE.Vector3 representing the forward direction on the ground plane
  */
-export function calculateMoveDirection(yaw: number): THREE.Vector3 {
-  return new THREE.Vector3(
-    Math.sin(yaw),
-    0,
-    Math.cos(yaw)
-  );
+export function calculateMoveDirection(yaw: number, out?: THREE.Vector3): THREE.Vector3 {
+  const x = Math.sin(yaw);
+  const z = Math.cos(yaw);
+  return out ? out.set(x, 0, z) : new THREE.Vector3(x, 0, z);
 }
 
 /**
@@ -193,12 +196,11 @@ export function calculateMoveDirection(yaw: number): THREE.Vector3 {
  * Used for strafing movement (A/D keys).
  *
  * @param yaw - Horizontal rotation angle in radians
+ * @param out - Optional output vector to reuse (avoids allocation)
  * @returns THREE.Vector3 representing the right direction on the ground plane
  */
-export function calculateRightDirection(yaw: number): THREE.Vector3 {
-  return new THREE.Vector3(
-    Math.sin(yaw + Math.PI / 2),
-    0,
-    Math.cos(yaw + Math.PI / 2)
-  );
+export function calculateRightDirection(yaw: number, out?: THREE.Vector3): THREE.Vector3 {
+  const x = Math.sin(yaw + Math.PI / 2);
+  const z = Math.cos(yaw + Math.PI / 2);
+  return out ? out.set(x, 0, z) : new THREE.Vector3(x, 0, z);
 }
