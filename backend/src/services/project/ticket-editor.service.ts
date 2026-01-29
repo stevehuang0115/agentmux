@@ -3,6 +3,14 @@ import * as path from 'path';
 import { existsSync } from 'fs';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
 import { Ticket, TicketFilter } from '../../types/index.js';
+import {
+  ContinuationTrackingData,
+  IterationRecord,
+  QualityGates,
+  QualityGateStatus,
+  REQUIRED_QUALITY_GATES,
+} from '../../types/task-tracking.types.js';
+import { CONTINUATION_CONSTANTS } from '../../constants.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface Subtask {
@@ -19,6 +27,10 @@ export interface ExtendedTicket extends Omit<Ticket, 'projectId'> {
   dueDate?: string;
   estimatedHours?: number;
   actualHours?: number;
+  /** Continuation tracking data */
+  continuation?: ContinuationTrackingData;
+  /** Quality gate statuses */
+  qualityGates?: QualityGates;
 }
 
 export interface TicketTemplate {
@@ -267,12 +279,250 @@ export class TicketEditorService {
 
   async getAllTemplates(): Promise<string[]> {
     const templatesDir = path.join(this.ticketsDir, 'templates');
-    
+
     if (!existsSync(templatesDir)) {
       return [];
     }
 
     const files = await fs.readdir(templatesDir);
     return files.filter(file => file.endsWith('.yaml')).map(file => file.replace('.yaml', ''));
+  }
+
+  // ============================================
+  // Iteration Tracking
+  // ============================================
+
+  /**
+   * Increment the iteration count for a ticket
+   *
+   * @param ticketId - Ticket identifier
+   * @param record - Iteration record (timestamp will be added)
+   * @returns New iteration count
+   */
+  async incrementIteration(
+    ticketId: string,
+    record: Omit<IterationRecord, 'timestamp'>
+  ): Promise<number> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    // Initialize continuation tracking if needed
+    if (!ticket.continuation) {
+      ticket.continuation = {
+        iterations: 0,
+        maxIterations: CONTINUATION_CONSTANTS.ITERATIONS.DEFAULT_MAX,
+        iterationHistory: [],
+      };
+    }
+
+    // Increment and record
+    ticket.continuation.iterations++;
+    ticket.continuation.lastIteration = new Date().toISOString();
+    ticket.continuation.iterationHistory.push({
+      ...record,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Trim history if too long (keep last 20)
+    if (ticket.continuation.iterationHistory.length > 20) {
+      ticket.continuation.iterationHistory = ticket.continuation.iterationHistory.slice(-20);
+    }
+
+    await this.updateTicket(ticketId, ticket as unknown as Partial<TicketTemplate>);
+    return ticket.continuation.iterations;
+  }
+
+  /**
+   * Set the maximum iterations for a ticket
+   *
+   * @param ticketId - Ticket identifier
+   * @param max - Maximum iterations allowed
+   */
+  async setMaxIterations(ticketId: string, max: number): Promise<void> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    // Clamp to absolute max
+    const clampedMax = Math.min(max, CONTINUATION_CONSTANTS.ITERATIONS.ABSOLUTE_MAX);
+
+    if (!ticket.continuation) {
+      ticket.continuation = {
+        iterations: 0,
+        maxIterations: clampedMax,
+        iterationHistory: [],
+      };
+    } else {
+      ticket.continuation.maxIterations = clampedMax;
+    }
+
+    await this.updateTicket(ticketId, ticket as unknown as Partial<TicketTemplate>);
+  }
+
+  /**
+   * Get the iteration count for a ticket
+   *
+   * @param ticketId - Ticket identifier
+   * @returns Current and max iteration counts
+   */
+  async getIterationCount(ticketId: string): Promise<{ current: number; max: number }> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    return {
+      current: ticket.continuation?.iterations || 0,
+      max: ticket.continuation?.maxIterations || CONTINUATION_CONSTANTS.ITERATIONS.DEFAULT_MAX,
+    };
+  }
+
+  /**
+   * Get the iteration history for a ticket
+   *
+   * @param ticketId - Ticket identifier
+   * @returns Iteration history
+   */
+  async getIterationHistory(ticketId: string): Promise<IterationRecord[]> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    return ticket.continuation?.iterationHistory || [];
+  }
+
+  /**
+   * Reset iterations for a ticket (e.g., when re-assigning)
+   *
+   * @param ticketId - Ticket identifier
+   */
+  async resetIterations(ticketId: string): Promise<void> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    if (ticket.continuation) {
+      ticket.continuation.iterations = 0;
+      ticket.continuation.iterationHistory = [];
+      ticket.continuation.lastIteration = undefined;
+    }
+
+    // Also reset quality gates
+    if (ticket.qualityGates) {
+      for (const gate of Object.keys(ticket.qualityGates)) {
+        ticket.qualityGates[gate] = { passed: false };
+      }
+    }
+
+    await this.updateTicket(ticketId, ticket as unknown as Partial<TicketTemplate>);
+  }
+
+  // ============================================
+  // Quality Gates
+  // ============================================
+
+  /**
+   * Update the status of a quality gate
+   *
+   * @param ticketId - Ticket identifier
+   * @param gateName - Gate name (typecheck, tests, lint, build, or custom)
+   * @param status - Gate status
+   */
+  async updateQualityGate(
+    ticketId: string,
+    gateName: string,
+    status: Omit<QualityGateStatus, 'lastRun'>
+  ): Promise<void> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    if (!ticket.qualityGates) {
+      ticket.qualityGates = {};
+    }
+
+    // Truncate output if too long (max 1000 chars)
+    const output = status.output ? status.output.slice(0, 1000) : undefined;
+
+    ticket.qualityGates[gateName] = {
+      passed: status.passed,
+      output,
+      lastRun: new Date().toISOString(),
+    };
+
+    await this.updateTicket(ticketId, ticket as unknown as Partial<TicketTemplate>);
+  }
+
+  /**
+   * Get all quality gates for a ticket
+   *
+   * @param ticketId - Ticket identifier
+   * @returns Quality gates
+   */
+  async getQualityGates(ticketId: string): Promise<QualityGates> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    return ticket.qualityGates || {};
+  }
+
+  /**
+   * Check if all required quality gates are passing
+   *
+   * @param ticketId - Ticket identifier
+   * @returns True if all required gates pass
+   */
+  async areAllGatesPassing(ticketId: string): Promise<boolean> {
+    const gates = await this.getQualityGates(ticketId);
+
+    return REQUIRED_QUALITY_GATES.every((gate) => gates[gate]?.passed === true);
+  }
+
+  /**
+   * Get failed quality gates
+   *
+   * @param ticketId - Ticket identifier
+   * @returns Array of failed gate names and statuses
+   */
+  async getFailedGates(ticketId: string): Promise<Array<{ name: string; status: QualityGateStatus }>> {
+    const gates = await this.getQualityGates(ticketId);
+    const failed: Array<{ name: string; status: QualityGateStatus }> = [];
+
+    for (const gate of REQUIRED_QUALITY_GATES) {
+      if (gates[gate] && !gates[gate]!.passed) {
+        failed.push({ name: gate, status: gates[gate]! });
+      }
+    }
+
+    return failed;
+  }
+
+  /**
+   * Initialize quality gates with default values
+   *
+   * @param ticketId - Ticket identifier
+   */
+  async initializeQualityGates(ticketId: string): Promise<void> {
+    const ticket = await this.getTicket(ticketId);
+    if (!ticket) {
+      throw new Error(`Ticket ${ticketId} not found`);
+    }
+
+    ticket.qualityGates = {
+      typecheck: { passed: false },
+      tests: { passed: false },
+      lint: { passed: false },
+      build: { passed: false },
+    };
+
+    await this.updateTicket(ticketId, ticket as unknown as Partial<TicketTemplate>);
   }
 }

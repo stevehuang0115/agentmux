@@ -33,3 +33,74 @@ export interface TaskFileInfo {
   milestoneFolder: string;
   statusFolder: 'open' | 'in_progress' | 'done' | 'blocked';
 }
+
+// ============================================
+// Iteration Tracking
+// ============================================
+
+/**
+ * Record of a single continuation iteration
+ */
+export interface IterationRecord {
+  /** ISO timestamp of the iteration */
+  timestamp: string;
+  /** What triggered this iteration */
+  trigger: 'pty_exit' | 'activity_idle' | 'heartbeat_stale' | 'explicit_request';
+  /** Action taken in response */
+  action: 'inject_prompt' | 'assign_next_task' | 'notify_owner' | 'retry_with_hints' | 'pause_agent' | 'no_action';
+  /** Conclusion of the analysis */
+  conclusion: 'TASK_COMPLETE' | 'WAITING_INPUT' | 'STUCK_OR_ERROR' | 'INCOMPLETE' | 'MAX_ITERATIONS' | 'UNKNOWN';
+  /** Optional notes about this iteration */
+  notes?: string;
+}
+
+/**
+ * Continuation tracking data stored with a ticket
+ */
+export interface ContinuationTrackingData {
+  /** Current iteration count */
+  iterations: number;
+  /** Maximum allowed iterations */
+  maxIterations: number;
+  /** ISO timestamp of last iteration */
+  lastIteration?: string;
+  /** History of iterations (max 20) */
+  iterationHistory: IterationRecord[];
+}
+
+// ============================================
+// Quality Gates
+// ============================================
+
+/**
+ * Status of a single quality gate
+ */
+export interface QualityGateStatus {
+  /** Whether the gate passed */
+  passed: boolean;
+  /** ISO timestamp of last run */
+  lastRun?: string;
+  /** Output from the gate (truncated if too long) */
+  output?: string;
+}
+
+/**
+ * Collection of quality gates for a ticket
+ */
+export interface QualityGates {
+  /** TypeScript type checking */
+  typecheck?: QualityGateStatus;
+  /** Test suite */
+  tests?: QualityGateStatus;
+  /** Lint check */
+  lint?: QualityGateStatus;
+  /** Build check */
+  build?: QualityGateStatus;
+  /** Allow custom gates */
+  [customGate: string]: QualityGateStatus | undefined;
+}
+
+/**
+ * Required gates that must pass for task completion
+ */
+export const REQUIRED_QUALITY_GATES = ['typecheck', 'tests', 'build'] as const;

@@ -504,4 +504,326 @@ priority: ${priority}
       expect(result[0].priority).toBe(priority);
     });
   });
+
+  describe('Iteration Tracking', () => {
+    test('should increment iteration and record history', async () => {
+      const ticketId = 'iteration-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Iteration Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      const record = {
+        trigger: 'activity_idle' as const,
+        action: 'inject_prompt' as const,
+        conclusion: 'INCOMPLETE' as const,
+        notes: 'Test iteration'
+      };
+
+      const newCount = await ticketService.incrementIteration(ticketId, record);
+
+      expect(newCount).toBe(1);
+      expect(mockFs.writeFile).toHaveBeenCalled();
+
+      // Verify the written content includes continuation data
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      expect(writtenContent).toContain('continuation');
+      expect(writtenContent).toContain('iterations');
+    });
+
+    test('should throw error when incrementing non-existent ticket', async () => {
+      mockExistsSync.mockReturnValue(false);
+
+      await expect(ticketService.incrementIteration('non-existent', {
+        trigger: 'activity_idle',
+        action: 'inject_prompt',
+        conclusion: 'INCOMPLETE'
+      })).rejects.toThrow('Ticket non-existent not found');
+    });
+
+    test('should set max iterations', async () => {
+      const ticketId = 'max-iteration-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Max Iteration Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      await ticketService.setMaxIterations(ticketId, 20);
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      expect(writtenContent).toContain('maxIterations: 20');
+    });
+
+    test('should cap max iterations at absolute max', async () => {
+      const ticketId = 'max-cap-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Max Cap Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      await ticketService.setMaxIterations(ticketId, 1000);
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      // Should be capped at 50 (ABSOLUTE_MAX)
+      expect(writtenContent).toContain('maxIterations: 50');
+    });
+
+    test('should get iteration count', async () => {
+      const ticketId = 'get-iteration-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Get Iteration Test
+status: in_progress
+priority: high
+subtasks: []
+continuation:
+  iterations: 5
+  maxIterations: 15
+  iterationHistory: []
+`);
+
+      const result = await ticketService.getIterationCount(ticketId);
+
+      expect(result.current).toBe(5);
+      expect(result.max).toBe(15);
+    });
+
+    test('should return defaults for ticket without continuation', async () => {
+      const ticketId = 'no-continuation-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: No Continuation Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+
+      const result = await ticketService.getIterationCount(ticketId);
+
+      expect(result.current).toBe(0);
+      expect(result.max).toBe(10); // DEFAULT_MAX
+    });
+
+    test('should reset iterations', async () => {
+      const ticketId = 'reset-iteration-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Reset Iteration Test
+status: in_progress
+priority: high
+subtasks: []
+continuation:
+  iterations: 5
+  maxIterations: 15
+  iterationHistory:
+    - timestamp: '2024-01-01T00:00:00.000Z'
+      trigger: activity_idle
+      action: inject_prompt
+      conclusion: INCOMPLETE
+qualityGates:
+  typecheck:
+    passed: true
+  tests:
+    passed: false
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      await ticketService.resetIterations(ticketId);
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      expect(writtenContent).toContain('iterations: 0');
+    });
+  });
+
+  describe('Quality Gates', () => {
+    test('should update quality gate', async () => {
+      const ticketId = 'quality-gate-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Quality Gate Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      await ticketService.updateQualityGate(ticketId, 'tests', {
+        passed: true,
+        output: 'All 50 tests passed'
+      });
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      expect(writtenContent).toContain('qualityGates');
+      expect(writtenContent).toContain('tests');
+      expect(writtenContent).toContain('passed: true');
+    });
+
+    test('should truncate long output', async () => {
+      const ticketId = 'long-output-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Long Output Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      const longOutput = 'x'.repeat(2000);
+      await ticketService.updateQualityGate(ticketId, 'tests', {
+        passed: false,
+        output: longOutput
+      });
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      // Output should be truncated to 1000 chars
+      expect(writtenContent.length).toBeLessThan(longOutput.length);
+    });
+
+    test('should get quality gates', async () => {
+      const ticketId = 'get-gates-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Get Gates Test
+status: in_progress
+priority: high
+subtasks: []
+qualityGates:
+  typecheck:
+    passed: true
+    lastRun: '2024-01-01T00:00:00.000Z'
+  tests:
+    passed: false
+    lastRun: '2024-01-01T00:00:00.000Z'
+    output: '2 tests failed'
+`);
+
+      const gates = await ticketService.getQualityGates(ticketId);
+
+      expect(gates.typecheck?.passed).toBe(true);
+      expect(gates.tests?.passed).toBe(false);
+      expect(gates.tests?.output).toBe('2 tests failed');
+    });
+
+    test('should check if all gates passing', async () => {
+      const ticketId = 'all-passing-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: All Passing Test
+status: in_progress
+priority: high
+subtasks: []
+qualityGates:
+  typecheck:
+    passed: true
+  tests:
+    passed: true
+  build:
+    passed: true
+`);
+
+      const allPassing = await ticketService.areAllGatesPassing(ticketId);
+
+      expect(allPassing).toBe(true);
+    });
+
+    test('should return false when gates not all passing', async () => {
+      const ticketId = 'not-all-passing-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Not All Passing Test
+status: in_progress
+priority: high
+subtasks: []
+qualityGates:
+  typecheck:
+    passed: true
+  tests:
+    passed: false
+  build:
+    passed: true
+`);
+
+      const allPassing = await ticketService.areAllGatesPassing(ticketId);
+
+      expect(allPassing).toBe(false);
+    });
+
+    test('should get failed gates', async () => {
+      const ticketId = 'failed-gates-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Failed Gates Test
+status: in_progress
+priority: high
+subtasks: []
+qualityGates:
+  typecheck:
+    passed: true
+  tests:
+    passed: false
+    output: '3 tests failed'
+  build:
+    passed: false
+    output: 'Type error'
+`);
+
+      const failed = await ticketService.getFailedGates(ticketId);
+
+      expect(failed).toHaveLength(2);
+      expect(failed[0].name).toBe('tests');
+      expect(failed[1].name).toBe('build');
+    });
+
+    test('should initialize quality gates', async () => {
+      const ticketId = 'init-gates-ticket';
+      mockExistsSync.mockReturnValue(true);
+      mockFs.readFile.mockResolvedValue(`
+id: ${ticketId}
+title: Init Gates Test
+status: in_progress
+priority: high
+subtasks: []
+`);
+      mockFs.writeFile.mockResolvedValue();
+
+      await ticketService.initializeQualityGates(ticketId);
+
+      expect(mockFs.writeFile).toHaveBeenCalled();
+      const writtenContent = mockFs.writeFile.mock.calls[0][1] as string;
+      expect(writtenContent).toContain('typecheck');
+      expect(writtenContent).toContain('tests');
+      expect(writtenContent).toContain('lint');
+      expect(writtenContent).toContain('build');
+    });
+  });
 });
