@@ -8,10 +8,12 @@ import {
   AutoAssignService,
   AgentWorkload,
   IAutoAssignService,
+  BudgetService,
+  IBudgetService,
 } from './index.js';
 
 describe('Autonomous Services Index', () => {
-  describe('exports', () => {
+  describe('AutoAssignService exports', () => {
     it('should export AutoAssignService', () => {
       expect(AutoAssignService).toBeDefined();
       expect(typeof AutoAssignService.getInstance).toBe('function');
@@ -59,6 +61,40 @@ describe('Autonomous Services Index', () => {
       }
 
       AutoAssignService.clearInstance();
+    });
+  });
+
+  describe('BudgetService exports', () => {
+    it('should export BudgetService', () => {
+      expect(BudgetService).toBeDefined();
+      expect(typeof BudgetService.getInstance).toBe('function');
+    });
+
+    it('should export IBudgetService interface', () => {
+      // Interface exports are validated at compile time
+      // This test documents the expected interface methods
+      const interfaceMethods = [
+        'initialize',
+        'recordUsage',
+        'getUsage',
+        'getProjectUsage',
+        'setBudget',
+        'getBudget',
+        'checkBudget',
+        'isWithinBudget',
+        'getRemainingBudget',
+        'onBudgetWarning',
+        'onBudgetExceeded',
+        'generateReport',
+      ];
+
+      // Verify the BudgetService implements the interface
+      const instance = BudgetService.getInstance();
+      for (const method of interfaceMethods) {
+        expect(typeof (instance as any)[method]).toBe('function');
+      }
+
+      BudgetService.clearInstance();
     });
   });
 });
