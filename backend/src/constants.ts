@@ -7,12 +7,14 @@
 import {
   AGENTMUX_CONSTANTS as CONFIG_AGENTMUX_CONSTANTS,
   AGENT_IDENTITY_CONSTANTS as CONFIG_AGENT_IDENTITY_CONSTANTS,
-  TIMING_CONSTANTS as CONFIG_TIMING_CONSTANTS
+  TIMING_CONSTANTS as CONFIG_TIMING_CONSTANTS,
+  MEMORY_CONSTANTS as CONFIG_MEMORY_CONSTANTS
 } from '../../config/constants.js';
 
 // Re-export the cross-domain constants for backend use
 export const AGENT_IDENTITY_CONSTANTS = CONFIG_AGENT_IDENTITY_CONSTANTS;
 export const TIMING_CONSTANTS = CONFIG_TIMING_CONSTANTS;
+export const MEMORY_CONSTANTS = CONFIG_MEMORY_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
 export const ORCHESTRATOR_SESSION_NAME = 'agentmux-orc';
