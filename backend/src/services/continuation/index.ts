@@ -21,6 +21,12 @@ export {
   type SessionContinuationStatus,
   type ContinuationNotification,
 } from './continuation.service.js';
+export {
+  TemplateLoader,
+  type ITemplateLoader,
+  type TemplateMetadata,
+  type ParsedTemplate,
+} from './template-loader.service.js';
 
 // Re-export patterns for extensibility
 export * from './patterns/index.js';
