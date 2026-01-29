@@ -21,6 +21,19 @@ jest.mock('fs/promises', () => ({
 	access: jest.fn(),
 }));
 
+// Mock MemoryService
+const mockInitializeForSession = jest.fn().mockResolvedValue(undefined);
+const mockGetFullContext = jest.fn().mockResolvedValue('');
+
+jest.mock('../memory/memory.service.js', () => ({
+	MemoryService: {
+		getInstance: jest.fn(() => ({
+			initializeForSession: mockInitializeForSession,
+			getFullContext: mockGetFullContext,
+		})),
+	},
+}));
+
 describe('PromptBuilderService', () => {
 	let service: PromptBuilderService;
 	let mockReadFile: jest.Mock;
@@ -354,6 +367,180 @@ describe('PromptBuilderService', () => {
 			expect(mockAccess).toHaveBeenCalledWith(
 				expect.stringContaining('/config/teams/prompts/tpm-prompt.md')
 			);
+		});
+	});
+
+	describe('buildMemoryContext', () => {
+		beforeEach(() => {
+			mockInitializeForSession.mockClear();
+			mockGetFullContext.mockClear();
+			mockInitializeForSession.mockResolvedValue(undefined);
+			mockGetFullContext.mockResolvedValue('');
+		});
+
+		it('should return formatted memory context when available', async () => {
+			mockGetFullContext.mockResolvedValue('## Test Memory Context\nSome knowledge');
+
+			const result = await service.buildMemoryContext('agent-001', '/test/project', { role: 'developer' });
+
+			expect(mockInitializeForSession).toHaveBeenCalledWith(
+				'agent-001',
+				'developer',
+				'/test/project'
+			);
+			expect(result).toContain('Your Knowledge Base');
+			expect(result).toContain('Test Memory Context');
+			expect(result).toContain('remember');
+			expect(result).toContain('recall');
+		});
+
+		it('should return empty string when no memory available', async () => {
+			mockGetFullContext.mockResolvedValue('');
+
+			const result = await service.buildMemoryContext('agent-001', '/test/project');
+
+			expect(result).toBe('');
+		});
+
+		it('should use default role when not provided', async () => {
+			mockGetFullContext.mockResolvedValue('');
+
+			await service.buildMemoryContext('agent-001', '/test/project');
+
+			expect(mockInitializeForSession).toHaveBeenCalledWith(
+				'agent-001',
+				'developer',
+				'/test/project'
+			);
+		});
+
+		it('should handle errors gracefully', async () => {
+			mockInitializeForSession.mockRejectedValue(new Error('Memory error'));
+
+			const result = await service.buildMemoryContext('agent-001', '/test/project');
+
+			expect(result).toBe('');
+		});
+	});
+
+	describe('buildSystemPromptWithMemory', () => {
+		const mockConfig: TeamMemberSessionConfig = {
+			name: 'test-session',
+			role: 'developer',
+			projectPath: '/test/project',
+			memberId: 'member-123',
+			systemPrompt: 'test prompt',
+			runtimeType: 'claude-code' as any
+		};
+
+		beforeEach(() => {
+			mockInitializeForSession.mockClear();
+			mockGetFullContext.mockClear();
+			mockInitializeForSession.mockResolvedValue(undefined);
+			mockGetFullContext.mockResolvedValue('');
+			mockAccess.mockRejectedValue(new Error('File not found')); // Use fallback prompt
+		});
+
+		it('should include memory context when available', async () => {
+			mockGetFullContext.mockResolvedValue('## Agent Knowledge\nImportant fact');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig);
+
+			expect(result).toContain('AgentMux Agent');
+			expect(result).toContain('Your Knowledge Base');
+			expect(result).toContain('Important fact');
+			expect(result).toContain('Your Identity');
+			expect(result).toContain('Communication');
+		});
+
+		it('should return base prompt when memory is empty', async () => {
+			mockGetFullContext.mockResolvedValue('');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig);
+
+			expect(result).toContain('AgentMux Agent');
+			expect(result).not.toContain('Your Knowledge Base');
+		});
+
+		it('should skip memory when includeMemory is false', async () => {
+			mockGetFullContext.mockResolvedValue('## Agent Knowledge\nImportant fact');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig, { includeMemory: false });
+
+			expect(result).not.toContain('Your Knowledge Base');
+			expect(mockInitializeForSession).not.toHaveBeenCalled();
+		});
+
+		it('should skip memory when projectPath is missing', async () => {
+			const configWithoutProject = { ...mockConfig, projectPath: undefined };
+			mockGetFullContext.mockResolvedValue('## Agent Knowledge\nImportant fact');
+
+			const result = await service.buildSystemPromptWithMemory(configWithoutProject);
+
+			expect(result).not.toContain('Your Knowledge Base');
+		});
+
+		it('should skip memory when memberId is missing', async () => {
+			const configWithoutMember = { ...mockConfig, memberId: undefined };
+			mockGetFullContext.mockResolvedValue('## Agent Knowledge\nImportant fact');
+
+			const result = await service.buildSystemPromptWithMemory(configWithoutMember);
+
+			expect(result).not.toContain('Your Knowledge Base');
+		});
+	});
+
+	describe('buildContinuationPrompt', () => {
+		beforeEach(() => {
+			mockInitializeForSession.mockClear();
+			mockGetFullContext.mockClear();
+			mockInitializeForSession.mockResolvedValue(undefined);
+			mockGetFullContext.mockResolvedValue('');
+		});
+
+		it('should build continuation prompt with memory context', async () => {
+			mockGetFullContext.mockResolvedValue('## Project Knowledge\nRelevant patterns');
+
+			const result = await service.buildContinuationPrompt(
+				'agent-001',
+				'developer',
+				'/test/project',
+				{ title: 'Fix authentication bug', description: 'Users cannot log in' }
+			);
+
+			expect(result).toContain('Continue Your Work');
+			expect(result).toContain('Fix authentication bug');
+			expect(result).toContain('Users cannot log in');
+			expect(result).toContain('Your Knowledge Base');
+		});
+
+		it('should handle missing memory context', async () => {
+			mockGetFullContext.mockResolvedValue('');
+
+			const result = await service.buildContinuationPrompt(
+				'agent-001',
+				'developer',
+				'/test/project',
+				{ title: 'Implement feature' }
+			);
+
+			expect(result).toContain('Continue Your Work');
+			expect(result).toContain('No prior memory context available');
+			expect(result).toContain('Implement feature');
+		});
+
+		it('should handle task without description', async () => {
+			mockGetFullContext.mockResolvedValue('');
+
+			const result = await service.buildContinuationPrompt(
+				'agent-001',
+				'developer',
+				'/test/project',
+				{ title: 'Quick fix' }
+			);
+
+			expect(result).toContain('**Quick fix**');
+			expect(result).not.toMatch(/Quick fix\n\n\n/); // No empty description block
 		});
 	});
 });

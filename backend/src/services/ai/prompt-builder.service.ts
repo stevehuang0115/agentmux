@@ -2,6 +2,51 @@ import { readFile, access } from 'fs/promises';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { TeamMemberSessionConfig } from '../../types/index.js';
+import { MemoryService } from '../memory/memory.service.js';
+
+/**
+ * Options for building system prompts
+ */
+export interface PromptOptions {
+  /** Agent's role */
+  role?: string;
+  /** Current task context for SOP selection */
+  taskContext?: string;
+  /** Whether to include memory context (default: true) */
+  includeMemory?: boolean;
+  /** Whether to include SOPs (default: true, for future use) */
+  includeSOPs?: boolean;
+  /** Maximum number of memory entries to include */
+  memoryLimit?: number;
+  /** Force reload context instead of using cache */
+  freshContext?: boolean;
+}
+
+/**
+ * Parts that compose a complete prompt
+ */
+interface PromptParts {
+  /** Base role instructions */
+  basePrompt: string;
+  /** Project context from context loader */
+  projectContext?: string;
+  /** Memory context from memory service */
+  memoryContext?: string;
+  /** SOP context (for future use) */
+  sopContext?: string;
+  /** Project name */
+  projectName?: string;
+  /** Project path */
+  projectPath?: string;
+  /** Session name */
+  sessionName?: string;
+  /** Member ID */
+  memberId?: string;
+  /** Role */
+  role?: string;
+  /** Team ID */
+  teamId?: string;
+}
 
 /**
  * Service dedicated to building and loading the various prompts used to communicate with agents.
@@ -10,10 +55,23 @@ import { TeamMemberSessionConfig } from '../../types/index.js';
 export class PromptBuilderService {
 	private logger: ComponentLogger;
 	private readonly promptsDirectory: string;
+	private memoryService: MemoryService | null = null;
 
 	constructor(projectRoot: string = process.cwd()) {
 		this.logger = LoggerService.getInstance().createComponentLogger('PromptBuilderService');
 		this.promptsDirectory = path.join(projectRoot, 'config', 'teams', 'prompts');
+	}
+
+	/**
+	 * Gets the MemoryService instance (lazy initialization)
+	 *
+	 * @returns The MemoryService singleton
+	 */
+	private getMemoryService(): MemoryService {
+		if (!this.memoryService) {
+			this.memoryService = MemoryService.getInstance();
+		}
+		return this.memoryService;
 	}
 
 	/**
@@ -105,6 +163,189 @@ Start all teams on Phase 1 simultaneously.`.trim();
 
 			return this.buildFallbackSystemPrompt(config);
 		}
+	}
+
+	/**
+	 * Build system prompt with memory context included
+	 *
+	 * This method builds a complete system prompt that includes:
+	 * - Base role instructions
+	 * - Project context
+	 * - Memory context (agent and project memories)
+	 * - Agent identity information
+	 *
+	 * @param config - Session configuration
+	 * @param options - Prompt building options
+	 * @returns Complete system prompt with memory
+	 *
+	 * @example
+	 * ```typescript
+	 * const prompt = await promptBuilder.buildSystemPromptWithMemory(config, {
+	 *   includeMemory: true,
+	 *   role: 'developer'
+	 * });
+	 * ```
+	 */
+	async buildSystemPromptWithMemory(
+		config: TeamMemberSessionConfig,
+		options: PromptOptions = {}
+	): Promise<string> {
+		const includeMemory = options.includeMemory !== false;
+
+		// Get base prompt
+		const basePrompt = await this.buildSystemPrompt(config);
+
+		// Build memory context if enabled
+		let memoryContext = '';
+		if (includeMemory && config.projectPath && config.memberId) {
+			memoryContext = await this.buildMemoryContext(
+				config.memberId,
+				config.projectPath,
+				options
+			);
+		}
+
+		// Compose final prompt with memory
+		if (memoryContext) {
+			return this.composePromptWithMemory({
+				basePrompt,
+				memoryContext,
+				sessionName: config.name,
+				memberId: config.memberId,
+				role: config.role,
+				projectPath: config.projectPath,
+			});
+		}
+
+		return basePrompt;
+	}
+
+	/**
+	 * Build memory context from agent and project memories
+	 *
+	 * @param agentId - Agent identifier
+	 * @param projectPath - Project path
+	 * @param options - Prompt options
+	 * @returns Formatted memory context string
+	 */
+	async buildMemoryContext(
+		agentId: string,
+		projectPath: string,
+		options: PromptOptions = {}
+	): Promise<string> {
+		try {
+			const memoryService = this.getMemoryService();
+
+			// Initialize memory for session if needed
+			await memoryService.initializeForSession(
+				agentId,
+				options.role || 'developer',
+				projectPath
+			);
+
+			// Get full context from memory service
+			const fullContext = await memoryService.getFullContext(agentId, projectPath);
+
+			if (!fullContext || fullContext.trim().length === 0) {
+				this.logger.debug('No memory context available', { agentId, projectPath });
+				return '';
+			}
+
+			this.logger.debug('Built memory context', {
+				agentId,
+				projectPath,
+				contextLength: fullContext.length,
+			});
+
+			return `
+## Your Knowledge Base
+
+This is your accumulated knowledge from previous sessions. Use it to work more effectively.
+
+${fullContext}
+
+**Note:** You can add new knowledge using the \`remember\` tool and recall specific memories using the \`recall\` tool.
+`.trim();
+		} catch (error) {
+			this.logger.warn('Failed to build memory context', {
+				agentId,
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return '';
+		}
+	}
+
+	/**
+	 * Compose a prompt with memory context included
+	 *
+	 * @param parts - Prompt parts to compose
+	 * @returns Composed prompt string
+	 */
+	private composePromptWithMemory(parts: PromptParts): string {
+		const sections: string[] = [];
+
+		// Add base prompt
+		sections.push(parts.basePrompt);
+
+		// Add memory context if available
+		if (parts.memoryContext && parts.memoryContext.trim()) {
+			sections.push('\n---\n');
+			sections.push(parts.memoryContext);
+		}
+
+		// Add agent identity section
+		if (parts.sessionName || parts.memberId || parts.role) {
+			sections.push('\n---\n');
+			sections.push('## Your Identity');
+			if (parts.sessionName) sections.push(`- **Session Name:** ${parts.sessionName}`);
+			if (parts.memberId) sections.push(`- **Member ID:** ${parts.memberId}`);
+			if (parts.role) sections.push(`- **Role:** ${parts.role}`);
+			if (parts.teamId) sections.push(`- **Team:** ${parts.teamId}`);
+		}
+
+		// Add communication instructions
+		sections.push('\n---\n');
+		sections.push(`## Communication
+
+Use MCP tools for all team communication:
+- \`send_message\` to communicate with other agents
+- \`report_progress\` to update on task status
+- \`remember\` to store important learnings
+- \`recall\` to retrieve relevant knowledge`);
+
+		return sections.join('\n').trim();
+	}
+
+	/**
+	 * Build a continuation prompt for when an agent needs to resume work
+	 *
+	 * @param agentId - Agent identifier
+	 * @param role - Agent's role
+	 * @param projectPath - Project path
+	 * @param currentTask - Current task being worked on
+	 * @returns Continuation prompt string
+	 */
+	async buildContinuationPrompt(
+		agentId: string,
+		role: string,
+		projectPath: string,
+		currentTask: { title: string; description?: string }
+	): Promise<string> {
+		const memoryContext = await this.buildMemoryContext(agentId, projectPath, { role });
+
+		return `
+# Continue Your Work
+
+${memoryContext || '(No prior memory context available)'}
+
+## Current Task
+**${currentTask.title}**
+${currentTask.description ? `\n${currentTask.description}` : ''}
+
+## Instructions
+Continue working on your assigned task. Use your knowledge base above to guide your approach.
+`.trim();
 	}
 
 	/**
