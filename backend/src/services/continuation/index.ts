@@ -15,6 +15,12 @@ export {
   type WaitingSignals,
   type AnalyzeParams,
 } from './output-analyzer.service.js';
+export {
+  ContinuationService,
+  type ContinuationConfig,
+  type SessionContinuationStatus,
+  type ContinuationNotification,
+} from './continuation.service.js';
 
 // Re-export patterns for extensibility
 export * from './patterns/index.js';
