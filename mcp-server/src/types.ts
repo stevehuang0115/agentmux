@@ -396,3 +396,68 @@ export interface RecoveryDetail {
 // ============================================
 
 export type YAMLFieldValue = string | number | boolean | string[] | null;
+
+// ============================================
+// Memory Tool Parameter Types
+// ============================================
+
+/**
+ * Parameters for the remember tool
+ */
+export interface RememberToolParams {
+  /** The knowledge content to remember */
+  content: string;
+  /** Category of the knowledge */
+  category: 'pattern' | 'decision' | 'gotcha' | 'fact' | 'preference' | 'relationship';
+  /** Scope: agent-level or project-level */
+  scope: 'agent' | 'project';
+  /** Optional short title for the knowledge */
+  title?: string;
+  /** Additional metadata */
+  metadata?: {
+    /** Pattern category for project patterns */
+    patternCategory?: 'api' | 'component' | 'service' | 'testing' | 'styling' | 'database' | 'config' | 'other';
+    /** Code example */
+    example?: string;
+    /** Related file paths */
+    files?: string[];
+    /** Rationale for decisions */
+    rationale?: string;
+    /** Alternatives considered */
+    alternatives?: string[];
+    /** Areas affected */
+    affectedAreas?: string[];
+    /** Solution for gotchas */
+    solution?: string;
+    /** Severity for gotchas */
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    /** Relationship type */
+    relationshipType?: 'depends-on' | 'uses' | 'extends' | 'implements' | 'calls' | 'imported-by';
+    /** Target component for relationships */
+    targetComponent?: string;
+  };
+}
+
+/**
+ * Parameters for the recall tool
+ */
+export interface RecallToolParams {
+  /** Context/query for finding relevant memories */
+  context: string;
+  /** Scope to search: agent, project, or both */
+  scope?: 'agent' | 'project' | 'both';
+  /** Maximum number of results to return */
+  limit?: number;
+}
+
+/**
+ * Parameters for the record_learning tool
+ */
+export interface RecordLearningToolParams {
+  /** The learning content */
+  learning: string;
+  /** Related task/ticket ID */
+  relatedTask?: string;
+  /** Related file paths */
+  relatedFiles?: string[];
+}

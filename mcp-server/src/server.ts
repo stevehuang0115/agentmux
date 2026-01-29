@@ -10,6 +10,7 @@ import { logger, createLogger } from './logger.js';
 import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import { sanitizeGitCommitMessage } from './security.js';
+import { MemoryService } from '../../backend/src/services/memory/memory.service.js';
 import {
   MCPRequest,
   MCPResponse,
@@ -55,7 +56,10 @@ import {
   TerminateAgentsParams,
   RecoveryReport,
   YAMLFieldValue,
-  InProgressTask
+  InProgressTask,
+  RememberToolParams,
+  RecallToolParams,
+  RecordLearningToolParams
 } from './types.js';
 
 
@@ -65,6 +69,7 @@ export class AgentMuxMCPServer {
   private projectPath: string;
   private agentRole: string;
   private sessionAdapter: SessionAdapter;
+  private memoryService: MemoryService;
   private requestQueue: Map<string, number> = new Map();
   private lastCleanup: number = Date.now();
 
@@ -78,6 +83,9 @@ export class AgentMuxMCPServer {
 
     // Initialize SessionAdapter (uses backend API for session management)
     this.sessionAdapter = new SessionAdapter();
+
+    // Initialize MemoryService
+    this.memoryService = MemoryService.getInstance();
 
     // Debug log session name
     logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
@@ -2033,6 +2041,218 @@ export class AgentMuxMCPServer {
     }
   }
 
+  // ============================================
+  // Memory Management Tools
+  // ============================================
+
+  /**
+   * Store knowledge in memory (remember tool)
+   *
+   * @param params - Remember tool parameters
+   * @returns MCP tool result
+   */
+  async rememberKnowledge(params: RememberToolParams): Promise<MCPToolResult> {
+    try {
+      logger.info(`[REMEMBER] Storing knowledge: category=${params.category}, scope=${params.scope}`);
+
+      // Get agent ID from session name (using session name as agent ID for now)
+      const agentId = this.sessionName;
+
+      const memoryId = await this.memoryService.remember({
+        agentId,
+        projectPath: this.projectPath,
+        content: params.content,
+        category: params.category,
+        scope: params.scope,
+        metadata: {
+          title: params.title,
+          ...params.metadata,
+        },
+      });
+
+      logger.info(`[REMEMBER] Knowledge stored successfully: ${memoryId}`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `✅ Knowledge stored successfully (ID: ${memoryId})\n\nCategory: ${params.category}\nScope: ${params.scope}${params.title ? `\nTitle: ${params.title}` : ''}`
+        }]
+      };
+    } catch (error) {
+      logger.error(`[REMEMBER] Failed to store knowledge:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to store knowledge: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Retrieve relevant memories (recall tool)
+   *
+   * @param params - Recall tool parameters
+   * @returns MCP tool result
+   */
+  async recallKnowledge(params: RecallToolParams): Promise<MCPToolResult> {
+    try {
+      const scope = params.scope || 'both';
+      logger.info(`[RECALL] Searching memories: context="${params.context.substring(0, 50)}...", scope=${scope}`);
+
+      const agentId = this.sessionName;
+
+      const result = await this.memoryService.recall({
+        agentId,
+        projectPath: this.projectPath,
+        context: params.context,
+        scope: scope,
+        limit: params.limit || 10,
+      });
+
+      const totalMemories = result.agentMemories.length + result.projectMemories.length;
+
+      if (totalMemories === 0) {
+        logger.info(`[RECALL] No relevant memories found`);
+        return {
+          content: [{
+            type: 'text',
+            text: `No relevant memories found for: "${params.context}"\n\nTip: Try using the 'remember' tool to store knowledge as you discover it.`
+          }]
+        };
+      }
+
+      logger.info(`[RECALL] Found ${totalMemories} relevant memories`);
+
+      let responseText = `Found ${totalMemories} relevant memories:\n\n`;
+
+      if (result.agentMemories.length > 0) {
+        responseText += `### From Your Experience (${result.agentMemories.length})\n`;
+        result.agentMemories.forEach(m => {
+          responseText += `- ${m}\n`;
+        });
+        responseText += '\n';
+      }
+
+      if (result.projectMemories.length > 0) {
+        responseText += `### From Project Knowledge (${result.projectMemories.length})\n`;
+        result.projectMemories.forEach(m => {
+          responseText += `- ${m}\n`;
+        });
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: responseText.trim()
+        }]
+      };
+    } catch (error) {
+      logger.error(`[RECALL] Failed to recall memories:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to recall memories: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Record a learning during task work (record_learning tool)
+   *
+   * @param params - Record learning parameters
+   * @returns MCP tool result
+   */
+  async recordLearning(params: RecordLearningToolParams): Promise<MCPToolResult> {
+    try {
+      logger.info(`[RECORD_LEARNING] Recording learning${params.relatedTask ? ` for task ${params.relatedTask}` : ''}`);
+
+      const agentId = this.sessionName;
+
+      await this.memoryService.recordLearning({
+        agentId,
+        agentRole: this.agentRole,
+        projectPath: this.projectPath,
+        learning: params.learning,
+        relatedTask: params.relatedTask,
+        relatedFiles: params.relatedFiles,
+      });
+
+      logger.info(`[RECORD_LEARNING] Learning recorded successfully`);
+
+      let responseText = `✅ Learning recorded successfully\n\n`;
+      responseText += `"${params.learning}"`;
+      if (params.relatedTask) {
+        responseText += `\n\nRelated to: ${params.relatedTask}`;
+      }
+      if (params.relatedFiles && params.relatedFiles.length > 0) {
+        responseText += `\nRelated files: ${params.relatedFiles.join(', ')}`;
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: responseText
+        }]
+      };
+    } catch (error) {
+      logger.error(`[RECORD_LEARNING] Failed to record learning:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to record learning: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Get full memory context (get_my_context tool)
+   *
+   * @returns MCP tool result with full context
+   */
+  async getMyContext(): Promise<MCPToolResult> {
+    try {
+      logger.info(`[GET_MY_CONTEXT] Retrieving full context for ${this.sessionName}`);
+
+      const agentId = this.sessionName;
+
+      const context = await this.memoryService.getFullContext(agentId, this.projectPath);
+
+      if (!context || context.trim().length === 0) {
+        logger.info(`[GET_MY_CONTEXT] No context available`);
+        return {
+          content: [{
+            type: 'text',
+            text: `No knowledge context available yet.\n\nYou can build your knowledge base by:\n- Using 'remember' to store patterns, decisions, and gotchas\n- Using 'record_learning' to capture learnings during work\n\nKnowledge persists across sessions and helps you work more effectively.`
+          }]
+        };
+      }
+
+      logger.info(`[GET_MY_CONTEXT] Context retrieved: ${context.length} characters`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `# Your Knowledge Context\n\n${context}`
+        }]
+      };
+    } catch (error) {
+      logger.error(`[GET_MY_CONTEXT] Failed to get context:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to get context: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
   /**
    * Helper Methods for Ticket Management
    */
@@ -2523,6 +2743,19 @@ Please respond promptly with either acceptance or delegation.`;
                 case 'terminate_agents':
                   result = await this.terminateAgents(toolArgs);
                   break;
+                // Memory Management Tools
+                case 'remember':
+                  result = await this.rememberKnowledge(toolArgs);
+                  break;
+                case 'recall':
+                  result = await this.recallKnowledge(toolArgs);
+                  break;
+                case 'record_learning':
+                  result = await this.recordLearning(toolArgs);
+                  break;
+                case 'get_my_context':
+                  result = await this.getMyContext();
+                  break;
                 default:
                   throw new Error(`Unknown tool: ${toolName}`);
               }
@@ -2886,6 +3119,125 @@ Please respond promptly with either acceptance or delegation.`;
             teamMemberId: { type: 'string', description: 'Team member ID for heartbeat tracking (optional)' }
           },
           required: ['sessionNames']
+        }
+      },
+
+      // Memory Management Tools
+      {
+        name: 'remember',
+        description: `Store a piece of knowledge in your memory for future reference.
+
+Use this when you:
+- Discover a code pattern specific to this project
+- Learn something important about how the codebase works
+- Make or observe an architectural decision
+- Find a gotcha or workaround
+- Want to remember a preference or best practice
+
+The knowledge will persist across sessions.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The knowledge to remember (be specific and actionable)'
+            },
+            category: {
+              type: 'string',
+              enum: ['pattern', 'decision', 'gotcha', 'fact', 'preference', 'relationship'],
+              description: 'Type of knowledge'
+            },
+            scope: {
+              type: 'string',
+              enum: ['agent', 'project'],
+              description: 'agent = your role knowledge, project = project-specific knowledge'
+            },
+            title: {
+              type: 'string',
+              description: 'Short title for the knowledge (optional)'
+            },
+            metadata: {
+              type: 'object',
+              description: 'Additional context (files, severity, rationale, etc.)'
+            }
+          },
+          required: ['content', 'category', 'scope']
+        }
+      },
+      {
+        name: 'recall',
+        description: `Retrieve relevant knowledge from your memory based on what you're working on.
+
+Use this when you:
+- Start working on a new task and want to check for relevant patterns
+- Need to remember how something was done before
+- Want to check for known gotchas before making changes
+- Need to recall a previous decision
+
+Returns relevant memories from your agent knowledge and/or project knowledge.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            context: {
+              type: 'string',
+              description: 'What you are working on or looking for (be specific)'
+            },
+            scope: {
+              type: 'string',
+              enum: ['agent', 'project', 'both'],
+              description: 'Where to search for memories (default: both)'
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of memories to return (default: 10)'
+            }
+          },
+          required: ['context']
+        }
+      },
+      {
+        name: 'record_learning',
+        description: `Record a learning or discovery while working on a task.
+
+This is simpler than 'remember' - use it to quickly jot down learnings as you work.
+Learnings are recorded in the project's learnings log and may also be added to your role knowledge.
+
+Good learnings are:
+- Specific and actionable
+- Include context about when/why this applies
+- Reference related files or components`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            learning: {
+              type: 'string',
+              description: 'What you learned (be specific)'
+            },
+            relatedTask: {
+              type: 'string',
+              description: 'Task ID this relates to (optional)'
+            },
+            relatedFiles: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Related file paths (optional)'
+            }
+          },
+          required: ['learning']
+        }
+      },
+      {
+        name: 'get_my_context',
+        description: `Get your full knowledge context including agent knowledge and project knowledge.
+
+Use this when you:
+- Want to review what you know before starting a task
+- Need a refresher on project patterns and decisions
+- Want to check your performance metrics`,
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
         }
       }
     ];

@@ -408,6 +408,80 @@ This is a mock task for testing purposes.
       content: [{ type: 'text', text: `Agent session ${params.sessionName} has been shutdown` }]
     };
   }
+
+  // Mock Memory Tool Methods
+  async rememberKnowledge(params: any): Promise<any> {
+    if (!params.content) {
+      return {
+        content: [{ type: 'text', text: 'content parameter is required' }],
+        isError: true
+      };
+    }
+    if (!params.category) {
+      return {
+        content: [{ type: 'text', text: 'category parameter is required' }],
+        isError: true
+      };
+    }
+    if (!params.scope) {
+      return {
+        content: [{ type: 'text', text: 'scope parameter is required' }],
+        isError: true
+      };
+    }
+
+    return {
+      content: [{
+        type: 'text',
+        text: `✅ Knowledge stored successfully (ID: mock-memory-id)\n\nCategory: ${params.category}\nScope: ${params.scope}${params.title ? `\nTitle: ${params.title}` : ''}`
+      }]
+    };
+  }
+
+  async recallKnowledge(params: any): Promise<any> {
+    if (!params.context) {
+      return {
+        content: [{ type: 'text', text: 'context parameter is required' }],
+        isError: true
+      };
+    }
+
+    // Mock response with some memories
+    return {
+      content: [{
+        type: 'text',
+        text: `Found 2 relevant memories:\n\n### From Your Experience (1)\n- [best-practice] Always validate input\n\n### From Project Knowledge (1)\n- [pattern] API Error Handling: Use error wrapper`
+      }]
+    };
+  }
+
+  async recordLearning(params: any): Promise<any> {
+    if (!params.learning) {
+      return {
+        content: [{ type: 'text', text: 'learning parameter is required' }],
+        isError: true
+      };
+    }
+
+    let responseText = `✅ Learning recorded successfully\n\n`;
+    responseText += `"${params.learning}"`;
+    if (params.relatedTask) {
+      responseText += `\n\nRelated to: ${params.relatedTask}`;
+    }
+
+    return {
+      content: [{ type: 'text', text: responseText }]
+    };
+  }
+
+  async getMyContext(): Promise<any> {
+    return {
+      content: [{
+        type: 'text',
+        text: `# Your Knowledge Context\n\n## Agent Memory\n- Best practices learned\n\n## Project Knowledge\n- Patterns discovered`
+      }]
+    };
+  }
 }
 
 describe('AgentMuxMCP', () => {
@@ -1233,6 +1307,125 @@ describe('AgentMuxMCP', () => {
 
       expect(result.content[0].text).toBe('Cannot shutdown orchestrator or self');
       expect(result.isError).toBe(true);
+    });
+  });
+
+  // ============================================
+  // Memory Tool Tests
+  // ============================================
+
+  describe('rememberKnowledge', () => {
+    it('should store knowledge with required parameters', async () => {
+      const result = await mcpServer.rememberKnowledge({
+        content: 'Always validate user input',
+        category: 'pattern',
+        scope: 'project'
+      });
+
+      expect(result.content[0].text).toContain('Knowledge stored successfully');
+      expect(result.content[0].text).toContain('Category: pattern');
+      expect(result.content[0].text).toContain('Scope: project');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should include title when provided', async () => {
+      const result = await mcpServer.rememberKnowledge({
+        content: 'Use error wrapper for API endpoints',
+        category: 'pattern',
+        scope: 'project',
+        title: 'API Error Handling'
+      });
+
+      expect(result.content[0].text).toContain('Title: API Error Handling');
+    });
+
+    it('should require content parameter', async () => {
+      const result = await mcpServer.rememberKnowledge({
+        category: 'pattern',
+        scope: 'project'
+      });
+
+      expect(result.content[0].text).toBe('content parameter is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should require category parameter', async () => {
+      const result = await mcpServer.rememberKnowledge({
+        content: 'Some knowledge',
+        scope: 'project'
+      });
+
+      expect(result.content[0].text).toBe('category parameter is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should require scope parameter', async () => {
+      const result = await mcpServer.rememberKnowledge({
+        content: 'Some knowledge',
+        category: 'pattern'
+      });
+
+      expect(result.content[0].text).toBe('scope parameter is required');
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe('recallKnowledge', () => {
+    it('should recall memories with context', async () => {
+      const result = await mcpServer.recallKnowledge({
+        context: 'input validation'
+      });
+
+      expect(result.content[0].text).toContain('relevant memories');
+      expect(result.content[0].text).toContain('From Your Experience');
+      expect(result.content[0].text).toContain('From Project Knowledge');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require context parameter', async () => {
+      const result = await mcpServer.recallKnowledge({});
+
+      expect(result.content[0].text).toBe('context parameter is required');
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe('recordLearning', () => {
+    it('should record learning with required parameter', async () => {
+      const result = await mcpServer.recordLearning({
+        learning: 'Always use parameterized queries to prevent SQL injection'
+      });
+
+      expect(result.content[0].text).toContain('Learning recorded successfully');
+      expect(result.content[0].text).toContain('parameterized queries');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should include related task when provided', async () => {
+      const result = await mcpServer.recordLearning({
+        learning: 'Discovered database connection leak',
+        relatedTask: 'TICKET-123'
+      });
+
+      expect(result.content[0].text).toContain('Related to: TICKET-123');
+    });
+
+    it('should require learning parameter', async () => {
+      const result = await mcpServer.recordLearning({});
+
+      expect(result.content[0].text).toBe('learning parameter is required');
+      expect(result.isError).toBe(true);
+    });
+  });
+
+  describe('getMyContext', () => {
+    it('should return full knowledge context', async () => {
+      const result = await mcpServer.getMyContext();
+
+      expect(result.content[0].text).toContain('Your Knowledge Context');
+      expect(result.content[0].text).toContain('Agent Memory');
+      expect(result.content[0].text).toContain('Project Knowledge');
+      expect(result.isError).toBeUndefined();
     });
   });
 });
