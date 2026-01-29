@@ -6,11 +6,14 @@ import { StartTeamModal } from './StartTeamModal';
 // Mock fetch globally
 global.fetch = vi.fn();
 
-// Mock window.alert
-Object.defineProperty(window, 'alert', {
-  value: vi.fn(),
-  writable: true
-});
+// Mock showWarning from useAlert hook
+const mockShowWarning = vi.fn();
+vi.mock('./UI/Dialog', () => ({
+  useAlert: () => ({
+    showWarning: mockShowWarning,
+    AlertComponent: () => null
+  })
+}));
 
 // Mock UI components to simplify testing
 vi.mock('./UI', () => ({
@@ -22,12 +25,12 @@ vi.mock('./UI', () => ({
         <div>Size: {size}</div>
         <form onSubmit={onSubmit}>
           {children}
-          <button 
-            type="submit" 
-            disabled={submitDisabled}
+          <button
+            type="submit"
+            disabled={submitDisabled || loading}
             data-testid="submit-button"
           >
-            {loading ? 'Loading...' : submitText}
+            {submitText}
           </button>
           <button type="button" onClick={onClose} data-testid="close-button">
             Close
@@ -127,7 +130,8 @@ const defaultProps = {
 describe('StartTeamModal Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    
+    mockShowWarning.mockClear();
+
     // Setup default fetch mock for projects
     (global.fetch as any).mockResolvedValue({
       ok: true,
@@ -173,12 +177,12 @@ describe('StartTeamModal Component', () => {
       });
     });
 
-    it('should render modal size as lg', async () => {
+    it('should render modal size as xl', async () => {
       await act(async () => {
         render(<StartTeamModal {...defaultProps} />);
       });
-      
-      expect(screen.getByText('Size: lg')).toBeInTheDocument();
+
+      expect(screen.getByText('Size: xl')).toBeInTheDocument();
     });
   });
 
@@ -409,41 +413,37 @@ describe('StartTeamModal Component', () => {
       });
     });
 
-    it('should show alert when no project is selected', async () => {
-      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-      
+    it('should show warning when no project is selected on submit', async () => {
       render(<StartTeamModal {...defaultProps} />);
-      
+
       await waitFor(() => {
         const submitButton = screen.getByTestId('submit-button');
         expect(submitButton).toBeDisabled();
       });
 
       // Force submit by triggering form submit event
-      const form = screen.getByRole('form');
-      fireEvent.submit(form);
+      const form = screen.getByTestId('form-popup').querySelector('form');
+      fireEvent.submit(form!);
 
-      expect(alertSpy).toHaveBeenCalledWith('Please select a project');
+      expect(mockShowWarning).toHaveBeenCalledWith('Please select a project');
       expect(defaultProps.onStartTeam).not.toHaveBeenCalled();
-      
-      alertSpy.mockRestore();
     });
   });
 
   describe('Loading States', () => {
     it('should show loading state on submit button when loading', async () => {
       render(<StartTeamModal {...defaultProps} loading={true} />);
-      
+
       await waitFor(() => {
         const submitButton = screen.getByTestId('submit-button');
-        expect(submitButton).toHaveTextContent('Loading...');
+        expect(submitButton).toHaveTextContent('Starting...');
         expect(submitButton).toBeDisabled();
       });
     });
 
     it('should show normal submit text when not loading', async () => {
       render(<StartTeamModal {...defaultProps} loading={false} />);
-      
+
       await waitFor(() => {
         const submitButton = screen.getByTestId('submit-button');
         expect(submitButton).toHaveTextContent('Proceed');

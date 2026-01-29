@@ -1,8 +1,8 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
-import { ViewToggle } from '../ViewToggle';
-import { Project, Team } from '../../../types';
+import { ViewToggle } from './ViewToggle';
+import { Project, Team } from '../../types';
 
 const mockProjects: Project[] = [
   {

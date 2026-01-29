@@ -549,6 +549,120 @@ Available commands:
 `.trim(),
 } as const;
 
+// ========================= MEMORY SYSTEM CONSTANTS =========================
+
+/**
+ * Memory system configuration for the two-level memory architecture
+ * Agent-level: ~/.agentmux/agents/{agentId}/
+ * Project-level: project/.agentmux/knowledge/
+ */
+export const MEMORY_CONSTANTS = {
+  /**
+   * Storage paths for memory files
+   */
+  PATHS: {
+    /** Agent memory directory (relative to AGENTMUX_HOME) */
+    AGENTS_DIR: 'agents',
+    /** Project knowledge directory (relative to project .agentmux) */
+    KNOWLEDGE_DIR: 'knowledge',
+  },
+
+  /**
+   * File names for agent-level memory
+   */
+  AGENT_FILES: {
+    /** Main memory file */
+    MEMORY: 'memory.json',
+    /** Detailed role knowledge entries */
+    ROLE_KNOWLEDGE: 'role-knowledge.json',
+    /** Agent preferences */
+    PREFERENCES: 'preferences.json',
+    /** Performance metrics */
+    PERFORMANCE: 'performance.json',
+    /** Custom SOPs directory */
+    SOP_CUSTOM_DIR: 'sop-custom',
+  },
+
+  /**
+   * File names for project-level memory
+   */
+  PROJECT_FILES: {
+    /** Main index file */
+    INDEX: 'index.json',
+    /** Pattern entries */
+    PATTERNS: 'patterns.json',
+    /** Decision entries */
+    DECISIONS: 'decisions.json',
+    /** Gotcha entries */
+    GOTCHAS: 'gotchas.json',
+    /** Relationship entries */
+    RELATIONSHIPS: 'relationships.json',
+    /** Human-readable learnings log */
+    LEARNINGS: 'learnings.md',
+  },
+
+  /**
+   * Storage limits to keep memory files performant
+   */
+  LIMITS: {
+    /** Maximum entries per category in agent memory */
+    MAX_ROLE_KNOWLEDGE_ENTRIES: 500,
+    /** Maximum entries per category in project memory */
+    MAX_PATTERN_ENTRIES: 200,
+    MAX_DECISION_ENTRIES: 100,
+    MAX_GOTCHA_ENTRIES: 200,
+    MAX_RELATIONSHIP_ENTRIES: 500,
+    /** Maximum file size in bytes (1MB) */
+    MAX_FILE_SIZE_BYTES: 1048576,
+    /** Maximum entries returned in a single query */
+    MAX_QUERY_RESULTS: 50,
+    /** Minimum confidence to retain during pruning (0-1) */
+    MIN_CONFIDENCE_THRESHOLD: 0.2,
+    /** Days before low-confidence entries are pruned */
+    PRUNE_AFTER_DAYS: 90,
+  },
+
+  /**
+   * Default values for memory entries
+   */
+  DEFAULTS: {
+    /** Default confidence for new knowledge entries */
+    INITIAL_CONFIDENCE: 0.5,
+    /** Confidence increase when knowledge is reinforced */
+    CONFIDENCE_REINFORCEMENT: 0.1,
+    /** Maximum confidence value */
+    MAX_CONFIDENCE: 1.0,
+    /** Minimum confidence value */
+    MIN_CONFIDENCE: 0.0,
+  },
+
+  /**
+   * Schema versioning for migrations
+   */
+  SCHEMA: {
+    /** Current schema version */
+    CURRENT_VERSION: 1,
+    /** Minimum supported schema version */
+    MIN_SUPPORTED_VERSION: 1,
+  },
+
+  /**
+   * Memory categories
+   */
+  CATEGORIES: {
+    /** Role knowledge categories */
+    ROLE_KNOWLEDGE: ['best-practice', 'anti-pattern', 'tool-usage', 'workflow'] as const,
+    /** Pattern categories */
+    PATTERN: ['api', 'component', 'service', 'testing', 'styling', 'database', 'config', 'other'] as const,
+    /** Gotcha severity levels */
+    GOTCHA_SEVERITY: ['low', 'medium', 'high', 'critical'] as const,
+    /** Learning categories */
+    LEARNING: ['pattern', 'decision', 'gotcha', 'insight', 'improvement'] as const,
+    /** Relationship types */
+    RELATIONSHIP: ['depends-on', 'uses', 'extends', 'implements', 'calls', 'imported-by'] as const,
+  },
+} as const;
+
 // ========================= TYPE HELPERS =========================
 
 /**

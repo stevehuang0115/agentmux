@@ -1,6 +1,13 @@
+/**
+ * Tests for Form components.
+ *
+ * Covers Form, FormGroup, FormRow, FormLabel, FormHelp, FormError,
+ * FormInput, FormTextarea, and FormSection components.
+ */
+
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { vi } from 'vitest';
+import { vi, describe, it, expect } from 'vitest';
 import {
   Form,
   FormGroup,
@@ -21,7 +28,7 @@ describe('Form Component', () => {
           <div>Form content</div>
         </Form>
       );
-      
+
       const form = container.querySelector('form');
       expect(form).toBeInTheDocument();
       expect(screen.getByText('Form content')).toBeInTheDocument();
@@ -33,7 +40,7 @@ describe('Form Component', () => {
           <div>Content</div>
         </Form>
       );
-      
+
       const form = container.querySelector('form');
       expect(form).toHaveClass('form');
     });
@@ -44,24 +51,24 @@ describe('Form Component', () => {
           <div>Content</div>
         </Form>
       );
-      
+
       const form = container.querySelector('form');
       expect(form).toHaveClass('form', 'custom-form');
     });
 
     it('should pass through form attributes', () => {
       const handleSubmit = vi.fn((e) => e.preventDefault());
-      
+
       const { container } = render(
         <Form onSubmit={handleSubmit} method="post" action="/submit">
           <button type="submit">Submit</button>
         </Form>
       );
-      
+
       const form = container.querySelector('form');
       expect(form).toHaveAttribute('method', 'post');
       expect(form).toHaveAttribute('action', '/submit');
-      
+
       fireEvent.submit(form!);
       expect(handleSubmit).toHaveBeenCalledTimes(1);
     });
@@ -76,7 +83,7 @@ describe('FormGroup Component', () => {
           <div>Group content</div>
         </FormGroup>
       );
-      
+
       expect(screen.getByText('Group content')).toBeInTheDocument();
     });
 
@@ -86,7 +93,7 @@ describe('FormGroup Component', () => {
           <div>Content</div>
         </FormGroup>
       );
-      
+
       const group = document.querySelector('.form-group');
       expect(group).toBeInTheDocument();
     });
@@ -97,7 +104,7 @@ describe('FormGroup Component', () => {
           <div>Content</div>
         </FormGroup>
       );
-      
+
       const group = document.querySelector('.form-group');
       expect(group).toHaveClass('form-group', 'custom-group');
     });
@@ -112,7 +119,7 @@ describe('FormRow Component', () => {
           <div>Row content</div>
         </FormRow>
       );
-      
+
       expect(screen.getByText('Row content')).toBeInTheDocument();
     });
 
@@ -122,7 +129,7 @@ describe('FormRow Component', () => {
           <div>Content</div>
         </FormRow>
       );
-      
+
       const row = document.querySelector('.form-row');
       expect(row).toBeInTheDocument();
     });
@@ -133,7 +140,7 @@ describe('FormRow Component', () => {
           <div>Content</div>
         </FormRow>
       );
-      
+
       const row = document.querySelector('.form-row');
       expect(row).toHaveClass('form-row', 'custom-row');
     });
@@ -144,29 +151,29 @@ describe('FormLabel Component', () => {
   describe('Basic Rendering', () => {
     it('should render label with text', () => {
       render(<FormLabel>Test Label</FormLabel>);
-      
+
       const label = screen.getByText('Test Label');
       expect(label).toBeInTheDocument();
       expect(label.tagName).toBe('LABEL');
     });
 
-    it('should apply form-label class by default', () => {
+    it('should apply Tailwind styling classes by default', () => {
       render(<FormLabel>Test Label</FormLabel>);
-      
+
       const label = screen.getByText('Test Label');
-      expect(label).toHaveClass('form-label');
+      expect(label).toHaveClass('block', 'text-sm', 'font-medium', 'text-text-primary-dark', 'mb-2');
     });
 
     it('should apply custom className', () => {
       render(<FormLabel className="custom-label">Test Label</FormLabel>);
-      
+
       const label = screen.getByText('Test Label');
-      expect(label).toHaveClass('form-label', 'custom-label');
+      expect(label).toHaveClass('custom-label');
     });
 
     it('should pass through label attributes', () => {
       render(<FormLabel htmlFor="test-input">Test Label</FormLabel>);
-      
+
       const label = screen.getByText('Test Label');
       expect(label).toHaveAttribute('for', 'test-input');
     });
@@ -175,25 +182,24 @@ describe('FormLabel Component', () => {
   describe('Required Indicator', () => {
     it('should show required asterisk when required is true', () => {
       render(<FormLabel required>Required Label</FormLabel>);
-      
+
       expect(screen.getByText('Required Label')).toBeInTheDocument();
-      const asterisk = document.querySelector('.form-required');
-      expect(asterisk).toBeInTheDocument();
-      expect(asterisk).toHaveTextContent('*');
+      expect(screen.getByText('*')).toBeInTheDocument();
+      expect(screen.getByText('*')).toHaveClass('text-red-500', 'ml-1');
     });
 
     it('should not show required asterisk by default', () => {
       render(<FormLabel>Normal Label</FormLabel>);
-      
+
       expect(screen.getByText('Normal Label')).toBeInTheDocument();
-      expect(document.querySelector('.form-required')).not.toBeInTheDocument();
+      expect(screen.queryByText('*')).not.toBeInTheDocument();
     });
 
     it('should not show required asterisk when required is false', () => {
       render(<FormLabel required={false}>Optional Label</FormLabel>);
-      
+
       expect(screen.getByText('Optional Label')).toBeInTheDocument();
-      expect(document.querySelector('.form-required')).not.toBeInTheDocument();
+      expect(screen.queryByText('*')).not.toBeInTheDocument();
     });
   });
 });
@@ -202,7 +208,7 @@ describe('FormHelp Component', () => {
   describe('Basic Rendering', () => {
     it('should render help text', () => {
       render(<FormHelp>This is help text</FormHelp>);
-      
+
       const help = screen.getByText('This is help text');
       expect(help).toBeInTheDocument();
       expect(help.tagName).toBe('SMALL');
@@ -210,14 +216,14 @@ describe('FormHelp Component', () => {
 
     it('should apply form-help class by default', () => {
       render(<FormHelp>Help text</FormHelp>);
-      
+
       const help = screen.getByText('Help text');
       expect(help).toHaveClass('form-help');
     });
 
     it('should apply custom className', () => {
       render(<FormHelp className="custom-help">Help text</FormHelp>);
-      
+
       const help = screen.getByText('Help text');
       expect(help).toHaveClass('form-help', 'custom-help');
     });
@@ -228,7 +234,7 @@ describe('FormError Component', () => {
   describe('Basic Rendering', () => {
     it('should render error text', () => {
       render(<FormError>This is an error</FormError>);
-      
+
       const error = screen.getByText('This is an error');
       expect(error).toBeInTheDocument();
       expect(error.tagName).toBe('DIV');
@@ -236,14 +242,14 @@ describe('FormError Component', () => {
 
     it('should apply form-error class by default', () => {
       render(<FormError>Error text</FormError>);
-      
+
       const error = screen.getByText('Error text');
       expect(error).toHaveClass('form-error');
     });
 
     it('should apply custom className', () => {
       render(<FormError className="custom-error">Error text</FormError>);
-      
+
       const error = screen.getByText('Error text');
       expect(error).toHaveClass('form-error', 'custom-error');
     });
@@ -254,24 +260,24 @@ describe('FormInput Component', () => {
   describe('Basic Rendering', () => {
     it('should render input element', () => {
       render(<FormInput placeholder="Test input" />);
-      
+
       const input = screen.getByPlaceholderText('Test input');
       expect(input).toBeInTheDocument();
       expect(input.tagName).toBe('INPUT');
     });
 
-    it('should apply form-input class by default', () => {
+    it('should apply Tailwind styling classes by default', () => {
       render(<FormInput placeholder="Test input" />);
-      
+
       const input = screen.getByPlaceholderText('Test input');
-      expect(input).toHaveClass('form-input');
+      expect(input).toHaveClass('w-full', 'bg-background-dark', 'border', 'border-border-dark', 'rounded-lg');
     });
 
     it('should apply custom className', () => {
       render(<FormInput placeholder="Test input" className="custom-input" />);
-      
+
       const input = screen.getByPlaceholderText('Test input');
-      expect(input).toHaveClass('form-input', 'custom-input');
+      expect(input).toHaveClass('custom-input');
     });
 
     it('should pass through input attributes', () => {
@@ -283,7 +289,7 @@ describe('FormInput Component', () => {
           id="email-input"
         />
       );
-      
+
       const input = screen.getByPlaceholderText('Enter email');
       expect(input).toHaveAttribute('type', 'email');
       expect(input).toHaveAttribute('required');
@@ -294,23 +300,23 @@ describe('FormInput Component', () => {
   describe('Error State', () => {
     it('should apply error class when error is true', () => {
       render(<FormInput placeholder="Error input" error />);
-      
+
       const input = screen.getByPlaceholderText('Error input');
-      expect(input).toHaveClass('form-input--error');
+      expect(input).toHaveClass('border-red-500');
     });
 
     it('should not apply error class by default', () => {
       render(<FormInput placeholder="Normal input" />);
-      
+
       const input = screen.getByPlaceholderText('Normal input');
-      expect(input).not.toHaveClass('form-input--error');
+      expect(input).not.toHaveClass('border-red-500');
     });
 
     it('should not apply error class when error is false', () => {
       render(<FormInput placeholder="Normal input" error={false} />);
-      
+
       const input = screen.getByPlaceholderText('Normal input');
-      expect(input).not.toHaveClass('form-input--error');
+      expect(input).not.toHaveClass('border-red-500');
     });
   });
 
@@ -318,10 +324,10 @@ describe('FormInput Component', () => {
     it('should handle change events', () => {
       const handleChange = vi.fn();
       render(<FormInput placeholder="Test input" onChange={handleChange} />);
-      
+
       const input = screen.getByPlaceholderText('Test input');
       fireEvent.change(input, { target: { value: 'test value' } });
-      
+
       expect(handleChange).toHaveBeenCalledTimes(1);
     });
 
@@ -335,12 +341,12 @@ describe('FormInput Component', () => {
           onBlur={handleBlur}
         />
       );
-      
+
       const input = screen.getByPlaceholderText('Test input');
-      
+
       fireEvent.focus(input);
       expect(handleFocus).toHaveBeenCalledTimes(1);
-      
+
       fireEvent.blur(input);
       expect(handleBlur).toHaveBeenCalledTimes(1);
     });
@@ -351,24 +357,24 @@ describe('FormTextarea Component', () => {
   describe('Basic Rendering', () => {
     it('should render textarea element', () => {
       render(<FormTextarea placeholder="Test textarea" />);
-      
+
       const textarea = screen.getByPlaceholderText('Test textarea');
       expect(textarea).toBeInTheDocument();
       expect(textarea.tagName).toBe('TEXTAREA');
     });
 
-    it('should apply form-textarea class by default', () => {
+    it('should apply Tailwind styling classes by default', () => {
       render(<FormTextarea placeholder="Test textarea" />);
-      
+
       const textarea = screen.getByPlaceholderText('Test textarea');
-      expect(textarea).toHaveClass('form-textarea');
+      expect(textarea).toHaveClass('w-full', 'bg-background-dark', 'border', 'border-border-dark', 'rounded-lg');
     });
 
     it('should apply custom className', () => {
       render(<FormTextarea placeholder="Test textarea" className="custom-textarea" />);
-      
+
       const textarea = screen.getByPlaceholderText('Test textarea');
-      expect(textarea).toHaveClass('form-textarea', 'custom-textarea');
+      expect(textarea).toHaveClass('custom-textarea');
     });
 
     it('should pass through textarea attributes', () => {
@@ -381,7 +387,7 @@ describe('FormTextarea Component', () => {
           id="description-textarea"
         />
       );
-      
+
       const textarea = screen.getByPlaceholderText('Enter description');
       expect(textarea).toHaveAttribute('rows', '5');
       expect(textarea).toHaveAttribute('cols', '50');
@@ -393,23 +399,23 @@ describe('FormTextarea Component', () => {
   describe('Error State', () => {
     it('should apply error class when error is true', () => {
       render(<FormTextarea placeholder="Error textarea" error />);
-      
+
       const textarea = screen.getByPlaceholderText('Error textarea');
-      expect(textarea).toHaveClass('form-textarea--error');
+      expect(textarea).toHaveClass('border-red-500');
     });
 
     it('should not apply error class by default', () => {
       render(<FormTextarea placeholder="Normal textarea" />);
-      
+
       const textarea = screen.getByPlaceholderText('Normal textarea');
-      expect(textarea).not.toHaveClass('form-textarea--error');
+      expect(textarea).not.toHaveClass('border-red-500');
     });
 
     it('should not apply error class when error is false', () => {
       render(<FormTextarea placeholder="Normal textarea" error={false} />);
-      
+
       const textarea = screen.getByPlaceholderText('Normal textarea');
-      expect(textarea).not.toHaveClass('form-textarea--error');
+      expect(textarea).not.toHaveClass('border-red-500');
     });
   });
 
@@ -417,10 +423,10 @@ describe('FormTextarea Component', () => {
     it('should handle change events', () => {
       const handleChange = vi.fn();
       render(<FormTextarea placeholder="Test textarea" onChange={handleChange} />);
-      
+
       const textarea = screen.getByPlaceholderText('Test textarea');
       fireEvent.change(textarea, { target: { value: 'test content' } });
-      
+
       expect(handleChange).toHaveBeenCalledTimes(1);
     });
   });
@@ -434,7 +440,7 @@ describe('FormSection Component', () => {
           <div>Section content</div>
         </FormSection>
       );
-      
+
       expect(screen.getByText('Section content')).toBeInTheDocument();
     });
 
@@ -444,7 +450,7 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       const section = document.querySelector('.form-section');
       expect(section).toBeInTheDocument();
     });
@@ -455,7 +461,7 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       const section = document.querySelector('.form-section');
       expect(section).toHaveClass('form-section', 'custom-section');
     });
@@ -468,9 +474,9 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       expect(screen.getByText('Section Title')).toBeInTheDocument();
-      
+
       const title = screen.getByRole('heading', { level: 3 });
       expect(title).toHaveTextContent('Section Title');
       expect(title).toHaveClass('form-section-title');
@@ -482,7 +488,7 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       const description = screen.getByText('This is a section description');
       expect(description).toBeInTheDocument();
       expect(description.tagName).toBe('P');
@@ -498,10 +504,10 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       expect(screen.getByText('Section Title')).toBeInTheDocument();
       expect(screen.getByText('Section description')).toBeInTheDocument();
-      
+
       const header = document.querySelector('.form-section-header');
       expect(header).toBeInTheDocument();
     });
@@ -512,7 +518,7 @@ describe('FormSection Component', () => {
           <div>Content</div>
         </FormSection>
       );
-      
+
       expect(document.querySelector('.form-section-header')).not.toBeInTheDocument();
     });
   });
@@ -524,7 +530,7 @@ describe('FormSection Component', () => {
           <div data-testid="section-content">Content</div>
         </FormSection>
       );
-      
+
       const content = screen.getByTestId('section-content');
       expect(content.parentElement).toHaveClass('form-section-content');
     });
@@ -536,7 +542,7 @@ describe('Form Components Integration', () => {
     const handleSubmit = vi.fn((e) => e.preventDefault());
     const handleInputChange = vi.fn();
     const handleTextareaChange = vi.fn();
-    
+
     const { container } = render(
       <Form onSubmit={handleSubmit}>
         <FormSection
@@ -556,7 +562,7 @@ describe('Form Components Integration', () => {
               />
               <FormHelp>Enter your full name as it appears on your ID</FormHelp>
             </FormGroup>
-            
+
             <FormGroup>
               <FormLabel htmlFor="email" required>
                 Email
@@ -570,7 +576,7 @@ describe('Form Components Integration', () => {
               <FormError>Please enter a valid email address</FormError>
             </FormGroup>
           </FormRow>
-          
+
           <FormGroup>
             <FormLabel htmlFor="bio">
               Biography
@@ -583,11 +589,11 @@ describe('Form Components Integration', () => {
             />
           </FormGroup>
         </FormSection>
-        
+
         <button type="submit">Submit</button>
       </Form>
     );
-    
+
     // Verify all elements are rendered
     expect(container.querySelector('form')).toBeInTheDocument();
     expect(screen.getByText('Personal Information')).toBeInTheDocument();
@@ -597,16 +603,16 @@ describe('Form Components Integration', () => {
     expect(screen.getByPlaceholderText('Tell us about yourself')).toBeInTheDocument();
     expect(screen.getByText('Enter your full name as it appears on your ID')).toBeInTheDocument();
     expect(screen.getByText('Please enter a valid email address')).toBeInTheDocument();
-    
+
     // Test interactions
     const nameInput = screen.getByPlaceholderText('Enter your name');
     fireEvent.change(nameInput, { target: { value: 'John Doe' } });
     expect(handleInputChange).toHaveBeenCalled();
-    
+
     const bioTextarea = screen.getByPlaceholderText('Tell us about yourself');
     fireEvent.change(bioTextarea, { target: { value: 'Bio content' } });
     expect(handleTextareaChange).toHaveBeenCalled();
-    
+
     const submitButton = screen.getByText('Submit');
     fireEvent.click(submitButton);
     expect(handleSubmit).toHaveBeenCalled();
@@ -625,10 +631,10 @@ describe('Form Components Integration', () => {
         </FormGroup>
       </Form>
     );
-    
+
     const input = container.querySelector('#accessible-input');
     expect(input).toHaveAttribute('aria-describedby', 'input-help input-error');
-    
+
     const label = screen.getByText('Accessible Input');
     expect(label).toHaveAttribute('for', 'accessible-input');
   });

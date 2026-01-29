@@ -41,17 +41,7 @@ const TestComponent: React.FC = () => {
   );
 };
 
-// Mock console.log to capture debug messages
-const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
 describe('TerminalContext', () => {
-  beforeEach(() => {
-    consoleSpy.mockClear();
-  });
-
-  afterAll(() => {
-    consoleSpy.mockRestore();
-  });
 
   it('throws error when useTerminal is used outside provider', () => {
     // Temporarily mock console.error to avoid test output noise
@@ -128,20 +118,17 @@ describe('TerminalContext', () => {
       expect(screen.getByTestId('selected-session')).toHaveTextContent('new-session');
     });
 
-    it('logs debug messages when openTerminalWithSession is called', async () => {
+    it('opens terminal with specified session name', async () => {
       const user = userEvent.setup();
       renderWithProvider();
 
+      expect(screen.getByTestId('terminal-open')).toHaveTextContent('false');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+
       await user.click(screen.getByTestId('open-with-session'));
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'TerminalContext: openTerminalWithSession called with:',
-        'new-session'
-      );
-      expect(consoleSpy).toHaveBeenCalledWith(
-        'TerminalContext: Terminal opened and session set to:',
-        'new-session'
-      );
+      expect(screen.getByTestId('terminal-open')).toHaveTextContent('true');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('new-session');
     });
 
     it('maintains state across multiple operations', async () => {

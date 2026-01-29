@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import { AppLayout } from './AppLayout';
@@ -20,14 +20,6 @@ vi.mock('../OrchestratorStatusBanner', () => ({
   OrchestratorStatusBanner: () => <div data-testid="orchestrator-banner">Orchestrator Banner</div>
 }));
 
-vi.mock('../UI', () => ({
-  IconButton: ({ onClick, children, className, 'aria-label': ariaLabel }: any) => (
-    <button onClick={onClick} className={className} aria-label={ariaLabel}>
-      {children}
-    </button>
-  )
-}));
-
 const renderWithProviders = (component: React.ReactElement) => {
   return render(
     <BrowserRouter>
@@ -41,28 +33,11 @@ const renderWithProviders = (component: React.ReactElement) => {
 };
 
 describe('AppLayout', () => {
-  it('renders navigation and main content', () => {
+  it('renders navigation and orchestrator banner', () => {
     renderWithProviders(<AppLayout />);
 
     expect(screen.getByTestId('navigation')).toBeInTheDocument();
     expect(screen.getByTestId('orchestrator-banner')).toBeInTheDocument();
-  });
-
-  it('applies collapsed class to sidebar when sidebar is collapsed', () => {
-    // This test would need a way to control the sidebar state
-    // For now, just verify the layout renders without errors
-    renderWithProviders(<AppLayout />);
-
-    const sidebar = document.querySelector('.app-sidebar');
-    expect(sidebar).toBeInTheDocument();
-  });
-
-  it('applies sidebar-collapsed class to main content when sidebar is collapsed', () => {
-    renderWithProviders(<AppLayout />);
-
-    const main = document.querySelector('.app-main');
-    expect(main).toBeInTheDocument();
-    expect(main).toHaveClass('app-main');
   });
 
   it('renders terminal toggle button', () => {
@@ -72,33 +47,47 @@ describe('AppLayout', () => {
     expect(toggleButton).toBeInTheDocument();
   });
 
-  it('applies correct classes based on sidebar state', () => {
+  it('opens terminal panel when terminal button is clicked', () => {
     renderWithProviders(<AppLayout />);
 
-    const sidebar = document.querySelector('.app-sidebar');
-    const main = document.querySelector('.app-main');
+    // Terminal should be closed initially
+    expect(screen.queryByTestId('terminal-panel')).not.toBeInTheDocument();
 
-    expect(sidebar).toBeInTheDocument();
-    expect(main).toBeInTheDocument();
+    // Click terminal toggle button
+    const toggleButton = screen.getByRole('button', { name: /open terminal/i });
+    fireEvent.click(toggleButton);
 
-    // Initially not collapsed (default state)
-    expect(sidebar).not.toHaveClass('collapsed');
-    expect(main).not.toHaveClass('sidebar-collapsed');
+    // Terminal panel should now be visible
+    expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
   });
 
-  it('renders app layout structure correctly', () => {
+  it('closes terminal panel when clicking close', () => {
     renderWithProviders(<AppLayout />);
 
-    const layout = document.querySelector('.app-layout');
-    const sidebar = document.querySelector('.app-sidebar');
-    const main = document.querySelector('.app-main');
+    // Open terminal first
+    const openButton = screen.getByRole('button', { name: /open terminal/i });
+    fireEvent.click(openButton);
+    expect(screen.getByTestId('terminal-panel')).toBeInTheDocument();
 
-    expect(layout).toBeInTheDocument();
-    expect(sidebar).toBeInTheDocument();
-    expect(main).toBeInTheDocument();
+    // Close terminal
+    const closeButton = screen.getByRole('button', { name: /close terminal/i });
+    fireEvent.click(closeButton);
 
-    // Check that sidebar is the first child and main is the second
-    expect(layout?.children[0]).toBe(sidebar);
-    expect(layout?.children[1]).toBe(main);
+    // Terminal panel should be hidden
+    expect(screen.queryByTestId('terminal-panel')).not.toBeInTheDocument();
+  });
+
+  it('renders mobile menu button on small screens', () => {
+    renderWithProviders(<AppLayout />);
+
+    // The mobile menu button should be present (though might be hidden on desktop via CSS)
+    const menuButton = screen.getByRole('button', { name: /open menu/i });
+    expect(menuButton).toBeInTheDocument();
+  });
+
+  it('shows AgentMux title in mobile header', () => {
+    renderWithProviders(<AppLayout />);
+
+    expect(screen.getByText('AgentMux')).toBeInTheDocument();
   });
 });

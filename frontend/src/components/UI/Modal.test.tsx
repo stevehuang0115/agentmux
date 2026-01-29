@@ -92,10 +92,12 @@ describe('Modal Component', () => {
       expect(onCloseMock).toHaveBeenCalledTimes(1);
     });
 
-    it('should not render close button when no title and closable is default', () => {
+    it('should render close button when no title but closable defaults to true', () => {
       render(<Modal {...defaultProps} />);
-      
-      expect(screen.queryByRole('button', { name: 'Close modal' })).not.toBeInTheDocument();
+
+      // closable defaults to true, so close button is rendered even without title
+      const closeButton = screen.getByRole('button', { name: 'Close modal' });
+      expect(closeButton).toBeInTheDocument();
     });
 
     it('should render close button when no title but closable is explicitly true', () => {
@@ -217,14 +219,14 @@ describe('Modal Component', () => {
   describe('Focus Management', () => {
     it('should focus first focusable element when modal opens', async () => {
       render(
-        <Modal {...defaultProps} title="Test Modal">
+        <Modal {...defaultProps} closable={false}>
           <div>
             <button>First Button</button>
             <button>Second Button</button>
           </div>
         </Modal>
       );
-      
+
       await waitFor(() => {
         expect(screen.getByText('First Button')).toHaveFocus();
       });

@@ -175,3 +175,6 @@ export interface StartupConfig {
   defaultCheckInterval: number;
   autoCommitInterval: number;
 }
+
+// Re-export memory types
+export * from './memory.types.js';

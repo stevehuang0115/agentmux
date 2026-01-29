@@ -1,0 +1,562 @@
+/**
+ * Memory Data Models for AgentMux Two-Level Memory System
+ *
+ * This module defines the data structures for the structured memory system:
+ * - Agent-level memory: Role knowledge, preferences, and performance metrics
+ * - Project-level memory: Patterns, decisions, gotchas, and relationships
+ *
+ * @module memory.types
+ */
+
+// ========================= AGENT-LEVEL MEMORY =========================
+
+/**
+ * Categories for role knowledge entries
+ */
+export type RoleKnowledgeCategory = 'best-practice' | 'anti-pattern' | 'tool-usage' | 'workflow';
+
+/**
+ * A single piece of role-specific knowledge learned by an agent
+ *
+ * @example
+ * ```typescript
+ * const entry: RoleKnowledgeEntry = {
+ *   id: 'rk-001',
+ *   category: 'best-practice',
+ *   content: 'Always run tests before committing code changes',
+ *   learnedFrom: 'TICKET-123',
+ *   confidence: 0.85,
+ *   createdAt: '2026-01-29T10:00:00Z',
+ *   lastUsed: '2026-01-29T14:30:00Z'
+ * };
+ * ```
+ */
+export interface RoleKnowledgeEntry {
+  /** Unique identifier for this knowledge entry */
+  id: string;
+  /** Category of knowledge */
+  category: RoleKnowledgeCategory;
+  /** The actual knowledge content */
+  content: string;
+  /** Task/Ticket ID where this was learned (optional) */
+  learnedFrom?: string;
+  /** Confidence score 0-1, increases with reinforcement */
+  confidence: number;
+  /** ISO timestamp when this entry was created */
+  createdAt: string;
+  /** ISO timestamp when this entry was last used/referenced */
+  lastUsed?: string;
+  /** Tags for additional categorization */
+  tags?: string[];
+}
+
+/**
+ * Verbosity level for agent communication
+ */
+export type VerbosityLevel = 'concise' | 'detailed';
+
+/**
+ * Task breakdown size preference
+ */
+export type BreakdownSize = 'small' | 'medium' | 'large';
+
+/**
+ * Agent coding style preferences
+ */
+export interface CodingStylePreferences {
+  /** Preferred programming language */
+  language?: string;
+  /** Preferred testing framework (e.g., 'jest', 'vitest', 'pytest') */
+  testingFramework?: string;
+  /** Linting rules preference (e.g., 'eslint-recommended', 'strict') */
+  lintingRules?: string;
+  /** Code formatting preferences */
+  formatting?: {
+    /** Indentation style ('tabs' or 'spaces') */
+    indentStyle?: 'tabs' | 'spaces';
+    /** Number of spaces for indentation */
+    indentSize?: number;
+    /** Maximum line length */
+    maxLineLength?: number;
+  };
+}
+
+/**
+ * Agent communication style preferences
+ */
+export interface CommunicationStylePreferences {
+  /** How verbose the agent should be in responses */
+  verbosity: VerbosityLevel;
+  /** Whether to ask for confirmation before taking actions */
+  askBeforeAction: boolean;
+  /** Whether to include explanations with code changes */
+  includeExplanations?: boolean;
+}
+
+/**
+ * Agent work pattern preferences
+ */
+export interface WorkPatternPreferences {
+  /** How often to commit changes (e.g., 'after-each-task', 'at-milestones') */
+  commitFrequency?: string;
+  /** Preferred size for task breakdown */
+  breakdownSize?: BreakdownSize;
+  /** Preferred working hours (for scheduling) */
+  preferredHours?: {
+    start: string; // HH:MM format
+    end: string;
+  };
+}
+
+/**
+ * Combined agent preferences
+ */
+export interface AgentPreferences {
+  /** Coding style preferences */
+  codingStyle?: CodingStylePreferences;
+  /** Communication style preferences */
+  communicationStyle?: CommunicationStylePreferences;
+  /** Work pattern preferences */
+  workPatterns?: WorkPatternPreferences;
+  /** Custom preferences (key-value pairs) */
+  custom?: Record<string, unknown>;
+}
+
+/**
+ * A pattern of errors encountered by the agent
+ */
+export interface ErrorPattern {
+  /** Identifier or description of the error pattern */
+  pattern: string;
+  /** Number of times this error has occurred */
+  occurrences: number;
+  /** ISO timestamp of the last occurrence */
+  lastOccurred: string;
+  /** Known resolution for this error (if any) */
+  resolution?: string;
+  /** Related file paths where this error commonly occurs */
+  relatedFiles?: string[];
+}
+
+/**
+ * Agent performance metrics over time
+ */
+export interface PerformanceMetrics {
+  /** Total number of tasks completed */
+  tasksCompleted: number;
+  /** Average number of iterations per task */
+  averageIterations: number;
+  /** Percentage of quality gates passed on first try (0-100) */
+  qualityGatePassRate: number;
+  /** Common error patterns encountered */
+  commonErrors: ErrorPattern[];
+  /** Average time to complete a task (in minutes) */
+  averageCompletionTime?: number;
+  /** Success rate for different task types */
+  taskTypeSuccessRates?: Record<string, number>;
+}
+
+/**
+ * Complete agent-level memory structure
+ *
+ * Stored at: ~/.agentmux/agents/{agentId}/memory.json
+ *
+ * @example
+ * ```typescript
+ * const agentMemory: AgentMemory = {
+ *   agentId: 'frontend-dev-001',
+ *   role: 'frontend-developer',
+ *   createdAt: '2026-01-01T00:00:00Z',
+ *   updatedAt: '2026-01-29T15:00:00Z',
+ *   roleKnowledge: [...],
+ *   preferences: { ... },
+ *   performance: { ... }
+ * };
+ * ```
+ */
+export interface AgentMemory {
+  /** Unique agent identifier */
+  agentId: string;
+  /** Agent's role (e.g., 'developer', 'qa', 'pm') */
+  role: string;
+  /** ISO timestamp when this memory was created */
+  createdAt: string;
+  /** ISO timestamp of last update */
+  updatedAt: string;
+  /** Role-specific knowledge entries */
+  roleKnowledge: RoleKnowledgeEntry[];
+  /** Agent preferences */
+  preferences: AgentPreferences;
+  /** Performance metrics */
+  performance: PerformanceMetrics;
+  /** Schema version for migration support */
+  schemaVersion?: number;
+}
+
+// ========================= PROJECT-LEVEL MEMORY =========================
+
+/**
+ * Categories for project code patterns
+ */
+export type PatternCategory = 'api' | 'component' | 'service' | 'testing' | 'styling' | 'database' | 'config' | 'other';
+
+/**
+ * A code pattern discovered in the project
+ *
+ * @example
+ * ```typescript
+ * const pattern: PatternEntry = {
+ *   id: 'pat-001',
+ *   category: 'api',
+ *   title: 'Error Handling Wrapper',
+ *   description: 'All API endpoints use handleApiError() wrapper',
+ *   example: 'app.get("/api/users", handleApiError(async (req, res) => {...}))',
+ *   files: ['backend/src/utils/api-errors.ts'],
+ *   discoveredBy: 'backend-dev-001',
+ *   createdAt: '2026-01-15T10:00:00Z'
+ * };
+ * ```
+ */
+export interface PatternEntry {
+  /** Unique identifier for this pattern */
+  id: string;
+  /** Category of the pattern */
+  category: PatternCategory;
+  /** Short title describing the pattern */
+  title: string;
+  /** Detailed description of the pattern */
+  description: string;
+  /** Code example demonstrating the pattern */
+  example?: string;
+  /** Related file paths */
+  files?: string[];
+  /** Agent ID that discovered this pattern */
+  discoveredBy: string;
+  /** ISO timestamp when discovered */
+  createdAt: string;
+  /** Tags for searchability */
+  tags?: string[];
+}
+
+/**
+ * An architecture or design decision made for the project
+ *
+ * @example
+ * ```typescript
+ * const decision: DecisionEntry = {
+ *   id: 'dec-001',
+ *   title: 'State Management Choice',
+ *   decision: 'Use React Context API instead of Redux',
+ *   rationale: 'Project scope is small, Redux would add unnecessary complexity',
+ *   alternatives: ['Redux', 'MobX', 'Zustand'],
+ *   decidedBy: 'tech-lead',
+ *   decidedAt: '2026-01-10T14:00:00Z',
+ *   affectedAreas: ['frontend/src/contexts/', 'frontend/src/components/']
+ * };
+ * ```
+ */
+export interface DecisionEntry {
+  /** Unique identifier for this decision */
+  id: string;
+  /** Short title of the decision */
+  title: string;
+  /** The actual decision made */
+  decision: string;
+  /** Why this decision was made */
+  rationale: string;
+  /** Other options that were considered */
+  alternatives?: string[];
+  /** Who made this decision (agent ID or 'user') */
+  decidedBy: string;
+  /** ISO timestamp when decided */
+  decidedAt: string;
+  /** Areas of the codebase affected by this decision */
+  affectedAreas?: string[];
+  /** Current status of the decision */
+  status?: 'active' | 'superseded' | 'deprecated';
+  /** ID of the decision that supersedes this one */
+  supersededBy?: string;
+}
+
+/**
+ * Severity levels for gotcha entries
+ */
+export type GotchaSeverity = 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * A known issue or workaround in the project
+ *
+ * @example
+ * ```typescript
+ * const gotcha: GotchaEntry = {
+ *   id: 'got-001',
+ *   title: 'PostgreSQL connection pool exhaustion',
+ *   problem: 'Database connections leak when using transactions without proper cleanup',
+ *   solution: 'Always use try/finally with client.release() or use pool.query() for single queries',
+ *   severity: 'high',
+ *   discoveredBy: 'backend-dev-001',
+ *   createdAt: '2026-01-20T09:00:00Z'
+ * };
+ * ```
+ */
+export interface GotchaEntry {
+  /** Unique identifier for this gotcha */
+  id: string;
+  /** Short title of the issue */
+  title: string;
+  /** Description of the problem */
+  problem: string;
+  /** Known solution or workaround */
+  solution: string;
+  /** How severe is this issue */
+  severity: GotchaSeverity;
+  /** Agent ID that discovered this */
+  discoveredBy: string;
+  /** ISO timestamp when discovered */
+  createdAt: string;
+  /** Related file paths */
+  relatedFiles?: string[];
+  /** Whether this gotcha is still relevant */
+  resolved?: boolean;
+  /** ISO timestamp when resolved */
+  resolvedAt?: string;
+}
+
+/**
+ * Types of relationships between components
+ */
+export type RelationshipType = 'depends-on' | 'uses' | 'extends' | 'implements' | 'calls' | 'imported-by';
+
+/**
+ * A relationship between two components/services in the project
+ *
+ * @example
+ * ```typescript
+ * const relationship: RelationshipEntry = {
+ *   id: 'rel-001',
+ *   from: 'UserController',
+ *   to: 'AuthService',
+ *   relationshipType: 'depends-on',
+ *   description: 'UserController requires AuthService for authentication checks'
+ * };
+ * ```
+ */
+export interface RelationshipEntry {
+  /** Unique identifier for this relationship */
+  id: string;
+  /** Source component/service name */
+  from: string;
+  /** Target component/service name */
+  to: string;
+  /** Type of relationship */
+  relationshipType: RelationshipType;
+  /** Optional description of the relationship */
+  description?: string;
+  /** File path of the source component */
+  fromFile?: string;
+  /** File path of the target component */
+  toFile?: string;
+}
+
+/**
+ * Complete project-level memory structure
+ *
+ * Stored at: project/.agentmux/knowledge/index.json
+ *
+ * @example
+ * ```typescript
+ * const projectMemory: ProjectMemory = {
+ *   projectId: 'proj-001',
+ *   projectPath: '/home/user/projects/my-app',
+ *   createdAt: '2026-01-01T00:00:00Z',
+ *   updatedAt: '2026-01-29T15:00:00Z',
+ *   patterns: [...],
+ *   decisions: [...],
+ *   gotchas: [...],
+ *   relationships: [...]
+ * };
+ * ```
+ */
+export interface ProjectMemory {
+  /** Unique project identifier */
+  projectId: string;
+  /** Absolute path to the project directory */
+  projectPath: string;
+  /** ISO timestamp when this memory was created */
+  createdAt: string;
+  /** ISO timestamp of last update */
+  updatedAt: string;
+  /** Code patterns discovered in the project */
+  patterns: PatternEntry[];
+  /** Architecture and design decisions */
+  decisions: DecisionEntry[];
+  /** Known issues and workarounds */
+  gotchas: GotchaEntry[];
+  /** Component/service relationships */
+  relationships: RelationshipEntry[];
+  /** Schema version for migration support */
+  schemaVersion?: number;
+}
+
+// ========================= LEARNING LOG TYPES =========================
+
+/**
+ * Categories for learning entries
+ */
+export type LearningCategory = 'pattern' | 'decision' | 'gotcha' | 'insight' | 'improvement';
+
+/**
+ * A single learning entry for the append-only log
+ *
+ * This is used for the human-readable learnings.md file
+ */
+export interface LearningEntry {
+  /** ISO timestamp of the learning */
+  timestamp: string;
+  /** Agent ID that recorded this learning */
+  agentId: string;
+  /** Agent's role */
+  agentRole: string;
+  /** Category of learning */
+  category: LearningCategory;
+  /** Title of the learning */
+  title: string;
+  /** Content of the learning */
+  content: string;
+  /** Related file paths */
+  relatedFiles?: string[];
+  /** Related task/ticket ID */
+  relatedTask?: string;
+}
+
+// ========================= MEMORY OPERATION TYPES =========================
+
+/**
+ * Scope for memory operations
+ */
+export type MemoryScope = 'agent' | 'project';
+
+/**
+ * Options for querying memory
+ */
+export interface MemoryQueryOptions {
+  /** Scope of the query */
+  scope: MemoryScope;
+  /** Category filter */
+  category?: string;
+  /** Tag filter */
+  tags?: string[];
+  /** Minimum confidence threshold (for agent memory) */
+  minConfidence?: number;
+  /** Maximum number of results */
+  limit?: number;
+  /** Search text for content matching */
+  searchText?: string;
+  /** Only return entries after this date */
+  since?: string;
+}
+
+/**
+ * Result of a memory query
+ */
+export interface MemoryQueryResult<T> {
+  /** The matching entries */
+  entries: T[];
+  /** Total count (may be more than entries if limited) */
+  totalCount: number;
+  /** Whether there are more results */
+  hasMore: boolean;
+}
+
+/**
+ * Options for storing memory
+ */
+export interface MemoryStoreOptions {
+  /** Scope for storage */
+  scope: MemoryScope;
+  /** Whether to merge with existing entry if ID exists */
+  merge?: boolean;
+  /** Whether to update the 'updatedAt' timestamp */
+  updateTimestamp?: boolean;
+}
+
+// ========================= FILE STRUCTURE TYPES =========================
+
+/**
+ * Agent memory file structure
+ *
+ * Location: ~/.agentmux/agents/{agentId}/
+ */
+export interface AgentMemoryFileStructure {
+  /** Main memory file containing AgentMemory */
+  memoryFile: 'memory.json';
+  /** Detailed role knowledge entries */
+  roleKnowledgeFile: 'role-knowledge.json';
+  /** Agent preferences */
+  preferencesFile: 'preferences.json';
+  /** Performance metrics */
+  performanceFile: 'performance.json';
+  /** Custom SOPs directory */
+  sopCustomDir: 'sop-custom';
+}
+
+/**
+ * Project memory file structure
+ *
+ * Location: project/.agentmux/knowledge/
+ */
+export interface ProjectMemoryFileStructure {
+  /** Main index file containing ProjectMemory summary */
+  indexFile: 'index.json';
+  /** All pattern entries */
+  patternsFile: 'patterns.json';
+  /** All decision entries */
+  decisionsFile: 'decisions.json';
+  /** All gotcha entries */
+  gotchasFile: 'gotchas.json';
+  /** All relationship entries */
+  relationshipsFile: 'relationships.json';
+  /** Append-only human-readable log */
+  learningsFile: 'learnings.md';
+}
+
+// ========================= VALIDATION AND DEFAULTS =========================
+
+/**
+ * Default values for new agent memory
+ */
+export const DEFAULT_AGENT_MEMORY: Omit<AgentMemory, 'agentId' | 'role' | 'createdAt' | 'updatedAt'> = {
+  roleKnowledge: [],
+  preferences: {
+    communicationStyle: {
+      verbosity: 'detailed',
+      askBeforeAction: true,
+    },
+    workPatterns: {
+      breakdownSize: 'medium',
+    },
+  },
+  performance: {
+    tasksCompleted: 0,
+    averageIterations: 0,
+    qualityGatePassRate: 0,
+    commonErrors: [],
+  },
+  schemaVersion: 1,
+};
+
+/**
+ * Default values for new project memory
+ */
+export const DEFAULT_PROJECT_MEMORY: Omit<ProjectMemory, 'projectId' | 'projectPath' | 'createdAt' | 'updatedAt'> = {
+  patterns: [],
+  decisions: [],
+  gotchas: [],
+  relationships: [],
+  schemaVersion: 1,
+};
+
+/**
+ * Current schema version for memory files
+ */
+export const MEMORY_SCHEMA_VERSION = 1;

@@ -1,8 +1,8 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
-import { ScheduledMessageCard } from '../ScheduledMessageCard';
-import { ScheduledMessage } from '../types';
+import { ScheduledMessageCard } from './ScheduledMessageCard';
+import { ScheduledMessage } from './types';
 
 const mockMessage: ScheduledMessage = {
   id: '1',

@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { EmptyTerminalState } from '../EmptyTerminalState';
+import { EmptyTerminalState } from './EmptyTerminalState';
 
 describe('EmptyTerminalState', () => {
   it('renders empty terminal message', () => {

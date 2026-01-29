@@ -1,5 +1,6 @@
 import React from 'react';
 import { render, act, renderHook } from '@testing-library/react';
+import { vi } from 'vitest';
 import { SidebarProvider, useSidebar } from './SidebarContext';
 
 describe('SidebarContext', () => {
@@ -30,11 +31,14 @@ describe('SidebarContext', () => {
 
   describe('useSidebar hook', () => {
     it('throws error when used outside provider', () => {
-      const { result } = renderHook(() => useSidebar());
+      // Suppress React error output during this test
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-      expect(result.error).toEqual(
-        Error('useSidebar must be used within a SidebarProvider')
-      );
+      expect(() => {
+        renderHook(() => useSidebar());
+      }).toThrow('useSidebar must be used within a SidebarProvider');
+
+      consoleSpy.mockRestore();
     });
 
     it('toggles sidebar state', () => {

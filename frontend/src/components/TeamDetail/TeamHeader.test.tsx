@@ -56,14 +56,26 @@ describe('TeamHeader', () => {
     expect(screen.getByText('View Terminal')).toBeInTheDocument();
   });
 
-  it('does not show Delete Team button for orchestrator team', () => {
+  it('does not show Delete Team in overflow menu for orchestrator team', async () => {
     const orchestratorTeam = { ...mockTeam, id: 'orchestrator', name: 'Orchestrator Team' };
     render(<TeamHeader {...mockProps} team={orchestratorTeam} />);
+
+    // Open the overflow menu
+    const menuButton = screen.getByRole('button', { name: /more options/i });
+    fireEvent.click(menuButton);
+
+    // Delete Team should not be present for orchestrator
     expect(screen.queryByText('Delete Team')).not.toBeInTheDocument();
   });
 
-  it('shows Delete Team button for regular teams', () => {
+  it('shows Delete Team option in overflow menu for regular teams', async () => {
     render(<TeamHeader {...mockProps} />);
+
+    // Open the overflow menu
+    const menuButton = screen.getByRole('button', { name: /more options/i });
+    fireEvent.click(menuButton);
+
+    // Delete Team should be visible in the menu
     expect(screen.getByText('Delete Team')).toBeInTheDocument();
   });
 });

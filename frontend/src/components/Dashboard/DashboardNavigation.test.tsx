@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { DashboardNavigation } from '../DashboardNavigation';
+import { vi } from 'vitest';
+import { DashboardNavigation } from './DashboardNavigation';
 
 describe('DashboardNavigation', () => {
   const mockOnTabChange = vi.fn();

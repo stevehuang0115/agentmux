@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { DashboardHeader } from '../DashboardHeader';
+import { DashboardHeader } from './DashboardHeader';
 
 const mockProject = {
   id: '1',

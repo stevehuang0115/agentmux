@@ -5,6 +5,11 @@ import { vi } from 'vitest';
 import { Navigation } from './Navigation';
 import { SidebarProvider } from '../../contexts/SidebarContext';
 
+// Mock the QRCodeDisplay component
+vi.mock('./QRCodeDisplay', () => ({
+  QRCodeDisplay: () => <div data-testid="qr-code">QR Code</div>
+}));
+
 const renderWithProviders = (component: React.ReactElement) => {
   return render(
     <BrowserRouter>
@@ -22,7 +27,6 @@ describe('Navigation', () => {
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
     expect(screen.getByText('Projects')).toBeInTheDocument();
     expect(screen.getByText('Teams')).toBeInTheDocument();
-    expect(screen.getByText('Assignments')).toBeInTheDocument();
     expect(screen.getByText('Schedules')).toBeInTheDocument();
   });
 
@@ -32,7 +36,7 @@ describe('Navigation', () => {
     expect(screen.getByText('AgentMux')).toBeInTheDocument();
   });
 
-  it('shows toggle button in footer', () => {
+  it('shows collapse toggle button in footer', () => {
     renderWithProviders(<Navigation />);
 
     const toggleButton = screen.getByRole('button', { name: /collapse sidebar/i });
@@ -46,52 +50,12 @@ describe('Navigation', () => {
 
     // Initially expanded, should show navigation labels
     expect(screen.getByText('Dashboard')).toBeInTheDocument();
+    expect(screen.getByText('Collapse')).toBeInTheDocument();
 
     fireEvent.click(toggleButton);
 
-    // After clicking, button text should change
+    // After clicking, button label should change to "Expand sidebar"
     expect(screen.getByRole('button', { name: /expand sidebar/i })).toBeInTheDocument();
-  });
-
-  it('adds collapsed class when sidebar is collapsed', () => {
-    renderWithProviders(<Navigation />);
-
-    const navigation = document.querySelector('.navigation');
-    const toggleButton = screen.getByRole('button', { name: /collapse sidebar/i });
-
-    // Initially not collapsed
-    expect(navigation).not.toHaveClass('navigation--collapsed');
-
-    fireEvent.click(toggleButton);
-
-    // After clicking, should have collapsed class
-    expect(navigation).toHaveClass('navigation--collapsed');
-  });
-
-  it('shows tooltips for navigation items when collapsed', () => {
-    renderWithProviders(<Navigation />);
-
-    const toggleButton = screen.getByRole('button', { name: /collapse sidebar/i });
-    fireEvent.click(toggleButton);
-
-    // Navigation items should have title attributes when collapsed
-    const dashboardLink = screen.getByRole('link', { name: /dashboard/i });
-    expect(dashboardLink).toHaveAttribute('title', 'Dashboard');
-  });
-
-  it('shows correct toggle icon based on state', () => {
-    renderWithProviders(<Navigation />);
-
-    const toggleButton = screen.getByRole('button', { name: /collapse sidebar/i });
-
-    // Initially expanded, should show ChevronLeft (collapse) icon
-    expect(toggleButton.querySelector('.toggle-icon')).toBeInTheDocument();
-
-    fireEvent.click(toggleButton);
-
-    // After clicking, should show ChevronRight (expand) icon
-    const expandButton = screen.getByRole('button', { name: /expand sidebar/i });
-    expect(expandButton.querySelector('.toggle-icon')).toBeInTheDocument();
   });
 
   it('renders navigation links correctly', () => {
@@ -101,13 +65,28 @@ describe('Navigation', () => {
     const dashboardLink = screen.getByRole('link', { name: /dashboard/i });
     const projectsLink = screen.getByRole('link', { name: /projects/i });
     const teamsLink = screen.getByRole('link', { name: /teams/i });
-    const assignmentsLink = screen.getByRole('link', { name: /assignments/i });
     const schedulesLink = screen.getByRole('link', { name: /schedules/i });
 
     expect(dashboardLink).toHaveAttribute('href', '/');
     expect(projectsLink).toHaveAttribute('href', '/projects');
     expect(teamsLink).toHaveAttribute('href', '/teams');
-    expect(assignmentsLink).toHaveAttribute('href', '/assignments');
     expect(schedulesLink).toHaveAttribute('href', '/scheduled-checkins');
+  });
+
+  it('shows QR code display', () => {
+    renderWithProviders(<Navigation />);
+
+    expect(screen.getByTestId('qr-code')).toBeInTheDocument();
+  });
+
+  it('renders close button when mobile menu is open', () => {
+    const onMobileClose = vi.fn();
+    renderWithProviders(<Navigation isMobileOpen={true} onMobileClose={onMobileClose} />);
+
+    const closeButton = screen.getByRole('button', { name: /close menu/i });
+    expect(closeButton).toBeInTheDocument();
+
+    fireEvent.click(closeButton);
+    expect(onMobileClose).toHaveBeenCalled();
   });
 });

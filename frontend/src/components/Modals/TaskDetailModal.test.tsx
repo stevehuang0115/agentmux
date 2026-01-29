@@ -53,7 +53,7 @@ describe('TaskDetailModal', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /close/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close modal/i }));
     expect(onCloseMock).toHaveBeenCalled();
   });
 
