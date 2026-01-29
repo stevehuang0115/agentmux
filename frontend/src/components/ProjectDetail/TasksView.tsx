@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, FolderOpen, Play, Unlock, Link2, Inbox } from 'lucide-react';
-import { Project } from '../../types';
+import { Play, Link2, Inbox } from 'lucide-react';
 import {
   Button,
   FormPopup,

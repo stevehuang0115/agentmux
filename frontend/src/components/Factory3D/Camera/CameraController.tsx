@@ -10,11 +10,7 @@ import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useFactory } from '../../../contexts/FactoryContext';
 import { FACTORY_CONSTANTS } from '../../../types/factory.types';
-import {
-  calculateViewDirection,
-  calculateMoveDirection,
-  calculateRightDirection,
-} from '../../../utils/factory.utils';
+import { calculateViewDirection } from '../../../utils/factory.utils';
 
 const { CAMERA } = FACTORY_CONSTANTS;
 
