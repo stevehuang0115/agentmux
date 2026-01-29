@@ -34,6 +34,17 @@ jest.mock('../memory/memory.service.js', () => ({
 	},
 }));
 
+// Mock SOPService
+const mockGenerateSOPContext = jest.fn().mockResolvedValue('');
+
+jest.mock('../sop/sop.service.js', () => ({
+	SOPService: {
+		getInstance: jest.fn(() => ({
+			generateSOPContext: mockGenerateSOPContext,
+		})),
+	},
+}));
+
 describe('PromptBuilderService', () => {
 	let service: PromptBuilderService;
 	let mockReadFile: jest.Mock;
@@ -494,12 +505,14 @@ describe('PromptBuilderService', () => {
 		beforeEach(() => {
 			mockInitializeForSession.mockClear();
 			mockGetFullContext.mockClear();
+			mockGenerateSOPContext.mockClear();
 			mockInitializeForSession.mockResolvedValue(undefined);
 			mockGetFullContext.mockResolvedValue('');
+			mockGenerateSOPContext.mockResolvedValue('');
 		});
 
 		it('should build continuation prompt with memory context', async () => {
-			mockGetFullContext.mockResolvedValue('## Project Knowledge\nRelevant patterns');
+			mockGetFullContext.mockResolvedValue('## Your Knowledge Base\n\nRelevant patterns');
 
 			const result = await service.buildContinuationPrompt(
 				'agent-001',
@@ -541,6 +554,138 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toContain('**Quick fix**');
 			expect(result).not.toMatch(/Quick fix\n\n\n/); // No empty description block
+		});
+
+		it('should include SOP context when available', async () => {
+			mockGetFullContext.mockResolvedValue('');
+			mockGenerateSOPContext.mockResolvedValue('## Standard Operating Procedures\n\n### Git Workflow\nCommit frequently...');
+
+			const result = await service.buildContinuationPrompt(
+				'agent-001',
+				'developer',
+				'/test/project',
+				{ title: 'Commit changes', description: 'Committing code changes' }
+			);
+
+			expect(result).toContain('Continue Your Work');
+			expect(result).toContain('Standard Operating Procedures');
+			expect(result).toContain('Git Workflow');
+			expect(mockGenerateSOPContext).toHaveBeenCalled();
+		});
+	});
+
+	describe('buildSOPContext', () => {
+		beforeEach(() => {
+			mockGenerateSOPContext.mockClear();
+			mockGenerateSOPContext.mockResolvedValue('');
+		});
+
+		it('should return SOP context when available', async () => {
+			mockGenerateSOPContext.mockResolvedValue('## Standard Operating Procedures\n\n### Git Workflow\nFollow these steps...');
+
+			const result = await service.buildSOPContext('developer', 'committing changes');
+
+			expect(result).toContain('Standard Operating Procedures');
+			expect(result).toContain('Git Workflow');
+			expect(mockGenerateSOPContext).toHaveBeenCalledWith({
+				role: 'developer',
+				taskContext: 'committing changes',
+				taskType: undefined,
+				limit: undefined,
+			});
+		});
+
+		it('should return empty string when no SOPs match', async () => {
+			mockGenerateSOPContext.mockResolvedValue('');
+
+			const result = await service.buildSOPContext('developer', 'random context');
+
+			expect(result).toBe('');
+		});
+
+		it('should pass taskType to SOP service', async () => {
+			mockGenerateSOPContext.mockResolvedValue('## SOPs');
+
+			await service.buildSOPContext('developer', 'testing', 'testing', 3);
+
+			expect(mockGenerateSOPContext).toHaveBeenCalledWith({
+				role: 'developer',
+				taskContext: 'testing',
+				taskType: 'testing',
+				limit: 3,
+			});
+		});
+
+		it('should handle SOP service errors gracefully', async () => {
+			mockGenerateSOPContext.mockRejectedValue(new Error('SOP service error'));
+
+			const result = await service.buildSOPContext('developer', 'context');
+
+			expect(result).toBe('');
+		});
+	});
+
+	describe('buildSystemPromptWithMemory with SOPs', () => {
+		const mockConfig: TeamMemberSessionConfig = {
+			name: 'test-session',
+			role: 'developer',
+			projectPath: '/test/project',
+			memberId: 'member-123',
+			systemPrompt: 'test prompt',
+			runtimeType: 'claude-code' as any
+		};
+
+		beforeEach(() => {
+			mockInitializeForSession.mockClear();
+			mockGetFullContext.mockClear();
+			mockGenerateSOPContext.mockClear();
+			mockInitializeForSession.mockResolvedValue(undefined);
+			mockGetFullContext.mockResolvedValue('');
+			mockGenerateSOPContext.mockResolvedValue('');
+			mockAccess.mockRejectedValue(new Error('File not found')); // Use fallback prompt
+		});
+
+		it('should include SOP context when available', async () => {
+			mockGenerateSOPContext.mockResolvedValue('## Standard Operating Procedures\n\n### Coding Standards\nUse TypeScript...');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig, {
+				taskContext: 'writing code'
+			});
+
+			expect(result).toContain('AgentMux Agent');
+			expect(result).toContain('Standard Operating Procedures');
+			expect(result).toContain('Coding Standards');
+		});
+
+		it('should skip SOPs when includeSOPs is false', async () => {
+			mockGenerateSOPContext.mockResolvedValue('## Standard Operating Procedures\n\nSome SOPs...');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig, { includeSOPs: false });
+
+			expect(result).not.toContain('Standard Operating Procedures');
+			expect(mockGenerateSOPContext).not.toHaveBeenCalled();
+		});
+
+		it('should include both memory and SOP context', async () => {
+			mockGetFullContext.mockResolvedValue('## Agent Knowledge\nImportant fact');
+			mockGenerateSOPContext.mockResolvedValue('## Standard Operating Procedures\n\n### Git Workflow\nCommit frequently');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig, {
+				taskContext: 'committing code'
+			});
+
+			expect(result).toContain('Your Knowledge Base');
+			expect(result).toContain('Important fact');
+			expect(result).toContain('Standard Operating Procedures');
+			expect(result).toContain('Git Workflow');
+		});
+
+		it('should include get_sops in communication tools', async () => {
+			mockGenerateSOPContext.mockResolvedValue('## SOPs');
+
+			const result = await service.buildSystemPromptWithMemory(mockConfig);
+
+			expect(result).toContain('get_sops');
 		});
 	});
 });

@@ -3,8 +3,6 @@
  *
  * @module types/sop.types.test
  */
-
-import { describe, it, expect } from 'vitest';
 import {
   SOP,
   SOPRole,

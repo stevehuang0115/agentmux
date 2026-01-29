@@ -4,27 +4,26 @@
  * @module services/sop/sop.service.test
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { SOPService } from './sop.service.js';
 import { SOP, SOPIndex, SOP_CONSTANTS } from '../../types/sop.types.js';
 
 // Mock fs/promises
-vi.mock('fs/promises');
-vi.mock('fs', () => ({
-  existsSync: vi.fn(),
+jest.mock('fs/promises');
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
 }));
 
 // Mock logger
-vi.mock('../core/logger.service.js', () => ({
+jest.mock('../core/logger.service.js', () => ({
   LoggerService: {
     getInstance: () => ({
       createComponentLogger: () => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
       }),
     }),
   },
@@ -33,11 +32,11 @@ vi.mock('../core/logger.service.js', () => ({
 describe('SOPService', () => {
   let service: SOPService;
   const mockFs = fs as unknown as {
-    mkdir: ReturnType<typeof vi.fn>;
-    readFile: ReturnType<typeof vi.fn>;
-    writeFile: ReturnType<typeof vi.fn>;
-    readdir: ReturnType<typeof vi.fn>;
-    unlink: ReturnType<typeof vi.fn>;
+    mkdir: jest.Mock;
+    readFile: jest.Mock;
+    writeFile: jest.Mock;
+    readdir: jest.Mock;
+    unlink: jest.Mock;
   };
 
   const testBasePath = '/test/sops';
@@ -102,7 +101,7 @@ This is the SOP content.
   beforeEach(() => {
     SOPService.clearInstance();
     service = SOPService.createWithPath(testBasePath);
-    vi.clearAllMocks();
+    jest.clearAllMocks();
 
     // Default mocks
     mockFs.mkdir.mockResolvedValue(undefined);

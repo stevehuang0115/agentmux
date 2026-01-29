@@ -61,9 +61,12 @@ import {
   RecallToolParams,
   RecordLearningToolParams,
   CheckQualityGatesParams,
+  GetSOPsParams,
 } from './types.js';
 import { QualityGateService } from '../../backend/src/services/quality/quality-gate.service.js';
 import { GateResult } from '../../backend/src/types/quality-gate.types.js';
+import { SOPService } from '../../backend/src/services/sop/sop.service.js';
+import { SOPRole, SOPCategory } from '../../backend/src/types/sop.types.js';
 
 
 export class AgentMuxMCPServer {
@@ -74,6 +77,7 @@ export class AgentMuxMCPServer {
   private sessionAdapter: SessionAdapter;
   private memoryService: MemoryService;
   private qualityGateService: QualityGateService;
+  private sopService: SOPService;
   private requestQueue: Map<string, number> = new Map();
   private lastCleanup: number = Date.now();
 
@@ -93,6 +97,9 @@ export class AgentMuxMCPServer {
 
     // Initialize QualityGateService
     this.qualityGateService = QualityGateService.getInstance();
+
+    // Initialize SOPService
+    this.sopService = SOPService.getInstance();
 
     // Debug log session name
     logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
@@ -2392,6 +2399,56 @@ export class AgentMuxMCPServer {
   }
 
   /**
+   * Get relevant SOPs for the current situation (get_sops tool)
+   *
+   * @param params - Parameters including context and optional category
+   * @returns MCP tool result with relevant SOPs
+   */
+  async getSOPs(params: GetSOPsParams): Promise<MCPToolResult> {
+    try {
+      logger.info(`[GET_SOPS] Getting SOPs for context: "${params.context.substring(0, 50)}..."`, {
+        role: this.agentRole,
+        category: params.category,
+      });
+
+      // Generate SOP context based on role and provided context
+      const sopContext = await this.sopService.generateSOPContext({
+        role: this.agentRole as SOPRole | 'all',
+        taskContext: params.context,
+        taskType: params.category,
+      });
+
+      if (!sopContext || sopContext.trim().length === 0) {
+        logger.info(`[GET_SOPS] No specific SOPs found for context`);
+        return {
+          content: [{
+            type: 'text',
+            text: `No specific SOPs found for this context.\n\nUse general best practices for your role (${this.agentRole}).\n\nYou can try a different context or category to find relevant procedures.`
+          }]
+        };
+      }
+
+      logger.info(`[GET_SOPS] Found relevant SOPs: ${sopContext.length} characters`);
+
+      return {
+        content: [{
+          type: 'text',
+          text: sopContext
+        }]
+      };
+    } catch (error) {
+      logger.error(`[GET_SOPS] Failed to get SOPs:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to get SOPs: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
    * Helper Methods for Ticket Management
    */
   private parseYAMLTicket(content: string): TicketInfo {
@@ -2896,6 +2953,9 @@ Please respond promptly with either acceptance or delegation.`;
                   break;
                 case 'get_my_context':
                   result = await this.getMyContext();
+                  break;
+                case 'get_sops':
+                  result = await this.getSOPs(toolArgs);
                   break;
                 default:
                   throw new Error(`Unknown tool: ${toolName}`);
@@ -3406,6 +3466,36 @@ Use this when you:
           type: 'object',
           properties: {},
           required: []
+        }
+      },
+
+      // SOP Tool
+      {
+        name: 'get_sops',
+        description: `Get relevant Standard Operating Procedures for your current situation.
+
+Use this when you need guidance on:
+- How to approach a task
+- Best practices for your role
+- How to handle errors or blockers
+- Communication protocols
+- Git workflow and coding standards
+
+The SOPs returned will be tailored to your role and the context you provide.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            context: {
+              type: 'string',
+              description: 'Describe what you need guidance on (e.g., "committing code", "handling blockers", "testing procedures")'
+            },
+            category: {
+              type: 'string',
+              enum: ['workflow', 'quality', 'communication', 'escalation', 'tools', 'debugging', 'testing', 'git', 'security'],
+              description: 'Specific category of SOPs (optional)'
+            }
+          },
+          required: ['context']
         }
       }
     ];

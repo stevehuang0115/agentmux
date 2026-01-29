@@ -1,8 +1,9 @@
 import { readFile, access } from 'fs/promises';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { TeamMemberSessionConfig } from '../../types/index.js';
+import { TeamMemberSessionConfig, SOPRole } from '../../types/index.js';
 import { MemoryService } from '../memory/memory.service.js';
+import { SOPService } from '../sop/sop.service.js';
 
 /**
  * Options for building system prompts
@@ -12,10 +13,14 @@ export interface PromptOptions {
   role?: string;
   /** Current task context for SOP selection */
   taskContext?: string;
+  /** Task type for SOP matching */
+  taskType?: string;
   /** Whether to include memory context (default: true) */
   includeMemory?: boolean;
-  /** Whether to include SOPs (default: true, for future use) */
+  /** Whether to include SOPs (default: true) */
   includeSOPs?: boolean;
+  /** Maximum number of SOPs to include */
+  sopLimit?: number;
   /** Maximum number of memory entries to include */
   memoryLimit?: number;
   /** Force reload context instead of using cache */
@@ -56,6 +61,7 @@ export class PromptBuilderService {
 	private logger: ComponentLogger;
 	private readonly promptsDirectory: string;
 	private memoryService: MemoryService | null = null;
+	private sopService: SOPService | null = null;
 
 	constructor(projectRoot: string = process.cwd()) {
 		this.logger = LoggerService.getInstance().createComponentLogger('PromptBuilderService');
@@ -72,6 +78,18 @@ export class PromptBuilderService {
 			this.memoryService = MemoryService.getInstance();
 		}
 		return this.memoryService;
+	}
+
+	/**
+	 * Gets the SOPService instance (lazy initialization)
+	 *
+	 * @returns The SOPService singleton
+	 */
+	private getSOPService(): SOPService {
+		if (!this.sopService) {
+			this.sopService = SOPService.getInstance();
+		}
+		return this.sopService;
 	}
 
 	/**
@@ -166,22 +184,25 @@ Start all teams on Phase 1 simultaneously.`.trim();
 	}
 
 	/**
-	 * Build system prompt with memory context included
+	 * Build system prompt with memory and SOP context included
 	 *
 	 * This method builds a complete system prompt that includes:
 	 * - Base role instructions
 	 * - Project context
 	 * - Memory context (agent and project memories)
+	 * - SOP context (relevant Standard Operating Procedures)
 	 * - Agent identity information
 	 *
 	 * @param config - Session configuration
 	 * @param options - Prompt building options
-	 * @returns Complete system prompt with memory
+	 * @returns Complete system prompt with memory and SOPs
 	 *
 	 * @example
 	 * ```typescript
 	 * const prompt = await promptBuilder.buildSystemPromptWithMemory(config, {
 	 *   includeMemory: true,
+	 *   includeSOPs: true,
+	 *   taskContext: 'implementing authentication',
 	 *   role: 'developer'
 	 * });
 	 * ```
@@ -191,6 +212,7 @@ Start all teams on Phase 1 simultaneously.`.trim();
 		options: PromptOptions = {}
 	): Promise<string> {
 		const includeMemory = options.includeMemory !== false;
+		const includeSOPs = options.includeSOPs !== false;
 
 		// Get base prompt
 		const basePrompt = await this.buildSystemPrompt(config);
@@ -205,11 +227,23 @@ Start all teams on Phase 1 simultaneously.`.trim();
 			);
 		}
 
-		// Compose final prompt with memory
-		if (memoryContext) {
+		// Build SOP context if enabled
+		let sopContext = '';
+		if (includeSOPs) {
+			sopContext = await this.buildSOPContext(
+				config.role,
+				options.taskContext,
+				options.taskType,
+				options.sopLimit
+			);
+		}
+
+		// Compose final prompt with memory and SOPs
+		if (memoryContext || sopContext) {
 			return this.composePromptWithMemory({
 				basePrompt,
 				memoryContext,
+				sopContext,
 				sessionName: config.name,
 				memberId: config.memberId,
 				role: config.role,
@@ -277,7 +311,55 @@ ${fullContext}
 	}
 
 	/**
-	 * Compose a prompt with memory context included
+	 * Build SOP context from relevant SOPs for the agent's role and task
+	 *
+	 * @param role - Agent's role
+	 * @param taskContext - Current task context for SOP matching
+	 * @param taskType - Type of task being performed
+	 * @param limit - Maximum number of SOPs to include
+	 * @returns Formatted SOP context string
+	 */
+	async buildSOPContext(
+		role: string,
+		taskContext?: string,
+		taskType?: string,
+		limit?: number
+	): Promise<string> {
+		try {
+			const sopService = this.getSOPService();
+
+			// Generate SOP context based on role and task
+			const sopContext = await sopService.generateSOPContext({
+				role: role as SOPRole | 'all',
+				taskContext: taskContext || '',
+				taskType,
+				limit,
+			});
+
+			if (!sopContext || sopContext.trim().length === 0) {
+				this.logger.debug('No SOP context available', { role, taskContext });
+				return '';
+			}
+
+			this.logger.debug('Built SOP context', {
+				role,
+				taskContext,
+				contextLength: sopContext.length,
+			});
+
+			return sopContext;
+		} catch (error) {
+			this.logger.warn('Failed to build SOP context', {
+				role,
+				taskContext,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return '';
+		}
+	}
+
+	/**
+	 * Compose a prompt with memory and SOP context included
 	 *
 	 * @param parts - Prompt parts to compose
 	 * @returns Composed prompt string
@@ -292,6 +374,12 @@ ${fullContext}
 		if (parts.memoryContext && parts.memoryContext.trim()) {
 			sections.push('\n---\n');
 			sections.push(parts.memoryContext);
+		}
+
+		// Add SOP context if available
+		if (parts.sopContext && parts.sopContext.trim()) {
+			sections.push('\n---\n');
+			sections.push(parts.sopContext);
 		}
 
 		// Add agent identity section
@@ -312,7 +400,8 @@ Use MCP tools for all team communication:
 - \`send_message\` to communicate with other agents
 - \`report_progress\` to update on task status
 - \`remember\` to store important learnings
-- \`recall\` to retrieve relevant knowledge`);
+- \`recall\` to retrieve relevant knowledge
+- \`get_sops\` to request relevant SOPs for your current situation`);
 
 		return sections.join('\n').trim();
 	}
@@ -324,28 +413,56 @@ Use MCP tools for all team communication:
 	 * @param role - Agent's role
 	 * @param projectPath - Project path
 	 * @param currentTask - Current task being worked on
+	 * @param taskContext - Optional task context for SOP matching
 	 * @returns Continuation prompt string
 	 */
 	async buildContinuationPrompt(
 		agentId: string,
 		role: string,
 		projectPath: string,
-		currentTask: { title: string; description?: string }
+		currentTask: { title: string; description?: string },
+		taskContext?: string
 	): Promise<string> {
 		const memoryContext = await this.buildMemoryContext(agentId, projectPath, { role });
 
-		return `
-# Continue Your Work
+		// Build SOP context based on task description/context
+		const sopContextInput = taskContext || currentTask.description || currentTask.title;
+		const sopContext = await this.buildSOPContext(role, sopContextInput);
 
-${memoryContext || '(No prior memory context available)'}
+		const sections: string[] = ['# Continue Your Work', ''];
 
-## Current Task
-**${currentTask.title}**
-${currentTask.description ? `\n${currentTask.description}` : ''}
+		if (memoryContext) {
+			sections.push(memoryContext);
+			sections.push('');
+		} else {
+			sections.push('(No prior memory context available)');
+			sections.push('');
+		}
 
-## Instructions
-Continue working on your assigned task. Use your knowledge base above to guide your approach.
-`.trim();
+		sections.push(`## Current Task`);
+		sections.push(`**${currentTask.title}**`);
+		if (currentTask.description) {
+			sections.push('');
+			sections.push(currentTask.description);
+		}
+		sections.push('');
+
+		if (sopContext) {
+			sections.push('---');
+			sections.push('');
+			sections.push(sopContext);
+			sections.push('');
+		}
+
+		sections.push(`## Instructions`);
+		sections.push('');
+		sections.push('1. Review your progress so far');
+		sections.push('2. Follow the SOPs above for guidance');
+		sections.push('3. Continue working on the task');
+		sections.push('4. Run quality checks before marking complete');
+		sections.push('5. Call `complete_task` when ALL gates pass');
+
+		return sections.join('\n').trim();
 	}
 
 	/**

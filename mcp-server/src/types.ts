@@ -475,3 +475,13 @@ export interface RecordLearningToolParams {
   /** Related file paths */
   relatedFiles?: string[];
 }
+
+/**
+ * Parameters for the get_sops tool
+ */
+export interface GetSOPsParams {
+  /** Describe what you need guidance on */
+  context: string;
+  /** Specific category of SOPs (optional) */
+  category?: 'workflow' | 'quality' | 'communication' | 'escalation' | 'tools' | 'debugging' | 'testing' | 'git' | 'security';
+}
