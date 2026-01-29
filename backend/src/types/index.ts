@@ -181,3 +181,6 @@ export * from './memory.types.js';
 
 // Re-export continuation types
 export * from './continuation.types.js';
+
+// Re-export quality gate types
+export * from './quality-gate.types.js';
