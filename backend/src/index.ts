@@ -137,7 +137,7 @@ export class AgentMuxServer {
 	private initializeServices(): void {
 		this.storageService = StorageService.getInstance(this.config.agentmuxHome);
 		this.tmuxService = new TmuxService();
-		this.schedulerService = new SchedulerService(this.tmuxService, this.storageService);
+		this.schedulerService = new SchedulerService(this.storageService);
 		this.messageSchedulerService = new MessageSchedulerService(
 			this.tmuxService,
 			this.storageService

@@ -193,3 +193,6 @@ export * from './auto-assign.types.js';
 
 // Re-export budget types
 export * from './budget.types.js';
+
+// Re-export scheduler types
+export * from './scheduler.types.js';
