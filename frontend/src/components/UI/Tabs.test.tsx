@@ -112,6 +112,61 @@ describe('Tabs', () => {
       const panel = screen.getByRole('tabpanel');
       expect(panel).toHaveAttribute('aria-labelledby', 'tab-tab1');
     });
+
+    it('should navigate tabs with arrow right key', () => {
+      renderTabs();
+      const tab1 = screen.getByText('Tab 1');
+      const tab2 = screen.getByText('Tab 2');
+
+      tab1.focus();
+      fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+
+      expect(document.activeElement).toBe(tab2);
+    });
+
+    it('should navigate tabs with arrow left key', () => {
+      renderTabs();
+      const tab1 = screen.getByText('Tab 1');
+      const tab2 = screen.getByText('Tab 2');
+
+      tab2.focus();
+      fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowLeft' });
+
+      expect(document.activeElement).toBe(tab1);
+    });
+
+    it('should wrap around with arrow keys', () => {
+      renderTabs();
+      const tab1 = screen.getByText('Tab 1');
+      const tab3 = screen.getByText('Tab 3');
+
+      tab3.focus();
+      fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+
+      expect(document.activeElement).toBe(tab1);
+    });
+
+    it('should navigate to first tab with Home key', () => {
+      renderTabs();
+      const tab1 = screen.getByText('Tab 1');
+      const tab3 = screen.getByText('Tab 3');
+
+      tab3.focus();
+      fireEvent.keyDown(screen.getByRole('tablist'), { key: 'Home' });
+
+      expect(document.activeElement).toBe(tab1);
+    });
+
+    it('should navigate to last tab with End key', () => {
+      renderTabs();
+      const tab1 = screen.getByText('Tab 1');
+      const tab3 = screen.getByText('Tab 3');
+
+      tab1.focus();
+      fireEvent.keyDown(screen.getByRole('tablist'), { key: 'End' });
+
+      expect(document.activeElement).toBe(tab3);
+    });
   });
 
   describe('Disabled tabs', () => {

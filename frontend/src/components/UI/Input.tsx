@@ -45,7 +45,9 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     { label, error, helperText, fullWidth = false, className = '', id, name, ...props },
     ref
   ) => {
-    const inputId = id || name;
+    // Generate a stable ID if neither id nor name provided
+    const generatedId = React.useId();
+    const inputId = id || name || generatedId;
 
     const inputClassName = [
       'w-full px-3 py-2',

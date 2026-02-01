@@ -44,6 +44,17 @@ describe('Input', () => {
       const label = screen.getByText('Email');
       expect(label).toHaveAttribute('for', 'custom-id');
     });
+
+    it('should generate a stable ID when neither id nor name is provided', () => {
+      render(<Input label="Field" />);
+      const label = screen.getByText('Field');
+      const input = screen.getByRole('textbox');
+      // The generated ID should exist and match
+      const labelFor = label.getAttribute('for');
+      const inputId = input.getAttribute('id');
+      expect(labelFor).toBeTruthy();
+      expect(inputId).toBe(labelFor);
+    });
   });
 
   describe('Error state', () => {

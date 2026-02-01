@@ -115,8 +115,34 @@ export const TabList: React.FC<TabListProps> = ({ children, className = '' }) =>
     .filter(Boolean)
     .join(' ');
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const tabs = Array.from(
+      e.currentTarget.querySelectorAll('[role="tab"]:not([disabled])')
+    ) as HTMLElement[];
+    const currentIndex = tabs.findIndex((tab) => tab === document.activeElement);
+
+    if (currentIndex === -1) return;
+
+    let nextIndex = currentIndex;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      nextIndex = (currentIndex + 1) % tabs.length;
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      nextIndex = 0;
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      nextIndex = tabs.length - 1;
+    }
+
+    tabs[nextIndex]?.focus();
+  };
+
   return (
-    <div className={combinedClassName} role="tablist">
+    <div className={combinedClassName} role="tablist" onKeyDown={handleKeyDown}>
       {children}
     </div>
   );
