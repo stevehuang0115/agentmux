@@ -129,8 +129,8 @@ export const Dashboard: React.FC = () => {
   if (loading) {
     return (
       <div className="dashboard">
-        <div className="dashboard-loading">
-          <div className="loading-spinner" />
+        <div className="dashboard-loading" role="status" aria-busy="true">
+          <div className="loading-spinner" aria-hidden="true" />
           <p>Loading dashboard...</p>
         </div>
       </div>
@@ -140,7 +140,7 @@ export const Dashboard: React.FC = () => {
   if (error) {
     return (
       <div className="dashboard">
-        <div className="dashboard-error">
+        <div className="dashboard-error" role="alert">
           <p>Error: {error}</p>
           <button type="button" className="btn-primary" onClick={fetchData}>
             Retry
