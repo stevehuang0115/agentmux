@@ -65,7 +65,8 @@ describe('AgentRegistrationService', () => {
 			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
 			sendMessage: jest.fn().mockResolvedValue(undefined),
 			sendKey: jest.fn().mockResolvedValue(undefined),
-			capturePane: jest.fn().mockResolvedValue(''),
+			sendEscape: jest.fn().mockResolvedValue(undefined),
+			capturePane: jest.fn().mockReturnValue('❯ '), // Claude at prompt by default
 			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
 		};
 
@@ -317,12 +318,43 @@ describe('AgentRegistrationService', () => {
 	describe('sendMessageToAgent', () => {
 		it('should send message to existing session', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// capturePane returns prompt first, then message content after send
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ ')  // Before: at prompt
+				.mockReturnValueOnce('❯ Hello, agent!');  // After: message visible
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
 
 			expect(result.success).toBe(true);
-			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
+		});
+
+		it('should retry when message not delivered on first attempt', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// First attempt: message not visible, second attempt: message visible
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ ')  // Before first attempt
+				.mockReturnValueOnce('❯ ')  // After first attempt (no message - failed)
+				.mockReturnValueOnce('❯ ')  // Before second attempt
+				.mockReturnValueOnce('❯ Hello');  // After second attempt (message visible - success)
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(2);
+		}, 15000);  // Increase timeout for retry test
+
+		it('should send Escape when Claude not at prompt', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// Not at prompt initially, then at prompt after Escape
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('Processing...')  // Before: not at prompt
+				.mockReturnValueOnce('❯ Hello');  // After: message visible
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendEscape).toHaveBeenCalled();
 		});
 
 		it('should fail if session does not exist', async () => {
@@ -340,6 +372,17 @@ describe('AgentRegistrationService', () => {
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('Message is required');
 		});
+
+		it('should fail after max retries', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// All attempts fail - message never visible
+			mockSessionHelper.capturePane.mockReturnValue('❯ ');
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Failed to deliver message');
+		}, 15000);  // Increase timeout for retry test
 	});
 
 	describe('sendKeyToAgent', () => {

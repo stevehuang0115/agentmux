@@ -17,6 +17,7 @@ import {
 	ORCHESTRATOR_ROLE,
 	RUNTIME_TYPES,
 	RuntimeType,
+	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
 
 export interface TeamRole {
@@ -42,6 +43,12 @@ export interface OrchestratorConfig {
 /**
  * Service responsible for the complex, multi-step process of agent initialization and registration.
  * Isolates the complex state management of agent startup with progressive escalation.
+ *
+ * Key capabilities:
+ * - Agent session creation and management
+ * - Runtime initialization and registration
+ * - Reliable message delivery to Claude Code with retry logic
+ * - Health checking and status management
  */
 export class AgentRegistrationService {
 	private logger: ComponentLogger;
@@ -54,6 +61,17 @@ export class AgentRegistrationService {
 
 	// Team roles configuration cache
 	private teamRolesConfig: TeamRolesConfig | null = null;
+
+	/**
+	 * Claude Code prompt indicators used to detect if the CLI is ready for input.
+	 * These characters appear at the start of input lines in Claude Code.
+	 */
+	private static readonly CLAUDE_PROMPT_INDICATORS = [
+		'❯', // Main prompt
+		'>', // Alternative prompt
+		'⏵', // Permission prompt indicator
+		'$', // Shell prompt if Claude exits
+	] as const;
 
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
@@ -1238,10 +1256,26 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Generic message sending to any agent session
-	 * @param sessionName The agent session name
-	 * @param message The message to send
-	 * @returns Promise with success/error information
+	 * Send a message to any agent session with reliable delivery.
+	 * Uses robust delivery mechanism with retry logic to ensure messages
+	 * are properly delivered to Claude Code's input.
+	 *
+	 * @param sessionName - The agent session name
+	 * @param message - The message to send
+	 * @returns Promise with success status and optional error message
+	 *
+	 * @example
+	 * ```typescript
+	 * const result = await agentRegistrationService.sendMessageToAgent(
+	 *   'agentmux-orc',
+	 *   '[CHAT:123] Hello, orchestrator!'
+	 * );
+	 * if (result.success) {
+	 *   console.log('Message delivered');
+	 * } else {
+	 *   console.error('Delivery failed:', result.error);
+	 * }
+	 * ```
 	 */
 	async sendMessageToAgent(
 		sessionName: string,
@@ -1268,13 +1302,16 @@ export class AgentRegistrationService {
 				};
 			}
 
-			// Clear the terminal first
-			await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
+			// Use robust message delivery with proper waiting mechanism
+			// This handles Claude Code's input state better than just clearing the line
+			const delivered = await this.sendMessageWithRetry(sessionName, message);
 
-			// Send message using tmux command service
-			await (await this.getSessionHelper()).sendMessage(sessionName, message);
-
-			// Note: sendMessage already includes Enter key with 1000ms delay
+			if (!delivered) {
+				return {
+					success: false,
+					error: 'Failed to deliver message after multiple attempts',
+				};
+			}
 
 			this.logger.info('Message sent to agent successfully', {
 				sessionName,
@@ -1297,6 +1334,136 @@ export class AgentRegistrationService {
 				error: errorMessage,
 			};
 		}
+	}
+
+	/**
+	 * Send message with retry logic for reliable delivery to Claude Code.
+	 * Waits for Claude Code to be at a prompt state before sending.
+	 *
+	 * @param sessionName - The session name
+	 * @param message - The message to send
+	 * @param maxAttempts - Maximum number of delivery attempts
+	 * @returns true if message was delivered successfully
+	 */
+	private async sendMessageWithRetry(
+		sessionName: string,
+		message: string,
+		maxAttempts: number = 3
+	): Promise<boolean> {
+		// Get session helper once to avoid repeated async calls
+		const sessionHelper = await this.getSessionHelper();
+
+		// Compute message fragment once for verification (use first 50 chars)
+		const messageFragment = message.substring(0, Math.min(50, message.length));
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				this.logger.debug('Attempting message delivery', {
+					sessionName,
+					attempt,
+					maxAttempts,
+					messageLength: message.length,
+				});
+
+				// Capture terminal state before sending to verify Claude is at a prompt
+				const beforeOutput = sessionHelper.capturePane(sessionName, 5);
+				const isAtPrompt = this.isClaudeAtPrompt(beforeOutput);
+
+				if (!isAtPrompt) {
+					this.logger.debug('Claude Code not at prompt, sending Escape to clear state', {
+						sessionName,
+						attempt,
+					});
+					// Send Escape key to exit any sub-menu or modal state
+					await sessionHelper.sendEscape(sessionName);
+					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+				}
+
+				// Send the message directly without clearing (Ctrl+C can disrupt Claude Code)
+				await sessionHelper.sendMessage(sessionName, message);
+
+				// Wait a bit for processing to start
+				await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY + 200);
+
+				// Verify message was accepted by checking terminal output changed
+				const afterOutput = sessionHelper.capturePane(sessionName, 10);
+
+				// Check if the message content appears in the terminal (indicating it was typed)
+				const messageAppeared = afterOutput.includes(messageFragment);
+
+				if (messageAppeared) {
+					this.logger.debug('Message delivery verified - content visible in terminal', {
+						sessionName,
+						attempt,
+					});
+					return true;
+				}
+
+				this.logger.warn('Message may not have been delivered, retrying', {
+					sessionName,
+					attempt,
+					nextAttempt: attempt < maxAttempts,
+				});
+
+				// Add delay before retry
+				if (attempt < maxAttempts) {
+					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
+				}
+			} catch (error) {
+				this.logger.error('Error during message delivery', {
+					sessionName,
+					attempt,
+					error: error instanceof Error ? error.message : String(error),
+				});
+
+				// Add delay before retry after error
+				if (attempt < maxAttempts) {
+					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
+				}
+			}
+		}
+
+		// Log exhaustion of all retries
+		this.logger.error('Message delivery failed after all retry attempts', {
+			sessionName,
+			maxAttempts,
+			messageLength: message.length,
+		});
+
+		return false;
+	}
+
+	/**
+	 * Utility delay function for async operations.
+	 *
+	 * @param ms - Milliseconds to delay
+	 * @returns Promise that resolves after the delay
+	 */
+	private delay(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
+	/**
+	 * Check if Claude Code appears to be at an input prompt.
+	 * Looks for common prompt indicators in terminal output.
+	 *
+	 * @param terminalOutput - The terminal output to check
+	 * @returns true if Claude Code appears to be at a prompt
+	 */
+	private isClaudeAtPrompt(terminalOutput: string): boolean {
+		// Handle null/undefined/empty input gracefully
+		if (!terminalOutput || typeof terminalOutput !== 'string') {
+			this.logger.debug('Terminal output is empty or invalid, assuming at prompt');
+			return true; // Assume at prompt if no output (safer for message delivery)
+		}
+
+		// Check last few lines for prompt indicators
+		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
+		const lastLine = lines[lines.length - 1] || '';
+
+		return AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
+			(indicator) => lastLine.includes(indicator)
+		);
 	}
 
 	/**

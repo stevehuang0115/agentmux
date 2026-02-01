@@ -69,10 +69,18 @@ export const PTY_CONSTANTS = {
 
 // Session command timing delays (in milliseconds)
 export const SESSION_COMMAND_DELAYS = {
+	/** Delay after sending a message (allows terminal to process) */
 	MESSAGE_DELAY: 100,
+	/** Delay after sending a key (allows key to be processed) */
 	KEY_DELAY: 50,
+	/** Delay after clearing command line (allows terminal to reset) */
 	CLEAR_COMMAND_DELAY: 100,
+	/** Delay after setting environment variable */
 	ENV_VAR_DELAY: 100,
+	/** Delay for Claude Code to recover from state changes */
+	CLAUDE_RECOVERY_DELAY: 300,
+	/** Delay between message delivery retry attempts */
+	MESSAGE_RETRY_DELAY: 1000,
 } as const;
 
 // Terminal controller constants
