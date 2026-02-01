@@ -8,6 +8,10 @@ import {
 	ORCHESTRATOR_ROLE,
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import {
+	getOrchestratorStatus as getOrchestratorStatusFromService,
+	getOrchestratorOfflineMessage,
+} from '../../services/orchestrator/index.js';
 
 // Delegate to existing ApiController methods to preserve complex logic without duplication
 export async function getOrchestratorCommands(
@@ -528,6 +532,41 @@ export async function updateOrchestratorRuntime(
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to update orchestrator runtime',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Get simple orchestrator status for UI checks.
+ *
+ * Returns whether the orchestrator is active and a user-friendly message.
+ * This is a lightweight endpoint for frontend status checks.
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ */
+export async function getOrchestratorStatus(
+	this: ApiContext,
+	req: Request,
+	res: Response
+): Promise<void> {
+	try {
+		const status = await getOrchestratorStatusFromService();
+
+		res.json({
+			success: true,
+			data: {
+				isActive: status.isActive,
+				agentStatus: status.agentStatus,
+				message: status.message,
+				offlineMessage: status.isActive ? null : getOrchestratorOfflineMessage(false),
+			},
+		} as ApiResponse);
+	} catch (error) {
+		console.error('Error getting orchestrator status:', error);
+		res.status(500).json({
+			success: false,
+			error: error instanceof Error ? error.message : 'Failed to get orchestrator status',
 		} as ApiResponse);
 	}
 }

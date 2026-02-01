@@ -11,6 +11,10 @@ import { EventEmitter } from 'events';
 import { getSlackService, SlackService } from './slack.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
 import {
+  isOrchestratorActive,
+  getOrchestratorOfflineMessage,
+} from '../orchestrator/index.js';
+import {
   SlackIncomingMessage,
   SlackNotification,
   SlackConversationContext,
@@ -326,15 +330,25 @@ Just type naturally to chat with the orchestrator!`;
   /**
    * Send message to orchestrator and get response
    *
+   * Checks if the orchestrator is active before sending. Returns a clear
+   * error message if the orchestrator is offline.
+   *
    * @param message - Message to send
    * @param context - Optional conversation context
-   * @returns Orchestrator response
+   * @returns Orchestrator response or offline message
    */
   private async sendToOrchestrator(
     message: string,
     context?: SlackConversationContext
   ): Promise<string> {
     try {
+      // Check if orchestrator is active before attempting to send
+      const isActive = await isOrchestratorActive();
+      if (!isActive) {
+        console.log('[SlackBridge] Orchestrator is not active, returning offline message');
+        return getOrchestratorOfflineMessage(true);
+      }
+
       // Send message via chat service
       const result = await this.chatService.sendMessage({
         content: message,

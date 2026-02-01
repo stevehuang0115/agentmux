@@ -11,6 +11,20 @@ import { useChat } from '../../contexts/ChatContext';
 import './ChatInput.css';
 
 // =============================================================================
+// Types
+// =============================================================================
+
+/**
+ * Props for ChatInput component
+ */
+interface ChatInputProps {
+  /** Whether the input is disabled (e.g., orchestrator offline) */
+  disabled?: boolean;
+  /** Placeholder text when disabled */
+  disabledPlaceholder?: string;
+}
+
+// =============================================================================
 // Component
 // =============================================================================
 
@@ -20,12 +34,16 @@ import './ChatInput.css';
  * Features:
  * - Auto-resizing textarea
  * - Enter to send, Shift+Enter for new line
- * - Disabled state while sending
+ * - Disabled state while sending or when orchestrator is offline
  * - Error display
  *
+ * @param props - Component props
  * @returns JSX element with chat input
  */
-export const ChatInput: React.FC = () => {
+export const ChatInput: React.FC<ChatInputProps> = ({
+  disabled = false,
+  disabledPlaceholder,
+}) => {
   const { sendMessage, isSending, error, clearError } = useChat();
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -39,11 +57,14 @@ export const ChatInput: React.FC = () => {
     }
   }, [input]);
 
+  // Combined disabled state
+  const isDisabled = disabled || isSending;
+
   /**
    * Handle form submission
    */
   const handleSubmit = async () => {
-    if (!input.trim() || isSending) return;
+    if (!input.trim() || isDisabled) return;
 
     const message = input.trim();
     setInput('');
@@ -99,21 +120,25 @@ export const ChatInput: React.FC = () => {
           value={input}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-          disabled={isSending}
+          placeholder={
+            disabled && disabledPlaceholder
+              ? disabledPlaceholder
+              : 'Type a message... (Enter to send, Shift+Enter for new line)'
+          }
+          disabled={isDisabled}
           rows={1}
-          className="message-input"
+          className={`message-input ${disabled ? 'disabled-offline' : ''}`}
           data-testid="chat-message-input"
           aria-label="Message input"
         />
 
         <button
           onClick={handleSubmit}
-          disabled={!input.trim() || isSending}
+          disabled={!input.trim() || isDisabled}
           className="send-button"
-          title="Send message"
+          title={disabled ? 'Orchestrator offline' : 'Send message'}
           data-testid="chat-send-button"
-          aria-label={isSending ? 'Sending message' : 'Send message'}
+          aria-label={isSending ? 'Sending message' : disabled ? 'Orchestrator offline' : 'Send message'}
         >
           {isSending ? (
             <span className="sending-indicator" aria-hidden="true">

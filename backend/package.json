@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@slack/bolt": "^4.6.0",
     "@types/helmet": "^0.0.48",
     "@types/node": "^24.3.0",
     "chokidar": "^3.5.3",
