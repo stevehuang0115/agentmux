@@ -140,6 +140,23 @@ These gaps were identified through thorough browser testing of the running appli
 | 64 | [Slack Integration UI](./64-slack-integration-ui.md) | Add Slack tab to Settings for configuration | High | 44, 46 |
 | 65 | [Default Skills Configuration](./65-default-skills-configuration.md) | Create built-in skills that ship with AgentMux | High | 29 |
 
+### Sprint 11: UI Consistency Fixes
+
+These tasks address user feedback about UI consistency and layout issues.
+
+#### Dashboard & Navigation
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 67 | [Restore Original Dashboard](./67-restore-original-dashboard.md) | Restore cards-based dashboard layout with Projects and Teams sections | Critical | None |
+| 68 | [Dedicated Chat Page](./68-dedicated-chat-page.md) | Move chat interface to dedicated /chat route | Critical | 67 |
+
+#### Styling Consistency
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 69 | [Settings UI Consistency](./69-settings-ui-consistency.md) | Fix Settings page to match app dark theme | High | None |
+
 ---
 
 ## Recommended Implementation Order
@@ -200,10 +217,15 @@ Phase 9 (Gap Fixes - Backend):
 Phase 10 (Gap Fixes - Frontend):
 ├── 58-frontend-skills-service.md (depends on 42) [GAP FIX]
 ├── 59-useskills-real-api.md (depends on 58) [GAP FIX]
-├── 60-skillstab-full-implementation.md (depends on 59) [GAP FIX]
-└── 61-chat-centric-dashboard.md (depends on 33, 38) [GAP FIX]
+└── 60-skillstab-full-implementation.md (depends on 59) [GAP FIX]
+# Note: Task 61 (chat-centric-dashboard) is superseded by tasks 67-68
 
-Phase 11 (Final):
+Phase 11 (UI Consistency Fixes):
+├── 67-restore-original-dashboard.md (no dependencies) [UI FIX]
+├── 68-dedicated-chat-page.md (depends on 67) [UI FIX]
+└── 69-settings-ui-consistency.md (no dependencies) [UI FIX]
+
+Phase 12 (Final):
 └── 34-orchestrator-enhancements.md (depends on all)
 ```
 

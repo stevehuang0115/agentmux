@@ -649,6 +649,82 @@ export interface CreateTeamForProjectToolParams {
 }
 
 // ============================================
+// Self-Improvement Tool Types
+// ============================================
+
+/**
+ * File change specification for self-improvement
+ */
+export interface SelfImproveFileChange {
+  /** File path relative to project root */
+  path: string;
+  /** Type of operation */
+  operation: 'create' | 'modify' | 'delete';
+  /** File content (for create/modify) */
+  content?: string;
+  /** Description of the change */
+  description?: string;
+}
+
+/**
+ * Parameters for self-improvement plan action
+ */
+export interface SelfImprovePlanParams {
+  /** Action type */
+  action: 'plan';
+  /** Description of the improvement */
+  description: string;
+  /** Files to modify */
+  files: SelfImproveFileChange[];
+}
+
+/**
+ * Parameters for self-improvement execute action
+ */
+export interface SelfImproveExecuteParams {
+  /** Action type */
+  action: 'execute';
+  /** Plan ID to execute */
+  planId: string;
+}
+
+/**
+ * Parameters for self-improvement status action
+ */
+export interface SelfImproveStatusParams {
+  /** Action type */
+  action: 'status';
+}
+
+/**
+ * Parameters for self-improvement rollback action
+ */
+export interface SelfImproveRollbackParams {
+  /** Action type */
+  action: 'rollback';
+  /** Reason for rollback */
+  reason: string;
+}
+
+/**
+ * Parameters for self-improvement cancel action
+ */
+export interface SelfImproveCancelParams {
+  /** Action type */
+  action: 'cancel';
+}
+
+/**
+ * Combined self-improvement tool parameters
+ */
+export type SelfImproveToolParams =
+  | SelfImprovePlanParams
+  | SelfImproveExecuteParams
+  | SelfImproveStatusParams
+  | SelfImproveRollbackParams
+  | SelfImproveCancelParams;
+
+// ============================================
 // Tool Result Types
 // ============================================
 

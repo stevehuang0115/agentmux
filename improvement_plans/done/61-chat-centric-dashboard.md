@@ -1,5 +1,11 @@
 # Task 61: Chat-Centric Dashboard Integration
 
+> **⚠️ SUPERSEDED:** This task has been superseded by Tasks 67-68 based on user feedback.
+> - Task 67: Restore Original Dashboard - Returns to cards-based layout
+> - Task 68: Dedicated Chat Page - Moves chat to /chat route
+>
+> The user prefers the original cards-based dashboard and wants a dedicated Chat page instead.
+
 ## Overview
 
 Transform the Dashboard from a traditional project/team grid layout to a chat-centric interface with the orchestrator.
