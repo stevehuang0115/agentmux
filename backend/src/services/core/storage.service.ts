@@ -64,6 +64,9 @@ export class StorageService {
     StorageService.instanceHome = null;
   }
 
+  /**
+   * Ensures the agentmux home directory exists, creating it if necessary
+   */
   private ensureDirectories(): void {
     if (!existsSync(this.agentmuxHome)) {
       mkdirSync(this.agentmuxHome, { recursive: true });
@@ -71,7 +74,7 @@ export class StorageService {
   }
 
   /**
-   * Create default orchestrator configuration object
+   * Creates default orchestrator configuration object
    * @returns Default orchestrator settings with inactive status
    */
   private createDefaultOrchestrator() {
@@ -85,7 +88,12 @@ export class StorageService {
     };
   }
 
-  private async ensureFile(filePath: string, defaultContent: any = []): Promise<void> {
+  /**
+   * Ensures a storage file exists and is valid JSON, creating or recovering it if needed
+   * @param filePath - Path to the storage file
+   * @param defaultContent - Default content to use if file needs to be created/recovered
+   */
+  private async ensureFile(filePath: string, defaultContent: unknown = []): Promise<void> {
     const fileName = path.basename(filePath);
 
     if (!existsSync(filePath)) {
