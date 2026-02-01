@@ -110,14 +110,15 @@
   white-space: nowrap;
 }
 
-.category-development { background: #dbeafe; color: #1e40af; }
-.category-design { background: #fce7f3; color: #9d174d; }
-.category-communication { background: #d1fae5; color: #065f46; }
-.category-research { background: #e0e7ff; color: #3730a3; }
-.category-content-creation { background: #fef3c7; color: #92400e; }
-.category-automation { background: #f3e8ff; color: #6b21a8; }
-.category-analysis { background: #cffafe; color: #0e7490; }
-.category-integration { background: #fee2e2; color: #991b1b; }
+/* Dark theme appropriate category colors */
+.category-development { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.category-design { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
+.category-communication { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.category-research { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+.category-content-creation { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.category-automation { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
+.category-analysis { background: rgba(14, 165, 233, 0.15); color: #38bdf8; }
+.category-integration { background: rgba(239, 68, 68, 0.15); color: #f87171; }
 
 .skill-card .skill-description {
   color: var(--text-secondary);
@@ -142,11 +143,12 @@
   color: var(--text-secondary);
 }
 
-.execution-type.script { background: #fef3c7; color: #92400e; }
-.execution-type.browser { background: #dbeafe; color: #1e40af; }
-.execution-type.mcp-tool { background: #d1fae5; color: #065f46; }
-.execution-type.composite { background: #e0e7ff; color: #3730a3; }
-.execution-type.prompt-only { background: #f3f4f6; color: #4b5563; }
+/* Dark theme appropriate execution type colors */
+.execution-type.script { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+.execution-type.browser { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.execution-type.mcp-tool { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.execution-type.composite { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+.execution-type.prompt-only { background: rgba(107, 114, 128, 0.15); color: #9ca3af; }
 
 .skill-card-footer {
   display: flex;
@@ -241,11 +243,11 @@
   to { transform: rotate(360deg); }
 }
 
-/* Error banner */
+/* Error banner - dark theme appropriate */
 .error-banner {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
   padding: 0.75rem 1rem;
   border-radius: 6px;
   margin-bottom: 1rem;
@@ -256,8 +258,8 @@
 
 .error-banner button {
   background: transparent;
-  border: 1px solid #fecaca;
-  color: #991b1b;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   cursor: pointer;
@@ -265,7 +267,7 @@
 }
 
 .error-banner button:hover {
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.2);
 }
 
 /* Modal styles */
@@ -380,10 +382,11 @@
   margin: 0.25rem 0 0 0;
 }
 
+/* Form error - dark theme appropriate */
 .form-error {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #991b1b;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #f87171;
   padding: 0.75rem 1rem;
   border-radius: 6px;
   margin: 0 1.25rem;

@@ -5,6 +5,7 @@ import {
 	FolderOpen,
 	Users,
 	Clock,
+	MessageSquare,
 	Settings,
 	ChevronLeft,
 	ChevronRight,
@@ -20,6 +21,7 @@ const navigationItems = [
 	{ name: 'Projects', href: '/projects', icon: FolderOpen },
 	{ name: 'Teams', href: '/teams', icon: Users },
 	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
+	{ name: 'Chat', href: '/chat', icon: MessageSquare },
 ];
 
 interface NavigationProps {

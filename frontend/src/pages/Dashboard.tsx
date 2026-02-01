@@ -1,162 +1,215 @@
 /**
  * Dashboard Page
  *
- * Chat-centric interface for interacting with the orchestrator.
- * Features a sidebar with navigation tabs and a main chat panel.
+ * Main landing page showing projects and teams overview.
+ * Features card-based layout with quick access to recent items.
  *
  * @module pages/Dashboard
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChatPanel } from '../components/Chat/ChatPanel';
-import { ChatSidebar } from '../components/Chat/ChatSidebar';
-import { ProjectsSummary } from '../components/Dashboard/ProjectsSummary';
-import { TeamsSummary } from '../components/Dashboard/TeamsSummary';
-import { useChat } from '../contexts/ChatContext';
+import { ProjectCard } from '../components/Cards/ProjectCard';
+import { TeamCard } from '../components/Cards/TeamCard';
+import { CreateCard } from '../components/Cards/CreateCard';
+import { apiService } from '../services/api.service';
+import type { Project, Team } from '../types';
 import './Dashboard.css';
 
 /**
- * View modes for the sidebar
+ * Maximum number of items to show in each section
  */
-type SidebarView = 'chat' | 'projects' | 'teams';
+const MAX_ITEMS_PER_SECTION = 4;
 
 /**
- * Dashboard component - main application interface
+ * Dashboard component - main application landing page
  *
  * Features:
- * - Chat-centric layout with orchestrator chat as main content
- * - Collapsible sidebar with navigation tabs
- * - Quick access to projects, teams, and settings
+ * - Projects section with card grid
+ * - Teams section with card grid
+ * - Quick create cards for new items
+ * - View All navigation buttons
  *
  * @returns Dashboard component
  */
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [sidebarView, setSidebarView] = useState<SidebarView>('chat');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const { isLoading, error } = useChat();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
 
   /**
-   * Handle sidebar toggle
+   * Fetch projects and teams data
+   * Uses isMountedRef to prevent state updates after unmount
    */
-  const handleSidebarToggle = useCallback((): void => {
-    setSidebarCollapsed((prev) => !prev);
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [projectsData, teamsData] = await Promise.all([
+        apiService.getProjects(),
+        apiService.getTeams(),
+      ]);
+
+      if (isMountedRef.current) {
+        setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
+        setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
+      }
+    } catch (err) {
+      if (isMountedRef.current) {
+        const message = err instanceof Error ? err.message : 'Failed to load data';
+        setError(message);
+        console.error('Dashboard: Failed to fetch data:', err);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
   }, []);
 
-  /**
-   * Handle navigation tab click
-   */
-  const handleTabClick = useCallback((view: SidebarView): void => {
-    setSidebarView(view);
-  }, []);
+  useEffect(() => {
+    fetchData();
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [fetchData]);
 
   /**
-   * Handle project click
+   * Handle project card click
    */
   const handleProjectClick = useCallback(
-    (projectId: string): void => {
+    (projectId: string) => {
       navigate(`/projects/${projectId}`);
     },
     [navigate]
   );
 
   /**
-   * Handle team click
+   * Handle team card click
    */
   const handleTeamClick = useCallback(
-    (teamId: string): void => {
+    (teamId: string) => {
       navigate(`/teams/${teamId}`);
     },
     [navigate]
   );
 
-  return (
-    <div className="dashboard-layout">
-      {/* Sidebar */}
-      <aside className={`dashboard-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
-        <div className="sidebar-header">
-          <h1 className="app-title">AgentMux</h1>
-          <button
-            className="sidebar-toggle"
-            onClick={handleSidebarToggle}
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? '→' : '←'}
+  /**
+   * Handle create project click
+   */
+  const handleCreateProject = useCallback(() => {
+    navigate('/projects?create=true');
+  }, [navigate]);
+
+  /**
+   * Handle create team click
+   */
+  const handleCreateTeam = useCallback(() => {
+    navigate('/teams?create=true');
+  }, [navigate]);
+
+  /**
+   * Handle view all projects click
+   */
+  const handleViewAllProjects = useCallback(() => {
+    navigate('/projects');
+  }, [navigate]);
+
+  /**
+   * Handle view all teams click
+   */
+  const handleViewAllTeams = useCallback(() => {
+    navigate('/teams');
+  }, [navigate]);
+
+  if (loading) {
+    return (
+      <div className="dashboard">
+        <div className="dashboard-loading" role="status" aria-busy="true">
+          <div className="loading-spinner" aria-hidden="true" />
+          <p>Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="dashboard">
+        <div className="dashboard-error" role="alert">
+          <p>Error: {error}</p>
+          <button type="button" className="btn-primary" onClick={fetchData}>
+            Retry
           </button>
         </div>
+      </div>
+    );
+  }
 
-        {!sidebarCollapsed && (
-          <>
-            {/* Navigation tabs */}
-            <nav className="sidebar-nav">
-              <button
-                className={`nav-tab ${sidebarView === 'chat' ? 'active' : ''}`}
-                onClick={() => handleTabClick('chat')}
-              >
-                💬 Conversations
-              </button>
-              <button
-                className={`nav-tab ${sidebarView === 'projects' ? 'active' : ''}`}
-                onClick={() => handleTabClick('projects')}
-              >
-                📁 Projects
-              </button>
-              <button
-                className={`nav-tab ${sidebarView === 'teams' ? 'active' : ''}`}
-                onClick={() => handleTabClick('teams')}
-              >
-                👥 Teams
-              </button>
-            </nav>
-
-            {/* Sidebar content */}
-            <div className="sidebar-content">
-              {sidebarView === 'chat' && <ChatSidebar />}
-              {sidebarView === 'projects' && (
-                <ProjectsSummary compact onProjectClick={handleProjectClick} />
-              )}
-              {sidebarView === 'teams' && (
-                <TeamsSummary compact onTeamClick={handleTeamClick} />
-              )}
-            </div>
-
-            {/* Sidebar footer */}
-            <div className="sidebar-footer">
-              <button
-                className="footer-link"
-                onClick={() => navigate('/settings')}
-              >
-                ⚙️ Settings
-              </button>
-              <button
-                className="footer-link"
-                onClick={() => navigate('/factory')}
-              >
-                🏭 3D Factory
-              </button>
-            </div>
-          </>
+  return (
+    <div className="dashboard">
+      {/* Projects Section */}
+      <section className="dashboard-section">
+        <div className="section-header">
+          <h2>Projects</h2>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleViewAllProjects}
+          >
+            View All
+          </button>
+        </div>
+        <div className="cards-grid">
+          {projects.map((project) => (
+            <ProjectCard
+              key={project.id}
+              project={project}
+              showStatus
+              onClick={() => handleProjectClick(project.id)}
+            />
+          ))}
+          <CreateCard title="New Project" onClick={handleCreateProject} />
+        </div>
+        {projects.length === 0 && (
+          <p className="empty-message">
+            No projects yet. Create your first project to get started.
+          </p>
         )}
-      </aside>
+      </section>
 
-      {/* Main content - Chat Panel */}
-      <main className="dashboard-main">
-        {/* Connection status banner */}
-        {isLoading && (
-          <div className="connection-banner warning">
-            <span>⏳ Connecting to orchestrator...</span>
-          </div>
+      {/* Teams Section */}
+      <section className="dashboard-section">
+        <div className="section-header">
+          <h2>Teams</h2>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={handleViewAllTeams}
+          >
+            View All
+          </button>
+        </div>
+        <div className="cards-grid">
+          {teams.map((team) => (
+            <TeamCard
+              key={team.id}
+              team={team}
+              onClick={() => handleTeamClick(team.id)}
+            />
+          ))}
+          <CreateCard title="New Team" onClick={handleCreateTeam} />
+        </div>
+        {teams.length === 0 && (
+          <p className="empty-message">
+            No teams yet. Create your first team to get started.
+          </p>
         )}
-
-        {error && (
-          <div className="connection-banner error">
-            <span>⚠️ {error}</span>
-          </div>
-        )}
-
-        <ChatPanel />
-      </main>
+      </section>
     </div>
   );
 };
