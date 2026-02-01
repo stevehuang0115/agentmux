@@ -315,6 +315,22 @@ interface FactoryContextType {
   consumeEntityCommand: (entityId: string) => EntityCommand | null;
   /** Pre-built entity position map for collision checks (updated each render, read from useFrame) */
   entityPositionMapRef: React.MutableRefObject<Map<string, { x: number; z: number }>>;
+  /** Whether freestyle mode is active (allows moving selected entity by double-clicking) */
+  freestyleMode: boolean;
+  /** Set the move target for the selected entity in freestyle mode */
+  setFreestyleMoveTarget: (target: { x: number; z: number }) => void;
+  /** Whether NPC agents (fake audience) are visible */
+  showNPCAgents: boolean;
+  /** Toggle NPC agents visibility */
+  setShowNPCAgents: (show: boolean) => void;
+  /** Whether guest agents (celebrity NPCs) are visible */
+  showGuestAgents: boolean;
+  /** Toggle guest agents visibility */
+  setShowGuestAgents: (show: boolean) => void;
+  /** Whether additional objects (Cybertruck, etc.) are visible */
+  showObjects: boolean;
+  /** Toggle objects visibility */
+  setShowObjects: (show: boolean) => void;
 }
 
 // ====== CONTEXT ======
@@ -389,6 +405,15 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
+  // Freestyle mode state - allows moving selected entity by double-clicking
+  const [freestyleMode] = useState(false);
+  const freestyleMoveTargetRef = useRef<{ x: number; z: number } | null>(null);
+
+  // Visibility toggles state
+  const [showNPCAgents, setShowNPCAgents] = useState(true);
+  const [showGuestAgents, setShowGuestAgents] = useState(true);
+  const [showObjects, setShowObjects] = useState(true);
+
   // Proximity conversation state
   const [entityConversations, setEntityConversations] = useState<Map<string, ProximityConversation>>(new Map());
 
@@ -412,6 +437,13 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityCommandRef.current.delete(entityId);
     }
     return command;
+  }, []);
+
+  /**
+   * Set the move target for the selected entity in freestyle mode
+   */
+  const setFreestyleMoveTarget = useCallback((target: { x: number; z: number }) => {
+    freestyleMoveTargetRef.current = target;
   }, []);
 
   // Computed night mode based on lighting mode and time
@@ -1432,6 +1464,14 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       sendEntityCommand,
       consumeEntityCommand,
       entityPositionMapRef,
+      freestyleMode,
+      setFreestyleMoveTarget,
+      showNPCAgents,
+      setShowNPCAgents,
+      showGuestAgents,
+      setShowGuestAgents,
+      showObjects,
+      setShowObjects,
     }),
     [
       agents,
@@ -1472,6 +1512,11 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       entityConversations,
       sendEntityCommand,
       consumeEntityCommand,
+      freestyleMode,
+      setFreestyleMoveTarget,
+      showNPCAgents,
+      showGuestAgents,
+      showObjects,
     ]
   );
 

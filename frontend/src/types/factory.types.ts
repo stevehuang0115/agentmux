@@ -14,6 +14,12 @@ import * as THREE from 'three';
 export type AnimalType = 'cow' | 'horse' | 'tiger' | 'rabbit';
 
 /**
+ * Pet types available in the factory.
+ * Different dog breeds and robotic pets.
+ */
+export type PetType = 'puppy' | 'shibainu' | 'roboticdog' | 'bulldog';
+
+/**
  * Agent operational status levels
  */
 export type AgentStatus = 'active' | 'idle' | 'dormant';
@@ -564,6 +570,10 @@ export const MODEL_PATHS = {
   MARK_ZUCKERBERG: '/models/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
   JENSEN_HUANG: '/models/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
   STEVE_HUANG: '/models/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
+  PUPPY: '/models/puppy/model.glb',  // Puppy pet with Idle, Walking, Running, Sitting animations
+  ROBOTIC_DOG: '/models/roboticdog/original.glb',  // Boston Dynamics Spot robot dog with Animation
+  SHIBA_INU: '/models/shibainu/model.glb',  // Shiba Inu (doge) pet with Idle, Sitting animations
+  BULLDOG: '/models/bulldog/model.glb',  // Bulldog pet (static model, procedural animation)
 } as const;
 
 /**
@@ -611,5 +621,17 @@ export const ANIMATION_NAMES = {
     WAVE: 'Wave',
     YES: 'Yes',
     NO: 'No',
+  },
+  /** Puppy pet animation names */
+  PUPPY: {
+    IDLE: 'Idle',
+    WALKING: 'Walking',
+    RUNNING: 'Running',
+    SITTING: 'Sitting',
+  },
+  /** Shiba Inu pet animation names */
+  SHIBA_INU: {
+    IDLE: 'Idle',
+    SITTING: 'Sitting',
   },
 } as const;
