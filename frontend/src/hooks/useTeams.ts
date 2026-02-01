@@ -43,37 +43,61 @@ export function useTeams(): UseTeamsResult {
 
   /**
    * Fetch teams from API
+   *
+   * @param signal - Optional AbortSignal for request cancellation
    */
-  const fetchTeams = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
+  const fetchTeams = useCallback(
+    async (signal?: AbortSignal): Promise<void> => {
+      setLoading(true);
+      setError(null);
 
-    try {
-      const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
-      if (response.data.success) {
-        setTeams(response.data.data || []);
-      } else {
-        setError(response.data.error || 'Failed to load teams');
+      try {
+        const response = await axios.get<ApiResponse<Team[]>>(
+          `${API_BASE}/teams`,
+          { signal }
+        );
+        if (response.data.success) {
+          setTeams(response.data.data || []);
+        } else {
+          setError(response.data.error || 'Failed to load teams');
+        }
+      } catch (err) {
+        // Don't set error state if request was cancelled
+        if (axios.isCancel(err)) {
+          return;
+        }
+        const message = err instanceof Error ? err.message : 'Failed to load teams';
+        setError(message);
+        console.error('useTeams: Failed to fetch teams:', err);
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load teams';
-      setError(message);
-      console.error('useTeams: Failed to fetch teams:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    []
+  );
 
-  // Fetch on mount
+  // Fetch on mount with cleanup
   useEffect(() => {
-    fetchTeams();
+    const controller = new AbortController();
+    fetchTeams(controller.signal);
+
+    return () => {
+      controller.abort();
+    };
+  }, [fetchTeams]);
+
+  /**
+   * Manual refresh without abort signal
+   */
+  const refresh = useCallback(async (): Promise<void> => {
+    await fetchTeams();
   }, [fetchTeams]);
 
   return {
     teams,
     loading,
     error,
-    refresh: fetchTeams,
+    refresh,
   };
 }
 

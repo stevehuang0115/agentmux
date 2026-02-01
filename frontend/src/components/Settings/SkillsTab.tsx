@@ -7,7 +7,7 @@
  * @module components/Settings/SkillsTab
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useSkills, type UseSkillsOptions } from '../../hooks/useSkills';
 import type {
   Skill,
@@ -77,47 +77,53 @@ export const SkillsTab: React.FC = () => {
   /**
    * Handle creating a new skill
    */
-  const handleCreate = (): void => {
+  const handleCreate = useCallback((): void => {
     setEditingSkill(null);
     setShowEditor(true);
-  };
+  }, []);
 
   /**
    * Handle editing a skill
    */
-  const handleEdit = (skill: SkillSummary): void => {
+  const handleEdit = useCallback((skill: SkillSummary): void => {
     setEditingSkill(skill);
     setShowEditor(true);
-  };
+  }, []);
 
   /**
    * Handle saving skill (create or update)
    */
-  const handleSave = async (skillData: CreateSkillInput): Promise<void> => {
-    try {
-      if (editingSkill?.id) {
-        await update(editingSkill.id, skillData);
-      } else {
-        await create(skillData);
+  const handleSave = useCallback(
+    async (skillData: CreateSkillInput): Promise<void> => {
+      try {
+        if (editingSkill?.id) {
+          await update(editingSkill.id, skillData);
+        } else {
+          await create(skillData);
+        }
+        setShowEditor(false);
+        setEditingSkill(null);
+      } catch (err) {
+        console.error('Failed to save skill:', err);
       }
-      setShowEditor(false);
-      setEditingSkill(null);
-    } catch (err) {
-      console.error('Failed to save skill:', err);
-    }
-  };
+    },
+    [editingSkill, update, create]
+  );
 
   /**
    * Handle deleting a skill
    */
-  const handleDelete = async (id: string): Promise<void> => {
-    try {
-      await remove(id);
-      setShowDeleteConfirm(null);
-    } catch (err) {
-      console.error('Failed to delete skill:', err);
-    }
-  };
+  const handleDelete = useCallback(
+    async (id: string): Promise<void> => {
+      try {
+        await remove(id);
+        setShowDeleteConfirm(null);
+      } catch (err) {
+        console.error('Failed to delete skill:', err);
+      }
+    },
+    [remove]
+  );
 
   return (
     <div className="skills-tab">

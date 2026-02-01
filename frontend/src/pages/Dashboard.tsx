@@ -7,7 +7,7 @@
  * @module pages/Dashboard
  */
 
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChatPanel } from '../components/Chat/ChatPanel';
 import { ChatSidebar } from '../components/Chat/ChatSidebar';
@@ -40,30 +40,36 @@ export const Dashboard: React.FC = () => {
   /**
    * Handle sidebar toggle
    */
-  const handleSidebarToggle = (): void => {
-    setSidebarCollapsed(!sidebarCollapsed);
-  };
+  const handleSidebarToggle = useCallback((): void => {
+    setSidebarCollapsed((prev) => !prev);
+  }, []);
 
   /**
    * Handle navigation tab click
    */
-  const handleTabClick = (view: SidebarView): void => {
+  const handleTabClick = useCallback((view: SidebarView): void => {
     setSidebarView(view);
-  };
+  }, []);
 
   /**
    * Handle project click
    */
-  const handleProjectClick = (projectId: string): void => {
-    navigate(`/projects/${projectId}`);
-  };
+  const handleProjectClick = useCallback(
+    (projectId: string): void => {
+      navigate(`/projects/${projectId}`);
+    },
+    [navigate]
+  );
 
   /**
    * Handle team click
    */
-  const handleTeamClick = (teamId: string): void => {
-    navigate(`/teams/${teamId}`);
-  };
+  const handleTeamClick = useCallback(
+    (teamId: string): void => {
+      navigate(`/teams/${teamId}`);
+    },
+    [navigate]
+  );
 
   return (
     <div className="dashboard-layout">
