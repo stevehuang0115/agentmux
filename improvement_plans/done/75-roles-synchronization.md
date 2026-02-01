@@ -1,157 +1,59 @@
 # Task 75: Synchronize Roles Between Settings and Team Dropdown
 
-## Priority: High
+## Priority: Low (May already be resolved)
 
-## Problem
+## Problem Statement
+The roles available in the Settings > Roles page should match the roles shown in the Team creation dropdown (when assigning roles to agents).
 
-There is a mismatch between the roles shown in the Settings page and the roles available in the Team creation dropdown.
+## Current State (Verified 2026-02-01)
 
-### Settings Page Roles
+### Settings > Roles page shows (ALL 6 roles):
+- UI/UX Designer (Design category)
+- Developer (Development category)
+- Product Manager (Management category)
+- QA Engineer (Quality category)
+- Sales Representative (Sales category)
+- Customer Support (Support category)
+
+### Team > Add Agent dropdown shows:
 - UI/UX Designer
 - Developer
 - Product Manager
-
-### Team Creation Dropdown Roles
-- Technical Product Manager
-- System Architect
-- Frontend Developer
-- Backend Developer
-- Fullstack Developer
 - QA Engineer
-- Designer
+- Sales Representative
+- Customer Support
 
-### Expected Behavior
-Both locations should show the same set of roles, loaded from a single source of truth.
+**STATUS: ROLES ARE SYNCHRONIZED - Both show 6 roles**
 
-## Root Cause Analysis
+## Expected Behavior
+Both locations should show the same set of roles. The roles should come from a single source of truth.
 
-Two possible sources of role data:
-1. **Settings Page**: Uses `useRoles()` hook which calls `/api/settings/roles`
-2. **Team Creation**: May be using a different source (hardcoded list or different endpoint)
+## Technical Investigation Needed
+1. Where are roles defined for Settings page?
+2. Where are roles defined for Team dropdown?
+3. Are they using different data sources?
 
-Check these files:
-- `frontend/src/hooks/useRoles.ts` - Role fetching hook
-- `frontend/src/components/Teams/CreateTeamModal.tsx` or similar - Team creation form
-- `backend/src/services/settings/role.service.ts` - Backend role service
-- `config/roles/` - Default role configurations
+## Solution Options
 
-## Investigation Steps
+### Option A: Unified Role Source
+- Create a single roles configuration that both UI components read from
+- Update Settings page to add/edit roles in this shared source
+- Update Team dropdown to read from the same source
 
-### 1. Find Team Creation Component
-
-```bash
-# Search for role dropdown in team creation
-grep -r "role" frontend/src/components/Teams/
-grep -r "Frontend Developer\|Backend Developer" frontend/src/
-```
-
-### 2. Check Role Data Sources
-
-```typescript
-// Settings roles endpoint
-GET /api/settings/roles
-
-// Team creation roles - where does this come from?
-// Check if using different endpoint or hardcoded
-```
-
-### 3. Verify Backend Role Service
-
-Check `backend/src/services/settings/role.service.ts`:
-- What roles does it return?
-- Are there multiple role lists?
-
-### 4. Check Config Files
-
-Look in `config/roles/` for default role configurations.
-
-## Implementation Plan
-
-### Option A: Use Single Role Source
-
-Make team creation use the same roles API as Settings:
-
-```typescript
-// In CreateTeamModal.tsx or similar
-const { roles } = useRoles();
-
-// Render dropdown with fetched roles
-<select>
-  {roles.map(role => (
-    <option key={role.id} value={role.id}>{role.name}</option>
-  ))}
-</select>
-```
-
-### Option B: Update Default Roles
-
-If team creation has the correct roles, update Settings to match:
-
-```typescript
-// config/roles/ - Update default roles to include:
-const DEFAULT_ROLES = [
-  'Technical Product Manager',
-  'System Architect',
-  'Frontend Developer',
-  'Backend Developer',
-  'Fullstack Developer',
-  'QA Engineer',
-  'Designer'
-];
-```
-
-### Option C: Merge Both Sets
-
-Combine both role sets into a comprehensive list:
-
-```typescript
-const COMPLETE_ROLES = [
-  // Development
-  'Frontend Developer',
-  'Backend Developer',
-  'Fullstack Developer',
-  'System Architect',
-
-  // Design
-  'Designer',
-  'UI/UX Designer',
-
-  // Management
-  'Product Manager',
-  'Technical Product Manager',
-
-  // Quality
-  'QA Engineer',
-];
-```
+### Option B: Sync on Change
+- Keep separate definitions but sync when Settings roles change
+- Add validation to prevent using deleted roles
 
 ## Files to Investigate
+- `frontend/src/pages/Settings.tsx`
+- `frontend/src/components/Settings/RolesTab.tsx`
+- `frontend/src/components/Teams/CreateTeamModal.tsx` or `AddAgentModal.tsx`
+- `backend/src/services/settings/role.service.ts` (if exists)
+- Any role configuration files in `config/roles/`
 
-1. `frontend/src/hooks/useRoles.ts` - Roles hook
-2. `frontend/src/components/Teams/` - Team creation components
-3. `backend/src/services/settings/role.service.ts` - Role service
-4. `config/roles/` - Role configuration files
-5. `backend/src/controllers/settings/role.controller.ts` - Role API
-
-## Files to Modify
-
-1. Update role source to be consistent across all components
-2. Update default roles configuration if needed
-3. Fix any hardcoded role lists in team components
-
-## Testing Requirements
-
-1. Settings page shows complete role list
-2. Team creation dropdown shows same roles as Settings
-3. Roles can be selected and assigned in team creation
-4. Existing teams with old roles continue to work
-5. API returns consistent role data
-
-## Acceptance Criteria
-
-- [ ] Settings page and Team dropdown show identical roles
-- [ ] Single source of truth for role definitions
-- [ ] No hardcoded role lists in components
-- [ ] All roles from both lists are available
-- [ ] Role selection works in team creation
-- [ ] Existing team data is not broken
+## Testing Steps
+1. Open Settings > Roles and note available roles
+2. Go to Teams > Create/Edit Team > Add Agent
+3. Compare dropdown roles with Settings roles
+4. After fix: verify both show identical role lists
+5. Add a new role in Settings and verify it appears in Team dropdown

@@ -1,211 +1,77 @@
 # Task 77: Fix Orchestrator Not Responding to Chat Messages
 
-## Priority: Critical
+## Priority: CRITICAL
 
-## Problem
+## Problem Statement
+The orchestrator does not respond to messages sent via the Chat interface. Messages are sent and displayed in the chat, but no responses come back from the orchestrator.
 
-When sending messages through the Chat interface to the Orchestrator, no response is received. The Orchestrator appears to be running (status shows "Active") but does not respond to user messages.
+## Root Cause Analysis (Discovered during testing)
 
-### Observed Behavior
-- Chat message is sent successfully (appears in chat)
-- Orchestrator shows as "Active" in Teams
-- No response received after 15+ seconds
-- No error messages displayed
-- No typing indicator or acknowledgment
+### Findings:
+1. **Orchestrator session is running**: Health check confirms `"running": true, "status": "active"`
+2. **Claude Code is running**: Terminal output shows Claude Code v2.1.29 is active in the orchestrator session
+3. **Messages are being forwarded**: API response shows `"orchestrator":{"forwarded":true}`
+4. **THE BUG**: Messages are being **displayed** in the terminal but **NOT sent to Claude Code's stdin**
 
-### Expected Behavior
-- Orchestrator should respond to messages within a few seconds
-- Typing indicator should show while processing
-- Response should appear in chat thread
-- Error message if something goes wrong
+### Evidence from terminal output:
+```
+❯ [CHAT:91c88d9f-cd13-4904-b7bb-07ac07af68e5] Test message from API
 
-## Root Cause Analysis
-
-Possible issues:
-
-### 1. WebSocket Connection Not Established
-The chat may not be properly connected to the backend WebSocket.
-
-### 2. Message Not Reaching Orchestrator Session
-The backend may not be routing messages to the orchestrator terminal session.
-
-### 3. Orchestrator Not Listening for Input
-The orchestrator session may not be in a state where it accepts input.
-
-### 4. Response Not Being Captured
-The orchestrator may respond but the output isn't being captured/forwarded.
-
-### 5. Response Format Not Parsed
-The orchestrator output may not match expected patterns for extraction.
-
-## Investigation Steps
-
-### 1. Check WebSocket Connection
-
-```typescript
-// In browser console:
-// Check if WebSocket is connected
-console.log(socket.connected);
-
-// Listen for all WebSocket events
-socket.onAny((event, ...args) => {
-  console.log('Socket event:', event, args);
-});
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
 ```
 
-### 2. Check Backend Logs
+The message appears as terminal output, but Claude Code is still waiting at the input prompt (`❯`). The message was echoed/displayed but never actually sent to the Claude Code process as user input.
 
-```bash
-# View backend server logs
-tail -f ~/.agentmux/logs/server.log
+### Technical Details:
+- Location: `backend/src/services/agent/agent-registration.service.ts` - `sendMessageToAgent()` method
+- The method likely writes to the terminal display (pty) but doesn't properly send input to the underlying process
+- Need to investigate how tmux panes/windows receive input vs display output
 
-# Check for incoming chat messages
-grep "chat" ~/.agentmux/logs/server.log
-```
+## Solution Requirements
 
-### 3. Test Orchestrator Session Directly
+1. **Fix message forwarding**: Ensure messages sent via `sendMessageToAgent()` are delivered to Claude Code's stdin, not just displayed
+2. **Verify input method**: Check if using `tmux send-keys` properly or if there's a pty input issue
+3. **Response capture**: Implement mechanism to capture Claude Code's response and forward back to chat
+4. **Add response markers**: Consider adding response markers for the orchestrator to use (e.g., `[CHAT_RESPONSE]...[/CHAT_RESPONSE]`)
 
-```bash
-# Check if orchestrator session exists
-tmux list-sessions | grep agentmux-orc
+## Additional Notes
 
-# Attach to orchestrator to see its state
-tmux attach -t agentmux-orc
-```
+### Orchestrator Setup
+- Orchestrator cannot be started from the UI Team page
+- Shows error: "Orchestrator is managed at system level. Use /orchestrator/setup endpoint instead."
+- Must call: `POST /api/orchestrator/setup` to initialize the orchestrator
 
-### 4. Check Chat Gateway
+### Current Flow (Broken)
+1. User sends message in Chat UI
+2. Frontend calls `POST /api/chat/send`
+3. Backend saves message and calls `forwardToOrchestrator()`
+4. `agentRegistrationService.sendMessageToAgent()` is called
+5. Message appears in terminal display BUT NOT sent to Claude Code input
+6. Claude Code never receives the message, never responds
+7. User sees no response in chat
 
-Review `backend/src/websocket/chat.gateway.ts`:
-- Is it receiving messages?
-- Is it sending to orchestrator session?
-- Is it listening for responses?
+### Expected Flow (After Fix)
+1. User sends message in Chat UI
+2. Frontend calls `POST /api/chat/send`
+3. Backend saves message and calls `forwardToOrchestrator()`
+4. Message is properly sent to Claude Code's stdin via tmux
+5. Claude Code processes message and generates response
+6. Response is captured (via output parsing or markers)
+7. Response is sent back to chat via WebSocket
+8. User sees orchestrator's response in chat
 
-### 5. Check Chat Service
+## Files to Investigate/Modify
+- `backend/src/services/agent/agent-registration.service.ts`
+- `backend/src/services/terminal/terminal-manager.service.ts`
+- `backend/src/websocket/terminal.gateway.ts`
+- `backend/src/controllers/chat/chat.controller.ts`
 
-Review `backend/src/services/chat/chat.service.ts`:
-- Message handling logic
-- Response extraction
-- WebSocket event emission
-
-## Implementation Plan
-
-### 1. Add Debug Logging
-
-```typescript
-// In chat.gateway.ts
-socket.on('chat:send', async (data) => {
-  console.log('Chat gateway received message:', data);
-
-  try {
-    const result = await chatService.sendMessage(data);
-    console.log('Chat service result:', result);
-  } catch (error) {
-    console.error('Chat gateway error:', error);
-    socket.emit('chat:error', { error: error.message });
-  }
-});
-```
-
-### 2. Fix Message Routing
-
-Ensure messages are properly sent to orchestrator:
-
-```typescript
-// In chat.service.ts
-async sendMessage(message: ChatMessage): Promise<void> {
-  // Get orchestrator session
-  const orchestratorSession = sessionManager.getOrchestratorSession();
-
-  if (!orchestratorSession) {
-    throw new Error('Orchestrator not running');
-  }
-
-  // Send to terminal
-  await orchestratorSession.write(message.content + '\n');
-
-  // Emit acknowledgment
-  this.emit('chat:sent', { messageId: message.id });
-}
-```
-
-### 3. Fix Response Capture
-
-Listen for orchestrator output and forward to chat:
-
-```typescript
-// In chat.gateway.ts or orchestrator integration
-orchestratorSession.onOutput((data) => {
-  // Parse orchestrator output
-  const response = parseOrchestratorResponse(data);
-
-  if (response) {
-    socket.emit('chat:message', {
-      from: { type: 'orchestrator', name: 'Orchestrator' },
-      content: response,
-      timestamp: new Date().toISOString(),
-    });
-  }
-});
-```
-
-### 4. Add Connection Status
-
-Show connection status in UI:
-
-```tsx
-const Chat: React.FC = () => {
-  const { isConnected, orchestratorStatus } = useChatContext();
-
-  return (
-    <div>
-      {!isConnected && (
-        <div className="connection-warning">
-          Not connected to server. Reconnecting...
-        </div>
-      )}
-      {orchestratorStatus !== 'active' && (
-        <div className="orchestrator-warning">
-          Orchestrator is not running. Start it from Teams page.
-        </div>
-      )}
-      {/* ... */}
-    </div>
-  );
-};
-```
-
-## Files to Investigate
-
-1. `backend/src/websocket/chat.gateway.ts` - Chat WebSocket handler
-2. `backend/src/services/chat/chat.service.ts` - Chat service
-3. `frontend/src/contexts/ChatContext.tsx` - Frontend chat state
-4. `frontend/src/services/chat.service.ts` - Frontend chat API
-5. `backend/src/services/session.service.ts` - Session management
-6. `config/teams/prompts/orchestrator-prompt.md` - Orchestrator behavior
-
-## Files to Modify
-
-1. Add proper message routing to orchestrator
-2. Add response capture from orchestrator
-3. Add error handling and status indicators
-4. Fix WebSocket event flow
-
-## Testing Requirements
-
-1. Send message - should appear in chat
-2. Orchestrator receives message - check terminal
-3. Orchestrator responds - response captured
-4. Response appears in chat UI
-5. Error shown if orchestrator not running
-6. Connection status visible in UI
-7. Typing indicator shows while processing
-
-## Acceptance Criteria
-
-- [ ] Messages sent from chat reach orchestrator session
-- [ ] Orchestrator responses appear in chat within 5 seconds
-- [ ] Error message if orchestrator is not running
-- [ ] Connection status indicator in UI
-- [ ] Typing/processing indicator while waiting
-- [ ] No silent failures - errors always shown
-- [ ] End-to-end chat flow works reliably
+## Testing Steps
+1. Start the application
+2. Setup orchestrator: `curl -X POST http://localhost:8787/api/orchestrator/setup`
+3. Go to Chat page
+4. Send a message
+5. Verify message appears in orchestrator terminal as actual INPUT (not just display)
+6. Verify Claude Code processes and responds
+7. Verify response appears in chat UI
