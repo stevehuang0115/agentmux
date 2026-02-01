@@ -2478,9 +2478,25 @@ export class AgentMuxMCPServer {
    */
   async sendChatResponse(params: SendChatResponseParams): Promise<MCPToolResult> {
     try {
+      // Input validation
+      if (!params.content || params.content.trim().length === 0) {
+        return {
+          content: [{
+            type: 'text',
+            text: '❌ Content is required and cannot be empty'
+          }],
+          isError: true
+        };
+      }
+
+      // Verify chatService is initialized
+      if (!this.chatService.isInitialized()) {
+        await this.chatService.initialize();
+      }
+
       logger.info(`[SEND_CHAT_RESPONSE] Sending response to chat UI`, {
-        conversationId: params.conversationId || 'current',
-        senderType: params.senderType || 'orchestrator',
+        conversationId: params.conversationId ?? 'current',
+        senderType: params.senderType ?? 'orchestrator',
         contentLength: params.content.length,
       });
 
@@ -2497,10 +2513,15 @@ export class AgentMuxMCPServer {
         }
       }
 
-      // Build sender information
+      // Build sender information with validated type
+      const validSenderTypes = ['orchestrator', 'agent'] as const;
+      const senderType = validSenderTypes.includes(params.senderType as typeof validSenderTypes[number])
+        ? params.senderType!
+        : 'orchestrator';
+
       const sender: ChatSender = {
-        type: params.senderType || 'orchestrator',
-        name: params.senderName || this.sessionName,
+        type: senderType,
+        name: params.senderName ?? this.sessionName,
         id: this.sessionName,
       };
 

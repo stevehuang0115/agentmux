@@ -485,9 +485,10 @@ This is a mock task for testing purposes.
 
   // Mock Chat Response Tool
   async sendChatResponse(params: any): Promise<any> {
-    if (!params.content) {
+    // Input validation - match the real implementation
+    if (!params.content || (typeof params.content === 'string' && params.content.trim().length === 0)) {
       return {
-        content: [{ type: 'text', text: '❌ content parameter is required' }],
+        content: [{ type: 'text', text: '❌ Content is required and cannot be empty' }],
         isError: true
       };
     }
@@ -1471,7 +1472,16 @@ describe('AgentMuxMCP', () => {
     it('should require content parameter', async () => {
       const result = await mcpServer.sendChatResponse({});
 
-      expect(result.content[0].text).toBe('❌ content parameter is required');
+      expect(result.content[0].text).toBe('❌ Content is required and cannot be empty');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should reject empty content', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: '   '
+      });
+
+      expect(result.content[0].text).toBe('❌ Content is required and cannot be empty');
       expect(result.isError).toBe(true);
     });
 
