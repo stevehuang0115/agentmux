@@ -1,0 +1,131 @@
+/**
+ * Summary Component Styles
+ *
+ * Shared styles for ProjectsSummary and TeamsSummary.
+ */
+
+.summary-list {
+  background: var(--bg-secondary, #f8fafc);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.summary-list.compact {
+  background: transparent;
+  padding: 0;
+}
+
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.summary-header h3 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text-primary, #1e293b);
+}
+
+.count-badge {
+  font-size: 0.75rem;
+  background: var(--bg-tertiary, #e2e8f0);
+  padding: 0.125rem 0.5rem;
+  border-radius: 10px;
+  color: var(--text-secondary, #64748b);
+}
+
+.summary-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.summary-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.summary-item:hover {
+  background: var(--bg-hover, #f1f5f9);
+}
+
+.summary-item:focus {
+  outline: 2px solid var(--primary, #3b82f6);
+  outline-offset: -2px;
+}
+
+.item-name {
+  font-size: 0.875rem;
+  color: var(--text-primary, #1e293b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-meta {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #64748b);
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-active {
+  background: #22c55e;
+}
+
+.status-inactive,
+.status-paused {
+  background: #94a3b8;
+}
+
+.status-completed {
+  background: #3b82f6;
+}
+
+.summary-empty {
+  color: var(--text-secondary, #64748b);
+  font-size: 0.875rem;
+  text-align: center;
+  padding: 1rem 0;
+  margin: 0;
+}
+
+.summary-more {
+  font-size: 0.75rem;
+  color: var(--primary, #3b82f6);
+  text-align: center;
+  padding: 0.5rem 0;
+  cursor: pointer;
+}
+
+.summary-more:hover {
+  text-decoration: underline;
+}
+
+.summary-loading,
+.summary-error {
+  text-align: center;
+  padding: 1rem;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.875rem;
+}
+
+.summary-error {
+  color: var(--error, #ef4444);
+}
