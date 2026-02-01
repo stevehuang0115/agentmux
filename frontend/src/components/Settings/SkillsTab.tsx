@@ -19,19 +19,32 @@ import { getSkillCategoryLabel } from '../../types/skill.types';
 import './SkillsTab.css';
 
 /**
- * Category filter options
+ * Build category options from skill types for consistency
  */
-const CATEGORY_OPTIONS: { value: SkillCategory | ''; label: string }[] = [
-  { value: '', label: 'All Categories' },
-  { value: 'development', label: 'Development' },
-  { value: 'design', label: 'Design' },
-  { value: 'communication', label: 'Communication' },
-  { value: 'research', label: 'Research' },
-  { value: 'content-creation', label: 'Content Creation' },
-  { value: 'automation', label: 'Automation' },
-  { value: 'analysis', label: 'Analysis' },
-  { value: 'integration', label: 'Integration' },
-];
+const buildCategoryOptions = (): { value: SkillCategory | ''; label: string }[] => {
+  const categories: SkillCategory[] = [
+    'development',
+    'design',
+    'communication',
+    'research',
+    'content-creation',
+    'automation',
+    'analysis',
+    'integration',
+  ];
+  return [
+    { value: '', label: 'All Categories' },
+    ...categories.map((cat) => ({
+      value: cat,
+      label: getSkillCategoryLabel(cat),
+    })),
+  ];
+};
+
+/**
+ * Category filter options derived from skill types
+ */
+const CATEGORY_OPTIONS = buildCategoryOptions();
 
 /**
  * SkillsTab component for managing skills
