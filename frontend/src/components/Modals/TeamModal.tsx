@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { FormLabel, FormInput, FormSelect, Button } from '../UI';
 import { useAlert } from '../UI/Dialog';
+import { useRoles } from '../../hooks/useRoles';
 
 interface Project {
   id: string;
@@ -38,18 +39,28 @@ interface TeamModalProps {
 
 export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit, team }) => {
   const { showWarning, AlertComponent } = useAlert();
+  const { roles: fetchedRoles, isLoading: rolesLoading } = useRoles();
   const [formData, setFormData] = useState({
     name: '',
     projectPath: '',
   });
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [availableRoles, setAvailableRoles] = useState<TeamRole[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Transform fetched roles into TeamRole format
+  const availableRoles: TeamRole[] = (fetchedRoles || []).map(role => ({
+    key: role.name,
+    displayName: role.displayName,
+    promptFile: `${role.name}-prompt.md`,
+    description: role.description || '',
+    category: role.category,
+    hidden: false,
+    isDefault: role.isDefault,
+  }));
 
   useEffect(() => {
     fetchProjects();
-    fetchAvailableRoles();
     if (team) {
       setFormData({
         name: team.name || '',
@@ -101,20 +112,6 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     }
   };
 
-  const fetchAvailableRoles = async () => {
-    try {
-      const response = await fetch('/api/config/available_team_roles.json');
-      if (response.ok) {
-        const result = await response.json();
-        if (result.roles && Array.isArray(result.roles)) {
-          setAvailableRoles(result.roles);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching available roles:', error);
-      setAvailableRoles([]);
-    }
-  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -255,6 +252,24 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
               </div>
 
               <div>
+                <FormLabel htmlFor="project-assignment">Assigned Project</FormLabel>
+                <FormSelect
+                  id="project-assignment"
+                  value={formData.projectPath || ''}
+                  onChange={handleInputChange}
+                  name="projectPath"
+                >
+                  <option value="">No project assigned</option>
+                  {projects.map(project => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </FormSelect>
+                <p className="text-xs text-text-secondary-dark mt-1">
+                  Optionally assign a project for this team to work on
+                </p>
+              </div>
+
+              <div>
                 <FormLabel>Team Members</FormLabel>
                 <div className="space-y-4">
                   {members.map((member, index) => (
@@ -356,7 +371,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
               variant="primary"
               type="submit"
               onClick={handleFormSubmit}
-              disabled={!formData.name.trim() || members.length === 0 || loading}
+              disabled={!formData.name.trim() || members.length === 0 || loading || rolesLoading}
             >
               {loading ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />

@@ -2,38 +2,35 @@
  * Chat Page
  *
  * Dedicated page for orchestrator communication.
- * Provides full chat interface with conversation sidebar.
+ * Provides a simple messenger-style chat interface without conversation history.
  *
  * @module pages/Chat
  */
 
 import React from 'react';
 import { ChatPanel } from '../components/Chat/ChatPanel';
-import { ChatSidebar } from '../components/Chat/ChatSidebar';
 import './Chat.css';
 
 /**
- * Chat page component - dedicated orchestrator communication interface
+ * Chat page component - messenger-style orchestrator communication
  *
  * Features:
- * - Full-height chat panel
- * - Conversation sidebar for managing multiple chats
+ * - Simple messenger-style interface
+ * - Single conversation with orchestrator (no history list)
+ * - Clean, focused chat experience
  * - Real-time message updates
  *
  * @returns Chat page component
  */
 export const Chat: React.FC = () => {
   return (
-    <div className="chat-page">
+    <div className="chat-page messenger-style">
       <header className="chat-page-header">
         <h1>Chat with Orchestrator</h1>
         <p>Communicate with the AgentMux orchestrator to manage projects and teams</p>
       </header>
 
       <div className="chat-page-content">
-        <aside className="chat-page-sidebar">
-          <ChatSidebar />
-        </aside>
         <main className="chat-page-main">
           <ChatPanel />
         </main>

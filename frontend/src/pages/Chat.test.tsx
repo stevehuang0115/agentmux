@@ -1,7 +1,7 @@
 /**
  * Chat Page Tests
  *
- * Tests for the dedicated Chat page.
+ * Tests for the dedicated Chat page (messenger-style without sidebar).
  *
  * @module pages/Chat.test
  */
@@ -19,10 +19,6 @@ vi.mock('../contexts/ChatContext');
 // Mock child components
 vi.mock('../components/Chat/ChatPanel', () => ({
   ChatPanel: () => <div data-testid="chat-panel">Chat Panel</div>,
-}));
-
-vi.mock('../components/Chat/ChatSidebar', () => ({
-  ChatSidebar: () => <div data-testid="chat-sidebar">Chat Sidebar</div>,
 }));
 
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -76,16 +72,6 @@ describe('Chat Page', () => {
       ).toBeInTheDocument();
     });
 
-    it('should render the chat sidebar', () => {
-      render(
-        <TestWrapper>
-          <Chat />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId('chat-sidebar')).toBeInTheDocument();
-    });
-
     it('should render the chat panel', () => {
       render(
         <TestWrapper>
@@ -98,7 +84,7 @@ describe('Chat Page', () => {
   });
 
   describe('Structure', () => {
-    it('should have correct class structure', () => {
+    it('should have correct class structure for messenger-style layout', () => {
       const { container } = render(
         <TestWrapper>
           <Chat />
@@ -106,10 +92,20 @@ describe('Chat Page', () => {
       );
 
       expect(container.querySelector('.chat-page')).toBeInTheDocument();
+      expect(container.querySelector('.chat-page.messenger-style')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-header')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-content')).toBeInTheDocument();
-      expect(container.querySelector('.chat-page-sidebar')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-main')).toBeInTheDocument();
+    });
+
+    it('should NOT have sidebar (messenger-style)', () => {
+      const { container } = render(
+        <TestWrapper>
+          <Chat />
+        </TestWrapper>
+      );
+
+      expect(container.querySelector('.chat-page-sidebar')).not.toBeInTheDocument();
     });
   });
 });

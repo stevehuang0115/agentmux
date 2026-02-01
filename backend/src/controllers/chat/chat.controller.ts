@@ -15,6 +15,7 @@ import {
 } from '../../services/chat/chat.service.js';
 import { AgentRegistrationService } from '../../services/agent/agent-registration.service.js';
 import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type {
   SendMessageInput,
   ChatMessageFilter,
@@ -52,6 +53,12 @@ async function forwardToOrchestrator(
   }
 
   try {
+    // Set active conversation ID for response routing
+    const terminalGateway = getTerminalGateway();
+    if (terminalGateway) {
+      terminalGateway.setActiveConversationId(conversationId);
+    }
+
     // Format message with conversation context
     const formattedMessage = `[CHAT:${conversationId}] ${content}`;
 

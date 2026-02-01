@@ -540,6 +540,7 @@ export const TeamDetail: React.FC = () => {
         onDeleteMember={handleDeleteMember}
         onStartMember={handleStartMember}
         onStopMember={handleStopMember}
+        onProjectChange={handleProjectChange}
         onViewTerminal={handleViewMemberTerminal}
       />
 

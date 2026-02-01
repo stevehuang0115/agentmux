@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { FolderOpen } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { FolderOpen, Edit2 } from 'lucide-react';
 import { TeamStats } from './TeamStats';
 import { TeamDescription } from './TeamDescription';
 import { AddMemberForm } from './AddMemberForm';
 import { MembersList } from './MembersList';
 import { Team, TeamMember } from '../../types';
+import { FormSelect } from '../UI';
 
 interface TeamOverviewProps {
   team: Team;
@@ -18,6 +19,12 @@ interface TeamOverviewProps {
   onStopMember: (memberId: string) => Promise<void>;
   onProjectChange?: (projectId: string | null) => void;
   onViewTerminal?: (member: TeamMember) => void;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  path: string;
 }
 
 export const TeamOverview: React.FC<TeamOverviewProps> = ({
@@ -34,7 +41,40 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   onViewTerminal,
 }) => {
   const [showAddMember, setShowAddMember] = useState(false);
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.currentProject || '');
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
+
+  useEffect(() => {
+    fetchProjects();
+  }, []);
+
+  useEffect(() => {
+    setSelectedProjectId(team?.currentProject || '');
+  }, [team?.currentProject]);
+
+  const fetchProjects = async () => {
+    try {
+      const response = await fetch('/api/projects');
+      if (response.ok) {
+        const result = await response.json();
+        const projectsData = result.success ? (result.data || []) : (result || []);
+        setProjects(Array.isArray(projectsData) ? projectsData : []);
+      }
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+      setProjects([]);
+    }
+  };
+
+  const handleProjectSelect = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    if (onProjectChange) {
+      onProjectChange(projectId || null);
+    }
+    setShowProjectSelector(false);
+  };
 
   const handleToggleAddMember = () => {
     setShowAddMember(!showAddMember);
@@ -67,14 +107,49 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
       </div>
       <div className="space-y-6">
         <div className="bg-surface-dark border border-border-dark rounded-xl p-6">
-          <h4 className="text-lg font-semibold mb-4">Assigned Project</h4>
-          <div className="flex items-center gap-3">
-            <FolderOpen className="h-5 w-5 text-primary" />
-            <div>
-              <div className="font-semibold text-white">{projectName || 'No Project Assigned'}</div>
-              {projectName && <div className="text-sm text-text-secondary-dark">Web App Redesign</div>}
-            </div>
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="text-lg font-semibold">Assigned Project</h4>
+            <button
+              onClick={() => setShowProjectSelector(!showProjectSelector)}
+              className="p-1.5 hover:bg-background-dark rounded-lg transition-colors text-text-secondary-dark hover:text-primary"
+              title="Change project"
+            >
+              <Edit2 className="h-4 w-4" />
+            </button>
           </div>
+          {showProjectSelector ? (
+            <div className="space-y-3">
+              <FormSelect
+                value={selectedProjectId}
+                onChange={(e) => handleProjectSelect(e.target.value)}
+              >
+                <option value="">No project assigned</option>
+                {projects.map(project => (
+                  <option key={project.id} value={project.id}>{project.name}</option>
+                ))}
+              </FormSelect>
+              <button
+                onClick={() => setShowProjectSelector(false)}
+                className="text-sm text-text-secondary-dark hover:text-primary"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div
+              className="flex items-center gap-3 cursor-pointer hover:bg-background-dark/50 -mx-3 px-3 py-2 rounded-lg transition-colors"
+              onClick={() => setShowProjectSelector(true)}
+              title="Click to change project"
+            >
+              <FolderOpen className="h-5 w-5 text-primary" />
+              <div className="flex-1">
+                <div className="font-semibold text-white">{projectName || 'No Project Assigned'}</div>
+                {!projectName && (
+                  <div className="text-sm text-text-secondary-dark">Click to assign a project</div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
           <h4 className="text-lg font-semibold mb-3">Recent Activity</h4>

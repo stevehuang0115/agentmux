@@ -30,7 +30,7 @@ export function createApiRouter(context: ApiContext): Router {
   router.use('/system', createSystemRouter(context));
   router.use('/sessions', createSessionRouter(context));
   router.use('/settings', createSettingsRouter(context));
-  router.use('/chat', createChatRouter());
+  router.use('/chat', createChatRouter(context));
   router.use('/skills', createSkillRouter());
   router.use('/slack', createSlackRouter());
   router.use('/self-improvement', selfImprovementRouter);

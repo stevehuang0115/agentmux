@@ -15,6 +15,8 @@ import {
 	getSessionBackendSync,
 	type ISessionBackend,
 } from '../services/session/index.js';
+import { getChatGateway } from './chat.gateway.js';
+import { ORCHESTRATOR_SESSION_NAME } from '../constants.js';
 
 /**
  * Terminal Gateway class for WebSocket-based terminal streaming.
@@ -34,6 +36,9 @@ export class TerminalGateway {
 
 	/** Map of session name to unsubscribe function for PTY onData */
 	private sessionSubscriptions: Map<string, () => void> = new Map();
+
+	/** Current active chat conversation ID for orchestrator responses */
+	private activeConversationId: string | null = null;
 
 	/**
 	 * Create a new TerminalGateway.
@@ -386,6 +391,7 @@ export class TerminalGateway {
 
 	/**
 	 * Broadcast terminal output to all subscribers of a session.
+	 * Also processes orchestrator output for chat responses.
 	 *
 	 * @param sessionName - The session name
 	 * @param output - The terminal output
@@ -398,6 +404,66 @@ export class TerminalGateway {
 		};
 
 		this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
+
+		// Process orchestrator output for chat responses
+		if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+			this.processOrchestratorOutputForChat(sessionName, output.content);
+		}
+	}
+
+	/**
+	 * Process orchestrator terminal output for potential chat responses.
+	 * Extracts conversation ID from output and forwards to chat gateway.
+	 *
+	 * @param sessionName - The orchestrator session name
+	 * @param content - The terminal output content
+	 */
+	private processOrchestratorOutputForChat(sessionName: string, content: string): void {
+		const chatGateway = getChatGateway();
+		if (!chatGateway) {
+			return;
+		}
+
+		// Extract conversation ID from the output if present
+		// The format is [CHAT:conversationId] at the start of a response
+		const chatIdMatch = content.match(/\[CHAT:([^\]]+)\]/);
+		if (chatIdMatch) {
+			this.activeConversationId = chatIdMatch[1];
+		}
+
+		// Only process if we have an active conversation
+		if (!this.activeConversationId) {
+			return;
+		}
+
+		// Process the output through the chat gateway
+		chatGateway.processTerminalOutput(
+			sessionName,
+			content,
+			this.activeConversationId
+		).catch(error => {
+			this.logger.warn('Failed to process orchestrator output for chat', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}
+
+	/**
+	 * Set the active conversation ID for orchestrator chat responses.
+	 *
+	 * @param conversationId - The conversation ID to set
+	 */
+	setActiveConversationId(conversationId: string | null): void {
+		this.activeConversationId = conversationId;
+	}
+
+	/**
+	 * Get the active conversation ID.
+	 *
+	 * @returns The active conversation ID or null
+	 */
+	getActiveConversationId(): string | null {
+		return this.activeConversationId;
 	}
 
 	/**
@@ -607,4 +673,36 @@ export class TerminalGateway {
 
 		this.logger.info('TerminalGateway destroyed');
 	}
+}
+
+// =============================================================================
+// Singleton Instance
+// =============================================================================
+
+let terminalGatewayInstance: TerminalGateway | null = null;
+
+/**
+ * Set the terminal gateway singleton instance.
+ * Called during server initialization.
+ *
+ * @param gateway - The TerminalGateway instance
+ */
+export function setTerminalGateway(gateway: TerminalGateway): void {
+	terminalGatewayInstance = gateway;
+}
+
+/**
+ * Get the terminal gateway singleton instance.
+ *
+ * @returns The TerminalGateway instance or null if not initialized
+ */
+export function getTerminalGateway(): TerminalGateway | null {
+	return terminalGatewayInstance;
+}
+
+/**
+ * Reset the terminal gateway singleton instance (for testing).
+ */
+export function resetTerminalGateway(): void {
+	terminalGatewayInstance = null;
 }
