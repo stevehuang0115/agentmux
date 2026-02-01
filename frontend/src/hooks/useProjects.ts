@@ -7,7 +7,7 @@
  * @module hooks/useProjects
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Project } from '../types';
 
 /**
@@ -79,12 +79,15 @@ export function useProjects(): UseProjectsResult {
     fetchProjects();
   }, [fetchProjects]);
 
-  // Create simplified options for dropdowns
-  const projectOptions: ProjectOption[] = projects.map(p => ({
-    id: p.id,
-    name: p.name,
-    path: p.path,
-  }));
+  // Create simplified options for dropdowns, memoized to avoid recalculation
+  const projectOptions: ProjectOption[] = useMemo(
+    () => projects.map(p => ({
+      id: p.id,
+      name: p.name,
+      path: p.path,
+    })),
+    [projects]
+  );
 
   return {
     projects,
