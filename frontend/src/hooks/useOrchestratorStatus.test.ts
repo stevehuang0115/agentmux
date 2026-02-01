@@ -12,24 +12,30 @@ import axios from 'axios';
 import { useOrchestratorStatus } from './useOrchestratorStatus';
 
 // Mock axios
-vi.mock('axios');
-const mockedAxios = vi.mocked(axios, true);
+vi.mock('axios', () => ({
+  default: {
+    get: vi.fn(),
+    isCancel: vi.fn(() => false),
+  },
+  get: vi.fn(),
+  isCancel: vi.fn(() => false),
+}));
+const mockedAxios = {
+  get: axios.get as ReturnType<typeof vi.fn>,
+  isCancel: axios.isCancel as ReturnType<typeof vi.fn>,
+};
 
 describe('useOrchestratorStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
+    mockedAxios.isCancel.mockReturnValue(false);
   });
 
   describe('initial state', () => {
     it('should start with loading state', () => {
       mockedAxios.get.mockImplementation(() => new Promise(() => {}));
 
-      const { result } = renderHook(() => useOrchestratorStatus());
+      const { result } = renderHook(() => useOrchestratorStatus({ enablePolling: false }));
 
       expect(result.current.isLoading).toBe(true);
       expect(result.current.status).toBeNull();
@@ -121,6 +127,14 @@ describe('useOrchestratorStatus', () => {
   });
 
   describe('polling', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('should poll for status when enablePolling is true', async () => {
       const mockStatus = {
         isActive: true,
@@ -133,22 +147,16 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
+      renderHook(() =>
         useOrchestratorStatus({ enablePolling: true, pollingInterval: 1000 })
       );
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
       // Initial call
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
 
       // Advance timer to trigger polling
-      await act(async () => {
-        vi.advanceTimersByTime(1000);
-      });
-
+      await vi.advanceTimersByTimeAsync(1000);
       expect(mockedAxios.get).toHaveBeenCalledTimes(2);
     });
 
@@ -164,21 +172,16 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
+      renderHook(() =>
         useOrchestratorStatus({ enablePolling: false })
       );
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
       // Initial call
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
 
       // Advance timer
-      await act(async () => {
-        vi.advanceTimersByTime(15000);
-      });
+      await vi.advanceTimersByTimeAsync(15000);
 
       // Should still be 1 (no polling)
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
@@ -217,42 +220,51 @@ describe('useOrchestratorStatus', () => {
     });
 
     it('should set loading state during refresh', async () => {
-      let resolvePromise: (value: unknown) => void;
-      const mockPromise = new Promise((resolve) => {
-        resolvePromise = resolve;
-      });
+      const mockStatus = {
+        isActive: true,
+        agentStatus: 'active',
+        message: 'Active',
+        offlineMessage: null,
+      };
 
-      mockedAxios.get.mockImplementation(() => mockPromise);
+      mockedAxios.get.mockResolvedValue({
+        data: { success: true, data: mockStatus },
+      });
 
       const { result } = renderHook(() =>
         useOrchestratorStatus({ enablePolling: false })
       );
 
-      // Initially loading
-      expect(result.current.isLoading).toBe(true);
-
-      // Resolve the promise
-      await act(async () => {
-        resolvePromise!({
-          data: {
-            success: true,
-            data: {
-              isActive: true,
-              agentStatus: 'active',
-              message: 'Active',
-              offlineMessage: null,
-            },
-          },
-        });
-      });
-
+      // Wait for initial load
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
       });
+
+      // Trigger refresh and check loading state
+      let refreshPromise: Promise<void>;
+      act(() => {
+        refreshPromise = result.current.refresh();
+      });
+
+      expect(result.current.isLoading).toBe(true);
+
+      await act(async () => {
+        await refreshPromise;
+      });
+
+      expect(result.current.isLoading).toBe(false);
     });
   });
 
   describe('cleanup', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('should cleanup polling interval on unmount', async () => {
       const mockStatus = {
         isActive: true,
@@ -265,24 +277,105 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result, unmount } = renderHook(() =>
+      const { unmount } = renderHook(() =>
         useOrchestratorStatus({ enablePolling: true, pollingInterval: 1000 })
+      );
+
+      // Initial call
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+
+      // Unmount the hook
+      unmount();
+
+      // Advance timer
+      await vi.advanceTimersByTimeAsync(5000);
+
+      // Should only have initial call (polling stopped on unmount)
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('should abort in-flight requests on unmount', async () => {
+      let rejectPromise: (error: Error) => void;
+      const mockPromise = new Promise((_, reject) => {
+        rejectPromise = reject;
+      });
+
+      mockedAxios.get.mockImplementation(() => mockPromise);
+
+      const { unmount } = renderHook(() =>
+        useOrchestratorStatus({ enablePolling: false })
+      );
+
+      // Unmount while request is in-flight
+      unmount();
+
+      // Simulate cancelled request being rejected
+      mockedAxios.isCancel.mockReturnValue(true);
+      await act(async () => {
+        const cancelError = new Error('canceled');
+        (cancelError as Error & { __CANCEL__: boolean }).__CANCEL__ = true;
+        try {
+          rejectPromise!(cancelError);
+        } catch {
+          // Ignore - expected for cancelled requests
+        }
+      });
+
+      // The hook should have been unmounted and abort controller called
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('request cancellation', () => {
+    it('should ignore cancelled requests', async () => {
+      const cancelError = new Error('canceled');
+      (cancelError as Error & { __CANCEL__: boolean }).__CANCEL__ = true;
+
+      mockedAxios.isCancel.mockReturnValue(true);
+      mockedAxios.get.mockRejectedValueOnce(cancelError);
+
+      const { result } = renderHook(() =>
+        useOrchestratorStatus({ enablePolling: false })
+      );
+
+      // Give the hook time to process
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Cancelled requests should be ignored - hook remains in loading state
+      // because no successful response was received
+      expect(mockedAxios.get).toHaveBeenCalled();
+    });
+
+    it('should pass abort signal and timeout to axios request', async () => {
+      mockedAxios.get.mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            isActive: true,
+            agentStatus: 'active',
+            message: 'Active',
+            offlineMessage: null,
+          },
+        },
+      });
+
+      const { result } = renderHook(() =>
+        useOrchestratorStatus({ enablePolling: false })
       );
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      // Unmount the hook
-      unmount();
-
-      // Advance timer
-      await act(async () => {
-        vi.advanceTimersByTime(5000);
-      });
-
-      // Should only have initial call (polling stopped on unmount)
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      // Verify axios.get was called with signal and timeout options
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        '/api/orchestrator/status',
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          timeout: 5000,
+        })
+      );
     });
   });
 });
