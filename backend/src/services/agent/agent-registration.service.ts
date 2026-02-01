@@ -73,6 +73,13 @@ export class AgentRegistrationService {
 		'$', // Shell prompt if Claude exits
 	] as const;
 
+	/**
+	 * Pattern to detect Claude Code processing indicators (spinners, thinking text).
+	 * Used to verify that a message has been submitted and is being processed.
+	 */
+	private static readonly CLAUDE_PROCESSING_PATTERN =
+		/thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i;
+
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
 		projectRoot: string | null,
@@ -1383,15 +1390,18 @@ export class AgentRegistrationService {
 				await sessionHelper.sendMessage(sessionName, message);
 
 				// Wait for Claude Code to start processing
-				await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY + 500);
+				await this.delay(
+					SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY +
+					SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY
+				);
 
 				// Verify message was submitted by checking terminal output
 				const afterOutput = sessionHelper.capturePane(sessionName, 15);
 
 				// Check for signs that Claude Code is processing (not just that text was pasted)
 				// After submission, Claude should show activity indicators or the prompt should be gone
-				const hasProcessingIndicator = /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/.test(
-					afterOutput.toLowerCase()
+				const hasProcessingIndicator = AgentRegistrationService.CLAUDE_PROCESSING_PATTERN.test(
+					afterOutput
 				);
 				const promptStillVisible = this.isClaudeAtPrompt(afterOutput);
 				const messageInOutput = afterOutput.includes(messageFragment);

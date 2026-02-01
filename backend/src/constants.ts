@@ -81,6 +81,8 @@ export const SESSION_COMMAND_DELAYS = {
 	CLAUDE_RECOVERY_DELAY: 300,
 	/** Delay between message delivery retry attempts */
 	MESSAGE_RETRY_DELAY: 1000,
+	/** Additional delay for Claude Code to start processing after message sent */
+	MESSAGE_PROCESSING_DELAY: 500,
 } as const;
 
 // Terminal controller constants
