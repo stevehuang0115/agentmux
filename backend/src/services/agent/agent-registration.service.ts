@@ -1322,11 +1322,15 @@ export class AgentRegistrationService {
 		// Get session helper once to avoid repeated async calls
 		const sessionHelper = await this.getSessionHelper();
 
+		// Compute message fragment once for verification (use first 50 chars)
+		const messageFragment = message.substring(0, Math.min(50, message.length));
+
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
 				this.logger.debug('Attempting message delivery', {
 					sessionName,
 					attempt,
+					maxAttempts,
 					messageLength: message.length,
 				});
 
@@ -1354,7 +1358,6 @@ export class AgentRegistrationService {
 				const afterOutput = sessionHelper.capturePane(sessionName, 10);
 
 				// Check if the message content appears in the terminal (indicating it was typed)
-				const messageFragment = message.substring(0, Math.min(50, message.length));
 				const messageAppeared = afterOutput.includes(messageFragment);
 
 				if (messageAppeared) {
@@ -1382,11 +1385,19 @@ export class AgentRegistrationService {
 					error: error instanceof Error ? error.message : String(error),
 				});
 
-				if (attempt === maxAttempts) {
-					return false;
+				// Add delay before retry after error
+				if (attempt < maxAttempts) {
+					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
 			}
 		}
+
+		// Log exhaustion of all retries
+		this.logger.error('Message delivery failed after all retry attempts', {
+			sessionName,
+			maxAttempts,
+			messageLength: message.length,
+		});
 
 		return false;
 	}
@@ -1409,6 +1420,12 @@ export class AgentRegistrationService {
 	 * @returns true if Claude Code appears to be at a prompt
 	 */
 	private isClaudeAtPrompt(terminalOutput: string): boolean {
+		// Handle null/undefined/empty input gracefully
+		if (!terminalOutput || typeof terminalOutput !== 'string') {
+			this.logger.debug('Terminal output is empty or invalid, assuming at prompt');
+			return true; // Assume at prompt if no output (safer for message delivery)
+		}
+
 		// Claude Code prompt indicators
 		const promptIndicators = [
 			'❯', // Main prompt
