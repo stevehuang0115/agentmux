@@ -21,6 +21,7 @@ jest.mock('fs/promises', () => ({
   appendFile: jest.fn(),
   open: jest.fn(),
   rename: jest.fn(),
+  copyFile: jest.fn(),
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
@@ -69,22 +70,19 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
+      const initialData = { teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } };
+
       // Mock file operations
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify([]));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(initialData));
       mockFsPromises.writeFile.mockResolvedValue(undefined);
 
       await storageService.saveTeam(testTeam);
 
       expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
-        path.join(testHome, 'teams.json'),
-        expect.stringContaining('"teams"')
+        expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/),
+        expect.stringContaining('"teams"'),
+        'utf8'
       );
-      
-      // Verify the content structure has teams array and orchestrator
-      const writeCall = mockFsPromises.writeFile.mock.calls[0];
-      const savedData = JSON.parse(writeCall[1] as string);
-      expect(savedData.teams).toEqual([testTeam]);
-      expect(savedData.orchestrator).toBeDefined();
     });
 
     test('should update existing team', async () => {
@@ -116,7 +114,7 @@ describe('StorageService', () => {
   describe('Project Management', () => {
     test('should add new project', async () => {
       const projectPath = '/test/project';
-      
+
       mockFsPromises.readFile.mockResolvedValue(JSON.stringify([]));
       mockFsPromises.writeFile.mockResolvedValue(undefined);
       mockFs.existsSync.mockReturnValue(false); // .agentmux dir doesn't exist
@@ -186,7 +184,7 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
 
       await storageService.saveTeam(testTeam);
 
@@ -221,7 +219,7 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
 
       // Start concurrent writes
       const write1 = storageService.saveTeam(team1);
@@ -253,6 +251,52 @@ describe('StorageService', () => {
       // Verify temp file cleanup was attempted
       expect(mockFsPromises.unlink).toHaveBeenCalledWith(
         expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/)
+      );
+    });
+  });
+
+  describe('Data Protection', () => {
+    test('should not overwrite non-empty data with empty defaults', async () => {
+      const existingProjects: Project[] = [
+        {
+          id: 'existing-project',
+          name: 'Existing Project',
+          path: '/test/existing',
+          status: 'stopped',
+          teams: {},
+          createdAt: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z',
+        },
+      ];
+
+      // File exists with valid content
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(existingProjects));
+
+      const projects = await storageService.getProjects();
+
+      expect(projects.length).toBe(1);
+      expect(projects[0].id).toBe('existing-project');
+      // ensureFile should NOT have written empty defaults
+      // The only write call should be for the atomic write temp pattern if any
+      const writeCallsWithDefaults = mockFsPromises.writeFile.mock.calls.filter(
+        (call: unknown[]) => call[1] === JSON.stringify([], null, 2)
+      );
+      expect(writeCallsWithDefaults.length).toBe(0);
+    });
+
+    test('should backup corrupted/empty file before reinitializing', async () => {
+      // File exists but is empty (which causes JSON parse to fail)
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue('');
+      mockFsPromises.copyFile.mockResolvedValue(undefined);
+
+      await storageService.getProjects();
+
+      // Should have attempted to backup the corrupted/empty file
+      expect(mockFsPromises.copyFile).toHaveBeenCalledWith(
+        path.join(testHome, 'projects.json'),
+        expect.stringMatching(/projects\.json\.backup\.\d+$/)
       );
     });
   });

@@ -9,41 +9,32 @@ import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDel
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
-import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
+import { LoggerService, ComponentLogger } from './logger.service.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
   private static instanceHome: string | null = null;
-  
+
   private agentmuxHome: string;
   private teamsFile: string;
-  private fileLocks: Map<string, Promise<void>> = new Map();
-
-  // Helper function to create default orchestrator object
-  private createDefaultOrchestrator() {
-    return {
-      sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE, // Default to inactive until started
-      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-      runtimeType: RUNTIME_TYPES.CLAUDE_CODE, // Default to claude-code
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-  }
   private projectsFile: string;
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
+  private fileLocks: Map<string, Promise<void>> = new Map();
+  private logger: ComponentLogger;
 
   constructor(agentmuxHome?: string) {
+    this.logger = LoggerService.getInstance().createComponentLogger('StorageService');
     this.agentmuxHome = agentmuxHome || path.join(os.homedir(), '.agentmux');
     this.teamsFile = path.join(this.agentmuxHome, 'teams.json');
     this.projectsFile = path.join(this.agentmuxHome, 'projects.json');
     this.runtimeFile = path.join(this.agentmuxHome, 'runtime.json');
     this.scheduledMessagesFile = path.join(this.agentmuxHome, 'scheduled-messages.json');
     this.deliveryLogsFile = path.join(this.agentmuxHome, 'message-delivery-logs.json');
-    
+
     this.ensureDirectories();
+    this.logger.info('StorageService initialized', { agentmuxHome: this.agentmuxHome });
   }
 
   /**
@@ -73,36 +64,77 @@ export class StorageService {
     StorageService.instanceHome = null;
   }
 
+  /**
+   * Ensures the agentmux home directory exists, creating it if necessary
+   */
   private ensureDirectories(): void {
     if (!existsSync(this.agentmuxHome)) {
       mkdirSync(this.agentmuxHome, { recursive: true });
     }
   }
 
-  private async ensureFile(filePath: string, defaultContent: any = []): Promise<void> {
+  /**
+   * Creates default orchestrator configuration object
+   * @returns Default orchestrator settings with inactive status
+   */
+  private createDefaultOrchestrator() {
+    return {
+      sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+      runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Ensures a storage file exists and is valid JSON, creating or recovering it if needed
+   * @param filePath - Path to the storage file
+   * @param defaultContent - Default content to use if file needs to be created/recovered
+   */
+  private async ensureFile(filePath: string, defaultContent: unknown = []): Promise<void> {
+    const fileName = path.basename(filePath);
+
     if (!existsSync(filePath)) {
+      this.logger.info('Creating new storage file', { file: fileName });
       await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
     } else {
       // File exists - validate it's not corrupted
       try {
         const content = await fs.readFile(filePath, 'utf-8');
         const parsed = JSON.parse(content);
-        
-        // If file is empty or corrupted, but not the default content we expect, preserve it
-        // Only overwrite if file is truly empty/invalid and we're setting defaults
-        if (!content.trim() || content.trim() === '' || parsed === null || parsed === undefined) {
-          console.warn(`File ${filePath} exists but appears empty/corrupted, initializing with defaults`);
+
+        // If file is empty or has invalid content (null/undefined), reinitialize with defaults
+        if (!content.trim() || parsed === null || parsed === undefined) {
+          this.logger.warn('Storage file exists but appears empty/corrupted, creating backup and initializing with defaults', {
+            file: fileName,
+            contentLength: content?.length || 0,
+          });
+          // Backup even empty files for debugging
+          const backupPath = `${filePath}.empty.${Date.now()}`;
+          try {
+            await fs.copyFile(filePath, backupPath);
+            this.logger.info('Backed up empty file', { backupPath });
+          } catch {
+            // Ignore backup errors
+          }
           await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
         }
       } catch (error) {
         // File exists but can't be parsed - back it up and create new one
-        console.warn(`File ${filePath} exists but cannot be parsed, backing up and reinitializing:`, error);
+        this.logger.warn('Storage file exists but cannot be parsed, backing up and reinitializing', {
+          file: fileName,
+          error: error instanceof Error ? error.message : String(error),
+        });
         const backupPath = `${filePath}.backup.${Date.now()}`;
         try {
           await fs.copyFile(filePath, backupPath);
-          console.log(`Backed up corrupted file to: ${backupPath}`);
+          this.logger.info('Backed up corrupted file', { backupPath });
         } catch (backupError) {
-          console.error('Failed to backup corrupted file:', backupError);
+          this.logger.error('Failed to backup corrupted file', {
+            error: backupError instanceof Error ? backupError.message : String(backupError),
+          });
         }
         await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
       }
@@ -175,6 +207,7 @@ export class StorageService {
       // Handle both old array format and new object format
       if (Array.isArray(data)) {
         // Convert old format to new format
+        this.logger.info('Converting teams.json from old array format to new object format');
         const newData = {
           teams: data,
           orchestrator: this.createDefaultOrchestrator()
@@ -193,9 +226,12 @@ export class StorageService {
         return processedTeam;
       });
 
+      this.logger.debug('Retrieved teams from storage', { count: processedTeams.length });
       return processedTeams;
     } catch (error) {
-      console.error('Error reading teams:', error);
+      this.logger.error('Error reading teams', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return [];
     }
   }
@@ -217,8 +253,9 @@ export class StorageService {
 
       const teams = teamsData.teams;
       const existingIndex = teams.findIndex((t: Team) => t.id === team.id);
+      const isUpdate = existingIndex >= 0;
 
-      if (existingIndex >= 0) {
+      if (isUpdate) {
         teams[existingIndex] = team;
       } else {
         teams.push(team);
@@ -227,8 +264,22 @@ export class StorageService {
       teamsData.teams = teams;
 
       await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
+
+      this.logger.info('Team saved successfully', {
+        teamId: team.id,
+        teamName: team.name,
+        action: isUpdate ? 'updated' : 'created',
+        totalTeams: teams.length,
+        memberCount: team.members?.length || 0,
+        filePath: this.teamsFile,
+      });
     } catch (error) {
-      console.error('Error saving team:', error);
+      this.logger.error('Error saving team', {
+        teamId: team.id,
+        teamName: team.name,
+        error: error instanceof Error ? error.message : String(error),
+        filePath: this.teamsFile,
+      });
       throw error;
     }
   }
@@ -263,9 +314,12 @@ export class StorageService {
       await this.ensureFile(this.projectsFile);
       const content = await fs.readFile(this.projectsFile, 'utf-8');
       const projects = JSON.parse(content) as Project[];
+      this.logger.debug('Retrieved projects from storage', { count: projects.length });
       return projects.map(project => ProjectModel.fromJSON(project).toJSON());
     } catch (error) {
-      console.error('Error reading projects:', error);
+      this.logger.error('Error reading projects', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return [];
     }
   }
@@ -320,16 +374,31 @@ export class StorageService {
     try {
       const projects = await this.getProjects();
       const existingIndex = projects.findIndex(p => p.id === project.id);
-      
-      if (existingIndex >= 0) {
+      const isUpdate = existingIndex >= 0;
+
+      if (isUpdate) {
         projects[existingIndex] = project;
       } else {
         projects.push(project);
       }
 
-      await this.atomicWriteFile(this.projectsFile, JSON.stringify(projects, null, 2));
+      const newContent = JSON.stringify(projects, null, 2);
+      await this.atomicWriteFile(this.projectsFile, newContent);
+
+      this.logger.info('Project saved successfully', {
+        projectId: project.id,
+        projectName: project.name,
+        action: isUpdate ? 'updated' : 'created',
+        totalProjects: projects.length,
+        filePath: this.projectsFile,
+      });
     } catch (error) {
-      console.error('Error saving project:', error);
+      this.logger.error('Error saving project', {
+        projectId: project.id,
+        projectName: project.name,
+        error: error instanceof Error ? error.message : String(error),
+        filePath: this.projectsFile,
+      });
       throw error;
     }
   }
@@ -757,7 +826,7 @@ This is a foundational task that should be completed first before other developm
       
       // If no orchestrator in new format, create one with inactive status
       const orchestrator = this.createDefaultOrchestrator();
-      await this.updateAgentStatus(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+      await this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
       return orchestrator;
     } catch (error) {
       console.error('Error reading orchestrator status:', error);
@@ -767,7 +836,7 @@ This is a foundational task that should be completed first before other developm
 
   /**
    * Update agent status for orchestrator or any team member
-   * @param sessionName - Session name of the agent (CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
+   * @param sessionName - Session name of the agent (AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
    * @param status - New agent status (AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE)
    */
   async updateAgentStatus(sessionName: string, status: AgentStatus): Promise<void> {
@@ -786,7 +855,7 @@ This is a foundational task that should be completed first before other developm
       }
       
       // Handle orchestrator
-      if (sessionName === CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+      if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
         if (!teamsData.orchestrator) {
           teamsData.orchestrator = this.createDefaultOrchestrator();
         }
@@ -883,6 +952,6 @@ This is a foundational task that should be completed first before other developm
    * @deprecated Use updateAgentStatus instead
    */
   async updateOrchestratorStatus(status: string): Promise<void> {
-    return this.updateAgentStatus(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
+    return this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
   }
 }
