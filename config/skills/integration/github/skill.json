@@ -1,0 +1,20 @@
+{
+  "id": "github",
+  "name": "GitHub Integration",
+  "description": "Interact with GitHub repositories, issues, and pull requests",
+  "category": "integration",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "mcp-tool",
+    "mcpTool": {
+      "toolName": "gh",
+      "defaultParams": {}
+    }
+  },
+  "triggers": ["github", "pr", "pull request", "issue", "repo"],
+  "tags": ["github", "git", "version-control", "collaboration"],
+  "assignableRoles": ["developer", "qa-engineer", "product-manager"],
+  "version": "1.0.0",
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

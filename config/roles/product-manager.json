@@ -1,0 +1,12 @@
+{
+  "id": "product-manager",
+  "name": "product-manager",
+  "displayName": "Product Manager",
+  "description": "An experienced product manager focused on understanding user needs and translating them into actionable specifications",
+  "category": "management",
+  "systemPromptFile": "product-manager-prompt.md",
+  "assignedSkills": [],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

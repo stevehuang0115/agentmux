@@ -1,0 +1,12 @@
+{
+  "id": "sales",
+  "name": "sales",
+  "displayName": "Sales Representative",
+  "description": "A customer-focused sales professional who builds relationships and delivers value",
+  "category": "sales",
+  "systemPromptFile": "sales-prompt.md",
+  "assignedSkills": [],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

@@ -14,12 +14,6 @@ import * as THREE from 'three';
 export type AnimalType = 'cow' | 'horse' | 'tiger' | 'rabbit';
 
 /**
- * Pet types available in the factory.
- * These are companion animals that wander around the factory.
- */
-export type PetType = 'bulldog' | 'puppy' | 'roboticdog' | 'shibainu';
-
-/**
  * Agent operational status levels
  */
 export type AgentStatus = 'active' | 'idle' | 'dormant';
@@ -498,29 +492,6 @@ export const FACTORY_CONSTANTS = {
   ANIMATION: {
     FOCUS_DURATION: 1500,
     BOSS_MODE_INTERVAL: 8000,
-    BOSS_MODE_TRANSITION: 2000, // Camera transition duration in ms
-  },
-  /** Pet timing and movement */
-  PET: {
-    TIMING: {
-      INITIAL_IDLE_DURATION: 2,    // seconds - first idle is longer
-      IDLE_DURATION: 1.5,          // seconds - subsequent idles
-      WALK_DURATION: 2.5,          // seconds - walking between waypoints
-    },
-    MOVEMENT: {
-      STUCK_CHECK_ATTEMPTS: 10,    // Max attempts to find valid wander target
-    },
-  },
-  /** Speech bubble configuration */
-  SPEECH_BUBBLE: {
-    CHAR_WIDTH: 0.12,
-    MIN_WIDTH: 2.0,
-    MAX_WIDTH: 5.0,
-    PADDING: 0.6,
-    HEIGHT: 0.7,
-    BORDER_RADIUS: 0.12,
-    FLOAT_AMPLITUDE: 0.03,
-    FLOAT_FREQUENCY: 1.5,
   },
   /** API polling */
   API: {
@@ -575,110 +546,24 @@ export const FACTORY_CONSTANTS = {
     JENSEN_HUANG: 'jensen-huang-npc',
     STEVE_HUANG: 'steve-huang-npc',
   },
-  /** Conveyor belt and proximity settings */
-  CONVEYOR: {
-    /** Z-coordinate of the conveyor belt */
-    BELT_Z: -14,
-    /** Distance threshold for conveyor proximity reaction */
-    PROXIMITY_THRESHOLD: 4,
-  },
 } as const;
-
-// ====== SPEECH BUBBLE THEMES ======
-
-/**
- * Speech bubble visual themes for different contexts.
- */
-export const SPEECH_BUBBLE_THEMES = {
-  work: {
-    bgColor: 0x1a1a2e,
-    borderColor: 0x4a90d9,
-    textColor: '#ffffff',
-    dotColor: 0x4ade80,
-    bgOpacity: 0.92,
-    borderOpacity: 0.3,
-  },
-  conversation: {
-    bgColor: 0xffffff,
-    borderColor: 0xcccccc,
-    textColor: '#222222',
-    dotColor: 0x4a90d9,
-    bgOpacity: 0.92,
-    borderOpacity: 0.3,
-  },
-} as const;
-
-export type SpeechBubbleVariant = keyof typeof SPEECH_BUBBLE_THEMES;
-
-// ====== PET CONFIGURATION TYPES ======
-
-/**
- * Wander area bounds for a pet.
- */
-export interface WanderBounds {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
-
-/**
- * Configuration for a pet type.
- */
-export interface PetConfig {
-  /** Path to the GLB model */
-  modelPath: string;
-  /** Scale factor for the model */
-  scale: number;
-  /** Walking speed (units per second) */
-  walkSpeed: number;
-  /** Running speed (units per second) */
-  runSpeed: number;
-  /** Y offset for ground placement */
-  groundOffset: number;
-  /** Model rotation [x, y, z] in radians (for fixing model orientation) */
-  modelRotation?: [number, number, number];
-  /** Custom wander bounds (optional - uses factory bounds if not set) */
-  wanderBounds?: WanderBounds;
-  /** Animation names (optional - uses procedural if not available) */
-  animations?: {
-    idle?: string;
-    walk?: string;
-    run?: string;
-    sit?: string;
-  };
-}
 
 /**
  * Model paths - Local models in public/models/
- *
- * Organized into categories:
- * - employees/  - Animal agents (workstation workers)
- * - guests/     - NPC visitors
- * - pets/       - Pet animals (dogs, etc.)
- * - objects/    - Non-character items
  */
 export const MODEL_PATHS = {
-  // Employees - Animal agents
-  ROBOT: '/models/employees/robot/RobotExpressive.glb',
-  COW: '/models/employees/cow/cow-fixed.glb?v=3',
-  HORSE: '/models/employees/horse/horse-fixed.glb',
-  TIGER: '/models/employees/tiger/tiger-fixed.glb',
-  RABBIT: '/models/employees/rabbit/rabbit-fixed.glb',
-  // Guests - NPC visitors
-  STEVE_JOBS: '/models/guests/stevejobs/model.glb',
-  SUNDAR_PICHAI: '/models/guests/sundarpichai/model.glb',
-  ELON_MUSK: '/models/guests/elonmusk/model.glb',
-  MARK_ZUCKERBERG: '/models/guests/markzuckerberg/model.glb',
-  JENSEN_HUANG: '/models/guests/jensenhuang/model.glb?v=2',
-  STEVE_HUANG: '/models/guests/stevehuang/model.glb?v=2',
-  // Pets - Dog companions
-  BULLDOG: '/models/pets/bulldog/model.glb',
-  PUPPY: '/models/pets/puppy/model.glb',
-  ROBOTIC_DOG: '/models/pets/roboticdog/original.glb',
-  SHIBA_INU: '/models/pets/shibainu/model.glb',
-  // Objects
-  CYBERTRUCK: '/models/objects/cybertruck/model.glb',
+  ROBOT: '/models/RobotExpressive.glb',
+  COW: '/models/cow/cow-fixed.glb?v=3',  // Model with 1K textures, no Draco compression
+  HORSE: '/models/horse/horse-fixed.glb',  // Horse model with animations and 1K textures
+  TIGER: '/models/tiger/tiger-fixed.glb',  // Tiger model with animations and 1K textures
+  RABBIT: '/models/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
+  STEVE_JOBS: '/models/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
+  SUNDAR_PICHAI: '/models/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
+  CYBERTRUCK: '/models/cybertruck/model.glb',  // Cybertruck model (compressed from 28MB to 630KB)
+  ELON_MUSK: '/models/elonmusk/model.glb',  // Elon Musk NPC with Walking, Disappointed, Dancing, Yelling
+  MARK_ZUCKERBERG: '/models/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
+  JENSEN_HUANG: '/models/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
+  STEVE_HUANG: '/models/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
 } as const;
 
 /**
@@ -726,34 +611,5 @@ export const ANIMATION_NAMES = {
     WAVE: 'Wave',
     YES: 'Yes',
     NO: 'No',
-  },
-  /**
-   * Pet animation names - actual GLB animation names
-   * Models without animations use procedural animation fallback in BasePet.tsx
-   */
-  BULLDOG: {
-    // No animations in model - uses procedural animation
-    HAS_ANIMATIONS: false,
-  },
-  PUPPY: {
-    // Actual animation names from Armature|PuppyALL_* set
-    HAS_ANIMATIONS: true,
-    IDLE: 'Armature|PuppyALL_IdleEnergetic',
-    WALKING: 'Armature|PuppyALL_Walk',
-    RUNNING: 'Armature|PuppyALL_Run',
-    SITTING: 'Armature|PuppyALL_IdleLayDown',
-  },
-  ROBOTIC_DOG: {
-    // C4D camera/object animations only - uses procedural animation
-    HAS_ANIMATIONS: false,
-  },
-  SHIBA_INU: {
-    // Actual animation names from 0|0|* set (no walk/run animations)
-    HAS_ANIMATIONS: true,
-    IDLE: '0|0|standing_0',
-    SITTING: '0|0|sitting_0',
-    SHAKE: '0|0|shake_0',
-    ROLLOVER: '0|0|rollover_0',
-    PLAY_DEAD: '0|0|play_dead_0',
   },
 } as const;

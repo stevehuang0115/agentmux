@@ -1,0 +1,13 @@
+{
+  "id": "documentation",
+  "name": "Documentation",
+  "description": "Write and update documentation",
+  "category": "development",
+  "promptFile": "instructions.md",
+  "triggers": ["document", "docs", "readme", "jsdoc", "api docs"],
+  "tags": ["documentation", "readme", "api"],
+  "assignableRoles": ["developer"],
+  "version": "1.0.0",
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

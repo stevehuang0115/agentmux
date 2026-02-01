@@ -1,0 +1,12 @@
+{
+  "id": "qa-engineer",
+  "name": "qa-engineer",
+  "displayName": "QA Engineer",
+  "description": "Quality assurance engineer focused on testing and ensuring product quality",
+  "category": "quality",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["testing", "github"],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

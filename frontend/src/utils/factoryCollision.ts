@@ -100,32 +100,14 @@ export function isInsideObstacle(x: number, z: number, obstacles: Obstacle[]): b
  *
  * @param x - World X position
  * @param z - World Z position
- * @param out - Optional output object to avoid allocation (creates new object if not provided)
- * @returns Clamped position (same as out if provided)
+ * @returns Clamped position
  */
-export function clampToWalls(
-  x: number,
-  z: number,
-  out?: { x: number; z: number }
-): { x: number; z: number } {
-  const result = out || { x: 0, z: 0 };
-  result.x = Math.max(WALL_BOUNDS.minX, Math.min(WALL_BOUNDS.maxX, x));
-  result.z = Math.max(WALL_BOUNDS.minZ, Math.min(WALL_BOUNDS.maxZ, z));
-  return result;
+export function clampToWalls(x: number, z: number): { x: number; z: number } {
+  return {
+    x: Math.max(WALL_BOUNDS.minX, Math.min(WALL_BOUNDS.maxX, x)),
+    z: Math.max(WALL_BOUNDS.minZ, Math.min(WALL_BOUNDS.maxZ, z)),
+  };
 }
-
-/**
- * INTERNAL: Reusable temp objects for getSafePosition to avoid per-frame allocations.
- *
- * IMPORTANT: These are for single-threaded, non-recursive use only.
- * Do NOT call getSafePosition recursively or from multiple concurrent
- * useFrame callbacks in the same synchronous tick, as the temp objects
- * will be overwritten.
- */
-const _safePosClamped = { x: 0, z: 0 };
-const _safePosSlideX = { x: 0, z: 0 };
-const _safePosSlideZ = { x: 0, z: 0 };
-const _safePosFallback = { x: 0, z: 0 };
 
 /**
  * Get a safe position that avoids obstacles and stays within walls.
@@ -136,50 +118,37 @@ const _safePosFallback = { x: 0, z: 0 };
  * @param currentX - Current X position (fallback)
  * @param currentZ - Current Z position (fallback)
  * @param obstacles - All obstacle rectangles to avoid
- * @param out - Optional output object to avoid allocation
- * @returns Safe position (same as out if provided)
+ * @returns Safe position
  */
 export function getSafePosition(
   newX: number,
   newZ: number,
   currentX: number,
   currentZ: number,
-  obstacles: Obstacle[],
-  out?: { x: number; z: number }
+  obstacles: Obstacle[]
 ): { x: number; z: number } {
-  const result = out || { x: 0, z: 0 };
-
-  // First clamp to walls (using internal temp)
-  clampToWalls(newX, newZ, _safePosClamped);
+  // First clamp to walls
+  const clamped = clampToWalls(newX, newZ);
 
   // Then check obstacles
-  if (!isInsideObstacle(_safePosClamped.x, _safePosClamped.z, obstacles)) {
-    result.x = _safePosClamped.x;
-    result.z = _safePosClamped.z;
-    return result;
+  if (!isInsideObstacle(clamped.x, clamped.z, obstacles)) {
+    return clamped;
   }
 
   // Try sliding along X axis only
-  clampToWalls(_safePosClamped.x, currentZ, _safePosSlideX);
-  if (!isInsideObstacle(_safePosSlideX.x, _safePosSlideX.z, obstacles)) {
-    result.x = _safePosSlideX.x;
-    result.z = _safePosSlideX.z;
-    return result;
+  const slideX = clampToWalls(clamped.x, currentZ);
+  if (!isInsideObstacle(slideX.x, slideX.z, obstacles)) {
+    return slideX;
   }
 
   // Try sliding along Z axis only
-  clampToWalls(currentX, _safePosClamped.z, _safePosSlideZ);
-  if (!isInsideObstacle(_safePosSlideZ.x, _safePosSlideZ.z, obstacles)) {
-    result.x = _safePosSlideZ.x;
-    result.z = _safePosSlideZ.z;
-    return result;
+  const slideZ = clampToWalls(currentX, clamped.z);
+  if (!isInsideObstacle(slideZ.x, slideZ.z, obstacles)) {
+    return slideZ;
   }
 
   // All blocked - stay in place
-  clampToWalls(currentX, currentZ, _safePosFallback);
-  result.x = _safePosFallback.x;
-  result.z = _safePosFallback.z;
-  return result;
+  return clampToWalls(currentX, currentZ);
 }
 
 /**
@@ -192,13 +161,9 @@ export function getSafePosition(
  * @returns true if the position is clear
  */
 export function isPositionClear(x: number, z: number, obstacles: Obstacle[]): boolean {
-  // Inline bounds check to avoid object allocation
-  if (
-    x < WALL_BOUNDS.minX ||
-    x > WALL_BOUNDS.maxX ||
-    z < WALL_BOUNDS.minZ ||
-    z > WALL_BOUNDS.maxZ
-  ) {
+  const clamped = clampToWalls(x, z);
+  // Check the position was actually clamped (was outside walls)
+  if (Math.abs(clamped.x - x) > 0.01 || Math.abs(clamped.z - z) > 0.01) {
     return false;
   }
   return !isInsideObstacle(x, z, obstacles);
@@ -257,66 +222,6 @@ export function buildEntityPositionMap(
     positions.set(id, { x: pos.x, z: pos.z });
   });
   return positions;
-}
-
-/**
- * Incrementally update an entity position map in-place.
- * Only updates entries that have changed, removes deleted entities,
- * and adds new entities. Avoids creating new position objects when unchanged.
- *
- * @param existing - The existing map to update in-place
- * @param agents - Map of agent ID to agent data with position
- * @param npcPositions - Map of NPC ID to tracked position
- */
-export function updateEntityPositionMapInPlace(
-  existing: Map<string, { x: number; z: number }>,
-  agents: Map<string, { currentPosition?: { x: number; z: number }; basePosition: { x: number; z: number } }>,
-  npcPositions: Map<string, { x: number; z: number }>
-): void {
-  // Track which IDs are still valid
-  const validIds = new Set<string>();
-
-  // Update agent positions
-  agents.forEach((agent, id) => {
-    validIds.add(id);
-    const pos = agent.currentPosition || agent.basePosition;
-    const existingPos = existing.get(id);
-
-    if (existingPos) {
-      // Update existing entry in-place only if changed
-      if (existingPos.x !== pos.x || existingPos.z !== pos.z) {
-        existingPos.x = pos.x;
-        existingPos.z = pos.z;
-      }
-    } else {
-      // New entity - create entry
-      existing.set(id, { x: pos.x, z: pos.z });
-    }
-  });
-
-  // Update NPC positions
-  npcPositions.forEach((pos, id) => {
-    validIds.add(id);
-    const existingPos = existing.get(id);
-
-    if (existingPos) {
-      // Update existing entry in-place only if changed
-      if (existingPos.x !== pos.x || existingPos.z !== pos.z) {
-        existingPos.x = pos.x;
-        existingPos.z = pos.z;
-      }
-    } else {
-      // New entity - create entry
-      existing.set(id, { x: pos.x, z: pos.z });
-    }
-  });
-
-  // Remove deleted entities
-  existing.forEach((_, id) => {
-    if (!validIds.has(id)) {
-      existing.delete(id);
-    }
-  });
 }
 
 /**

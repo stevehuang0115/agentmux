@@ -1,0 +1,12 @@
+{
+  "id": "product-manager",
+  "name": "product-manager",
+  "displayName": "Product Manager",
+  "description": "Product manager focused on user needs, requirements, and product strategy",
+  "category": "management",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["github", "slack"],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

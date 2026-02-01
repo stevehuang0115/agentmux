@@ -1,0 +1,12 @@
+{
+  "id": "designer",
+  "name": "designer",
+  "displayName": "UI/UX Designer",
+  "description": "A creative designer focused on creating intuitive and visually appealing user experiences",
+  "category": "design",
+  "systemPromptFile": "designer-prompt.md",
+  "assignedSkills": [],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

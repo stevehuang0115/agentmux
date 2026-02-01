@@ -21,8 +21,6 @@ interface ThinkingBubbleProps {
   yOffset?: number;
   /** Milliseconds between thought changes */
   changeInterval?: number;
-  /** Callback when the displayed thought changes */
-  onThoughtChange?: (thought: string) => void;
 }
 
 /** White color for cloud elements */
@@ -49,7 +47,6 @@ export const ThinkingBubble: React.FC<ThinkingBubbleProps> = ({
   thoughts,
   yOffset = 3.5,
   changeInterval = 5000,
-  onThoughtChange,
 }) => {
   const groupRef = useRef<THREE.Group>(null);
   const [currentIndex, setCurrentIndex] = useState(
@@ -75,13 +72,6 @@ export const ThinkingBubble: React.FC<ThinkingBubbleProps> = ({
   }, [thoughts.length, changeInterval]);
 
   const displayText = thoughts[currentIndex] || '';
-
-  // Notify parent when thought changes
-  useEffect(() => {
-    if (displayText && onThoughtChange) {
-      onThoughtChange(displayText);
-    }
-  }, [displayText, onThoughtChange]);
 
   // Calculate bubble dimensions based on text length
   const dimensions = useMemo(() => {
@@ -231,18 +221,6 @@ export const AGENT_THOUGHTS: Record<string, string[]> = {
     'Looking around the office',
     'Enjoying the break',
   ],
-  conveyor: [
-    'Wow, great production!',
-    'Look at those deliveries!',
-    'Shipping code so fast!',
-    'Amazing output today!',
-    'The factory is humming!',
-    'Production is on fire!',
-    'Great momentum here!',
-    'We are crushing it!',
-    'Tokens flying by!',
-    'Such good velocity!',
-  ],
   couch: [
     'Time to relax...',
     'The couch looks comfy',
@@ -320,13 +298,6 @@ export const STEVE_JOBS_THOUGHTS: Record<string, string[]> = {
     'Stay hungry, stay foolish',
     'Simplicity is genius',
   ],
-  conveyor: [
-    'Now this is production!',
-    'Insanely great output!',
-    'Ship it, ship it all!',
-    'Beautiful execution',
-    'This is what we do',
-  ],
   checking_agent: [
     "How's the project?",
     'Show me the progress',
@@ -371,21 +342,6 @@ export const SUNDAR_PICHAI_THOUGHTS: Record<string, string[]> = {
     'Cloud strategy...',
     'Organizing the world',
     'Open source matters',
-    'How can Gemini improve?',
-    'Gemini 2.5 is coming!',
-    'Deep thinking about AI...',
-    'Planning Gemini roadmap',
-    'What if Gemini could...',
-    'Processing Gemini feedback',
-    'Strategic Gemini moves',
-    'Gemini Pro needs work',
-  ],
-  conveyor: [
-    'Great momentum here!',
-    'Production is flowing',
-    'AI at scale!',
-    'This is the Google way',
-    'Impressive throughput',
   ],
   talking_to_agent: [
     "Let's discuss this",
@@ -442,17 +398,6 @@ export const ELON_MUSK_THOUGHTS: Record<string, string[]> = {
     'TSLA to the moon!',
     'SpaceX booster caught!',
     'Stock looking good today',
-    'Starship blew up again!',
-    'Rocket exploded... again',
-    'Ugh, another RUD today',
-    'Booster failed to land',
-  ],
-  conveyor: [
-    'Ship it 10x faster!',
-    'This is the future!',
-    'Production machine!',
-    'Exponential output!',
-    'First principles shipping',
   ],
   talking_to_agent: [
     'Ship it yesterday!',
@@ -502,19 +447,6 @@ export const MARK_ZUCKERBERG_THOUGHTS: Record<string, string[]> = {
     'Horizon Worlds update',
     'Llama needs more GPUs',
     'Zuck mode: activated',
-    'Llama not accepted yet...',
-    'Why is Llama losing?',
-    'Claude is behind us, right?',
-    'Llama rejected again...',
-    'Struggling against ChatGPT',
-    'Why is GPT still winning?',
-  ],
-  conveyor: [
-    'Great engagement metrics!',
-    'Look at that throughput',
-    'Meta scale production!',
-    'Open source shipping!',
-    'This could be in VR',
   ],
   talking_to_agent: [
     'Try the Quest headset!',
@@ -564,13 +496,6 @@ export const JENSEN_HUANG_THOUGHTS: Record<string, string[]> = {
     'NVIDIA is the platform',
     'Data centers love us!',
     'Cloud needs more GPUs!',
-  ],
-  conveyor: [
-    'All running on NVIDIA!',
-    'GPU-accelerated shipping!',
-    'CUDA powered production',
-    'This needs more H100s!',
-    'Tensor cores at work!',
   ],
   talking_to_agent: [
     'Using CUDA, right?',
@@ -623,13 +548,6 @@ export const STEVE_HUANG_THOUGHTS: Record<string, string[]> = {
     'I can\'t believe how far we\'ve come',
     'This is just the beginning',
     'What a great company',
-  ],
-  conveyor: [
-    'My factory in action!',
-    'AgentMux is shipping!',
-    'Beautiful production',
-    'Just as I imagined',
-    'The dream is real!',
   ],
   talking_to_agent: [
     'I made you, you know',

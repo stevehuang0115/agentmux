@@ -254,10 +254,6 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
     stagePerformerRef,
     consumeEntityCommand,
     entityPositionMapRef,
-    freestyleMode,
-    consumeFreestyleMoveTarget,
-    selectedEntityId,
-    clearActiveEntityAction,
   } = useFactory();
 
   const { isHovered, isSelected, handlePointerOver, handlePointerOut, handleClick } =
@@ -508,34 +504,6 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
       hasCommand = true;
     }
 
-    // Check for freestyle movement target (double-click control)
-    const isThisAgentSelected = selectedEntityId === agent.id;
-    const freestyleMoveTarget = isThisAgentSelected && freestyleMode ? consumeFreestyleMoveTarget() : null;
-    if (freestyleMoveTarget) {
-      // Set up a wander-like step to the target position
-      if (walkState.claimedSeatArea) {
-        releaseSeat(walkState.claimedSeatArea, agent.id);
-        walkState.claimedSeatArea = null;
-      }
-      releaseStage(agent.id);
-      plan.planRef.current = {
-        steps: [{
-          type: 'wander',
-          duration: 999, // Stay indefinitely until another command
-          target: { x: freestyleMoveTarget.x, z: freestyleMoveTarget.z },
-          arrivalAnimation: 'Breathing idle',
-        }],
-        currentStepIndex: 0,
-        paused: false,
-        arrivalTime: null,
-        commanded: true,
-      };
-      walkState.arrived = false;
-      walkState.wasWorking = false;
-      wasPausedRef.current = false;
-      hasCommand = true;
-    }
-
     // Check if there's an active commanded plan (persists across frames)
     const currentPlanIsCommanded = plan.planRef.current?.commanded ?? false;
 
@@ -729,13 +697,7 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
           // Reset Y to ground before moving to next step
           groupRef.current.position.y = 0;
 
-          // Check if this was a commanded plan before advancing
-          const wasCommanded = plan.planRef.current?.commanded ?? false;
           plan.advanceStep();
-          // Clear active action UI state when commanded plan completes
-          if (wasCommanded) {
-            clearActiveEntityAction(agent.id);
-          }
           walkState.arrived = false;
         }
       }
@@ -746,13 +708,9 @@ export const BaseAgent: React.FC<BaseAgentProps> = ({ agent, config }) => {
   });
 
   // Get thought key for ThinkingBubble based on current plan step
-  // Override with 'conveyor' if near the conveyor belt
-  const baseThoughtKey = plan.displayStepType
+  const thoughtKey = plan.displayStepType
     ? STEP_TYPE_TO_THOUGHT_KEY[plan.displayStepType] ?? 'wander'
     : 'wander';
-
-  const isNearConveyor = Math.abs(walkingStateRef.current.currentPos.z - FACTORY_CONSTANTS.CONVEYOR.BELT_Z) < FACTORY_CONSTANTS.CONVEYOR.PROXIMITY_THRESHOLD;
-  const thoughtKey = isNearConveyor ? 'conveyor' : baseThoughtKey;
 
   return (
     <group

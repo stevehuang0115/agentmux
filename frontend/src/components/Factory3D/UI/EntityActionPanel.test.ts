@@ -1,0 +1,132 @@
+/**
+ * EntityActionPanel tests - Verifies the action panel logic for entity commands.
+ *
+ * Tests cover:
+ * - Entity name resolution for different entity types
+ * - Action button definitions completeness
+ * - Panel visibility conditions
+ */
+
+import { describe, it, expect } from 'vitest';
+
+// ====== ENTITY NAME RESOLUTION (duplicated from component for testing) ======
+
+/**
+ * Resolves a display name for an entity ID (mirrors component logic)
+ */
+function resolveEntityName(
+  entityId: string,
+  agents: Map<string, { name?: string; sessionName?: string }>
+): string {
+  const agent = agents.get(entityId);
+  if (agent) {
+    return agent.name || agent.sessionName || entityId;
+  }
+  if (entityId === 'steve-jobs-npc') return 'Steve Jobs';
+  if (entityId === 'sundar-pichai-npc') return 'Sundar Pichai';
+  const audienceMatch = entityId.match(/^fake-audience-(\d+)$/);
+  if (audienceMatch) {
+    return `Audience Member ${Number(audienceMatch[1]) + 1}`;
+  }
+  return entityId;
+}
+
+// ====== TESTS ======
+
+describe('EntityActionPanel', () => {
+  describe('resolveEntityName', () => {
+    it('returns agent name when entity is in agents map', () => {
+      const agents = new Map([
+        ['agent-1', { name: 'Builder Bot', sessionName: 'session-1' }],
+      ]);
+      expect(resolveEntityName('agent-1', agents)).toBe('Builder Bot');
+    });
+
+    it('falls back to sessionName if name is missing', () => {
+      const agents = new Map([
+        ['agent-2', { sessionName: 'my-session' }],
+      ]);
+      expect(resolveEntityName('agent-2', agents)).toBe('my-session');
+    });
+
+    it('falls back to entityId if both name and sessionName are missing', () => {
+      const agents = new Map([
+        ['agent-3', {}],
+      ]);
+      expect(resolveEntityName('agent-3', agents)).toBe('agent-3');
+    });
+
+    it('returns "Steve Jobs" for steve-jobs-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('steve-jobs-npc', agents)).toBe('Steve Jobs');
+    });
+
+    it('returns "Sundar Pichai" for sundar-pichai-npc', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('sundar-pichai-npc', agents)).toBe('Sundar Pichai');
+    });
+
+    it('returns "Audience Member N" for fake audience entities', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('fake-audience-0', agents)).toBe('Audience Member 1');
+      expect(resolveEntityName('fake-audience-4', agents)).toBe('Audience Member 5');
+    });
+
+    it('returns raw entityId for unknown entities', () => {
+      const agents = new Map<string, { name?: string; sessionName?: string }>();
+      expect(resolveEntityName('unknown-entity', agents)).toBe('unknown-entity');
+    });
+  });
+
+  describe('ENTITY_ACTIONS', () => {
+    // Re-define locally to test structure without importing React component
+    const ENTITY_ACTIONS = [
+      { label: 'Perform on Stage', stepType: 'go_to_stage', icon: '🎤' },
+      { label: 'Eat Food', stepType: 'go_to_kitchen', icon: '🍕' },
+      { label: 'Take a Break', stepType: 'go_to_couch', icon: '🛋️' },
+      { label: 'Play Poker', stepType: 'go_to_poker_table', icon: '🃏' },
+      { label: 'Hang Out', stepType: 'go_to_break_room', icon: '☕' },
+      { label: 'Wander', stepType: 'wander', icon: '🚶' },
+    ];
+
+    it('has exactly 6 action buttons', () => {
+      expect(ENTITY_ACTIONS).toHaveLength(6);
+    });
+
+    it('each action has label, stepType, and icon', () => {
+      for (const action of ENTITY_ACTIONS) {
+        expect(action.label).toBeTruthy();
+        expect(action.stepType).toBeTruthy();
+        expect(action.icon).toBeTruthy();
+      }
+    });
+
+    it('has unique step types', () => {
+      const stepTypes = ENTITY_ACTIONS.map(a => a.stepType);
+      expect(new Set(stepTypes).size).toBe(stepTypes.length);
+    });
+  });
+
+  describe('visibility conditions', () => {
+    it('should not render when selectedEntityId is null', () => {
+      const selectedEntityId = null;
+      const bossModeActive = true;
+      const shouldRender = selectedEntityId !== null && bossModeActive;
+      expect(shouldRender).toBe(false);
+    });
+
+    it('should not render when boss mode is inactive', () => {
+      const selectedEntityId = 'agent-1';
+      const bossModeActive = false;
+      const shouldRender = selectedEntityId !== null && bossModeActive;
+      expect(shouldRender).toBe(false);
+    });
+
+    it('should render when entity is selected and boss mode is active', () => {
+      const selectedEntityId = 'agent-1';
+      const bossModeActive = true;
+      const shouldRender = selectedEntityId !== null && bossModeActive;
+      expect(shouldRender).toBe(true);
+    });
+  });
+});

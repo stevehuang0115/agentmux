@@ -1,0 +1,12 @@
+{
+  "id": "developer",
+  "name": "developer",
+  "displayName": "Developer",
+  "description": "Software developer focused on writing clean, tested, and maintainable code",
+  "category": "development",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["code-review", "testing", "documentation", "github"],
+  "isDefault": true,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

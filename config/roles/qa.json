@@ -1,0 +1,12 @@
+{
+  "id": "qa",
+  "name": "qa",
+  "displayName": "QA Engineer",
+  "description": "A quality assurance engineer dedicated to ensuring software reliability through comprehensive testing",
+  "category": "quality",
+  "systemPromptFile": "qa-prompt.md",
+  "assignedSkills": [],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

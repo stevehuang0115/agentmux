@@ -27,34 +27,7 @@ useGLTF.preload(MODEL_PATHS.MARK_ZUCKERBERG);
 const MARK_ANIMATIONS = {
   WALKING: 'Talking',
   IDLE: 'Look around',
-  LOOK_AROUND: 'Look around',
-  SAD: 'Disappointed',
 } as const;
-
-/**
- * Map thought patterns to specific animations.
- * When a thought contains any of these patterns, the corresponding animation plays.
- */
-const MARK_THOUGHT_ANIMATIONS: Record<string, string[]> = {
-  [MARK_ANIMATIONS.LOOK_AROUND]: [
-    'vr',
-    'glasses',
-    'headset',
-    'quest',
-    'metaverse',
-    'ar ',
-    'lenses',
-    'reality',
-  ],
-  [MARK_ANIMATIONS.SAD]: [
-    'not accepted',
-    'rejected',
-    'failed',
-    'losing',
-    'behind',
-    'struggling',
-  ],
-};
 
 /**
  * MarkZuckerbergNPC - Mark Zuckerberg character that spawns near the golf court
@@ -73,7 +46,6 @@ export const MarkZuckerbergNPC: React.FC = () => {
       circleColor={0x4444aa}
       scale={3.6}
       modelYOffset={2.0}
-      thoughtAnimationMap={MARK_THOUGHT_ANIMATIONS}
     />
   );
 };

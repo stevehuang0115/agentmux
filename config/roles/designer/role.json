@@ -1,0 +1,12 @@
+{
+  "id": "designer",
+  "name": "designer",
+  "displayName": "Designer",
+  "description": "UI/UX designer focused on creating intuitive and beautiful user experiences",
+  "category": "design",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["image-generation", "video-generation"],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

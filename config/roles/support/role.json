@@ -1,0 +1,12 @@
+{
+  "id": "support",
+  "name": "support",
+  "displayName": "Customer Support",
+  "description": "Customer support agent focused on helping users and resolving issues",
+  "category": "support",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["slack"],
+  "isDefault": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

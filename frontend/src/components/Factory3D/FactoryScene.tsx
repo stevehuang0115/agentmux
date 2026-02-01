@@ -22,7 +22,6 @@ import { OutdoorScenery } from './Environment/OutdoorScenery';
 import { OfficeZones } from './Office/OfficeZone';
 import { Decorations } from './Office/Decorations';
 import { ConveyorBelt } from './Office/ConveyorBelt';
-import { TokenCubePile } from './Office/TokenCubePile';
 
 // Interaction zones
 import { BreakRoom } from './InteractionZones/BreakRoom';
@@ -44,15 +43,11 @@ import { SteveHuangNPC } from './Agents/SteveHuangNPC';
 // Camera components
 import { CameraController } from './Camera/CameraController';
 
-// Scene components
-import { DoubleClickHandler } from './Scene/DoubleClickHandler';
-
 // UI components (overlay)
 import { InfoPanel } from './UI/InfoPanel';
 import { ProjectButtons } from './UI/ProjectButtons';
 import { LightingToggle } from './UI/LightingToggle';
 import { EntityActionPanel } from './UI/EntityActionPanel';
-import { VisibilityToggles } from './UI/VisibilityToggles';
 
 // ====== ERROR BOUNDARY ======
 
@@ -188,8 +183,6 @@ const LoadingFallback: React.FC = () => {
  * SceneContent - All 3D content rendered inside the Canvas
  */
 const SceneContent: React.FC = () => {
-  const { showNPCAgents, showGuestAgents, showObjects } = useFactory();
-
   return (
     <>
       {/* Scene configuration */}
@@ -201,16 +194,12 @@ const SceneContent: React.FC = () => {
       {/* Environment */}
       <Floor />
       <Walls />
-      <OutdoorScenery showObjects={showObjects} />
-
-      {/* Double-click handler for freestyle movement and camera control */}
-      <DoubleClickHandler />
+      <OutdoorScenery />
 
       {/* Office content */}
       <OfficeZones />
       <Decorations />
       <ConveyorBelt />
-      <TokenCubePile />
 
       {/* Interaction zones */}
       <BreakRoom />
@@ -223,30 +212,25 @@ const SceneContent: React.FC = () => {
       <Agents />
 
       {/* Fake audience for stage */}
-      {showNPCAgents && <FakeAudience />}
+      <FakeAudience />
 
-      {/* Guest NPCs - celebrity characters */}
-      {showGuestAgents && (
-        <>
-          {/* Steve Jobs NPC - wanders around checking on agents */}
-          <SteveJobsNPC />
+      {/* Steve Jobs NPC - wanders around checking on agents */}
+      <SteveJobsNPC />
 
-          {/* Sundar Pichai NPC - walks around talking to agents */}
-          <SundarPichaiNPC />
+      {/* Sundar Pichai NPC - walks around talking to agents */}
+      <SundarPichaiNPC />
 
-          {/* Elon Musk NPC - outdoor near cybertruck */}
-          <ElonMuskNPC />
+      {/* Elon Musk NPC - outdoor near cybertruck */}
+      <ElonMuskNPC />
 
-          {/* Mark Zuckerberg NPC - near golf court */}
-          <MarkZuckerbergNPC />
+      {/* Mark Zuckerberg NPC - near golf court */}
+      <MarkZuckerbergNPC />
 
-          {/* Jensen Huang NPC - inside the building */}
-          <JensenHuangNPC />
+      {/* Jensen Huang NPC - inside the building */}
+      <JensenHuangNPC />
 
-          {/* Steve Huang NPC - builder/architect of AgentMux */}
-          <SteveHuangNPC />
-        </>
-      )}
+      {/* Steve Huang NPC - builder/architect of AgentMux */}
+      <SteveHuangNPC />
 
       {/* Camera controls */}
       <CameraController />
@@ -345,7 +329,6 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               <ProjectButtons />
               <LightingToggle />
               <EntityActionPanel />
-              <VisibilityToggles />
             </div>
           </div>
 

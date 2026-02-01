@@ -1,0 +1,20 @@
+{
+  "id": "video-generation",
+  "name": "Video Generation",
+  "description": "Generate short videos using AI tools via browser automation",
+  "category": "design",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "browser",
+    "browser": {
+      "url": "https://runway.ml",
+      "instructions": "Use the browser to generate videos based on the prompt"
+    }
+  },
+  "triggers": ["generate video", "create video", "make animation", "video clip"],
+  "tags": ["video", "ai", "design", "animation"],
+  "assignableRoles": ["designer"],
+  "version": "1.0.0",
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

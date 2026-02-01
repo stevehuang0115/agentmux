@@ -470,21 +470,15 @@ const CyberTruck: React.FC<{
 
 // ====== OUTDOOR SCENERY ======
 
-interface OutdoorSceneryProps {
-  /** Whether to show additional objects like Cybertruck (default: true) */
-  showObjects?: boolean;
-}
-
 /**
  * OutdoorScenery - Complete outdoor environment.
  *
  * Positions trees, houses, and clouds around the building
  * to create a pleasant view through the windows.
  *
- * @param showObjects - Whether to render additional objects like Cybertruck
  * @returns JSX element with all outdoor objects
  */
-export const OutdoorScenery: React.FC<OutdoorSceneryProps> = ({ showObjects = true }) => {
+export const OutdoorScenery: React.FC = () => {
   const { isNightMode } = useFactory();
 
   // Tree positions around the building - many more trees for denser forest
@@ -707,7 +701,7 @@ export const OutdoorScenery: React.FC<OutdoorSceneryProps> = ({ showObjects = tr
       <ParkBench position={[4, 0, 36]} rotation={-Math.PI / 2} />
 
       {/* Cybertruck parked on the main walkway */}
-      {showObjects && <CyberTruck position={[0, 0, 50]} rotation={0} />}
+      <CyberTruck position={[0, 0, 50]} rotation={0} />
     </group>
   );
 };
