@@ -121,6 +121,25 @@ These tasks address gaps found after initial implementation was marked complete.
 | 60 | [SkillsTab Full Implementation](./60-skillstab-full-implementation.md) | Remove placeholder, implement full skill management | Medium | 59 |
 | 61 | [Chat-Centric Dashboard](./61-chat-centric-dashboard.md) | Transform Dashboard to chat interface | Critical | 33, 38 |
 
+### Sprint 10: Browser-Tested Gap Fixes
+
+These gaps were identified through thorough browser testing of the running application.
+
+#### Critical Fixes
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 62 | [Roles API 500 Fix](./62-roles-api-500-fix.md) | Fix Roles tab returning HTTP 500 error | Critical | 24 |
+| 63 | [Orchestrator Setup Endpoint](./63-orchestrator-setup-endpoint.md) | Create proper orchestrator startup flow | Critical | 48, 50 |
+| 66 | [Chat-Orchestrator Connection](./66-chat-orchestrator-connection.md) | Connect chat UI to orchestrator responses | Critical | 31, 32, 63 |
+
+#### Feature Completions
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 64 | [Slack Integration UI](./64-slack-integration-ui.md) | Add Slack tab to Settings for configuration | High | 44, 46 |
+| 65 | [Default Skills Configuration](./65-default-skills-configuration.md) | Create built-in skills that ship with AgentMux | High | 29 |
+
 ---
 
 ## Recommended Implementation Order

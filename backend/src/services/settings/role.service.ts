@@ -162,7 +162,7 @@ export class RoleService {
    * @returns Array of role summaries
    */
   async listRoles(filter?: RoleFilter): Promise<RoleSummary[]> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const roles = Array.from(this.rolesCache.values());
     const filteredRoles = filter
@@ -179,7 +179,7 @@ export class RoleService {
    * @returns The role with prompt content, or null if not found
    */
   async getRole(id: string): Promise<RoleWithPrompt | null> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(id);
     if (!role) {
@@ -200,7 +200,7 @@ export class RoleService {
    * @returns The role with prompt content, or null if not found
    */
   async getRoleByName(name: string): Promise<RoleWithPrompt | null> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = Array.from(this.rolesCache.values()).find(r => r.name === name);
     if (!role) {
@@ -219,7 +219,7 @@ export class RoleService {
    * @throws {DuplicateRoleNameError} If a role with the same name exists
    */
   async createRole(input: CreateRoleInput): Promise<Role> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     // Validate input
     const errors = validateCreateRoleInput(input);
@@ -281,7 +281,7 @@ export class RoleService {
    * @throws {RoleValidationError} If input validation fails
    */
   async updateRole(id: string, input: UpdateRoleInput): Promise<Role> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(id);
     if (!role) {
@@ -339,7 +339,7 @@ export class RoleService {
    * @throws {BuiltinRoleModificationError} If attempting to delete a built-in role
    */
   async deleteRole(id: string): Promise<void> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(id);
     if (!role) {
@@ -381,7 +381,7 @@ export class RoleService {
    * @throws {BuiltinRoleModificationError} If attempting to modify a built-in role
    */
   async assignSkills(roleId: string, skillIds: string[]): Promise<Role> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(roleId);
     if (!role) {
@@ -408,7 +408,7 @@ export class RoleService {
    * @throws {BuiltinRoleModificationError} If attempting to modify a built-in role
    */
   async removeSkills(roleId: string, skillIds: string[]): Promise<Role> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(roleId);
     if (!role) {
@@ -433,7 +433,7 @@ export class RoleService {
    * @throws {RoleNotFoundError} If the role is not found
    */
   async setDefaultRole(roleId: string): Promise<Role> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const role = this.rolesCache.get(roleId);
     if (!role) {
@@ -469,7 +469,7 @@ export class RoleService {
    * @returns The default role, or null if none is set
    */
   async getDefaultRole(): Promise<Role | null> {
-    this.ensureInitialized();
+    await this.ensureInitialized();
 
     const roles = Array.from(this.rolesCache.values());
     return roles.find(role => role.isDefault) ?? null;
@@ -488,12 +488,12 @@ export class RoleService {
   // ============================================================================
 
   /**
-   * Ensure the service is initialized
-   * @throws {Error} If the service is not initialized
+   * Ensure the service is initialized.
+   * Auto-initializes if not already done.
    */
-  private ensureInitialized(): void {
+  private async ensureInitialized(): Promise<void> {
     if (!this.initialized) {
-      throw new Error('RoleService not initialized. Call initialize() first.');
+      await this.initialize();
     }
   }
 

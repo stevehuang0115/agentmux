@@ -13,6 +13,8 @@ import {
   MessageValidationError,
   ConversationNotFoundError,
 } from '../../services/chat/chat.service.js';
+import { AgentRegistrationService } from '../../services/agent/agent-registration.service.js';
+import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import type {
   SendMessageInput,
   ChatMessageFilter,
@@ -20,6 +22,53 @@ import type {
   ChatSenderType,
   ChatContentType,
 } from '../../types/chat.types.js';
+
+// Module-level agent registration service instance
+let agentRegistrationService: AgentRegistrationService | null = null;
+
+/**
+ * Set the agent registration service for forwarding messages to orchestrator.
+ * Called during server initialization.
+ *
+ * @param service - The AgentRegistrationService instance
+ */
+export function setAgentRegistrationService(service: AgentRegistrationService): void {
+  agentRegistrationService = service;
+}
+
+/**
+ * Forward a message to the orchestrator terminal.
+ *
+ * @param content - Message content to send
+ * @param conversationId - Conversation ID for context
+ * @returns Success status and any error message
+ */
+async function forwardToOrchestrator(
+  content: string,
+  conversationId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!agentRegistrationService) {
+    return { success: false, error: 'Agent registration service not available' };
+  }
+
+  try {
+    // Format message with conversation context
+    const formattedMessage = `[CHAT:${conversationId}] ${content}`;
+
+    const result = await agentRegistrationService.sendMessageToAgent(
+      ORCHESTRATOR_SESSION_NAME,
+      formattedMessage
+    );
+
+    return result;
+  } catch (error) {
+    console.error('Failed to forward message to orchestrator:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
 
 // =============================================================================
 // Message Endpoints
@@ -40,7 +89,7 @@ export async function sendMessage(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { content, conversationId, metadata } = req.body;
+    const { content, conversationId, metadata, forwardToOrchestrator: shouldForward = true } = req.body;
 
     if (!content || (typeof content === 'string' && content.trim().length === 0)) {
       res.status(400).json({
@@ -59,9 +108,28 @@ export async function sendMessage(
     const chatService = getChatService();
     const result = await chatService.sendMessage(input);
 
+    // Forward to orchestrator if enabled (default: true)
+    let orchestratorStatus: { forwarded: boolean; error?: string } = { forwarded: false };
+
+    if (shouldForward) {
+      const forwardResult = await forwardToOrchestrator(content, result.conversation.id);
+      orchestratorStatus = {
+        forwarded: forwardResult.success,
+        error: forwardResult.error,
+      };
+
+      // Update message status if forwarding failed
+      if (!forwardResult.success) {
+        console.warn('Failed to forward message to orchestrator:', forwardResult.error);
+      }
+    }
+
     res.status(201).json({
       success: true,
-      data: result,
+      data: {
+        ...result,
+        orchestrator: orchestratorStatus,
+      },
     });
   } catch (error) {
     if (error instanceof MessageValidationError) {

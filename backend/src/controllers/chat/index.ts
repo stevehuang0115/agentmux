@@ -21,4 +21,5 @@ export {
   deleteConversation,
   clearConversation,
   getStatistics,
+  setAgentRegistrationService,
 } from './chat.controller.js';

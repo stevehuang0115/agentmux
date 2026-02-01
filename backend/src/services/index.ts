@@ -83,3 +83,36 @@ export {
   SettingsValidationError,
   SettingsFileError,
 } from './settings/index.js';
+
+// Slack Services
+export {
+  SlackService,
+  getSlackService,
+  resetSlackService,
+  SlackOrchestratorBridge,
+  getSlackOrchestratorBridge,
+  resetSlackOrchestratorBridge,
+  initializeSlackIfConfigured,
+  isSlackConfigured,
+  getSlackConfigFromEnv,
+  shutdownSlack,
+} from './slack/index.js';
+
+// Orchestrator Services
+export {
+  StatePersistenceService,
+  getStatePersistenceService,
+  resetStatePersistenceService,
+  SafeRestartService,
+  getSafeRestartService,
+  resetSafeRestartService,
+  SelfImprovementService,
+  getSelfImprovementService,
+  resetSelfImprovementService,
+  ImprovementMarkerService,
+  getImprovementMarkerService,
+  resetImprovementMarkerService,
+  ImprovementStartupService,
+  getImprovementStartupService,
+  resetImprovementStartupService,
+} from './orchestrator/index.js';

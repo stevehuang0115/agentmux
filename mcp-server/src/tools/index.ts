@@ -19,6 +19,18 @@ export {
   handleCreateTeamForProject,
 } from './project-tools.js';
 
+// Self-Improvement Tools
+export {
+  handleSelfImprovePlan,
+  handleSelfImproveExecute,
+  handleSelfImproveStatus,
+  handleSelfImproveCancel,
+  handleSelfImproveRollback,
+  handleSelfImproveHistory,
+} from './self-improve-tools.js';
+import { selfImproveToolDefinition as _selfImproveToolDefinition } from './self-improve-tools.js';
+export { selfImproveToolDefinition } from './self-improve-tools.js';
+
 // Tool Definition Constants
 
 /**
@@ -311,4 +323,5 @@ export const orchestratorToolDefinitions = [
   createProjectFolderToolDefinition,
   setupProjectStructureToolDefinition,
   createTeamForProjectToolDefinition,
+  _selfImproveToolDefinition,
 ];

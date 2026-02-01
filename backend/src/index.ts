@@ -32,6 +32,7 @@ import { TerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
+import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -345,6 +346,9 @@ export class AgentMuxServer {
 			await initializeMCPServer();
 			this.logger.info('MCP server integrated at /mcp endpoint');
 
+			// Initialize Slack if configured
+			await this.initializeSlackIfConfigured();
+
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
 
@@ -362,6 +366,30 @@ export class AgentMuxServer {
 				await this.handlePortConflict();
 			}
 			throw error;
+		}
+	}
+
+	/**
+	 * Initialize Slack integration if environment variables are configured.
+	 * Gracefully handles missing configuration or connection failures.
+	 */
+	private async initializeSlackIfConfigured(): Promise<void> {
+		try {
+			this.logger.info('Checking Slack configuration...');
+			const result = await initializeSlackIfConfigured();
+
+			if (result.success) {
+				this.logger.info('Slack integration initialized successfully');
+			} else if (result.attempted) {
+				this.logger.warn('Slack initialization failed', { error: result.error });
+			} else {
+				this.logger.info('Slack not configured, skipping initialization');
+			}
+		} catch (error) {
+			this.logger.error('Error initializing Slack integration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Don't fail startup if Slack fails
 		}
 	}
 
@@ -552,6 +580,10 @@ export class AgentMuxServer {
 
 			// Stop teams.json file watcher
 			this.teamsJsonWatcherService.stop();
+
+			// Shutdown Slack integration
+			this.logger.info('Shutting down Slack integration...');
+			await shutdownSlack();
 
 			// Destroy MCP server
 			this.logger.info('Stopping MCP server...');
