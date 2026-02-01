@@ -97,9 +97,8 @@ export class StorageService {
         const content = await fs.readFile(filePath, 'utf-8');
         const parsed = JSON.parse(content);
 
-        // If file is empty or corrupted, but not the default content we expect, preserve it
-        // Only overwrite if file is truly empty/invalid and we're setting defaults
-        if (!content.trim() || content.trim() === '' || parsed === null || parsed === undefined) {
+        // If file is empty or has invalid content (null/undefined), reinitialize with defaults
+        if (!content.trim() || parsed === null || parsed === undefined) {
           this.logger.warn('Storage file exists but appears empty/corrupted, creating backup and initializing with defaults', {
             file: fileName,
             contentLength: content?.length || 0,
