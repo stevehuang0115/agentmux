@@ -545,7 +545,7 @@ export async function updateOrchestratorRuntime(
  * @param req - Express request object
  * @param res - Express response object
  */
-export async function getOrchestratorStatusEndpoint(
+export async function getOrchestratorStatus(
 	this: ApiContext,
 	req: Request,
 	res: Response

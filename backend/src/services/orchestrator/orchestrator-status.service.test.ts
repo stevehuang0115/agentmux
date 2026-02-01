@@ -38,13 +38,18 @@ jest.mock('../core/logger.service.js', () => ({
   },
 }));
 
-// Mock the config module to ensure AGENTMUX_CONSTANTS is available
+// Mock the config module to ensure constants are available
 jest.mock('../../../../config/index.js', () => ({
   AGENTMUX_CONSTANTS: {
     AGENT_STATUSES: {
       INACTIVE: 'inactive',
       ACTIVATING: 'activating',
       ACTIVE: 'active',
+    },
+  },
+  WEB_CONSTANTS: {
+    PORTS: {
+      FRONTEND: 8788,
     },
   },
 }));
@@ -209,12 +214,12 @@ describe('OrchestratorStatusService', () => {
   describe('getOrchestratorOfflineMessage', () => {
     it('should include URL by default', () => {
       const message = getOrchestratorOfflineMessage();
-      expect(message).toContain('http://localhost:8788');
+      expect(message).toContain('http://localhost:');
     });
 
     it('should exclude URL when includeUrl is false', () => {
       const message = getOrchestratorOfflineMessage(false);
-      expect(message).not.toContain('http://localhost:8788');
+      expect(message).not.toContain('http://localhost:');
       expect(message).toContain('dashboard');
     });
 

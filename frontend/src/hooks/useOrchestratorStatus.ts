@@ -104,7 +104,7 @@ export function useOrchestratorStatus(options?: {
       }
     } catch (err) {
       // Don't set error for network errors - orchestrator might just be starting
-      const errorMessage = err instanceof Error ? err.message : 'Failed to check orchestrator status';
+      const errorMessage = err instanceof Error ? err.message : 'Unable to check orchestrator status';
       setError(errorMessage);
       // Set a default offline status
       setStatus({

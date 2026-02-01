@@ -9,8 +9,11 @@
  */
 
 import { StorageService } from '../core/storage.service.js';
-import { AGENTMUX_CONSTANTS } from '../../../../config/index.js';
+import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../../../../config/index.js';
 import type { Team } from '../../types/index.js';
+
+/** Dashboard URL for user-facing messages */
+const DASHBOARD_URL = `http://localhost:${WEB_CONSTANTS.PORTS.FRONTEND}`;
 
 /**
  * Result of an orchestrator status check
@@ -127,7 +130,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
 export function getOrchestratorOfflineMessage(includeUrl = true): string {
   const baseMessage = 'The orchestrator is currently offline.';
   if (includeUrl) {
-    return `${baseMessage} Please start it from the AgentMux dashboard at http://localhost:8788`;
+    return `${baseMessage} Please start it from the AgentMux dashboard at ${DASHBOARD_URL}`;
   }
   return `${baseMessage} Please start it from the AgentMux dashboard.`;
 }
