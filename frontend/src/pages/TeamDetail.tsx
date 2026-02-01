@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Team, TeamMember } from '../types/index';
+import { Team, TeamMember, TeamMemberStatusChangeEvent } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
@@ -29,12 +29,7 @@ export const TeamDetail: React.FC = () => {
    * Handle team member status change event from WebSocket.
    * Updates the team member's agentStatus in the local state.
    */
-  const handleTeamMemberStatusChange = useCallback((data: {
-    teamId: string;
-    memberId: string;
-    sessionName: string;
-    agentStatus: 'active' | 'inactive' | 'activating';
-  }) => {
+  const handleTeamMemberStatusChange = useCallback((data: TeamMemberStatusChangeEvent) => {
     // Only update if this event is for our team
     if (data.teamId === id) {
       setTeam(prevTeam => {

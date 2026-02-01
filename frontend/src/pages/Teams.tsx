@@ -5,7 +5,7 @@ import { useAlert } from '../components/UI/Dialog';
 import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamMemberModal } from '../components/Modals/TeamMemberModal';
-import { Team, TeamMember } from '../types';
+import { Team, TeamMember, TeamMemberStatusChangeEvent } from '../types';
 import TeamListItem from '@/components/Teams/TeamListItem';
 import { apiService } from '@/services/api.service';
 import { logSilentError } from '@/utils/error-handling';
@@ -31,12 +31,7 @@ export const Teams: React.FC = () => {
    * Handle team member status change event from WebSocket.
    * Updates the team member's agentStatus in the teams list.
    */
-  const handleTeamMemberStatusChange = useCallback((data: {
-    teamId: string;
-    memberId: string;
-    sessionName: string;
-    agentStatus: 'active' | 'inactive' | 'activating';
-  }) => {
+  const handleTeamMemberStatusChange = useCallback((data: TeamMemberStatusChangeEvent) => {
     setTeams(prevTeams =>
       prevTeams.map(team => {
         if (team.id === data.teamId) {

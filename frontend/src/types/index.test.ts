@@ -268,4 +268,31 @@ describe('Types Index Exports', () => {
       expect(TypesModule.EXECUTION_TYPES).toContain('script');
     });
   });
+
+  describe('WebSocket Event Types', () => {
+    it('should export TeamMemberStatusChangeEvent interface (type check)', () => {
+      const event: TypesModule.TeamMemberStatusChangeEvent = {
+        teamId: 'team-1',
+        memberId: 'member-1',
+        sessionName: 'test-session',
+        agentStatus: 'active',
+      };
+      expect(event.teamId).toBe('team-1');
+      expect(event.agentStatus).toBe('active');
+    });
+
+    it('should accept all valid agentStatus values', () => {
+      const statuses: Array<TypesModule.TeamMember['agentStatus']> = ['active', 'inactive', 'activating'];
+
+      statuses.forEach((status) => {
+        const event: TypesModule.TeamMemberStatusChangeEvent = {
+          teamId: 'team-1',
+          memberId: 'member-1',
+          sessionName: 'test-session',
+          agentStatus: status,
+        };
+        expect(['active', 'inactive', 'activating']).toContain(event.agentStatus);
+      });
+    });
+  });
 });
