@@ -7,7 +7,7 @@
  * @module pages/Dashboard
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ProjectCard } from '../components/Cards/ProjectCard';
 import { TeamCard } from '../components/Cards/TeamCard';
@@ -38,9 +38,11 @@ export const Dashboard: React.FC = () => {
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
 
   /**
    * Fetch projects and teams data
+   * Uses isMountedRef to prevent state updates after unmount
    */
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -52,19 +54,28 @@ export const Dashboard: React.FC = () => {
         apiService.getTeams(),
       ]);
 
-      setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
-      setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
+      if (isMountedRef.current) {
+        setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
+        setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
+      }
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load data';
-      setError(message);
-      console.error('Dashboard: Failed to fetch data:', err);
+      if (isMountedRef.current) {
+        const message = err instanceof Error ? err.message : 'Failed to load data';
+        setError(message);
+        console.error('Dashboard: Failed to fetch data:', err);
+      }
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     fetchData();
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [fetchData]);
 
   /**
@@ -101,6 +112,20 @@ export const Dashboard: React.FC = () => {
     navigate('/teams?create=true');
   }, [navigate]);
 
+  /**
+   * Handle view all projects click
+   */
+  const handleViewAllProjects = useCallback(() => {
+    navigate('/projects');
+  }, [navigate]);
+
+  /**
+   * Handle view all teams click
+   */
+  const handleViewAllTeams = useCallback(() => {
+    navigate('/teams');
+  }, [navigate]);
+
   if (loading) {
     return (
       <div className="dashboard">
@@ -134,7 +159,7 @@ export const Dashboard: React.FC = () => {
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => navigate('/projects')}
+            onClick={handleViewAllProjects}
           >
             View All
           </button>
@@ -164,7 +189,7 @@ export const Dashboard: React.FC = () => {
           <button
             type="button"
             className="btn-secondary"
-            onClick={() => navigate('/teams')}
+            onClick={handleViewAllTeams}
           >
             View All
           </button>
