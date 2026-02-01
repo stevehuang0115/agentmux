@@ -1,19 +1,19 @@
 /**
  * Dashboard Page Tests
  *
- * Tests for the chat-centric Dashboard page.
+ * Tests for the cards-based Dashboard page.
  *
  * @module pages/Dashboard.test
  */
 
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { Dashboard } from './Dashboard';
-import * as useChatHook from '../contexts/ChatContext';
+import { apiService } from '../services/api.service';
 
-// Mock the useNavigate hook
+// Mock the navigate hook
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
@@ -23,329 +23,318 @@ vi.mock('react-router-dom', async () => {
   };
 });
 
-// Mock the useChat hook
-vi.mock('../contexts/ChatContext');
-
-// Mock child components to simplify testing
-vi.mock('../components/Chat/ChatPanel', () => ({
-  ChatPanel: () => <div data-testid="chat-panel">Chat Panel</div>,
+// Mock the API service
+vi.mock('../services/api.service', () => ({
+  apiService: {
+    getProjects: vi.fn(),
+    getTeams: vi.fn(),
+  },
 }));
 
-vi.mock('../components/Chat/ChatSidebar', () => ({
-  ChatSidebar: () => <div data-testid="chat-sidebar">Chat Sidebar</div>,
+// Mock the TerminalContext
+vi.mock('../contexts/TerminalContext', () => ({
+  useTerminal: () => ({
+    openTerminalWithSession: vi.fn(),
+  }),
 }));
 
-vi.mock('../components/Dashboard/ProjectsSummary', () => ({
-  ProjectsSummary: ({ onProjectClick }: any) => (
-    <div data-testid="projects-summary">
-      <button onClick={() => onProjectClick('project-1')}>Project 1</button>
-    </div>
-  ),
-}));
+const mockProjects = [
+  {
+    id: 'project-1',
+    name: 'Test Project 1',
+    path: '/path/to/project1',
+    status: 'active',
+    updatedAt: new Date().toISOString(),
+    teams: {},
+  },
+  {
+    id: 'project-2',
+    name: 'Test Project 2',
+    path: '/path/to/project2',
+    status: 'paused',
+    updatedAt: new Date().toISOString(),
+    teams: {},
+  },
+];
 
-vi.mock('../components/Dashboard/TeamsSummary', () => ({
-  TeamsSummary: ({ onTeamClick }: any) => (
-    <div data-testid="teams-summary">
-      <button onClick={() => onTeamClick('team-1')}>Team 1</button>
-    </div>
-  ),
-}));
+const mockTeams = [
+  {
+    id: 'team-1',
+    name: 'Test Team 1',
+    description: 'Team 1 description',
+    members: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'team-2',
+    name: 'Test Team 2',
+    description: 'Team 2 description',
+    members: [],
+    updatedAt: new Date().toISOString(),
+  },
+];
 
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <MemoryRouter>{children}</MemoryRouter>
 );
 
 describe('Dashboard Page', () => {
-  const mockChatContext = {
-    conversations: [],
-    currentConversation: null,
-    messages: [],
-    isLoading: false,
-    isSending: false,
-    error: null,
-    isTyping: false,
-    sendMessage: vi.fn(),
-    selectConversation: vi.fn(),
-    createConversation: vi.fn(),
-    deleteConversation: vi.fn(),
-    archiveConversation: vi.fn(),
-    clearConversation: vi.fn(),
-    refreshMessages: vi.fn(),
-    clearError: vi.fn(),
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useChatHook.useChat).mockReturnValue(mockChatContext);
+    vi.mocked(apiService.getProjects).mockResolvedValue(mockProjects);
+    vi.mocked(apiService.getTeams).mockResolvedValue(mockTeams);
   });
 
   describe('Layout', () => {
-    it('should render the app title', () => {
-      render(
+    it('should render the dashboard container', async () => {
+      const { container } = render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      expect(screen.getByText('AgentMux')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(container.querySelector('.dashboard')).toBeInTheDocument();
+      });
     });
 
-    it('should render the sidebar', () => {
+    it('should render projects section header', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      expect(screen.getByRole('complementary')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText('Projects')).toBeInTheDocument();
+      });
     });
 
-    it('should render the main content area', () => {
+    it('should render teams section header', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      expect(screen.getByRole('main')).toBeInTheDocument();
-    });
-
-    it('should render the chat panel in main content', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId('chat-panel')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.getByText('Teams')).toBeInTheDocument();
+      });
     });
   });
 
-  describe('Navigation Tabs', () => {
-    it('should render Conversations tab', () => {
+  describe('Loading State', () => {
+    it('should show loading state initially', () => {
+      // Make the API never resolve to see loading state
+      vi.mocked(apiService.getProjects).mockImplementation(() => new Promise(() => {}));
+      vi.mocked(apiService.getTeams).mockImplementation(() => new Promise(() => {}));
+
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      expect(screen.getByRole('button', { name: /Conversations/i })).toBeInTheDocument();
-    });
-
-    it('should render Projects tab', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByRole('button', { name: /Projects/i })).toBeInTheDocument();
-    });
-
-    it('should render Teams tab', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByRole('button', { name: /Teams/i })).toBeInTheDocument();
-    });
-
-    it('should show ChatSidebar when Conversations tab is active', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByTestId('chat-sidebar')).toBeInTheDocument();
-    });
-
-    it('should show ProjectsSummary when Projects tab is clicked', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      fireEvent.click(screen.getByRole('button', { name: /Projects/i }));
-
-      expect(screen.getByTestId('projects-summary')).toBeInTheDocument();
-    });
-
-    it('should show TeamsSummary when Teams tab is clicked', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      fireEvent.click(screen.getByRole('button', { name: /Teams/i }));
-
-      expect(screen.getByTestId('teams-summary')).toBeInTheDocument();
+      expect(screen.getByText('Loading dashboard...')).toBeInTheDocument();
     });
   });
 
-  describe('Sidebar Toggle', () => {
-    it('should toggle sidebar when toggle button is clicked', () => {
+  describe('Error State', () => {
+    it('should show error message on API failure', async () => {
+      vi.mocked(apiService.getProjects).mockRejectedValue(new Error('API Error'));
+      vi.mocked(apiService.getTeams).mockRejectedValue(new Error('API Error'));
+
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      const sidebar = screen.getByRole('complementary');
-      const toggleButton = screen.getByRole('button', { name: /Collapse sidebar/i });
-
-      expect(sidebar).not.toHaveClass('collapsed');
-
-      fireEvent.click(toggleButton);
-
-      expect(sidebar).toHaveClass('collapsed');
+      await waitFor(() => {
+        expect(screen.getByText(/Error:/)).toBeInTheDocument();
+      });
     });
 
-    it('should expand sidebar when toggle is clicked again', () => {
+    it('should show retry button on error', async () => {
+      vi.mocked(apiService.getProjects).mockRejectedValue(new Error('API Error'));
+      vi.mocked(apiService.getTeams).mockRejectedValue(new Error('API Error'));
+
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      const sidebar = screen.getByRole('complementary');
-      const toggleButton = screen.getByRole('button', { name: /Collapse sidebar/i });
-
-      fireEvent.click(toggleButton);
-      expect(sidebar).toHaveClass('collapsed');
-
-      const expandButton = screen.getByRole('button', { name: /Expand sidebar/i });
-      fireEvent.click(expandButton);
-
-      expect(sidebar).not.toHaveClass('collapsed');
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+      });
     });
   });
 
-  describe('Footer Links', () => {
-    it('should navigate to settings when Settings button is clicked', () => {
+  describe('Projects Section', () => {
+    it('should render project cards', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Settings/i }));
-
-      expect(mockNavigate).toHaveBeenCalledWith('/settings');
+      await waitFor(() => {
+        expect(screen.getByText('Test Project 1')).toBeInTheDocument();
+        expect(screen.getByText('Test Project 2')).toBeInTheDocument();
+      });
     });
 
-    it('should navigate to factory when 3D Factory button is clicked', () => {
+    it('should render View All button for projects', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /3D Factory/i }));
+      await waitFor(() => {
+        const viewAllButtons = screen.getAllByRole('button', { name: /View All/i });
+        expect(viewAllButtons.length).toBeGreaterThan(0);
+      });
+    });
 
-      expect(mockNavigate).toHaveBeenCalledWith('/factory');
+    it('should navigate to projects page when View All is clicked', async () => {
+      render(
+        <TestWrapper>
+          <Dashboard />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        const viewAllButtons = screen.getAllByRole('button', { name: /View All/i });
+        fireEvent.click(viewAllButtons[0]);
+      });
+
+      expect(mockNavigate).toHaveBeenCalledWith('/projects');
+    });
+
+    it('should render New Project create card', async () => {
+      render(
+        <TestWrapper>
+          <Dashboard />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('New Project')).toBeInTheDocument();
+      });
     });
   });
 
-  describe('Navigation from Summary Components', () => {
-    it('should navigate to project when project is clicked in summary', () => {
+  describe('Teams Section', () => {
+    it('should render team cards', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Projects/i }));
-      fireEvent.click(screen.getByText('Project 1'));
+      await waitFor(() => {
+        expect(screen.getByText('Test Team 1')).toBeInTheDocument();
+        expect(screen.getByText('Test Team 2')).toBeInTheDocument();
+      });
+    });
+
+    it('should render New Team create card', async () => {
+      render(
+        <TestWrapper>
+          <Dashboard />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('New Team')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Navigation', () => {
+    it('should navigate to project detail when project card is clicked', async () => {
+      render(
+        <TestWrapper>
+          <Dashboard />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        const projectCard = screen.getByText('Test Project 1').closest('[class*="bg-surface-dark"]');
+        if (projectCard) {
+          fireEvent.click(projectCard);
+        }
+      });
 
       expect(mockNavigate).toHaveBeenCalledWith('/projects/project-1');
     });
 
-    it('should navigate to team when team is clicked in summary', () => {
+    it('should navigate to team detail when team card is clicked', async () => {
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Teams/i }));
-      fireEvent.click(screen.getByText('Team 1'));
+      await waitFor(() => {
+        const teamCard = screen.getByText('Test Team 1').closest('[class*="bg-surface-dark"]');
+        if (teamCard) {
+          fireEvent.click(teamCard);
+        }
+      });
 
       expect(mockNavigate).toHaveBeenCalledWith('/teams/team-1');
     });
-  });
 
-  describe('Connection Status', () => {
-    it('should show loading banner when isLoading is true', () => {
-      vi.mocked(useChatHook.useChat).mockReturnValue({
-        ...mockChatContext,
-        isLoading: true,
+    it('should navigate to create project when New Project is clicked', async () => {
+      render(
+        <TestWrapper>
+          <Dashboard />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        const createCard = screen.getByText('New Project').closest('div');
+        if (createCard) {
+          fireEvent.click(createCard);
+        }
       });
 
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByText(/Connecting to orchestrator/i)).toBeInTheDocument();
-    });
-
-    it('should show error banner when error exists', () => {
-      vi.mocked(useChatHook.useChat).mockReturnValue({
-        ...mockChatContext,
-        error: 'Connection failed',
-      });
-
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.getByText(/Connection failed/)).toBeInTheDocument();
-    });
-
-    it('should not show status banners when connected successfully', () => {
-      render(
-        <TestWrapper>
-          <Dashboard />
-        </TestWrapper>
-      );
-
-      expect(screen.queryByText(/Connecting/i)).not.toBeInTheDocument();
-      expect(screen.queryByText(/Connection failed/i)).not.toBeInTheDocument();
+      expect(mockNavigate).toHaveBeenCalledWith('/projects?create=true');
     });
   });
 
-  describe('Tab Highlighting', () => {
-    it('should highlight active tab', () => {
+  describe('Empty State', () => {
+    it('should show message when no projects exist', async () => {
+      vi.mocked(apiService.getProjects).mockResolvedValue([]);
+      vi.mocked(apiService.getTeams).mockResolvedValue(mockTeams);
+
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      const conversationsTab = screen.getByRole('button', { name: /Conversations/i });
-      expect(conversationsTab).toHaveClass('active');
+      await waitFor(() => {
+        expect(screen.getByText(/No projects yet/)).toBeInTheDocument();
+      });
     });
 
-    it('should update active tab when different tab is clicked', () => {
+    it('should show message when no teams exist', async () => {
+      vi.mocked(apiService.getProjects).mockResolvedValue(mockProjects);
+      vi.mocked(apiService.getTeams).mockResolvedValue([]);
+
       render(
         <TestWrapper>
           <Dashboard />
         </TestWrapper>
       );
 
-      const projectsTab = screen.getByRole('button', { name: /Projects/i });
-      fireEvent.click(projectsTab);
-
-      expect(projectsTab).toHaveClass('active');
-      expect(screen.getByRole('button', { name: /Conversations/i })).not.toHaveClass('active');
+      await waitFor(() => {
+        expect(screen.getByText(/No teams yet/)).toBeInTheDocument();
+      });
     });
   });
 });

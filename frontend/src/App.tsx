@@ -9,33 +9,40 @@ import { Assignments } from './pages/Assignments';
 import { ScheduledCheckins } from './pages/ScheduledCheckins';
 import { Factory } from './pages/Factory';
 import { Settings } from './pages/Settings';
+import { Chat } from './pages/Chat';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ChatProvider } from './contexts/ChatContext';
 
 function App() {
   return (
-    <ChatProvider>
-      <TerminalProvider>
-        <SidebarProvider>
-          <Router>
-            <Routes>
-              <Route path="/" element={<AppLayout />}>
-                <Route index element={<Dashboard />} />
-                <Route path="projects" element={<Projects />} />
-                <Route path="projects/:id" element={<ProjectDetail />} />
-                <Route path="teams" element={<Teams />} />
-                <Route path="teams/:id" element={<TeamDetail />} />
-                <Route path="assignments" element={<Assignments />} />
-                <Route path="scheduled-checkins" element={<ScheduledCheckins />} />
-                <Route path="factory" element={<Factory />} />
-                <Route path="settings" element={<Settings />} />
-              </Route>
-            </Routes>
-          </Router>
-        </SidebarProvider>
-      </TerminalProvider>
-    </ChatProvider>
+    <TerminalProvider>
+      <SidebarProvider>
+        <Router>
+          <Routes>
+            <Route path="/" element={<AppLayout />}>
+              <Route index element={<Dashboard />} />
+              <Route path="projects" element={<Projects />} />
+              <Route path="projects/:id" element={<ProjectDetail />} />
+              <Route path="teams" element={<Teams />} />
+              <Route path="teams/:id" element={<TeamDetail />} />
+              <Route path="assignments" element={<Assignments />} />
+              <Route path="scheduled-checkins" element={<ScheduledCheckins />} />
+              <Route path="factory" element={<Factory />} />
+              <Route path="settings" element={<Settings />} />
+              <Route
+                path="chat"
+                element={
+                  <ChatProvider>
+                    <Chat />
+                  </ChatProvider>
+                }
+              />
+            </Route>
+          </Routes>
+        </Router>
+      </SidebarProvider>
+    </TerminalProvider>
   );
 }
 

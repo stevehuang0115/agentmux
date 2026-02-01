@@ -1,222 +1,136 @@
 /**
  * Dashboard Page Styles
- *
- * Chat-centric layout with collapsible sidebar.
  */
 
-.dashboard-layout {
-  display: flex;
-  height: 100vh;
-  overflow: hidden;
-  background: var(--bg-primary, #ffffff);
+.dashboard {
+  padding: 24px;
+  min-height: 100%;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }
 
-/* Sidebar */
-.dashboard-sidebar {
-  width: 280px;
-  min-width: 280px;
-  background: var(--sidebar-bg, #f8fafc);
-  border-right: 1px solid var(--border-color, #e2e8f0);
+/* Loading State */
+.dashboard-loading {
   display: flex;
   flex-direction: column;
-  transition: width 0.2s ease, min-width 0.2s ease;
+  align-items: center;
+  justify-content: center;
+  padding: 64px;
+  color: var(--text-secondary);
 }
 
-.dashboard-sidebar.collapsed {
-  width: 60px;
-  min-width: 60px;
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-primary);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
 }
 
-.sidebar-header {
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Error State */
+.dashboard-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 64px;
+  color: var(--danger);
+}
+
+.dashboard-error p {
+  margin-bottom: 16px;
+}
+
+/* Dashboard Sections */
+.dashboard-section {
+  margin-bottom: 48px;
+}
+
+.section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  margin-bottom: 24px;
 }
 
-.app-title {
-  font-size: 1.25rem;
-  font-weight: 700;
+.section-header h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
   margin: 0;
-  color: var(--primary, #3b82f6);
-  white-space: nowrap;
+  color: var(--text-primary);
 }
 
-.dashboard-sidebar.collapsed .app-title {
-  display: none;
+/* Cards Grid */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 24px;
 }
 
-.sidebar-toggle {
-  background: transparent;
-  border: 1px solid var(--border-color, #e2e8f0);
-  border-radius: 4px;
-  padding: 0.25rem 0.5rem;
-  cursor: pointer;
-  color: var(--text-secondary, #64748b);
-  font-size: 0.875rem;
-  transition: background 0.15s;
-}
-
-.sidebar-toggle:hover {
-  background: var(--bg-hover, #f1f5f9);
-}
-
-/* Navigation tabs */
-.sidebar-nav {
-  display: flex;
-  flex-direction: column;
-  padding: 0.5rem;
-  gap: 0.25rem;
-}
-
-.nav-tab {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  text-align: left;
-  font-size: 0.875rem;
-  color: var(--text-secondary, #64748b);
-  transition: background 0.15s, color 0.15s;
-}
-
-.nav-tab:hover {
-  background: var(--bg-hover, #f1f5f9);
-  color: var(--text-primary, #1e293b);
-}
-
-.nav-tab.active {
-  background: var(--primary-light, #dbeafe);
-  color: var(--primary, #3b82f6);
-  font-weight: 500;
-}
-
-/* Sidebar content */
-.sidebar-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
-}
-
-/* Override ChatSidebar styles when embedded in dashboard */
-.sidebar-content .chat-sidebar {
-  border: none;
-  padding: 0;
-  background: transparent;
-}
-
-/* Sidebar footer */
-.sidebar-footer {
-  padding: 0.5rem;
-  border-top: 1px solid var(--border-color, #e2e8f0);
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.footer-link {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  text-align: left;
-  font-size: 0.875rem;
-  color: var(--text-secondary, #64748b);
-  transition: background 0.15s, color 0.15s;
-  width: 100%;
-}
-
-.footer-link:hover {
-  background: var(--bg-hover, #f1f5f9);
-  color: var(--text-primary, #1e293b);
-}
-
-/* Main content area */
-.dashboard-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  background: var(--main-bg, #ffffff);
-  overflow: hidden;
-}
-
-/* Override ChatPanel styles when embedded in dashboard */
-.dashboard-main .chat-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Connection status banner */
-.connection-banner {
-  padding: 0.5rem 1rem;
+/* Empty State */
+.empty-message {
+  color: var(--text-secondary);
+  font-size: 14px;
+  padding: 24px;
   text-align: center;
-  font-size: 0.875rem;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  border: 1px dashed var(--border-primary);
 }
 
-.connection-banner.warning {
-  background: #fef3c7;
-  color: #92400e;
-  border-bottom: 1px solid #fcd34d;
+/* Buttons */
+.btn-primary {
+  padding: 10px 20px;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
 }
 
-.connection-banner.error {
-  background: #fef2f2;
-  color: #991b1b;
-  border-bottom: 1px solid #fecaca;
+.btn-primary:hover {
+  background: var(--primary-hover);
 }
 
-.connection-banner.success {
-  background: #d1fae5;
-  color: #065f46;
-  border-bottom: 1px solid #6ee7b7;
+.btn-secondary {
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
-/* Responsive adjustments */
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  border-color: var(--primary);
+}
+
+/* Responsive Design */
 @media (max-width: 768px) {
-  .dashboard-sidebar {
-    position: fixed;
-    left: 0;
-    top: 0;
-    height: 100vh;
-    z-index: 50;
-    transform: translateX(0);
+  .dashboard {
+    padding: 16px;
   }
 
-  .dashboard-sidebar.collapsed {
-    transform: translateX(-100%);
-    width: 280px;
-    min-width: 280px;
+  .section-header h2 {
+    font-size: 1.25rem;
   }
 
-  .dashboard-main {
-    width: 100%;
-  }
-}
-
-@media (max-width: 480px) {
-  .sidebar-header {
-    padding: 0.75rem;
-  }
-
-  .app-title {
-    font-size: 1rem;
-  }
-
-  .nav-tab {
-    padding: 0.625rem 0.75rem;
-    font-size: 0.8125rem;
+  .cards-grid {
+    grid-template-columns: 1fr;
   }
 }
