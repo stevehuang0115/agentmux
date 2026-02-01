@@ -7,7 +7,7 @@
  * @module pages/Dashboard
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ProjectCard } from '../components/Cards/ProjectCard';
 import { TeamCard } from '../components/Cards/TeamCard';
@@ -38,45 +38,71 @@ export const Dashboard: React.FC = () => {
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const isMountedRef = useRef(true);
 
   /**
-   * Fetch projects and teams data
-   * Uses isMountedRef to prevent state updates after unmount
+   * Fetch projects and teams data on mount
+   * Uses local isMounted variable to prevent state updates after unmount
+   * This pattern works correctly with React StrictMode's double-render
    */
-  const fetchData = useCallback(async () => {
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchData = async () => {
+      try {
+        const [projectsData, teamsData] = await Promise.all([
+          apiService.getProjects(),
+          apiService.getTeams(),
+        ]);
+
+        if (isMounted) {
+          setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
+          setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
+          setLoading(false);
+        }
+      } catch (err) {
+        if (isMounted) {
+          const message = err instanceof Error ? err.message : 'Failed to load data';
+          setError(message);
+          setLoading(false);
+          console.error('Dashboard: Failed to fetch data:', err);
+        }
+      }
+    };
+
+    fetchData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  /**
+   * Retry fetching data after an error
+   */
+  const handleRetry = useCallback(() => {
     setLoading(true);
     setError(null);
 
-    try {
-      const [projectsData, teamsData] = await Promise.all([
-        apiService.getProjects(),
-        apiService.getTeams(),
-      ]);
+    const fetchData = async () => {
+      try {
+        const [projectsData, teamsData] = await Promise.all([
+          apiService.getProjects(),
+          apiService.getTeams(),
+        ]);
 
-      if (isMountedRef.current) {
         setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
         setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
-      }
-    } catch (err) {
-      if (isMountedRef.current) {
+        setLoading(false);
+      } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to load data';
         setError(message);
+        setLoading(false);
         console.error('Dashboard: Failed to fetch data:', err);
       }
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    return () => {
-      isMountedRef.current = false;
     };
-  }, [fetchData]);
+
+    fetchData();
+  }, []);
 
   /**
    * Handle project card click
@@ -142,7 +168,7 @@ export const Dashboard: React.FC = () => {
       <div className="dashboard">
         <div className="dashboard-error" role="alert">
           <p>Error: {error}</p>
-          <button type="button" className="btn-primary" onClick={fetchData}>
+          <button type="button" className="btn-primary" onClick={handleRetry}>
             Retry
           </button>
         </div>

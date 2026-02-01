@@ -1,12 +1,14 @@
 /**
  * Chat Panel Styles
+ *
+ * Uses design token CSS variables for consistent dark theming.
  */
 
 .chat-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: var(--background-color, #fff);
+  background-color: var(--color-bg-primary);
 }
 
 /* Loading state */
@@ -20,14 +22,14 @@
   flex-direction: column;
   align-items: center;
   gap: 1rem;
-  color: var(--text-muted, #999);
+  color: var(--color-text-muted);
 }
 
 .loading-spinner .spinner {
   width: 2.5rem;
   height: 2.5rem;
-  border: 3px solid var(--border-color, #e0e0e0);
-  border-top-color: var(--primary-color, #0066cc);
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -50,7 +52,8 @@
   align-items: center;
   gap: 1rem;
   padding: 2rem;
-  background-color: var(--error-bg, #fff5f5);
+  background-color: var(--color-error-light);
+  border: 1px solid rgba(239, 68, 68, 0.2);
   border-radius: 0.5rem;
   text-align: center;
   max-width: 300px;
@@ -62,22 +65,23 @@
 
 .error-message p {
   margin: 0;
-  color: var(--error-color, #c53030);
+  color: var(--color-error);
 }
 
 .retry-button {
   padding: 0.5rem 1rem;
-  background-color: var(--primary-color, #0066cc);
+  background-color: var(--color-primary);
   color: white;
   border: none;
-  border-radius: 0.25rem;
+  border-radius: 0.375rem;
   cursor: pointer;
   font-size: 0.875rem;
+  font-weight: 500;
   transition: background-color 0.2s;
 }
 
 .retry-button:hover {
-  background-color: var(--primary-hover, #0052a3);
+  background-color: var(--color-primary-hover);
 }
 
 /* Header */
@@ -86,20 +90,20 @@
   align-items: center;
   justify-content: space-between;
   padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--border-color, #e0e0e0);
-  background-color: var(--surface-color, #fafafa);
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-bg-secondary);
 }
 
 .chat-header h2 {
   margin: 0;
   font-size: 1.125rem;
   font-weight: 600;
-  color: var(--text-primary, #333);
+  color: var(--color-text-primary);
 }
 
 .message-count {
   font-size: 0.875rem;
-  color: var(--text-muted, #999);
+  color: var(--color-text-muted);
 }
 
 /* Messages container */
@@ -132,12 +136,12 @@
 .welcome-message h3 {
   margin: 0 0 1rem;
   font-size: 1.5rem;
-  color: var(--text-primary, #333);
+  color: var(--color-text-primary);
 }
 
 .welcome-message p {
   margin: 0.5rem 0;
-  color: var(--text-secondary, #666);
+  color: var(--color-text-secondary);
 }
 
 .welcome-message ul {
@@ -148,11 +152,11 @@
 
 .welcome-message li {
   margin: 0.5rem 0;
-  color: var(--text-secondary, #666);
+  color: var(--color-text-secondary);
 }
 
 .welcome-message li::marker {
-  color: var(--primary-color, #0066cc);
+  color: var(--color-primary);
 }
 
 /* Mobile responsive */
