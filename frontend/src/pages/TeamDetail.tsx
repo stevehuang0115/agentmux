@@ -533,9 +533,7 @@ export const TeamDetail: React.FC = () => {
       <TeamOverview
         team={team}
         teamId={id!}
-        teamStatus={getTeamStatus()}
         projectName={projectName}
-        onAddMember={handleAddMember}
         onUpdateMember={handleUpdateMember}
         onDeleteMember={handleDeleteMember}
         onStartMember={handleStartMember}

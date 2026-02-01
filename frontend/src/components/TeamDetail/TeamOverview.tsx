@@ -1,33 +1,53 @@
+/**
+ * TeamOverview Component
+ *
+ * Displays team members list and project assignment section.
+ * Allows changing the assigned project through an inline selector.
+ *
+ * @module components/TeamDetail/TeamOverview
+ */
+
 import React, { useState, useEffect } from 'react';
 import { FolderOpen, Edit2 } from 'lucide-react';
-import { TeamStats } from './TeamStats';
-import { TeamDescription } from './TeamDescription';
-import { AddMemberForm } from './AddMemberForm';
 import { MembersList } from './MembersList';
 import { Team, TeamMember } from '../../types';
 import { FormSelect } from '../UI';
 import { useProjects } from '../../hooks/useProjects';
 
+/**
+ * Props for TeamOverview component
+ */
 interface TeamOverviewProps {
+  /** Team data to display */
   team: Team;
+  /** Team identifier */
   teamId: string;
-  teamStatus: string;
+  /** Current project name to display */
   projectName: string | null;
-  onAddMember: (member: { name: string; role: string }) => void;
+  /** Handler for updating team members */
   onUpdateMember: (memberId: string, updates: Partial<TeamMember>) => void;
+  /** Handler for deleting team members */
   onDeleteMember: (memberId: string) => void;
+  /** Handler for starting a team member */
   onStartMember: (memberId: string) => Promise<void>;
+  /** Handler for stopping a team member */
   onStopMember: (memberId: string) => Promise<void>;
+  /** Handler for project assignment changes */
   onProjectChange?: (projectId: string | null) => void;
+  /** Handler for viewing a member's terminal */
   onViewTerminal?: (member: TeamMember) => void;
 }
 
+/**
+ * TeamOverview component - displays team members and project assignment
+ *
+ * @param props - Component props
+ * @returns TeamOverview component
+ */
 export const TeamOverview: React.FC<TeamOverviewProps> = ({
   team,
   teamId,
-  teamStatus,
   projectName,
-  onAddMember,
   onUpdateMember,
   onDeleteMember,
   onStartMember,
@@ -35,35 +55,25 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   onProjectChange,
   onViewTerminal,
 }) => {
-  const [showAddMember, setShowAddMember] = useState(false);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.currentProject || '');
   const { projectOptions } = useProjects();
-  const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
 
   useEffect(() => {
     setSelectedProjectId(team?.currentProject || '');
   }, [team?.currentProject]);
 
-  const handleProjectSelect = (projectId: string) => {
+  /**
+   * Handle project selection change
+   *
+   * @param projectId - The selected project ID or empty string for no project
+   */
+  const handleProjectSelect = (projectId: string): void => {
     setSelectedProjectId(projectId);
     if (onProjectChange) {
       onProjectChange(projectId || null);
     }
     setShowProjectSelector(false);
-  };
-
-  const handleToggleAddMember = () => {
-    setShowAddMember(!showAddMember);
-  };
-
-  const handleCancelAddMember = () => {
-    setShowAddMember(false);
-  };
-
-  const handleAddMember = (member: { name: string; role: string }) => {
-    onAddMember(member);
-    setShowAddMember(false);
   };
 
   return (
