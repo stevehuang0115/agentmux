@@ -9,7 +9,7 @@ import {
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import {
-	getOrchestratorStatus,
+	getOrchestratorStatus as getOrchestratorStatusFromService,
 	getOrchestratorOfflineMessage,
 } from '../../services/orchestrator/index.js';
 
@@ -551,7 +551,7 @@ export async function getOrchestratorStatus(
 	res: Response
 ): Promise<void> {
 	try {
-		const status = await getOrchestratorStatus();
+		const status = await getOrchestratorStatusFromService();
 
 		res.json({
 			success: true,

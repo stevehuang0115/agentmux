@@ -7,7 +7,7 @@
  * @module hooks/useOrchestratorStatus
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 // =============================================================================
@@ -52,6 +52,9 @@ const ORCHESTRATOR_STATUS_ENDPOINT = '/api/orchestrator/status';
 /** Polling interval in milliseconds (10 seconds) */
 const POLLING_INTERVAL = 10000;
 
+/** Request timeout in milliseconds (5 seconds) */
+const REQUEST_TIMEOUT = 5000;
+
 // =============================================================================
 // Hook
 // =============================================================================
@@ -85,16 +88,36 @@ export function useOrchestratorStatus(options?: {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Track if component is mounted to prevent state updates after unmount
+  const isMountedRef = useRef(true);
+  // Track current request to prevent race conditions
+  const abortControllerRef = useRef<AbortController | null>(null);
+
   /**
    * Fetch orchestrator status from the API
    */
   const fetchStatus = useCallback(async () => {
+    // Cancel any in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // Create new abort controller for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const response = await axios.get<{
         success: boolean;
         data: OrchestratorStatus;
         error?: string;
-      }>(ORCHESTRATOR_STATUS_ENDPOINT);
+      }>(ORCHESTRATOR_STATUS_ENDPOINT, {
+        signal: controller.signal,
+        timeout: REQUEST_TIMEOUT,
+      });
+
+      // Only update state if component is still mounted
+      if (!isMountedRef.current) return;
 
       if (response.data.success && response.data.data) {
         setStatus(response.data.data);
@@ -103,6 +126,12 @@ export function useOrchestratorStatus(options?: {
         setError(response.data.error || 'Failed to get orchestrator status');
       }
     } catch (err) {
+      // Ignore aborted requests
+      if (axios.isCancel(err)) return;
+
+      // Only update state if component is still mounted
+      if (!isMountedRef.current) return;
+
       // Don't set error for network errors - orchestrator might just be starting
       const errorMessage = err instanceof Error ? err.message : 'Unable to check orchestrator status';
       setError(errorMessage);
@@ -114,7 +143,10 @@ export function useOrchestratorStatus(options?: {
         offlineMessage: 'The orchestrator is currently offline. Please start it from the Dashboard.',
       });
     } finally {
-      setIsLoading(false);
+      // Only update state if component is still mounted
+      if (isMountedRef.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -126,9 +158,18 @@ export function useOrchestratorStatus(options?: {
     await fetchStatus();
   }, [fetchStatus]);
 
-  // Initial fetch on mount
+  // Initial fetch on mount and cleanup on unmount
   useEffect(() => {
+    isMountedRef.current = true;
     fetchStatus();
+
+    return () => {
+      isMountedRef.current = false;
+      // Cancel any pending request on unmount
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [fetchStatus]);
 
   // Polling for status updates
