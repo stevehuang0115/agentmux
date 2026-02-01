@@ -28,7 +28,7 @@ import {
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
-import { TerminalGateway } from './websocket/terminal.gateway.js';
+import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
@@ -168,6 +168,9 @@ export class AgentMuxServer {
 			this.messageSchedulerService
 		);
 		this.terminalGateway = new TerminalGateway(this.io);
+
+		// Set terminal gateway singleton for chat integration
+		setTerminalGateway(this.terminalGateway);
 
 		// Connect WebSocket service to terminal gateway for broadcasting
 		this.teamActivityWebSocketService.setTerminalGateway(this.terminalGateway);

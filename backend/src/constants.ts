@@ -82,6 +82,14 @@ export const TERMINAL_CONTROLLER_CONSTANTS = {
 	MAX_OUTPUT_SIZE: 16384, // 16KB max output per request
 } as const;
 
+// Chat-related constants
+export const CHAT_CONSTANTS = {
+	/** Regex pattern for extracting conversation ID from chat messages */
+	CONVERSATION_ID_PATTERN: /\[CHAT:([^\]]+)\]/,
+	/** Message format prefix for chat routing */
+	MESSAGE_PREFIX: 'CHAT',
+} as const;
+
 // Type helpers
 export type AgentStatus =
 	(typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];

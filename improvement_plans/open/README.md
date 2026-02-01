@@ -168,6 +168,30 @@ Build UI from ground up using atomic, reusable components with consistent themin
 | 68 | [Dedicated Chat Page](./68-dedicated-chat-page.md) | Move chat interface to dedicated /chat route | Still valid |
 | 69 | [Settings UI Consistency](./69-settings-ui-consistency.md) | Fix Settings page styling (old approach) | Superseded by 73 |
 
+### Sprint 12: User-Reported Issues from Browser Testing
+
+These issues were identified during comprehensive browser testing of the application.
+
+#### UI/UX Issues
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 74 | [Dashboard Design Revert](./74-dashboard-design-revert.md) | Revert Dashboard to original design (check git history) | High | None |
+| 75 | [Roles Synchronization](./75-roles-synchronization.md) | Sync roles between Settings page and Team creation dropdown | High | 24 |
+| 76 | [Messenger-Style Chat](./76-messenger-style-chat.md) | Redesign Chat to messenger-style without conversation history | High | 72 |
+
+#### Critical Functionality
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 77 | [Orchestrator Response Fix](./77-orchestrator-response-fix.md) | Fix Orchestrator not responding to chat messages | Critical | 66 |
+
+#### UX Improvements
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 78 | [Project Assignment UX](./78-project-assignment-ux.md) | Allow project assignment from Edit Team and team details page | Medium | None |
+
 ---
 
 ## Recommended Implementation Order
@@ -238,7 +262,13 @@ Phase 11 (UI Consistency Fixes - Atomic Component Approach):
 ├── 73-settings-ui-consistency.md (depends on 71) [UI FIX]
 └── 68-dedicated-chat-page.md (depends on 70) [UI FIX]
 
-Phase 12 (Final):
+Phase 12 (User-Reported Issues):
+├── 74-dashboard-design-revert.md (no dependencies) [UI REVERT]
+├── 75-roles-synchronization.md (depends on 24) [DATA CONSISTENCY]
+├── 76-messenger-style-chat.md (depends on 72) [UI REDESIGN]
+└── 77-orchestrator-response-fix.md (depends on 66) [CRITICAL BUG]
+
+Phase 13 (Final):
 └── 34-orchestrator-enhancements.md (depends on all)
 ```
 

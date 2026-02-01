@@ -14,7 +14,9 @@ import {
   ConversationNotFoundError,
 } from '../../services/chat/chat.service.js';
 import { AgentRegistrationService } from '../../services/agent/agent-registration.service.js';
-import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../../constants.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
 import type {
   SendMessageInput,
   ChatMessageFilter,
@@ -25,6 +27,9 @@ import type {
 
 // Module-level agent registration service instance
 let agentRegistrationService: AgentRegistrationService | null = null;
+
+// Logger instance for chat controller
+const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('ChatController');
 
 /**
  * Set the agent registration service for forwarding messages to orchestrator.
@@ -52,8 +57,14 @@ async function forwardToOrchestrator(
   }
 
   try {
-    // Format message with conversation context
-    const formattedMessage = `[CHAT:${conversationId}] ${content}`;
+    // Set active conversation ID for response routing
+    const terminalGateway = getTerminalGateway();
+    if (terminalGateway) {
+      terminalGateway.setActiveConversationId(conversationId);
+    }
+
+    // Format message with conversation context using constant prefix
+    const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;
 
     const result = await agentRegistrationService.sendMessageToAgent(
       ORCHESTRATOR_SESSION_NAME,
@@ -62,7 +73,10 @@ async function forwardToOrchestrator(
 
     return result;
   } catch (error) {
-    console.error('Failed to forward message to orchestrator:', error);
+    logger.error('Failed to forward message to orchestrator', {
+      error: error instanceof Error ? error.message : String(error),
+      conversationId,
+    });
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -120,7 +134,10 @@ export async function sendMessage(
 
       // Update message status if forwarding failed
       if (!forwardResult.success) {
-        console.warn('Failed to forward message to orchestrator:', forwardResult.error);
+        logger.warn('Failed to forward message to orchestrator', {
+          error: forwardResult.error,
+          conversationId: result.conversation.id,
+        });
       }
     }
 
