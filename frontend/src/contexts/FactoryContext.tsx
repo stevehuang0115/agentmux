@@ -346,6 +346,10 @@ interface FactoryContextType {
   showObjects: boolean;
   /** Toggle objects visibility */
   setShowObjects: (show: boolean) => void;
+  /** Whether to show pets (dogs, etc.) */
+  showPets: boolean;
+  /** Toggle pets visibility */
+  setShowPets: (show: boolean) => void;
 }
 
 // ====== CONTEXT ======
@@ -523,6 +527,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   const [showNPCAgents, setShowNPCAgents] = useState(true);
   const [showGuestAgents, setShowGuestAgents] = useState(true);
   const [showObjects, setShowObjects] = useState(true);
+  const [showPets, setShowPets] = useState(true);
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -1258,14 +1263,29 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     }
   }, [sseError, sseLoading]);
 
-  // Update night mode when in auto mode
+  // Update night mode when in auto mode - only re-render when actual day/night changes
+  const lastNightModeRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (lightingMode !== 'auto') return;
 
-    const interval = setInterval(() => {
-      // Force re-render to check time
-      setLightingMode('auto');
-    }, 60000); // Check every minute
+    const checkDayNightChange = () => {
+      const hour = new Date().getHours();
+      const currentIsNight = hour < 7 || hour >= 19;
+
+      // Only trigger re-render if night mode actually changed
+      if (lastNightModeRef.current !== null && lastNightModeRef.current !== currentIsNight) {
+        // Force re-compute of isNightMode by toggling and back
+        setLightingMode('day');
+        setTimeout(() => setLightingMode('auto'), 0);
+      }
+      lastNightModeRef.current = currentIsNight;
+    };
+
+    // Initial check
+    checkDayNightChange();
+
+    // Check every 5 minutes (300000ms) instead of every minute
+    const interval = setInterval(checkDayNightChange, 300000);
 
     return () => clearInterval(interval);
   }, [lightingMode]);
@@ -1278,6 +1298,12 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   agentsRef.current = agents;
   npcPositionsRef.current = npcPositions;
   entityConversationsRef.current = entityConversations;
+
+  // Reusable Vector3 objects for boss mode camera animation - avoids allocation every frame
+  const bossModeVectorsRef = useRef({
+    position: new THREE.Vector3(),
+    target: new THREE.Vector3(),
+  });
 
   // Pre-built entity position map for collision checks.
   // Built once per render (when agents/npcPositions change) instead of once per entity per frame.
@@ -1345,22 +1371,17 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         const camZ = livePos.z + effectiveRadius * Math.sin(newAngle);
         const camY = livePos.y + effectiveHeight;
 
-        // Update camera position directly
-        setCamera((camPrev) => {
-          const newPosition = new THREE.Vector3(camX, camY, camZ);
-          const newTarget = new THREE.Vector3(
-            livePos.x,
-            livePos.y + 2, // Look at head height
-            livePos.z
-          );
+        // Update camera position directly - reuse Vector3 objects to avoid allocation
+        const vectors = bossModeVectorsRef.current;
+        vectors.position.set(camX, camY, camZ);
+        vectors.target.set(livePos.x, livePos.y + 2, livePos.z); // Look at head height
 
-          return {
-            ...camPrev,
-            position: newPosition,
-            target: newTarget,
-            isAnimating: false,
-          };
-        });
+        setCamera((camPrev) => ({
+          ...camPrev,
+          position: vectors.position.clone(), // Clone once for state
+          target: vectors.target.clone(),
+          isAnimating: false,
+        }));
 
         return {
           ...prev,
@@ -1577,11 +1598,20 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
         if (now >= until) cooldowns.delete(key);
       });
 
-      // Only update state if conversations actually changed
-      const serialize = (m: Map<string, ProximityConversation>) =>
-        JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
+      // Only update state if conversations actually changed - efficient comparison without JSON
+      const hasChanged = (): boolean => {
+        const current = entityConversationsRef.current;
+        if (newConvos.size !== current.size) return true;
+        for (const [key, newConvo] of newConvos) {
+          const oldConvo = current.get(key);
+          if (!oldConvo) return true;
+          if (newConvo.currentLine !== oldConvo.currentLine) return true;
+          if (newConvo.isLongDuration !== oldConvo.isLongDuration) return true;
+        }
+        return false;
+      };
 
-      if (serialize(newConvos) !== serialize(entityConversationsRef.current)) {
+      if (hasChanged()) {
         setEntityConversations(newConvos);
       }
     };
@@ -1650,6 +1680,8 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       setShowGuestAgents,
       showObjects,
       setShowObjects,
+      showPets,
+      setShowPets,
     }),
     [
       agents,
@@ -1698,6 +1730,7 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       showNPCAgents,
       showGuestAgents,
       showObjects,
+      showPets,
     ]
   );
 
