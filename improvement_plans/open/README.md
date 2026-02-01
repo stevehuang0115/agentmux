@@ -142,20 +142,31 @@ These gaps were identified through thorough browser testing of the running appli
 
 ### Sprint 11: UI Consistency Fixes
 
-These tasks address user feedback about UI consistency and layout issues.
+These tasks address user feedback about UI consistency, styling issues, and build from atomic reusable components.
 
-#### Dashboard & Navigation
-
-| # | Task | Description | Priority | Dependencies |
-|---|------|-------------|----------|--------------|
-| 67 | [Restore Original Dashboard](./67-restore-original-dashboard.md) | Restore cards-based dashboard layout with Projects and Teams sections | Critical | None |
-| 68 | [Dedicated Chat Page](./68-dedicated-chat-page.md) | Move chat interface to dedicated /chat route | Critical | 67 |
-
-#### Styling Consistency
+#### Critical Bug Fixes
 
 | # | Task | Description | Priority | Dependencies |
 |---|------|-------------|----------|--------------|
-| 69 | [Settings UI Consistency](./69-settings-ui-consistency.md) | Fix Settings page to match app dark theme | High | None |
+| 70 | [Dashboard Loading Fix](./70-dashboard-loading-fix.md) | Fix Dashboard stuck at "Loading dashboard..." state | Critical | None |
+
+#### Atomic Component System
+
+Build UI from ground up using atomic, reusable components with consistent theming.
+
+| # | Task | Description | Priority | Dependencies |
+|---|------|-------------|----------|--------------|
+| 71 | [Atomic UI Component System](./71-atomic-ui-component-system.md) | Create design tokens and atomic components (Card, Input, Badge, Tabs, Alert) | High | None |
+| 72 | [Chat UI Consistency](./72-chat-ui-consistency.md) | Refactor Chat page to use atomic components and dark theme | High | 71 |
+| 73 | [Settings UI Consistency](./73-settings-ui-consistency.md) | Refactor Settings page to use atomic components and dark theme | High | 71 |
+
+#### Legacy Tasks (Superseded)
+
+| # | Task | Description | Status |
+|---|------|-------------|--------|
+| 67 | [Restore Original Dashboard](./67-restore-original-dashboard.md) | Restore cards-based dashboard layout | Superseded by 70 |
+| 68 | [Dedicated Chat Page](./68-dedicated-chat-page.md) | Move chat interface to dedicated /chat route | Still valid |
+| 69 | [Settings UI Consistency](./69-settings-ui-consistency.md) | Fix Settings page styling (old approach) | Superseded by 73 |
 
 ---
 
@@ -220,10 +231,12 @@ Phase 10 (Gap Fixes - Frontend):
 └── 60-skillstab-full-implementation.md (depends on 59) [GAP FIX]
 # Note: Task 61 (chat-centric-dashboard) is superseded by tasks 67-68
 
-Phase 11 (UI Consistency Fixes):
-├── 67-restore-original-dashboard.md (no dependencies) [UI FIX]
-├── 68-dedicated-chat-page.md (depends on 67) [UI FIX]
-└── 69-settings-ui-consistency.md (no dependencies) [UI FIX]
+Phase 11 (UI Consistency Fixes - Atomic Component Approach):
+├── 70-dashboard-loading-fix.md (no dependencies) [CRITICAL BUG]
+├── 71-atomic-ui-component-system.md (no dependencies) [FOUNDATION]
+├── 72-chat-ui-consistency.md (depends on 71) [UI FIX]
+├── 73-settings-ui-consistency.md (depends on 71) [UI FIX]
+└── 68-dedicated-chat-page.md (depends on 70) [UI FIX]
 
 Phase 12 (Final):
 └── 34-orchestrator-enhancements.md (depends on all)

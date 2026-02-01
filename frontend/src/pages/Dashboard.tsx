@@ -38,16 +38,18 @@ export const Dashboard: React.FC = () => {
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Track mount status using ref to prevent state updates after unmount
+   * This ref persists across retries and component lifecycle
+   */
   const isMountedRef = useRef(true);
 
   /**
    * Fetch projects and teams data
-   * Uses isMountedRef to prevent state updates after unmount
+   * Respects mount status to prevent state updates after unmount
    */
   const fetchData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-
     try {
       const [projectsData, teamsData] = await Promise.all([
         apiService.getProjects(),
@@ -57,25 +59,38 @@ export const Dashboard: React.FC = () => {
       if (isMountedRef.current) {
         setProjects(projectsData.slice(0, MAX_ITEMS_PER_SECTION));
         setTeams(teamsData.slice(0, MAX_ITEMS_PER_SECTION));
+        setLoading(false);
       }
     } catch (err) {
       if (isMountedRef.current) {
         const message = err instanceof Error ? err.message : 'Failed to load data';
         setError(message);
-        console.error('Dashboard: Failed to fetch data:', err);
-      }
-    } finally {
-      if (isMountedRef.current) {
         setLoading(false);
+        console.error('Dashboard: Failed to fetch data:', err);
       }
     }
   }, []);
 
+  /**
+   * Fetch data on mount and cleanup mount status on unmount
+   */
   useEffect(() => {
+    isMountedRef.current = true;
     fetchData();
+
     return () => {
       isMountedRef.current = false;
     };
+  }, [fetchData]);
+
+  /**
+   * Retry fetching data after an error
+   * Reuses the same fetchData function to avoid code duplication
+   */
+  const handleRetry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetchData();
   }, [fetchData]);
 
   /**
@@ -142,7 +157,7 @@ export const Dashboard: React.FC = () => {
       <div className="dashboard">
         <div className="dashboard-error" role="alert">
           <p>Error: {error}</p>
-          <button type="button" className="btn-primary" onClick={fetchData}>
+          <button type="button" className="btn-primary" onClick={handleRetry}>
             Retry
           </button>
         </div>

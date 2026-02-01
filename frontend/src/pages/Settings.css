@@ -1,5 +1,7 @@
 /**
  * Settings Page Styles
+ *
+ * Uses design token CSS variables for consistent dark theming.
  */
 
 .settings-page {
@@ -7,8 +9,8 @@
   flex-direction: column;
   height: 100%;
   padding: 24px;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
 }
 
 .settings-header {
@@ -18,20 +20,20 @@
 .settings-header h1 {
   font-size: 28px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--color-text-primary);
   margin: 0 0 8px 0;
 }
 
 .settings-header p {
   font-size: 14px;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
 .settings-tabs {
   display: flex;
   gap: 4px;
-  border-bottom: 1px solid var(--border-primary);
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 0;
   margin-bottom: 24px;
 }
@@ -44,7 +46,7 @@
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -53,13 +55,13 @@
 }
 
 .settings-tab:hover {
-  color: var(--text-primary);
-  background-color: var(--bg-hover);
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-hover);
 }
 
 .settings-tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
 }
 
 .tab-icon {
@@ -86,11 +88,11 @@
 }
 
 .loading {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
 
 .error {
-  color: var(--danger);
+  color: var(--color-error);
 }
 
 /* Responsive design */

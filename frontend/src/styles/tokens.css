@@ -1,0 +1,129 @@
+/**
+ * Design Tokens
+ *
+ * Centralized design tokens for consistent theming across the application.
+ * All colors, spacing, typography, and other design values are defined here.
+ *
+ * @module styles/tokens
+ */
+
+:root {
+  /* === Color Tokens === */
+
+  /* Primary palette */
+  --color-primary: #2a73ea;
+  --color-primary-hover: #1e5fc7;
+  --color-primary-light: rgba(42, 115, 234, 0.1);
+
+  /* Background colors */
+  --color-bg-primary: #111721;
+  --color-bg-secondary: #1a222c;
+  --color-bg-tertiary: #232d3b;
+  --color-bg-hover: rgba(255, 255, 255, 0.05);
+
+  /* Surface colors (cards, panels) */
+  --color-surface: #1a222c;
+  --color-surface-hover: #232d3b;
+
+  /* Border colors */
+  --color-border: #313a48;
+  --color-border-light: #3d4654;
+  --color-border-focus: #2a73ea;
+
+  /* Text colors */
+  --color-text-primary: #f6f7f8;
+  --color-text-secondary: #9ab0d9;
+  --color-text-muted: #6b7a94;
+  --color-text-inverse: #111721;
+
+  /* Status colors */
+  --color-success: #22c55e;
+  --color-success-light: rgba(34, 197, 94, 0.1);
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.1);
+  --color-error: #ef4444;
+  --color-error-light: rgba(239, 68, 68, 0.1);
+  --color-info: #3b82f6;
+  --color-info-light: rgba(59, 130, 246, 0.1);
+
+  /* === Spacing Tokens === */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* === Typography Tokens === */
+  --font-family-base: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family-mono: 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
+
+  --font-size-xs: 0.75rem;   /* 12px */
+  --font-size-sm: 0.875rem;  /* 14px */
+  --font-size-base: 1rem;    /* 16px */
+  --font-size-lg: 1.125rem;  /* 18px */
+  --font-size-xl: 1.25rem;   /* 20px */
+  --font-size-2xl: 1.5rem;   /* 24px */
+  --font-size-3xl: 1.875rem; /* 30px */
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* === Border Radius === */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* === Shadows === */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.3);
+
+  /* === Transitions === */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  /* === Z-Index Scale === */
+  --z-dropdown: 100;
+  --z-modal: 200;
+  --z-tooltip: 300;
+  --z-toast: 400;
+
+  /* Code block colors */
+  --color-bg-code: #1e1e1e;
+  --color-text-code: #d4d4d4;
+
+  /* === Legacy variable mappings (for backward compatibility) === */
+  --bg-primary: var(--color-bg-primary);
+  --bg-secondary: var(--color-bg-secondary);
+  --bg-tertiary: var(--color-bg-tertiary);
+  --text-primary: var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --border-primary: var(--color-border);
+  --primary: var(--color-primary);
+  --primary-hover: var(--color-primary-hover);
+  --bg-hover: var(--color-bg-hover);
+  --danger: var(--color-error);
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+
+  /* Chat-specific legacy mappings */
+  --sidebar-bg: var(--color-bg-secondary);
+  --border-color: var(--color-border);
+  --hover-bg: var(--color-bg-hover);
+  --active-bg: var(--color-primary-light);
+  --primary-color: var(--color-primary);
+  --error-color: var(--color-error);
+  --error-bg: var(--color-error-light);
+}
