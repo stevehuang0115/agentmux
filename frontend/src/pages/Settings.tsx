@@ -10,12 +10,13 @@ import React, { useState } from 'react';
 import { GeneralTab } from '../components/Settings/GeneralTab';
 import { RolesTab } from '../components/Settings/RolesTab';
 import { SkillsTab } from '../components/Settings/SkillsTab';
+import { SlackTab } from '../components/Settings/SlackTab';
 import './Settings.css';
 
 /**
  * Available settings tabs
  */
-type SettingsTab = 'general' | 'roles' | 'skills';
+type SettingsTab = 'general' | 'roles' | 'skills' | 'slack';
 
 /**
  * Tab configuration
@@ -38,6 +39,7 @@ export const Settings: React.FC = () => {
     { id: 'general', label: 'General', icon: '⚙️' },
     { id: 'roles', label: 'Roles', icon: '👤' },
     { id: 'skills', label: 'Skills', icon: '🛠️' },
+    { id: 'slack', label: 'Slack', icon: '💬' },
   ];
 
   /**
@@ -51,6 +53,8 @@ export const Settings: React.FC = () => {
         return <RolesTab />;
       case 'skills':
         return <SkillsTab />;
+      case 'slack':
+        return <SlackTab />;
       default:
         return null;
     }

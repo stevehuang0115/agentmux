@@ -22,6 +22,10 @@ vi.mock('../components/Settings/SkillsTab', () => ({
   SkillsTab: () => <div data-testid="skills-tab">Skills Tab Content</div>,
 }));
 
+vi.mock('../components/Settings/SlackTab', () => ({
+  SlackTab: () => <div data-testid="slack-tab">Slack Tab Content</div>,
+}));
+
 describe('Settings Page', () => {
   describe('Rendering', () => {
     it('should render settings page with header', () => {
@@ -37,6 +41,7 @@ describe('Settings Page', () => {
       expect(screen.getByText('General')).toBeInTheDocument();
       expect(screen.getByText('Roles')).toBeInTheDocument();
       expect(screen.getByText('Skills')).toBeInTheDocument();
+      expect(screen.getByText('Slack')).toBeInTheDocument();
     });
 
     it('should show tab icons', () => {
@@ -45,6 +50,7 @@ describe('Settings Page', () => {
       expect(screen.getByText('⚙️')).toBeInTheDocument();
       expect(screen.getByText('👤')).toBeInTheDocument();
       expect(screen.getByText('🛠️')).toBeInTheDocument();
+      expect(screen.getByText('💬')).toBeInTheDocument();
     });
   });
 
@@ -55,6 +61,16 @@ describe('Settings Page', () => {
       expect(screen.getByTestId('general-tab')).toBeInTheDocument();
       expect(screen.queryByTestId('roles-tab')).not.toBeInTheDocument();
       expect(screen.queryByTestId('skills-tab')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('slack-tab')).not.toBeInTheDocument();
+    });
+
+    it('should switch to Slack tab when clicked', () => {
+      render(<Settings />);
+
+      fireEvent.click(screen.getByText('Slack'));
+
+      expect(screen.getByTestId('slack-tab')).toBeInTheDocument();
+      expect(screen.queryByTestId('general-tab')).not.toBeInTheDocument();
     });
 
     it('should switch to Roles tab when clicked', () => {
@@ -117,7 +133,7 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       const tabs = screen.getAllByRole('tab');
-      expect(tabs).toHaveLength(3);
+      expect(tabs).toHaveLength(4);
     });
 
     it('should set aria-selected on active tab', () => {

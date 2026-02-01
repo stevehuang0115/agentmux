@@ -396,6 +396,9 @@ export class SkillService {
   /**
    * Load skills from a directory
    *
+   * Handles both flat structure (skill.json in immediate subdirs)
+   * and nested category structure (category/skill/skill.json).
+   *
    * @param dir - Directory path
    * @param isBuiltin - Whether these are built-in skills
    * @returns Array of loaded skills
@@ -408,28 +411,87 @@ export class SkillService {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
 
-      const skillDir = path.join(dir, entry.name);
-      const skillJsonPath = path.join(skillDir, 'skill.json');
+      const subDir = path.join(dir, entry.name);
+      const skillJsonPath = path.join(subDir, 'skill.json');
 
-      try {
-        const content = await fs.readFile(skillJsonPath, 'utf-8');
-        const data: SkillStorageFormat = JSON.parse(content);
-
-        const skill: Skill = {
-          ...data,
-          isBuiltin,
-          isEnabled: true,
-          promptFile: path.join(skillDir, data.promptFile || 'instructions.md'),
-        };
-
-        skills.push(skill);
-      } catch (error) {
-        // Log warning but continue loading other skills
-        console.warn(`Failed to load skill from ${skillDir}:`, error);
+      // Check if this is a skill directory (has skill.json)
+      if (existsSync(skillJsonPath)) {
+        const skill = await this.loadSkillFromPath(subDir, skillJsonPath, isBuiltin);
+        if (skill) {
+          skills.push(skill);
+        }
+      } else {
+        // This might be a category directory, recurse into it
+        const nestedSkills = await this.loadNestedSkills(subDir, isBuiltin);
+        skills.push(...nestedSkills);
       }
     }
 
     return skills;
+  }
+
+  /**
+   * Load skills from nested directories (category/skill structure)
+   *
+   * @param categoryDir - Category directory path
+   * @param isBuiltin - Whether these are built-in skills
+   * @returns Array of loaded skills from the category
+   */
+  private async loadNestedSkills(categoryDir: string, isBuiltin: boolean): Promise<Skill[]> {
+    const skills: Skill[] = [];
+
+    try {
+      const entries = await fs.readdir(categoryDir, { withFileTypes: true });
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        const skillDir = path.join(categoryDir, entry.name);
+        const skillJsonPath = path.join(skillDir, 'skill.json');
+
+        if (existsSync(skillJsonPath)) {
+          const skill = await this.loadSkillFromPath(skillDir, skillJsonPath, isBuiltin);
+          if (skill) {
+            skills.push(skill);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to load nested skills from ${categoryDir}:`, error);
+    }
+
+    return skills;
+  }
+
+  /**
+   * Load a single skill from a skill.json path
+   *
+   * @param skillDir - Directory containing the skill
+   * @param skillJsonPath - Path to skill.json file
+   * @param isBuiltin - Whether this is a built-in skill
+   * @returns Loaded skill or null if loading fails
+   */
+  private async loadSkillFromPath(
+    skillDir: string,
+    skillJsonPath: string,
+    isBuiltin: boolean
+  ): Promise<Skill | null> {
+    try {
+      const content = await fs.readFile(skillJsonPath, 'utf-8');
+      const data: SkillStorageFormat = JSON.parse(content);
+
+      const skill: Skill = {
+        ...data,
+        isBuiltin,
+        isEnabled: true,
+        promptFile: path.join(skillDir, data.promptFile || 'instructions.md'),
+      };
+
+      return skill;
+    } catch (error) {
+      console.warn(`Failed to load skill from ${skillDir}:`, error);
+      return null;
+    }
   }
 
   /**

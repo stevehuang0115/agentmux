@@ -1,5 +1,7 @@
 /**
- * Tests for useSkills Hook
+ * useSkills Hook Tests
+ *
+ * Tests for the useSkills hook with real API integration.
  *
  * @module hooks/useSkills.test
  */
@@ -7,135 +9,264 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useSkills } from './useSkills';
+import * as skillsService from '../services/skills.service';
 
-describe('useSkills Hook', () => {
+vi.mock('../services/skills.service');
+
+describe('useSkills', () => {
+  const mockSkills = [
+    {
+      id: 'skill-1',
+      name: 'skill-1',
+      displayName: 'Skill 1',
+      description: 'Test skill',
+      category: 'development',
+      isEnabled: true,
+      isBuiltin: true,
+    },
+    {
+      id: 'skill-2',
+      name: 'skill-2',
+      displayName: 'Skill 2',
+      description: 'Another skill',
+      category: 'design',
+      isEnabled: true,
+      isBuiltin: false,
+    },
+  ];
+
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    vi.mocked(skillsService.getSkills).mockResolvedValue(mockSkills);
   });
 
-  describe('Initial Load', () => {
-    it('should start with loading state', () => {
-      const { result } = renderHook(() => useSkills());
+  it('should fetch skills on mount', async () => {
+    const { result } = renderHook(() => useSkills());
 
-      expect(result.current.isLoading).toBe(true);
-      expect(result.current.skills).toBe(null);
+    expect(result.current.loading).toBe(true);
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
     });
 
-    it('should load skills on mount', async () => {
-      const { result } = renderHook(() => useSkills());
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      expect(result.current.skills).not.toBe(null);
-      expect(result.current.skills?.length).toBeGreaterThan(0);
-    });
-
-    it('should have no error on successful load', async () => {
-      const { result } = renderHook(() => useSkills());
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      expect(result.current.error).toBe(null);
-    });
+    expect(result.current.skills).toEqual(mockSkills);
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(1);
   });
 
-  describe('Skills Data', () => {
-    it('should return mock skills', async () => {
-      const { result } = renderHook(() => useSkills());
+  it('should not fetch on mount when fetchOnMount is false', async () => {
+    const { result } = renderHook(() => useSkills({ fetchOnMount: false }));
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.skills).toEqual([]);
+    expect(skillsService.getSkills).not.toHaveBeenCalled();
+  });
 
-      const skills = result.current.skills;
-      expect(skills).toBeDefined();
+  it('should filter by category', async () => {
+    const { result } = renderHook(() => useSkills({ category: 'development' }));
 
-      // Check structure of skills
-      if (skills && skills.length > 0) {
-        const skill = skills[0];
-        expect(skill).toHaveProperty('id');
-        expect(skill).toHaveProperty('name');
-        expect(skill).toHaveProperty('displayName');
-        expect(skill).toHaveProperty('description');
-        expect(skill).toHaveProperty('type');
-        expect(skill).toHaveProperty('isEnabled');
-      }
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
     });
 
-    it('should include file operations skill', async () => {
-      const { result } = renderHook(() => useSkills());
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      const fileOpsSkill = result.current.skills?.find((s) => s.id === 'file-operations');
-      expect(fileOpsSkill).toBeDefined();
-      expect(fileOpsSkill?.displayName).toBe('File Operations');
-    });
-
-    it('should include git operations skill', async () => {
-      const { result } = renderHook(() => useSkills());
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      const gitOpsSkill = result.current.skills?.find((s) => s.id === 'git-operations');
-      expect(gitOpsSkill).toBeDefined();
-      expect(gitOpsSkill?.displayName).toBe('Git Operations');
+    expect(skillsService.getSkills).toHaveBeenCalledWith({
+      category: 'development',
     });
   });
 
-  describe('refreshSkills', () => {
-    it('should refresh skills', async () => {
-      const { result } = renderHook(() => useSkills());
+  it('should filter by roleId', async () => {
+    const { result } = renderHook(() => useSkills({ roleId: 'developer' }));
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
 
-      const initialSkills = result.current.skills;
-
-      await act(async () => {
-        await result.current.refreshSkills();
-      });
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      // Skills should be reloaded (same mock data)
-      expect(result.current.skills).toBeDefined();
-      expect(result.current.skills?.length).toBe(initialSkills?.length);
+    expect(skillsService.getSkills).toHaveBeenCalledWith({
+      roleId: 'developer',
     });
   });
 
-  describe('Skill Types', () => {
-    it('should have builtin skills', async () => {
-      const { result } = renderHook(() => useSkills());
+  it('should filter by search', async () => {
+    const { result } = renderHook(() => useSkills({ search: 'test' }));
 
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      const builtinSkills = result.current.skills?.filter((s) => s.type === 'builtin');
-      expect(builtinSkills?.length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
     });
 
-    it('should have enabled skills', async () => {
-      const { result } = renderHook(() => useSkills());
-
-      await waitFor(() => {
-        expect(result.current.isLoading).toBe(false);
-      });
-
-      const enabledSkills = result.current.skills?.filter((s) => s.isEnabled);
-      expect(enabledSkills?.length).toBeGreaterThan(0);
+    expect(skillsService.getSkills).toHaveBeenCalledWith({
+      search: 'test',
     });
+  });
+
+  it('should handle fetch error', async () => {
+    vi.mocked(skillsService.getSkills).mockRejectedValue(new Error('API Error'));
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.error).toBe('API Error');
+    expect(result.current.skills).toEqual([]);
+  });
+
+  it('should select a skill and load details', async () => {
+    const fullSkill = {
+      ...mockSkills[0],
+      promptContent: 'Test prompt content',
+    };
+    vi.mocked(skillsService.getSkillById).mockResolvedValue(fullSkill);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.selectSkill('skill-1');
+    });
+
+    expect(result.current.selectedSkill).toEqual(fullSkill);
+    expect(skillsService.getSkillById).toHaveBeenCalledWith('skill-1');
+  });
+
+  it('should clear selection', async () => {
+    const fullSkill = { ...mockSkills[0], promptContent: 'Test' };
+    vi.mocked(skillsService.getSkillById).mockResolvedValue(fullSkill);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.selectSkill('skill-1');
+    });
+
+    expect(result.current.selectedSkill).toBeTruthy();
+
+    act(() => {
+      result.current.clearSelection();
+    });
+
+    expect(result.current.selectedSkill).toBeNull();
+  });
+
+  it('should refresh skills list', async () => {
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it('should create a skill and refresh list', async () => {
+    const newSkill = {
+      name: 'new-skill',
+      displayName: 'New Skill',
+      description: 'Test',
+      category: 'development' as const,
+    };
+    const createdSkill = { id: 'skill-3', ...newSkill, isEnabled: true, isBuiltin: false };
+    vi.mocked(skillsService.createSkill).mockResolvedValue(createdSkill);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.create(newSkill);
+    });
+
+    expect(skillsService.createSkill).toHaveBeenCalledWith(newSkill);
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(2); // Initial + refresh
+  });
+
+  it('should update a skill and refresh list', async () => {
+    const updates = { displayName: 'Updated Skill' };
+    const updatedSkill = { ...mockSkills[0], ...updates };
+    vi.mocked(skillsService.updateSkill).mockResolvedValue(updatedSkill);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.update('skill-1', updates);
+    });
+
+    expect(skillsService.updateSkill).toHaveBeenCalledWith('skill-1', updates);
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it('should delete a skill and refresh list', async () => {
+    vi.mocked(skillsService.deleteSkill).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.remove('skill-1');
+    });
+
+    expect(skillsService.deleteSkill).toHaveBeenCalledWith('skill-1');
+    expect(skillsService.getSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it('should execute a skill', async () => {
+    const mockResult = { success: true, output: 'Done' };
+    vi.mocked(skillsService.executeSkill).mockResolvedValue(mockResult);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    const execResult = await result.current.execute('skill-1', { input: 'test' });
+
+    expect(execResult).toEqual(mockResult);
+    expect(skillsService.executeSkill).toHaveBeenCalledWith('skill-1', { input: 'test' });
+  });
+
+  it('should clear selected skill when deleting selected', async () => {
+    const fullSkill = { ...mockSkills[0], promptContent: 'Test' };
+    vi.mocked(skillsService.getSkillById).mockResolvedValue(fullSkill);
+    vi.mocked(skillsService.deleteSkill).mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useSkills());
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.selectSkill('skill-1');
+    });
+
+    expect(result.current.selectedSkill?.id).toBe('skill-1');
+
+    await act(async () => {
+      await result.current.remove('skill-1');
+    });
+
+    expect(result.current.selectedSkill).toBeNull();
   });
 });
