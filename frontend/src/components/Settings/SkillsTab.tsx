@@ -2,24 +2,51 @@
  * SkillsTab Component
  *
  * Skills management tab for viewing and managing agent skills.
- * Placeholder for Sprint 2 - Skills System implementation.
+ * Now connected to real API through the useSkills hook.
  *
  * @module components/Settings/SkillsTab
  */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useSkills } from '../../hooks/useSkills';
+import {
+  getSkillCategoryLabel,
+  getSkillCategoryIcon,
+  getExecutionTypeLabel,
+  type SkillCategory,
+} from '../../types/skill.types';
 import './SkillsTab.css';
 
 /**
- * Skills management tab for viewing and managing agent skills
+ * Category filter options
+ */
+const CATEGORY_OPTIONS: { value: SkillCategory | ''; label: string }[] = [
+  { value: '', label: 'All Categories' },
+  { value: 'development', label: 'Development' },
+  { value: 'design', label: 'Design' },
+  { value: 'communication', label: 'Communication' },
+  { value: 'research', label: 'Research' },
+  { value: 'content-creation', label: 'Content Creation' },
+  { value: 'automation', label: 'Automation' },
+  { value: 'analysis', label: 'Analysis' },
+  { value: 'integration', label: 'Integration' },
+];
+
+/**
+ * Skills management tab for viewing and managing agent skills.
  *
  * @returns SkillsTab component
  */
 export const SkillsTab: React.FC = () => {
-  const { skills, isLoading, error } = useSkills();
+  const [categoryFilter, setCategoryFilter] = useState<SkillCategory | ''>('');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  if (isLoading) {
+  const { skills, loading, error, refresh } = useSkills({
+    category: categoryFilter || undefined,
+    search: searchQuery || undefined,
+  });
+
+  if (loading) {
     return <div className="loading">Loading skills...</div>;
   }
 
@@ -31,7 +58,9 @@ export const SkillsTab: React.FC = () => {
     <div className="skills-tab">
       <div className="skills-header">
         <h2>Skills Management</h2>
-        <p className="coming-soon-badge">Coming in Sprint 2</p>
+        <button onClick={refresh} className="refresh-button">
+          Refresh
+        </button>
       </div>
 
       <div className="skills-info">
@@ -42,19 +71,60 @@ export const SkillsTab: React.FC = () => {
         </p>
       </div>
 
+      <div className="skills-filters">
+        <div className="filter-group">
+          <label htmlFor="category-filter">Category:</label>
+          <select
+            id="category-filter"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value as SkillCategory | '')}
+          >
+            {CATEGORY_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-group">
+          <label htmlFor="search-filter">Search:</label>
+          <input
+            id="search-filter"
+            type="text"
+            placeholder="Search skills..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+      </div>
+
       <div className="skills-list">
-        <h3>Available Skills</h3>
-        {skills && skills.length > 0 ? (
+        <h3>Available Skills ({skills.length})</h3>
+        {skills.length > 0 ? (
           <div className="skill-items">
             {skills.map((skill) => (
               <div key={skill.id} className="skill-item">
                 <div className="skill-item-header">
-                  <span className="skill-name">{skill.displayName}</span>
-                  <span className={`skill-type ${skill.type}`}>
-                    {skill.type}
+                  <span className="skill-icon">
+                    {getSkillCategoryIcon(skill.category)}
+                  </span>
+                  <span className="skill-name">{skill.name}</span>
+                  <span className={`skill-type ${skill.isBuiltin ? 'builtin' : 'custom'}`}>
+                    {skill.isBuiltin ? 'Built-in' : 'Custom'}
                   </span>
                 </div>
                 <p className="skill-description">{skill.description}</p>
+                <div className="skill-meta">
+                  <span className="skill-category">
+                    {getSkillCategoryLabel(skill.category)}
+                  </span>
+                  <span className="skill-execution">
+                    {getExecutionTypeLabel(skill.executionType)}
+                  </span>
+                  <span className="skill-roles">
+                    {skill.roleCount} role{skill.roleCount !== 1 ? 's' : ''}
+                  </span>
+                </div>
                 <div className="skill-status">
                   <span className={`status-indicator ${skill.isEnabled ? 'enabled' : 'disabled'}`}>
                     {skill.isEnabled ? 'Enabled' : 'Disabled'}
@@ -65,20 +135,13 @@ export const SkillsTab: React.FC = () => {
           </div>
         ) : (
           <div className="empty-state">
-            <p>No skills configured yet.</p>
+            <p>
+              {categoryFilter || searchQuery
+                ? 'No skills match your filters.'
+                : 'No skills configured yet.'}
+            </p>
           </div>
         )}
-      </div>
-
-      <div className="skills-placeholder">
-        <h3>Upcoming Features</h3>
-        <ul>
-          <li>Create custom skills with scripts and prompts</li>
-          <li>Enable/disable skills per agent or role</li>
-          <li>Configure skill execution permissions</li>
-          <li>Import skills from external sources</li>
-          <li>Skill execution history and analytics</li>
-        </ul>
       </div>
     </div>
   );

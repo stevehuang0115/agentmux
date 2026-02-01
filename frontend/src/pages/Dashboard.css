@@ -1,0 +1,209 @@
+/**
+ * Dashboard Page Styles
+ *
+ * Chat-centric dashboard layout styles.
+ *
+ * @module pages/Dashboard.css
+ */
+
+.dashboard-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.dashboard-sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: var(--sidebar-bg, #f8fafc);
+  border-right: 1px solid var(--border-color, #e2e8f0);
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s, min-width 0.2s;
+}
+
+.dashboard-sidebar.collapsed {
+  width: 60px;
+  min-width: 60px;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+}
+
+.app-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--primary-color, #3b82f6);
+}
+
+.dashboard-sidebar.collapsed .app-title {
+  display: none;
+}
+
+.sidebar-toggle {
+  background: transparent;
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  color: var(--text-secondary, #64748b);
+  font-size: 1rem;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.sidebar-toggle:hover {
+  background: var(--bg-hover, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+/* Navigation tabs */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  gap: 0.25rem;
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #64748b);
+  transition: background 0.15s, color 0.15s;
+}
+
+.nav-tab:hover {
+  background: var(--bg-hover, #f1f5f9);
+  color: var(--text-primary, #1e293b);
+}
+
+.nav-tab.active {
+  background: var(--primary-light, #dbeafe);
+  color: var(--primary-color, #3b82f6);
+  font-weight: 500;
+}
+
+/* Sidebar content */
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+/* Main content area */
+.dashboard-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--main-bg, #ffffff);
+  overflow: hidden;
+}
+
+/* Connection status banner */
+.connection-banner {
+  padding: 0.5rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.connection-banner.warning {
+  background: #fef3c7;
+  color: #92400e;
+  border-bottom: 1px solid #fcd34d;
+}
+
+.connection-banner.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border-bottom: 1px solid #fecaca;
+}
+
+.connection-banner.success {
+  background: #d1fae5;
+  color: #065f46;
+  border-bottom: 1px solid #6ee7b7;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .dashboard-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    z-index: 50;
+    transform: translateX(0);
+  }
+
+  .dashboard-sidebar.collapsed {
+    transform: translateX(-100%);
+    width: 280px;
+  }
+
+  .dashboard-main {
+    width: 100%;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .dashboard-sidebar {
+    background: var(--sidebar-bg-dark, #1e293b);
+    border-right-color: var(--border-color-dark, #334155);
+  }
+
+  .sidebar-header {
+    border-bottom-color: var(--border-color-dark, #334155);
+  }
+
+  .app-title {
+    color: var(--primary-color, #60a5fa);
+  }
+
+  .sidebar-toggle {
+    border-color: var(--border-color-dark, #334155);
+    color: var(--text-secondary-dark, #94a3b8);
+  }
+
+  .sidebar-toggle:hover {
+    background: var(--bg-hover-dark, #334155);
+    color: var(--text-primary-dark, #f1f5f9);
+  }
+
+  .nav-tab {
+    color: var(--text-secondary-dark, #94a3b8);
+  }
+
+  .nav-tab:hover {
+    background: var(--bg-hover-dark, #334155);
+    color: var(--text-primary-dark, #f1f5f9);
+  }
+
+  .nav-tab.active {
+    background: var(--primary-dark-bg, #1e3a5f);
+    color: var(--primary-color, #60a5fa);
+  }
+
+  .dashboard-main {
+    background: var(--main-bg-dark, #0f172a);
+  }
+}

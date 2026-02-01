@@ -32,6 +32,7 @@ import { TerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
+import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -345,6 +346,9 @@ export class AgentMuxServer {
 			await initializeMCPServer();
 			this.logger.info('MCP server integrated at /mcp endpoint');
 
+			// Initialize Slack integration if configured
+			await this.initializeSlackIntegration();
+
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
 
@@ -362,6 +366,34 @@ export class AgentMuxServer {
 				await this.handlePortConflict();
 			}
 			throw error;
+		}
+	}
+
+	/**
+	 * Initialize Slack integration if environment variables are configured.
+	 * Slack failures are logged but don't prevent server startup.
+	 */
+	private async initializeSlackIntegration(): Promise<void> {
+		try {
+			this.logger.info('Checking Slack configuration...');
+			const result = await initializeSlackIfConfigured();
+
+			if (result.attempted) {
+				if (result.success) {
+					this.logger.info('Slack integration initialized successfully');
+				} else {
+					this.logger.warn('Slack integration failed to initialize', {
+						error: result.error,
+					});
+				}
+			} else {
+				this.logger.info('Slack integration not configured, skipping');
+			}
+		} catch (error) {
+			this.logger.error('Error initializing Slack integration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Continue startup even if Slack fails
 		}
 	}
 
@@ -556,6 +588,10 @@ export class AgentMuxServer {
 			// Destroy MCP server
 			this.logger.info('Stopping MCP server...');
 			destroyMCPServer();
+
+			// Disconnect Slack
+			this.logger.info('Disconnecting Slack...');
+			await shutdownSlack();
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();

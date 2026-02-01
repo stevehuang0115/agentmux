@@ -19,6 +19,9 @@ export {
   handleCreateTeamForProject,
 } from './project-tools.js';
 
+// Self-Improvement Tools
+export { handleSelfImprove } from './self-improve-tools.js';
+
 // Tool Definition Constants
 
 /**
@@ -299,6 +302,71 @@ export const createTeamForProjectToolDefinition = {
 };
 
 /**
+ * Self-improve tool definition for MCP tools/list response
+ */
+export const selfImproveToolDefinition = {
+  name: 'self_improve',
+  description: `Safely modify the AgentMux codebase with automatic backup and rollback.
+
+Actions:
+- plan: Create an improvement plan describing changes to make
+- execute: Execute a planned improvement
+- status: Check status of current/pending improvements
+- rollback: Revert the last improvement if issues detected
+- cancel: Cancel a pending improvement plan
+
+Safety features:
+- All changes are backed up before modification
+- Automatic rollback on validation failure
+- TypeScript compilation check after changes
+- Test execution to verify changes
+
+Examples:
+- Create plan: { action: "plan", description: "Fix bug", files: [...] }
+- Execute: { action: "execute", planId: "si-123" }
+- Check status: { action: "status" }
+- Rollback: { action: "rollback", reason: "Tests failing" }
+- Cancel: { action: "cancel" }`,
+  inputSchema: {
+    type: 'object' as const,
+    properties: {
+      action: {
+        type: 'string',
+        enum: ['plan', 'execute', 'status', 'rollback', 'cancel'],
+        description: 'The action to perform',
+      },
+      description: {
+        type: 'string',
+        description: 'Description of the improvement (for plan action)',
+      },
+      planId: {
+        type: 'string',
+        description: 'ID of the plan to execute (for execute action)',
+      },
+      files: {
+        type: 'array',
+        description: 'Files to modify (for plan action)',
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File path relative to project root' },
+            operation: { type: 'string', enum: ['create', 'modify', 'delete'] },
+            content: { type: 'string', description: 'New file content (for create/modify)' },
+            description: { type: 'string', description: 'Description of the change' },
+          },
+          required: ['path', 'operation'],
+        },
+      },
+      reason: {
+        type: 'string',
+        description: 'Reason for rollback (for rollback action)',
+      },
+    },
+    required: ['action'],
+  },
+};
+
+/**
  * Array of all new tool definitions for easy inclusion
  */
 export const orchestratorToolDefinitions = [
@@ -311,4 +379,5 @@ export const orchestratorToolDefinitions = [
   createProjectFolderToolDefinition,
   setupProjectStructureToolDefinition,
   createTeamForProjectToolDefinition,
+  selfImproveToolDefinition,
 ];

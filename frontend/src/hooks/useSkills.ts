@@ -1,139 +1,238 @@
 /**
  * useSkills Hook
  *
- * React hook for managing skills.
- * Placeholder for Sprint 2 - Skills System implementation.
+ * React hook for managing skills data with real API integration.
+ * Provides CRUD operations and skill execution.
  *
  * @module hooks/useSkills
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import type {
+  SkillSummary,
+  Skill,
+  SkillCategory,
+  CreateSkillInput,
+  UpdateSkillInput,
+} from '../types/skill.types';
+import {
+  getSkills,
+  getSkillById,
+  createSkill,
+  updateSkill,
+  deleteSkill,
+  executeSkill,
+  type SkillExecutionResult,
+} from '../services/skills.service';
 
 /**
- * Skill summary for list display
+ * Options for the useSkills hook
  */
-export interface SkillSummary {
-  id: string;
-  name: string;
-  displayName: string;
-  description: string;
-  type: 'builtin' | 'custom';
-  isEnabled: boolean;
+export interface UseSkillsOptions {
+  /** Filter by category */
+  category?: SkillCategory;
+  /** Filter by role ID */
+  roleId?: string;
+  /** Search query */
+  search?: string;
+  /** Whether to fetch immediately on mount (default: true) */
+  fetchOnMount?: boolean;
 }
 
 /**
- * Return type for useSkills hook
+ * Result returned by the useSkills hook
  */
 export interface UseSkillsResult {
   /** List of skill summaries */
-  skills: SkillSummary[] | null;
+  skills: SkillSummary[];
+  /** Currently selected skill (full details) */
+  selectedSkill: Skill | null;
   /** Whether skills are loading */
-  isLoading: boolean;
+  loading: boolean;
   /** Error message if any */
   error: string | null;
-  /** Refresh skills from server */
-  refreshSkills: () => Promise<void>;
+  /** Refresh the skills list */
+  refresh: () => Promise<void>;
+  /** Select a skill and load full details */
+  selectSkill: (id: string) => Promise<void>;
+  /** Clear selected skill */
+  clearSelection: () => void;
+  /** Create a new skill */
+  create: (skill: CreateSkillInput) => Promise<Skill>;
+  /** Update an existing skill */
+  update: (id: string, updates: UpdateSkillInput) => Promise<Skill>;
+  /** Delete a skill */
+  remove: (id: string) => Promise<void>;
+  /** Execute a skill with optional context */
+  execute: (id: string, context?: Record<string, unknown>) => Promise<SkillExecutionResult>;
 }
 
 /**
- * Hook for managing skills list
+ * Hook for managing skills data.
  *
- * Note: This is a placeholder implementation for Sprint 2.
- * The actual implementation will connect to the skills API.
+ * Fetches skills from the backend API with optional filtering,
+ * and provides CRUD operations and skill execution.
  *
- * @returns Skills state and operations
+ * @param options - Configuration options
+ * @returns Skills data and operations
  *
  * @example
  * ```tsx
- * const { skills, isLoading } = useSkills();
+ * // Fetch all skills
+ * const { skills, loading, refresh } = useSkills();
  *
- * return (
- *   <ul>
- *     {skills?.map(skill => (
- *       <li key={skill.id}>{skill.displayName}</li>
- *     ))}
- *   </ul>
- * );
+ * // Fetch skills filtered by category
+ * const { skills } = useSkills({ category: 'development' });
+ *
+ * // Fetch skills for a specific role
+ * const { skills } = useSkills({ roleId: 'frontend-developer' });
+ *
+ * // Create a new skill
+ * const { create } = useSkills();
+ * const newSkill = await create({
+ *   name: 'code-review',
+ *   description: 'Review code for quality',
+ *   category: 'development',
+ *   promptContent: '...',
+ * });
  * ```
  */
-export function useSkills(): UseSkillsResult {
-  const [skills, setSkills] = useState<SkillSummary[] | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+export function useSkills(options: UseSkillsOptions = {}): UseSkillsResult {
+  const { category, roleId, search, fetchOnMount = true } = options;
+
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
+  const [loading, setLoading] = useState<boolean>(fetchOnMount);
   const [error, setError] = useState<string | null>(null);
 
   /**
-   * Fetch skills from server
-   *
-   * Note: This is a placeholder that returns mock data.
-   * Will be replaced with actual API call in Sprint 2.
+   * Fetch skills from API with current filter options.
    */
-  const fetchSkills = useCallback(async () => {
-    setIsLoading(true);
+  const fetchSkills = useCallback(async (): Promise<void> => {
+    setLoading(true);
     setError(null);
-    try {
-      // Placeholder mock data until Skills API is implemented
-      const mockSkills: SkillSummary[] = [
-        {
-          id: 'file-operations',
-          name: 'file-operations',
-          displayName: 'File Operations',
-          description: 'Read, write, and manage files',
-          type: 'builtin',
-          isEnabled: true,
-        },
-        {
-          id: 'git-operations',
-          name: 'git-operations',
-          displayName: 'Git Operations',
-          description: 'Perform git version control operations',
-          type: 'builtin',
-          isEnabled: true,
-        },
-        {
-          id: 'browser-automation',
-          name: 'browser-automation',
-          displayName: 'Browser Automation',
-          description: 'Control web browsers programmatically',
-          type: 'builtin',
-          isEnabled: true,
-        },
-        {
-          id: 'code-execution',
-          name: 'code-execution',
-          displayName: 'Code Execution',
-          description: 'Execute code in various languages',
-          type: 'builtin',
-          isEnabled: true,
-        },
-      ];
 
-      // Simulate API delay
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      setSkills(mockSkills);
+    try {
+      const data = await getSkills({ category, roleId, search });
+      setSkills(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load skills');
+      const message = err instanceof Error ? err.message : 'Failed to load skills';
+      setError(message);
+      console.error('[useSkills] Failed to fetch skills:', err);
     } finally {
-      setIsLoading(false);
+      setLoading(false);
+    }
+  }, [category, roleId, search]);
+
+  /**
+   * Select a skill and load full details.
+   *
+   * @param id - Skill ID to select
+   */
+  const selectSkill = useCallback(async (id: string): Promise<void> => {
+    try {
+      const skill = await getSkillById(id);
+      setSelectedSkill(skill);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load skill';
+      setError(message);
+      console.error('[useSkills] Failed to select skill:', err);
     }
   }, []);
 
   /**
-   * Refresh skills from server
+   * Clear the selected skill.
    */
-  const refreshSkills = useCallback(async (): Promise<void> => {
-    await fetchSkills();
-  }, [fetchSkills]);
+  const clearSelection = useCallback((): void => {
+    setSelectedSkill(null);
+  }, []);
 
-  // Load skills on mount
+  /**
+   * Create a new skill.
+   *
+   * @param skill - Skill creation data
+   * @returns Created skill
+   */
+  const create = useCallback(
+    async (skill: CreateSkillInput): Promise<Skill> => {
+      const created = await createSkill(skill);
+      await fetchSkills(); // Refresh list after creation
+      return created;
+    },
+    [fetchSkills]
+  );
+
+  /**
+   * Update an existing skill.
+   *
+   * @param id - Skill ID to update
+   * @param updates - Skill update data
+   * @returns Updated skill
+   */
+  const update = useCallback(
+    async (id: string, updates: UpdateSkillInput): Promise<Skill> => {
+      const updated = await updateSkill(id, updates);
+      await fetchSkills(); // Refresh list after update
+      if (selectedSkill?.id === id) {
+        setSelectedSkill(updated);
+      }
+      return updated;
+    },
+    [fetchSkills, selectedSkill?.id]
+  );
+
+  /**
+   * Delete a skill.
+   *
+   * @param id - Skill ID to delete
+   */
+  const remove = useCallback(
+    async (id: string): Promise<void> => {
+      await deleteSkill(id);
+      await fetchSkills(); // Refresh list after deletion
+      if (selectedSkill?.id === id) {
+        setSelectedSkill(null);
+      }
+    },
+    [fetchSkills, selectedSkill?.id]
+  );
+
+  /**
+   * Execute a skill with optional context.
+   *
+   * @param id - Skill ID to execute
+   * @param context - Optional execution context
+   * @returns Execution result
+   */
+  const execute = useCallback(
+    async (
+      id: string,
+      context?: Record<string, unknown>
+    ): Promise<SkillExecutionResult> => {
+      return executeSkill(id, context);
+    },
+    []
+  );
+
+  // Fetch skills on mount if enabled
   useEffect(() => {
-    fetchSkills();
-  }, [fetchSkills]);
+    if (fetchOnMount) {
+      fetchSkills();
+    }
+  }, [fetchOnMount, fetchSkills]);
 
   return {
     skills,
-    isLoading,
+    selectedSkill,
+    loading,
     error,
-    refreshSkills,
+    refresh: fetchSkills,
+    selectSkill,
+    clearSelection,
+    create,
+    update,
+    remove,
+    execute,
   };
 }
 

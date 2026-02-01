@@ -1,176 +1,268 @@
 /**
- * Tests for SkillsTab Component
+ * SkillsTab Component Tests
  *
  * @module components/Settings/SkillsTab.test
  */
 
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { SkillsTab } from './SkillsTab';
-import * as useSkillsHook from '../../hooks/useSkills';
+import * as useSkillsModule from '../../hooks/useSkills';
+import type { SkillSummary, SkillCategory } from '../../types/skill.types';
+
+vi.mock('../../hooks/useSkills');
 
 describe('SkillsTab', () => {
-  const mockSkills = [
+  const mockSkills: SkillSummary[] = [
     {
-      id: 'file-operations',
-      name: 'file-operations',
-      displayName: 'File Operations',
-      description: 'Read, write, and manage files',
-      type: 'builtin' as const,
+      id: 'skill-1',
+      name: 'Code Review',
+      description: 'Review code for quality',
+      category: 'development' as SkillCategory,
+      executionType: 'prompt-only',
+      triggerCount: 2,
+      roleCount: 3,
+      isBuiltin: true,
       isEnabled: true,
     },
     {
-      id: 'git-operations',
-      name: 'git-operations',
-      displayName: 'Git Operations',
-      description: 'Perform git version control operations',
-      type: 'builtin' as const,
+      id: 'skill-2',
+      name: 'UI Design',
+      description: 'Design user interfaces',
+      category: 'design' as SkillCategory,
+      executionType: 'browser',
+      triggerCount: 1,
+      roleCount: 1,
+      isBuiltin: false,
       isEnabled: true,
-    },
-    {
-      id: 'browser-automation',
-      name: 'browser-automation',
-      displayName: 'Browser Automation',
-      description: 'Control web browsers programmatically',
-      type: 'builtin' as const,
-      isEnabled: false,
     },
   ];
 
+  const mockRefresh = vi.fn();
+
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.spyOn(useSkillsHook, 'useSkills').mockReturnValue({
-      skills: mockSkills,
-      isLoading: false,
+    vi.resetAllMocks();
+  });
+
+  it('should show loading state', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: [],
+      selectedSkill: null,
+      loading: true,
       error: null,
-      refreshSkills: vi.fn(),
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    expect(screen.getByText('Loading skills...')).toBeInTheDocument();
+  });
+
+  it('should show error state', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: [],
+      selectedSkill: null,
+      loading: false,
+      error: 'Failed to load',
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    expect(screen.getByText(/Error loading skills/)).toBeInTheDocument();
+  });
+
+  it('should render skills list', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    expect(screen.getByText('Code Review')).toBeInTheDocument();
+    expect(screen.getByText('UI Design')).toBeInTheDocument();
+    expect(screen.getByText('Review code for quality')).toBeInTheDocument();
+    expect(screen.getByText('Design user interfaces')).toBeInTheDocument();
+  });
+
+  it('should show skill counts and categories', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    expect(screen.getByText('Available Skills (2)')).toBeInTheDocument();
+    expect(screen.getByText('3 roles')).toBeInTheDocument();
+    expect(screen.getByText('1 role')).toBeInTheDocument();
+  });
+
+  it('should show empty state when no skills', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: [],
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    expect(screen.getByText('No skills configured yet.')).toBeInTheDocument();
+  });
+
+  it('should show filter message when no results', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: [],
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    // Type in search box to trigger filter
+    const searchInput = screen.getByPlaceholderText('Search skills...');
+    fireEvent.change(searchInput, { target: { value: 'nonexistent' } });
+
+    expect(screen.getByText('No skills match your filters.')).toBeInTheDocument();
+  });
+
+  it('should call refresh when button clicked', async () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    const refreshButton = screen.getByText('Refresh');
+    fireEvent.click(refreshButton);
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('should filter by category', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
+    });
+
+    render(<SkillsTab />);
+
+    const categorySelect = screen.getByLabelText('Category:');
+    fireEvent.change(categorySelect, { target: { value: 'development' } });
+
+    // The hook should be called with the new category
+    expect(useSkillsModule.useSkills).toHaveBeenCalledWith({
+      category: 'development',
+      search: undefined,
     });
   });
 
-  describe('Rendering', () => {
-    it('should render skills management header', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText('Skills Management')).toBeInTheDocument();
+  it('should show builtin and custom badges', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
     });
 
-    it('should show coming soon badge', () => {
-      render(<SkillsTab />);
+    render(<SkillsTab />);
 
-      expect(screen.getByText('Coming in Sprint 2')).toBeInTheDocument();
-    });
-
-    it('should render info section', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText(/Skills define what capabilities/)).toBeInTheDocument();
-    });
-
-    it('should render Available Skills section', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText('Available Skills')).toBeInTheDocument();
-    });
-
-    it('should render upcoming features section', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText('Upcoming Features')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Built-in')).toBeInTheDocument();
+    expect(screen.getByText('Custom')).toBeInTheDocument();
   });
 
-  describe('Skills List', () => {
-    it('should render all skills', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText('File Operations')).toBeInTheDocument();
-      expect(screen.getByText('Git Operations')).toBeInTheDocument();
-      expect(screen.getByText('Browser Automation')).toBeInTheDocument();
+  it('should show enabled status', () => {
+    vi.mocked(useSkillsModule.useSkills).mockReturnValue({
+      skills: mockSkills,
+      selectedSkill: null,
+      loading: false,
+      error: null,
+      refresh: mockRefresh,
+      selectSkill: vi.fn(),
+      clearSelection: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      execute: vi.fn(),
     });
 
-    it('should show skill descriptions', () => {
-      render(<SkillsTab />);
+    render(<SkillsTab />);
 
-      expect(screen.getByText('Read, write, and manage files')).toBeInTheDocument();
-      expect(screen.getByText('Perform git version control operations')).toBeInTheDocument();
-    });
-
-    it('should show skill types', () => {
-      render(<SkillsTab />);
-
-      const builtinBadges = screen.getAllByText('builtin');
-      expect(builtinBadges.length).toBe(3);
-    });
-
-    it('should show enabled status for enabled skills', () => {
-      render(<SkillsTab />);
-
-      const enabledBadges = screen.getAllByText('Enabled');
-      expect(enabledBadges.length).toBe(2); // File Operations and Git Operations
-    });
-
-    it('should show disabled status for disabled skills', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText('Disabled')).toBeInTheDocument();
-    });
-  });
-
-  describe('Upcoming Features', () => {
-    it('should list upcoming features', () => {
-      render(<SkillsTab />);
-
-      expect(screen.getByText(/Create custom skills/)).toBeInTheDocument();
-      expect(screen.getByText(/Enable\/disable skills/)).toBeInTheDocument();
-      expect(screen.getByText(/Configure skill execution/)).toBeInTheDocument();
-      expect(screen.getByText(/Import skills/)).toBeInTheDocument();
-      expect(screen.getByText(/Skill execution history/)).toBeInTheDocument();
-    });
-  });
-
-  describe('Loading State', () => {
-    it('should show loading state', () => {
-      vi.spyOn(useSkillsHook, 'useSkills').mockReturnValue({
-        skills: null,
-        isLoading: true,
-        error: null,
-        refreshSkills: vi.fn(),
-      });
-
-      render(<SkillsTab />);
-
-      expect(screen.getByText('Loading skills...')).toBeInTheDocument();
-    });
-  });
-
-  describe('Error State', () => {
-    it('should show error state', () => {
-      vi.spyOn(useSkillsHook, 'useSkills').mockReturnValue({
-        skills: null,
-        isLoading: false,
-        error: 'Failed to load skills',
-        refreshSkills: vi.fn(),
-      });
-
-      render(<SkillsTab />);
-
-      expect(screen.getByText(/Error loading skills/)).toBeInTheDocument();
-    });
-  });
-
-  describe('Empty State', () => {
-    it('should show empty state when no skills', () => {
-      vi.spyOn(useSkillsHook, 'useSkills').mockReturnValue({
-        skills: [],
-        isLoading: false,
-        error: null,
-        refreshSkills: vi.fn(),
-      });
-
-      render(<SkillsTab />);
-
-      expect(screen.getByText('No skills configured yet.')).toBeInTheDocument();
-    });
+    const enabledIndicators = screen.getAllByText('Enabled');
+    expect(enabledIndicators.length).toBe(2);
   });
 });
