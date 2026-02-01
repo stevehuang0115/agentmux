@@ -1,6 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { existsSync, mkdirSync, watch, FSWatcher, readFileSync } from 'fs';
+import { existsSync, mkdirSync, watch, FSWatcher } from 'fs';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
@@ -9,7 +9,6 @@ import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDel
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
-import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
 
 export class StorageService {
@@ -18,24 +17,12 @@ export class StorageService {
 
   private agentmuxHome: string;
   private teamsFile: string;
-  private fileLocks: Map<string, Promise<void>> = new Map();
-  private logger: ComponentLogger;
-
-  // Helper function to create default orchestrator object
-  private createDefaultOrchestrator() {
-    return {
-      sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE, // Default to inactive until started
-      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
-      runtimeType: RUNTIME_TYPES.CLAUDE_CODE, // Default to claude-code
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-  }
   private projectsFile: string;
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
+  private fileLocks: Map<string, Promise<void>> = new Map();
+  private logger: ComponentLogger;
 
   constructor(agentmuxHome?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('StorageService');
@@ -81,6 +68,21 @@ export class StorageService {
     if (!existsSync(this.agentmuxHome)) {
       mkdirSync(this.agentmuxHome, { recursive: true });
     }
+  }
+
+  /**
+   * Create default orchestrator configuration object
+   * @returns Default orchestrator settings with inactive status
+   */
+  private createDefaultOrchestrator() {
+    return {
+      sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+      runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
   }
 
   private async ensureFile(filePath: string, defaultContent: any = []): Promise<void> {
@@ -817,7 +819,7 @@ This is a foundational task that should be completed first before other developm
       
       // If no orchestrator in new format, create one with inactive status
       const orchestrator = this.createDefaultOrchestrator();
-      await this.updateAgentStatus(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+      await this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
       return orchestrator;
     } catch (error) {
       console.error('Error reading orchestrator status:', error);
@@ -827,7 +829,7 @@ This is a foundational task that should be completed first before other developm
 
   /**
    * Update agent status for orchestrator or any team member
-   * @param sessionName - Session name of the agent (CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
+   * @param sessionName - Session name of the agent (AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
    * @param status - New agent status (AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE)
    */
   async updateAgentStatus(sessionName: string, status: AgentStatus): Promise<void> {
@@ -846,7 +848,7 @@ This is a foundational task that should be completed first before other developm
       }
       
       // Handle orchestrator
-      if (sessionName === CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+      if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
         if (!teamsData.orchestrator) {
           teamsData.orchestrator = this.createDefaultOrchestrator();
         }
@@ -943,6 +945,6 @@ This is a foundational task that should be completed first before other developm
    * @deprecated Use updateAgentStatus instead
    */
   async updateOrchestratorStatus(status: string): Promise<void> {
-    return this.updateAgentStatus(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
+    return this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
   }
 }
