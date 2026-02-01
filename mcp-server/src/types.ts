@@ -485,3 +485,179 @@ export interface GetSOPsParams {
   /** Specific category of SOPs (optional) */
   category?: 'workflow' | 'quality' | 'communication' | 'escalation' | 'tools' | 'debugging' | 'testing' | 'git' | 'security';
 }
+
+// ============================================
+// Role Management Tool Types
+// ============================================
+
+/**
+ * Parameters for the create_role tool
+ */
+export interface CreateRoleToolParams {
+  /** Internal name for the role (lowercase, hyphens) */
+  name: string;
+  /** Human-readable display name */
+  displayName: string;
+  /** Description of the role purpose */
+  description: string;
+  /** Role category */
+  category: 'development' | 'management' | 'quality' | 'design' | 'sales' | 'support';
+  /** The system prompt content for this role (markdown) */
+  systemPromptContent: string;
+  /** Skill IDs to assign to this role */
+  assignedSkills?: string[];
+}
+
+/**
+ * Parameters for the update_role tool
+ */
+export interface UpdateRoleToolParams {
+  /** ID of the role to update */
+  roleId: string;
+  /** Human-readable display name */
+  displayName?: string;
+  /** Description of the role purpose */
+  description?: string;
+  /** Role category */
+  category?: 'development' | 'management' | 'quality' | 'design' | 'sales' | 'support';
+  /** The system prompt content for this role (markdown) */
+  systemPromptContent?: string;
+  /** Skill IDs to assign to this role */
+  assignedSkills?: string[];
+}
+
+/**
+ * Parameters for the list_roles tool
+ */
+export interface ListRolesToolParams {
+  /** Filter by category */
+  category?: string;
+  /** Search in name/description */
+  search?: string;
+}
+
+// ============================================
+// Skill Management Tool Types
+// ============================================
+
+/**
+ * Parameters for the create_skill tool
+ */
+export interface CreateSkillToolParams {
+  /** Skill name */
+  name: string;
+  /** What this skill does */
+  description: string;
+  /** Skill category */
+  category: 'development' | 'design' | 'communication' | 'research' | 'content-creation' | 'automation' | 'analysis' | 'integration';
+  /** Skill instructions (markdown) */
+  promptContent: string;
+  /** Keywords that trigger this skill */
+  triggers?: string[];
+  /** Searchable tags */
+  tags?: string[];
+  /** How this skill is executed */
+  executionType?: 'prompt-only' | 'script' | 'browser' | 'mcp-tool';
+  /** Script configuration (if executionType is script) */
+  scriptConfig?: {
+    file: string;
+    interpreter: 'bash' | 'python' | 'node';
+  };
+  /** Browser automation config (if executionType is browser) */
+  browserConfig?: {
+    url: string;
+    instructions: string;
+  };
+}
+
+/**
+ * Parameters for the execute_skill tool
+ */
+export interface ExecuteSkillToolParams {
+  /** ID of the skill to execute */
+  skillId: string;
+  /** Execution context */
+  context?: {
+    agentId?: string;
+    roleId?: string;
+    projectId?: string;
+    taskId?: string;
+    userInput?: string;
+  };
+}
+
+/**
+ * Parameters for the list_skills tool
+ */
+export interface ListSkillsToolParams {
+  /** Filter by category */
+  category?: string;
+  /** Filter by assignable role */
+  roleId?: string;
+  /** Search in name/description */
+  search?: string;
+}
+
+// ============================================
+// Project Management Tool Types
+// ============================================
+
+/**
+ * Parameters for the create_project_folder tool
+ */
+export interface CreateProjectFolderToolParams {
+  /** Project name */
+  name: string;
+  /** Path where to create the project */
+  path: string;
+  /** Project template to use */
+  template?: 'empty' | 'typescript' | 'react' | 'node' | 'python';
+  /** Initialize git repository */
+  initGit?: boolean;
+}
+
+/**
+ * Parameters for the setup_project_structure tool
+ */
+export interface SetupProjectStructureToolParams {
+  /** Path to the project */
+  projectPath: string;
+  /** Project structure configuration */
+  structure: {
+    /** Folders to create */
+    folders?: string[];
+    /** Files to create */
+    files?: Array<{
+      path: string;
+      content: string;
+    }>;
+  };
+}
+
+/**
+ * Parameters for the create_team_for_project tool
+ */
+export interface CreateTeamForProjectToolParams {
+  /** Project to create team for */
+  projectId: string;
+  /** Name for the team */
+  teamName: string;
+  /** Role IDs to include in the team */
+  roles: string[];
+  /** Number of agents per role */
+  agentCount?: Record<string, number>;
+}
+
+// ============================================
+// Tool Result Types
+// ============================================
+
+/**
+ * Standard tool result structure
+ */
+export interface ToolResultData {
+  success: boolean;
+  message?: string;
+  error?: string;
+  [key: string]: unknown;
+}

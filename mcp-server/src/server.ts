@@ -5,7 +5,7 @@ import * as url from 'url';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs/promises';
-import { execSync, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { logger, createLogger } from './logger.js';
 import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
@@ -62,7 +62,28 @@ import {
   RecordLearningToolParams,
   CheckQualityGatesParams,
   GetSOPsParams,
+  CreateRoleToolParams,
+  UpdateRoleToolParams,
+  ListRolesToolParams,
+  CreateSkillToolParams,
+  ExecuteSkillToolParams,
+  ListSkillsToolParams,
+  CreateProjectFolderToolParams,
+  SetupProjectStructureToolParams,
+  CreateTeamForProjectToolParams,
 } from './types.js';
+import {
+  handleCreateRole,
+  handleUpdateRole,
+  handleListRoles,
+  handleCreateSkill,
+  handleExecuteSkill,
+  handleListSkills,
+  handleCreateProjectFolder,
+  handleSetupProjectStructure,
+  handleCreateTeamForProject,
+  orchestratorToolDefinitions,
+} from './tools/index.js';
 import { QualityGateService } from '../../backend/src/services/quality/quality-gate.service.js';
 import { GateResult } from '../../backend/src/types/quality-gate.types.js';
 import { SOPService } from '../../backend/src/services/sop/sop.service.js';
@@ -82,9 +103,9 @@ export class AgentMuxMCPServer {
   private lastCleanup: number = Date.now();
 
   constructor() {
-    // Try to get session name from environment variable first
-    // If not available, try to get from tmux directly
-    this.sessionName = process.env.TMUX_SESSION_NAME || this.getCurrentTmuxSession() || 'mcp-server';
+    // Get session name from environment variable, or use default
+    // Note: tmux session detection has been removed as we now use PTY backend
+    this.sessionName = process.env.TMUX_SESSION_NAME || 'mcp-server';
     this.apiBaseUrl = `http://localhost:${process.env.API_PORT || WEB_CONSTANTS.PORTS.BACKEND}`;
     this.projectPath = process.env.PROJECT_PATH || process.cwd();
     this.agentRole = process.env.AGENT_ROLE || 'developer';
@@ -108,19 +129,6 @@ export class AgentMuxMCPServer {
     setInterval(() => {
       this.cleanup();
     }, TIMING_CONSTANTS.INTERVALS.CLEANUP);
-  }
-
-  /**
-   * Get current tmux session name
-   */
-  private getCurrentTmuxSession(): string | null {
-    try {
-      const sessionName = execSync('tmux display-message -p "#S"', { encoding: 'utf8' }).trim();
-      return sessionName || null;
-    } catch (error) {
-      logger.warn('[MCP Server] Could not get tmux session name:', error);
-      return null;
-    }
   }
 
   /**
@@ -2957,6 +2965,40 @@ Please respond promptly with either acceptance or delegation.`;
                 case 'get_sops':
                   result = await this.getSOPs(toolArgs);
                   break;
+
+                // Orchestrator Tools - Role Management
+                case 'create_role':
+                  result = await this.wrapToolResult(handleCreateRole(toolArgs as CreateRoleToolParams));
+                  break;
+                case 'update_role':
+                  result = await this.wrapToolResult(handleUpdateRole(toolArgs as UpdateRoleToolParams));
+                  break;
+                case 'list_roles':
+                  result = await this.wrapToolResult(handleListRoles(toolArgs as ListRolesToolParams));
+                  break;
+
+                // Orchestrator Tools - Skill Management
+                case 'create_skill':
+                  result = await this.wrapToolResult(handleCreateSkill(toolArgs as CreateSkillToolParams));
+                  break;
+                case 'execute_skill':
+                  result = await this.wrapToolResult(handleExecuteSkill(toolArgs as ExecuteSkillToolParams));
+                  break;
+                case 'list_skills':
+                  result = await this.wrapToolResult(handleListSkills(toolArgs as ListSkillsToolParams));
+                  break;
+
+                // Orchestrator Tools - Project Management
+                case 'create_project_folder':
+                  result = await this.wrapToolResult(handleCreateProjectFolder(toolArgs as CreateProjectFolderToolParams));
+                  break;
+                case 'setup_project_structure':
+                  result = await this.wrapToolResult(handleSetupProjectStructure(toolArgs as SetupProjectStructureToolParams));
+                  break;
+                case 'create_team_for_project':
+                  result = await this.wrapToolResult(handleCreateTeamForProject(toolArgs as CreateTeamForProjectToolParams));
+                  break;
+
                 default:
                   throw new Error(`Unknown tool: ${toolName}`);
               }
@@ -3497,8 +3539,45 @@ The SOPs returned will be tailored to your role and the context you provide.`,
           },
           required: ['context']
         }
-      }
+      },
+
+      // Orchestrator Tools - Role, Skill, and Project Management
+      ...orchestratorToolDefinitions
     ];
+  }
+
+  /**
+   * Wrap a tool result from the new tool handlers into MCPToolResult format
+   *
+   * @param resultPromise - Promise that resolves to ToolResultData
+   * @returns MCPToolResult with content array
+   */
+  private async wrapToolResult(resultPromise: Promise<{ success: boolean; error?: string; [key: string]: unknown }>): Promise<MCPToolResult> {
+    try {
+      const result = await resultPromise;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+        isError: !result.success,
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              success: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            }, null, 2),
+          },
+        ],
+        isError: true,
+      };
+    }
   }
 
   private analyzeAgentStatus(output: string): string {

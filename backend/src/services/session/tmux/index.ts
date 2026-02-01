@@ -1,15 +1,14 @@
 /**
- * Tmux Session Module (DORMANT)
+ * Tmux Session Module (REMOVED)
  *
- * This module provides a tmux-based implementation of the session backend.
- * It is currently DORMANT - the PTY backend is preferred for active use.
+ * The tmux session backend has been removed in favor of the PTY backend.
+ * The PTY backend provides better cross-platform support and doesn't require
+ * tmux to be installed.
  *
- * To re-enable tmux support:
- * 1. Uncomment the import in session-backend.factory.ts
- * 2. Uncomment the case in createSessionBackend()
+ * This directory is kept for potential future re-implementation if needed.
  *
  * @module session/tmux
+ * @deprecated Use PTY backend instead
  */
 
-export { TmuxSession } from './tmux-session.js';
-export { TmuxSessionBackend } from './tmux-session-backend.js';
+// No exports - tmux backend has been removed

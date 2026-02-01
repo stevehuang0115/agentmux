@@ -43,3 +43,43 @@ export { StorageService } from './core/storage.service.js';
 // Autonomous Services
 export { AutoAssignService, AgentWorkload, IAutoAssignService } from './autonomous/index.js';
 export { BudgetService, IBudgetService } from './autonomous/index.js';
+
+// Skill Services
+export {
+  SkillService,
+  SkillServiceOptions,
+  getSkillService,
+  resetSkillService,
+  SkillNotFoundError,
+  SkillValidationError,
+  BuiltinSkillModificationError,
+  SkillExecutorService,
+  getSkillExecutorService,
+  resetSkillExecutorService,
+} from './skill/index.js';
+
+// Chat Services
+export {
+  ChatService,
+  ChatServiceOptions,
+  getChatService,
+  resetChatService,
+  ConversationNotFoundError,
+  MessageValidationError,
+} from './chat/index.js';
+
+// Settings Services
+export {
+  RoleService,
+  getRoleService,
+  resetRoleService,
+  RoleNotFoundError,
+  RoleValidationError,
+  BuiltinRoleModificationError,
+  DuplicateRoleNameError,
+  SettingsService,
+  getSettingsService,
+  resetSettingsService,
+  SettingsValidationError,
+  SettingsFileError,
+} from './settings/index.js';

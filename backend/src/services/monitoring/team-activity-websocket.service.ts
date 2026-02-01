@@ -4,6 +4,7 @@ import { TmuxService } from '../agent/tmux.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { TerminalGateway } from '../../websocket/terminal.gateway.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { getSessionBackendSync } from '../session/index.js';
 
 export interface TeamActivityData {
   orchestrator: {
@@ -34,7 +35,7 @@ export interface TeamActivityData {
 
 export class TeamActivityWebSocketService extends EventEmitter {
   private storageService: StorageService;
-  private tmuxService: TmuxService;
+  private _legacyTmuxService: TmuxService; // DORMANT: kept for backward compatibility, using PTY backend
   private taskTrackingService: TaskTrackingService;
   private terminalGateway: TerminalGateway | null = null;
   private backgroundTimer: NodeJS.Timeout | null = null;
@@ -50,7 +51,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
   ) {
     super();
     this.storageService = storageService;
-    this.tmuxService = tmuxService;
+    this._legacyTmuxService = tmuxService; // DORMANT: kept for backward compatibility
     this.taskTrackingService = taskTrackingService;
 
     // Listen for events that should trigger activity updates
@@ -95,16 +96,8 @@ export class TeamActivityWebSocketService extends EventEmitter {
    * Set up event listeners for activity triggers
    */
   private setupEventListeners(): void {
-    // Listen for tmux session lifecycle events
-    this.tmuxService.on('session_created', (data) => {
-      console.log(`Session created: ${data.sessionName} - triggering activity check`);
-      this.performActivityCheck();
-    });
-
-    this.tmuxService.on('session_killed', (data) => {
-      console.log(`Session killed: ${data.sessionName} - triggering activity check`);
-      this.performActivityCheck();
-    });
+    // DORMANT: tmux session lifecycle events removed - using PTY backend polling instead
+    // PTY session events could be added here in the future if needed
 
     // Listen for task tracking events
     this.taskTrackingService.on('task_assigned', () => {
@@ -172,22 +165,22 @@ export class TeamActivityWebSocketService extends EventEmitter {
       }
     }
 
-    // Perform bulk session existence check with timeout protection
-    let sessionExistenceMap: Map<string, boolean>;
-    try {
-      sessionExistenceMap = await Promise.race([
-        this.tmuxService.bulkSessionExists(allSessionNames),
-        new Promise<Map<string, boolean>>((_, reject) => 
-          setTimeout(() => reject(new Error('Bulk session check timeout')), this.SESSION_CHECK_TIMEOUT * 2) // Double timeout for bulk
-        )
-      ]);
-    } catch (error) {
-      console.warn('Bulk session check failed, falling back to individual checks:', error);
-      // Fallback to individual checks with timeout
-      sessionExistenceMap = new Map();
+    // Use PTY session backend for session existence checks (replaces tmux)
+    const sessionExistenceMap = new Map<string, boolean>();
+    const backend = getSessionBackendSync();
+
+    if (backend) {
+      // Get all active PTY sessions
+      const activeSessions = new Set(backend.listSessions());
+
+      // Check existence for all session names
       for (const sessionName of allSessionNames) {
-        const exists = await this.checkSessionWithTimeout(sessionName);
-        sessionExistenceMap.set(sessionName, exists);
+        sessionExistenceMap.set(sessionName, activeSessions.has(sessionName));
+      }
+    } else {
+      // No backend initialized yet - all sessions are inactive
+      for (const sessionName of allSessionNames) {
+        sessionExistenceMap.set(sessionName, false);
       }
     }
 
@@ -208,17 +201,19 @@ export class TeamActivityWebSocketService extends EventEmitter {
           const sessionExists = sessionExistenceMap.get(member.sessionName) || false;
           const currentTask = tasksByMember.get(member.id);
           
-          // Read agentStatus directly from member data, fallback to session check
-          const agentStatus = member.agentStatus || (sessionExists ? 'active' : 'inactive');
+          // Use actual PTY session existence as the primary source of truth for agentStatus
+          // This ensures the UI reflects the real state, not stale data from teams.json
+          const agentStatus = sessionExists ? 'active' : 'inactive';
           const workingStatus = currentTask ? 'in_progress' : 'idle';
           
           // Get terminal output for activity detection (only if session exists)
           let terminalOutput = '';
           let activityDetected = false;
           
-          if (sessionExists) {
+          if (sessionExists && backend) {
             try {
-              terminalOutput = await this.tmuxService.capturePane(member.sessionName, 5);
+              // Use PTY backend to capture terminal output
+              terminalOutput = backend.captureOutput(member.sessionName, 5);
               terminalOutput = terminalOutput.slice(-this.MAX_OUTPUT_SIZE); // Limit size
               activityDetected = this.detectActivity(member.sessionName, terminalOutput);
             } catch (error) {
@@ -259,16 +254,15 @@ export class TeamActivityWebSocketService extends EventEmitter {
   }
 
   /**
-   * Check if session exists with timeout
+   * Check if session exists using PTY backend
    */
-  private async checkSessionWithTimeout(sessionName: string): Promise<boolean> {
+  private checkSessionWithTimeout(sessionName: string): boolean {
     try {
-      return await Promise.race([
-        this.tmuxService.sessionExists(sessionName),
-        new Promise<boolean>((_, reject) => 
-          setTimeout(() => reject(new Error('Session check timeout')), this.SESSION_CHECK_TIMEOUT)
-        )
-      ]);
+      const backend = getSessionBackendSync();
+      if (!backend) {
+        return false;
+      }
+      return backend.sessionExists(sessionName);
     } catch (error) {
       console.warn(`Session check failed for ${sessionName}:`, error);
       return false;

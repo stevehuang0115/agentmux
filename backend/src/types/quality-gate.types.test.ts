@@ -4,7 +4,7 @@
  * @module types/quality-gate.types.test
  */
 
-import { describe, it, expect } from 'vitest';
+// Jest globals are available automatically
 import {
   QualityGate,
   GateSettings,

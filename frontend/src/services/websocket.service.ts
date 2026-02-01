@@ -38,11 +38,16 @@ export class WebSocketService {
         return;
       }
 
+      // Reset intentional disconnect flag when connecting
+      this.isIntentionalDisconnect = false;
+
       this.socket = io(this.url!, {
         transports: ['websocket', 'polling'],
         upgrade: true,
         autoConnect: true,
         reconnection: false, // We handle reconnection manually
+        // Shorter timeouts to detect disconnections faster
+        timeout: 10000, // 10 second connection timeout
       });
 
       // Connection established

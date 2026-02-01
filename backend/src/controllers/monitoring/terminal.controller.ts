@@ -9,7 +9,7 @@
 
 import { Request, Response } from 'express';
 import { ApiResponse } from '../../types/index.js';
-import { getSessionBackendSync } from '../../services/session/index.js';
+import { getSessionBackendSync, getSessionBackend } from '../../services/session/index.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
 import { TERMINAL_CONTROLLER_CONSTANTS } from '../../constants.js';
 import {
@@ -34,14 +34,9 @@ const logger: ComponentLogger = LoggerService.getInstance().createComponentLogge
  */
 export async function listTerminalSessions(req: Request, res: Response): Promise<void> {
 	try {
-		const backend = getSessionBackendSync();
-		if (!backend) {
-			res.status(503).json({
-				success: false,
-				error: 'Session backend not initialized',
-			} as ApiResponse);
-			return;
-		}
+		// Use async getSessionBackend to ensure backend is initialized
+		// This prevents race conditions when sessions are queried before orchestrator setup completes
+		const backend = await getSessionBackend();
 
 		const sessions = backend.listSessions();
 		res.json({

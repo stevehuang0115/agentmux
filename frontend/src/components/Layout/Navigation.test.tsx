@@ -89,4 +89,17 @@ describe('Navigation', () => {
     fireEvent.click(closeButton);
     expect(onMobileClose).toHaveBeenCalled();
   });
+
+  it('renders Settings link in navigation', () => {
+    renderWithProviders(<Navigation />);
+
+    expect(screen.getByText('Settings')).toBeInTheDocument();
+  });
+
+  it('Settings link has correct href', () => {
+    renderWithProviders(<Navigation />);
+
+    const settingsLink = screen.getByRole('link', { name: /settings/i });
+    expect(settingsLink).toHaveAttribute('href', '/settings');
+  });
 });

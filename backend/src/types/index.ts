@@ -196,3 +196,15 @@ export * from './budget.types.js';
 
 // Re-export scheduler types
 export * from './scheduler.types.js';
+
+// Re-export role types
+export * from './role.types.js';
+
+// Re-export settings types
+export * from './settings.types.js';
+
+// Re-export skill types
+export * from './skill.types.js';
+
+// Re-export chat types
+export * from './chat.types.js';

@@ -5,6 +5,7 @@ import {
 	FolderOpen,
 	Users,
 	Clock,
+	Settings,
 	ChevronLeft,
 	ChevronRight,
 	X,
@@ -163,8 +164,27 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
           </div>
         </nav>
 
-			{/* Bottom Section - QR Code and Toggle button */}
+			{/* Bottom Section - Settings, QR Code and Toggle button */}
 			<div className="p-2 border-t border-border-dark space-y-1">
+				{/* Settings Link */}
+				<NavLink
+					to="/settings"
+					onClick={handleLinkClick}
+					className={({ isActive }) =>
+						clsx(
+							'group flex items-center px-4 py-2 rounded-lg text-sm transition-colors',
+							isCollapsed && !isMobileOpen ? 'md:justify-center' : '',
+							isActive
+								? 'bg-primary/10 text-primary font-semibold'
+								: 'text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark'
+						)
+					}
+					title={isCollapsed && !isMobileOpen ? 'Settings' : undefined}
+				>
+					<Settings className="h-5 w-5 flex-shrink-0" />
+					<span className={clsx('ml-3', isCollapsed && !isMobileOpen ? 'md:hidden' : '')}>Settings</span>
+				</NavLink>
+
 				{/* QR Code for Mobile Access */}
 				<QRCodeDisplay isCollapsed={isCollapsed && !isMobileOpen} />
 

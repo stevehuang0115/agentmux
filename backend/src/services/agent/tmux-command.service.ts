@@ -14,6 +14,10 @@ export class TmuxCommandService {
 	private logger: ComponentLogger;
 	private readonly projectRoot: string;
 
+	// DORMANT: tmux is disabled in favor of PTY session backend
+	// Set to false to re-enable tmux support
+	private readonly tmuxDisabled = true;
+
 	// Cache for session existence checks - expires in 5 seconds
 	private sessionCache: Map<string, { exists: boolean; timestamp: number }> = new Map();
 	private readonly SESSION_CACHE_TTL = 10000; // 10 seconds (increased for better reliability)
@@ -39,10 +43,11 @@ export class TmuxCommandService {
 		// Resolve project root - go up from current file to find package.json
 		this.projectRoot = this.findProjectRoot();
 
-		// Enable focus events for shadow client support (done asynchronously)
-		this.enableFocusEvents().catch((error) => {
-			this.logger.warn('Failed to enable focus events for shadow clients', { error });
-		});
+		// DORMANT: tmux initialization is disabled since we're using PTY session backend
+		// To re-enable tmux support, set tmuxDisabled to false and uncomment the following:
+		// this.enableFocusEvents().catch((error) => {
+		//   this.logger.warn('Failed to enable focus events for shadow clients', { error });
+		// });
 	}
 
 	/**
@@ -412,8 +417,15 @@ export class TmuxCommandService {
 
 	/**
 	 * Check if a tmux session exists (optimized to use listSessions instead of individual has-session calls)
+	 *
+	 * DORMANT: Returns false when tmux is disabled (PTY backend is active)
 	 */
 	async sessionExists(sessionName: string): Promise<boolean> {
+		// DORMANT: Skip tmux operations when using PTY backend
+		if (this.tmuxDisabled) {
+			return false;
+		}
+
 		const now = Date.now();
 		const cacheKey = sessionName;
 
@@ -475,10 +487,21 @@ export class TmuxCommandService {
 	/**
 	 * Check multiple sessions at once (highly optimized for bulk checking)
 	 * Returns a Map with sessionName -> boolean for each session
+	 *
+	 * DORMANT: Returns map with all false when tmux is disabled (PTY backend is active)
 	 */
 	async bulkSessionExists(sessionNames: string[]): Promise<Map<string, boolean>> {
 		if (sessionNames.length === 0) {
 			return new Map();
+		}
+
+		// DORMANT: Skip tmux operations when using PTY backend
+		if (this.tmuxDisabled) {
+			const result = new Map<string, boolean>();
+			for (const name of sessionNames) {
+				result.set(name, false);
+			}
+			return result;
 		}
 
 		const now = Date.now();
@@ -836,8 +859,15 @@ export class TmuxCommandService {
 
 	/**
 	 * List all tmux sessions (rate limited and cached for 3 seconds)
+	 *
+	 * DORMANT: Returns empty array when tmux is disabled (PTY backend is active)
 	 */
 	async listSessions(): Promise<SessionInfo[]> {
+		// DORMANT: Skip tmux operations when using PTY backend
+		if (this.tmuxDisabled) {
+			return [];
+		}
+
 		const now = Date.now();
 
 		// Check if we have cached results

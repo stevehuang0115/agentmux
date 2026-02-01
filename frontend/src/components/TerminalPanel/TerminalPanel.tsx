@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Terminal as TerminalIcon, X, AlertCircle, Play } from 'lucide-react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
@@ -75,9 +75,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     }
   }, []);
 
-  // Initialize xterm.js terminal
-  useEffect(() => {
-    // Only initialize when panel is open and container is ready
+  // Initialize xterm.js terminal - use useLayoutEffect to ensure DOM is ready
+  useLayoutEffect(() => {
+    // Only initialize when panel is open and not already initialized
     if (!isOpen || xtermInitialized) return;
 
     // Wait for container to be available
@@ -154,7 +154,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       fitAddonRef.current = null;
       setXtermInitialized(false);
     };
-  }, [isOpen, sessionsLoaded, availableSessions.length]);
+  }, [isOpen]);  // Only depend on isOpen - xterm init shouldn't depend on session loading
 
   // Write terminal output to xterm
   const writeToXterm = useCallback((data: string) => {
@@ -179,8 +179,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     const dataContent = data?.content || data?.payload?.content;
 
     if (data && dataSessionName === selectedSessionRef.current) {
-      // Write to xterm.js for proper escape sequence handling
-      replaceXtermContent(dataContent || '');
+      // Write incremental data to xterm.js (don't replace - append for streaming)
+      writeToXterm(dataContent || '');
 
       // Clear loading state when we receive terminal output
       setLoading(false);
@@ -193,7 +193,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         xtermRef.current.scrollToBottom();
       }
     }
-  }, [clearSessionTimeouts, replaceXtermContent]);
+  }, [clearSessionTimeouts, writeToXterm]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     // Check both direct sessionName and nested structure
@@ -519,125 +519,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     }
   };
 
-  const sendTerminalInput = (input: string) => {
-    if (webSocketService.isConnected() && selectedSession) {
-      try {
-        webSocketService.sendInput(selectedSession, input);
-      } catch {
-        setError('Failed to send input. Please try again.');
-      }
-    } else {
-      setError('Not connected to terminal service');
-    }
-  };
-
   const retryConnection = () => {
     setError(null);
     initializeWebSocket();
   };
 
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Only handle keys when terminal panel is focused and connected
-    if (!isOpen || connectionStatus !== 'connected') return;
-
-    e.preventDefault();
-
-    // Handle special key combinations
-    if (e.ctrlKey) {
-      switch (e.key.toLowerCase()) {
-        case 'c':
-          sendTerminalInput('\x03'); // Ctrl+C (SIGINT)
-          break;
-        case 'd':
-          sendTerminalInput('\x04'); // Ctrl+D (EOF)
-          break;
-        case 'l':
-          sendTerminalInput('\x0c'); // Ctrl+L (clear screen)
-          break;
-        case 'z':
-          sendTerminalInput('\x1a'); // Ctrl+Z (SIGTSTP)
-          break;
-        case 'u':
-          sendTerminalInput('\x15'); // Ctrl+U (clear line)
-          break;
-        case 'k':
-          sendTerminalInput('\x0b'); // Ctrl+K (clear to end of line)
-          break;
-        case 'a':
-          sendTerminalInput('\x01'); // Ctrl+A (beginning of line)
-          break;
-        case 'e':
-          sendTerminalInput('\x05'); // Ctrl+E (end of line)
-          break;
-        default:
-          return; // Don't prevent default for unhandled Ctrl combinations
-      }
-    } else {
-      // Handle normal keys
-      switch (e.key) {
-        case 'Enter':
-          sendTerminalInput('\r'); // Send carriage return
-          break;
-        case 'Tab':
-          sendTerminalInput('\t');
-          break;
-        case 'Escape':
-          sendTerminalInput('\x1b'); // ESC character
-          break;
-        case 'Backspace':
-          sendTerminalInput('\x08'); // Backspace
-          break;
-        case 'Delete':
-          sendTerminalInput('\x7f'); // DEL character
-          break;
-        case 'ArrowUp':
-          sendTerminalInput('\x1b[A'); // Up arrow
-          break;
-        case 'ArrowDown':
-          sendTerminalInput('\x1b[B'); // Down arrow
-          break;
-        case 'ArrowRight':
-          sendTerminalInput('\x1b[C'); // Right arrow
-          break;
-        case 'ArrowLeft':
-          sendTerminalInput('\x1b[D'); // Left arrow
-          break;
-        case 'Home':
-          sendTerminalInput('\x1b[H'); // Home key
-          break;
-        case 'End':
-          sendTerminalInput('\x1b[F'); // End key
-          break;
-        case 'PageUp':
-          sendTerminalInput('\x1b[5~'); // Page Up
-          break;
-        case 'PageDown':
-          sendTerminalInput('\x1b[6~'); // Page Down
-          break;
-        default:
-          // Send printable characters
-          if (e.key.length === 1) {
-            sendTerminalInput(e.key);
-          }
-          break;
-      }
-    }
-  }, [isOpen, connectionStatus]);
-
-  // Set up keyboard event listeners when panel opens
+  // Focus the xterm terminal when panel opens so it can receive keyboard input directly
+  // xterm.js handles all keyboard input natively through its onData callback
   useEffect(() => {
-    if (isOpen && terminalPanelRef.current) {
-      // Focus the terminal panel to capture keyboard events
-      terminalPanelRef.current.focus();
-
-      // Add global keyboard event listener
-      document.addEventListener('keydown', handleKeyDown);
-
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-      };
+    if (isOpen && xtermRef.current) {
+      // Focus the xterm terminal element to receive keyboard events
+      xtermRef.current.focus();
     }
-  }, [isOpen, handleKeyDown]);
+  }, [isOpen, xtermInitialized]);
 
   return (
     <div
@@ -645,8 +539,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       className={`fixed top-0 right-0 h-full bg-surface-dark border-l border-border-dark flex flex-col z-50 transition-transform duration-300 ${
         isOpen ? 'translate-x-0' : 'translate-x-full'
       } w-[600px]`}
-      tabIndex={0}
-      style={{ outline: 'none' }}
     >
       <div className="flex items-center justify-between p-4 border-b border-border-dark">
         <div className="flex items-center space-x-3">

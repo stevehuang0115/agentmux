@@ -159,13 +159,21 @@ export class TmuxService extends EventEmitter {
 
 	/**
 	 * Initialize tmux server if not running
+	 *
+	 * DORMANT: tmux initialization is disabled since we're using PTY session backend.
+	 * This method is kept for backward compatibility but does nothing.
+	 * To re-enable tmux support, restore the call to ensureTmuxServer().
 	 */
 	async initialize(): Promise<void> {
-		await this.ensureTmuxServer();
+		// DORMANT: PTY backend is now the primary session backend
+		// await this.ensureTmuxServer();
+		this.logger.debug('TmuxService.initialize() skipped - using PTY session backend');
 	}
 
 	/**
 	 * Ensure tmux server is running using the initialize_tmux.sh script
+	 *
+	 * DORMANT: This method is not called when using PTY session backend.
 	 */
 	private async ensureTmuxServer(): Promise<void> {
 		try {

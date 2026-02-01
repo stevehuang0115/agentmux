@@ -28,6 +28,7 @@ import {
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
+import { getSessionBackendSync } from '../../services/session/index.js';
 
 // Internal helper function types
 interface StartTeamMemberResult {
@@ -511,6 +512,16 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
   try {
     const teams = await this.storageService.getTeams();
     const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+
+    // Check actual PTY session existence for accurate status
+    const backend = getSessionBackendSync();
+    const orchestratorSessionExists = backend?.sessionExists(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
+
+    // Use actual session existence as the source of truth for agentStatus
+    const actualOrchestratorStatus = orchestratorSessionExists
+      ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+      : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+
     const orchestratorTeam: Team = {
       id: 'orchestrator',
       name: 'Orchestrator Team',
@@ -522,7 +533,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
           sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
           role: 'orchestrator',
           systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-          agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+          agentStatus: actualOrchestratorStatus,
           workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
           runtimeType: orchestratorStatus?.runtimeType || 'claude-code',
           createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
@@ -533,11 +544,28 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       updatedAt: orchestratorStatus?.updatedAt || new Date().toISOString()
     };
 
-    const allTeams = [orchestratorTeam, ...teams];
+    // Also update status for team members based on actual session existence
+    const teamsWithActualStatus = teams.map(team => ({
+      ...team,
+      members: team.members.map(member => {
+        const memberSessionExists = backend?.sessionExists(member.sessionName) || false;
+        return {
+          ...member,
+          agentStatus: memberSessionExists
+            ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+            : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+        };
+      })
+    }));
+
+    const allTeams = [orchestratorTeam, ...teamsWithActualStatus];
     res.json({
       success: true,
       data: allTeams,
-      orchestrator: orchestratorStatus
+      orchestrator: {
+        ...orchestratorStatus,
+        agentStatus: actualOrchestratorStatus
+      }
     } as ApiResponse<Team[]>);
   } catch (error) {
     console.error('Error getting teams:', error);
@@ -553,6 +581,16 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
     const { id } = req.params;
     if (id === 'orchestrator') {
       const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+
+      // Check actual PTY session existence for accurate status
+      const backend = getSessionBackendSync();
+      const orchestratorSessionExists = backend?.sessionExists(CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
+
+      // Use actual session existence as the source of truth for agentStatus
+      const actualOrchestratorStatus = orchestratorSessionExists
+        ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+        : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+
       const orchestratorTeam: Team = {
         id: 'orchestrator',
         name: 'Orchestrator Team',
@@ -564,7 +602,7 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
             sessionName: CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
             role: 'orchestrator',
             systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-            agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+            agentStatus: actualOrchestratorStatus,
             workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
             runtimeType: orchestratorStatus?.runtimeType || 'claude-code',
             createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),

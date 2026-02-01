@@ -31,6 +31,7 @@ import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes
 import { TerminalGateway } from './websocket/terminal.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
+import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,6 +127,15 @@ export class AgentMuxServer {
 				origin: process.env.NODE_ENV === 'production' ? false : '*',
 				methods: ['GET', 'POST'],
 			},
+			// Configure ping/pong to keep connections alive
+			pingInterval: 10000, // Send ping every 10 seconds
+			pingTimeout: 5000, // Wait 5 seconds for pong response
+			// Prefer WebSocket transport for lower latency
+			transports: ['websocket', 'polling'],
+			// Allow transport upgrade from polling to websocket
+			allowUpgrades: true,
+			// Increase buffer size for large terminal output
+			maxHttpBufferSize: 5 * 1024 * 1024, // 5MB
 		});
 
 		this.initializeServices();
@@ -290,6 +300,9 @@ export class AgentMuxServer {
 				targetPort: this.config.webPort
 			});
 
+			// Check for pending self-improvement (hot-reload recovery)
+			await this.checkPendingSelfImprovement();
+
 			// Check if port is already in use
 			await this.checkPortAvailability();
 
@@ -349,6 +362,37 @@ export class AgentMuxServer {
 				await this.handlePortConflict();
 			}
 			throw error;
+		}
+	}
+
+	/**
+	 * Check for and handle pending self-improvement from hot-reload.
+	 * This runs at startup to validate or rollback any changes made
+	 * before the process was restarted.
+	 */
+	private async checkPendingSelfImprovement(): Promise<void> {
+		try {
+			const startupService = getImprovementStartupService();
+			const result = await startupService.runStartupCheck();
+
+			if (result.hadPendingImprovement) {
+				this.logger.info('Handled pending self-improvement', {
+					improvementId: result.improvementId,
+					action: result.action,
+					validationPassed: result.validationPassed,
+				});
+
+				if (result.action === 'rolled_back') {
+					this.logger.warn('Self-improvement rollback performed', {
+						error: result.error,
+					});
+				}
+			}
+		} catch (error) {
+			this.logger.error('Error checking pending self-improvement', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Continue startup even if self-improvement check fails
 		}
 	}
 

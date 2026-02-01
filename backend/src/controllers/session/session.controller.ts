@@ -26,11 +26,9 @@ export async function listSessions(
 	res: Response
 ): Promise<void> {
 	try {
-		const backend = getSessionBackendSync();
-		if (!backend) {
-			res.json({ sessions: [] });
-			return;
-		}
+		// Use async getSessionBackend to ensure backend is initialized
+		// This prevents race conditions when sessions are queried before orchestrator setup completes
+		const backend = await getSessionBackend();
 
 		const sessionNames = backend.listSessions();
 		const sessions = sessionNames.map((name) => {

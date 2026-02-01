@@ -99,9 +99,30 @@ describe('Main Controller Router', () => {
   });
 
   it('should mount system routes at /system', () => {
-    const systemRoute = router.stack.find(layer => 
+    const systemRoute = router.stack.find(layer =>
       layer.regexp.test('/system')
     );
     expect(systemRoute).toBeDefined();
+  });
+
+  it('should mount settings routes at /settings', () => {
+    const settingsRoute = router.stack.find(layer =>
+      layer.regexp.test('/settings')
+    );
+    expect(settingsRoute).toBeDefined();
+  });
+
+  it('should mount chat routes at /chat', () => {
+    const chatRoute = router.stack.find(layer =>
+      layer.regexp.test('/chat')
+    );
+    expect(chatRoute).toBeDefined();
+  });
+
+  it('should mount skill routes at /skills', () => {
+    const skillRoute = router.stack.find(layer =>
+      layer.regexp.test('/skills')
+    );
+    expect(skillRoute).toBeDefined();
   });
 });

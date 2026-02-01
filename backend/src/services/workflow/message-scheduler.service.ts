@@ -5,10 +5,11 @@ import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { getSessionBackendSync } from '../session/index.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
-  private tmuxService: TmuxService;
+  private _legacyTmuxService: TmuxService; // DORMANT: kept for backward compatibility
   private storageService: StorageService;
   private logger = LoggerService.getInstance().createComponentLogger('MessageSchedulerService');
   private messageQueue: Array<{ message: ScheduledMessage; resolve: () => void; reject: (error: Error) => void }> = [];
@@ -16,7 +17,7 @@ export class MessageSchedulerService extends EventEmitter {
 
   constructor(tmuxService: TmuxService, storageService: StorageService) {
     super();
-    this.tmuxService = tmuxService;
+    this._legacyTmuxService = tmuxService; // DORMANT: kept for backward compatibility
     this.storageService = storageService;
   }
 
@@ -136,16 +137,28 @@ export class MessageSchedulerService extends EventEmitter {
         ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
         : message.targetTeam;
 
-      // Check if session exists
-      if (!await this.tmuxService.sessionExists(sessionName)) {
+      // Use PTY session backend to check if session exists and send message
+      const backend = getSessionBackendSync();
+      if (!backend) {
+        throw new Error('Session backend not initialized');
+      }
+
+      // Check if session exists using PTY backend
+      if (!backend.sessionExists(sessionName)) {
         throw new Error(`Target session "${sessionName}" does not exist`);
+      }
+
+      // Get the session
+      const session = backend.getSession(sessionName);
+      if (!session) {
+        throw new Error(`Could not get session "${sessionName}"`);
       }
 
       // Enhance message with continuation instructions to handle interruptions gracefully
       enhancedMessage = this.addContinuationInstructions(message.message);
 
-      // Send message to session (sendMessage already includes Enter key)
-      await this.tmuxService.sendMessage(sessionName, enhancedMessage);
+      // Send message to PTY session (write message + Enter key)
+      session.write(enhancedMessage + '\r');
       success = true;
 
       this.logger.info('Executed scheduled message', {
