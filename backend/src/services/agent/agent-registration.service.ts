@@ -43,6 +43,12 @@ export interface OrchestratorConfig {
 /**
  * Service responsible for the complex, multi-step process of agent initialization and registration.
  * Isolates the complex state management of agent startup with progressive escalation.
+ *
+ * Key capabilities:
+ * - Agent session creation and management
+ * - Runtime initialization and registration
+ * - Reliable message delivery to Claude Code with retry logic
+ * - Health checking and status management
  */
 export class AgentRegistrationService {
 	private logger: ComponentLogger;
@@ -55,6 +61,17 @@ export class AgentRegistrationService {
 
 	// Team roles configuration cache
 	private teamRolesConfig: TeamRolesConfig | null = null;
+
+	/**
+	 * Claude Code prompt indicators used to detect if the CLI is ready for input.
+	 * These characters appear at the start of input lines in Claude Code.
+	 */
+	private static readonly CLAUDE_PROMPT_INDICATORS = [
+		'❯', // Main prompt
+		'>', // Alternative prompt
+		'⏵', // Permission prompt indicator
+		'$', // Shell prompt if Claude exits
+	] as const;
 
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
@@ -1239,12 +1256,26 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Generic message sending to any agent session.
-	 * Uses robust delivery mechanism with retry logic for reliable message delivery.
+	 * Send a message to any agent session with reliable delivery.
+	 * Uses robust delivery mechanism with retry logic to ensure messages
+	 * are properly delivered to Claude Code's input.
 	 *
 	 * @param sessionName - The agent session name
 	 * @param message - The message to send
-	 * @returns Promise with success/error information
+	 * @returns Promise with success status and optional error message
+	 *
+	 * @example
+	 * ```typescript
+	 * const result = await agentRegistrationService.sendMessageToAgent(
+	 *   'agentmux-orc',
+	 *   '[CHAT:123] Hello, orchestrator!'
+	 * );
+	 * if (result.success) {
+	 *   console.log('Message delivered');
+	 * } else {
+	 *   console.error('Delivery failed:', result.error);
+	 * }
+	 * ```
 	 */
 	async sendMessageToAgent(
 		sessionName: string,
@@ -1426,19 +1457,13 @@ export class AgentRegistrationService {
 			return true; // Assume at prompt if no output (safer for message delivery)
 		}
 
-		// Claude Code prompt indicators
-		const promptIndicators = [
-			'❯', // Main prompt
-			'>', // Alternative prompt
-			'⏵', // Permission prompt indicator
-			'$', // Shell prompt if Claude exits
-		];
-
 		// Check last few lines for prompt indicators
 		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
 		const lastLine = lines[lines.length - 1] || '';
 
-		return promptIndicators.some((indicator) => lastLine.includes(indicator));
+		return AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
+			(indicator) => lastLine.includes(indicator)
+		);
 	}
 
 	/**
