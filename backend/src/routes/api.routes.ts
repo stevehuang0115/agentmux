@@ -11,6 +11,7 @@ import { registerScheduledMessageRoutes } from './modules/scheduled-messages.rou
 import { registerDeliveryLogRoutes } from './modules/delivery-logs.routes.js';
 import { registerConfigRoutes } from './modules/config.routes.js';
 import { createFactoryRoutes } from './factory.routes.js';
+import { selfImprovementRouter } from '../controllers/self-improvement/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -43,6 +44,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Factory routes for 3D visualization
   router.use('/factory', createFactoryRoutes());
+
+  // Self-improvement routes for orchestrator codebase modifications
+  router.use('/self-improvement', selfImprovementRouter);
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

@@ -428,6 +428,63 @@ export class ImprovementStartupService {
   }
 
   /**
+   * Force a rollback of the current improvement.
+   * Used for manual rollback requests via the API.
+   *
+   * @param reason - Reason for the rollback
+   * @returns Rollback result with success status and files restored count
+   */
+  async forceRollback(reason: string): Promise<{
+    success: boolean;
+    filesRestored: number;
+    message: string;
+  }> {
+    const markerService = getImprovementMarkerService();
+    await markerService.initialize();
+
+    const marker = await markerService.getPendingImprovement();
+
+    if (!marker) {
+      return {
+        success: false,
+        filesRestored: 0,
+        message: 'No pending improvement to rollback',
+      };
+    }
+
+    console.log(`[ImprovementStartup] Manual rollback requested: ${reason}`);
+
+    await markerService.recordRollbackStarted(reason);
+
+    await this.notifySlack(
+      marker,
+      `:rewind: *Manual rollback requested*\n\n*${marker.description}*\n\nReason: ${reason}`,
+      'high'
+    );
+
+    const rollbackResult = await this.performRollback(marker);
+
+    await markerService.recordRollbackCompleted(
+      rollbackResult.filesRestored,
+      rollbackResult.gitReset
+    );
+
+    await markerService.completeImprovement(false);
+
+    await this.notifySlack(
+      marker,
+      `:white_check_mark: *Rollback completed.* Restored ${rollbackResult.filesRestored.length} files.`,
+      'normal'
+    );
+
+    return {
+      success: true,
+      filesRestored: rollbackResult.filesRestored.length,
+      message: `Rollback completed. Restored ${rollbackResult.filesRestored.length} files.`,
+    };
+  }
+
+  /**
    * Handle too many restarts.
    *
    * @param marker - The improvement marker

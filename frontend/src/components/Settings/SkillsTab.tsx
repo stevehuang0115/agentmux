@@ -17,9 +17,9 @@ import './SkillsTab.css';
  * @returns SkillsTab component
  */
 export const SkillsTab: React.FC = () => {
-  const { skills, isLoading, error } = useSkills();
+  const { skills, loading, error } = useSkills();
 
-  if (isLoading) {
+  if (loading) {
     return <div className="loading">Loading skills...</div>;
   }
 
@@ -49,9 +49,9 @@ export const SkillsTab: React.FC = () => {
             {skills.map((skill) => (
               <div key={skill.id} className="skill-item">
                 <div className="skill-item-header">
-                  <span className="skill-name">{skill.displayName}</span>
-                  <span className={`skill-type ${skill.type}`}>
-                    {skill.type}
+                  <span className="skill-name">{skill.name}</span>
+                  <span className={`skill-type ${skill.executionType}`}>
+                    {skill.executionType}
                   </span>
                 </div>
                 <p className="skill-description">{skill.description}</p>

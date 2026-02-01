@@ -293,7 +293,7 @@ export const RoleEditor: React.FC<RoleEditorProps> = ({
                     onChange={() => handleSkillToggle(skill.id)}
                     disabled={isReadOnly}
                   />
-                  <span className="skill-name">{skill.displayName}</span>
+                  <span className="skill-name">{skill.name}</span>
                   <span className="skill-description">{skill.description}</span>
                 </label>
               ))}
