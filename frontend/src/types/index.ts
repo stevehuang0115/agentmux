@@ -70,8 +70,19 @@ export interface TerminalOutput {
 
 export interface WebSocketMessage {
   type: 'terminal_output' | 'file_change' | 'team_status' | 'schedule_update';
-  payload: any;
+  payload: unknown;
   timestamp: string;
+}
+
+/**
+ * WebSocket event data for team member status changes
+ * Used by Teams and TeamDetail pages for real-time status updates
+ */
+export interface TeamMemberStatusChangeEvent {
+  teamId: string;
+  memberId: string;
+  sessionName: string;
+  agentStatus: TeamMember['agentStatus'];
 }
 
 export interface ApiResponse<T = any> {

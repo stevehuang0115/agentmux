@@ -183,6 +183,23 @@ export interface GetAgentStatusParams {
   sessionName?: string;
 }
 
+/**
+ * Parameters for the send_chat_response tool
+ * Used by orchestrator/agents to send messages back to the chat UI
+ */
+export interface SendChatResponseParams {
+  /** The message content to send */
+  content: string;
+  /** Conversation ID to add the message to (uses current if not specified) */
+  conversationId?: string;
+  /** Sender type: 'orchestrator' or 'agent' */
+  senderType?: 'orchestrator' | 'agent';
+  /** Sender name (defaults to session name) */
+  senderName?: string;
+  /** Optional metadata to attach to the message */
+  metadata?: Record<string, unknown>;
+}
+
 export interface ShutdownAgentParams {
   sessionName: string;
 }
