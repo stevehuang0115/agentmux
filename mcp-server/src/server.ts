@@ -2467,6 +2467,10 @@ export class AgentMuxMCPServer {
     }
   }
 
+  /** Valid sender types for chat responses */
+  private static readonly VALID_SENDER_TYPES = ['orchestrator', 'agent'] as const;
+  private static readonly CHAT_RESPONSE_LOG_TAG = '[SEND_CHAT_RESPONSE]';
+
   /**
    * Send a chat response back to the UI
    *
@@ -2475,8 +2479,25 @@ export class AgentMuxMCPServer {
    *
    * @param params - The send chat response parameters
    * @returns MCP tool result indicating success or failure
+   *
+   * @example
+   * ```typescript
+   * // Send a simple response
+   * await server.sendChatResponse({
+   *   content: 'Task completed successfully!'
+   * });
+   *
+   * // Send as a specific agent
+   * await server.sendChatResponse({
+   *   content: 'Code review completed',
+   *   senderType: 'agent',
+   *   senderName: 'Backend Developer'
+   * });
+   * ```
    */
   async sendChatResponse(params: SendChatResponseParams): Promise<MCPToolResult> {
+    const logTag = AgentMuxMCPServer.CHAT_RESPONSE_LOG_TAG;
+
     try {
       // Input validation
       if (!params.content || params.content.trim().length === 0) {
@@ -2494,36 +2515,17 @@ export class AgentMuxMCPServer {
         await this.chatService.initialize();
       }
 
-      logger.info(`[SEND_CHAT_RESPONSE] Sending response to chat UI`, {
+      logger.info(`${logTag} Sending response to chat UI`, {
         conversationId: params.conversationId ?? 'current',
         senderType: params.senderType ?? 'orchestrator',
         contentLength: params.content.length,
       });
 
       // Determine conversation ID - use provided or get current
-      let conversationId = params.conversationId;
-      if (!conversationId) {
-        const currentConversation = await this.chatService.getCurrentConversation();
-        if (!currentConversation) {
-          logger.warn('[SEND_CHAT_RESPONSE] No active conversation found, creating new one');
-          const newConversation = await this.chatService.createNewConversation();
-          conversationId = newConversation.id;
-        } else {
-          conversationId = currentConversation.id;
-        }
-      }
+      const conversationId = await this.resolveConversationId(params.conversationId);
 
       // Build sender information with validated type
-      const validSenderTypes = ['orchestrator', 'agent'] as const;
-      const senderType = validSenderTypes.includes(params.senderType as typeof validSenderTypes[number])
-        ? params.senderType!
-        : 'orchestrator';
-
-      const sender: ChatSender = {
-        type: senderType,
-        name: params.senderName ?? this.sessionName,
-        id: this.sessionName,
-      };
+      const sender = this.buildChatSender(params);
 
       // Add the message to the chat
       const message = await this.chatService.addAgentMessage(
@@ -2533,7 +2535,7 @@ export class AgentMuxMCPServer {
         params.metadata
       );
 
-      logger.info(`[SEND_CHAT_RESPONSE] Response added to chat`, {
+      logger.info(`${logTag} Response added to chat`, {
         messageId: message.id,
         conversationId,
       });
@@ -2545,7 +2547,7 @@ export class AgentMuxMCPServer {
         }]
       };
     } catch (error) {
-      logger.error(`[SEND_CHAT_RESPONSE] Failed to send chat response:`, error);
+      logger.error(`${AgentMuxMCPServer.CHAT_RESPONSE_LOG_TAG} Failed to send chat response:`, error);
       return {
         content: [{
           type: 'text',
@@ -2554,6 +2556,47 @@ export class AgentMuxMCPServer {
         isError: true
       };
     }
+  }
+
+  /**
+   * Resolve conversation ID, creating a new conversation if needed
+   *
+   * @param providedId - Optional conversation ID provided by the caller
+   * @returns The resolved conversation ID
+   */
+  private async resolveConversationId(providedId?: string): Promise<string> {
+    if (providedId) {
+      return providedId;
+    }
+
+    const currentConversation = await this.chatService.getCurrentConversation();
+    if (currentConversation) {
+      return currentConversation.id;
+    }
+
+    logger.warn(`${AgentMuxMCPServer.CHAT_RESPONSE_LOG_TAG} No active conversation found, creating new one`);
+    const newConversation = await this.chatService.createNewConversation();
+    return newConversation.id;
+  }
+
+  /**
+   * Build a ChatSender object from params with validation
+   *
+   * @param params - The send chat response parameters
+   * @returns A validated ChatSender object
+   */
+  private buildChatSender(params: SendChatResponseParams): ChatSender {
+    const senderType = AgentMuxMCPServer.VALID_SENDER_TYPES.includes(
+      params.senderType as typeof AgentMuxMCPServer.VALID_SENDER_TYPES[number]
+    )
+      ? params.senderType!
+      : 'orchestrator';
+
+    return {
+      type: senderType,
+      name: params.senderName ?? this.sessionName,
+      id: this.sessionName,
+    };
   }
 
   /**
