@@ -46,7 +46,9 @@ describe('useProjects', () => {
 
     expect(result.current.projects).toEqual(mockProjects);
     expect(result.current.error).toBeNull();
-    expect(mockedAxios.get).toHaveBeenCalledWith('/api/projects');
+    expect(mockedAxios.get).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   it('should handle API success false', async () => {

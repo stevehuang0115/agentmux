@@ -46,7 +46,9 @@ describe('useTeams', () => {
 
     expect(result.current.teams).toEqual(mockTeams);
     expect(result.current.error).toBeNull();
-    expect(mockedAxios.get).toHaveBeenCalledWith('/api/teams');
+    expect(mockedAxios.get).toHaveBeenCalledWith('/api/teams', expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
   });
 
   it('should handle API success false', async () => {

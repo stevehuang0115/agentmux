@@ -307,7 +307,7 @@ describe('Dashboard Page', () => {
         </TestWrapper>
       );
 
-      expect(screen.getByText('Connection failed')).toBeInTheDocument();
+      expect(screen.getByText(/Connection failed/)).toBeInTheDocument();
     });
 
     it('should not show status banners when connected successfully', () => {

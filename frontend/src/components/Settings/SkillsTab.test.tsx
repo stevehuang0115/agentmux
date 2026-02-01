@@ -121,9 +121,12 @@ describe('SkillsTab', () => {
     it('should show category badges', () => {
       render(<SkillsTab />);
 
+      // 2 skill cards + 1 in category filter dropdown = 3 total
       const devBadges = screen.getAllByText('Development');
-      expect(devBadges.length).toBe(2);
-      expect(screen.getByText('Automation')).toBeInTheDocument();
+      expect(devBadges.length).toBe(3);
+      // 1 skill card + 1 in category filter dropdown = 2 total
+      const automationBadges = screen.getAllByText('Automation');
+      expect(automationBadges.length).toBe(2);
     });
 
     it('should show execution type', () => {
@@ -309,8 +312,11 @@ describe('SkillsTab', () => {
 
       fireEvent.click(screen.getByText('+ New Skill'));
 
-      const nameInput = screen.getByLabelText('Name *');
-      fireEvent.change(nameInput, { target: { value: 'new-skill' } });
+      const displayNameInput = screen.getByLabelText('Display Name *');
+      fireEvent.change(displayNameInput, { target: { value: 'New Skill' } });
+
+      const idInput = screen.getByLabelText('ID *');
+      fireEvent.change(idInput, { target: { value: 'new-skill' } });
 
       const descInput = screen.getByLabelText('Description *');
       fireEvent.change(descInput, { target: { value: 'A new skill' } });
