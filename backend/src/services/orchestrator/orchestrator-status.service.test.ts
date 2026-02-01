@@ -8,14 +8,14 @@ import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals
 
 // Use a global mock data object that we can configure per-test
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockTeamsData: { value: any[] | Error } = { value: [] };
+const mockOrchestratorData: { value: any | null | Error } = { value: null };
 
 // Mock storage service (using path without .js since moduleNameMapper strips it)
 jest.mock('../core/storage.service', () => ({
   StorageService: {
     getInstance: () => ({
-      getTeams: async () => {
-        const data = mockTeamsData.value;
+      getOrchestratorStatus: async () => {
+        const data = mockOrchestratorData.value;
         if (data instanceof Error) {
           throw data;
         }
@@ -63,75 +63,55 @@ import {
 
 describe('OrchestratorStatusService', () => {
   /**
-   * Helper to create a mock team for testing.
+   * Helper to create a mock orchestrator status for testing.
    *
-   * @param id - The team ID
-   * @param members - Array of partial member objects with optional agentStatus
-   * @returns A mock team object suitable for testing
+   * @param agentStatus - The agent status (active, inactive, activating)
+   * @returns A mock orchestrator status object suitable for testing
    */
-  function createMockTeam(
-    id: string,
-    members: Array<{ agentStatus?: string }>
-  ): Record<string, unknown> {
+  function createMockOrchestratorStatus(agentStatus: string): Record<string, unknown> {
     return {
-      id,
-      name: id.charAt(0).toUpperCase() + id.slice(1),
-      members: members.map((m) => ({
-        id: `${id}-member`,
-        name: `${id} member`,
-        sessionName: `${id}-session`,
-        role: 'worker',
-        capabilities: [],
-        agentStatus: m.agentStatus,
-        workingStatus: 'idle',
-        currentTask: '',
-        promptId: '',
-        model: 'default',
-        systemPrompt: '',
-        runtimeType: 'local',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })),
+      sessionName: 'agentmux-orc',
+      agentStatus,
+      workingStatus: 'idle',
+      runtimeType: 'claude-code',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
   }
 
   beforeEach(() => {
-    // Reset mock data to empty array before each test
-    mockTeamsData.value = [];
+    // Reset mock data to null before each test
+    mockOrchestratorData.value = null;
   });
 
   afterEach(() => {
-    mockTeamsData.value = [];
+    mockOrchestratorData.value = null;
   });
 
   describe('isOrchestratorActive', () => {
     it('should return true when orchestrator is active', async () => {
-      mockTeamsData.value = [createMockTeam('orchestrator', [{ agentStatus: 'active' }])];
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
 
       const result = await isOrchestratorActive();
       expect(result).toBe(true);
     });
 
     it('should return false when orchestrator is inactive', async () => {
-      mockTeamsData.value = [createMockTeam('orchestrator', [{ agentStatus: 'inactive' }])];
+      mockOrchestratorData.value = createMockOrchestratorStatus('inactive');
 
       const result = await isOrchestratorActive();
       expect(result).toBe(false);
     });
 
-    it('should return false when orchestrator team not found', async () => {
-      mockTeamsData.value = [];
+    it('should return false when orchestrator is not configured', async () => {
+      mockOrchestratorData.value = null;
 
       const result = await isOrchestratorActive();
       expect(result).toBe(false);
     });
 
-    it('should return false when orchestrator has no members', async () => {
-      const team = createMockTeam('orchestrator', []);
-      team.members = []; // Override to have no members
-      mockTeamsData.value = [team];
+    it('should return false when orchestrator is activating', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('activating');
 
       const result = await isOrchestratorActive();
       expect(result).toBe(false);
@@ -140,7 +120,7 @@ describe('OrchestratorStatusService', () => {
 
   describe('getOrchestratorStatus', () => {
     it('should return active status with correct message', async () => {
-      mockTeamsData.value = [createMockTeam('orchestrator', [{ agentStatus: 'active' }])];
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(true);
@@ -149,7 +129,7 @@ describe('OrchestratorStatusService', () => {
     });
 
     it('should return activating status with appropriate message', async () => {
-      mockTeamsData.value = [createMockTeam('orchestrator', [{ agentStatus: 'activating' }])];
+      mockOrchestratorData.value = createMockOrchestratorStatus('activating');
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
@@ -158,7 +138,7 @@ describe('OrchestratorStatusService', () => {
     });
 
     it('should return inactive status with appropriate message', async () => {
-      mockTeamsData.value = [createMockTeam('orchestrator', [{ agentStatus: 'inactive' }])];
+      mockOrchestratorData.value = createMockOrchestratorStatus('inactive');
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
@@ -166,21 +146,8 @@ describe('OrchestratorStatusService', () => {
       expect(result.message).toContain('not running');
     });
 
-    it('should handle missing orchestrator team', async () => {
-      const team = createMockTeam('other-team', []);
-      team.members = [];
-      mockTeamsData.value = [team];
-
-      const result = await getOrchestratorStatus();
-      expect(result.isActive).toBe(false);
-      expect(result.agentStatus).toBeNull();
-      expect(result.message).toContain('not found');
-    });
-
-    it('should handle missing orchestrator member', async () => {
-      const team = createMockTeam('orchestrator', []);
-      team.members = [];
-      mockTeamsData.value = [team];
+    it('should handle missing orchestrator status (null)', async () => {
+      mockOrchestratorData.value = null;
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
@@ -189,7 +156,7 @@ describe('OrchestratorStatusService', () => {
     });
 
     it('should handle storage errors gracefully', async () => {
-      mockTeamsData.value = new Error('Storage error');
+      mockOrchestratorData.value = new Error('Storage error');
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
@@ -198,12 +165,10 @@ describe('OrchestratorStatusService', () => {
     });
 
     it('should default to inactive when agentStatus is undefined', async () => {
-      // Create a mock team with a member that has no agentStatus
-      const team = createMockTeam('orchestrator', [{}]);
-      // Remove the agentStatus property to test the default behavior
-      const members = team.members as Array<Record<string, unknown>>;
-      delete members[0].agentStatus;
-      mockTeamsData.value = [team];
+      // Create a mock status with undefined agentStatus
+      const status = createMockOrchestratorStatus('active');
+      delete (status as Record<string, unknown>).agentStatus;
+      mockOrchestratorData.value = status;
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);

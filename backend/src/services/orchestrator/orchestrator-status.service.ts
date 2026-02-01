@@ -10,7 +10,6 @@
 
 import { StorageService } from '../core/storage.service.js';
 import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../../../../config/index.js';
-import type { Team } from '../../types/index.js';
 
 /** Dashboard URL for user-facing messages */
 const DASHBOARD_URL = `http://localhost:${WEB_CONSTANTS.PORTS.FRONTEND}`;
@@ -49,6 +48,9 @@ export async function isOrchestratorActive(): Promise<boolean> {
 /**
  * Get detailed orchestrator status information.
  *
+ * Uses the storageService.getOrchestratorStatus() method which reads the
+ * orchestrator data directly from storage (not from the teams array).
+ *
  * @returns Promise resolving to status details including active state and message
  *
  * @example
@@ -62,31 +64,20 @@ export async function isOrchestratorActive(): Promise<boolean> {
 export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult> {
   try {
     const storageService = StorageService.getInstance();
-    const teams = await storageService.getTeams();
 
-    // Find the orchestrator team
-    const orchestratorTeam = teams.find((t: Team) => t.id === 'orchestrator');
+    // Use getOrchestratorStatus which reads the orchestrator data directly
+    // The orchestrator is stored separately from the teams array
+    const orchestratorStatus = await storageService.getOrchestratorStatus();
 
-    if (!orchestratorTeam) {
+    if (!orchestratorStatus) {
       return {
         isActive: false,
         agentStatus: null,
-        message: 'Orchestrator team not found. Please create an orchestrator team first.',
+        message: 'Orchestrator not configured. Please set up the orchestrator from the Dashboard.',
       };
     }
 
-    // Get the orchestrator member (should be the first/only member)
-    const orchestrator = orchestratorTeam.members?.[0];
-
-    if (!orchestrator) {
-      return {
-        isActive: false,
-        agentStatus: null,
-        message: 'Orchestrator not configured. Please add an orchestrator member to the team.',
-      };
-    }
-
-    const agentStatus = orchestrator.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    const agentStatus = orchestratorStatus.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
     const isActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
     if (isActive) {
