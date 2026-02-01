@@ -45,3 +45,10 @@ export {
   resetImprovementStartupService,
   type StartupResult,
 } from './improvement-startup.service.js';
+
+export {
+  isOrchestratorActive,
+  getOrchestratorStatus,
+  getOrchestratorOfflineMessage,
+  type OrchestratorStatusResult,
+} from './orchestrator-status.service.js';

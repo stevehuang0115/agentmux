@@ -84,6 +84,56 @@
   background-color: var(--color-primary-hover);
 }
 
+/* Orchestrator Offline Banner */
+.orchestrator-offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.875rem 1.5rem;
+  background-color: var(--color-warning-bg, rgba(251, 191, 36, 0.1));
+  border-bottom: 1px solid var(--color-warning, #f59e0b);
+  color: var(--color-warning, #f59e0b);
+}
+
+.orchestrator-offline-banner .offline-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.orchestrator-offline-banner .offline-content {
+  flex: 1;
+}
+
+.orchestrator-offline-banner .offline-content strong {
+  display: block;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.orchestrator-offline-banner .offline-content p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+}
+
+.orchestrator-offline-banner .dashboard-link {
+  padding: 0.5rem 1rem;
+  background-color: var(--color-primary);
+  color: white;
+  text-decoration: none;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.2s;
+}
+
+.orchestrator-offline-banner .dashboard-link:hover {
+  background-color: var(--color-primary-hover);
+}
+
 /* Header */
 .chat-header {
   display: flex;

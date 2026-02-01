@@ -761,4 +761,10 @@ describe('Orchestrator Handlers', () => {
       });
     });
   });
+
+  describe('getOrchestratorStatusEndpoint', () => {
+    it('should have the status endpoint function exported', () => {
+      expect(typeof orchestratorHandlers.getOrchestratorStatusEndpoint).toBe('function');
+    });
+  });
 });

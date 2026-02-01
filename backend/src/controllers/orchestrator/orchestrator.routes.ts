@@ -8,6 +8,7 @@ import {
   setupOrchestrator,
   stopOrchestrator,
   getOrchestratorHealth,
+  getOrchestratorStatusEndpoint,
   assignTaskToOrchestrator,
   updateOrchestratorRuntime
 } from './orchestrator.controller.js';
@@ -24,6 +25,7 @@ export function createOrchestratorRouter(context: ApiContext): Router {
   router.post('/setup', setupOrchestrator.bind(context));
   router.post('/stop', stopOrchestrator.bind(context));
   router.get('/health', getOrchestratorHealth.bind(context));
+  router.get('/status', getOrchestratorStatusEndpoint.bind(context));
 
   // Command and message handling
   router.get('/commands', getOrchestratorCommands.bind(context));

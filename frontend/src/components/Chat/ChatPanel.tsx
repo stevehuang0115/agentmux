@@ -7,7 +7,9 @@
  */
 
 import React, { useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useChat } from '../../contexts/ChatContext';
+import { useOrchestratorStatus } from '../../hooks/useOrchestratorStatus';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { TypingIndicator } from './TypingIndicator';
@@ -30,6 +32,7 @@ import './ChatPanel.css';
  */
 export const ChatPanel: React.FC = () => {
   const { messages, isLoading, error, isTyping, currentConversation } = useChat();
+  const { status: orchestratorStatus, isLoading: statusLoading } = useOrchestratorStatus();
 
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +74,9 @@ export const ChatPanel: React.FC = () => {
     );
   }
 
+  // Determine if orchestrator is offline
+  const isOrchestratorOffline = !statusLoading && orchestratorStatus && !orchestratorStatus.isActive;
+
   return (
     <div className="chat-panel" data-testid="chat-panel">
       <header className="chat-header">
@@ -79,6 +85,19 @@ export const ChatPanel: React.FC = () => {
           {messages.length} {messages.length === 1 ? 'message' : 'messages'}
         </span>
       </header>
+
+      {isOrchestratorOffline && (
+        <div className="orchestrator-offline-banner" data-testid="orchestrator-offline-banner">
+          <span className="offline-icon" aria-hidden="true">⚠️</span>
+          <div className="offline-content">
+            <strong>Orchestrator Offline</strong>
+            <p>{orchestratorStatus?.offlineMessage || orchestratorStatus?.message}</p>
+          </div>
+          <Link to="/" className="dashboard-link">
+            Go to Dashboard
+          </Link>
+        </div>
+      )}
 
       <div
         className="messages-container"
@@ -112,7 +131,10 @@ export const ChatPanel: React.FC = () => {
         <div className="messages-end" />
       </div>
 
-      <ChatInput />
+      <ChatInput
+        disabled={isOrchestratorOffline}
+        disabledPlaceholder="Orchestrator is offline. Start it from the Dashboard to chat."
+      />
     </div>
   );
 };

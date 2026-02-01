@@ -238,4 +238,56 @@ describe('ChatInput', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
     });
   });
+
+  describe('disabled prop (orchestrator offline)', () => {
+    it('disables textarea when disabled prop is true', () => {
+      render(<ChatInput disabled />);
+      expect(screen.getByTestId('chat-message-input')).toBeDisabled();
+    });
+
+    it('disables send button when disabled prop is true', () => {
+      render(<ChatInput disabled />);
+      expect(screen.getByTestId('chat-send-button')).toBeDisabled();
+    });
+
+    it('shows custom placeholder when disabled with disabledPlaceholder', () => {
+      render(<ChatInput disabled disabledPlaceholder="Orchestrator offline" />);
+      expect(screen.getByTestId('chat-message-input')).toHaveAttribute(
+        'placeholder',
+        'Orchestrator offline'
+      );
+    });
+
+    it('applies disabled-offline class when disabled', () => {
+      render(<ChatInput disabled />);
+      expect(screen.getByTestId('chat-message-input')).toHaveClass('disabled-offline');
+    });
+
+    it('does not send message when disabled', async () => {
+      const user = userEvent.setup();
+      render(<ChatInput disabled />);
+
+      const input = screen.getByTestId('chat-message-input');
+      // Try to type - should not work since disabled
+      await user.type(input, 'Hello');
+
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it('shows correct aria-label on send button when disabled', () => {
+      render(<ChatInput disabled />);
+      expect(screen.getByTestId('chat-send-button')).toHaveAttribute(
+        'aria-label',
+        'Orchestrator offline'
+      );
+    });
+
+    it('shows correct title on send button when disabled', () => {
+      render(<ChatInput disabled />);
+      expect(screen.getByTestId('chat-send-button')).toHaveAttribute(
+        'title',
+        'Orchestrator offline'
+      );
+    });
+  });
 });

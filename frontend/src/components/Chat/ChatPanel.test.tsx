@@ -9,13 +9,20 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { ChatPanel } from './ChatPanel';
 import { useChat } from '../../contexts/ChatContext';
+import { useOrchestratorStatus } from '../../hooks/useOrchestratorStatus';
 import type { ChatMessage, ChatConversation } from '../../types/chat.types';
 
 // Mock the useChat hook
 vi.mock('../../contexts/ChatContext', () => ({
   useChat: vi.fn(),
+}));
+
+// Mock the useOrchestratorStatus hook
+vi.mock('../../hooks/useOrchestratorStatus', () => ({
+  useOrchestratorStatus: vi.fn(),
 }));
 
 // Mock the child components
@@ -26,7 +33,11 @@ vi.mock('./ChatMessage', () => ({
 }));
 
 vi.mock('./ChatInput', () => ({
-  ChatInput: () => <div data-testid="chat-input">Chat Input</div>,
+  ChatInput: ({ disabled, disabledPlaceholder }: { disabled?: boolean; disabledPlaceholder?: string }) => (
+    <div data-testid="chat-input" data-disabled={disabled} data-placeholder={disabledPlaceholder}>
+      Chat Input
+    </div>
+  ),
 }));
 
 vi.mock('./TypingIndicator', () => ({
@@ -34,6 +45,14 @@ vi.mock('./TypingIndicator', () => ({
 }));
 
 const mockUseChat = useChat as jest.MockedFunction<typeof useChat>;
+const mockUseOrchestratorStatus = useOrchestratorStatus as jest.MockedFunction<typeof useOrchestratorStatus>;
+
+/**
+ * Wrapper component for router context
+ */
+const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <MemoryRouter>{children}</MemoryRouter>
+);
 
 describe('ChatPanel', () => {
   const mockConversation: ChatConversation = {
@@ -86,32 +105,45 @@ describe('ChatPanel', () => {
       refreshMessages: vi.fn(),
       clearError: vi.fn(),
     });
+
+    // Default: orchestrator is active
+    mockUseOrchestratorStatus.mockReturnValue({
+      status: {
+        isActive: true,
+        agentStatus: 'active',
+        message: 'Orchestrator is active and ready.',
+        offlineMessage: null,
+      },
+      isLoading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
   });
 
   describe('normal state', () => {
     it('renders the chat panel', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('chat-panel')).toBeInTheDocument();
     });
 
     it('renders conversation title', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('Test Conversation')).toBeInTheDocument();
     });
 
     it('renders message count', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('2 messages')).toBeInTheDocument();
     });
 
     it('renders all messages', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       const messages = screen.getAllByTestId('chat-message');
       expect(messages).toHaveLength(2);
     });
 
     it('renders chat input', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('chat-input')).toBeInTheDocument();
     });
 
@@ -121,7 +153,7 @@ describe('ChatPanel', () => {
         messages: [mockMessages[0]],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('1 message')).toBeInTheDocument();
     });
   });
@@ -134,7 +166,7 @@ describe('ChatPanel', () => {
         messages: [],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('chat-panel-loading')).toBeInTheDocument();
       expect(screen.getByText('Loading conversation...')).toBeInTheDocument();
     });
@@ -145,7 +177,7 @@ describe('ChatPanel', () => {
         isLoading: true,
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.queryByTestId('chat-panel-loading')).not.toBeInTheDocument();
     });
   });
@@ -158,7 +190,7 @@ describe('ChatPanel', () => {
         messages: [],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('chat-panel-error')).toBeInTheDocument();
       expect(screen.getByText(/Failed to load/)).toBeInTheDocument();
     });
@@ -170,7 +202,7 @@ describe('ChatPanel', () => {
         messages: [],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('Retry')).toBeInTheDocument();
     });
 
@@ -180,7 +212,7 @@ describe('ChatPanel', () => {
         error: 'Some error',
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.queryByTestId('chat-panel-error')).not.toBeInTheDocument();
     });
   });
@@ -192,7 +224,7 @@ describe('ChatPanel', () => {
         messages: [],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('empty-chat')).toBeInTheDocument();
       expect(screen.getByText('Welcome to AgentMux')).toBeInTheDocument();
     });
@@ -203,7 +235,7 @@ describe('ChatPanel', () => {
         messages: [],
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('Create a new project')).toBeInTheDocument();
       expect(screen.getByText('Assign a task to an agent')).toBeInTheDocument();
       expect(screen.getByText('Check project status')).toBeInTheDocument();
@@ -218,12 +250,12 @@ describe('ChatPanel', () => {
         isTyping: true,
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('typing-indicator')).toBeInTheDocument();
     });
 
     it('does not show typing indicator when isTyping is false', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.queryByTestId('typing-indicator')).not.toBeInTheDocument();
     });
   });
@@ -235,7 +267,7 @@ describe('ChatPanel', () => {
         currentConversation: null,
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('Chat with Orchestrator')).toBeInTheDocument();
     });
 
@@ -245,15 +277,106 @@ describe('ChatPanel', () => {
         currentConversation: { ...mockConversation, title: undefined },
       });
 
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByText('Chat with Orchestrator')).toBeInTheDocument();
     });
   });
 
   describe('messages container', () => {
     it('renders messages container', () => {
-      render(<ChatPanel />);
+      render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('messages-container')).toBeInTheDocument();
+    });
+  });
+
+  describe('orchestrator offline state', () => {
+    it('shows offline banner when orchestrator is inactive', () => {
+      mockUseOrchestratorStatus.mockReturnValue({
+        status: {
+          isActive: false,
+          agentStatus: 'inactive',
+          message: 'Orchestrator is not running.',
+          offlineMessage: 'The orchestrator is currently offline. Please start it from the Dashboard.',
+        },
+        isLoading: false,
+        error: null,
+        refresh: vi.fn(),
+      });
+
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      expect(screen.getByTestId('orchestrator-offline-banner')).toBeInTheDocument();
+    });
+
+    it('shows offline message in banner', () => {
+      mockUseOrchestratorStatus.mockReturnValue({
+        status: {
+          isActive: false,
+          agentStatus: 'inactive',
+          message: 'Orchestrator is not running.',
+          offlineMessage: 'The orchestrator is currently offline. Please start it from the Dashboard.',
+        },
+        isLoading: false,
+        error: null,
+        refresh: vi.fn(),
+      });
+
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      expect(
+        screen.getByText(/orchestrator is currently offline/i)
+      ).toBeInTheDocument();
+    });
+
+    it('shows link to dashboard when offline', () => {
+      mockUseOrchestratorStatus.mockReturnValue({
+        status: {
+          isActive: false,
+          agentStatus: 'inactive',
+          message: 'Orchestrator is not running.',
+          offlineMessage: 'The orchestrator is currently offline. Please start it from the Dashboard.',
+        },
+        isLoading: false,
+        error: null,
+        refresh: vi.fn(),
+      });
+
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      expect(screen.getByText('Go to Dashboard')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /go to dashboard/i })).toHaveAttribute('href', '/');
+    });
+
+    it('disables chat input when orchestrator is offline', () => {
+      mockUseOrchestratorStatus.mockReturnValue({
+        status: {
+          isActive: false,
+          agentStatus: 'inactive',
+          message: 'Orchestrator is not running.',
+          offlineMessage: 'The orchestrator is currently offline.',
+        },
+        isLoading: false,
+        error: null,
+        refresh: vi.fn(),
+      });
+
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      const chatInput = screen.getByTestId('chat-input');
+      expect(chatInput).toHaveAttribute('data-disabled', 'true');
+    });
+
+    it('does not show offline banner when orchestrator is active', () => {
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      expect(screen.queryByTestId('orchestrator-offline-banner')).not.toBeInTheDocument();
+    });
+
+    it('does not show offline banner while status is loading', () => {
+      mockUseOrchestratorStatus.mockReturnValue({
+        status: null,
+        isLoading: true,
+        error: null,
+        refresh: vi.fn(),
+      });
+
+      render(<ChatPanel />, { wrapper: TestWrapper });
+      expect(screen.queryByTestId('orchestrator-offline-banner')).not.toBeInTheDocument();
     });
   });
 });

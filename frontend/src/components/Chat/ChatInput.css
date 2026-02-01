@@ -72,6 +72,14 @@
   cursor: not-allowed;
 }
 
+.message-input.disabled-offline {
+  background-color: rgba(251, 191, 36, 0.05);
+}
+
+.message-input.disabled-offline::placeholder {
+  color: var(--color-warning, #f59e0b);
+}
+
 .send-button {
   display: flex;
   align-items: center;
