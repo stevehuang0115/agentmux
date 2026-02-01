@@ -1224,11 +1224,13 @@ export class AgentRegistrationService {
 		try {
 			this.logger.info('Terminating agent session (unified approach)', { sessionName, role });
 
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			// Get session helper once to avoid repeated async calls
+			const sessionHelper = await this.getSessionHelper();
+			const sessionExists = sessionHelper.sessionExists(sessionName);
 
 			if (sessionExists) {
 				// Kill the tmux session
-				await (await this.getSessionHelper()).killSession(sessionName);
+				await sessionHelper.killSession(sessionName);
 				this.logger.info('Session terminated successfully', { sessionName });
 			} else {
 				this.logger.info('Session already terminated or does not exist', { sessionName });
@@ -1300,9 +1302,11 @@ export class AgentRegistrationService {
 				};
 			}
 
+			// Get session helper once for this method
+			const sessionHelper = await this.getSessionHelper();
+
 			// Check if session exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
-			if (!sessionExists) {
+			if (!sessionHelper.sessionExists(sessionName)) {
 				return {
 					success: false,
 					error: `Session '${sessionName}' does not exist`,
@@ -1524,8 +1528,11 @@ export class AgentRegistrationService {
 		error?: string;
 	}> {
 		try {
+			// Get session helper once to avoid repeated async calls
+			const sessionHelper = await this.getSessionHelper();
+
 			// Check if session exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			const sessionExists = sessionHelper.sessionExists(sessionName);
 			if (!sessionExists) {
 				return {
 					success: false,
@@ -1533,8 +1540,8 @@ export class AgentRegistrationService {
 				};
 			}
 
-			// Send key using tmux command service
-			await (await this.getSessionHelper()).sendKey(sessionName, key);
+			// Send key using session command helper
+			await sessionHelper.sendKey(sessionName, key);
 
 			this.logger.info('Key sent to agent successfully', {
 				sessionName,
@@ -1630,6 +1637,8 @@ export class AgentRegistrationService {
 	 */
 	private async sendPromptRobustly(sessionName: string, prompt: string): Promise<boolean> {
 		const maxAttempts = 3;
+		// Get session helper once to avoid repeated async calls
+		const sessionHelper = await this.getSessionHelper();
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
@@ -1640,24 +1649,20 @@ export class AgentRegistrationService {
 				});
 
 				// Capture state before sending
-				const beforeOutput = await (await this.getSessionHelper()).capturePane(sessionName, 10);
+				const beforeOutput = sessionHelper.capturePane(sessionName, 10);
 				const beforeLength = beforeOutput.length;
 
 				// Clear the existing prompts if any
-				await (await this.getSessionHelper()).sendCtrlC(sessionName);
+				await sessionHelper.sendCtrlC(sessionName);
 
 				// Send the prompt with proper timing
-				await (await this.getSessionHelper()).sendMessage(sessionName, prompt);
+				await sessionHelper.sendMessage(sessionName, prompt);
 
-				// Note: sendMessage already includes Enter key with 1000ms delay
-				// Additional delay for processing to begin
-				await new Promise((resolve) => setTimeout(resolve, 2000));
-
-				// Wait for processing to begin
-				await new Promise((resolve) => setTimeout(resolve, 2000));
+				// Note: sendMessage already includes Enter key - wait for processing to begin
+				await this.delay(4000);
 
 				// Verify prompt was delivered and processed
-				const afterOutput = await (await this.getSessionHelper()).capturePane(sessionName, 20);
+				const afterOutput = sessionHelper.capturePane(sessionName, 20);
 				const afterLength = afterOutput.length;
 
 				// Check for signs of Claude processing the prompt
