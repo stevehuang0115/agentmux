@@ -117,7 +117,7 @@ export const Dashboard: React.FC = () => {
       <div className="dashboard">
         <div className="dashboard-error">
           <p>Error: {error}</p>
-          <button className="btn-primary" onClick={fetchData}>
+          <button type="button" className="btn-primary" onClick={fetchData}>
             Retry
           </button>
         </div>
@@ -132,6 +132,7 @@ export const Dashboard: React.FC = () => {
         <div className="section-header">
           <h2>Projects</h2>
           <button
+            type="button"
             className="btn-secondary"
             onClick={() => navigate('/projects')}
           >
@@ -161,6 +162,7 @@ export const Dashboard: React.FC = () => {
         <div className="section-header">
           <h2>Teams</h2>
           <button
+            type="button"
             className="btn-secondary"
             onClick={() => navigate('/teams')}
           >
