@@ -17,6 +17,7 @@ import {
 	ORCHESTRATOR_ROLE,
 	RUNTIME_TYPES,
 	RuntimeType,
+	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
 
 export interface TeamRole {
@@ -1318,6 +1319,9 @@ export class AgentRegistrationService {
 		message: string,
 		maxAttempts: number = 3
 	): Promise<boolean> {
+		// Get session helper once to avoid repeated async calls
+		const sessionHelper = await this.getSessionHelper();
+
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
 				this.logger.debug('Attempting message delivery', {
@@ -1327,7 +1331,7 @@ export class AgentRegistrationService {
 				});
 
 				// Capture terminal state before sending to verify Claude is at a prompt
-				const beforeOutput = await (await this.getSessionHelper()).capturePane(sessionName, 5);
+				const beforeOutput = sessionHelper.capturePane(sessionName, 5);
 				const isAtPrompt = this.isClaudeAtPrompt(beforeOutput);
 
 				if (!isAtPrompt) {
@@ -1336,18 +1340,18 @@ export class AgentRegistrationService {
 						attempt,
 					});
 					// Send Escape key to exit any sub-menu or modal state
-					await (await this.getSessionHelper()).sendEscape(sessionName);
-					await new Promise((resolve) => setTimeout(resolve, 300));
+					await sessionHelper.sendEscape(sessionName);
+					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 				}
 
 				// Send the message directly without clearing (Ctrl+C can disrupt Claude Code)
-				await (await this.getSessionHelper()).sendMessage(sessionName, message);
+				await sessionHelper.sendMessage(sessionName, message);
 
 				// Wait a bit for processing to start
-				await new Promise((resolve) => setTimeout(resolve, 500));
+				await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY + 200);
 
 				// Verify message was accepted by checking terminal output changed
-				const afterOutput = await (await this.getSessionHelper()).capturePane(sessionName, 10);
+				const afterOutput = sessionHelper.capturePane(sessionName, 10);
 
 				// Check if the message content appears in the terminal (indicating it was typed)
 				const messageFragment = message.substring(0, Math.min(50, message.length));
@@ -1369,7 +1373,7 @@ export class AgentRegistrationService {
 
 				// Add delay before retry
 				if (attempt < maxAttempts) {
-					await new Promise((resolve) => setTimeout(resolve, 1000));
+					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
 			} catch (error) {
 				this.logger.error('Error during message delivery', {
@@ -1385,6 +1389,16 @@ export class AgentRegistrationService {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Utility delay function for async operations.
+	 *
+	 * @param ms - Milliseconds to delay
+	 * @returns Promise that resolves after the delay
+	 */
+	private delay(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
 	/**
