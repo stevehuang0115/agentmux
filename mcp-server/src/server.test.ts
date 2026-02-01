@@ -482,6 +482,28 @@ This is a mock task for testing purposes.
       }]
     };
   }
+
+  // Mock Chat Response Tool
+  async sendChatResponse(params: any): Promise<any> {
+    if (!params.content) {
+      return {
+        content: [{ type: 'text', text: '❌ content parameter is required' }],
+        isError: true
+      };
+    }
+
+    const senderType = params.senderType || 'orchestrator';
+    const senderName = params.senderName || this.sessionName;
+    const conversationId = params.conversationId || 'conv-mock-123';
+    const messageId = `msg-mock-${Date.now()}`;
+
+    return {
+      content: [{
+        type: 'text',
+        text: `✅ Response sent to chat UI\n\nMessage ID: ${messageId}\nConversation: ${conversationId}\nSender: ${senderName} (${senderType})`
+      }]
+    };
+  }
 }
 
 describe('AgentMuxMCP', () => {
@@ -1425,6 +1447,109 @@ describe('AgentMuxMCP', () => {
       expect(result.content[0].text).toContain('Your Knowledge Context');
       expect(result.content[0].text).toContain('Agent Memory');
       expect(result.content[0].text).toContain('Project Knowledge');
+      expect(result.isError).toBeUndefined();
+    });
+  });
+
+  // ============================================
+  // Chat Response Loop Tests
+  // ============================================
+
+  describe('sendChatResponse', () => {
+    it('should send response with required content parameter', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Hello, I have completed the task!'
+      });
+
+      expect(result.content[0].text).toContain('✅ Response sent to chat UI');
+      expect(result.content[0].text).toContain('Message ID:');
+      expect(result.content[0].text).toContain('Conversation:');
+      expect(result.content[0].text).toContain('Sender: mock-session (orchestrator)');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require content parameter', async () => {
+      const result = await mcpServer.sendChatResponse({});
+
+      expect(result.content[0].text).toBe('❌ content parameter is required');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should use specified conversationId', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Test message',
+        conversationId: 'custom-conv-456'
+      });
+
+      expect(result.content[0].text).toContain('Conversation: custom-conv-456');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should support orchestrator sender type', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Orchestrator message',
+        senderType: 'orchestrator'
+      });
+
+      expect(result.content[0].text).toContain('(orchestrator)');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should support agent sender type', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Agent task completion report',
+        senderType: 'agent',
+        senderName: 'backend-dev'
+      });
+
+      expect(result.content[0].text).toContain('Sender: backend-dev (agent)');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should use custom sender name', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Custom sender message',
+        senderName: 'Custom Agent Name'
+      });
+
+      expect(result.content[0].text).toContain('Sender: Custom Agent Name');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should default to session name when senderName not provided', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Default sender message'
+      });
+
+      expect(result.content[0].text).toContain('Sender: mock-session');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should handle long content', async () => {
+      const longContent = 'A'.repeat(10000);
+      const result = await mcpServer.sendChatResponse({
+        content: longContent
+      });
+
+      expect(result.content[0].text).toContain('✅ Response sent to chat UI');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should handle special characters in content', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Task completed! ✅ Output:\n```json\n{"status": "success"}\n```'
+      });
+
+      expect(result.content[0].text).toContain('✅ Response sent to chat UI');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should include message ID in response', async () => {
+      const result = await mcpServer.sendChatResponse({
+        content: 'Test message'
+      });
+
+      expect(result.content[0].text).toMatch(/Message ID: msg-mock-\d+/);
       expect(result.isError).toBeUndefined();
     });
   });

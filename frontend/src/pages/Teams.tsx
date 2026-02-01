@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Grid, List } from 'lucide-react';
 import { useAlert } from '../components/UI/Dialog';
@@ -9,6 +9,7 @@ import { Team, TeamMember } from '../types';
 import TeamListItem from '@/components/Teams/TeamListItem';
 import { apiService } from '@/services/api.service';
 import { logSilentError } from '@/utils/error-handling';
+import { webSocketService } from '../services/websocket.service';
 
 export const Teams: React.FC = () => {
   const navigate = useNavigate();
@@ -26,10 +27,49 @@ export const Teams: React.FC = () => {
   const projectMap = Object.fromEntries(projectsForFilter.map(p => [p.id, p.name]));
   const [projectFilter, setProjectFilter] = useState<string>('all');
 
+  /**
+   * Handle team member status change event from WebSocket.
+   * Updates the team member's agentStatus in the teams list.
+   */
+  const handleTeamMemberStatusChange = useCallback((data: {
+    teamId: string;
+    memberId: string;
+    sessionName: string;
+    agentStatus: 'active' | 'inactive' | 'activating';
+  }) => {
+    setTeams(prevTeams =>
+      prevTeams.map(team => {
+        if (team.id === data.teamId) {
+          return {
+            ...team,
+            members: team.members.map(member => {
+              if (member.id === data.memberId || member.sessionName === data.sessionName) {
+                return { ...member, agentStatus: data.agentStatus };
+              }
+              return member;
+            }),
+          };
+        }
+        return team;
+      })
+    );
+  }, []);
+
   useEffect(() => {
     fetchTeams();
     loadProjectsForFilter();
   }, []);
+
+  /**
+   * Subscribe to WebSocket events for real-time status updates.
+   */
+  useEffect(() => {
+    webSocketService.on('team_member_status_changed', handleTeamMemberStatusChange);
+
+    return () => {
+      webSocketService.off('team_member_status_changed', handleTeamMemberStatusChange);
+    };
+  }, [handleTeamMemberStatusChange]);
 
   const loadProjectsForFilter = async () => {
     try {

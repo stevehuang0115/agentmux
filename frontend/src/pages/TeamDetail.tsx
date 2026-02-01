@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Team, TeamMember } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
@@ -7,6 +7,7 @@ import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus } from '../components/TeamDetail';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
 import { safeParseJSON } from '../utils/api';
+import { webSocketService } from '../services/websocket.service';
 
 export const TeamDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +25,47 @@ export const TeamDetail: React.FC = () => {
   const { showSuccess, showError, showWarning, AlertComponent } = useAlert();
   const { showConfirm, ConfirmComponent } = useConfirm();
 
+  /**
+   * Handle team member status change event from WebSocket.
+   * Updates the team member's agentStatus in the local state.
+   */
+  const handleTeamMemberStatusChange = useCallback((data: {
+    teamId: string;
+    memberId: string;
+    sessionName: string;
+    agentStatus: 'active' | 'inactive' | 'activating';
+  }) => {
+    // Only update if this event is for our team
+    if (data.teamId === id) {
+      setTeam(prevTeam => {
+        if (!prevTeam) return prevTeam;
+        return {
+          ...prevTeam,
+          members: prevTeam.members.map(member => {
+            if (member.id === data.memberId || member.sessionName === data.sessionName) {
+              return { ...member, agentStatus: data.agentStatus };
+            }
+            return member;
+          }),
+        };
+      });
+    }
+  }, [id]);
+
+  /**
+   * Handle orchestrator status change event from WebSocket.
+   * Updates the orchestrator session active state.
+   */
+  const handleOrchestratorStatusChange = useCallback((data: {
+    sessionName: string;
+    agentStatus: string;
+  }) => {
+    // Update orchestrator session active state based on agentStatus
+    if (id === 'orchestrator' || team?.name === 'Orchestrator Team') {
+      setOrchestratorSessionActive(data.agentStatus === 'active');
+    }
+  }, [id, team?.name]);
+
   useEffect(() => {
     if (id) {
       fetchTeamData();
@@ -33,6 +75,21 @@ export const TeamDetail: React.FC = () => {
       }
     }
   }, [id, team?.name]);
+
+  /**
+   * Subscribe to WebSocket events for real-time status updates.
+   */
+  useEffect(() => {
+    // Subscribe to status change events
+    webSocketService.on('team_member_status_changed', handleTeamMemberStatusChange);
+    webSocketService.on('orchestrator_status_changed', handleOrchestratorStatusChange);
+
+    // Cleanup on unmount
+    return () => {
+      webSocketService.off('team_member_status_changed', handleTeamMemberStatusChange);
+      webSocketService.off('orchestrator_status_changed', handleOrchestratorStatusChange);
+    };
+  }, [handleTeamMemberStatusChange, handleOrchestratorStatusChange]);
 
   useEffect(() => {
     if (team?.currentProject) {

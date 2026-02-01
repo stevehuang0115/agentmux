@@ -144,8 +144,7 @@ export class SlackService extends EventEmitter {
     this.config = config;
 
     try {
-      // Dynamic import of @slack/bolt to handle optional dependency
-      // @ts-expect-error - @slack/bolt is an optional dependency
+      // Dynamic import of @slack/bolt
       const { App, LogLevel } = await import('@slack/bolt');
 
       this.app = new App({

@@ -10,7 +10,7 @@ import { logger, createLogger } from './logger.js';
 import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import { sanitizeGitCommitMessage } from './security.js';
-import { MemoryService } from '../../backend/src/services/memory/memory.service.js';
+import { MemoryService } from '../../backend/src/services/memory/index.js';
 import {
   MCPRequest,
   MCPResponse,
@@ -71,6 +71,7 @@ import {
   CreateProjectFolderToolParams,
   SetupProjectStructureToolParams,
   CreateTeamForProjectToolParams,
+  SendChatResponseParams,
 } from './types.js';
 import {
   handleCreateRole,
@@ -88,6 +89,8 @@ import { QualityGateService } from '../../backend/src/services/quality/quality-g
 import { GateResult } from '../../backend/src/types/quality-gate.types.js';
 import { SOPService } from '../../backend/src/services/sop/sop.service.js';
 import { SOPRole, SOPCategory } from '../../backend/src/types/sop.types.js';
+import { getChatService, ChatService } from '../../backend/src/services/chat/index.js';
+import { ChatSender } from '../../backend/src/types/chat.types.js';
 
 
 export class AgentMuxMCPServer {
@@ -99,6 +102,7 @@ export class AgentMuxMCPServer {
   private memoryService: MemoryService;
   private qualityGateService: QualityGateService;
   private sopService: SOPService;
+  private chatService: ChatService;
   private requestQueue: Map<string, number> = new Map();
   private lastCleanup: number = Date.now();
 
@@ -122,6 +126,9 @@ export class AgentMuxMCPServer {
     // Initialize SOPService
     this.sopService = SOPService.getInstance();
 
+    // Initialize ChatService for chat response loop
+    this.chatService = getChatService();
+
     // Debug log session name
     logger.info(`[MCP Server] Initialized with sessionName: ${this.sessionName}`);
 
@@ -139,8 +146,12 @@ export class AgentMuxMCPServer {
       // Initialize SessionAdapter
       await this.sessionAdapter.initialize();
       logger.info('SessionAdapter initialized successfully');
+
+      // Initialize ChatService for chat response loop
+      await this.chatService.initialize();
+      logger.info('ChatService initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize SessionAdapter:', error);
+      logger.error('Failed to initialize services:', error);
       throw error;
     }
   }
@@ -2457,6 +2468,74 @@ export class AgentMuxMCPServer {
   }
 
   /**
+   * Send a chat response back to the UI
+   *
+   * This tool allows orchestrators and agents to send responses back to the
+   * conversational chat dashboard, completing the chat response loop.
+   *
+   * @param params - The send chat response parameters
+   * @returns MCP tool result indicating success or failure
+   */
+  async sendChatResponse(params: SendChatResponseParams): Promise<MCPToolResult> {
+    try {
+      logger.info(`[SEND_CHAT_RESPONSE] Sending response to chat UI`, {
+        conversationId: params.conversationId || 'current',
+        senderType: params.senderType || 'orchestrator',
+        contentLength: params.content.length,
+      });
+
+      // Determine conversation ID - use provided or get current
+      let conversationId = params.conversationId;
+      if (!conversationId) {
+        const currentConversation = await this.chatService.getCurrentConversation();
+        if (!currentConversation) {
+          logger.warn('[SEND_CHAT_RESPONSE] No active conversation found, creating new one');
+          const newConversation = await this.chatService.createNewConversation();
+          conversationId = newConversation.id;
+        } else {
+          conversationId = currentConversation.id;
+        }
+      }
+
+      // Build sender information
+      const sender: ChatSender = {
+        type: params.senderType || 'orchestrator',
+        name: params.senderName || this.sessionName,
+        id: this.sessionName,
+      };
+
+      // Add the message to the chat
+      const message = await this.chatService.addAgentMessage(
+        conversationId,
+        params.content,
+        sender,
+        params.metadata
+      );
+
+      logger.info(`[SEND_CHAT_RESPONSE] Response added to chat`, {
+        messageId: message.id,
+        conversationId,
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: `✅ Response sent to chat UI\n\nMessage ID: ${message.id}\nConversation: ${conversationId}\nSender: ${sender.name} (${sender.type})`
+        }]
+      };
+    } catch (error) {
+      logger.error(`[SEND_CHAT_RESPONSE] Failed to send chat response:`, error);
+      return {
+        content: [{
+          type: 'text',
+          text: `❌ Failed to send chat response: ${error instanceof Error ? error.message : 'Unknown error'}`
+        }],
+        isError: true
+      };
+    }
+  }
+
+  /**
    * Helper Methods for Ticket Management
    */
   private parseYAMLTicket(content: string): TicketInfo {
@@ -2964,6 +3043,11 @@ Please respond promptly with either acceptance or delegation.`;
                   break;
                 case 'get_sops':
                   result = await this.getSOPs(toolArgs);
+                  break;
+
+                // Chat Response Loop
+                case 'send_chat_response':
+                  result = await this.sendChatResponse(toolArgs);
                   break;
 
                 // Orchestrator Tools - Role Management
@@ -3538,6 +3622,53 @@ The SOPs returned will be tailored to your role and the context you provide.`,
             }
           },
           required: ['context']
+        }
+      },
+
+      // Chat Response Loop Tool
+      {
+        name: 'send_chat_response',
+        description: `Send a response back to the chat UI.
+
+Use this tool to communicate with the user through the conversational dashboard.
+This completes the chat response loop, allowing orchestrators and agents to
+send messages, updates, and task completion reports back to the user.
+
+**When to use:**
+- Responding to user messages
+- Reporting task completion status
+- Providing progress updates
+- Asking clarifying questions
+- Sharing results or summaries
+
+**Note:** Messages sent with this tool appear in the chat UI alongside
+user messages, creating a full conversational experience.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The message content to send to the user'
+            },
+            conversationId: {
+              type: 'string',
+              description: 'Conversation ID to add the message to (uses current conversation if not specified)'
+            },
+            senderType: {
+              type: 'string',
+              enum: ['orchestrator', 'agent'],
+              description: 'Type of sender (defaults to orchestrator)'
+            },
+            senderName: {
+              type: 'string',
+              description: 'Name to display for the sender (defaults to session name)'
+            },
+            metadata: {
+              type: 'object',
+              description: 'Optional metadata to attach to the message'
+            }
+          },
+          required: ['content']
         }
       },
 
