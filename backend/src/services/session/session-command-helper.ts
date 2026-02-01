@@ -88,7 +88,9 @@ export class SessionCommandHelper {
 	}
 
 	/**
-	 * Send a message to a session with Enter key
+	 * Send a message to a session with Enter key.
+	 * For multi-line messages, sends the text first then Enter separately
+	 * to avoid bracketed paste mode issues where Enter is treated as part of the paste.
 	 *
 	 * @param sessionName - The session to send to
 	 * @param message - The message to send
@@ -100,13 +102,21 @@ export class SessionCommandHelper {
 		this.logger.debug('Sending message to session', {
 			sessionName,
 			messageLength: message.length,
+			isMultiLine: message.includes('\n'),
 		});
 
-		// Write message followed by Enter key
-		session.write(message + '\r');
+		// For multi-line messages, terminal may enter bracketed paste mode
+		// Send text first, then Enter separately to ensure submission
+		session.write(message);
 
-		// Small delay to allow processing
+		// Brief delay for paste to complete (important for bracketed paste mode)
 		await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
+
+		// Send Enter explicitly as a separate keystroke
+		session.write('\r');
+
+		// Additional delay for Enter to be processed
+		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**

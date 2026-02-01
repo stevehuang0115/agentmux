@@ -66,6 +66,7 @@ describe('AgentRegistrationService', () => {
 			sendMessage: jest.fn().mockResolvedValue(undefined),
 			sendKey: jest.fn().mockResolvedValue(undefined),
 			sendEscape: jest.fn().mockResolvedValue(undefined),
+			sendEnter: jest.fn().mockResolvedValue(undefined),
 			capturePane: jest.fn().mockReturnValue('❯ '), // Claude at prompt by default
 			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
 		};
@@ -316,12 +317,12 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendMessageToAgent', () => {
-		it('should send message to existing session', async () => {
+		it('should send message and verify processing started (prompt gone)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// capturePane returns prompt first, then message content after send
+			// Message sent, prompt disappears indicating processing started
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ ')  // Before: at prompt
-				.mockReturnValueOnce('❯ Hello, agent!');  // After: message visible
+				.mockReturnValueOnce('Hello, agent!\nThinking...');  // After: no prompt, processing
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
 
@@ -329,27 +330,37 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
 		});
 
-		it('should retry when message not delivered on first attempt', async () => {
+		it('should send Enter again if message visible but prompt still showing', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// First attempt: message not visible, second attempt: message visible
+			// Message pasted but prompt still shows (bracketed paste issue)
+			// After sending Enter again, prompt disappears
 			mockSessionHelper.capturePane
-				.mockReturnValueOnce('❯ ')  // Before first attempt
-				.mockReturnValueOnce('❯ ')  // After first attempt (no message - failed)
-				.mockReturnValueOnce('❯ ')  // Before second attempt
-				.mockReturnValueOnce('❯ Hello');  // After second attempt (message visible - success)
+				.mockReturnValueOnce('❯ ')  // Before: at prompt
+				.mockReturnValueOnce('❯ Hello')  // After send: message visible but prompt still there
+				.mockReturnValueOnce('Hello\nProcessing...');  // After Enter: processing started
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(true);
-			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(2);
-		}, 15000);  // Increase timeout for retry test
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalled();
+		}, 15000);
+
+		it('should detect processing indicators as success', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ ')  // Before: at prompt
+				.mockReturnValueOnce('Hello\n⠋ thinking...');  // After: spinner visible
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(true);
+		});
 
 		it('should send Escape when Claude not at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Not at prompt initially, then at prompt after Escape
 			mockSessionHelper.capturePane
-				.mockReturnValueOnce('Processing...')  // Before: not at prompt
-				.mockReturnValueOnce('❯ Hello');  // After: message visible
+				.mockReturnValueOnce('Some modal text...')  // Before: not at prompt
+				.mockReturnValueOnce('Hello\nThinking...');  // After: processing
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
@@ -373,16 +384,16 @@ describe('AgentRegistrationService', () => {
 			expect(result.error).toContain('Message is required');
 		});
 
-		it('should fail after max retries', async () => {
+		it('should fail after max retries when prompt never goes away', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// All attempts fail - message never visible
+			// All attempts fail - prompt always visible, no processing
 			mockSessionHelper.capturePane.mockReturnValue('❯ ');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('Failed to deliver message');
-		}, 15000);  // Increase timeout for retry test
+		}, 20000);  // Increase timeout for retry test
 	});
 
 	describe('sendKeyToAgent', () => {

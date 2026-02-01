@@ -83,9 +83,19 @@ describe('SessionCommandHelper', () => {
 	});
 
 	describe('sendMessage', () => {
-		it('should write message with Enter key', async () => {
+		it('should write message followed by separate Enter key', async () => {
 			await helper.sendMessage('test-session', 'hello world');
-			expect(mockSession.write).toHaveBeenCalledWith('hello world\r');
+			// First call: message text
+			expect(mockSession.write).toHaveBeenNthCalledWith(1, 'hello world');
+			// Second call: Enter key (after delay)
+			expect(mockSession.write).toHaveBeenNthCalledWith(2, '\r');
+			expect(mockSession.write).toHaveBeenCalledTimes(2);
+		});
+
+		it('should handle multi-line messages', async () => {
+			await helper.sendMessage('test-session', 'line1\nline2\nline3');
+			expect(mockSession.write).toHaveBeenNthCalledWith(1, 'line1\nline2\nline3');
+			expect(mockSession.write).toHaveBeenNthCalledWith(2, '\r');
 		});
 
 		it('should throw error if session does not exist', async () => {
