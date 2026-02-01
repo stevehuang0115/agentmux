@@ -6,7 +6,7 @@
  * @module components/Dashboard/TeamsSummary
  */
 
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useTeams } from '../../hooks/useTeams';
 import './Summary.css';
 
@@ -43,16 +43,23 @@ export const TeamsSummary: React.FC<TeamsSummaryProps> = ({
   /**
    * Handle team click
    */
-  const handleClick = (teamId: string): void => {
-    onTeamClick?.(teamId);
-  };
+  const handleClick = useCallback(
+    (teamId: string): void => {
+      onTeamClick?.(teamId);
+    },
+    [onTeamClick]
+  );
 
   /**
    * Count active agents in a team
    */
-  const getActiveAgentCount = (members: Array<{ agentStatus: string }>): number => {
-    return members.filter((m) => m.agentStatus === 'active').length;
-  };
+  const getActiveAgentCount = useMemo(
+    () =>
+      (members: Array<{ agentStatus: string }>): number => {
+        return members.filter((m) => m.agentStatus === 'active').length;
+      },
+    []
+  );
 
   const displayTeams = compact ? teams.slice(0, 5) : teams;
 
@@ -67,21 +74,26 @@ export const TeamsSummary: React.FC<TeamsSummaryProps> = ({
         <p className="summary-empty">No teams yet</p>
       ) : (
         <ul className="summary-items">
-          {displayTeams.map((team) => (
-            <li
-              key={team.id}
-              className="summary-item"
-              onClick={() => handleClick(team.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => e.key === 'Enter' && handleClick(team.id)}
-            >
-              <span className="item-name">{team.name}</span>
-              <span className="item-meta">
-                {getActiveAgentCount(team.members)}/{team.members.length} active
-              </span>
-            </li>
-          ))}
+          {displayTeams.map((team) => {
+            const activeCount = getActiveAgentCount(team.members);
+            const totalCount = team.members.length;
+            return (
+              <li
+                key={team.id}
+                className="summary-item"
+                onClick={() => handleClick(team.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => e.key === 'Enter' && handleClick(team.id)}
+                aria-label={`${team.name}, ${activeCount} of ${totalCount} agents active`}
+              >
+                <span className="item-name">{team.name}</span>
+                <span className="item-meta" aria-hidden="true">
+                  {activeCount}/{totalCount} active
+                </span>
+              </li>
+            );
+          })}
           {compact && teams.length > 5 && (
             <li className="summary-more">+{teams.length - 5} more</li>
           )}

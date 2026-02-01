@@ -6,7 +6,7 @@
  * @module components/Dashboard/ProjectsSummary
  */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { useProjects } from '../../hooks/useProjects';
 import './Summary.css';
 
@@ -43,9 +43,12 @@ export const ProjectsSummary: React.FC<ProjectsSummaryProps> = ({
   /**
    * Handle project click
    */
-  const handleClick = (projectId: string): void => {
-    onProjectClick?.(projectId);
-  };
+  const handleClick = useCallback(
+    (projectId: string): void => {
+      onProjectClick?.(projectId);
+    },
+    [onProjectClick]
+  );
 
   const displayProjects = compact ? projects.slice(0, 5) : projects;
 
@@ -68,9 +71,13 @@ export const ProjectsSummary: React.FC<ProjectsSummaryProps> = ({
               role="button"
               tabIndex={0}
               onKeyDown={(e) => e.key === 'Enter' && handleClick(project.id)}
+              aria-label={`${project.name}, status: ${project.status}`}
             >
               <span className="item-name">{project.name}</span>
-              <span className={`status-dot status-${project.status}`} />
+              <span
+                className={`status-dot status-${project.status}`}
+                aria-hidden="true"
+              />
             </li>
           ))}
           {compact && projects.length > 5 && (
