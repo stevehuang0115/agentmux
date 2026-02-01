@@ -1,298 +1,115 @@
 /**
- * VisibilityToggles tests - Verifies toggle configurations and visibility logic.
+ * Tests for VisibilityToggles component.
+ *
+ * Tests cover:
+ * - Component rendering
+ * - Toggle button states
+ * - Expansion/collapse behavior
+ * - Toggle functionality
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import React from 'react';
 
-/**
- * Toggle switch configuration (matches the component interface)
- */
-interface ToggleConfig {
-  key: 'npc' | 'guest' | 'objects' | 'pets';
-  label: string;
-  icon: React.ReactNode;
-  isVisible: boolean;
-  onToggle: (visible: boolean) => void;
-}
+// Mock the FactoryContext
+const mockSetShowNPCAgents = vi.fn();
+const mockSetShowGuestAgents = vi.fn();
+const mockSetShowObjects = vi.fn();
 
-/**
- * Creates toggle configurations for testing.
- */
-function createToggles(
-  visibilityState: { npc: boolean; guest: boolean; objects: boolean; pets: boolean },
-  handlers: {
-    setNPC: (v: boolean) => void;
-    setGuest: (v: boolean) => void;
-    setObjects: (v: boolean) => void;
-    setPets: (v: boolean) => void;
-  }
-): ToggleConfig[] {
-  return [
-    {
-      key: 'npc',
-      label: 'NPC Agents',
-      icon: null, // Simplified for testing
-      isVisible: visibilityState.npc,
-      onToggle: handlers.setNPC,
-    },
-    {
-      key: 'guest',
-      label: 'Guest Agents',
-      icon: null,
-      isVisible: visibilityState.guest,
-      onToggle: handlers.setGuest,
-    },
-    {
-      key: 'objects',
-      label: 'Objects',
-      icon: null,
-      isVisible: visibilityState.objects,
-      onToggle: handlers.setObjects,
-    },
-    {
-      key: 'pets',
-      label: 'Pets',
-      icon: null,
-      isVisible: visibilityState.pets,
-      onToggle: handlers.setPets,
-    },
-  ];
-}
+let mockShowNPCAgents = true;
+let mockShowGuestAgents = true;
+let mockShowObjects = true;
 
-/**
- * Counts how many toggles are hidden.
- */
-function countHidden(toggles: ToggleConfig[]): number {
-  return toggles.filter((t) => !t.isVisible).length;
-}
+vi.mock('../../../contexts/FactoryContext', () => ({
+  useFactory: () => ({
+    showNPCAgents: mockShowNPCAgents,
+    setShowNPCAgents: mockSetShowNPCAgents,
+    showGuestAgents: mockShowGuestAgents,
+    setShowGuestAgents: mockSetShowGuestAgents,
+    showObjects: mockShowObjects,
+    setShowObjects: mockSetShowObjects,
+  }),
+}));
 
-/**
- * Gets the display text for the toggle button.
- */
-function getButtonText(hiddenCount: number): string {
-  return hiddenCount > 0 ? `${hiddenCount} Hidden` : 'Visibility';
-}
+// Import after mocks
+import { VisibilityToggles } from './VisibilityToggles';
 
 describe('VisibilityToggles', () => {
-  describe('Toggle configurations', () => {
-    it('should have all four toggle types', () => {
-      const toggles = createToggles(
-        { npc: true, guest: true, objects: true, pets: true },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShowNPCAgents = true;
+    mockShowGuestAgents = true;
+    mockShowObjects = true;
+  });
 
-      expect(toggles).toHaveLength(4);
-      expect(toggles.map((t) => t.key)).toEqual(['npc', 'guest', 'objects', 'pets']);
+  describe('rendering', () => {
+    it('should render the visibility button', () => {
+      render(<VisibilityToggles />);
+      const button = screen.getByRole('button', { name: /visibility/i });
+      expect(button).toBeDefined();
     });
 
-    it('should have correct labels', () => {
-      const toggles = createToggles(
-        { npc: true, guest: true, objects: true, pets: true },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
-
-      expect(toggles.find((t) => t.key === 'npc')?.label).toBe('NPC Agents');
-      expect(toggles.find((t) => t.key === 'guest')?.label).toBe('Guest Agents');
-      expect(toggles.find((t) => t.key === 'objects')?.label).toBe('Objects');
-      expect(toggles.find((t) => t.key === 'pets')?.label).toBe('Pets');
+    it('should show "Visibility" text when all are visible', () => {
+      render(<VisibilityToggles />);
+      expect(screen.getByText('Visibility')).toBeDefined();
     });
 
-    it('should reflect visibility state correctly', () => {
-      const toggles = createToggles(
-        { npc: true, guest: false, objects: true, pets: false },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
+    it('should show hidden count when some are hidden', () => {
+      mockShowNPCAgents = false;
+      render(<VisibilityToggles />);
+      expect(screen.getByText('1 Hidden')).toBeDefined();
+    });
 
-      expect(toggles.find((t) => t.key === 'npc')?.isVisible).toBe(true);
-      expect(toggles.find((t) => t.key === 'guest')?.isVisible).toBe(false);
-      expect(toggles.find((t) => t.key === 'objects')?.isVisible).toBe(true);
-      expect(toggles.find((t) => t.key === 'pets')?.isVisible).toBe(false);
+    it('should show correct hidden count for multiple hidden items', () => {
+      mockShowNPCAgents = false;
+      mockShowGuestAgents = false;
+      render(<VisibilityToggles />);
+      expect(screen.getByText('2 Hidden')).toBeDefined();
     });
   });
 
-  describe('Toggle handlers', () => {
-    it('should call correct handler when toggled', () => {
-      const handlers = {
-        setNPC: vi.fn(),
-        setGuest: vi.fn(),
-        setObjects: vi.fn(),
-        setPets: vi.fn(),
-      };
-
-      const toggles = createToggles(
-        { npc: true, guest: true, objects: true, pets: true },
-        handlers
-      );
-
-      // Simulate toggling each one
-      toggles.find((t) => t.key === 'npc')?.onToggle(false);
-      toggles.find((t) => t.key === 'guest')?.onToggle(false);
-      toggles.find((t) => t.key === 'objects')?.onToggle(false);
-      toggles.find((t) => t.key === 'pets')?.onToggle(false);
-
-      expect(handlers.setNPC).toHaveBeenCalledWith(false);
-      expect(handlers.setGuest).toHaveBeenCalledWith(false);
-      expect(handlers.setObjects).toHaveBeenCalledWith(false);
-      expect(handlers.setPets).toHaveBeenCalledWith(false);
+  describe('expansion', () => {
+    it('should not show toggles when collapsed', () => {
+      render(<VisibilityToggles />);
+      expect(screen.queryByText('NPC Agents')).toBeNull();
+      expect(screen.queryByText('Guest Agents')).toBeNull();
+      expect(screen.queryByText('Objects')).toBeNull();
     });
 
-    it('should toggle visibility correctly', () => {
-      let npcVisible = true;
-      const setNPC = vi.fn((v) => { npcVisible = v; });
+    it('should show toggles when expanded', () => {
+      render(<VisibilityToggles />);
+      const button = screen.getByRole('button', { name: /visibility/i });
+      fireEvent.click(button);
 
-      const toggles = createToggles(
-        { npc: npcVisible, guest: true, objects: true, pets: true },
-        {
-          setNPC,
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
-
-      // Toggle off
-      toggles.find((t) => t.key === 'npc')?.onToggle(!npcVisible);
-      expect(setNPC).toHaveBeenCalledWith(false);
-      expect(npcVisible).toBe(false);
-
-      // Toggle back on
-      toggles.find((t) => t.key === 'npc')?.onToggle(!npcVisible);
-      expect(setNPC).toHaveBeenCalledWith(true);
-      expect(npcVisible).toBe(true);
+      expect(screen.getByText('NPC Agents')).toBeDefined();
+      expect(screen.getByText('Guest Agents')).toBeDefined();
+      expect(screen.getByText('Objects')).toBeDefined();
     });
   });
 
-  describe('Hidden count', () => {
-    it('should return 0 when all visible', () => {
-      const toggles = createToggles(
-        { npc: true, guest: true, objects: true, pets: true },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
+  describe('toggle functionality', () => {
+    it('should have three toggles in the expanded panel', () => {
+      render(<VisibilityToggles />);
+      const mainButton = screen.getByRole('button', { name: /visibility/i });
+      fireEvent.click(mainButton);
 
-      expect(countHidden(toggles)).toBe(0);
-    });
-
-    it('should return 4 when all hidden', () => {
-      const toggles = createToggles(
-        { npc: false, guest: false, objects: false, pets: false },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
-
-      expect(countHidden(toggles)).toBe(4);
-    });
-
-    it('should return correct count for partial visibility', () => {
-      const toggles = createToggles(
-        { npc: true, guest: false, objects: true, pets: false },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
-
-      expect(countHidden(toggles)).toBe(2);
+      // Each toggle is a button inside the panel
+      const toggles = screen.getAllByRole('button');
+      // Main button + close button + 3 toggle switches = 5 buttons
+      expect(toggles.length).toBe(5);
     });
   });
 
-  describe('Button text', () => {
-    it('should show "Visibility" when none hidden', () => {
-      expect(getButtonText(0)).toBe('Visibility');
-    });
+  describe('toggle configurations', () => {
+    it('should have correct labels for each toggle', () => {
+      render(<VisibilityToggles />);
+      const button = screen.getByRole('button', { name: /visibility/i });
+      fireEvent.click(button);
 
-    it('should show "1 Hidden" when one hidden', () => {
-      expect(getButtonText(1)).toBe('1 Hidden');
-    });
-
-    it('should show "4 Hidden" when all hidden', () => {
-      expect(getButtonText(4)).toBe('4 Hidden');
-    });
-  });
-
-  describe('Expansion state', () => {
-    it('should track expanded state correctly', () => {
-      let isExpanded = false;
-
-      const toggle = () => {
-        isExpanded = !isExpanded;
-      };
-
-      expect(isExpanded).toBe(false);
-      toggle();
-      expect(isExpanded).toBe(true);
-      toggle();
-      expect(isExpanded).toBe(false);
-    });
-  });
-
-  describe('Toggle order', () => {
-    it('should maintain consistent order', () => {
-      const toggles = createToggles(
-        { npc: true, guest: true, objects: true, pets: true },
-        {
-          setNPC: vi.fn(),
-          setGuest: vi.fn(),
-          setObjects: vi.fn(),
-          setPets: vi.fn(),
-        }
-      );
-
-      expect(toggles[0].key).toBe('npc');
-      expect(toggles[1].key).toBe('guest');
-      expect(toggles[2].key).toBe('objects');
-      expect(toggles[3].key).toBe('pets');
-    });
-  });
-
-  describe('UI state derivation', () => {
-    it('should determine warning state from hidden count', () => {
-      const hasHidden = (count: number) => count > 0;
-
-      expect(hasHidden(0)).toBe(false);
-      expect(hasHidden(1)).toBe(true);
-      expect(hasHidden(4)).toBe(true);
-    });
-
-    it('should select correct icon based on hidden state', () => {
-      const getIcon = (count: number) => (count > 0 ? 'EyeOff' : 'Eye');
-
-      expect(getIcon(0)).toBe('Eye');
-      expect(getIcon(1)).toBe('EyeOff');
-      expect(getIcon(4)).toBe('EyeOff');
-    });
-
-    it('should select correct chevron based on expanded state', () => {
-      const getChevron = (expanded: boolean) => (expanded ? 'ChevronDown' : 'ChevronUp');
-
-      expect(getChevron(false)).toBe('ChevronUp');
-      expect(getChevron(true)).toBe('ChevronDown');
+      expect(screen.getByText('NPC Agents')).toBeDefined();
+      expect(screen.getByText('Guest Agents')).toBeDefined();
+      expect(screen.getByText('Objects')).toBeDefined();
     });
   });
 });

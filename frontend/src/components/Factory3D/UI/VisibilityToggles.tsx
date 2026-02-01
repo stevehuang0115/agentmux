@@ -8,7 +8,7 @@
  */
 
 import React, { useState } from 'react';
-import { Eye, EyeOff, ChevronUp, ChevronDown, Users, UserCheck, Car, Dog } from 'lucide-react';
+import { Eye, EyeOff, ChevronUp, ChevronDown, Users, UserCheck, Car } from 'lucide-react';
 import { useFactory } from '../../../contexts/FactoryContext';
 
 /**
@@ -16,7 +16,7 @@ import { useFactory } from '../../../contexts/FactoryContext';
  */
 interface ToggleConfig {
   /** Unique key for the toggle */
-  key: 'npc' | 'guest' | 'objects' | 'pets';
+  key: 'npc' | 'guest' | 'objects';
   /** Display label */
   label: string;
   /** Icon component */
@@ -42,8 +42,6 @@ export const VisibilityToggles: React.FC = () => {
     setShowGuestAgents,
     showObjects,
     setShowObjects,
-    showPets,
-    setShowPets,
   } = useFactory();
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -70,13 +68,6 @@ export const VisibilityToggles: React.FC = () => {
       icon: <Car className="w-4 h-4" />,
       isVisible: showObjects,
       onToggle: setShowObjects,
-    },
-    {
-      key: 'pets',
-      label: 'Pets',
-      icon: <Dog className="w-4 h-4" />,
-      isVisible: showPets,
-      onToggle: setShowPets,
     },
   ];
 

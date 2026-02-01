@@ -41,9 +41,6 @@ import { MarkZuckerbergNPC } from './Agents/MarkZuckerbergNPC';
 import { JensenHuangNPC } from './Agents/JensenHuangNPC';
 import { SteveHuangNPC } from './Agents/SteveHuangNPC';
 
-// Pet components
-import { RoboticDogPet } from './Pets';
-
 // Camera components
 import { CameraController } from './Camera/CameraController';
 
@@ -191,7 +188,7 @@ const LoadingFallback: React.FC = () => {
  * SceneContent - All 3D content rendered inside the Canvas
  */
 const SceneContent: React.FC = () => {
-  const { showNPCAgents, showGuestAgents, showObjects, showPets } = useFactory();
+  const { showNPCAgents, showGuestAgents, showObjects } = useFactory();
 
   return (
     <>
@@ -251,15 +248,6 @@ const SceneContent: React.FC = () => {
         </>
       )}
 
-      {/* Pets - robotic dogs that wander around the factory */}
-      {showPets && (
-        <>
-          <RoboticDogPet id="roboticdog-1" initialPosition={[8, 0, 5]} />
-          <RoboticDogPet id="roboticdog-2" initialPosition={[-5, 0, 8]} />
-          <RoboticDogPet id="roboticdog-3" initialPosition={[0, 0, -5]} />
-        </>
-      )}
-
       {/* Camera controls */}
       <CameraController />
 
@@ -300,19 +288,14 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
   const { CAMERA } = FACTORY_CONSTANTS;
   const statsParentRef = useRef<HTMLDivElement>(null);
 
-  // Detect mobile devices for performance adjustments
-  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-    navigator.userAgent
-  );
-
   return (
     <FactoryProvider>
       <SceneErrorBoundary>
         <div className={`relative w-full h-full ${className}`}>
           {/* 3D Canvas */}
           <Canvas
-            shadows={!isMobile} // Disable shadows on mobile for performance
-            dpr={isMobile ? [1, 1.5] : [1, 2]} // Lower max DPR on mobile
+            shadows
+            dpr={[1, 2]}
             camera={{
               fov: CAMERA.FOV,
               near: CAMERA.NEAR,
@@ -324,13 +307,11 @@ export const FactoryScene: React.FC<FactorySceneProps> = ({
               ],
             }}
             gl={{
-              antialias: !isMobile, // Disable antialiasing on mobile for performance
+              antialias: true,
               alpha: false,
-              powerPreference: isMobile ? 'default' : 'high-performance',
+              powerPreference: 'high-performance',
               // Enable context restoration for WebGL context loss recovery
               preserveDrawingBuffer: true,
-              // Mobile-specific: limit precision for better compatibility
-              ...(isMobile && { precision: 'mediump' }),
             }}
             onCreated={({ gl }) => {
               // Handle WebGL context loss gracefully

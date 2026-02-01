@@ -37,7 +37,7 @@ import {
   isNightTime,
   createInitialCameraState,
 } from '../utils/factory.utils';
-import { updateEntityPositionMapInPlace } from '../utils/factoryCollision';
+import { buildEntityPositionMap } from '../utils/factoryCollision';
 
 // ====== PROXIMITY CONVERSATION CONSTANTS ======
 
@@ -346,10 +346,6 @@ interface FactoryContextType {
   showObjects: boolean;
   /** Toggle objects visibility */
   setShowObjects: (show: boolean) => void;
-  /** Whether to show pets (robotic dogs, etc.) */
-  showPets: boolean;
-  /** Toggle pets visibility */
-  setShowPets: (show: boolean) => void;
 }
 
 // ====== CONTEXT ======
@@ -405,12 +401,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   // Loading and error state (derived from SSE hook)
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Visibility toggle state
-  const [showNPCAgents, setShowNPCAgents] = useState(true);
-  const [showGuestAgents, setShowGuestAgents] = useState(true);
-  const [showObjects, setShowObjects] = useState(true);
-  const [showPets, setShowPets] = useState(true);
 
   // Seat occupancy ref - tracks which seats are taken at each area (no re-renders)
   const seatOccupancyRef = useRef<SeatOccupancyMap>(new Map([
@@ -528,6 +518,11 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
     }
     return target;
   }, []);
+
+  // Visibility toggle state
+  const [showNPCAgents, setShowNPCAgents] = useState(true);
+  const [showGuestAgents, setShowGuestAgents] = useState(true);
+  const [showObjects, setShowObjects] = useState(true);
 
   // Computed night mode based on lighting mode and time
   const isNightMode = useMemo(() => {
@@ -1285,12 +1280,12 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
   entityConversationsRef.current = entityConversations;
 
   // Pre-built entity position map for collision checks.
-  // Uses stable Map reference with incremental in-place updates for performance.
-  // Only creates new position objects for new entities; updates existing ones in-place.
+  // Built once per render (when agents/npcPositions change) instead of once per entity per frame.
   const entityPositionMapRef = useRef<Map<string, { x: number; z: number }>>(new Map());
-  useEffect(() => {
-    updateEntityPositionMapInPlace(entityPositionMapRef.current, agents, npcPositions);
-  }, [agents, npcPositions]);
+  entityPositionMapRef.current = useMemo(
+    () => buildEntityPositionMap(agents, npcPositions),
+    [agents, npcPositions]
+  );
 
   useEffect(() => {
     if (!bossModeState.isActive) return;
@@ -1424,52 +1419,22 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       }
 
       // For each entity, find mutual-closest neighbor within threshold
-      // Use spatial hashing for O(n) instead of O(n²) complexity
       const closestNeighbor = new Map<string, string>();
-      const cellSize = PROXIMITY_THRESHOLD;
-      const grid = new Map<string, number[]>();
 
-      // Build spatial hash grid
-      for (let i = 0; i < entities.length; i++) {
-        const cellX = Math.floor(entities[i].x / cellSize);
-        const cellZ = Math.floor(entities[i].z / cellSize);
-        const key = `${cellX},${cellZ}`;
-        let cell = grid.get(key);
-        if (!cell) {
-          cell = [];
-          grid.set(key, cell);
-        }
-        cell.push(i);
-      }
-
-      // Find closest neighbor checking only adjacent cells
       for (let i = 0; i < entities.length; i++) {
         let minDistSq = Infinity;
         let closestId = '';
-        const cellX = Math.floor(entities[i].x / cellSize);
-        const cellZ = Math.floor(entities[i].z / cellSize);
-
-        // Check 3x3 neighborhood of cells
-        for (let dcx = -1; dcx <= 1; dcx++) {
-          for (let dcz = -1; dcz <= 1; dcz++) {
-            const neighborKey = `${cellX + dcx},${cellZ + dcz}`;
-            const neighborIndices = grid.get(neighborKey);
-            if (!neighborIndices) continue;
-
-            for (const j of neighborIndices) {
-              if (i === j) continue;
-              const dx = entities[i].x - entities[j].x;
-              const dz = entities[i].z - entities[j].z;
-              const distSq = dx * dx + dz * dz;
-              // Compare squared distances to avoid expensive sqrt calls
-              if (distSq < minDistSq && distSq < PROXIMITY_THRESHOLD_SQUARED) {
-                minDistSq = distSq;
-                closestId = entities[j].id;
-              }
-            }
+        for (let j = 0; j < entities.length; j++) {
+          if (i === j) continue;
+          const dx = entities[i].x - entities[j].x;
+          const dz = entities[i].z - entities[j].z;
+          const distSq = dx * dx + dz * dz;
+          // Compare squared distances to avoid expensive sqrt calls
+          if (distSq < minDistSq && distSq < PROXIMITY_THRESHOLD_SQUARED) {
+            minDistSq = distSq;
+            closestId = entities[j].id;
           }
         }
-
         if (closestId) {
           closestNeighbor.set(entities[i].id, closestId);
         }
@@ -1613,25 +1578,10 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       });
 
       // Only update state if conversations actually changed
-      // Use fast comparison instead of JSON serialization:
-      // Compare size first, then check if each entry matches
-      const currentConvos = entityConversationsRef.current;
-      let hasChanged = newConvos.size !== currentConvos.size;
+      const serialize = (m: Map<string, ProximityConversation>) =>
+        JSON.stringify(Array.from(m.entries()).map(([k, v]) => [k, v.currentLine, v.isLongDuration]));
 
-      if (!hasChanged) {
-        // Same size - check if contents match
-        for (const [key, newConvo] of newConvos) {
-          const current = currentConvos.get(key);
-          if (!current ||
-              current.currentLine !== newConvo.currentLine ||
-              current.isLongDuration !== newConvo.isLongDuration) {
-            hasChanged = true;
-            break;
-          }
-        }
-      }
-
-      if (hasChanged) {
+      if (serialize(newConvos) !== serialize(entityConversationsRef.current)) {
         setEntityConversations(newConvos);
       }
     };
@@ -1700,8 +1650,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       setShowGuestAgents,
       showObjects,
       setShowObjects,
-      showPets,
-      setShowPets,
     }),
     [
       agents,
@@ -1709,7 +1657,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       camera,
       setCameraTarget,
       lightingMode,
-      setLightingMode,
       isNightMode,
       bossModeState,
       toggleBossMode,
@@ -1751,7 +1698,6 @@ export const FactoryProvider: React.FC<FactoryProviderProps> = ({ children }) =>
       showNPCAgents,
       showGuestAgents,
       showObjects,
-      showPets,
     ]
   );
 
