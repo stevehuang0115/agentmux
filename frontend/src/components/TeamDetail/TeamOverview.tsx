@@ -6,6 +6,7 @@ import { AddMemberForm } from './AddMemberForm';
 import { MembersList } from './MembersList';
 import { Team, TeamMember } from '../../types';
 import { FormSelect } from '../UI';
+import { useProjects } from '../../hooks/useProjects';
 
 interface TeamOverviewProps {
   team: Team;
@@ -19,12 +20,6 @@ interface TeamOverviewProps {
   onStopMember: (memberId: string) => Promise<void>;
   onProjectChange?: (projectId: string | null) => void;
   onViewTerminal?: (member: TeamMember) => void;
-}
-
-interface Project {
-  id: string;
-  name: string;
-  path: string;
 }
 
 export const TeamOverview: React.FC<TeamOverviewProps> = ({
@@ -42,31 +37,13 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
 }) => {
   const [showAddMember, setShowAddMember] = useState(false);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.currentProject || '');
+  const { projectOptions } = useProjects();
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
-
-  useEffect(() => {
-    fetchProjects();
-  }, []);
 
   useEffect(() => {
     setSelectedProjectId(team?.currentProject || '');
   }, [team?.currentProject]);
-
-  const fetchProjects = async () => {
-    try {
-      const response = await fetch('/api/projects');
-      if (response.ok) {
-        const result = await response.json();
-        const projectsData = result.success ? (result.data || []) : (result || []);
-        setProjects(Array.isArray(projectsData) ? projectsData : []);
-      }
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-      setProjects([]);
-    }
-  };
 
   const handleProjectSelect = (projectId: string) => {
     setSelectedProjectId(projectId);
@@ -124,7 +101,7 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
                 onChange={(e) => handleProjectSelect(e.target.value)}
               >
                 <option value="">No project assigned</option>
-                {projects.map(project => (
+                {projectOptions.map(project => (
                   <option key={project.id} value={project.id}>{project.name}</option>
                 ))}
               </FormSelect>

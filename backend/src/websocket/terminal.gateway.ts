@@ -16,7 +16,7 @@ import {
 	type ISessionBackend,
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
-import { ORCHESTRATOR_SESSION_NAME } from '../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../constants.js';
 
 /**
  * Terminal Gateway class for WebSocket-based terminal streaming.
@@ -426,7 +426,7 @@ export class TerminalGateway {
 
 		// Extract conversation ID from the output if present
 		// The format is [CHAT:conversationId] at the start of a response
-		const chatIdMatch = content.match(/\[CHAT:([^\]]+)\]/);
+		const chatIdMatch = content.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
 		if (chatIdMatch) {
 			this.activeConversationId = chatIdMatch[1];
 		}

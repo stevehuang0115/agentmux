@@ -1,137 +1,144 @@
 /**
  * useProjects Hook Tests
  *
+ * Unit tests for the useProjects custom hook.
+ *
  * @module hooks/useProjects.test
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import axios from 'axios';
 import { useProjects } from './useProjects';
 
-// Mock axios
-vi.mock('axios');
-const mockedAxios = vi.mocked(axios);
+// Mock fetch globally
+const mockFetch = vi.fn();
+global.fetch = mockFetch;
 
 describe('useProjects', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    mockFetch.mockReset();
   });
 
-  it('should initialize with loading state', () => {
-    mockedAxios.get.mockImplementation(() => new Promise(() => {})); // Never resolves
-
-    const { result } = renderHook(() => useProjects());
-
-    expect(result.current.loading).toBe(true);
-    expect(result.current.projects).toEqual([]);
-    expect(result.current.error).toBeNull();
+  afterEach(() => {
+    vi.clearAllMocks();
   });
 
   it('should fetch projects on mount', async () => {
     const mockProjects = [
-      { id: 'proj-1', name: 'Project 1', status: 'active' },
-      { id: 'proj-2', name: 'Project 2', status: 'paused' },
+      { id: '1', name: 'Project 1', path: '/path/1', status: 'active', teams: {}, createdAt: '', updatedAt: '' },
+      { id: '2', name: 'Project 2', path: '/path/2', status: 'active', teams: {}, createdAt: '', updatedAt: '' },
     ];
 
-    mockedAxios.get.mockResolvedValueOnce({
-      data: { success: true, data: mockProjects },
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: mockProjects }),
     });
 
     const { result } = renderHook(() => useProjects());
 
+    expect(result.current.isLoading).toBe(true);
+
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.projects).toEqual(mockProjects);
+    expect(result.current.projects).toHaveLength(2);
+    expect(result.current.projectOptions).toHaveLength(2);
     expect(result.current.error).toBeNull();
-    expect(mockedAxios.get).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
-      signal: expect.any(AbortSignal),
-    }));
   });
 
-  it('should handle API success false', async () => {
-    mockedAxios.get.mockResolvedValueOnce({
-      data: { success: false, error: 'Not authorized' },
+  it('should handle fetch errors', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      statusText: 'Internal Server Error',
     });
 
     const { result } = renderHook(() => useProjects());
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.projects).toEqual([]);
-    expect(result.current.error).toBe('Not authorized');
+    expect(result.current.projects).toHaveLength(0);
+    expect(result.current.error).toBe('Failed to fetch projects: Internal Server Error');
   });
 
-  it('should handle network error', async () => {
-    mockedAxios.get.mockRejectedValueOnce(new Error('Network error'));
+  it('should handle network errors', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('Network error'));
 
     const { result } = renderHook(() => useProjects());
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.projects).toEqual([]);
+    expect(result.current.projects).toHaveLength(0);
     expect(result.current.error).toBe('Network error');
   });
 
-  it('should refresh projects when refresh is called', async () => {
-    const initialProjects = [{ id: 'proj-1', name: 'Project 1', status: 'active' }];
-    const updatedProjects = [
-      { id: 'proj-1', name: 'Project 1', status: 'active' },
-      { id: 'proj-2', name: 'Project 2', status: 'active' },
+  it('should create projectOptions from projects', async () => {
+    const mockProjects = [
+      { id: 'p1', name: 'Alpha', path: '/alpha', status: 'active', teams: {}, createdAt: '', updatedAt: '' },
     ];
 
-    mockedAxios.get
-      .mockResolvedValueOnce({ data: { success: true, data: initialProjects } })
-      .mockResolvedValueOnce({ data: { success: true, data: updatedProjects } });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: mockProjects }),
+    });
 
     const { result } = renderHook(() => useProjects());
 
     await waitFor(() => {
-      expect(result.current.projects).toEqual(initialProjects);
+      expect(result.current.isLoading).toBe(false);
     });
 
-    await result.current.refresh();
-
-    await waitFor(() => {
-      expect(result.current.projects).toEqual(updatedProjects);
-    });
-
-    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+    expect(result.current.projectOptions).toEqual([
+      { id: 'p1', name: 'Alpha', path: '/alpha' },
+    ]);
   });
 
-  it('should handle empty projects array', async () => {
-    mockedAxios.get.mockResolvedValueOnce({
-      data: { success: true, data: [] },
+  it('should handle non-array response data', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, data: null }),
     });
 
     const { result } = renderHook(() => useProjects());
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.isLoading).toBe(false);
     });
 
-    expect(result.current.projects).toEqual([]);
-    expect(result.current.error).toBeNull();
+    expect(result.current.projects).toHaveLength(0);
   });
 
-  it('should handle null data gracefully', async () => {
-    mockedAxios.get.mockResolvedValueOnce({
-      data: { success: true, data: null },
-    });
+  it('should allow refetch', async () => {
+    const mockProjects1 = [{ id: '1', name: 'P1', path: '/p1', status: 'active', teams: {}, createdAt: '', updatedAt: '' }];
+    const mockProjects2 = [
+      { id: '1', name: 'P1', path: '/p1', status: 'active', teams: {}, createdAt: '', updatedAt: '' },
+      { id: '2', name: 'P2', path: '/p2', status: 'active', teams: {}, createdAt: '', updatedAt: '' },
+    ];
+
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true, data: mockProjects1 }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true, data: mockProjects2 }),
+      });
 
     const { result } = renderHook(() => useProjects());
 
     await waitFor(() => {
-      expect(result.current.loading).toBe(false);
+      expect(result.current.projects).toHaveLength(1);
     });
 
-    expect(result.current.projects).toEqual([]);
-    expect(result.current.error).toBeNull();
+    await result.current.refetch();
+
+    await waitFor(() => {
+      expect(result.current.projects).toHaveLength(2);
+    });
   });
 });

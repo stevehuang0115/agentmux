@@ -2,12 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { FormLabel, FormInput, FormSelect, Button } from '../UI';
 import { useAlert } from '../UI/Dialog';
 import { useRoles } from '../../hooks/useRoles';
-
-interface Project {
-  id: string;
-  name: string;
-  path: string;
-}
+import { useProjects } from '../../hooks/useProjects';
+import type { Project } from '../../types';
 
 interface TeamRole {
   key: string;
@@ -40,12 +36,12 @@ interface TeamModalProps {
 export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit, team }) => {
   const { showWarning, AlertComponent } = useAlert();
   const { roles: fetchedRoles, isLoading: rolesLoading } = useRoles();
+  const { projects, isLoading: projectsLoading } = useProjects();
   const [formData, setFormData] = useState({
     name: '',
     projectPath: '',
   });
   const [members, setMembers] = useState<TeamMember[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Transform fetched roles into TeamRole format
@@ -60,7 +56,6 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
   }));
 
   useEffect(() => {
-    fetchProjects();
     if (team) {
       setFormData({
         name: team.name || '',
@@ -68,7 +63,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       });
       if (team.members && Array.isArray(team.members)) {
         // Ensure all members have runtimeType and avatar (for backward compatibility)
-        const migratedMembers = team.members.map((member, index) => ({
+        const migratedMembers = team.members.map((member: TeamMember, index: number) => ({
           ...member,
           runtimeType: member.runtimeType || 'claude-code',
           avatar: member.avatar || avatarChoices[index % avatarChoices.length]
@@ -82,7 +77,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
   useEffect(() => {
     if (availableRoles.length > 0 && members.length === 0 && !team) {
       const defaultRoles = availableRoles.filter(role => role.isDefault);
-      
+
       const defaultMembers: TeamMember[] = defaultRoles.map((role, index) => ({
         id: (index + 1).toString(),
         name: role.displayName,
@@ -91,26 +86,12 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         runtimeType: 'claude-code',
         avatar: avatarChoices[index % avatarChoices.length]
       }));
-      
+
       if (defaultMembers.length > 0) {
         setMembers(defaultMembers);
       }
     }
   }, [availableRoles, members.length, team]);
-
-  const fetchProjects = async () => {
-    try {
-      const response = await fetch('/api/projects');
-      if (response.ok) {
-        const result = await response.json();
-        const projectsData = result.success ? (result.data || []) : (result || []);
-        setProjects(Array.isArray(projectsData) ? projectsData : []);
-      }
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-      setProjects([]);
-    }
-  };
 
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -371,7 +352,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
               variant="primary"
               type="submit"
               onClick={handleFormSubmit}
-              disabled={!formData.name.trim() || members.length === 0 || loading || rolesLoading}
+              disabled={!formData.name.trim() || members.length === 0 || loading || rolesLoading || projectsLoading}
             >
               {loading ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />

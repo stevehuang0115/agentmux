@@ -30,9 +30,9 @@ export const ProjectsSummary: React.FC<ProjectsSummaryProps> = ({
   compact = false,
   onProjectClick,
 }) => {
-  const { projects, loading, error } = useProjects();
+  const { projects, isLoading, error } = useProjects();
 
-  if (loading) {
+  if (isLoading) {
     return <div className="summary-loading">Loading projects...</div>;
   }
 

@@ -14,7 +14,7 @@ import {
   ConversationNotFoundError,
 } from '../../services/chat/chat.service.js';
 import { AgentRegistrationService } from '../../services/agent/agent-registration.service.js';
-import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../../constants.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type {
   SendMessageInput,
@@ -59,8 +59,8 @@ async function forwardToOrchestrator(
       terminalGateway.setActiveConversationId(conversationId);
     }
 
-    // Format message with conversation context
-    const formattedMessage = `[CHAT:${conversationId}] ${content}`;
+    // Format message with conversation context using constant prefix
+    const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;
 
     const result = await agentRegistrationService.sendMessageToAgent(
       ORCHESTRATOR_SESSION_NAME,
