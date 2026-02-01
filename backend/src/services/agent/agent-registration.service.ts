@@ -73,6 +73,13 @@ export class AgentRegistrationService {
 		'$', // Shell prompt if Claude exits
 	] as const;
 
+	/**
+	 * Pattern to detect Claude Code processing indicators (spinners, thinking text).
+	 * Used to verify that a message has been submitted and is being processed.
+	 */
+	private static readonly CLAUDE_PROCESSING_PATTERN =
+		/thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i;
+
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
 		projectRoot: string | null,
@@ -1217,11 +1224,13 @@ export class AgentRegistrationService {
 		try {
 			this.logger.info('Terminating agent session (unified approach)', { sessionName, role });
 
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			// Get session helper once to avoid repeated async calls
+			const sessionHelper = await this.getSessionHelper();
+			const sessionExists = sessionHelper.sessionExists(sessionName);
 
 			if (sessionExists) {
 				// Kill the tmux session
-				await (await this.getSessionHelper()).killSession(sessionName);
+				await sessionHelper.killSession(sessionName);
 				this.logger.info('Session terminated successfully', { sessionName });
 			} else {
 				this.logger.info('Session already terminated or does not exist', { sessionName });
@@ -1293,9 +1302,11 @@ export class AgentRegistrationService {
 				};
 			}
 
+			// Get session helper once for this method
+			const sessionHelper = await this.getSessionHelper();
+
 			// Check if session exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
-			if (!sessionExists) {
+			if (!sessionHelper.sessionExists(sessionName)) {
 				return {
 					success: false,
 					error: `Session '${sessionName}' does not exist`,
@@ -1379,24 +1390,60 @@ export class AgentRegistrationService {
 					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 				}
 
-				// Send the message directly without clearing (Ctrl+C can disrupt Claude Code)
+				// Send the message (sendMessage now handles Enter separately for bracketed paste mode)
 				await sessionHelper.sendMessage(sessionName, message);
 
-				// Wait a bit for processing to start
-				await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY + 200);
+				// Wait for Claude Code to start processing
+				await this.delay(
+					SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY +
+					SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY
+				);
 
-				// Verify message was accepted by checking terminal output changed
-				const afterOutput = sessionHelper.capturePane(sessionName, 10);
+				// Verify message was submitted by checking terminal output
+				const afterOutput = sessionHelper.capturePane(sessionName, 15);
 
-				// Check if the message content appears in the terminal (indicating it was typed)
-				const messageAppeared = afterOutput.includes(messageFragment);
+				// Check for signs that Claude Code is processing (not just that text was pasted)
+				// After submission, Claude should show activity indicators or the prompt should be gone
+				const hasProcessingIndicator = AgentRegistrationService.CLAUDE_PROCESSING_PATTERN.test(
+					afterOutput
+				);
+				const promptStillVisible = this.isClaudeAtPrompt(afterOutput);
+				const messageInOutput = afterOutput.includes(messageFragment);
 
-				if (messageAppeared) {
-					this.logger.debug('Message delivery verified - content visible in terminal', {
+				// Message is considered submitted if:
+				// 1. Processing indicators are visible, OR
+				// 2. Prompt is no longer visible (Claude is working), OR
+				// 3. Message appeared and we don't see the same prompt line (input was consumed)
+				if (hasProcessingIndicator || (!promptStillVisible && messageInOutput)) {
+					this.logger.debug('Message submitted and being processed', {
+						sessionName,
+						attempt,
+						hasProcessingIndicator,
+						promptStillVisible,
+					});
+					return true;
+				}
+
+				// Fallback: if message appeared but prompt is still visible, Claude might be waiting
+				// This could mean the message was pasted but not submitted - send Enter again
+				if (messageInOutput && promptStillVisible) {
+					this.logger.debug('Message visible but prompt still showing - sending Enter again', {
 						sessionName,
 						attempt,
 					});
-					return true;
+					await sessionHelper.sendEnter(sessionName);
+					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+
+					// Re-check after sending Enter
+					const recheckOutput = sessionHelper.capturePane(sessionName, 15);
+					const recheckPromptVisible = this.isClaudeAtPrompt(recheckOutput);
+					if (!recheckPromptVisible) {
+						this.logger.debug('Message submitted after extra Enter', {
+							sessionName,
+							attempt,
+						});
+						return true;
+					}
 				}
 
 				this.logger.warn('Message may not have been delivered, retrying', {
@@ -1481,8 +1528,11 @@ export class AgentRegistrationService {
 		error?: string;
 	}> {
 		try {
+			// Get session helper once to avoid repeated async calls
+			const sessionHelper = await this.getSessionHelper();
+
 			// Check if session exists
-			const sessionExists = await (await this.getSessionHelper()).sessionExists(sessionName);
+			const sessionExists = sessionHelper.sessionExists(sessionName);
 			if (!sessionExists) {
 				return {
 					success: false,
@@ -1490,8 +1540,8 @@ export class AgentRegistrationService {
 				};
 			}
 
-			// Send key using tmux command service
-			await (await this.getSessionHelper()).sendKey(sessionName, key);
+			// Send key using session command helper
+			await sessionHelper.sendKey(sessionName, key);
 
 			this.logger.info('Key sent to agent successfully', {
 				sessionName,
@@ -1587,6 +1637,8 @@ export class AgentRegistrationService {
 	 */
 	private async sendPromptRobustly(sessionName: string, prompt: string): Promise<boolean> {
 		const maxAttempts = 3;
+		// Get session helper once to avoid repeated async calls
+		const sessionHelper = await this.getSessionHelper();
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
@@ -1597,24 +1649,20 @@ export class AgentRegistrationService {
 				});
 
 				// Capture state before sending
-				const beforeOutput = await (await this.getSessionHelper()).capturePane(sessionName, 10);
+				const beforeOutput = sessionHelper.capturePane(sessionName, 10);
 				const beforeLength = beforeOutput.length;
 
 				// Clear the existing prompts if any
-				await (await this.getSessionHelper()).sendCtrlC(sessionName);
+				await sessionHelper.sendCtrlC(sessionName);
 
 				// Send the prompt with proper timing
-				await (await this.getSessionHelper()).sendMessage(sessionName, prompt);
+				await sessionHelper.sendMessage(sessionName, prompt);
 
-				// Note: sendMessage already includes Enter key with 1000ms delay
-				// Additional delay for processing to begin
-				await new Promise((resolve) => setTimeout(resolve, 2000));
-
-				// Wait for processing to begin
-				await new Promise((resolve) => setTimeout(resolve, 2000));
+				// Note: sendMessage already includes Enter key - wait for processing to begin
+				await this.delay(4000);
 
 				// Verify prompt was delivered and processed
-				const afterOutput = await (await this.getSessionHelper()).capturePane(sessionName, 20);
+				const afterOutput = sessionHelper.capturePane(sessionName, 20);
 				const afterLength = afterOutput.length;
 
 				// Check for signs of Claude processing the prompt
