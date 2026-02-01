@@ -9,8 +9,20 @@
 
 import { Router, Request, Response } from 'express';
 import { getSelfImprovementService } from '../../services/orchestrator/index.js';
+import { getImprovementStartupService } from '../../services/orchestrator/improvement-startup.service.js';
 
 const router = Router();
+
+/**
+ * Helper to extract error message from unknown error
+ *
+ * @param error - The caught error
+ * @param fallback - Fallback message if error is not an Error instance
+ * @returns Error message string
+ */
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
 
 /**
  * POST /api/self-improvement/plan
@@ -21,17 +33,34 @@ const router = Router();
  */
 router.post('/plan', async (req: Request, res: Response) => {
   try {
+    const { description, targetFiles, changes, slackContext } = req.body;
+
+    // Validate required fields
+    if (!description || typeof description !== 'string') {
+      res.status(400).json({ error: 'description is required and must be a string' });
+      return;
+    }
+
+    if (!Array.isArray(targetFiles) || targetFiles.length === 0) {
+      res.status(400).json({ error: 'targetFiles is required and must be a non-empty array' });
+      return;
+    }
+
+    if (!Array.isArray(changes) || changes.length === 0) {
+      res.status(400).json({ error: 'changes is required and must be a non-empty array' });
+      return;
+    }
+
     const service = getSelfImprovementService();
     const plan = await service.planImprovement({
-      description: req.body.description,
-      targetFiles: req.body.targetFiles,
-      changes: req.body.changes,
-      slackContext: req.body.slackContext,
+      description,
+      targetFiles,
+      changes,
+      slackContext,
     });
     res.json(plan);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to create plan';
-    res.status(400).json({ error: message });
+    res.status(400).json({ error: getErrorMessage(error, 'Failed to create plan') });
   }
 });
 
@@ -65,8 +94,7 @@ router.post('/execute', async (req: Request, res: Response) => {
     });
     res.json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to execute plan';
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to execute plan') });
   }
 });
 
@@ -83,8 +111,7 @@ router.get('/status', async (_req: Request, res: Response) => {
     const status = await service.getStatus();
     res.json(status);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get status';
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to get status') });
   }
 });
 
@@ -101,8 +128,7 @@ router.post('/cancel', async (_req: Request, res: Response) => {
     await service.cancelImprovement();
     res.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to cancel';
-    res.status(400).json({ error: message });
+    res.status(400).json({ error: getErrorMessage(error, 'Failed to cancel') });
   }
 });
 
@@ -115,12 +141,7 @@ router.post('/cancel', async (_req: Request, res: Response) => {
  */
 router.post('/rollback', async (req: Request, res: Response) => {
   try {
-    // Note: Rollback is handled by the startup service automatically
-    // This endpoint is for manual rollback requests
-    const { getImprovementStartupService } = await import('../../services/orchestrator/improvement-startup.service.js');
     const startupService = getImprovementStartupService();
-
-    // Force a rollback check
     const result = await startupService.forceRollback(req.body.reason || 'Manual rollback requested');
 
     res.json({
@@ -129,8 +150,7 @@ router.post('/rollback', async (req: Request, res: Response) => {
       message: result.message || 'Rollback completed',
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to rollback';
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to rollback') });
   }
 });
 
@@ -144,12 +164,12 @@ router.post('/rollback', async (req: Request, res: Response) => {
 router.get('/history', async (req: Request, res: Response) => {
   try {
     const service = getSelfImprovementService();
-    const limit = parseInt(req.query.limit as string) || 10;
+    const parsedLimit = parseInt(req.query.limit as string, 10);
+    const limit = Number.isNaN(parsedLimit) || parsedLimit <= 0 ? 10 : Math.min(parsedLimit, 100);
     const history = await service.getHistory(limit);
     res.json(history);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to get history';
-    res.status(500).json({ error: message });
+    res.status(500).json({ error: getErrorMessage(error, 'Failed to get history') });
   }
 });
 

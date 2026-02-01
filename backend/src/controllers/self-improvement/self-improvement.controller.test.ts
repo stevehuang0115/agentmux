@@ -78,11 +78,49 @@ describe('self-improvement.controller', () => {
         .send({
           description: 'Test',
           targetFiles: ['test.ts'],
-          changes: [],
+          changes: [{ file: 'test.ts', type: 'modify', description: 'Test change' }],
         });
 
       expect(response.status).toBe(400);
       expect(response.body.error).toContain('Another improvement is pending');
+    });
+
+    it('should return 400 when description is missing', async () => {
+      const response = await request(app)
+        .post('/api/self-improvement/plan')
+        .send({
+          targetFiles: ['test.ts'],
+          changes: [{ file: 'test.ts', type: 'modify', description: 'Test' }],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('description is required');
+    });
+
+    it('should return 400 when targetFiles is empty', async () => {
+      const response = await request(app)
+        .post('/api/self-improvement/plan')
+        .send({
+          description: 'Test',
+          targetFiles: [],
+          changes: [{ file: 'test.ts', type: 'modify', description: 'Test' }],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('targetFiles is required');
+    });
+
+    it('should return 400 when changes is empty', async () => {
+      const response = await request(app)
+        .post('/api/self-improvement/plan')
+        .send({
+          description: 'Test',
+          targetFiles: ['test.ts'],
+          changes: [],
+        });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('changes is required');
     });
   });
 
@@ -164,6 +202,24 @@ describe('self-improvement.controller', () => {
         .get('/api/self-improvement/history?limit=5');
 
       expect(mockService.getHistory).toHaveBeenCalledWith(5);
+    });
+
+    it('should cap limit at 100', async () => {
+      vi.mocked(mockService.getHistory).mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/self-improvement/history?limit=999');
+
+      expect(mockService.getHistory).toHaveBeenCalledWith(100);
+    });
+
+    it('should use default limit for invalid values', async () => {
+      vi.mocked(mockService.getHistory).mockResolvedValue([]);
+
+      await request(app)
+        .get('/api/self-improvement/history?limit=invalid');
+
+      expect(mockService.getHistory).toHaveBeenCalledWith(10);
     });
   });
 });
