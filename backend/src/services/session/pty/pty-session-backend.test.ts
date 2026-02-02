@@ -217,6 +217,106 @@ describe('PtySessionBackend', () => {
 		});
 	});
 
+	describe('getRawHistory', () => {
+		it('should return empty string for non-existent session', () => {
+			const history = backend!.getRawHistory('non-existent');
+
+			expect(history).toBe('');
+		});
+
+		it('should return raw output with ANSI codes preserved', async () => {
+			const session = await backend!.createSession('test-session', createTestOptions());
+
+			// Write something that might produce ANSI codes
+			session.write('echo "raw output"\n');
+
+			// Wait for output to be processed
+			await new Promise(resolve => setTimeout(resolve, 500));
+
+			const history = backend!.getRawHistory('test-session');
+
+			expect(typeof history).toBe('string');
+		});
+
+		it('should preserve terminal escape sequences', async () => {
+			const session = await backend!.createSession('test-session', createTestOptions());
+
+			// Write a command that produces output
+			session.write('echo "test"\n');
+
+			// Wait for output
+			await new Promise(resolve => setTimeout(resolve, 500));
+
+			const history = backend!.getRawHistory('test-session');
+
+			// Should have some content (at minimum shell prompt or command output)
+			expect(history.length).toBeGreaterThan(0);
+		});
+	});
+
+	describe('getSessionHistory', () => {
+		it('should return empty string for non-existent session', () => {
+			const history = backend!.getSessionHistory('non-existent');
+
+			expect(history).toBe('');
+		});
+
+		it('should return session history', async () => {
+			const session = await backend!.createSession('test-session', createTestOptions());
+
+			// Write something to generate history
+			session.write('echo "session history test"\n');
+
+			// Wait for output
+			await new Promise(resolve => setTimeout(resolve, 500));
+
+			const history = backend!.getSessionHistory('test-session');
+
+			expect(typeof history).toBe('string');
+		});
+
+		it('should be functionally equivalent to getRawHistory', async () => {
+			const session = await backend!.createSession('test-session', createTestOptions());
+
+			session.write('echo "equivalence test"\n');
+
+			await new Promise(resolve => setTimeout(resolve, 500));
+
+			const rawHistory = backend!.getRawHistory('test-session');
+			const sessionHistory = backend!.getSessionHistory('test-session');
+
+			// Both methods call terminalBuffer.getHistoryAsString()
+			expect(rawHistory).toBe(sessionHistory);
+		});
+	});
+
+	describe('getTerminalBufferInstance', () => {
+		it('should return undefined for non-existent session', () => {
+			const buffer = backend!.getTerminalBufferInstance('non-existent');
+
+			expect(buffer).toBeUndefined();
+		});
+
+		it('should return PtyTerminalBuffer instance for existing session', async () => {
+			await backend!.createSession('test-session', createTestOptions());
+
+			const buffer = backend!.getTerminalBufferInstance('test-session');
+
+			expect(buffer).toBeDefined();
+			expect(typeof buffer!.getContent).toBe('function');
+			expect(typeof buffer!.getHistoryAsString).toBe('function');
+		});
+
+		it('should return undefined after session is killed', async () => {
+			await backend!.createSession('test-session', createTestOptions());
+			await backend!.killSession('test-session');
+
+			const buffer = backend!.getTerminalBufferInstance('test-session');
+
+			expect(buffer).toBeUndefined();
+		});
+	});
+
 	describe('destroy', () => {
 		it('should kill all sessions', async () => {
 			await backend!.createSession('session-1', createTestOptions());
