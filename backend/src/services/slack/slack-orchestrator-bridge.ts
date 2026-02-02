@@ -24,12 +24,7 @@ import {
 import { ChatMessage } from '../../types/chat.types.js';
 import { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
-import { CHAT_CONSTANTS } from '../../constants.js';
-/**
- * Default orchestrator session name
- * Uses constant value to avoid import issues in test environments
- */
-const ORCHESTRATOR_SESSION_NAME = 'agentmux-orc';
+import { CHAT_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 /**
  * Bridge configuration
@@ -84,6 +79,8 @@ export class SlackOrchestratorBridge extends EventEmitter {
   private agentRegistrationService: AgentRegistrationService | null = null;
   private config: SlackBridgeConfig;
   private initialized = false;
+  /** Track if we've already logged the missing scope warning */
+  private loggedMissingScope = false;
 
   /**
    * Create a new SlackOrchestratorBridge
@@ -520,9 +517,6 @@ Just type naturally to chat with the orchestrator!`;
       }
     }
   }
-
-  /** Track if we've already logged the missing scope warning */
-  private loggedMissingScope = false;
 
   /**
    * Mark message as complete
