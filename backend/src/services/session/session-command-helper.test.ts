@@ -47,6 +47,7 @@ describe('SessionCommandHelper', () => {
 			sessionExists: jest.fn().mockReturnValue(true),
 			captureOutput: jest.fn().mockReturnValue('terminal output'),
 			getTerminalBuffer: jest.fn().mockReturnValue('buffer content'),
+			getRawHistory: jest.fn().mockReturnValue('raw history with \x1b[32mcolors\x1b[0m'),
 			destroy: jest.fn().mockResolvedValue(undefined),
 		} as any;
 
@@ -183,6 +184,14 @@ describe('SessionCommandHelper', () => {
 		it('should use default lines value', () => {
 			helper.capturePane('test-session');
 			expect(mockBackend.captureOutput).toHaveBeenCalledWith('test-session', 100);
+		});
+	});
+
+	describe('getRawHistory', () => {
+		it('should return raw history with ANSI codes', () => {
+			const output = helper.getRawHistory('test-session');
+			expect(output).toBe('raw history with \x1b[32mcolors\x1b[0m');
+			expect(mockBackend.getRawHistory).toHaveBeenCalledWith('test-session');
 		});
 	});
 

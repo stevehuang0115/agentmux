@@ -53,6 +53,7 @@ describe('SessionStatePersistence', () => {
 			sessionExists: jest.fn(() => false),
 			captureOutput: jest.fn(() => ''),
 			getTerminalBuffer: jest.fn(() => ''),
+			getRawHistory: jest.fn(() => ''),
 			destroy: jest.fn(),
 		} as unknown as jest.Mocked<ISessionBackend>;
 	});

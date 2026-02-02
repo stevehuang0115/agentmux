@@ -53,6 +53,8 @@ describe('Settings Types', () => {
         checkInIntervalMinutes: 5,
         maxConcurrentAgents: 10,
         verboseLogging: false,
+        claudeCodeCommand: 'claude --flag',
+        claudeCodeInitScript: 'scripts/init.sh',
       };
 
       expect(settings.defaultRuntime).toBe('claude-code');
@@ -60,6 +62,23 @@ describe('Settings Types', () => {
       expect(settings.checkInIntervalMinutes).toBe(5);
       expect(settings.maxConcurrentAgents).toBe(10);
       expect(settings.verboseLogging).toBe(false);
+      expect(settings.claudeCodeCommand).toBe('claude --flag');
+      expect(settings.claudeCodeInitScript).toBe('scripts/init.sh');
+    });
+
+    it('should allow custom Claude Code configuration', () => {
+      const settings: GeneralSettings = {
+        defaultRuntime: 'claude-code',
+        autoStartOrchestrator: true,
+        checkInIntervalMinutes: 10,
+        maxConcurrentAgents: 5,
+        verboseLogging: true,
+        claudeCodeCommand: '/custom/path/to/claude --dangerously-skip-permissions',
+        claudeCodeInitScript: 'custom/runtime_scripts/my_init.sh',
+      };
+
+      expect(settings.claudeCodeCommand).toContain('/custom/path');
+      expect(settings.claudeCodeInitScript).toContain('custom/runtime_scripts');
     });
   });
 
@@ -106,6 +125,8 @@ describe('Settings Types', () => {
           checkInIntervalMinutes: 5,
           maxConcurrentAgents: 10,
           verboseLogging: false,
+          claudeCodeCommand: 'claude --dangerously-skip-permissions',
+          claudeCodeInitScript: 'config/runtime_scripts/initialize_claude.sh',
         },
         chat: {
           showRawTerminalOutput: false,
@@ -125,6 +146,8 @@ describe('Settings Types', () => {
       expect(settings.general).toBeDefined();
       expect(settings.chat).toBeDefined();
       expect(settings.skills).toBeDefined();
+      expect(settings.general.claudeCodeCommand).toBeDefined();
+      expect(settings.general.claudeCodeInitScript).toBeDefined();
     });
   });
 
@@ -210,6 +233,22 @@ describe('Settings Types', () => {
       expect(defaults.general.checkInIntervalMinutes).toBe(5);
       expect(defaults.general.maxConcurrentAgents).toBe(10);
       expect(defaults.general.verboseLogging).toBe(false);
+    });
+
+    it('should have Claude Code configuration defaults', () => {
+      const defaults = getDefaultSettings();
+
+      expect(defaults.general.claudeCodeCommand).toBe('~/.claude/local/claude --dangerously-skip-permissions');
+      expect(defaults.general.claudeCodeInitScript).toBe('config/runtime_scripts/initialize_claude.sh');
+    });
+
+    it('should include Claude Code fields in default settings', () => {
+      const defaults = getDefaultSettings();
+
+      expect(typeof defaults.general.claudeCodeCommand).toBe('string');
+      expect(typeof defaults.general.claudeCodeInitScript).toBe('string');
+      expect(defaults.general.claudeCodeCommand.length).toBeGreaterThan(0);
+      expect(defaults.general.claudeCodeInitScript.length).toBeGreaterThan(0);
     });
 
     it('should have sensible chat defaults', () => {

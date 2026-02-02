@@ -532,8 +532,8 @@ export class TerminalGateway {
 				return;
 			}
 
-			// Capture current terminal content from buffer
-			const output = backend.captureOutput(sessionName, 500);
+			// Get raw output history with ANSI codes preserved for color rendering
+			const output = backend.getRawHistory(sessionName);
 
 			const terminalState: TerminalOutput = {
 				sessionName,

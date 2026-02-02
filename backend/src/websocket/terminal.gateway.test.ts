@@ -81,6 +81,8 @@ describe('TerminalGateway', () => {
 			getSession: vi.fn(() => mockSession),
 			sessionExists: vi.fn(() => true),
 			captureOutput: vi.fn(() => 'mock output content'),
+			getRawHistory: vi.fn(() => 'mock raw history with ANSI codes'),
+			listSessions: vi.fn(() => ['test-session']),
 		};
 
 		// Set up the mock
@@ -227,6 +229,51 @@ describe('TerminalGateway', () => {
 
 			const stats = gateway.getConnectionStats();
 			expect(stats.activeStreams).toBe(0);
+			expect(stats.totalSessions).toBe(0);
+		});
+	});
+
+	describe('activeConversationId', () => {
+		it('should initially be null', () => {
+			expect(gateway.getActiveConversationId()).toBeNull();
+		});
+
+		it('should set and get active conversation ID', () => {
+			gateway.setActiveConversationId('test-conv-123');
+
+			expect(gateway.getActiveConversationId()).toBe('test-conv-123');
+		});
+
+		it('should allow setting to null', () => {
+			gateway.setActiveConversationId('test-conv-123');
+			gateway.setActiveConversationId(null);
+
+			expect(gateway.getActiveConversationId()).toBeNull();
+		});
+
+		it('should update to new conversation ID', () => {
+			gateway.setActiveConversationId('conv-1');
+			gateway.setActiveConversationId('conv-2');
+
+			expect(gateway.getActiveConversationId()).toBe('conv-2');
+		});
+	});
+
+	describe('disconnectSessionClients', () => {
+		it('should disconnect all clients from session', () => {
+			gateway.subscribeToSession('test-session', mockSocket as Socket);
+
+			gateway.disconnectSessionClients('test-session');
+
+			expect(mockIo.to).toHaveBeenCalledWith('terminal_test-session');
+		});
+
+		it('should clean up session subscription after disconnect', () => {
+			gateway.subscribeToSession('test-session', mockSocket as Socket);
+
+			gateway.disconnectSessionClients('test-session');
+
+			const stats = gateway.getConnectionStats();
 			expect(stats.totalSessions).toBe(0);
 		});
 	});

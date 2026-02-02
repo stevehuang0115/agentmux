@@ -46,6 +46,7 @@ function createMockBackend(): jest.Mocked<ISessionBackend> {
 		sessionExists: jest.fn().mockImplementation((name: string) => sessions.has(name)),
 		captureOutput: jest.fn().mockReturnValue('mock output'),
 		getTerminalBuffer: jest.fn().mockReturnValue('mock buffer'),
+		getRawHistory: jest.fn().mockReturnValue('raw history'),
 		destroy: jest.fn().mockResolvedValue(undefined),
 	};
 }

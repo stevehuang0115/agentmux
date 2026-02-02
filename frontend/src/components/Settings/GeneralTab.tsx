@@ -181,6 +181,57 @@ export const GeneralTab: React.FC = () => {
       </section>
 
       <section className="settings-section">
+        <h2>Claude Code Configuration</h2>
+        <p className="section-description">
+          Configure how AgentMux initializes Claude Code agents.
+        </p>
+
+        <div className="setting-row">
+          <label htmlFor="claudeCodeCommand">Startup Command</label>
+          <input
+            type="text"
+            id="claudeCodeCommand"
+            value={localSettings.general.claudeCodeCommand}
+            onChange={(e) => handleChange('general', 'claudeCodeCommand', e.target.value)}
+            className="text-input"
+          />
+          <p className="setting-description">
+            The command used to start Claude Code agents. Edit the initialization script below to apply changes.
+          </p>
+        </div>
+
+        <div className="setting-row">
+          <label htmlFor="claudeCodeInitScript">Initialization Script</label>
+          <input
+            type="text"
+            id="claudeCodeInitScript"
+            value={localSettings.general.claudeCodeInitScript}
+            onChange={(e) => handleChange('general', 'claudeCodeInitScript', e.target.value)}
+            className="text-input"
+          />
+          <p className="setting-description">
+            Path to the initialization script (relative to AgentMux root). This script runs when starting new Claude Code agents.
+          </p>
+        </div>
+
+        <div className="setting-row">
+          <label>Detection Priority</label>
+          <ol className="detection-priority-list">
+            <li><code>~/.claude/local/claude</code> - Local installation (preferred)</li>
+            <li><code>claude</code> - System PATH via <code>type</code> command</li>
+            <li><code>claude</code> - System PATH via <code>command -v</code></li>
+          </ol>
+          <p className="setting-description">
+            Claude Code must be installed on your system. Visit{' '}
+            <a href="https://docs.anthropic.com/en/docs/claude-code/getting-started" target="_blank" rel="noopener noreferrer">
+              Claude Code documentation
+            </a>
+            {' '}for installation instructions.
+          </p>
+        </div>
+      </section>
+
+      <section className="settings-section">
         <h2>Chat Settings</h2>
 
         <div className="setting-row">

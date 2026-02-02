@@ -10,6 +10,7 @@
 import { getSlackService } from './slack.service.js';
 import { getSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
 import { SlackConfig } from '../../types/slack.types.js';
+import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
 
 /**
  * Result of initialization attempt
@@ -61,16 +62,27 @@ export function getSlackConfigFromEnv(): SlackConfig | null {
 }
 
 /**
+ * Options for Slack initialization
+ */
+export interface SlackInitOptions {
+  /** Optional AgentRegistrationService for forwarding messages to orchestrator */
+  agentRegistrationService?: AgentRegistrationService;
+}
+
+/**
  * Initialize Slack integration if environment variables are set
  *
  * This function is designed to be called during application startup.
  * It safely handles cases where Slack is not configured.
  *
+ * @param options - Optional initialization options
  * @returns Result object indicating success or failure
  *
  * @example
  * ```typescript
- * const result = await initializeSlackIfConfigured();
+ * const result = await initializeSlackIfConfigured({
+ *   agentRegistrationService: myService
+ * });
  * if (result.success) {
  *   console.log('Slack connected!');
  * } else if (result.attempted) {
@@ -80,7 +92,9 @@ export function getSlackConfigFromEnv(): SlackConfig | null {
  * }
  * ```
  */
-export async function initializeSlackIfConfigured(): Promise<SlackInitResult> {
+export async function initializeSlackIfConfigured(
+  options?: SlackInitOptions
+): Promise<SlackInitResult> {
   const config = getSlackConfigFromEnv();
 
   if (!config) {
@@ -93,6 +107,12 @@ export async function initializeSlackIfConfigured(): Promise<SlackInitResult> {
     await slackService.initialize(config);
 
     const bridge = getSlackOrchestratorBridge();
+
+    // Set the agent registration service if provided
+    if (options?.agentRegistrationService) {
+      bridge.setAgentRegistrationService(options.agentRegistrationService);
+    }
+
     await bridge.initialize();
 
     console.log('[Slack] Successfully connected');
