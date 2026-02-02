@@ -318,6 +318,26 @@ export interface ISessionBackend {
 	getTerminalBuffer(name: string): string;
 
 	/**
+	 * Get raw output history with ANSI escape codes preserved.
+	 *
+	 * This returns the raw data that was written to the terminal,
+	 * including all ANSI escape sequences for colors, cursor movement, etc.
+	 * Use this when you need to replay the terminal output with colors intact.
+	 *
+	 * @param name - Name of the session
+	 * @returns Raw output history as a string with ANSI codes
+	 * @throws Error if session does not exist
+	 *
+	 * @example
+	 * ```typescript
+	 * const rawHistory = backend.getRawHistory('my-session');
+	 * // Can be written to another terminal for replay with colors
+	 * terminal.write(rawHistory);
+	 * ```
+	 */
+	getRawHistory(name: string): string;
+
+	/**
 	 * Destroy the backend and clean up all resources.
 	 * Kills all active sessions and releases any held resources.
 	 *

@@ -298,6 +298,29 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('setAgentRegistrationService', () => {
+    it('should accept an AgentRegistrationService', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const mockService = {
+        sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+      } as any;
+
+      // Should not throw
+      expect(() => bridge.setAgentRegistrationService(mockService)).not.toThrow();
+    });
+
+    it('should allow setting service after initialization', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      await bridge.initialize();
+
+      const mockService = {
+        sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+      } as any;
+
+      expect(() => bridge.setAgentRegistrationService(mockService)).not.toThrow();
+    });
+  });
+
   describe('getConfig', () => {
     it('should return a copy of the configuration', () => {
       const bridge = new SlackOrchestratorBridge();

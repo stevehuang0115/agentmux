@@ -68,6 +68,7 @@ describe('SchedulerService', () => {
       sessionExists: jest.fn().mockReturnValue(true),
       captureOutput: jest.fn().mockReturnValue(''),
       getTerminalBuffer: jest.fn().mockReturnValue(''),
+      getRawHistory: jest.fn().mockReturnValue(''),
       destroy: jest.fn().mockResolvedValue(undefined),
     };
 

@@ -51,6 +51,7 @@ describe('ActivityMonitorService', () => {
     mockSessionBackend = {
       sessionExists: jest.fn().mockReturnValue(true),
       captureOutput: jest.fn().mockReturnValue('some terminal output'),
+      getRawHistory: jest.fn().mockReturnValue('raw history'),
       listSessions: jest.fn().mockReturnValue([]),
       getSession: jest.fn().mockReturnValue(undefined),
       killSession: jest.fn().mockResolvedValue(undefined),

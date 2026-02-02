@@ -19,4 +19,5 @@ export {
   getSlackConfigFromEnv,
   shutdownSlack,
   type SlackInitResult,
+  type SlackInitOptions,
 } from './slack-initializer.js';

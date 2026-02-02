@@ -256,6 +256,27 @@ export class PtySessionBackend implements ISessionBackend {
 	}
 
 	/**
+	 * Get raw output history with ANSI escape codes preserved.
+	 *
+	 * @param name - Name of the session
+	 * @returns Raw output history as a string with ANSI codes
+	 *
+	 * @example
+	 * ```typescript
+	 * const rawHistory = backend.getRawHistory('my-session');
+	 * terminal.write(rawHistory);
+	 * ```
+	 */
+	getRawHistory(name: string): string {
+		const terminalBuffer = this.terminalBuffers.get(name);
+		if (!terminalBuffer) {
+			return '';
+		}
+
+		return terminalBuffer.getHistoryAsString();
+	}
+
+	/**
 	 * Destroy the backend and clean up all resources.
 	 *
 	 * @returns Promise that resolves when cleanup is complete

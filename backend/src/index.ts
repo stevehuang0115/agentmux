@@ -390,7 +390,9 @@ export class AgentMuxServer {
 	private async initializeSlackIfConfigured(): Promise<void> {
 		try {
 			this.logger.info('Checking Slack configuration...');
-			const result = await initializeSlackIfConfigured();
+			const result = await initializeSlackIfConfigured({
+				agentRegistrationService: this.apiController.agentRegistrationService,
+			});
 
 			if (result.success) {
 				this.logger.info('Slack integration initialized successfully');

@@ -206,6 +206,16 @@ export class SessionCommandHelper {
 	}
 
 	/**
+	 * Get raw output history with ANSI escape codes preserved.
+	 *
+	 * @param sessionName - The session to get history from
+	 * @returns Raw output history with ANSI codes
+	 */
+	getRawHistory(sessionName: string): string {
+		return this.backend.getRawHistory(sessionName);
+	}
+
+	/**
 	 * List all active sessions
 	 */
 	listSessions(): string[] {

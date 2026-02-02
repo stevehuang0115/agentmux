@@ -22,6 +22,9 @@ import {
   parseCommandIntent,
 } from '../../types/slack.types.js';
 import { ChatMessage } from '../../types/chat.types.js';
+import { AgentRegistrationService } from '../agent/agent-registration.service.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { CHAT_CONSTANTS } from '../../constants.js';
 /**
  * Default orchestrator session name
  * Uses constant value to avoid import issues in test environments
@@ -78,6 +81,7 @@ let bridgeInstance: SlackOrchestratorBridge | null = null;
 export class SlackOrchestratorBridge extends EventEmitter {
   private slackService: SlackService;
   private chatService: ChatService;
+  private agentRegistrationService: AgentRegistrationService | null = null;
   private config: SlackBridgeConfig;
   private initialized = false;
 
@@ -117,6 +121,16 @@ export class SlackOrchestratorBridge extends EventEmitter {
    */
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  /**
+   * Set the agent registration service for forwarding messages to orchestrator.
+   * Called during server initialization.
+   *
+   * @param service - The AgentRegistrationService instance
+   */
+  setAgentRegistrationService(service: AgentRegistrationService): void {
+    this.agentRegistrationService = service;
   }
 
   /**
@@ -328,6 +342,49 @@ Just type naturally to chat with the orchestrator!`;
   }
 
   /**
+   * Forward a message to the orchestrator terminal.
+   *
+   * @param content - Message content to send
+   * @param conversationId - Conversation ID for context
+   * @returns Success status and any error message
+   */
+  private async forwardToOrchestratorTerminal(
+    content: string,
+    conversationId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.agentRegistrationService) {
+      return { success: false, error: 'Agent registration service not available' };
+    }
+
+    try {
+      // Set active conversation ID for response routing
+      const terminalGateway = getTerminalGateway();
+      if (terminalGateway) {
+        terminalGateway.setActiveConversationId(conversationId);
+      }
+
+      // Format message with conversation context using constant prefix
+      const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;
+
+      const result = await this.agentRegistrationService.sendMessageToAgent(
+        this.config.orchestratorSession,
+        formattedMessage
+      );
+
+      return result;
+    } catch (error) {
+      console.error('[SlackBridge] Failed to forward message to orchestrator', {
+        error: error instanceof Error ? error.message : String(error),
+        conversationId,
+      });
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
+  /**
    * Send message to orchestrator and get response
    *
    * Checks if the orchestrator is active before sending. Returns a clear
@@ -349,7 +406,13 @@ Just type naturally to chat with the orchestrator!`;
         return getOrchestratorOfflineMessage(true);
       }
 
-      // Send message via chat service
+      // Check if agent registration service is available
+      if (!this.agentRegistrationService) {
+        console.error('[SlackBridge] Agent registration service not configured');
+        return 'The Slack bridge is not properly configured. Please restart the server.';
+      }
+
+      // Send message via chat service to store it
       const result = await this.chatService.sendMessage({
         content: message,
         conversationId: context?.conversationId,
@@ -359,6 +422,20 @@ Just type naturally to chat with the orchestrator!`;
           channelId: context?.channelId,
         },
       });
+
+      // Forward the message to the orchestrator terminal
+      const forwardResult = await this.forwardToOrchestratorTerminal(
+        message,
+        result.conversation.id
+      );
+
+      if (!forwardResult.success) {
+        console.warn('[SlackBridge] Failed to forward message to orchestrator', {
+          error: forwardResult.error,
+          conversationId: result.conversation.id,
+        });
+        return `Failed to send message to orchestrator: ${forwardResult.error}`;
+      }
 
       // Wait for orchestrator response
       const response = await this.waitForOrchestratorResponse(
@@ -430,10 +507,22 @@ Just type naturally to chat with the orchestrator!`;
     try {
       await this.slackService.addReaction(message.channelId, message.ts, 'eyes');
     } catch (error) {
-      // Non-critical, log and continue
-      console.warn('[SlackBridge] Could not add typing indicator:', error);
+      // Non-critical - reactions require 'reactions:write' scope which is optional
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('missing_scope')) {
+        // Only log once about missing scope, not on every message
+        if (!this.loggedMissingScope) {
+          console.warn('[SlackBridge] Reactions disabled - add reactions:write scope to Slack app for typing indicators');
+          this.loggedMissingScope = true;
+        }
+      } else {
+        console.warn('[SlackBridge] Could not add typing indicator:', errorMessage);
+      }
     }
   }
+
+  /** Track if we've already logged the missing scope warning */
+  private loggedMissingScope = false;
 
   /**
    * Mark message as complete
@@ -444,8 +533,12 @@ Just type naturally to chat with the orchestrator!`;
     try {
       await this.slackService.addReaction(message.channelId, message.ts, 'white_check_mark');
     } catch (error) {
-      // Non-critical, log and continue
-      console.warn('[SlackBridge] Could not add completion indicator:', error);
+      // Non-critical - reactions require 'reactions:write' scope which is optional
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!errorMessage.includes('missing_scope')) {
+        console.warn('[SlackBridge] Could not add completion indicator:', errorMessage);
+      }
+      // Silent fail for missing_scope since we already logged about it
     }
   }
 

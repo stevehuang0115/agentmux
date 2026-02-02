@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { getSettingsService } from '../settings/settings.service.js';
 
 /**
  * Claude Code specific runtime service implementation.

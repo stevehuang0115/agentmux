@@ -558,22 +558,26 @@ export const FACTORY_CONSTANTS = {
  * Model paths - Local models in public/models/
  */
 export const MODEL_PATHS = {
-  ROBOT: '/models/RobotExpressive.glb',
-  COW: '/models/cow/cow-fixed.glb?v=3',  // Model with 1K textures, no Draco compression
-  HORSE: '/models/horse/horse-fixed.glb',  // Horse model with animations and 1K textures
-  TIGER: '/models/tiger/tiger-fixed.glb',  // Tiger model with animations and 1K textures
-  RABBIT: '/models/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
-  STEVE_JOBS: '/models/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
-  SUNDAR_PICHAI: '/models/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
-  CYBERTRUCK: '/models/cybertruck/model.glb',  // Cybertruck model (compressed from 28MB to 630KB)
-  ELON_MUSK: '/models/elonmusk/model.glb',  // Elon Musk NPC with Walking, Disappointed, Dancing, Yelling
-  MARK_ZUCKERBERG: '/models/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
-  JENSEN_HUANG: '/models/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
-  STEVE_HUANG: '/models/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
-  PUPPY: '/models/puppy/model.glb',  // Puppy pet with Idle, Walking, Running, Sitting animations
-  ROBOTIC_DOG: '/models/roboticdog/original.glb',  // Boston Dynamics Spot robot dog with Animation
-  SHIBA_INU: '/models/shibainu/model.glb',  // Shiba Inu (doge) pet with Idle, Sitting animations
-  BULLDOG: '/models/bulldog/model.glb',  // Bulldog pet (static model, procedural animation)
+  // Employee models (animal heads)
+  ROBOT: '/models/employees/robot/RobotExpressive.glb',
+  COW: '/models/employees/cow/cow-fixed.glb?v=3',  // Model with 1K textures, no Draco compression
+  HORSE: '/models/employees/horse/horse-fixed.glb',  // Horse model with animations and 1K textures
+  TIGER: '/models/employees/tiger/tiger-fixed.glb',  // Tiger model with animations and 1K textures
+  RABBIT: '/models/employees/rabbit/rabbit-fixed.glb',  // Rabbit model with animations and 1K textures
+  // Guest NPC models
+  STEVE_JOBS: '/models/guests/stevejobs/model.glb',  // Steve Jobs NPC model with Walking, Clapping, Standing Clap
+  SUNDAR_PICHAI: '/models/guests/sundarpichai/model.glb',  // Sundar Pichai NPC model with Walking, Talking, Walk In Circle
+  ELON_MUSK: '/models/guests/elonmusk/model.glb',  // Elon Musk NPC with Walking, Disappointed, Dancing, Yelling
+  MARK_ZUCKERBERG: '/models/guests/markzuckerberg/model.glb',  // Mark Zuckerberg NPC with Talking, Looking, Disappointed
+  JENSEN_HUANG: '/models/guests/jensenhuang/model.glb?v=2',  // Jensen Huang NPC with Talking, Dancing, Walking, Sitting (v2: textures fixed)
+  STEVE_HUANG: '/models/guests/stevehuang/model.glb?v=2',  // Steve Huang (builder) NPC with Walking, Drinking, Golf, Sitting (v2: textures fixed)
+  // Object models
+  CYBERTRUCK: '/models/objects/cybertruck/model.glb',  // Cybertruck model (compressed from 28MB to 630KB)
+  // Pet models
+  PUPPY: '/models/pets/puppy/model.glb',  // Puppy pet with Idle, Walking, Running, Sitting animations
+  ROBOTIC_DOG: '/models/pets/roboticdog/original.glb',  // Boston Dynamics Spot robot dog with Animation
+  SHIBA_INU: '/models/pets/shibainu/model.glb',  // Shiba Inu (doge) pet with Idle, Sitting animations
+  BULLDOG: '/models/pets/bulldog/model.glb',  // Bulldog pet (static model, procedural animation)
 } as const;
 
 /**

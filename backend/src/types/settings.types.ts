@@ -39,6 +39,12 @@ export interface GeneralSettings {
 
   /** Enable verbose logging */
   verboseLogging: boolean;
+
+  /** Claude Code startup command */
+  claudeCodeCommand: string;
+
+  /** Claude Code initialization script path */
+  claudeCodeInitScript: string;
 }
 
 /**
@@ -171,6 +177,8 @@ export function getDefaultSettings(): AgentMuxSettings {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
+      claudeCodeCommand: '~/.claude/local/claude --dangerously-skip-permissions',
+      claudeCodeInitScript: 'config/runtime_scripts/initialize_claude.sh',
     },
     chat: {
       showRawTerminalOutput: false,

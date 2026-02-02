@@ -68,6 +68,7 @@ describe('TerminalController', () => {
 			sessionExists: jest.fn(() => true),
 			getSession: jest.fn(() => mockSession),
 			captureOutput: jest.fn(() => 'mock terminal output'),
+			getRawHistory: jest.fn(() => 'raw history with colors'),
 			killSession: jest.fn(),
 		};
 
