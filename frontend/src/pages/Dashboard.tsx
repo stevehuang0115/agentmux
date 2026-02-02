@@ -33,6 +33,17 @@ interface ProjectProgress {
 }
 
 /**
+ * StatCard component for displaying dashboard statistics
+ * Defined outside Dashboard to prevent recreation on every render
+ */
+const StatCard: React.FC<{title: string; value: string | number}> = ({title, value}) => (
+  <div className="bg-surface-dark p-6 rounded-lg border border-border-dark transition-all hover:shadow-lg hover:border-primary/50">
+    <p className="text-sm font-medium text-text-secondary-dark">{title}</p>
+    <p className="text-3xl font-bold mt-1">{value}</p>
+  </div>
+);
+
+/**
  * Dashboard component - main application landing page
  *
  * Features:
@@ -126,44 +137,45 @@ export const Dashboard: React.FC = () => {
         setProjectProgress(progressMap);
       }
 
+      // Process teams data - migrate teams without avatars for backward compatibility
+      const projectList = projectsResponse.data.success ? projectsResponse.data.data || [] : [];
+      const teamList = teamsResponse.data.success ? teamsResponse.data.data || [] : [];
+
+      // Avatar choices for migration (only need to define once)
+      const avatarChoices = [
+        'https://picsum.photos/seed/1/64',
+        'https://picsum.photos/seed/2/64',
+        'https://picsum.photos/seed/3/64',
+        'https://picsum.photos/seed/4/64',
+        'https://picsum.photos/seed/5/64',
+        'https://picsum.photos/seed/6/64',
+      ];
+
+      // Migrate teams without avatars (do once, reuse for both teams and teamsMap)
+      const migratedTeams = teamList.map(team => ({
+        ...team,
+        members: team.members.map((member: any, index: number) => ({
+          ...member,
+          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+        }))
+      }));
+
       if (teamsResponse.data.success) {
-        let teamList = teamsResponse.data.data || [];
-
-        // Avatar choices for migration
-        const avatarChoices = [
-          'https://picsum.photos/seed/1/64',
-          'https://picsum.photos/seed/2/64',
-          'https://picsum.photos/seed/3/64',
-          'https://picsum.photos/seed/4/64',
-          'https://picsum.photos/seed/5/64',
-          'https://picsum.photos/seed/6/64',
-        ];
-
-        // Migrate teams without avatars for backward compatibility
-        const migratedTeams = teamList.map(team => ({
-          ...team,
-          members: team.members.map((member: any, index: number) => ({
-            ...member,
-            avatar: member.avatar || avatarChoices[index % avatarChoices.length]
-          }))
-        }));
-
         setTeams(migratedTeams);
+      }
 
-        // Create teams map for projects
-        if (projectsResponse.data.success) {
-          const projectList = projectsResponse.data.data || [];
-          const teamsMapping = projectList.reduce((acc, project) => {
-            const assignedTeams = migratedTeams.filter(team => {
-              const matchesById = team.currentProject === project.id;
-              const matchesByName = team.currentProject === project.name;
-              return matchesById || matchesByName;
-            });
-            acc[project.id] = assignedTeams;
-            return acc;
-          }, {} as Record<string, Team[]>);
-          setTeamsMap(teamsMapping);
-        }
+      // Create teams map for projects (reuse migratedTeams)
+      if (projectsResponse.data.success && teamsResponse.data.success) {
+        const teamsMapping = projectList.reduce((acc, project) => {
+          const assignedTeams = migratedTeams.filter(team => {
+            const matchesById = team.currentProject === project.id;
+            const matchesByName = team.currentProject === project.name;
+            return matchesById || matchesByName;
+          });
+          acc[project.id] = assignedTeams;
+          return acc;
+        }, {} as Record<string, Team[]>);
+        setTeamsMap(teamsMapping);
       }
     } catch (error) {
       console.error('Error loading dashboard data:', error);
@@ -197,13 +209,6 @@ export const Dashboard: React.FC = () => {
   // Show top 2 projects and more teams on dashboard
   const topProjects = projects.slice(0, 2);
   const topTeams = teams.slice(0, 6);
-
-  const StatCard: React.FC<{title: string, value: string | number}> = ({title, value}) => (
-    <div className="bg-surface-dark p-6 rounded-lg border border-border-dark transition-all hover:shadow-lg hover:border-primary/50">
-      <p className="text-sm font-medium text-text-secondary-dark">{title}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
-    </div>
-  );
 
   return (
     <div className="max-w-7xl mx-auto">
