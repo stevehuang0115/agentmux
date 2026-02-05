@@ -416,7 +416,7 @@ export class AgentRegistrationService {
 		await (await this.getSessionHelper()).killSession(sessionName);
 
 		// Wait for cleanup
-		await new Promise((resolve) => setTimeout(resolve, 1000));
+		await delay(1000);
 
 		// Recreate session based on role
 		if (role === ORCHESTRATOR_ROLE) {
@@ -451,7 +451,7 @@ export class AgentRegistrationService {
 				'Runtime ready detected for orchestrator, waiting for full startup before verification',
 				{ sessionName, runtimeType }
 			);
-			await new Promise((resolve) => setTimeout(resolve, 5000));
+			await delay(5000);
 
 			this.logger.debug('Verifying orchestrator runtime responsiveness', {
 				sessionName,
@@ -641,14 +641,14 @@ Then wait for explicit task assignments from the orchestrator.`;
 					return true;
 				}
 
-				await new Promise((resolve) => setTimeout(resolve, checkInterval));
+				await delay(checkInterval);
 			} catch (error) {
 				this.logger.warn('Error checking registration', {
 					sessionName,
 					role,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				await new Promise((resolve) => setTimeout(resolve, checkInterval));
+				await delay(checkInterval);
 			}
 		}
 
@@ -719,7 +719,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 				// Step 1: Send Ctrl+C to clear any pending commands (skip on first attempt if Claude was just initialized)
 				if (!skipInitialCleanup || attempt > 1) {
 					await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
-					await new Promise((resolve) => setTimeout(resolve, 500));
+					await delay(500);
 					this.logger.debug('Sent Ctrl+C to clear terminal state', {
 						sessionName,
 						attempt,
@@ -757,7 +757,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 						// Add longer delay between failed detection attempts
 						if (attempt < maxRetries) {
-							await new Promise((resolve) => setTimeout(resolve, 2000));
+							await delay(2000);
 						}
 						continue; // Try again
 					}
@@ -828,7 +828,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 			// Short delay before retry
 			if (attempt < maxRetries) {
-				await new Promise((resolve) => setTimeout(resolve, 1000));
+				await delay(1000);
 			}
 		}
 
@@ -859,14 +859,14 @@ Then wait for explicit task assignments from the orchestrator.`;
 					return true;
 				}
 
-				await new Promise((resolve) => setTimeout(resolve, fastCheckInterval));
+				await delay(fastCheckInterval);
 			} catch (error) {
 				this.logger.debug('Error in fast registration check', {
 					sessionName,
 					role,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				await new Promise((resolve) => setTimeout(resolve, 1000)); // Shorter error delay
+				await delay(1000); // Shorter error delay
 			}
 		}
 
@@ -1049,9 +1049,9 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 						// Send Ctrl+C twice to try to restart Claude
 						await (await this.getSessionHelper()).sendCtrlC(sessionName);
-						await new Promise((resolve) => setTimeout(resolve, 1000));
+						await delay(1000);
 						await (await this.getSessionHelper()).sendCtrlC(sessionName);
-						await new Promise((resolve) => setTimeout(resolve, 2000));
+						await delay(2000);
 
 						// Clear runtime detection cache after Ctrl+C restart
 						runtimeService.clearDetectionCache(sessionName);
@@ -1099,7 +1099,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 					}
 				);
 				await (await this.getSessionHelper()).killSession(sessionName);
-				await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for cleanup
+				await delay(1000); // Wait for cleanup
 			}
 
 			// Create new session (same approach for both orchestrator and team members)
@@ -1371,9 +1371,21 @@ Then wait for explicit task assignments from the orchestrator.`;
 			let deliveryConfirmed = false;
 			let resolved = false;
 
+			// Track all timeouts to prevent memory leaks (P1.1 fix)
+			const pendingTimeouts: NodeJS.Timeout[] = [];
+			const scheduleTimeout = (fn: () => void, delayMs: number): NodeJS.Timeout => {
+				const id = setTimeout(fn, delayMs);
+				pendingTimeouts.push(id);
+				return id;
+			};
+
 			const cleanup = () => {
-				if (!resolved) {
-					resolved = true;
+				// Immediately mark as resolved to prevent race conditions (P1.2 fix)
+				const wasResolved = resolved;
+				resolved = true;
+				if (!wasResolved) {
+					// Clear all pending timeouts to prevent memory leaks
+					pendingTimeouts.forEach((id) => clearTimeout(id));
 					clearTimeout(timeoutId);
 					unsubscribe();
 				}
@@ -1388,6 +1400,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 			const PASTE_CHECK_DELAY = EVENT_DELIVERY_CONSTANTS.PASTE_CHECK_DELAY;
 			const ENTER_RETRY_DELAY = EVENT_DELIVERY_CONSTANTS.ENTER_RETRY_DELAY;
 			const MAX_ENTER_RETRIES = EVENT_DELIVERY_CONSTANTS.MAX_ENTER_RETRIES;
+			const MAX_BUFFER_SIZE = EVENT_DELIVERY_CONSTANTS.MAX_BUFFER_SIZE;
 
 		// Helper to send the message when prompt is detected
 			const sendMessageNow = () => {
@@ -1454,8 +1467,8 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 					sendEnterKey(attemptNum === 1 ? 'initial' : `retry-${attemptNum}`);
 
-					// Schedule check and possible retry
-					setTimeout(() => {
+					// Schedule check and possible retry (using tracked timeout to prevent leaks)
+					scheduleTimeout(() => {
 						if (resolved) return;
 
 						if (checkProcessingStarted()) {
@@ -1478,7 +1491,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 				// For single-line messages, send Enter sooner
 				const initialWait = isMultiLine ? PASTE_CHECK_DELAY : INITIAL_DELAY;
 
-				setTimeout(() => {
+				scheduleTimeout(() => {
 					if (resolved) return;
 
 					// For multi-line: check if paste indicator appeared
@@ -1515,7 +1528,11 @@ Then wait for explicit task assignments from the orchestrator.`;
 			const unsubscribe = session.onData((data) => {
 				if (resolved) return;
 
+				// Accumulate data with size limit to prevent memory exhaustion (P2.3 fix)
 				buffer += data;
+				if (buffer.length > MAX_BUFFER_SIZE) {
+					buffer = buffer.slice(-MAX_BUFFER_SIZE);
+				}
 
 				// Phase 1: Wait for Claude to be at prompt before sending
 				if (!messageSent) {
@@ -1542,7 +1559,8 @@ Then wait for explicit task assignments from the orchestrator.`;
 				const promptStillVisible =
 					AgentRegistrationService.CLAUDE_PROMPT_STREAM_PATTERN.test(buffer);
 
-				if (hasProcessingIndicator || (!promptStillVisible && buffer.length > 50)) {
+				// Use constant for minimum buffer check (P3.2 fix)
+				if (hasProcessingIndicator || (!promptStillVisible && buffer.length > EVENT_DELIVERY_CONSTANTS.MIN_BUFFER_FOR_PROCESSING_DETECTION)) {
 					this.logger.debug('Message delivery confirmed (event-driven)', {
 						sessionName,
 						hasProcessingIndicator,
@@ -1860,7 +1878,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 				// Add longer delay before retry
 				if (attempt < maxAttempts) {
-					await new Promise((resolve) => setTimeout(resolve, 1000));
+					await delay(1000);
 				}
 			} catch (error) {
 				this.logger.error('Error during robust prompt delivery', {

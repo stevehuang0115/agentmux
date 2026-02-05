@@ -117,6 +117,10 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	ENTER_RETRY_DELAY: 800,
 	/** Maximum number of Enter key retry attempts */
 	MAX_ENTER_RETRIES: 3,
+	/** Maximum buffer size for terminal output collection (bytes) */
+	MAX_BUFFER_SIZE: 10000,
+	/** Minimum buffer length to consider processing detection valid */
+	MIN_BUFFER_FOR_PROCESSING_DETECTION: 50,
 } as const;
 
 /**

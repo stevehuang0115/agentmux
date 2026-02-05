@@ -601,10 +601,20 @@ export function formatMessageContent(content: string): string {
   // IMPORTANT: Convert cursor movement sequences to spaces BEFORE stripping other ANSI codes
   // Terminal uses \x1b[nC (cursor forward n positions) to create visual spacing
   // We need to convert these to actual spaces to preserve word separation
-  cleaned = cleaned.replace(/\x1b\[(\d+)C/g, (_match, count) => ' '.repeat(parseInt(count, 10)));
+  // Added validation to handle malformed sequences and prevent memory issues (P1.4 fix)
+  const MAX_REPEAT_COUNT = 1000; // Cap repeat count to prevent memory exhaustion
+  cleaned = cleaned.replace(/\x1b\[(\d+)C/g, (_match, count) => {
+    const num = parseInt(count, 10);
+    if (Number.isNaN(num) || num < 0) return '';
+    return ' '.repeat(Math.min(num, MAX_REPEAT_COUNT));
+  });
 
   // Convert cursor down sequences to newlines
-  cleaned = cleaned.replace(/\x1b\[(\d+)B/g, (_match, count) => '\n'.repeat(parseInt(count, 10)));
+  cleaned = cleaned.replace(/\x1b\[(\d+)B/g, (_match, count) => {
+    const num = parseInt(count, 10);
+    if (Number.isNaN(num) || num < 0) return '';
+    return '\n'.repeat(Math.min(num, MAX_REPEAT_COUNT));
+  });
 
   // Remove ANSI color/style codes (SGR sequences)
   cleaned = cleaned.replace(/\x1b\[[0-9;]*m/g, '');
