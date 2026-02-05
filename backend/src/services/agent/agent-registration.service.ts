@@ -19,7 +19,9 @@ import {
 	RuntimeType,
 	SESSION_COMMAND_DELAYS,
 	EVENT_DELIVERY_CONSTANTS,
+	TERMINAL_PATTERNS,
 } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -46,41 +48,19 @@ export class AgentRegistrationService {
 	// Prompt file caching to eliminate file I/O contention during concurrent session creation
 	private promptCache = new Map<string, string>();
 
-	/**
-	 * Claude Code prompt indicators used to detect if the CLI is ready for input.
-	 * These characters appear at the start of input lines in Claude Code.
-	 */
-	private static readonly CLAUDE_PROMPT_INDICATORS = [
-		'❯', // Main prompt
-		'>', // Alternative prompt
-		'⏵', // Permission prompt indicator
-		'$', // Shell prompt if Claude exits
-	] as const;
+	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
+	// Keeping these as static getters for backwards compatibility within the class
+	private static get CLAUDE_PROMPT_INDICATORS() {
+		return TERMINAL_PATTERNS.PROMPT_CHARS;
+	}
 
-	/**
-	 * Pattern to detect Claude Code processing indicators (spinners, thinking text).
-	 * Used to verify that a message has been submitted and is being processed.
-	 */
-	private static readonly CLAUDE_PROCESSING_PATTERN =
-		/thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i;
+	private static get CLAUDE_PROMPT_STREAM_PATTERN() {
+		return TERMINAL_PATTERNS.PROMPT_STREAM;
+	}
 
-	/**
-	 * Pattern to detect Claude Code prompt in event stream.
-	 * Matches a line with single ❯ or > prompt (not ❯❯ which is mode indicator).
-	 * The prompt may be followed by the mode indicator line.
-	 */
-	private static readonly CLAUDE_PROMPT_STREAM_PATTERN = /(?:^|\n)\s*[>❯⏵]\s*(?:\n|$)/;
-
-	/**
-	 * Array of processing indicator patterns for event-driven delivery.
-	 * Each pattern detects a different type of Claude Code activity.
-	 */
-	private static readonly CLAUDE_PROCESSING_INDICATORS: RegExp[] = [
-		/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/, // Spinner characters
-		/Thinking|Processing|Analyzing|Running/i, // Status text
-		/\[\d+\/\d+\]/, // Progress indicators like [1/3]
-		/\.\.\.$/, // Trailing dots indicating activity
-	];
+	private static get CLAUDE_PROCESSING_INDICATORS() {
+		return TERMINAL_PATTERNS.PROCESSING_INDICATORS;
+	}
 
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
@@ -1399,18 +1379,15 @@ Then wait for explicit task assignments from the orchestrator.`;
 				}
 			};
 
-			// Multi-strategy detection patterns:
-			// 1. "[Pasted text" - appears for multi-line messages in bracketed paste mode
-			// 2. Message echo - the message text appears in terminal output
-			// 3. Processing started - ⏺ or spinner appears (universal indicator)
-			const PASTE_PATTERN = /\[Pasted text/;
-			const PROCESSING_PATTERN = /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/;
+			// Use centralized patterns from TERMINAL_PATTERNS
+			const PASTE_PATTERN = TERMINAL_PATTERNS.PASTE_INDICATOR;
+			const PROCESSING_PATTERN = TERMINAL_PATTERNS.PROCESSING;
 
-			// Timing configuration
-			const INITIAL_DELAY = 300;      // Wait for terminal to echo short messages
-			const PASTE_CHECK_DELAY = 1200; // Extra time for multi-line paste indicator
-			const ENTER_RETRY_DELAY = 800;  // Delay between Enter retries
-			const MAX_ENTER_RETRIES = 3;    // Max Enter key attempts
+			// Use centralized timing from EVENT_DELIVERY_CONSTANTS
+			const INITIAL_DELAY = EVENT_DELIVERY_CONSTANTS.INITIAL_MESSAGE_DELAY;
+			const PASTE_CHECK_DELAY = EVENT_DELIVERY_CONSTANTS.PASTE_CHECK_DELAY;
+			const ENTER_RETRY_DELAY = EVENT_DELIVERY_CONSTANTS.ENTER_RETRY_DELAY;
+			const MAX_ENTER_RETRIES = EVENT_DELIVERY_CONSTANTS.MAX_ENTER_RETRIES;
 
 		// Helper to send the message when prompt is detected
 			const sendMessageNow = () => {
@@ -1630,7 +1607,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 					if (!isAtPrompt) {
 						this.logger.debug('Clearing terminal state before retry', { sessionName });
 						await sessionHelper.sendEscape(sessionName);
-						await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+						await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 					}
 				}
 
@@ -1641,7 +1618,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 				});
 
 				if (attempt < maxAttempts) {
-					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
+					await delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
 			} catch (error) {
 				this.logger.error('Error during message delivery', {
@@ -1651,7 +1628,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 				});
 
 				if (attempt < maxAttempts) {
-					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
+					await delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
 			}
 		}
@@ -1666,15 +1643,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 		return false;
 	}
 
-	/**
-	 * Utility delay function for async operations.
-	 *
-	 * @param ms - Milliseconds to delay
-	 * @returns Promise that resolves after the delay
-	 */
-	private delay(ms: number): Promise<void> {
-		return new Promise((resolve) => setTimeout(resolve, ms));
-	}
+	// delay() utility is now imported from utils/async.utils.js
 
 	/**
 	 * Check if Claude Code appears to be at an input prompt.
@@ -1846,13 +1815,13 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 				// Claude Code with bracketed paste mode may need explicit Enter presses after paste
 				// Send additional Enter keys to ensure the prompt is submitted
-				await this.delay(500);
+				await delay(500);
 				await sessionHelper.sendEnter(sessionName);
-				await this.delay(300);
+				await delay(300);
 				await sessionHelper.sendEnter(sessionName);
 
 				// Wait for Claude to start processing
-				await this.delay(3000);
+				await delay(3000);
 
 				// Verify prompt was delivered and processed
 				const afterOutput = sessionHelper.capturePane(sessionName, 20);

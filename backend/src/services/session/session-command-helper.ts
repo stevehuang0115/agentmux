@@ -18,7 +18,8 @@
 
 import type { ISession, ISessionBackend } from './session-backend.interface.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { SESSION_COMMAND_DELAYS, EVENT_DELIVERY_CONSTANTS } from '../../constants.js';
+import { SESSION_COMMAND_DELAYS, EVENT_DELIVERY_CONSTANTS, TERMINAL_PATTERNS } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Key code mappings for special keys
@@ -111,14 +112,14 @@ export class SessionCommandHelper {
 
 		// Longer delay for paste to complete (important for bracketed paste mode)
 		// Claude Code needs time to process the pasted text before accepting Enter
-		await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
 
 		// Send Enter explicitly as a separate keystroke
 		// Use \r (carriage return) which is the standard Enter key in terminals
 		session.write('\r');
 
 		// Additional delay for Enter to be processed
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 
 		// Log that we finished sending
 		this.logger.debug('Message sent with Enter key', {
@@ -151,7 +152,7 @@ export class SessionCommandHelper {
 			isSpecialKey: !!keyCode,
 		});
 
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -161,7 +162,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x03');
 		this.logger.debug('Sent Ctrl+C to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -171,7 +172,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\r');
 		this.logger.debug('Sent Enter to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -181,7 +182,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x1b');
 		this.logger.debug('Sent Escape to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -193,13 +194,13 @@ export class SessionCommandHelper {
 
 		// Ctrl+C to cancel any running command
 		session.write('\x03');
-		await this.delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
 		// Ctrl+U to clear the current line
 		session.write('\x15');
 
 		this.logger.debug('Cleared command line', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -289,7 +290,7 @@ export class SessionCommandHelper {
 		// Export the variable
 		session.write(`export ${key}="${value}"\r`);
 		this.logger.debug('Set environment variable', { sessionName, key });
-		await this.delay(SESSION_COMMAND_DELAYS.ENV_VAR_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.ENV_VAR_DELAY);
 	}
 
 	/**
@@ -645,8 +646,8 @@ export class SessionCommandHelper {
 			pasteTimeout = 3000,
 			processingTimeout = 5000,
 			waitForProcessing = false,
-			pastePattern = /\[Pasted text/,
-			processingPattern = /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Thinking|thinking/,
+			pastePattern = TERMINAL_PATTERNS.PASTE_INDICATOR,
+			processingPattern = TERMINAL_PATTERNS.PROCESSING,
 			fallbackDelay = 1500,
 		} = options;
 
@@ -677,7 +678,7 @@ export class SessionCommandHelper {
 				sessionName,
 				fallbackDelay,
 			});
-			await this.delay(fallbackDelay);
+			await delay(fallbackDelay);
 			result.usedFallback = true;
 		}
 
@@ -727,10 +728,9 @@ export class SessionCommandHelper {
 	): Promise<boolean> {
 		const session = this.getSessionOrThrow(sessionName);
 
-		// Pattern that indicates message is stuck (paste indicator still visible)
-		const stuckPattern = /\[Pasted text #\d+ \+\d+ lines\]/;
-		// Pattern that indicates processing started
-		const processingPattern = /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/;
+		// Use centralized patterns for consistency
+		const stuckPattern = TERMINAL_PATTERNS.PASTE_STUCK;
+		const processingPattern = TERMINAL_PATTERNS.PROCESSING;
 
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			this.logger.debug('Smart retry attempt', { sessionName, attempt, maxRetries });
@@ -754,7 +754,7 @@ export class SessionCommandHelper {
 			}
 
 			// Wait a moment and check terminal state
-			await this.delay(1000);
+			await delay(1000);
 
 			// Capture current output to check state
 			const output = this.backend.captureOutput(sessionName, 10);
@@ -809,12 +809,7 @@ export class SessionCommandHelper {
 		});
 	}
 
-	/**
-	 * Utility delay function
-	 */
-	private delay(ms: number): Promise<void> {
-		return new Promise((resolve) => setTimeout(resolve, ms));
-	}
+	// delay() utility is now imported from utils/async.utils.js
 }
 
 /**

@@ -109,6 +109,74 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	TOTAL_DELIVERY_TIMEOUT: 30000,
 	/** Default timeout for pattern matching (ms) */
 	DEFAULT_PATTERN_TIMEOUT: 30000,
+	/** Initial delay for terminal to echo short messages (ms) */
+	INITIAL_MESSAGE_DELAY: 300,
+	/** Extra time for multi-line paste indicator detection (ms) */
+	PASTE_CHECK_DELAY: 1200,
+	/** Delay between Enter key retry attempts (ms) */
+	ENTER_RETRY_DELAY: 800,
+	/** Maximum number of Enter key retry attempts */
+	MAX_ENTER_RETRIES: 3,
+} as const;
+
+/**
+ * Terminal detection patterns for Claude Code interaction.
+ * These patterns are used across multiple services to detect terminal state.
+ */
+export const TERMINAL_PATTERNS = {
+	/**
+	 * Braille spinner characters used by Claude Code to indicate processing.
+	 * Pattern: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
+	 */
+	SPINNER: /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/,
+
+	/**
+	 * Claude Code's "working" indicator (filled circle).
+	 */
+	WORKING_INDICATOR: /⏺/,
+
+	/**
+	 * Combined pattern for detecting any processing activity.
+	 * Includes spinner, working indicator, and status text.
+	 */
+	PROCESSING: /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/,
+
+	/**
+	 * Pattern for detecting paste indicator in bracketed paste mode.
+	 * Appears as "[Pasted text #N +M lines]" in Claude Code.
+	 */
+	PASTE_INDICATOR: /\[Pasted text/,
+
+	/**
+	 * Pattern to detect if paste indicator is still visible (stuck state).
+	 */
+	PASTE_STUCK: /\[Pasted text #\d+ \+\d+ lines\]/,
+
+	/**
+	 * Claude Code prompt indicators (characters that appear at input prompts).
+	 */
+	PROMPT_CHARS: ['❯', '>', '⏵', '$'] as const,
+
+	/**
+	 * Pattern for detecting Claude Code prompt in terminal stream.
+	 * Matches a line with single ❯ or > prompt (not ❯❯ which is mode indicator).
+	 */
+	PROMPT_STREAM: /(?:^|\n)\s*[>❯⏵]\s*(?:\n|$)/,
+
+	/**
+	 * Processing indicators including status text patterns.
+	 */
+	PROCESSING_INDICATORS: [
+		/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/, // Spinner characters
+		/Thinking|Processing|Analyzing|Running/i, // Status text
+		/\[\d+\/\d+\]/, // Progress indicators like [1/3]
+		/\.\.\.$/, // Trailing dots indicating activity
+	] as const,
+
+	/**
+	 * Pattern for detecting Claude Code processing with status text.
+	 */
+	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
 } as const;
 
 // Type helpers
