@@ -1661,7 +1661,6 @@ Then wait for explicit task assignments from the orchestrator.`;
 		return false;
 	}
 
-	// delay() utility is now imported from utils/async.utils.js
 
 	/**
 	 * Check if Claude Code appears to be at an input prompt.

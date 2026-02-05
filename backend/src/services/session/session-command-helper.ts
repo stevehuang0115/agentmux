@@ -809,7 +809,6 @@ export class SessionCommandHelper {
 		});
 	}
 
-	// delay() utility is now imported from utils/async.utils.js
 }
 
 /**

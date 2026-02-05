@@ -124,6 +124,15 @@ export const EVENT_DELIVERY_CONSTANTS = {
 } as const;
 
 /**
+ * Constants for terminal content formatting.
+ * Used by formatMessageContent to safely process terminal output.
+ */
+export const TERMINAL_FORMATTING_CONSTANTS = {
+	/** Maximum repeat count for cursor movement sequences (prevents memory exhaustion) */
+	MAX_CURSOR_REPEAT: 1000,
+} as const;
+
+/**
  * Terminal detection patterns for Claude Code interaction.
  * These patterns are used across multiple services to detect terminal state.
  */

@@ -8,6 +8,8 @@
  * @module types/chat
  */
 
+import { TERMINAL_FORMATTING_CONSTANTS } from '../constants.js';
+
 // =============================================================================
 // Enums and Constants
 // =============================================================================
@@ -601,19 +603,19 @@ export function formatMessageContent(content: string): string {
   // IMPORTANT: Convert cursor movement sequences to spaces BEFORE stripping other ANSI codes
   // Terminal uses \x1b[nC (cursor forward n positions) to create visual spacing
   // We need to convert these to actual spaces to preserve word separation
-  // Added validation to handle malformed sequences and prevent memory issues (P1.4 fix)
-  const MAX_REPEAT_COUNT = 1000; // Cap repeat count to prevent memory exhaustion
+  // Uses TERMINAL_FORMATTING_CONSTANTS.MAX_CURSOR_REPEAT to cap repeat count
+  const maxRepeat = TERMINAL_FORMATTING_CONSTANTS.MAX_CURSOR_REPEAT;
   cleaned = cleaned.replace(/\x1b\[(\d+)C/g, (_match, count) => {
     const num = parseInt(count, 10);
     if (Number.isNaN(num) || num < 0) return '';
-    return ' '.repeat(Math.min(num, MAX_REPEAT_COUNT));
+    return ' '.repeat(Math.min(num, maxRepeat));
   });
 
   // Convert cursor down sequences to newlines
   cleaned = cleaned.replace(/\x1b\[(\d+)B/g, (_match, count) => {
     const num = parseInt(count, 10);
     if (Number.isNaN(num) || num < 0) return '';
-    return '\n'.repeat(Math.min(num, MAX_REPEAT_COUNT));
+    return '\n'.repeat(Math.min(num, maxRepeat));
   });
 
   // Remove ANSI color/style codes (SGR sequences)
