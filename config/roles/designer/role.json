@@ -2,11 +2,12 @@
   "id": "designer",
   "name": "designer",
   "displayName": "Designer",
-  "description": "UI/UX designer focused on creating intuitive and beautiful user experiences",
+  "description": "UI/UX designer responsible for user experience and visual design",
   "category": "design",
   "systemPromptFile": "prompt.md",
   "assignedSkills": ["image-generation", "video-generation"],
   "isDefault": false,
+  "isHidden": false,
   "createdAt": "2024-01-01T00:00:00.000Z",
   "updatedAt": "2024-01-01T00:00:00.000Z"
 }

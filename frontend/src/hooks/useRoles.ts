@@ -31,8 +31,10 @@ export interface UseRolesResult {
   updateRole: (id: string, input: UpdateRoleInput) => Promise<void>;
   /** Delete a role */
   deleteRole: (id: string) => Promise<void>;
-  /** Refresh roles from server */
+  /** Refresh roles from server (cached data) */
   refreshRoles: () => Promise<void>;
+  /** Refresh roles from disk (reloads from filesystem) */
+  refreshFromDisk: () => Promise<void>;
 }
 
 /**
@@ -101,11 +103,29 @@ export function useRoles(): UseRolesResult {
   }, [fetchRoles]);
 
   /**
-   * Refresh roles from server
+   * Refresh roles from server (cached data)
    */
   const refreshRoles = useCallback(async (): Promise<void> => {
     await fetchRoles();
   }, [fetchRoles]);
+
+  /**
+   * Refresh roles from disk
+   * Forces backend to reload roles from filesystem before fetching
+   */
+  const refreshFromDisk = useCallback(async (): Promise<void> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      await rolesService.refreshFromDisk();
+      const data = await rolesService.listRoles();
+      setRoles(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to refresh roles from disk');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   // Load roles on mount
   useEffect(() => {
@@ -120,6 +140,7 @@ export function useRoles(): UseRolesResult {
     updateRole,
     deleteRole,
     refreshRoles,
+    refreshFromDisk,
   };
 }
 

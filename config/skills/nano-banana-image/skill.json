@@ -1,0 +1,35 @@
+{
+  "id": "nano-banana-image",
+  "name": "Nano Banana Image Generation",
+  "description": "Generate images using Google's Gemini Nano Banana API. This skill provides specialized domain knowledge for creating AI-generated images through API calls.",
+  "category": "design",
+  "skillType": "claude-skill",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "script",
+    "script": {
+      "file": "generate.sh",
+      "interpreter": "bash",
+      "timeoutMs": 120000
+    }
+  },
+  "environment": {
+    "file": ".env",
+    "required": ["GEMINI_API_KEY"]
+  },
+  "notices": [
+    {
+      "type": "requirement",
+      "title": "API Key Required",
+      "message": "This skill requires a Gemini API key. Add your API key in the skill settings.",
+      "link": "https://aistudio.google.com/apikey",
+      "linkText": "Get API Key"
+    }
+  ],
+  "triggers": ["generate image", "create image", "nano banana", "gemini image", "ai image"],
+  "tags": ["image", "generation", "ai", "gemini", "api"],
+  "assignableRoles": ["designer"],
+  "version": "1.0.0",
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

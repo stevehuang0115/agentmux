@@ -1,0 +1,13 @@
+{
+  "id": "fullstack-dev",
+  "name": "fullstack-dev",
+  "displayName": "Fullstack Developer",
+  "description": "Full-stack developer capable of working on both frontend and backend",
+  "category": "development",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["code-review", "testing", "documentation", "github"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

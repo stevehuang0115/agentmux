@@ -1,0 +1,13 @@
+{
+  "id": "orchestrator",
+  "name": "orchestrator",
+  "displayName": "Orchestrator",
+  "description": "System orchestrator for coordinating teams and managing project workflows",
+  "category": "management",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": [],
+  "isDefault": false,
+  "isHidden": true,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

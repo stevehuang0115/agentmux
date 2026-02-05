@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { X, Check } from 'lucide-react';
 import { useRole } from '../../hooks/useRole';
 import { useSkills } from '../../hooks/useSkills';
 import {
@@ -16,7 +17,8 @@ import {
   ROLE_CATEGORIES,
   ROLE_CATEGORY_DISPLAY_NAMES,
 } from '../../types/role.types';
-import './RoleEditor.css';
+import { Button, IconButton } from '../UI/Button';
+import { FormInput, FormLabel, FormSelect, FormTextarea } from '../UI/Form';
 
 /**
  * Props for RoleEditor component
@@ -72,7 +74,7 @@ export const RoleEditor: React.FC<RoleEditorProps> = ({
 
   const isCreating = roleId === null;
   const isBuiltin = role?.isBuiltin ?? false;
-  const isReadOnly = isBuiltin && !isCreating;
+  const hasOverride = role?.hasOverride ?? false;
 
   // Populate form when role is loaded
   useEffect(() => {
@@ -160,53 +162,89 @@ export const RoleEditor: React.FC<RoleEditorProps> = ({
 
   if (isLoading && roleId) {
     return (
-      <div className="role-editor-overlay" onClick={handleOverlayClick}>
-        <div className="role-editor-modal">
-          <p className="loading-text">Loading role...</p>
+      <div
+        className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center z-50"
+        onClick={handleOverlayClick}
+      >
+        <div className="bg-surface-dark border border-border-dark rounded-xl shadow-lg p-8">
+          <div className="flex flex-col items-center">
+            <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
+            <p className="text-text-secondary-dark">Loading role...</p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="role-editor-overlay" onClick={handleOverlayClick}>
-      <div className="role-editor-modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-header">
-          <h2>
-            {isCreating ? 'Create Role' : isReadOnly ? 'View Role' : 'Edit Role'}
-          </h2>
-          <button
-            className="close-btn"
+    <div
+      className="fixed inset-0 bg-background-dark/80 backdrop-blur-sm flex items-center justify-center z-50"
+      onClick={handleOverlayClick}
+    >
+      <div
+        className="bg-surface-dark border border-border-dark rounded-xl shadow-lg w-full max-w-2xl m-4 max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-border-dark sticky top-0 bg-surface-dark z-10">
+          <div>
+            <h2 className="text-xl font-semibold text-text-primary-dark">
+              {isCreating ? 'Create Role' : 'Edit Role'}
+            </h2>
+            <p className="text-sm text-text-secondary-dark mt-1">
+              {isCreating
+                ? 'Configure a new agent role'
+                : 'Modify role settings and prompt'}
+            </p>
+          </div>
+          <IconButton
+            icon={X}
             onClick={onClose}
+            variant="ghost"
             aria-label="Close"
-          >
-            ×
-          </button>
-        </header>
+          />
+        </div>
 
-        {error && <div className="error-banner">{error}</div>}
+        {/* Built-in Role Notice */}
+        {isBuiltin && !isCreating && (
+          <div className="mx-6 mt-4 bg-blue-500/10 border border-blue-500/30 text-blue-400 px-4 py-3 rounded-lg text-sm">
+            <strong>Built-in Role:</strong> Changes will be saved as a user override. You can reset to defaults anytime.
+            {hasOverride && <span className="ml-1">(Currently has user override)</span>}
+          </div>
+        )}
 
-        <form onSubmit={handleSubmit}>
-          <div className="form-section">
-            <h3>Basic Information</h3>
+        {/* Error Banner */}
+        {error && (
+          <div className="mx-6 mt-4 bg-rose-500/10 border border-rose-500/30 text-rose-400 px-4 py-3 rounded-lg text-sm">
+            {error}
+          </div>
+        )}
 
-            <div className="form-row">
-              <label htmlFor="displayName">Display Name *</label>
-              <input
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+          {/* Basic Information Section */}
+          <div className="p-6 border-b border-border-dark space-y-4">
+            <h3 className="text-sm font-semibold text-text-secondary-dark uppercase tracking-wide">
+              Basic Information
+            </h3>
+
+            <div>
+              <FormLabel htmlFor="displayName" required>Display Name</FormLabel>
+              <FormInput
                 id="displayName"
                 type="text"
                 value={formData.displayName}
                 onChange={(e) => handleChange('displayName', e.target.value)}
-                disabled={isReadOnly}
+                disabled={false}
                 required
                 placeholder="e.g., Senior Developer"
               />
             </div>
 
             {isCreating && (
-              <div className="form-row">
-                <label htmlFor="name">Internal Name *</label>
-                <input
+              <div>
+                <FormLabel htmlFor="name" required>Internal Name</FormLabel>
+                <FormInput
                   id="name"
                   type="text"
                   value={formData.name}
@@ -220,110 +258,136 @@ export const RoleEditor: React.FC<RoleEditorProps> = ({
                   required
                   placeholder="e.g., senior-developer"
                 />
-                <p className="hint">Lowercase letters, numbers, and hyphens only</p>
+                <p className="text-xs text-text-secondary-dark mt-1">
+                  Lowercase letters, numbers, and hyphens only
+                </p>
               </div>
             )}
 
-            <div className="form-row">
-              <label htmlFor="description">Description</label>
-              <textarea
+            <div>
+              <FormLabel htmlFor="description">Description</FormLabel>
+              <FormTextarea
                 id="description"
                 value={formData.description}
                 onChange={(e) => handleChange('description', e.target.value)}
-                disabled={isReadOnly}
+                disabled={false}
                 rows={2}
                 placeholder="Brief description of this role's responsibilities"
               />
             </div>
 
-            <div className="form-row">
-              <label htmlFor="category">Category</label>
-              <select
+            <div>
+              <FormLabel htmlFor="category">Category</FormLabel>
+              <FormSelect
                 id="category"
                 value={formData.category}
                 onChange={(e) => handleChange('category', e.target.value as RoleCategory)}
-                disabled={isReadOnly}
+                disabled={false}
               >
                 {ROLE_CATEGORIES.map((cat) => (
                   <option key={cat} value={cat}>
                     {ROLE_CATEGORY_DISPLAY_NAMES[cat]}
                   </option>
                 ))}
-              </select>
+              </FormSelect>
             </div>
 
-            <div className="form-row checkbox-row">
+            <div className="flex items-center gap-3">
               <input
                 id="isDefault"
                 type="checkbox"
                 checked={formData.isDefault}
                 onChange={(e) => handleChange('isDefault', e.target.checked)}
-                disabled={isReadOnly}
+                disabled={false}
+                className="w-4 h-4 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
               />
-              <label htmlFor="isDefault">Set as default role</label>
+              <label htmlFor="isDefault" className="text-sm text-text-primary-dark cursor-pointer">
+                Set as default role
+              </label>
             </div>
           </div>
 
-          <div className="form-section">
-            <h3>System Prompt</h3>
-            <div className="form-row">
-              <textarea
+          {/* System Prompt Section */}
+          <div className="p-6 border-b border-border-dark space-y-4">
+            <h3 className="text-sm font-semibold text-text-secondary-dark uppercase tracking-wide">
+              System Prompt
+            </h3>
+            <div>
+              <FormTextarea
                 id="systemPrompt"
                 value={formData.systemPromptContent}
                 onChange={(e) => handleChange('systemPromptContent', e.target.value)}
-                disabled={isReadOnly}
-                rows={10}
-                placeholder="# Role Name\n\nYou are a..."
-                className="prompt-editor"
+                disabled={false}
+                rows={12}
+                placeholder="# Role Name&#10;&#10;You are a..."
+                className="font-mono text-sm"
               />
-              <p className="hint">
+              <p className="text-xs text-text-secondary-dark mt-1">
                 Markdown supported. This prompt defines the agent's behavior.
               </p>
             </div>
           </div>
 
-          <div className="form-section">
-            <h3>Assigned Skills</h3>
-            <div className="skills-grid">
+          {/* Assigned Skills Section */}
+          <div className="p-6 space-y-4">
+            <h3 className="text-sm font-semibold text-text-secondary-dark uppercase tracking-wide">
+              Assigned Skills
+            </h3>
+            <div className="space-y-2">
               {skills?.map((skill) => (
-                <label key={skill.id} className="skill-checkbox">
+                <label
+                  key={skill.id}
+                  className={`flex items-start gap-3 p-3 bg-background-dark border border-border-dark rounded-lg cursor-pointer hover:border-primary/50 transition-colors ${
+                    formData.assignedSkills.includes(skill.id) ? 'border-primary/50 bg-primary/5' : ''
+                  }`}
+                >
                   <input
                     type="checkbox"
                     checked={formData.assignedSkills.includes(skill.id)}
                     onChange={() => handleSkillToggle(skill.id)}
-                    disabled={isReadOnly}
+                    disabled={false}
+                    className="w-4 h-4 mt-0.5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
                   />
-                  <span className="skill-name">{skill.name}</span>
-                  <span className="skill-description">{skill.description}</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-text-primary-dark block">
+                      {skill.name}
+                    </span>
+                    <span className="text-xs text-text-secondary-dark block mt-0.5">
+                      {skill.description}
+                    </span>
+                  </div>
+                  {formData.assignedSkills.includes(skill.id) && (
+                    <Check className="w-4 h-4 text-primary flex-shrink-0" />
+                  )}
                 </label>
               ))}
               {(!skills || skills.length === 0) && (
-                <p className="empty-skills">
+                <p className="text-sm text-text-secondary-dark text-center py-6">
                   No skills available. Create skills in the Skills tab.
                 </p>
               )}
             </div>
           </div>
-
-          <footer className="modal-footer">
-            <button type="button" className="btn-secondary" onClick={onClose}>
-              {isReadOnly ? 'Close' : 'Cancel'}
-            </button>
-            {!isReadOnly && (
-              <button
-                type="submit"
-                className="btn-primary"
-                disabled={isSaving}
-              >
-                {isSaving
-                  ? 'Saving...'
-                  : isCreating
-                  ? 'Create Role'
-                  : 'Save Changes'}
-              </button>
-            )}
-          </footer>
         </form>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 p-6 border-t border-border-dark bg-background-dark sticky bottom-0">
+          <Button variant="secondary" onClick={onClose} type="button">
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            onClick={handleSubmit}
+            disabled={isSaving}
+            loading={isSaving}
+          >
+            {isSaving
+              ? 'Saving...'
+              : isCreating
+              ? 'Create Role'
+              : 'Save Changes'}
+          </Button>
+        </div>
       </div>
     </div>
   );

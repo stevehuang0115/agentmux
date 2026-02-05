@@ -6,25 +6,31 @@
  * @module terminal-gateway.test
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TerminalGateway } from './terminal.gateway.js';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 
 // Mock the session module
-vi.mock('../services/session/index.js', () => ({
-	getSessionBackend: vi.fn(),
-	getSessionBackendSync: vi.fn(),
+jest.mock('../services/session/index.js', () => ({
+	getSessionBackend: jest.fn(),
+	getSessionBackendSync: jest.fn(),
+}));
+
+// Mock the chat gateway
+jest.mock('./chat.gateway.js', () => ({
+	getChatGateway: jest.fn(() => ({
+		processTerminalOutput: jest.fn().mockResolvedValue(undefined),
+	})),
 }));
 
 // Mock the logger service
-vi.mock('../services/core/logger.service.js', () => ({
+jest.mock('../services/core/logger.service.js', () => ({
 	LoggerService: {
-		getInstance: vi.fn(() => ({
-			createComponentLogger: vi.fn(() => ({
-				info: vi.fn(),
-				debug: vi.fn(),
-				warn: vi.fn(),
-				error: vi.fn(),
+		getInstance: jest.fn(() => ({
+			createComponentLogger: jest.fn(() => ({
+				info: jest.fn(),
+				debug: jest.fn(),
+				warn: jest.fn(),
+				error: jest.fn(),
 			})),
 		})),
 	},
@@ -40,29 +46,29 @@ describe('TerminalGateway', () => {
 
 	beforeEach(() => {
 		// Reset mocks
-		vi.clearAllMocks();
+		jest.clearAllMocks();
 
 		// Create mock socket
 		mockSocket = {
 			id: 'test-socket-id',
-			emit: vi.fn(),
-			join: vi.fn(),
-			leave: vi.fn(),
-			on: vi.fn(),
+			emit: jest.fn(),
+			join: jest.fn(),
+			leave: jest.fn(),
+			on: jest.fn(),
 		};
 
 		// Create mock Socket.IO server
 		mockIo = {
-			on: vi.fn((event: string, callback: (socket: Socket) => void) => {
+			on: jest.fn((event: string, callback: (socket: Socket) => void) => {
 				if (event === 'connection') {
 					connectionCallback = callback;
 				}
 			}),
-			to: vi.fn(() => ({
-				emit: vi.fn(),
-				disconnectSockets: vi.fn(),
+			to: jest.fn(() => ({
+				emit: jest.fn(),
+				disconnectSockets: jest.fn(),
 			})),
-			emit: vi.fn(),
+			emit: jest.fn(),
 			sockets: {
 				sockets: new Map([['test-socket-id', mockSocket]]),
 			},
@@ -70,19 +76,19 @@ describe('TerminalGateway', () => {
 
 		// Create mock session
 		mockSession = {
-			write: vi.fn(),
-			resize: vi.fn(),
-			onData: vi.fn(() => vi.fn()), // Returns unsubscribe function
-			onExit: vi.fn(() => vi.fn()),
+			write: jest.fn(),
+			resize: jest.fn(),
+			onData: jest.fn(() => jest.fn()), // Returns unsubscribe function
+			onExit: jest.fn(() => jest.fn()),
 		};
 
 		// Create mock session backend
 		mockSessionBackend = {
-			getSession: vi.fn(() => mockSession),
-			sessionExists: vi.fn(() => true),
-			captureOutput: vi.fn(() => 'mock output content'),
-			getRawHistory: vi.fn(() => 'mock raw history with ANSI codes'),
-			listSessions: vi.fn(() => ['test-session']),
+			getSession: jest.fn(() => mockSession),
+			sessionExists: jest.fn(() => true),
+			captureOutput: jest.fn(() => 'mock output content'),
+			getRawHistory: jest.fn(() => 'mock raw history with ANSI codes'),
+			listSessions: jest.fn(() => ['test-session']),
 		};
 
 		// Set up the mock
@@ -142,7 +148,7 @@ describe('TerminalGateway', () => {
 
 			expect(mockSocket.emit).toHaveBeenCalledWith('subscription_confirmed', expect.objectContaining({
 				type: 'subscription_confirmed',
-				payload: { sessionName: 'test-session' },
+				payload: { sessionName: 'test-session', sessionExists: true },
 			}));
 		});
 
@@ -158,9 +164,9 @@ describe('TerminalGateway', () => {
 
 			const mockSocket2 = {
 				id: 'test-socket-id-2',
-				emit: vi.fn(),
-				join: vi.fn(),
-				leave: vi.fn(),
+				emit: jest.fn(),
+				join: jest.fn(),
+				leave: jest.fn(),
 			} as any;
 
 			gateway.subscribeToSession('test-session', mockSocket2 as Socket);
@@ -313,6 +319,34 @@ describe('TerminalGateway', () => {
 				type: 'team_activity_updated',
 				payload: { activity: 'test' },
 			}));
+		});
+	});
+
+	describe('orchestrator output buffer', () => {
+		it('should clear buffer when setActiveConversationId is called', () => {
+			gateway.setActiveConversationId('conv-1');
+			gateway.clearOrchestratorBuffer();
+
+			// Set new conversation should clear buffer
+			gateway.setActiveConversationId('conv-2');
+
+			expect(gateway.getActiveConversationId()).toBe('conv-2');
+		});
+
+		it('should clear buffer on clearOrchestratorBuffer call', () => {
+			gateway.setActiveConversationId('test-conv');
+			gateway.clearOrchestratorBuffer();
+
+			// No error should occur
+			expect(gateway.getActiveConversationId()).toBe('test-conv');
+		});
+
+		it('should not clear buffer when setting same conversation ID', () => {
+			gateway.setActiveConversationId('conv-1');
+			// Set same ID - should not clear buffer
+			gateway.setActiveConversationId('conv-1');
+
+			expect(gateway.getActiveConversationId()).toBe('conv-1');
 		});
 	});
 });

@@ -1,0 +1,13 @@
+{
+  "id": "frontend-developer",
+  "name": "frontend-developer",
+  "displayName": "Frontend Developer",
+  "description": "Frontend developer specializing in user interfaces and client-side development",
+  "category": "development",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["code-review", "testing", "documentation"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

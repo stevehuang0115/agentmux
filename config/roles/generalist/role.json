@@ -1,0 +1,13 @@
+{
+  "id": "generalist",
+  "name": "generalist",
+  "displayName": "Generalist",
+  "description": "A versatile virtual assistant who can learn and execute any task - web research, document creation, data entry, form filling, spreadsheets, and more",
+  "category": "support",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["chrome-browser", "playwright-chrome-browser"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

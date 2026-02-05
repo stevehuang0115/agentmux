@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { FolderOpen, X } from 'lucide-react';
+import { FolderBrowser } from './FolderBrowser';
 
 interface ProjectCreatorProps {
   onSave: (path: string) => Promise<void>;
@@ -13,6 +14,7 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
   const [path, setPath] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,36 +35,20 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
     }
   };
 
-  const handleSelectFolder = async () => {
-    try {
-      // Check if the File System Access API is supported
-      if ('showDirectoryPicker' in window && (window as any).showDirectoryPicker) {
-        const directoryHandle = await (window as any).showDirectoryPicker();
-        setPath(directoryHandle.name);
-      } else {
-        // Fallback for browsers that don't support the File System Access API
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.webkitdirectory = true;
-        input.multiple = true;
+  const handleSelectFolder = () => {
+    setShowFolderBrowser(true);
+  };
 
-        input.addEventListener('change', (e) => {
-          const files = (e.target as HTMLInputElement).files;
-          if (files && files.length > 0) {
-            // Get the directory path from the first file
-            const firstFile = files[0];
-            const pathParts = firstFile.webkitRelativePath.split('/');
-            const folderName = pathParts[0];
-            setPath(folderName);
-          }
-        });
+  const handleFolderSelected = (selectedPath: string) => {
+    setPath(selectedPath);
+    setError('');
+    setShowFolderBrowser(false);
+  };
 
-        input.click();
-      }
-    } catch (err) {
-      // User cancelled the dialog or error occurred
-      console.log('Folder selection cancelled or failed:', err);
-    }
+  const handleCreateProjectFromBrowser = async (selectedPath: string) => {
+    // Directly create project from folder browser and close everything
+    await onSave(selectedPath);
+    // onSave will handle navigation/closing the parent
   };
 
   return (
@@ -107,9 +93,7 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
                   </button>
                 </div>
                 <p className="text-xs text-text-secondary-dark mt-2">
-                  Enter the absolute path to your project directory.
-                  AgentMux will create a <code className="bg-background-dark px-1 rounded text-xs">.agentmux</code> subdirectory
-                  for configuration and tickets.
+                  Enter the <strong>full absolute path</strong> to your project directory, or use Browse to navigate to it.
                 </p>
                 {error && (
                   <p className="text-red-400 text-sm mt-2">{error}</p>
@@ -144,6 +128,15 @@ export const ProjectCreator: React.FC<ProjectCreatorProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Folder Browser Modal - Direct project creation mode */}
+      {showFolderBrowser && (
+        <FolderBrowser
+          title="Create New Project"
+          onCreateProject={handleCreateProjectFromBrowser}
+          onClose={() => setShowFolderBrowser(false)}
+        />
+      )}
     </div>
   );
 };

@@ -14,6 +14,7 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
   onDeleteTeam,
   onEditTeam,
   isStoppingTeam = false,
+  isStartingTeam = false,
 }) => {
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
   const members = team?.members || [];
@@ -27,9 +28,13 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
         </div>
       </div>
       <div className="header-controls">
-        {teamStatus === 'idle' ? (
+        {teamStatus === 'idle' && !isStartingTeam ? (
           <Button variant="success" onClick={onStartTeam} icon={Play}>
-            Start Team
+            {isOrchestratorTeam ? 'Start Orchestrator' : 'Start Team'}
+          </Button>
+        ) : isStartingTeam ? (
+          <Button variant="success" loading={true} disabled={true}>
+            Starting...
           </Button>
         ) : (
           <Button
@@ -38,7 +43,7 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
             icon={Square}
             loading={isStoppingTeam}
           >
-            {isStoppingTeam ? 'Stopping...' : 'Stop Team'}
+            {isStoppingTeam ? 'Stopping...' : isOrchestratorTeam ? 'Stop Orchestrator' : 'Stop Team'}
           </Button>
         )}
         {isOrchestratorTeam && (
@@ -46,14 +51,16 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
             View Terminal
           </Button>
         )}
-        {/* Three-dot menu with edit/delete actions */}
-        <OverflowMenu
-          align="bottom-right"
-          items={[
-            { label: 'Edit Team', onClick: onEditTeam },
-            ...(isOrchestratorTeam ? [] : [{ label: 'Delete Team', danger: true, onClick: onDeleteTeam }])
-          ]}
-        />
+        {/* Three-dot menu with edit/delete actions - hidden for orchestrator */}
+        {!isOrchestratorTeam && (
+          <OverflowMenu
+            align="bottom-right"
+            items={[
+              { label: 'Edit Team', onClick: onEditTeam },
+              { label: 'Delete Team', danger: true, onClick: onDeleteTeam }
+            ]}
+          />
+        )}
       </div>
     </div>
   );

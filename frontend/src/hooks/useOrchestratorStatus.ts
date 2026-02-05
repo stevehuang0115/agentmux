@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
+import { webSocketService } from '../services/websocket.service';
 
 // =============================================================================
 // Types
@@ -182,6 +183,41 @@ export function useOrchestratorStatus(options?: {
       clearInterval(intervalId);
     };
   }, [enablePolling, pollingInterval, fetchStatus]);
+
+  // Listen for WebSocket orchestrator status changes for real-time updates
+  useEffect(() => {
+    const handleOrchestratorStatusChange = (payload: {
+      sessionName?: string;
+      agentStatus?: string;
+      workingStatus?: string;
+    }) => {
+      // Only update if component is still mounted
+      if (!isMountedRef.current) return;
+
+      // Map the WebSocket payload to our OrchestratorStatus format
+      const isActive = payload.agentStatus === 'active';
+      setStatus({
+        isActive,
+        agentStatus: payload.agentStatus || null,
+        message: isActive
+          ? 'Orchestrator is active and ready.'
+          : payload.agentStatus === 'starting' || payload.agentStatus === 'started'
+          ? 'Orchestrator is starting up. Please wait a moment and try again.'
+          : 'Orchestrator is not running. Please start the orchestrator from the Dashboard.',
+        offlineMessage: isActive
+          ? null
+          : 'The orchestrator is currently offline. Please start it from the AgentMux dashboard.',
+      });
+      setIsLoading(false);
+      setError(null);
+    };
+
+    webSocketService.on('orchestrator_status_changed', handleOrchestratorStatusChange);
+
+    return () => {
+      webSocketService.off('orchestrator_status_changed', handleOrchestratorStatusChange);
+    };
+  }, []);
 
   return {
     status,

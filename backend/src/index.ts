@@ -40,6 +40,7 @@ import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
 import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
 import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gateway.js';
+import { initializeChatGateway } from './websocket/chat.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
@@ -105,6 +106,10 @@ export class AgentMuxServer {
 	private teamsJsonWatcherService!: TeamsJsonWatcherService;
 	private apiController!: ApiController;
 	private terminalGateway!: TerminalGateway;
+
+	// Shutdown state
+	private isShuttingDown = false;
+	private healthMonitoringInterval: NodeJS.Timeout | null = null;
 
 	constructor(config?: Partial<StartupConfig>) {
 		// Resolve ~ to actual home directory
@@ -182,6 +187,12 @@ export class AgentMuxServer {
 
 		// Set terminal gateway singleton for chat integration
 		setTerminalGateway(this.terminalGateway);
+
+		// Initialize ChatGateway for chat message forwarding
+		// This sets up the event listeners that forward chat messages to WebSocket clients
+		initializeChatGateway(this.io).catch((error) => {
+			console.error('[AgentMuxServer] Failed to initialize ChatGateway:', error);
+		});
 
 		// Connect WebSocket service to terminal gateway for broadcasting
 		this.teamActivityWebSocketService.setTerminalGateway(this.terminalGateway);
@@ -514,6 +525,8 @@ export class AgentMuxServer {
 		}
 	}
 
+	private sigintCount = 0;
+
 	private registerSignalHandlers(): void {
 		this.logger.info('Registering signal handlers...');
 
@@ -523,8 +536,14 @@ export class AgentMuxServer {
 		});
 
 		process.on('SIGINT', () => {
-			this.logger.info('Received SIGINT signal (Ctrl+C)');
-			this.shutdown();
+			this.sigintCount++;
+			if (this.sigintCount === 1) {
+				this.logger.info('Received SIGINT signal (Ctrl+C) - shutting down gracefully. Press Ctrl+C again to force exit.');
+				this.shutdown();
+			} else {
+				this.logger.info('Received second SIGINT - forcing immediate exit');
+				process.exit(1);
+			}
 		});
 
 		process.on('uncaughtException', (error) => {
@@ -547,7 +566,7 @@ export class AgentMuxServer {
 		this.logger.info('Starting health monitoring...');
 
 		// Monitor memory usage every 30 seconds
-		setInterval(() => {
+		this.healthMonitoringInterval = setInterval(() => {
 			this.logMemoryUsage();
 		}, 30000);
 	}
@@ -567,9 +586,30 @@ export class AgentMuxServer {
 	}
 
 	async shutdown(): Promise<void> {
+		// Prevent double shutdown
+		if (this.isShuttingDown) {
+			this.logger.info('Shutdown already in progress, skipping...');
+			return;
+		}
+		this.isShuttingDown = true;
 		this.logger.info('Shutting down AgentMux server...');
 
+		// Set a hard timeout to force exit if graceful shutdown takes too long
+		// Use shorter timeout in development for faster restarts
+		const isDev = process.env.NODE_ENV !== 'production';
+		const timeoutMs = isDev ? 3000 : 10000;
+		const forceExitTimeout = setTimeout(() => {
+			this.logger.warn('Graceful shutdown timed out, forcing exit...');
+			process.exit(1);
+		}, timeoutMs);
+
 		try {
+			// Clear health monitoring interval first
+			if (this.healthMonitoringInterval) {
+				clearInterval(this.healthMonitoringInterval);
+				this.healthMonitoringInterval = null;
+			}
+
 			// Save PTY session state before cleanup
 			this.logger.info('Saving PTY session state...');
 			try {
@@ -588,6 +628,7 @@ export class AgentMuxServer {
 			// Clean up schedulers
 			this.schedulerService.cleanup();
 			this.messageSchedulerService.cleanup();
+
 			// Stop activity monitoring
 			this.activityMonitorService.stopPolling();
 
@@ -596,6 +637,9 @@ export class AgentMuxServer {
 
 			// Stop teams.json file watcher
 			this.teamsJsonWatcherService.stop();
+
+			// Clean up tmux service resources
+			this.tmuxService.destroy();
 
 			// Shutdown Slack integration
 			this.logger.info('Shutting down Slack integration...');
@@ -613,17 +657,26 @@ export class AgentMuxServer {
 				}
 			}
 
-			// Close HTTP server
+			// Close all socket.io connections
+			this.logger.info('Closing WebSocket connections...');
+			this.io.close();
+
+			// Close HTTP server with timeout
+			this.logger.info('Closing HTTP server...');
 			await new Promise<void>((resolve) => {
 				this.httpServer.close(() => {
 					this.logger.info('Server shut down gracefully');
 					resolve();
 				});
+				// If server doesn't close in 3 seconds, continue anyway
+				setTimeout(resolve, 3000);
 			});
 
+			clearTimeout(forceExitTimeout);
 			process.exit(0);
 		} catch (error) {
 			this.logger.error('Error during shutdown', { error: error instanceof Error ? error.message : String(error) });
+			clearTimeout(forceExitTimeout);
 			process.exit(1);
 		}
 	}

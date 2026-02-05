@@ -1,0 +1,13 @@
+{
+  "id": "backend-developer",
+  "name": "backend-developer",
+  "displayName": "Backend Developer",
+  "description": "Backend developer focusing on server-side logic, APIs, and database design",
+  "category": "development",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["code-review", "testing", "documentation", "github"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

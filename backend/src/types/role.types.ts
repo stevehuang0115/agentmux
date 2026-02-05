@@ -17,7 +17,8 @@ export type RoleCategory =
   | 'quality'
   | 'design'
   | 'sales'
-  | 'support';
+  | 'support'
+  | 'automation';
 
 /**
  * Array of all valid role categories
@@ -29,6 +30,7 @@ export const ROLE_CATEGORIES: readonly RoleCategory[] = [
   'design',
   'sales',
   'support',
+  'automation',
 ] as const;
 
 /**
@@ -60,8 +62,14 @@ export interface Role {
   /** Whether this is the default role for new agents */
   isDefault: boolean;
 
+  /** Whether this role is hidden from the UI (e.g., orchestrator) */
+  isHidden: boolean;
+
   /** Whether this role is built-in (system) or user-created */
   isBuiltin: boolean;
+
+  /** Whether this builtin role has a user override in ~/.agentmux/roles/ */
+  hasOverride?: boolean;
 
   /** ISO timestamp of role creation */
   createdAt: string;
@@ -152,6 +160,12 @@ export interface RoleSummary {
   /** Whether this is the default role */
   isDefault: boolean;
 
+  /** Whether this role is hidden from UI */
+  isHidden: boolean;
+
+  /** Whether this builtin role has a user override */
+  hasOverride?: boolean;
+
   /** Whether this is a built-in role */
   isBuiltin: boolean;
 }
@@ -200,6 +214,9 @@ export interface RoleStorageFormat {
 
   /** Whether this is the default role */
   isDefault: boolean;
+
+  /** Whether this role is hidden from UI */
+  isHidden?: boolean;
 
   /** ISO timestamp of creation */
   createdAt: string;
@@ -257,6 +274,7 @@ export function createDefaultRole(
     systemPromptFile: input.systemPromptFile ?? '',
     assignedSkills: input.assignedSkills ?? [],
     isDefault: input.isDefault ?? false,
+    isHidden: input.isHidden ?? false,
     isBuiltin: input.isBuiltin ?? false,
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now,
@@ -287,6 +305,8 @@ export function roleToSummary(role: Role): RoleSummary {
     category: role.category,
     skillCount: role.assignedSkills.length,
     isDefault: role.isDefault,
+    isHidden: role.isHidden,
+    hasOverride: role.hasOverride,
     isBuiltin: role.isBuiltin,
   };
 }
@@ -428,6 +448,7 @@ export function roleToStorageFormat(role: Role): RoleStorageFormat {
     systemPromptFile: role.systemPromptFile,
     assignedSkills: role.assignedSkills,
     isDefault: role.isDefault,
+    isHidden: role.isHidden,
     createdAt: role.createdAt,
     updatedAt: role.updatedAt,
   };
@@ -443,6 +464,7 @@ export function roleToStorageFormat(role: Role): RoleStorageFormat {
 export function storageFormatToRole(stored: RoleStorageFormat, isBuiltin: boolean): Role {
   return {
     ...stored,
+    isHidden: stored.isHidden ?? false,
     isBuiltin,
   };
 }

@@ -30,14 +30,13 @@ export const AGENTMUX_CONSTANTS = {
 	...CONFIG_AGENTMUX_CONSTANTS,
 	// Backend-specific extensions
 	INIT_SCRIPTS: {
-		TMUX: 'initialize_tmux.sh',
 		CLAUDE: 'initialize_claude.sh',
-		TMUX_ROBOSEND: 'tmux_robosend.sh',
 	},
 } as const;
 
 // Environment variable names (duplicated from config/constants.ts for backend use)
 export const ENV_CONSTANTS = {
+	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
 	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
 } as const;
@@ -69,10 +68,10 @@ export const PTY_CONSTANTS = {
 
 // Session command timing delays (in milliseconds)
 export const SESSION_COMMAND_DELAYS = {
-	/** Delay after sending a message (allows terminal to process) */
-	MESSAGE_DELAY: 100,
+	/** Delay after sending a message (allows terminal to process bracketed paste) */
+	MESSAGE_DELAY: 1000,
 	/** Delay after sending a key (allows key to be processed) */
-	KEY_DELAY: 50,
+	KEY_DELAY: 200,
 	/** Delay after clearing command line (allows terminal to reset) */
 	CLEAR_COMMAND_DELAY: 100,
 	/** Delay after setting environment variable */
@@ -98,6 +97,18 @@ export const CHAT_CONSTANTS = {
 	CONVERSATION_ID_PATTERN: /\[CHAT:([^\]]+)\]/,
 	/** Message format prefix for chat routing */
 	MESSAGE_PREFIX: 'CHAT',
+} as const;
+
+// Event-driven message delivery constants
+export const EVENT_DELIVERY_CONSTANTS = {
+	/** Timeout for waiting for prompt detection (ms) */
+	PROMPT_DETECTION_TIMEOUT: 10000,
+	/** Timeout for waiting for delivery confirmation (ms) */
+	DELIVERY_CONFIRMATION_TIMEOUT: 5000,
+	/** Total timeout for message delivery with retries (ms) */
+	TOTAL_DELIVERY_TIMEOUT: 30000,
+	/** Default timeout for pattern matching (ms) */
+	DEFAULT_PATTERN_TIMEOUT: 30000,
 } as const;
 
 // Type helpers

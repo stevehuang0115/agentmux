@@ -43,13 +43,12 @@ export interface TeamOption {
   label: string;
 }
 
+/**
+ * @deprecated Use dynamic team options from useScheduledMessages hook instead
+ * This was previously a hardcoded list but now team options are loaded from the API
+ */
 export const TEAM_OPTIONS: TeamOption[] = [
-  { value: 'orchestrator', label: 'Orchestrator' },
-  { value: 'frontend-team-pm', label: 'Frontend Team PM' },
-  { value: 'frontend-team-dev', label: 'Frontend Team Dev' },
-  { value: 'backend-team-pm', label: 'Backend Team PM' },
-  { value: 'backend-team-dev', label: 'Backend Team Dev' },
-  { value: 'backend-team-qa', label: 'Backend Team QA' }
+  { value: 'orchestrator', label: 'Orchestrator' }
 ];
 
 export const DEFAULT_FORM_DATA: ScheduledMessageFormData = {

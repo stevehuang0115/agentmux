@@ -110,6 +110,9 @@ export interface CreateTeamMemberInput {
   role: TeamMember['role'];
   systemPrompt: string;
   runtimeType?: TeamMember['runtimeType'];
+  avatar?: string;
+  skillOverrides?: string[];
+  excludedRoleSkills?: string[];
 }
 
 /**
@@ -197,12 +200,26 @@ export interface UpdateTeamMemberRuntimeRequestBody {
 }
 
 /**
+ * Member update data in team update request
+ */
+export interface TeamMemberUpdate {
+  name: string;
+  role: string;
+  systemPrompt: string;
+  runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  avatar?: string;
+  skillOverrides?: string[];
+  excludedRoleSkills?: string[];
+}
+
+/**
  * Request body for updating team properties
  */
 export interface UpdateTeamRequestBody {
   name?: string;
   description?: string;
   currentProject?: string;
+  members?: TeamMemberUpdate[];
 }
 
 // =============================================================================

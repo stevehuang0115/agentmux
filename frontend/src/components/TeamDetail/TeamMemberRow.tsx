@@ -9,29 +9,39 @@ interface TeamMemberRowProps {
   onStart?: (memberId: string) => Promise<void>;
   onStop?: (memberId: string) => Promise<void>;
   onViewTerminal?: (member: TeamMember) => void;
+  onViewAgent?: (member: TeamMember) => void;
+  /** When true, shows loading state (team is starting) */
+  isStartingTeam?: boolean;
 }
 
-export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, onStart, onStop, onViewTerminal }) => {
+export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, onStart, onStop, onViewTerminal, onViewAgent, isStartingTeam }) => {
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
 
   const isActive = member.agentStatus === 'active';
-  const isActivating = member.agentStatus === 'activating' || isStarting;
-  const isLoading = isStarting || isStopping;
+  const isStarted = member.agentStatus === 'started';
+  const isStartingStatus = member.agentStatus === 'starting' || member.agentStatus === 'activating';
+  // Show as loading if: starting/activating status, OR individual start is clicked, OR team is starting (and member not already active/started)
+  const isInTransition = isStartingStatus || isStarting || (isStartingTeam && !isActive && !isStarted);
+  const isLoading = isStarting || isStopping || (isStartingTeam && !isActive && !isStarted);
 
-  // Determine status display
-  let statusText = 'Stopped';
+  // Determine status display based on agent lifecycle:
+  // inactive -> starting -> started -> active
+  let statusText = 'Inactive';
   let statusColor = 'bg-gray-500/10 text-gray-300';
 
-  if (isActive && !isStopping) {
-    statusText = 'Started';
-    statusColor = 'bg-emerald-500/10 text-emerald-400';
-  } else if (isActivating) {
-    statusText = 'Starting...';
-    statusColor = 'bg-yellow-500/10 text-yellow-400';
-  } else if (isStopping) {
+  if (isStopping) {
     statusText = 'Stopping...';
     statusColor = 'bg-orange-500/10 text-orange-400';
+  } else if (isActive) {
+    statusText = 'Active';
+    statusColor = 'bg-emerald-500/10 text-emerald-400';
+  } else if (isStarted) {
+    statusText = 'Started';
+    statusColor = 'bg-blue-500/10 text-blue-400';
+  } else if (isInTransition) {
+    statusText = 'Starting...';
+    statusColor = 'bg-yellow-500/10 text-yellow-400';
   }
 
   const handleStart = async (e: React.MouseEvent) => {
@@ -85,7 +95,7 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
           {statusText}
         </span>
         <div className="flex items-center gap-2">
-          {(isActive || isStopping) && !isStarting ? (
+          {(isActive || isStarted || isStartingStatus || isStopping) && !isStarting ? (
             <button
               className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 isLoading
@@ -124,6 +134,12 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
             align="bottom-right"
             buttonClassName="w-9 h-9 rounded-full hover:bg-primary/20 hover:text-primary flex items-center justify-center transition-colors"
             items={[
+              ...(onViewAgent ? [
+                {
+                  label: 'View Agent',
+                  onClick: () => onViewAgent(member)
+                }
+              ] : []),
               ...(member.sessionName && onViewTerminal ? [
                 {
                   label: 'View Terminal',

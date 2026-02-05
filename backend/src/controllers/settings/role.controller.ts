@@ -25,6 +25,28 @@ import {
 const router = Router();
 
 /**
+ * POST /api/settings/roles/refresh
+ * Refresh roles from disk
+ *
+ * Forces the role service to reload all roles from the filesystem.
+ * Use this after adding/modifying role files to see changes without server restart.
+ *
+ * Note: This route must be defined before /:id to avoid matching 'refresh' as an ID
+ */
+router.post('/refresh', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const roleService = getRoleService();
+    await roleService.refresh();
+    res.json({
+      success: true,
+      message: 'Roles refreshed from disk',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/settings/roles/default
  * Get the current default role
  *
@@ -327,6 +349,49 @@ router.post('/:id/set-default', async (req: Request, res: Response, next: NextFu
         error: error.message,
       });
     }
+    next(error);
+  }
+});
+
+/**
+ * POST /api/settings/roles/:id/reset
+ * Reset a builtin role to its default (removes user override)
+ */
+router.post('/:id/reset', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const roleService = getRoleService();
+    const role = await roleService.resetToDefault(req.params.id);
+
+    res.json({
+      success: true,
+      data: role,
+      message: 'Role reset to default successfully',
+    });
+  } catch (error) {
+    if (error instanceof RoleNotFoundError) {
+      return res.status(404).json({
+        success: false,
+        error: error.message,
+      });
+    }
+    next(error);
+  }
+});
+
+/**
+ * GET /api/settings/roles/:id/has-override
+ * Check if a builtin role has a user override
+ */
+router.get('/:id/has-override', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const roleService = getRoleService();
+    const hasOverride = await roleService.hasOverride(req.params.id);
+
+    res.json({
+      success: true,
+      data: { hasOverride },
+    });
+  } catch (error) {
     next(error);
   }
 });

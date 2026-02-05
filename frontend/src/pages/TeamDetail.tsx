@@ -4,7 +4,7 @@ import { Team, TeamMember, TeamMemberStatusChangeEvent } from '../types/index';
 import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
-import { TeamHeader, TeamOverview, TeamStatus } from '../components/TeamDetail';
+import { TeamHeader, TeamOverview, TeamStatus, AgentDetailModal } from '../components/TeamDetail';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
 import { safeParseJSON } from '../utils/api';
 import { webSocketService } from '../services/websocket.service';
@@ -19,9 +19,12 @@ export const TeamDetail: React.FC = () => {
   const [orchestratorSessionActive, setOrchestratorSessionActive] = useState(false);
   const [showStartTeamModal, setShowStartTeamModal] = useState(false);
   const [showEditTeamModal, setShowEditTeamModal] = useState(false);
+  const [showAgentDetailModal, setShowAgentDetailModal] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<TeamMember | null>(null);
   const [startTeamLoading, setStartTeamLoading] = useState(false);
   const [stopTeamLoading, setStopTeamLoading] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
+  const [projectPath, setProjectPath] = useState<string | null>(null);
   const { showSuccess, showError, showWarning, AlertComponent } = useAlert();
   const { showConfirm, ConfirmComponent } = useConfirm();
 
@@ -88,9 +91,10 @@ export const TeamDetail: React.FC = () => {
 
   useEffect(() => {
     if (team?.currentProject) {
-      fetchProjectName(team.currentProject);
+      fetchProjectData(team.currentProject);
     } else {
       setProjectName(null);
+      setProjectPath(null);
     }
   }, [team?.currentProject]);
 
@@ -150,7 +154,7 @@ export const TeamDetail: React.FC = () => {
     }
   };
 
-  const fetchProjectName = async (projectId: string) => {
+  const fetchProjectData = async (projectId: string) => {
     try {
       const response = await fetch('/api/projects');
       if (response.ok) {
@@ -158,16 +162,49 @@ export const TeamDetail: React.FC = () => {
         const projectsData = result.success ? (result.data || []) : (result || []);
         const project = projectsData.find((p: any) => p.id === projectId);
         setProjectName(project ? project.name : projectId);
+        setProjectPath(project ? project.path : null);
       } else {
         setProjectName(projectId);
+        setProjectPath(null);
       }
     } catch (error) {
-      console.error('Error fetching project name:', error);
+      console.error('Error fetching project data:', error);
       setProjectName(projectId);
+      setProjectPath(null);
     }
   };
 
-  const handleStartTeam = () => {
+  const handleStartTeam = async () => {
+    // For orchestrator, start directly without showing the modal
+    const isOrchestrator = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
+    if (isOrchestrator) {
+      setStartTeamLoading(true);
+      try {
+        const response = await fetch('/api/orchestrator/setup', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+          fetchTeamData();
+          showSuccess(result.message || 'Orchestrator started successfully!');
+        } else {
+          showError(result.error || 'Failed to start orchestrator');
+        }
+      } catch (error) {
+        console.error('Error starting orchestrator:', error);
+        showError('Error starting orchestrator. Please try again.');
+      } finally {
+        setStartTeamLoading(false);
+      }
+      return;
+    }
+
+    // For regular teams, show the modal
     setShowStartTeamModal(true);
   };
 
@@ -336,6 +373,11 @@ export const TeamDetail: React.FC = () => {
     if (member.sessionName) {
       openTerminalWithSession(member.sessionName);
     }
+  };
+
+  const handleViewAgent = (member: TeamMember) => {
+    setSelectedAgent(member);
+    setShowAgentDetailModal(true);
   };
 
   const handleAddMember = async (member: { name: string; role: string }) => {
@@ -580,6 +622,7 @@ export const TeamDetail: React.FC = () => {
         onDeleteTeam={handleDeleteTeam}
         onEditTeam={handleOpenEditTeam}
         isStoppingTeam={stopTeamLoading}
+        isStartingTeam={startTeamLoading}
       />
 
       <TeamOverview
@@ -592,6 +635,8 @@ export const TeamDetail: React.FC = () => {
         onStopMember={handleStopMember}
         onProjectChange={handleProjectChange}
         onViewTerminal={handleViewMemberTerminal}
+        onViewAgent={handleViewAgent}
+        isStartingTeam={startTeamLoading}
       />
 
       {/* Start Team Modal */}
@@ -610,6 +655,18 @@ export const TeamDetail: React.FC = () => {
           onClose={() => setShowEditTeamModal(false)}
           onSubmit={handleEditTeamSubmit}
           team={team}
+        />
+      )}
+
+      {/* Agent Detail Modal */}
+      {showAgentDetailModal && selectedAgent && (
+        <AgentDetailModal
+          member={selectedAgent}
+          onClose={() => {
+            setShowAgentDetailModal(false);
+            setSelectedAgent(null);
+          }}
+          projectPath={projectPath || undefined}
         />
       )}
 

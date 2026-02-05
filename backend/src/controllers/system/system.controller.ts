@@ -1,8 +1,20 @@
 import { Request, Response } from 'express';
 import os from 'os';
+import path from 'path';
+import * as fs from 'fs/promises';
 import type { ApiContext } from '../types.js';
 import { MonitoringService, ConfigService, LoggerService } from '../../services/index.js';
 import { ApiResponse } from '../../types/index.js';
+
+/**
+ * Directory entry for filesystem browsing
+ */
+interface DirectoryEntry {
+  name: string;
+  path: string;
+  type: 'directory' | 'file';
+  isHidden: boolean;
+}
 
 export async function getSystemHealth(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
@@ -178,6 +190,104 @@ export async function getLocalIpAddress(this: ApiContext, req: Request, res: Res
     res.status(500).json({
       success: false,
       error: 'Failed to get local IP address'
+    } as ApiResponse);
+  }
+}
+
+/**
+ * Browse directories on the server filesystem.
+ * Used by frontend folder browser to let users select project paths with full paths.
+ *
+ * Query parameters:
+ * - path: Directory to browse (defaults to home directory)
+ * - showFiles: Include files in results (default: false)
+ * - showHidden: Include hidden files/directories (default: false)
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ */
+export async function browseDirectories(
+  this: ApiContext,
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const requestedPath = req.query.path as string | undefined;
+    const showFiles = req.query.showFiles === 'true';
+    const showHidden = req.query.showHidden === 'true';
+
+    // Default to home directory if no path specified
+    const targetPath = requestedPath || os.homedir();
+
+    // Resolve the path to handle relative paths and symlinks
+    const resolvedPath = path.resolve(targetPath);
+
+    // Security: Ensure path exists and is accessible
+    try {
+      const stats = await fs.stat(resolvedPath);
+      if (!stats.isDirectory()) {
+        res.status(400).json({
+          success: false,
+          error: 'Path is not a directory',
+        } as ApiResponse);
+        return;
+      }
+    } catch (statError) {
+      res.status(404).json({
+        success: false,
+        error: 'Directory not found or not accessible',
+      } as ApiResponse);
+      return;
+    }
+
+    // Read directory contents
+    const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+
+    const result: DirectoryEntry[] = [];
+
+    for (const entry of entries) {
+      const isHidden = entry.name.startsWith('.');
+
+      // Skip hidden files unless requested
+      if (isHidden && !showHidden) continue;
+
+      // Skip files unless requested
+      if (!entry.isDirectory() && !showFiles) continue;
+
+      const entryPath = path.join(resolvedPath, entry.name);
+
+      result.push({
+        name: entry.name,
+        path: entryPath,
+        type: entry.isDirectory() ? 'directory' : 'file',
+        isHidden,
+      });
+    }
+
+    // Sort: directories first, then alphabetically
+    result.sort((a, b) => {
+      if (a.type === 'directory' && b.type === 'file') return -1;
+      if (a.type === 'file' && b.type === 'directory') return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    // Get parent directory path
+    const parentPath = path.dirname(resolvedPath);
+    const isRoot = resolvedPath === parentPath;
+
+    res.json({
+      success: true,
+      data: {
+        currentPath: resolvedPath,
+        parentPath: isRoot ? null : parentPath,
+        entries: result,
+      },
+    } as ApiResponse);
+  } catch (error) {
+    console.error('Error browsing directories:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to browse directories',
     } as ApiResponse);
   }
 }

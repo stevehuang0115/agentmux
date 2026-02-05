@@ -22,6 +22,14 @@ export type SkillCategory =
   | 'integration';
 
 /**
+ * Skill type - defines the nature of the skill
+ * - mcp: MCP-related skills that require MCP installation or runtime flags
+ * - claude-skill: Specialized domain knowledge with optional bash scripts
+ * - web-page: Page-specific skills with domain knowledge and actions
+ */
+export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
+
+/**
  * Type of skill execution
  */
 export type SkillExecutionType = 'script' | 'browser' | 'mcp-tool' | 'composite' | 'prompt-only';
@@ -120,6 +128,40 @@ export interface SkillEnvironmentConfig {
 }
 
 /**
+ * Runtime configuration for skills that modify agent startup
+ */
+export interface SkillRuntimeConfig {
+  /** Runtime this skill is compatible with (e.g., 'claude-code') */
+  runtime?: string;
+
+  /** Additional flags to pass to the runtime (e.g., ['--chrome']) */
+  flags?: string[];
+
+  /** MCP servers required for this skill */
+  requiredMcpServers?: string[];
+}
+
+/**
+ * User notice configuration for skills
+ */
+export interface SkillNotice {
+  /** Notice type for styling */
+  type: 'info' | 'warning' | 'requirement';
+
+  /** Notice title */
+  title: string;
+
+  /** Notice message */
+  message: string;
+
+  /** Optional link for more information */
+  link?: string;
+
+  /** Link text */
+  linkText?: string;
+}
+
+/**
  * Full Skill definition
  */
 export interface Skill {
@@ -135,6 +177,9 @@ export interface Skill {
   /** Category for grouping */
   category: SkillCategory;
 
+  /** Type of skill (mcp, claude-skill, web-page) */
+  skillType: SkillType;
+
   /** Path to .md file with detailed instructions */
   promptFile: string;
 
@@ -143,6 +188,12 @@ export interface Skill {
 
   /** Environment configuration */
   environment?: SkillEnvironmentConfig;
+
+  /** Runtime configuration for agent startup modifications */
+  runtime?: SkillRuntimeConfig;
+
+  /** Notices to display to users (requirements, warnings, etc.) */
+  notices?: SkillNotice[];
 
   /** Role IDs that can use this skill */
   assignableRoles: string[];
@@ -193,6 +244,9 @@ export interface SkillSummary {
   /** Category for grouping */
   category: SkillCategory;
 
+  /** Type of skill */
+  skillType: SkillType;
+
   /** Type of execution */
   executionType: SkillExecutionType;
 
@@ -207,6 +261,12 @@ export interface SkillSummary {
 
   /** Whether this skill is enabled */
   isEnabled: boolean;
+
+  /** Notices to display to users */
+  notices?: SkillNotice[];
+
+  /** Runtime configuration summary */
+  runtime?: SkillRuntimeConfig;
 }
 
 /**
@@ -222,6 +282,9 @@ export interface CreateSkillInput {
   /** Category for grouping */
   category: SkillCategory;
 
+  /** Type of skill */
+  skillType?: SkillType;
+
   /** Prompt content (markdown) */
   promptContent: string;
 
@@ -230,6 +293,12 @@ export interface CreateSkillInput {
 
   /** Environment configuration */
   environment?: SkillEnvironmentConfig;
+
+  /** Runtime configuration */
+  runtime?: SkillRuntimeConfig;
+
+  /** Notices to display to users */
+  notices?: SkillNotice[];
 
   /** Role IDs that can use this skill */
   assignableRoles?: string[];
@@ -254,6 +323,9 @@ export interface UpdateSkillInput {
   /** Category for grouping */
   category?: SkillCategory;
 
+  /** Type of skill */
+  skillType?: SkillType;
+
   /** Prompt content (markdown) */
   promptContent?: string;
 
@@ -262,6 +334,12 @@ export interface UpdateSkillInput {
 
   /** Environment configuration */
   environment?: SkillEnvironmentConfig;
+
+  /** Runtime configuration */
+  runtime?: SkillRuntimeConfig;
+
+  /** Notices to display to users */
+  notices?: SkillNotice[];
 
   /** Role IDs that can use this skill */
   assignableRoles?: string[];
@@ -361,6 +439,9 @@ export interface SkillStorageFormat {
   /** Category for grouping */
   category: SkillCategory;
 
+  /** Type of skill */
+  skillType: SkillType;
+
   /** Path to .md file with detailed instructions */
   promptFile: string;
 
@@ -369,6 +450,12 @@ export interface SkillStorageFormat {
 
   /** Environment configuration */
   environment?: SkillEnvironmentConfig;
+
+  /** Runtime configuration */
+  runtime?: SkillRuntimeConfig;
+
+  /** Notices to display to users */
+  notices?: SkillNotice[];
 
   /** Role IDs that can use this skill */
   assignableRoles: string[];
@@ -419,6 +506,20 @@ export const SKILL_CATEGORY_DISPLAY_NAMES: Record<SkillCategory, string> = {
   automation: 'Automation',
   analysis: 'Analysis',
   integration: 'Integration',
+};
+
+/**
+ * Valid skill types
+ */
+export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
+
+/**
+ * Display names for skill types
+ */
+export const SKILL_TYPE_DISPLAY_NAMES: Record<SkillType, string> = {
+  mcp: 'MCP Integration',
+  'claude-skill': 'Claude Skill',
+  'web-page': 'Web Page',
 };
 
 /**
@@ -498,6 +599,16 @@ export function isValidSkillCategory(value: string): value is SkillCategory {
 }
 
 /**
+ * Check if a value is a valid skill type
+ *
+ * @param value - Value to check
+ * @returns True if value is a valid SkillType
+ */
+export function isValidSkillType(value: string): value is SkillType {
+  return SKILL_TYPES.includes(value as SkillType);
+}
+
+/**
  * Check if a value is a valid execution type
  *
  * @param value - Value to check
@@ -528,7 +639,9 @@ export function isValidScriptInterpreter(value: string): value is ScriptInterpre
  * @returns A complete Skill object with default values
  */
 export function createDefaultSkill(
-  input: Pick<CreateSkillInput, 'name' | 'description' | 'category' | 'promptContent'>
+  input: Pick<CreateSkillInput, 'name' | 'description' | 'category' | 'promptContent'> & {
+    skillType?: SkillType;
+  }
 ): Skill {
   const now = new Date().toISOString();
   const id = `skill-${input.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
@@ -538,6 +651,7 @@ export function createDefaultSkill(
     name: input.name,
     description: input.description,
     category: input.category,
+    skillType: input.skillType ?? 'claude-skill',
     promptFile: `${id}/instructions.md`,
     assignableRoles: [],
     triggers: [],
@@ -562,11 +676,14 @@ export function skillToSummary(skill: Skill): SkillSummary {
     name: skill.name,
     description: skill.description,
     category: skill.category,
+    skillType: skill.skillType,
     executionType: skill.execution?.type ?? 'prompt-only',
     triggerCount: skill.triggers.length,
     roleCount: skill.assignableRoles.length,
     isBuiltin: skill.isBuiltin,
     isEnabled: skill.isEnabled,
+    notices: skill.notices,
+    runtime: skill.runtime,
   };
 }
 
@@ -582,9 +699,12 @@ export function skillToStorageFormat(skill: Skill): SkillStorageFormat {
     name: skill.name,
     description: skill.description,
     category: skill.category,
+    skillType: skill.skillType,
     promptFile: skill.promptFile,
     execution: skill.execution,
     environment: skill.environment,
+    runtime: skill.runtime,
+    notices: skill.notices,
     assignableRoles: skill.assignableRoles,
     triggers: skill.triggers,
     tags: skill.tags,
@@ -604,6 +724,7 @@ export function skillToStorageFormat(skill: Skill): SkillStorageFormat {
 export function storageFormatToSkill(storage: SkillStorageFormat, isBuiltin: boolean): Skill {
   return {
     ...storage,
+    skillType: storage.skillType ?? 'claude-skill', // Default for backward compatibility
     isBuiltin,
     isEnabled: true, // Default to enabled when loading
   };

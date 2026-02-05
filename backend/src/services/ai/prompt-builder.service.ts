@@ -4,6 +4,7 @@ import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { TeamMemberSessionConfig, SOPRole } from '../../types/index.js';
 import { MemoryService } from '../memory/memory.service.js';
 import { SOPService } from '../sop/sop.service.js';
+import { getRoleService } from '../settings/role.service.js';
 
 /**
  * Options for building system prompts
@@ -59,13 +60,13 @@ interface PromptParts {
  */
 export class PromptBuilderService {
 	private logger: ComponentLogger;
-	private readonly promptsDirectory: string;
+	private readonly rolesDirectory: string;
 	private memoryService: MemoryService | null = null;
 	private sopService: SOPService | null = null;
 
 	constructor(projectRoot: string = process.cwd()) {
 		this.logger = LoggerService.getInstance().createComponentLogger('PromptBuilderService');
-		this.promptsDirectory = path.join(projectRoot, 'config', 'teams', 'prompts');
+		this.rolesDirectory = path.join(projectRoot, 'config', 'roles');
 	}
 
 	/**
@@ -148,11 +149,14 @@ Start all teams on Phase 1 simultaneously.`.trim();
 
 	/**
 	 * Build system prompt for Claude Code agent
+	 * Loads prompts from config/roles/{role}/prompt.md
 	 */
 	async buildSystemPrompt(config: TeamMemberSessionConfig): Promise<string> {
-		// Try to load role-specific prompt from config/prompts directory
-		const promptFileName = `${config.role.toLowerCase().replace(/\s+/g, '-')}-prompt.md`;
-		const promptPath = path.resolve(this.promptsDirectory, promptFileName);
+		// Normalize role name to directory name format
+		const roleName = config.role.toLowerCase().replace(/\s+/g, '-');
+
+		// Try to load role-specific prompt from config/roles/{role}/prompt.md
+		const promptPath = path.resolve(this.rolesDirectory, roleName, 'prompt.md');
 
 		try {
 			await access(promptPath);
@@ -467,6 +471,7 @@ Use MCP tools for all team communication:
 
 	/**
 	 * Load registration prompt from config files
+	 * Loads from config/roles/{role}/prompt.md
 	 */
 	async loadRegistrationPrompt(
 		role: string,
@@ -474,7 +479,9 @@ Use MCP tools for all team communication:
 		memberId?: string
 	): Promise<string> {
 		try {
-			const promptPath = path.join(this.promptsDirectory, `${role}-prompt.md`);
+			// Normalize role name to directory name format
+			const roleName = role.toLowerCase().replace(/\s+/g, '-');
+			const promptPath = path.join(this.rolesDirectory, roleName, 'prompt.md');
 			let prompt = await readFile(promptPath, 'utf8');
 
 			// Replace template variables
@@ -509,8 +516,54 @@ Use MCP tools for all team communication:
 				error: error instanceof Error ? error.message : String(error),
 			});
 
-			const memberIdParam = memberId ? `, "memberId": "${memberId}"` : '';
-			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionName": "${sessionName}"${memberIdParam}}`;
+			const memberIdMcpParam = memberId ? `, "teamMemberId": "${memberId}"` : '';
+			const memberIdApiParam = memberId ? `, "memberId": "${memberId}"` : '';
+
+			return `# AgentMux Agent Registration
+
+You are running in the **AgentMux multi-agent orchestration environment**.
+
+## Registration Required
+
+**IMMEDIATELY** register yourself with the AgentMux system.
+
+### Primary Method: MCP Tool (Preferred)
+
+Call the \`register_agent_status\` MCP tool with these parameters:
+\`\`\`json
+{
+  "role": "${role}",
+  "sessionName": "${sessionName}"${memberIdMcpParam}
+}
+\`\`\`
+
+### Fallback Method: Direct API Call
+
+If the MCP tool is unavailable or fails, use curl to call the registration API directly:
+\`\`\`bash
+curl -X POST "http://localhost:8787/api/teams/members/register" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "role": "${role}",
+    "sessionName": "${sessionName}"${memberIdApiParam},
+    "status": "active",
+    "registeredAt": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+  }'
+\`\`\`
+
+**IMPORTANT:** You MUST complete registration before proceeding. Try the MCP method first; only use the API fallback if MCP fails.
+
+## Instructions
+
+After successful registration, respond with:
+\`\`\`
+Agent registered and awaiting instructions from orchestrator.
+Environment: AgentMux
+Role: ${role}
+Status: Active and ready for task assignments
+\`\`\`
+
+Then wait for explicit task assignments from the orchestrator.`;
 		}
 	}
 
@@ -571,21 +624,42 @@ Do not take autonomous action. Wait for explicit instructions.
 
 	/**
 	 * Load prompt template from file
+	 *
+	 * Loads from config/roles/{roleName}/prompt.md or by full file name for backwards compatibility.
+	 * Checks for user override files in ~/.agentmux/roles/{roleName}/prompt.md first.
+	 *
+	 * @param fileNameOrRole - Either a role name (e.g., 'orchestrator') or legacy file name (e.g., 'orchestrator-prompt.md')
+	 * @returns The prompt content, or null if not found
 	 */
-	async loadPromptTemplate(fileName: string): Promise<string | null> {
+	async loadPromptTemplate(fileNameOrRole: string): Promise<string | null> {
 		try {
-			const filePath = path.join(this.promptsDirectory, fileName);
+			// Try to get role from RoleService
+			const roleService = getRoleService();
+			const roleName = fileNameOrRole.replace(/-prompt\.md$/, '').toLowerCase().replace(/\s+/g, '-');
+
+			const roleWithPrompt = await roleService.getRoleByName(roleName);
+			if (roleWithPrompt && roleWithPrompt.systemPromptContent) {
+				this.logger.debug('Loaded prompt template from RoleService', {
+					roleName,
+					contentLength: roleWithPrompt.systemPromptContent.length,
+				});
+				return roleWithPrompt.systemPromptContent;
+			}
+
+			// Fall back to direct file read from roles directory
+			const filePath = path.join(this.rolesDirectory, roleName, 'prompt.md');
 			const content = await readFile(filePath, 'utf8');
 
 			this.logger.debug('Loaded prompt template', {
-				fileName,
+				roleName,
 				contentLength: content.length,
+				source: 'direct-file',
 			});
 
 			return content;
 		} catch (error) {
 			this.logger.warn('Failed to load prompt template', {
-				fileName,
+				fileNameOrRole,
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return null;
@@ -593,11 +667,12 @@ Do not take autonomous action. Wait for explicit instructions.
 	}
 
 	/**
-	 * Check if a prompt template exists
+	 * Check if a prompt template exists for a role
 	 */
-	async promptTemplateExists(fileName: string): Promise<boolean> {
+	async promptTemplateExists(roleName: string): Promise<boolean> {
 		try {
-			const filePath = path.join(this.promptsDirectory, fileName);
+			const normalizedName = roleName.replace(/-prompt\.md$/, '').toLowerCase().replace(/\s+/g, '-');
+			const filePath = path.join(this.rolesDirectory, normalizedName, 'prompt.md');
 			await access(filePath);
 			return true;
 		} catch {
@@ -606,10 +681,10 @@ Do not take autonomous action. Wait for explicit instructions.
 	}
 
 	/**
-	 * Get the path to the prompts directory
+	 * Get the path to the roles directory
 	 */
-	getPromptsDirectory(): string {
-		return this.promptsDirectory;
+	getRolesDirectory(): string {
+		return this.rolesDirectory;
 	}
 
 	/**

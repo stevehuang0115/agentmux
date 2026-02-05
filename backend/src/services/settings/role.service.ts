@@ -159,12 +159,19 @@ export class RoleService {
    * Get all roles, optionally filtered
    *
    * @param filter - Optional filter criteria
+   * @param includeHidden - Whether to include hidden roles (default: false for UI)
    * @returns Array of role summaries
    */
-  async listRoles(filter?: RoleFilter): Promise<RoleSummary[]> {
+  async listRoles(filter?: RoleFilter, includeHidden: boolean = false): Promise<RoleSummary[]> {
     await this.ensureInitialized();
 
-    const roles = Array.from(this.rolesCache.values());
+    let roles = Array.from(this.rolesCache.values());
+
+    // Filter out hidden roles unless explicitly requested
+    if (!includeHidden) {
+      roles = roles.filter(role => !role.isHidden);
+    }
+
     const filteredRoles = filter
       ? roles.filter(role => matchesRoleFilter(role, filter))
       : roles;
@@ -186,7 +193,7 @@ export class RoleService {
       return null;
     }
 
-    const promptContent = await this.loadPromptContent(role.systemPromptFile, role.isBuiltin);
+    const promptContent = await this.loadPromptContent(role.systemPromptFile, role.isBuiltin, role.name);
     return {
       ...role,
       systemPromptContent: promptContent,
@@ -194,7 +201,7 @@ export class RoleService {
   }
 
   /**
-   * Get a role by name
+   * Get a role by name (includes hidden roles)
    *
    * @param name - The role name
    * @returns The role with prompt content, or null if not found
@@ -208,6 +215,38 @@ export class RoleService {
     }
 
     return this.getRole(role.id);
+  }
+
+  /**
+   * Get the prompt file path for a role
+   * Used by PromptBuilderService and AgentRegistrationService
+   *
+   * @param roleName - The role name (e.g., 'orchestrator', 'tpm', 'developer')
+   * @returns The full path to the prompt file, or null if role not found
+   */
+  async getPromptFilePath(roleName: string): Promise<string | null> {
+    await this.ensureInitialized();
+
+    const role = Array.from(this.rolesCache.values()).find(r => r.name === roleName);
+    if (!role) {
+      return null;
+    }
+
+    // Built-in roles use subdirectory structure: config/roles/{role}/prompt.md
+    // User roles use flat structure: ~/.agentmux/roles/{promptFile}
+    if (role.isBuiltin) {
+      return path.join(this.builtinRolesDir, role.name, role.systemPromptFile);
+    }
+    return path.join(this.userRolesDir, role.systemPromptFile);
+  }
+
+  /**
+   * Get the built-in roles directory path
+   *
+   * @returns The path to built-in roles directory
+   */
+  getBuiltinRolesDir(): string {
+    return this.builtinRolesDir;
   }
 
   /**
@@ -250,6 +289,7 @@ export class RoleService {
       systemPromptFile: promptFileName,
       assignedSkills: input.assignedSkills ?? [],
       isDefault: input.isDefault ?? false,
+      isHidden: false,
       isBuiltin: false,
       createdAt: now,
       updatedAt: now,
@@ -271,13 +311,15 @@ export class RoleService {
   }
 
   /**
-   * Update an existing role (only user-created roles can be modified)
+   * Update an existing role
+   *
+   * For builtin roles: Creates an override in ~/.agentmux/roles/ (original stays intact)
+   * For user roles: Updates the role directly
    *
    * @param id - The role ID
    * @param input - The update input
    * @returns The updated role
    * @throws {RoleNotFoundError} If the role is not found
-   * @throws {BuiltinRoleModificationError} If attempting to modify a built-in role
    * @throws {RoleValidationError} If input validation fails
    */
   async updateRole(id: string, input: UpdateRoleInput): Promise<Role> {
@@ -286,10 +328,6 @@ export class RoleService {
     const role = this.rolesCache.get(id);
     if (!role) {
       throw new RoleNotFoundError(id);
-    }
-
-    if (role.isBuiltin) {
-      throw new BuiltinRoleModificationError('update');
     }
 
     // Validate input
@@ -316,19 +354,89 @@ export class RoleService {
     }
 
     // Get prompt content (use new or existing)
-    const promptContent = input.systemPromptContent ??
-      await this.loadPromptContent(role.systemPromptFile, false);
+    const existingPromptContent = role.isBuiltin
+      ? await this.loadPromptContent(role.systemPromptFile, true, role.name)
+      : await this.loadPromptContent(role.systemPromptFile, false);
+    const promptContent = input.systemPromptContent ?? existingPromptContent;
 
-    // Save role
-    await this.saveRole(updatedRole, promptContent);
+    // Save to user directory (creates override for builtin roles)
+    await this.saveRoleOverride(updatedRole, promptContent);
 
     // Update cache
     this.rolesCache.set(id, updatedRole);
     if (input.systemPromptContent) {
-      this.promptCache.set(role.systemPromptFile, input.systemPromptContent);
+      const cacheKey = role.isBuiltin ? `override:${role.name}` : role.systemPromptFile;
+      this.promptCache.set(cacheKey, input.systemPromptContent);
     }
 
     return updatedRole;
+  }
+
+  /**
+   * Check if a builtin role has a user override
+   *
+   * @param id - The role ID
+   * @returns True if the role has a user override
+   */
+  async hasOverride(id: string): Promise<boolean> {
+    await this.ensureInitialized();
+
+    const role = this.rolesCache.get(id);
+    if (!role || !role.isBuiltin) {
+      return false;
+    }
+
+    const overridePath = path.join(this.userRolesDir, role.name, 'role.json');
+    try {
+      await fs.access(overridePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reset a builtin role to its default (removes user override)
+   *
+   * @param id - The role ID
+   * @returns The reset role (original builtin values)
+   * @throws {RoleNotFoundError} If the role is not found
+   */
+  async resetToDefault(id: string): Promise<Role> {
+    await this.ensureInitialized();
+
+    const role = this.rolesCache.get(id);
+    if (!role) {
+      throw new RoleNotFoundError(id);
+    }
+
+    if (!role.isBuiltin) {
+      // Non-builtin roles can't be "reset" - they have no default
+      return role;
+    }
+
+    // Delete the override directory
+    const overrideDir = path.join(this.userRolesDir, role.name);
+    try {
+      await fs.rm(overrideDir, { recursive: true, force: true });
+    } catch {
+      // Override doesn't exist, that's fine
+    }
+
+    // Clear override from cache
+    const cacheKey = `override:${role.name}`;
+    this.promptCache.delete(cacheKey);
+
+    // Reload the original builtin role
+    const roleJsonPath = path.join(this.builtinRolesDir, role.name, 'role.json');
+    const content = await fs.readFile(roleJsonPath, 'utf-8');
+    const stored: RoleStorageFormat = JSON.parse(content);
+    const originalRole = storageFormatToRole(stored, true);
+
+    // Update cache with original
+    this.rolesCache.set(id, originalRole);
+
+    return originalRole;
   }
 
   /**
@@ -499,23 +607,45 @@ export class RoleService {
 
   /**
    * Load built-in roles from the config directory
+   * Loads from subdirectories (config/roles/{role}/role.json)
    */
   private async loadBuiltinRoles(): Promise<Role[]> {
     const roles: Role[] = [];
 
     try {
-      const files = await fs.readdir(this.builtinRolesDir);
-      const jsonFiles = files.filter(f => f.endsWith('.json'));
+      const entries = await fs.readdir(this.builtinRolesDir, { withFileTypes: true });
 
-      for (const file of jsonFiles) {
-        try {
-          const filePath = path.join(this.builtinRolesDir, file);
-          const content = await fs.readFile(filePath, 'utf-8');
-          const stored: RoleStorageFormat = JSON.parse(content);
-          const role = storageFormatToRole(stored, true);
-          roles.push(role);
-        } catch (err) {
-          console.warn(`Failed to load builtin role from ${file}:`, err);
+      for (const entry of entries) {
+        // Load from subdirectories containing role.json
+        if (entry.isDirectory()) {
+          try {
+            // Check for user override first
+            const overridePath = path.join(this.userRolesDir, entry.name, 'role.json');
+            let roleJsonPath: string;
+            let hasOverride = false;
+
+            try {
+              await fs.access(overridePath);
+              roleJsonPath = overridePath;
+              hasOverride = true;
+            } catch {
+              // No override, use builtin
+              roleJsonPath = path.join(this.builtinRolesDir, entry.name, 'role.json');
+            }
+
+            const content = await fs.readFile(roleJsonPath, 'utf-8');
+            const stored: RoleStorageFormat = JSON.parse(content);
+            const role = storageFormatToRole(stored, true);
+
+            // Mark if this role has a user override
+            if (hasOverride) {
+              (role as any).hasOverride = true;
+            }
+
+            roles.push(role);
+          } catch {
+            // Skip directories without role.json
+          }
         }
       }
     } catch {
@@ -573,21 +703,65 @@ export class RoleService {
   }
 
   /**
-   * Load prompt content from a file
+   * Save a role override to user directory
+   * Uses subdirectory structure: ~/.agentmux/roles/{role-name}/role.json + prompt.md
    *
-   * @param promptFile - The prompt file name
+   * @param role - The role to save
+   * @param promptContent - The prompt content
+   */
+  private async saveRoleOverride(role: Role, promptContent: string): Promise<void> {
+    await this.ensureUserRolesDir();
+
+    // Create role subdirectory
+    const roleDir = path.join(this.userRolesDir, role.name);
+    await fs.mkdir(roleDir, { recursive: true });
+
+    // Save role.json
+    const jsonPath = path.join(roleDir, 'role.json');
+    const storageFormat = roleToStorageFormat(role);
+    // Override uses prompt.md in same directory
+    storageFormat.systemPromptFile = 'prompt.md';
+    await fs.writeFile(jsonPath, JSON.stringify(storageFormat, null, 2), 'utf-8');
+
+    // Save prompt.md
+    const promptPath = path.join(roleDir, 'prompt.md');
+    await fs.writeFile(promptPath, promptContent, 'utf-8');
+  }
+
+  /**
+   * Load prompt content from a file
+   * For built-in roles, checks for user override first, then falls back to builtin
+   * For user roles, loads from ~/.agentmux/roles/
+   *
+   * @param promptFile - The prompt file name (e.g., "prompt.md")
    * @param isBuiltin - Whether this is a built-in role
+   * @param roleName - The role name (directory name)
    * @returns The prompt content
    */
-  private async loadPromptContent(promptFile: string, isBuiltin: boolean): Promise<string> {
+  private async loadPromptContent(promptFile: string, isBuiltin: boolean, roleName?: string): Promise<string> {
     // Check cache first
-    const cacheKey = `${isBuiltin ? 'builtin' : 'user'}:${promptFile}`;
+    const cacheKey = `${isBuiltin ? 'builtin' : 'user'}:${roleName || 'unknown'}:${promptFile}`;
     if (this.promptCache.has(cacheKey)) {
       return this.promptCache.get(cacheKey)!;
     }
 
+    // For builtin roles, check for user override first
+    if (isBuiltin && roleName) {
+      const overridePath = path.join(this.userRolesDir, roleName, 'prompt.md');
+      try {
+        const content = await fs.readFile(overridePath, 'utf-8');
+        this.promptCache.set(cacheKey, content);
+        return content;
+      } catch {
+        // No override, continue to load builtin
+      }
+    }
+
     const dir = isBuiltin ? this.builtinRolesDir : this.userRolesDir;
-    const promptPath = path.join(dir, promptFile);
+    // For built-in roles, load from subdirectory; for user roles, use subdirectory too
+    const promptPath = roleName
+      ? path.join(dir, roleName, promptFile)
+      : path.join(dir, promptFile);
 
     try {
       const content = await fs.readFile(promptPath, 'utf-8');

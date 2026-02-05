@@ -28,7 +28,7 @@ export const AGENTMUX_CONSTANTS = {
 		REGISTRATION_CHECK_INTERVAL: 5000,
 		/** Cache timeout for Claude detection (30 seconds) */
 		CLAUDE_DETECTION_CACHE_TIMEOUT: 30000,
-		/** Default shell for tmux sessions, /bin/bash, /bin/zsh */
+		/** Default shell for terminal sessions, /bin/bash, /bin/zsh */
 		DEFAULT_SHELL: '/bin/bash',
 	},
 
@@ -62,14 +62,19 @@ export const AGENTMUX_CONSTANTS = {
 
 	/**
 	 * Agent status enumeration - represents agent lifecycle states
+	 * Lifecycle: inactive -> starting -> started -> active
 	 */
 	AGENT_STATUSES: {
 		/** Agent is not running or has been stopped */
 		INACTIVE: 'inactive',
-		/** Agent is in the process of starting up */
-		ACTIVATING: 'activating',
-		/** Agent is fully operational and ready */
+		/** Terminal/PTY session is being created */
+		STARTING: 'starting',
+		/** Runtime (Claude Code, etc.) is running but agent hasn't registered yet */
+		STARTED: 'started',
+		/** Agent has registered and is fully operational */
 		ACTIVE: 'active',
+		/** @deprecated Use STARTING instead - kept for backward compatibility */
+		ACTIVATING: 'activating',
 	},
 
 	/**
@@ -126,7 +131,7 @@ export const AGENTMUX_CONSTANTS = {
 	ORCHESTRATOR: {
 		/** Display name for the orchestrator role */
 		DISPLAY_NAME: 'Orchestrator',
-		/** Default orchestrator window name in tmux */
+		/** Default orchestrator window name */
 		WINDOW_NAME: 'AgentMux Orchestrator',
 		/** AgentMux session name prefix pattern */
 		SESSION_PREFIX: 'agentmux_',
@@ -145,7 +150,7 @@ export const AGENT_IDENTITY_CONSTANTS = {
 	ORCHESTRATOR: {
 		/** Agent identifier used in teamAgentStatus.json */
 		ID: AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID, // 'orchestrator'
-		/** Tmux session name */
+		/** PTY session name */
 		SESSION_NAME: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // 'agentmux-orc'
 		/** Agent role */
 		ROLE: AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR // 'orchestrator'
@@ -384,7 +389,7 @@ export const MESSAGE_CONSTANTS = {
  * Environment variable names used across domains
  */
 export const ENV_CONSTANTS = {
-	/** Tmux session name */
+	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
 	/** AgentMux role identifier */
 	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
@@ -484,10 +489,11 @@ export const BACKEND_CONSTANTS = {
 	},
 
 	/**
-	 * Tmux command templates
+	 * Session command templates (legacy - PTY backend now used)
 	 */
-	TMUX_COMMANDS: {
-		LIST_SESSIONS: 'tmux list-sessions -F "#{session_name}" 2>/dev/null || echo "No sessions"',
+	SESSION_COMMANDS: {
+		/** @deprecated PTY backend now manages sessions internally */
+		LIST_SESSIONS: '',
 	},
 
 	/**
@@ -502,9 +508,7 @@ export const BACKEND_CONSTANTS = {
 	 * Initialization script file names
 	 */
 	INIT_SCRIPTS: {
-		TMUX: 'initialize_tmux.sh',
 		CLAUDE: 'initialize_claude.sh',
-		TMUX_ROBOSEND: 'tmux_robosend.sh',
 	},
 
 	/**
@@ -543,7 +547,7 @@ export const BACKEND_CONSTANTS = {
 Available commands:
 - get_team_status: Get current status of all team members
 - list_projects: List all available projects
-- list_sessions: List all tmux sessions
+- list_sessions: List all active sessions
 - broadcast [message]: Send message to all active agents
 - help: Show this help message
 `.trim(),

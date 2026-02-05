@@ -51,6 +51,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const reconnectAttemptRef = useRef<number>(0);
   const maxReconnectAttempts = 3;
 
+  // Smart scrolling: track if user has scrolled away from bottom
+  const isUserScrolledUp = useRef<boolean>(false);
+
   // Ref to track the current session for use in recursive timeouts
   // This prevents stale closures in the retry logic
   const selectedSessionRef = useRef<string>(selectedSession);
@@ -59,6 +62,33 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   useEffect(() => {
     selectedSessionRef.current = selectedSession;
   }, [selectedSession]);
+
+  /**
+   * Check if the terminal is scrolled to the bottom (or within threshold).
+   * Uses xterm's buffer to determine scroll position.
+   */
+  const isAtBottom = useCallback((): boolean => {
+    if (!xtermRef.current) return true;
+    const term = xtermRef.current;
+    const buffer = term.buffer.active;
+    // baseY is the scroll position from top, rows is visible rows
+    // viewportY is the current viewport position
+    // If viewportY + rows >= buffer length, we're at the bottom
+    const viewportY = buffer.viewportY;
+    const totalRows = buffer.length;
+    const visibleRows = term.rows;
+    // Allow a small threshold (2 lines) to account for partial scrolls
+    return viewportY + visibleRows >= totalRows - 2;
+  }, []);
+
+  /**
+   * Scrolls to bottom only if auto-scroll is enabled (user hasn't scrolled up).
+   */
+  const scrollToBottomIfEnabled = useCallback(() => {
+    if (!isUserScrolledUp.current && xtermRef.current) {
+      xtermRef.current.scrollToBottom();
+    }
+  }, []);
 
   /**
    * Clears all session-related timeouts to prevent memory leaks.
@@ -131,6 +161,35 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       }
     });
 
+    // Smart scroll: detect when user scrolls to enable/disable auto-scroll
+    // When user scrolls up, disable auto-scroll; when they scroll back to bottom, re-enable
+    const viewportElement = container.querySelector('.xterm-viewport');
+    const handleScroll = () => {
+      if (isAtBottom()) {
+        // User scrolled back to bottom, re-enable auto-scroll
+        isUserScrolledUp.current = false;
+      } else {
+        // User scrolled up, disable auto-scroll
+        isUserScrolledUp.current = true;
+      }
+    };
+
+    if (viewportElement) {
+      viewportElement.addEventListener('scroll', handleScroll);
+    }
+
+    // Also listen for mousewheel events to detect intentional user scrolling
+    const handleWheel = (e: WheelEvent) => {
+      // Only track upward scrolls (negative deltaY means scrolling up)
+      if (e.deltaY < 0) {
+        isUserScrolledUp.current = true;
+      } else if (e.deltaY > 0 && isAtBottom()) {
+        // User scrolled down and reached bottom
+        isUserScrolledUp.current = false;
+      }
+    };
+    container.addEventListener('wheel', handleWheel);
+
     // Handle resize
     const handleResize = () => {
       if (fitAddonRef.current && xtermRef.current) {
@@ -149,12 +208,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     return () => {
       resizeObserver.disconnect();
+      if (viewportElement) {
+        viewportElement.removeEventListener('scroll', handleScroll);
+      }
+      container.removeEventListener('wheel', handleWheel);
       term.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
       setXtermInitialized(false);
+      isUserScrolledUp.current = false;
     };
-  }, [isOpen]);  // Only depend on isOpen - xterm init shouldn't depend on session loading
+  }, [isOpen, isAtBottom]);  // Only depend on isOpen - xterm init shouldn't depend on session loading
 
   // Write terminal output to xterm
   const writeToXterm = useCallback((data: string) => {
@@ -188,12 +252,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       // Clear session switch timeout since we got content
       clearSessionTimeouts();
 
-      // Auto-scroll to bottom
-      if (xtermRef.current) {
-        xtermRef.current.scrollToBottom();
-      }
+      // Smart auto-scroll: only scroll to bottom if user hasn't scrolled up
+      scrollToBottomIfEnabled();
     }
-  }, [clearSessionTimeouts, writeToXterm]);
+  }, [clearSessionTimeouts, writeToXterm, scrollToBottomIfEnabled]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     // Check both direct sessionName and nested structure
@@ -428,6 +490,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     // Clear any existing session timeouts
     clearSessionTimeouts();
 
+    // Reset auto-scroll when switching sessions
+    isUserScrolledUp.current = false;
+
     // Unsubscribe from previous session
     if (currentSubscription.current && currentSubscription.current !== sessionName) {
       webSocketService.unsubscribeFromSession(currentSubscription.current);
@@ -510,6 +575,13 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         });
 
         setAvailableSessions(sessions);
+
+        // If current selectedSession is not in the available sessions, update to first available
+        // This fixes the bug where the default 'agentmux-orc' session may not exist
+        const currentSessionExists = sessions.some(s => s.id === selectedSession);
+        if (!currentSessionExists && sessions.length > 0) {
+          setSelectedSession(sessions[0].id);
+        }
       } else {
         setAvailableSessions([]);
       }

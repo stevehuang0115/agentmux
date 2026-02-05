@@ -23,7 +23,7 @@ export const AppLayout: React.FC = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-background-dark">
+    <div className="flex h-screen overflow-hidden bg-background-dark">
       {/* Mobile Backdrop */}
       <div
         className={`fixed inset-0 bg-black/60 z-40 md:hidden transition-opacity ${isMobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -59,9 +59,9 @@ export const AppLayout: React.FC = () => {
           <div className="w-10 h-10" /> {/* Spacer to center title */}
         </header>
 
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <OrchestratorStatusBanner />
-          <div className="flex-1 p-4 md:p-6">
+          <div className="flex-1 p-4 md:p-6 min-h-0 overflow-hidden">
             <Outlet />
           </div>
         </main>

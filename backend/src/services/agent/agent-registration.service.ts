@@ -18,21 +18,8 @@ import {
 	RUNTIME_TYPES,
 	RuntimeType,
 	SESSION_COMMAND_DELAYS,
+	EVENT_DELIVERY_CONSTANTS,
 } from '../../constants.js';
-
-export interface TeamRole {
-	key: string;
-	displayName: string;
-	promptFile: string;
-	description: string;
-	category: string;
-	hidden?: boolean;
-	isDefault?: boolean;
-}
-
-export interface TeamRolesConfig {
-	roles: TeamRole[];
-}
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -59,9 +46,6 @@ export class AgentRegistrationService {
 	// Prompt file caching to eliminate file I/O contention during concurrent session creation
 	private promptCache = new Map<string, string>();
 
-	// Team roles configuration cache
-	private teamRolesConfig: TeamRolesConfig | null = null;
-
 	/**
 	 * Claude Code prompt indicators used to detect if the CLI is ready for input.
 	 * These characters appear at the start of input lines in Claude Code.
@@ -79,6 +63,24 @@ export class AgentRegistrationService {
 	 */
 	private static readonly CLAUDE_PROCESSING_PATTERN =
 		/thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i;
+
+	/**
+	 * Pattern to detect Claude Code prompt in event stream.
+	 * Matches a line with single ❯ or > prompt (not ❯❯ which is mode indicator).
+	 * The prompt may be followed by the mode indicator line.
+	 */
+	private static readonly CLAUDE_PROMPT_STREAM_PATTERN = /(?:^|\n)\s*[>❯⏵]\s*(?:\n|$)/;
+
+	/**
+	 * Array of processing indicator patterns for event-driven delivery.
+	 * Each pattern detects a different type of Claude Code activity.
+	 */
+	private static readonly CLAUDE_PROCESSING_INDICATORS: RegExp[] = [
+		/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/, // Spinner characters
+		/Thinking|Processing|Analyzing|Running/i, // Status text
+		/\[\d+\/\d+\]/, // Progress indicators like [1/3]
+		/\.\.\.$/, // Trailing dots indicating activity
+	];
 
 	constructor(
 		_legacyTmuxService: unknown, // Legacy parameter for backwards compatibility
@@ -181,46 +183,13 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Load team roles configuration from available_team_roles.json
-	 */
-	private async loadTeamRolesConfig(): Promise<TeamRolesConfig> {
-		if (this.teamRolesConfig) {
-			return this.teamRolesConfig;
-		}
-
-		try {
-			const configPath = path.join(process.cwd(), 'config', 'teams', 'available_team_roles.json');
-			const configContent = await readFile(configPath, 'utf8');
-			this.teamRolesConfig = JSON.parse(configContent) as TeamRolesConfig;
-			this.logger.debug('Team roles configuration loaded', {
-				rolesCount: this.teamRolesConfig.roles.length
-			});
-			return this.teamRolesConfig;
-		} catch (error) {
-			this.logger.error('Failed to load team roles configuration', {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			throw new Error('Could not load team roles configuration');
-		}
-	}
-
-	/**
-	 * Get prompt file path for a specific role using the team roles configuration
+	 * Get prompt file path for a specific role
+	 * Uses the unified config/roles/{role}/prompt.md structure
 	 */
 	private async getPromptFileForRole(role: string): Promise<string> {
-		const config = await this.loadTeamRolesConfig();
-		const roleConfig = config.roles.find(r => r.key === role);
-
-		if (!roleConfig) {
-			throw new Error(`Role '${role}' not found in team roles configuration`);
-		}
-
-		// Determine the correct directory based on role
-		if (role === 'orchestrator') {
-			return path.join(process.cwd(), 'config', 'orchestrator_tasks', 'prompts', roleConfig.promptFile);
-		} else {
-			return path.join(process.cwd(), 'config', 'teams', 'prompts', roleConfig.promptFile);
-		}
+		// Normalize role name to directory name format
+		const roleName = role.toLowerCase().replace(/\s+/g, '-');
+		return path.join(process.cwd(), 'config', 'roles', roleName, 'prompt.md');
 	}
 
 	/**
@@ -412,14 +381,14 @@ export class AgentRegistrationService {
 			});
 		});
 
-		// Update agent status to 'active' since the runtime is running
-		// This was previously done by the MCP callback, but we now do it immediately
+		// Update agent status to 'started' since the runtime is running
+		// The agent will become 'active' only after it registers via the API endpoint
 		try {
 			await this.storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
 			);
-			this.logger.info('Agent status updated to active', { sessionName, role });
+			this.logger.info('Agent status updated to started (runtime running, awaiting registration)', { sessionName, role });
 		} catch (statusError) {
 			this.logger.warn('Failed to update agent status (non-critical)', {
 				sessionName,
@@ -556,13 +525,14 @@ export class AgentRegistrationService {
 			});
 		});
 
-		// Update agent status to 'active' since the runtime is running
+		// Update agent status to 'started' since the runtime is running
+		// The agent will become 'active' only after it registers via the API endpoint
 		try {
 			await this.storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
 			);
-			this.logger.info('Agent status updated to active after recreation', { sessionName, role });
+			this.logger.info('Agent status updated to started after recreation (awaiting registration)', { sessionName, role });
 		} catch (statusError) {
 			this.logger.warn('Failed to update agent status after recreation (non-critical)', {
 				sessionName,
@@ -613,13 +583,7 @@ export class AgentRegistrationService {
 			return prompt;
 		} catch (error) {
 			// Fallback to inline prompt if file doesn't exist
-			// Try to get the attempted path for error logging
-			let attemptedPath: string = 'unknown';
-			try {
-				attemptedPath = await this.getPromptFileForRole(role);
-			} catch {
-				attemptedPath = `config/${role === 'orchestrator' ? 'orchestrator_tasks' : 'teams'}/prompts/${role}-prompt.md`;
-			}
+			const attemptedPath = await this.getPromptFileForRole(role);
 
 			this.logger.error('Could not load prompt from config, using fallback', {
 				role,
@@ -628,7 +592,54 @@ export class AgentRegistrationService {
 				stack: error instanceof Error ? error.stack : undefined,
 			});
 
-			return `Please immediately run: register_agent_status with parameters {"role": "${role}", "sessionName": "${sessionName}"}`;
+			const memberIdParam = memberId ? `, "teamMemberId": "${memberId}"` : '';
+			const memberIdApiParam = memberId ? `, "memberId": "${memberId}"` : '';
+
+			return `# AgentMux Agent Registration
+
+You are running in the **AgentMux multi-agent orchestration environment**.
+
+## Registration Required
+
+**IMMEDIATELY** register yourself with the AgentMux system.
+
+### Primary Method: MCP Tool (Preferred)
+
+Call the \`register_agent_status\` MCP tool with these parameters:
+\`\`\`json
+{
+  "role": "${role}",
+  "sessionName": "${sessionName}"${memberIdParam}
+}
+\`\`\`
+
+### Fallback Method: Direct API Call
+
+If the MCP tool is unavailable or fails, use curl to call the registration API directly:
+\`\`\`bash
+curl -X POST "http://localhost:8787/api/teams/members/register" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "role": "${role}",
+    "sessionName": "${sessionName}"${memberIdApiParam},
+    "status": "active",
+    "registeredAt": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
+  }'
+\`\`\`
+
+**IMPORTANT:** You MUST complete registration before proceeding. Try the MCP method first; only use the API fallback if MCP fails.
+
+## Instructions
+
+After successful registration, respond with:
+\`\`\`
+Agent registered and awaiting instructions from orchestrator.
+Environment: AgentMux
+Role: ${role}
+Status: Active and ready for task assignments
+\`\`\`
+
+Then wait for explicit task assignments from the orchestrator.`;
 		}
 	}
 
@@ -1348,8 +1359,230 @@ export class AgentRegistrationService {
 	}
 
 	/**
+	 * Send message using event-driven delivery with output stream subscription.
+	 *
+	 * This method subscribes to the terminal output stream to:
+	 * 1. Detect when Claude is at a prompt (ready for input)
+	 * 2. Send the message when ready
+	 * 3. Confirm delivery via processing indicators in the stream
+	 *
+	 * @param sessionName - The session name
+	 * @param message - The message to send
+	 * @param timeoutMs - Maximum time to wait for delivery confirmation
+	 * @returns true if message was delivered and processing confirmed
+	 */
+	private async sendMessageEventDriven(
+		sessionName: string,
+		message: string,
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.TOTAL_DELIVERY_TIMEOUT
+	): Promise<boolean> {
+		const sessionHelper = await this.getSessionHelper();
+		const session = sessionHelper.getSession(sessionName);
+
+		if (!session) {
+			this.logger.error('Session not found for event-driven delivery', { sessionName });
+			return false;
+		}
+
+		return new Promise<boolean>((resolve) => {
+			let buffer = '';
+			let messageSent = false;
+			let enterSent = false;
+			let deliveryConfirmed = false;
+			let resolved = false;
+
+			const cleanup = () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeoutId);
+					unsubscribe();
+				}
+			};
+
+			// Multi-strategy detection patterns:
+			// 1. "[Pasted text" - appears for multi-line messages in bracketed paste mode
+			// 2. Message echo - the message text appears in terminal output
+			// 3. Processing started - ⏺ or spinner appears (universal indicator)
+			const PASTE_PATTERN = /\[Pasted text/;
+			const PROCESSING_PATTERN = /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/;
+
+			// Timing configuration
+			const INITIAL_DELAY = 300;      // Wait for terminal to echo short messages
+			const PASTE_CHECK_DELAY = 1200; // Extra time for multi-line paste indicator
+			const ENTER_RETRY_DELAY = 800;  // Delay between Enter retries
+			const MAX_ENTER_RETRIES = 3;    // Max Enter key attempts
+
+		// Helper to send the message when prompt is detected
+			const sendMessageNow = () => {
+				if (messageSent || resolved) return;
+
+				this.logger.debug('Claude at prompt, sending message', {
+					sessionName,
+					messageLength: message.length,
+					isMultiLine: message.includes('\n'),
+				});
+
+				// Send the message text
+				session.write(message);
+				messageSent = true;
+				const isMultiLine = message.includes('\n');
+
+				// Track Enter key state
+				let enterAttempts = 0;
+				let processingDetected = false;
+				const bufferAtSend = buffer;
+
+				// Function to send Enter and track attempts
+				const sendEnterKey = (reason: string) => {
+					if (resolved || processingDetected) return;
+					enterAttempts++;
+					session.write('\r');
+					enterSent = true;
+					this.logger.debug('Enter key sent', {
+						sessionName,
+						attempt: enterAttempts,
+						reason,
+					});
+				};
+
+				// Function to check if Enter was accepted (processing started)
+				const checkProcessingStarted = (): boolean => {
+					const newData = buffer.slice(bufferAtSend.length);
+					return PROCESSING_PATTERN.test(newData);
+				};
+
+				// Function to check for paste indicator
+				const checkPasteIndicator = (): boolean => {
+					const newData = buffer.slice(bufferAtSend.length);
+					return PASTE_PATTERN.test(newData);
+				};
+
+				// Strategy: Send Enter with progressive timing, retry if not accepted
+				const attemptEnter = (attemptNum: number) => {
+					if (resolved || processingDetected) return;
+
+					// Check if processing already started
+					if (checkProcessingStarted()) {
+						processingDetected = true;
+						this.logger.debug('Processing detected, message accepted', { sessionName, attemptNum });
+						buffer = ''; // Reset for processing indicator detection
+						return;
+					}
+
+					if (attemptNum > MAX_ENTER_RETRIES) {
+						this.logger.debug('Max Enter retries reached, proceeding', { sessionName });
+						buffer = '';
+						return;
+					}
+
+					sendEnterKey(attemptNum === 1 ? 'initial' : `retry-${attemptNum}`);
+
+					// Schedule check and possible retry
+					setTimeout(() => {
+						if (resolved) return;
+
+						if (checkProcessingStarted()) {
+							processingDetected = true;
+							this.logger.debug('Processing detected after Enter', { sessionName, attemptNum });
+							buffer = '';
+						} else {
+							// Not accepted yet, retry
+							this.logger.debug('Enter may not have been accepted, retrying', {
+								sessionName,
+								attemptNum,
+								bufferLength: buffer.length,
+							});
+							attemptEnter(attemptNum + 1);
+						}
+					}, ENTER_RETRY_DELAY);
+				};
+
+				// For multi-line messages, wait longer for paste indicator
+				// For single-line messages, send Enter sooner
+				const initialWait = isMultiLine ? PASTE_CHECK_DELAY : INITIAL_DELAY;
+
+				setTimeout(() => {
+					if (resolved) return;
+
+					// For multi-line: check if paste indicator appeared
+					if (isMultiLine && checkPasteIndicator()) {
+						this.logger.debug('Paste indicator detected', { sessionName });
+					}
+
+					// Start Enter key attempts
+					attemptEnter(1);
+				}, initialWait);
+			};
+
+			const timeoutId = setTimeout(() => {
+				this.logger.debug('Event-driven delivery timed out', {
+					sessionName,
+					messageSent,
+					enterSent,
+					deliveryConfirmed,
+					bufferLength: buffer.length,
+				});
+				cleanup();
+				// Partial success if Enter was sent (message was fully submitted)
+				resolve(enterSent);
+			}, timeoutMs);
+
+			// IMPORTANT: Check current terminal state immediately
+			// Claude may already be at prompt with no new output coming
+			const currentOutput = sessionHelper.capturePane(sessionName, 10);
+			if (this.isClaudeAtPrompt(currentOutput)) {
+				this.logger.debug('Claude already at prompt (immediate check)', { sessionName });
+				sendMessageNow();
+			}
+
+			const unsubscribe = session.onData((data) => {
+				if (resolved) return;
+
+				buffer += data;
+
+				// Phase 1: Wait for Claude to be at prompt before sending
+				if (!messageSent) {
+					const isAtPrompt = AgentRegistrationService.CLAUDE_PROMPT_STREAM_PATTERN.test(buffer);
+
+					if (isAtPrompt) {
+						sendMessageNow();
+					}
+					return;
+				}
+
+				// Phase 2: Only check for processing indicators AFTER Enter has been sent
+				if (!enterSent) {
+					return; // Wait for Enter to be sent
+				}
+
+				// Look for processing indicators confirming delivery
+				const hasProcessingIndicator =
+					AgentRegistrationService.CLAUDE_PROCESSING_INDICATORS.some((pattern) =>
+						pattern.test(buffer)
+					);
+
+				// Also check if prompt disappeared (Claude is working)
+				const promptStillVisible =
+					AgentRegistrationService.CLAUDE_PROMPT_STREAM_PATTERN.test(buffer);
+
+				if (hasProcessingIndicator || (!promptStillVisible && buffer.length > 50)) {
+					this.logger.debug('Message delivery confirmed (event-driven)', {
+						sessionName,
+						hasProcessingIndicator,
+						promptStillVisible,
+						bufferLength: buffer.length,
+					});
+					deliveryConfirmed = true;
+					cleanup();
+					resolve(true);
+				}
+			});
+		});
+	}
+
+	/**
 	 * Send message with retry logic for reliable delivery to Claude Code.
-	 * Waits for Claude Code to be at a prompt state before sending.
+	 * Uses event-driven delivery as primary method with polling fallback.
 	 *
 	 * @param sessionName - The session name
 	 * @param message - The message to send
@@ -1361,11 +1594,7 @@ export class AgentRegistrationService {
 		message: string,
 		maxAttempts: number = 3
 	): Promise<boolean> {
-		// Get session helper once to avoid repeated async calls
 		const sessionHelper = await this.getSessionHelper();
-
-		// Compute message fragment once for verification (use first 50 chars)
-		const messageFragment = message.substring(0, Math.min(50, message.length));
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
@@ -1374,85 +1603,43 @@ export class AgentRegistrationService {
 					attempt,
 					maxAttempts,
 					messageLength: message.length,
+					method: 'event-driven',
 				});
 
-				// Capture terminal state before sending to verify Claude is at a prompt
-				const beforeOutput = sessionHelper.capturePane(sessionName, 5);
-				const isAtPrompt = this.isClaudeAtPrompt(beforeOutput);
-
-				if (!isAtPrompt) {
-					this.logger.debug('Claude Code not at prompt, sending Escape to clear state', {
-						sessionName,
-						attempt,
-					});
-					// Send Escape key to exit any sub-menu or modal state
-					await sessionHelper.sendEscape(sessionName);
-					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
-				}
-
-				// Send the message (sendMessage now handles Enter separately for bracketed paste mode)
-				await sessionHelper.sendMessage(sessionName, message);
-
-				// Wait for Claude Code to start processing
-				await this.delay(
-					SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY +
-					SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY
+				// Try event-driven delivery first (primary method)
+				const delivered = await this.sendMessageEventDriven(
+					sessionName,
+					message,
+					EVENT_DELIVERY_CONSTANTS.PROMPT_DETECTION_TIMEOUT
 				);
 
-				// Verify message was submitted by checking terminal output
-				const afterOutput = sessionHelper.capturePane(sessionName, 15);
-
-				// Check for signs that Claude Code is processing (not just that text was pasted)
-				// After submission, Claude should show activity indicators or the prompt should be gone
-				const hasProcessingIndicator = AgentRegistrationService.CLAUDE_PROCESSING_PATTERN.test(
-					afterOutput
-				);
-				const promptStillVisible = this.isClaudeAtPrompt(afterOutput);
-				const messageInOutput = afterOutput.includes(messageFragment);
-
-				// Message is considered submitted if:
-				// 1. Processing indicators are visible, OR
-				// 2. Prompt is no longer visible (Claude is working), OR
-				// 3. Message appeared and we don't see the same prompt line (input was consumed)
-				if (hasProcessingIndicator || (!promptStillVisible && messageInOutput)) {
-					this.logger.debug('Message submitted and being processed', {
+				if (delivered) {
+					this.logger.debug('Message delivered via event-driven method', {
 						sessionName,
 						attempt,
-						hasProcessingIndicator,
-						promptStillVisible,
 					});
 					return true;
 				}
 
-				// Fallback: if message appeared but prompt is still visible, Claude might be waiting
-				// This could mean the message was pasted but not submitted - send Enter again
-				if (messageInOutput && promptStillVisible) {
-					this.logger.debug('Message visible but prompt still showing - sending Enter again', {
-						sessionName,
-						attempt,
-					});
-					await sessionHelper.sendEnter(sessionName);
-					await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+				// Event-driven failed, check if we need to clear terminal state
+				// Only do this on first failed attempt to avoid interrupting processing
+				if (attempt === 1) {
+					const output = sessionHelper.capturePane(sessionName, 5);
+					const isAtPrompt = this.isClaudeAtPrompt(output);
 
-					// Re-check after sending Enter
-					const recheckOutput = sessionHelper.capturePane(sessionName, 15);
-					const recheckPromptVisible = this.isClaudeAtPrompt(recheckOutput);
-					if (!recheckPromptVisible) {
-						this.logger.debug('Message submitted after extra Enter', {
-							sessionName,
-							attempt,
-						});
-						return true;
+					if (!isAtPrompt) {
+						this.logger.debug('Clearing terminal state before retry', { sessionName });
+						await sessionHelper.sendEscape(sessionName);
+						await this.delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 					}
 				}
 
-				this.logger.warn('Message may not have been delivered, retrying', {
+				this.logger.warn('Event-driven delivery failed, retrying', {
 					sessionName,
 					attempt,
 					nextAttempt: attempt < maxAttempts,
 				});
 
-				// Add delay before retry
 				if (attempt < maxAttempts) {
 					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
@@ -1463,7 +1650,6 @@ export class AgentRegistrationService {
 					error: error instanceof Error ? error.message : String(error),
 				});
 
-				// Add delay before retry after error
 				if (attempt < maxAttempts) {
 					await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
@@ -1658,8 +1844,15 @@ export class AgentRegistrationService {
 				// Send the prompt with proper timing
 				await sessionHelper.sendMessage(sessionName, prompt);
 
-				// Note: sendMessage already includes Enter key - wait for processing to begin
-				await this.delay(4000);
+				// Claude Code with bracketed paste mode may need explicit Enter presses after paste
+				// Send additional Enter keys to ensure the prompt is submitted
+				await this.delay(500);
+				await sessionHelper.sendEnter(sessionName);
+				await this.delay(300);
+				await sessionHelper.sendEnter(sessionName);
+
+				// Wait for Claude to start processing
+				await this.delay(3000);
 
 				// Verify prompt was delivered and processed
 				const afterOutput = sessionHelper.capturePane(sessionName, 20);

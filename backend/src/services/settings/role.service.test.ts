@@ -34,27 +34,31 @@ describe('RoleService', () => {
     await fs.mkdir(builtinRolesDir, { recursive: true });
     await fs.mkdir(userRolesDir, { recursive: true });
 
-    // Create a sample builtin role
+    // Create a sample builtin role in subdirectory structure
+    const developerDir = path.join(builtinRolesDir, 'developer');
+    await fs.mkdir(developerDir, { recursive: true });
+
     const sampleRole: RoleStorageFormat = {
       id: 'developer',
       name: 'developer',
       displayName: 'Developer',
       description: 'A software developer role',
       category: 'development',
-      systemPromptFile: 'developer-prompt.md',
+      systemPromptFile: 'prompt.md',
       assignedSkills: [],
       isDefault: true,
+      isHidden: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     await fs.writeFile(
-      path.join(builtinRolesDir, 'developer.json'),
+      path.join(developerDir, 'role.json'),
       JSON.stringify(sampleRole, null, 2)
     );
 
     await fs.writeFile(
-      path.join(builtinRolesDir, 'developer-prompt.md'),
+      path.join(developerDir, 'prompt.md'),
       '# Developer Role\n\nYou are a software developer...'
     );
 
@@ -191,13 +195,15 @@ describe('RoleService', () => {
       expect(role).not.toHaveProperty('assignedSkills');
     });
 
-    it('should throw error if not initialized', async () => {
+    it('should auto-initialize when listRoles is called', async () => {
       const uninitializedService = new RoleService({
         builtinRolesDir,
         userRolesDir,
       });
 
-      await expect(uninitializedService.listRoles()).rejects.toThrow('not initialized');
+      // RoleService uses lazy initialization - listRoles will auto-initialize
+      const roles = await uninitializedService.listRoles();
+      expect(Array.isArray(roles)).toBe(true);
     });
   });
 

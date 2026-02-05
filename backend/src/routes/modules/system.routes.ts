@@ -19,4 +19,7 @@ export function registerSystemRoutes(router: Router, apiController: ApiControlle
 
   // Local IP address for QR code generation (mobile access)
   router.get('/system/local-ip', (req, res) => systemHandlers.getLocalIpAddress.call(apiController, req, res));
+
+  // Directory browsing for folder selection (used by project creator)
+  router.get('/directories', (req, res) => systemHandlers.browseDirectories.call(apiController, req, res));
 }

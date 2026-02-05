@@ -15,6 +15,7 @@ import {
   updateSkill,
   deleteSkill,
   executeSkill,
+  refreshSkillsFromDisk,
   type SkillWithPrompt,
   type CreateSkillInput,
   type UpdateSkillInput,
@@ -97,12 +98,19 @@ export function useSkills(options: UseSkillsOptions = {}): UseSkillsResult {
 
   /**
    * Fetch skills from API
+   *
+   * @param reloadFromDisk - If true, tells backend to reload skills from filesystem first
    */
-  const fetchSkills = useCallback(async (): Promise<void> => {
+  const fetchSkills = useCallback(async (reloadFromDisk = false): Promise<void> => {
     setLoading(true);
     setError(null);
 
     try {
+      // If reloadFromDisk is true, tell the backend to rescan the skills directories
+      if (reloadFromDisk) {
+        await refreshSkillsFromDisk();
+      }
+
       const filterOptions: SkillFilterOptions = {};
       if (category) filterOptions.category = category;
       if (roleId) filterOptions.roleId = roleId;
@@ -194,10 +202,17 @@ export function useSkills(options: UseSkillsOptions = {}): UseSkillsResult {
     []
   );
 
+  /**
+   * Refresh skills from disk - reloads all skills from the filesystem
+   */
+  const refreshFromDisk = useCallback(async (): Promise<void> => {
+    await fetchSkills(true);
+  }, [fetchSkills]);
+
   // Fetch on mount if enabled
   useEffect(() => {
     if (fetchOnMount) {
-      fetchSkills();
+      fetchSkills(false);
     }
   }, [fetchOnMount, fetchSkills]);
 
@@ -206,7 +221,7 @@ export function useSkills(options: UseSkillsOptions = {}): UseSkillsResult {
     selectedSkill,
     loading,
     error,
-    refresh: fetchSkills,
+    refresh: refreshFromDisk, // Now refreshes from disk by default
     selectSkill,
     clearSelection,
     create,

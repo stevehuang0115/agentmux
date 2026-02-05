@@ -76,14 +76,12 @@ export class TmuxCommandService {
 
 	/**
 	 * Get path to the tmux_robosend.sh script
+	 * @deprecated tmux support has been removed - PTY backend is now used
 	 */
 	private getTmuxRobosendScriptPath(): string {
-		return path.join(
-			this.projectRoot,
-			'config',
-			'runtime_scripts',
-			AGENTMUX_CONSTANTS.INIT_SCRIPTS.TMUX_ROBOSEND
-		);
+		// REMOVED: tmux_robosend.sh script no longer exists
+		// This method is kept for backward compatibility but should not be called
+		throw new Error('tmux_robosend.sh has been removed - use PTY backend instead');
 	}
 
 	/**
