@@ -438,6 +438,63 @@ describe('Utility Functions', () => {
       expect(formatMessageContent('')).toBe('');
       expect(formatMessageContent('   ')).toBe('');
     });
+
+    // Smart paste detection tests - ANSI cursor movement conversion
+    it('should convert cursor forward sequences to spaces', () => {
+      // \x1b[nC moves cursor forward n positions - should become n spaces
+      expect(formatMessageContent('Hello\x1b[5CWorld')).toBe('Hello World');
+      expect(formatMessageContent('A\x1b[1CB')).toBe('A B');
+      expect(formatMessageContent('Start\x1b[10CEnd')).toBe('Start End');
+    });
+
+    it('should convert cursor down sequences to newlines', () => {
+      // \x1b[nB moves cursor down n lines - should become n newlines
+      expect(formatMessageContent('Line1\x1b[1BLine2')).toBe('Line1\nLine2');
+      expect(formatMessageContent('Top\x1b[2BBottom')).toBe('Top\n\nBottom');
+    });
+
+    it('should handle carriage returns by keeping last segment', () => {
+      // Carriage return (\r) returns cursor to start of line
+      // Content after \r overwrites content before it
+      expect(formatMessageContent('old text\rnew text')).toBe('new text');
+      expect(formatMessageContent('first\rsecond\rthird')).toBe('third');
+      expect(formatMessageContent('Line1\nold\rnew\nLine3')).toBe('Line1\nnew\nLine3');
+    });
+
+    it('should handle carriage returns with empty segments', () => {
+      expect(formatMessageContent('text\r')).toBe('text');
+      expect(formatMessageContent('\rtext')).toBe('text');
+    });
+
+    it('should normalize multiple consecutive spaces to single space', () => {
+      expect(formatMessageContent('Hello    World')).toBe('Hello World');
+      expect(formatMessageContent('A  B   C    D')).toBe('A B C D');
+    });
+
+    it('should remove OSC sequences (terminal title changes)', () => {
+      // OSC sequences: \x1b]....\x07
+      expect(formatMessageContent('\x1b]0;Terminal Title\x07Actual content')).toBe('Actual content');
+      // OSC removal concatenates surrounding text (no space added)
+      expect(formatMessageContent('Before\x1b]2;Window Title\x07After')).toBe('BeforeAfter');
+    });
+
+    it('should handle complex smart paste output', () => {
+      // Simulates real terminal output with cursor movements creating visual spacing
+      const complexOutput = 'Status:\x1b[5COK\x1b[1BDetails:\x1b[3CRunning';
+      const result = formatMessageContent(complexOutput);
+      expect(result).toBe('Status: OK\nDetails: Running');
+    });
+
+    it('should clean up multiple blank lines to maximum of two', () => {
+      expect(formatMessageContent('A\n\n\n\n\nB')).toBe('A\n\nB');
+      expect(formatMessageContent('Line1\n\n\nLine2\n\n\n\nLine3')).toBe('Line1\n\nLine2\n\nLine3');
+    });
+
+    it('should combine cursor movement conversion with color stripping', () => {
+      // Real terminal often combines colors with cursor movements
+      const output = '\x1b[32mGreen\x1b[0m\x1b[5C\x1b[31mRed\x1b[0m';
+      expect(formatMessageContent(output)).toBe('Green Red');
+    });
   });
 
   describe('extractResponseFromOutput', () => {
