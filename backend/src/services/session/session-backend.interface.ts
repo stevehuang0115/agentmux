@@ -1,8 +1,8 @@
 /**
  * Session Backend Interface Module
  *
- * Defines the abstraction layer interfaces that both PTY and tmux backends will implement.
- * This enables the AgentMux system to switch between different terminal session backends
+ * Defines the abstraction layer interfaces for terminal session backends.
+ * This enables the AgentMux system to use terminal session backends
  * without changing the higher-level code that uses these interfaces.
  *
  * @module session-backend.interface
@@ -189,7 +189,6 @@ export interface SessionOptions {
  *
  * Implementations include:
  * - PtySessionBackend: Uses node-pty for direct PTY access
- * - TmuxSessionBackend: Uses tmux for session management (deprecated)
  *
  * @example
  * ```typescript
@@ -354,10 +353,9 @@ export interface ISessionBackend {
 /**
  * Supported session backend types.
  *
- * - 'pty': Uses node-pty for direct PTY access (preferred for Windows support)
- * - 'tmux': Uses tmux for session management (Unix only, deprecated)
+ * - 'pty': Uses node-pty for direct PTY access (preferred for cross-platform support)
  */
-export type SessionBackendType = 'pty' | 'tmux';
+export type SessionBackendType = 'pty';
 
 /**
  * Default terminal dimensions

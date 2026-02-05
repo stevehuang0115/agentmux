@@ -18,7 +18,8 @@
 
 import type { ISession, ISessionBackend } from './session-backend.interface.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { SESSION_COMMAND_DELAYS } from '../../constants.js';
+import { SESSION_COMMAND_DELAYS, EVENT_DELIVERY_CONSTANTS, TERMINAL_PATTERNS } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Key code mappings for special keys
@@ -109,14 +110,22 @@ export class SessionCommandHelper {
 		// Send text first, then Enter separately to ensure submission
 		session.write(message);
 
-		// Brief delay for paste to complete (important for bracketed paste mode)
-		await this.delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
+		// Longer delay for paste to complete (important for bracketed paste mode)
+		// Claude Code needs time to process the pasted text before accepting Enter
+		await delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
 
 		// Send Enter explicitly as a separate keystroke
+		// Use \r (carriage return) which is the standard Enter key in terminals
 		session.write('\r');
 
 		// Additional delay for Enter to be processed
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+
+		// Log that we finished sending
+		this.logger.debug('Message sent with Enter key', {
+			sessionName,
+			messageLength: message.length,
+		});
 	}
 
 	/**
@@ -143,7 +152,7 @@ export class SessionCommandHelper {
 			isSpecialKey: !!keyCode,
 		});
 
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -153,7 +162,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x03');
 		this.logger.debug('Sent Ctrl+C to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -163,7 +172,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\r');
 		this.logger.debug('Sent Enter to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -173,7 +182,7 @@ export class SessionCommandHelper {
 		const session = this.getSessionOrThrow(sessionName);
 		session.write('\x1b');
 		this.logger.debug('Sent Escape to session', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -185,13 +194,13 @@ export class SessionCommandHelper {
 
 		// Ctrl+C to cancel any running command
 		session.write('\x03');
-		await this.delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
 		// Ctrl+U to clear the current line
 		session.write('\x15');
 
 		this.logger.debug('Cleared command line', { sessionName });
-		await this.delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
 	}
 
 	/**
@@ -281,7 +290,7 @@ export class SessionCommandHelper {
 		// Export the variable
 		session.write(`export ${key}="${value}"\r`);
 		this.logger.debug('Set environment variable', { sessionName, key });
-		await this.delay(SESSION_COMMAND_DELAYS.ENV_VAR_DELAY);
+		await delay(SESSION_COMMAND_DELAYS.ENV_VAR_DELAY);
 	}
 
 	/**
@@ -301,11 +310,505 @@ export class SessionCommandHelper {
 	}
 
 	/**
-	 * Utility delay function
+	 * Subscribe to session output events.
+	 *
+	 * This method provides direct access to the terminal output stream,
+	 * enabling event-driven processing instead of polling.
+	 *
+	 * @param sessionName - The session to subscribe to
+	 * @param callback - Function called on each data event
+	 * @returns Unsubscribe function to stop receiving events
+	 * @throws Error if session does not exist
+	 *
+	 * @example
+	 * ```typescript
+	 * const unsubscribe = helper.subscribeToOutput('my-session', (data) => {
+	 *   console.log('Received:', data);
+	 * });
+	 * // Later: unsubscribe();
+	 * ```
 	 */
-	private delay(ms: number): Promise<void> {
-		return new Promise((resolve) => setTimeout(resolve, ms));
+	subscribeToOutput(sessionName: string, callback: (data: string) => void): () => void {
+		const session = this.getSessionOrThrow(sessionName);
+		this.logger.debug('Subscribing to session output', { sessionName });
+		return session.onData(callback);
 	}
+
+	/**
+	 * Subscribe to session exit events.
+	 *
+	 * @param sessionName - The session to subscribe to
+	 * @param callback - Function called when session exits with exit code
+	 * @returns Unsubscribe function to stop receiving events
+	 * @throws Error if session does not exist
+	 *
+	 * @example
+	 * ```typescript
+	 * const unsubscribe = helper.subscribeToExit('my-session', (code) => {
+	 *   console.log('Session exited with code:', code);
+	 * });
+	 * ```
+	 */
+	subscribeToExit(sessionName: string, callback: (code: number) => void): () => void {
+		const session = this.getSessionOrThrow(sessionName);
+		this.logger.debug('Subscribing to session exit', { sessionName });
+		return session.onExit(callback);
+	}
+
+	/**
+	 * Wait for a pattern to appear in session output.
+	 *
+	 * Subscribes to the output stream and resolves when the pattern is found.
+	 * Useful for waiting for specific prompts or indicators.
+	 *
+	 * @param sessionName - The session to monitor
+	 * @param pattern - RegExp or string to match against output
+	 * @param timeoutMs - Maximum time to wait (default: 30 seconds)
+	 * @returns Promise resolving to the accumulated buffer when pattern matches
+	 * @throws Error if timeout or session does not exist
+	 *
+	 * @example
+	 * ```typescript
+	 * // Wait for Claude prompt
+	 * const output = await helper.waitForPattern('agent-1', />\s*$/, 10000);
+	 * console.log('Claude is ready:', output);
+	 * ```
+	 */
+	async waitForPattern(
+		sessionName: string,
+		pattern: RegExp | string,
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.DEFAULT_PATTERN_TIMEOUT
+	): Promise<string> {
+		const session = this.getSessionOrThrow(sessionName);
+
+		return new Promise<string>((resolve, reject) => {
+			let buffer = '';
+			let resolved = false;
+
+			const cleanup = () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeoutId);
+					unsubscribe();
+				}
+			};
+
+			const timeoutId = setTimeout(() => {
+				cleanup();
+				this.logger.debug('waitForPattern timed out', {
+					sessionName,
+					pattern: pattern.toString(),
+					bufferLength: buffer.length,
+				});
+				reject(new Error(`Timeout waiting for pattern: ${pattern}`));
+			}, timeoutMs);
+
+			const unsubscribe = session.onData((data) => {
+				if (resolved) return;
+
+				buffer += data;
+
+				const match =
+					typeof pattern === 'string' ? buffer.includes(pattern) : pattern.test(buffer);
+
+				if (match) {
+					this.logger.debug('Pattern matched in output', {
+						sessionName,
+						pattern: pattern.toString(),
+						bufferLength: buffer.length,
+					});
+					cleanup();
+					resolve(buffer);
+				}
+			});
+		});
+	}
+
+	/**
+	 * Wait for any of multiple patterns to appear in session output.
+	 *
+	 * Useful when multiple outcomes are possible (e.g., success or error).
+	 *
+	 * @param sessionName - The session to monitor
+	 * @param patterns - Array of patterns with identifiers
+	 * @param timeoutMs - Maximum time to wait
+	 * @returns Promise resolving to which pattern matched and the buffer
+	 *
+	 * @example
+	 * ```typescript
+	 * const result = await helper.waitForAnyPattern('agent-1', [
+	 *   { id: 'prompt', pattern: />\s*$/ },
+	 *   { id: 'error', pattern: /error:/i },
+	 * ], 10000);
+	 *
+	 * if (result.matchedId === 'error') {
+	 *   console.log('Error occurred:', result.buffer);
+	 * }
+	 * ```
+	 */
+	async waitForAnyPattern(
+		sessionName: string,
+		patterns: Array<{ id: string; pattern: RegExp | string }>,
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.DEFAULT_PATTERN_TIMEOUT
+	): Promise<{ matchedId: string; buffer: string }> {
+		const session = this.getSessionOrThrow(sessionName);
+
+		return new Promise((resolve, reject) => {
+			let buffer = '';
+			let resolved = false;
+
+			const cleanup = () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeoutId);
+					unsubscribe();
+				}
+			};
+
+			const timeoutId = setTimeout(() => {
+				cleanup();
+				this.logger.debug('waitForAnyPattern timed out', {
+					sessionName,
+					patternCount: patterns.length,
+					bufferLength: buffer.length,
+				});
+				reject(new Error(`Timeout waiting for any pattern`));
+			}, timeoutMs);
+
+			const unsubscribe = session.onData((data) => {
+				if (resolved) return;
+
+				buffer += data;
+
+				for (const { id, pattern } of patterns) {
+					const match =
+						typeof pattern === 'string' ? buffer.includes(pattern) : pattern.test(buffer);
+
+					if (match) {
+						this.logger.debug('Pattern matched in waitForAnyPattern', {
+							sessionName,
+							matchedId: id,
+							pattern: pattern.toString(),
+						});
+						cleanup();
+						resolve({ matchedId: id, buffer });
+						return;
+					}
+				}
+			});
+		});
+	}
+
+	/**
+	 * Send message and wait for delivery confirmation via events.
+	 *
+	 * This is the core event-driven message delivery method. It:
+	 * 1. Sends the message to the terminal
+	 * 2. Subscribes to output to detect confirmation patterns
+	 * 3. Resolves when confirmation is detected or timeout occurs
+	 *
+	 * @param sessionName - The session to send to
+	 * @param message - The message to send
+	 * @param confirmationPattern - Pattern indicating successful delivery
+	 * @param timeoutMs - Maximum time to wait for confirmation
+	 * @returns Promise resolving to true if confirmed, false if timeout
+	 *
+	 * @example
+	 * ```typescript
+	 * // Send message and wait for processing indicator
+	 * const confirmed = await helper.sendMessageWithConfirmation(
+	 *   'agent-1',
+	 *   'Hello Claude',
+	 *   /⠋|⠙|⠹|Thinking/,
+	 *   5000
+	 * );
+	 * ```
+	 */
+	async sendMessageWithConfirmation(
+		sessionName: string,
+		message: string,
+		confirmationPattern: RegExp | string,
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.DELIVERY_CONFIRMATION_TIMEOUT
+	): Promise<boolean> {
+		const session = this.getSessionOrThrow(sessionName);
+
+		return new Promise<boolean>((resolve) => {
+			let confirmed = false;
+			let resolved = false;
+
+			const cleanup = () => {
+				if (!resolved) {
+					resolved = true;
+					clearTimeout(timeoutId);
+					unsubscribe();
+				}
+			};
+
+			const timeoutId = setTimeout(() => {
+				this.logger.debug('sendMessageWithConfirmation timed out', {
+					sessionName,
+					messageLength: message.length,
+					confirmed,
+				});
+				cleanup();
+				resolve(confirmed);
+			}, timeoutMs);
+
+			const unsubscribe = session.onData((data) => {
+				if (resolved) return;
+
+				const match =
+					typeof confirmationPattern === 'string'
+						? data.includes(confirmationPattern)
+						: confirmationPattern.test(data);
+
+				if (match) {
+					this.logger.debug('Message delivery confirmed', {
+						sessionName,
+						pattern: confirmationPattern.toString(),
+					});
+					confirmed = true;
+					cleanup();
+					resolve(true);
+				}
+			});
+
+			// Send the message
+			this.logger.debug('Sending message with confirmation tracking', {
+				sessionName,
+				messageLength: message.length,
+			});
+
+			session.write(message);
+
+			// Send Enter after a brief delay (for bracketed paste mode)
+			setTimeout(() => {
+				if (!resolved) {
+					session.write('\r');
+				}
+			}, SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
+		});
+	}
+
+	/**
+	 * Smart message sending with event-driven paste detection.
+	 *
+	 * This method intelligently handles bracketed paste mode by:
+	 * 1. Sending the message text
+	 * 2. Waiting for "[Pasted text" indicator (paste received)
+	 * 3. Sending Enter key only after paste is confirmed
+	 * 4. Optionally waiting for processing indicators
+	 *
+	 * This is much more reliable than fixed delays because it detects
+	 * the actual terminal state rather than guessing timing.
+	 *
+	 * @param sessionName - The session to send to
+	 * @param message - The message to send
+	 * @param options - Configuration options
+	 * @returns Promise with delivery result
+	 *
+	 * @example
+	 * ```typescript
+	 * const result = await helper.sendMessageSmart('agent-1', 'Hello', {
+	 *   waitForProcessing: true,
+	 *   pasteTimeout: 3000,
+	 * });
+	 * if (result.pasteDetected && result.processingStarted) {
+	 *   console.log('Message delivered and being processed');
+	 * }
+	 * ```
+	 */
+	async sendMessageSmart(
+		sessionName: string,
+		message: string,
+		options: {
+			/** Timeout for detecting paste confirmation (ms) */
+			pasteTimeout?: number;
+			/** Timeout for detecting processing start (ms) */
+			processingTimeout?: number;
+			/** Whether to wait for processing indicators after sending */
+			waitForProcessing?: boolean;
+			/** Custom pattern for paste detection (default: /\[Pasted text/) */
+			pastePattern?: RegExp;
+			/** Custom pattern for processing detection (default: spinner/thinking) */
+			processingPattern?: RegExp;
+			/** Fallback delay if paste not detected (ms) - sends Enter anyway */
+			fallbackDelay?: number;
+		} = {}
+	): Promise<{
+		pasteDetected: boolean;
+		enterSent: boolean;
+		processingStarted: boolean;
+		usedFallback: boolean;
+	}> {
+		const session = this.getSessionOrThrow(sessionName);
+		const {
+			pasteTimeout = 3000,
+			processingTimeout = 5000,
+			waitForProcessing = false,
+			pastePattern = TERMINAL_PATTERNS.PASTE_INDICATOR,
+			processingPattern = TERMINAL_PATTERNS.PROCESSING,
+			fallbackDelay = 1500,
+		} = options;
+
+		const result = {
+			pasteDetected: false,
+			enterSent: false,
+			processingStarted: false,
+			usedFallback: false,
+		};
+
+		this.logger.debug('Smart message send starting', {
+			sessionName,
+			messageLength: message.length,
+			isMultiLine: message.includes('\n'),
+		});
+
+		// Step 1: Send the message text (without Enter)
+		session.write(message);
+
+		// Step 2: Wait for paste detection or fallback
+		try {
+			await this.waitForPattern(sessionName, pastePattern, pasteTimeout);
+			result.pasteDetected = true;
+			this.logger.debug('Paste detected via pattern', { sessionName });
+		} catch {
+			// Paste pattern not detected within timeout - use fallback delay
+			this.logger.debug('Paste pattern not detected, using fallback delay', {
+				sessionName,
+				fallbackDelay,
+			});
+			await delay(fallbackDelay);
+			result.usedFallback = true;
+		}
+
+		// Step 3: Send Enter key
+		session.write('\r');
+		result.enterSent = true;
+		this.logger.debug('Enter key sent', { sessionName });
+
+		// Step 4: Optionally wait for processing indicators
+		if (waitForProcessing) {
+			try {
+				await this.waitForPattern(sessionName, processingPattern, processingTimeout);
+				result.processingStarted = true;
+				this.logger.debug('Processing started', { sessionName });
+			} catch {
+				this.logger.debug('Processing pattern not detected within timeout', {
+					sessionName,
+				});
+			}
+		}
+
+		this.logger.debug('Smart message send complete', {
+			sessionName,
+			result,
+		});
+
+		return result;
+	}
+
+	/**
+	 * Send message with retry logic using smart detection.
+	 *
+	 * Attempts to deliver a message with intelligent retry behavior:
+	 * - Uses event-driven paste detection
+	 * - Retries with Enter key if message appears stuck
+	 * - Detects common failure modes (prompt still visible, no response)
+	 *
+	 * @param sessionName - The session to send to
+	 * @param message - The message to send
+	 * @param maxRetries - Maximum number of retry attempts
+	 * @returns Promise resolving to true if message was successfully processed
+	 */
+	async sendMessageWithSmartRetry(
+		sessionName: string,
+		message: string,
+		maxRetries: number = 3
+	): Promise<boolean> {
+		const session = this.getSessionOrThrow(sessionName);
+
+		// Use centralized patterns for consistency
+		const stuckPattern = TERMINAL_PATTERNS.PASTE_STUCK;
+		const processingPattern = TERMINAL_PATTERNS.PROCESSING;
+
+		for (let attempt = 1; attempt <= maxRetries; attempt++) {
+			this.logger.debug('Smart retry attempt', { sessionName, attempt, maxRetries });
+
+			if (attempt === 1) {
+				// First attempt: use smart send
+				const result = await this.sendMessageSmart(sessionName, message, {
+					waitForProcessing: true,
+					pasteTimeout: 3000,
+					processingTimeout: 5000,
+				});
+
+				if (result.processingStarted) {
+					this.logger.debug('Message delivered on first attempt', { sessionName });
+					return true;
+				}
+			} else {
+				// Retry attempts: just send Enter and check
+				this.logger.debug('Sending retry Enter', { sessionName, attempt });
+				session.write('\r');
+			}
+
+			// Wait a moment and check terminal state
+			await delay(1000);
+
+			// Capture current output to check state
+			const output = this.backend.captureOutput(sessionName, 10);
+
+			// Check if stuck (paste indicator still visible)
+			if (stuckPattern.test(output)) {
+				this.logger.debug('Message appears stuck, will retry with Enter', {
+					sessionName,
+					attempt,
+				});
+				continue;
+			}
+
+			// Check if processing started
+			if (processingPattern.test(output)) {
+				this.logger.debug('Processing detected after retry', { sessionName, attempt });
+				return true;
+			}
+
+			// Check if prompt appeared (message may have been processed already)
+			if (output.includes('❯') && !output.includes('[Pasted text')) {
+				this.logger.debug('Prompt visible without paste indicator - likely processed', {
+					sessionName,
+					attempt,
+				});
+				return true;
+			}
+		}
+
+		this.logger.warn('Message delivery failed after all retries', {
+			sessionName,
+			maxRetries,
+		});
+		return false;
+	}
+
+	/**
+	 * Write raw data to session without Enter key.
+	 *
+	 * Useful for sending partial input or special key sequences.
+	 *
+	 * @param sessionName - The session to write to
+	 * @param data - Data to write
+	 * @throws Error if session does not exist
+	 */
+	writeRaw(sessionName: string, data: string): void {
+		const session = this.getSessionOrThrow(sessionName);
+		session.write(data);
+		this.logger.debug('Wrote raw data to session', {
+			sessionName,
+			dataLength: data.length,
+		});
+	}
+
 }
 
 /**

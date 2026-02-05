@@ -819,62 +819,12 @@ export class TmuxService extends EventEmitter {
 
 	/**
 	 * Execute tmux initialization script
+	 * @deprecated tmux support has been removed - PTY backend is now used
 	 */
 	private async executeTmuxInitScript(): Promise<void> {
-		try {
-			const { readFile } = await import('fs/promises');
-			const initScriptPath = path.join(this.projectRoot, 'config', 'runtime_scripts', 'initialize_tmux.sh');
-
-			// Read the script file
-			const scriptContent = await readFile(initScriptPath, 'utf8');
-
-			this.logger.info('Executing tmux initialization script', {
-				scriptPath: initScriptPath,
-			});
-
-			// Execute the script using bash
-			return new Promise((resolve, reject) => {
-				const process = spawn('bash', [initScriptPath]);
-				let output = '';
-				let error = '';
-
-				process.stdout.on('data', (data) => {
-					output += data.toString();
-					this.logger.info('tmux init script output', { output: data.toString().trim() });
-				});
-
-				process.stderr.on('data', (data) => {
-					error += data.toString();
-					this.logger.warn('tmux init script stderr', { error: data.toString().trim() });
-				});
-
-				process.on('close', (code) => {
-					if (code === 0) {
-						this.logger.info('tmux initialization script completed successfully', {
-							output: output.trim(),
-						});
-						resolve();
-					} else {
-						const errorMessage = `tmux init script failed with exit code ${code}: ${error}`;
-						this.logger.error('tmux initialization script failed', { code, error });
-						reject(new Error(errorMessage));
-					}
-				});
-
-				process.on('error', (err) => {
-					const errorMessage = `Failed to spawn bash for tmux init script: ${err.message}`;
-					this.logger.error('Failed to spawn bash for tmux init script', {
-						error: errorMessage,
-					});
-					reject(new Error(errorMessage));
-				});
-			});
-		} catch (error: any) {
-			this.logger.error('Failed to execute tmux initialization script', {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			throw error;
-		}
+		// REMOVED: initialize_tmux.sh script no longer exists
+		// This method is kept for backward compatibility but should not be called
+		throw new Error('initialize_tmux.sh has been removed - use PTY backend instead');
 	}
 
 	/**

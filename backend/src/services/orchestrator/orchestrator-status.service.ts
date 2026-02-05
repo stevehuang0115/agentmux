@@ -10,6 +10,7 @@
 
 import { StorageService } from '../core/storage.service.js';
 import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../../../../config/index.js';
+import { getSessionBackendSync } from '../session/index.js';
 
 /** Dashboard URL for user-facing messages */
 const DASHBOARD_URL = `http://localhost:${WEB_CONSTANTS.PORTS.FRONTEND}`;
@@ -69,6 +70,18 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     // The orchestrator is stored separately from the teams array
     const orchestratorStatus = await storageService.getOrchestratorStatus();
 
+    // Also check if the PTY session exists - this provides a real-time view
+    // of whether the orchestrator is actually running
+    let sessionExists = false;
+    try {
+      const sessionBackend = getSessionBackendSync();
+      if (sessionBackend && orchestratorStatus?.sessionName) {
+        sessionExists = sessionBackend.sessionExists(orchestratorStatus.sessionName);
+      }
+    } catch {
+      // Ignore session check errors - fall back to storage-based status
+    }
+
     if (!orchestratorStatus) {
       return {
         isActive: false,
@@ -78,18 +91,33 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     }
 
     const agentStatus = orchestratorStatus.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
-    const isActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+
+    // Consider the orchestrator active if:
+    // 1. The storage status is 'active', OR
+    // 2. The PTY session exists AND status is 'started' (runtime running, awaiting registration)
+    const isActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE ||
+                     (sessionExists && agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED);
 
     if (isActive) {
       return {
         isActive: true,
-        agentStatus,
+        agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
         message: 'Orchestrator is active and ready.',
       };
     }
 
     // Provide context-appropriate message based on status
-    if (agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING) {
+    if (agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING ||
+        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING) {
+      return {
+        isActive: false,
+        agentStatus,
+        message: 'Orchestrator is starting up. Please wait a moment and try again.',
+      };
+    }
+
+    // If session exists but status is not active/started, it may be initializing
+    if (sessionExists) {
       return {
         isActive: false,
         agentStatus,

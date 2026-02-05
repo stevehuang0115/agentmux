@@ -74,12 +74,6 @@ describe('SessionBackendFactory', () => {
 			await destroySessionBackend();
 		});
 
-		it('should throw error for tmux backend (currently disabled)', async () => {
-			await expect(createSessionBackend('tmux')).rejects.toThrow(
-				'tmux backend is currently disabled'
-			);
-		});
-
 		it('should default to pty backend when no type specified', async () => {
 			const backend = await createSessionBackend();
 
@@ -156,14 +150,6 @@ describe('SessionBackendFactory', () => {
 
 			const type = getSessionBackendType();
 			expect(type).toBe('pty');
-		});
-
-		it('should return tmux when tmux backend is set', () => {
-			const mockBackend = createMockBackend();
-			setSessionBackendForTesting(mockBackend, 'tmux');
-
-			const type = getSessionBackendType();
-			expect(type).toBe('tmux');
 		});
 	});
 

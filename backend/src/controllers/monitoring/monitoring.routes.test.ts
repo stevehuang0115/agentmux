@@ -1,10 +1,9 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
 import { Router } from 'express';
 import { createMonitoringRouter } from './monitoring.routes.js';
-import type { ApiContext } from '../types.js';
+import { ApiContext } from '../types.js';
 
 describe('Monitoring Routes', () => {
-  let mockContext: ApiContext;
+  let mockContext: any;
   let router: Router;
 
   beforeEach(() => {
@@ -16,7 +15,7 @@ describe('Monitoring Routes', () => {
       promptTemplateService: {},
       taskAssignmentMonitor: {},
       taskTrackingService: {}
-    } as any;
+    } as ApiContext;
 
     router = createMonitoringRouter(mockContext);
   });

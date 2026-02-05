@@ -235,6 +235,11 @@ export class ChatGateway {
         { sessionId }
       );
 
+      this.logger.debug('Added agent message to chat', {
+        messageId: message.id,
+        conversationId,
+      });
+
       return message;
     } catch (error) {
       this.logger.error('Failed to process terminal output for chat', {

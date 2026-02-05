@@ -24,6 +24,7 @@ const mockXtermInstance = {
   loadAddon: vi.fn(),
   onData: vi.fn(),
   scrollToBottom: vi.fn(),
+  focus: vi.fn(),
 };
 
 vi.mock('xterm', () => ({
@@ -453,6 +454,73 @@ describe('TerminalPanel', () => {
       });
 
       expect(mockSetSelectedSession).toHaveBeenCalledWith('agentmux-dev');
+    });
+
+    it('updates selectedSession when current selection is not in available sessions', async () => {
+      // Mock selectedSession as a session that doesn't exist in the available sessions
+      mockUseTerminal.mockReturnValue({
+        isTerminalOpen: true,
+        selectedSession: 'non-existent-session',
+        openTerminal: vi.fn(),
+        closeTerminal: vi.fn(),
+        setSelectedSession: mockSetSelectedSession,
+        openTerminalWithSession: vi.fn(),
+      });
+
+      // Mock fetch to return sessions that don't include the selectedSession
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['business-os-ceo-7a049b72', 'team-member-abc123']
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      // Should update selectedSession to the first available session
+      await waitFor(() => {
+        expect(mockSetSelectedSession).toHaveBeenCalledWith('business-os-ceo-7a049b72');
+      });
+    });
+
+    it('does not update selectedSession when current selection exists in available sessions', async () => {
+      // Mock selectedSession as a session that exists in the available sessions
+      mockUseTerminal.mockReturnValue({
+        isTerminalOpen: true,
+        selectedSession: 'agentmux-orc',
+        openTerminal: vi.fn(),
+        closeTerminal: vi.fn(),
+        setSelectedSession: mockSetSelectedSession,
+        openTerminalWithSession: vi.fn(),
+      });
+
+      // Mock fetch to return sessions including the selectedSession
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['agentmux-orc', 'team-member-abc123']
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      // Give time for the async operations to complete
+      await act(async () => {
+        await new Promise(r => setTimeout(r, 100));
+      });
+
+      // Should NOT call setSelectedSession since current selection is valid
+      expect(mockSetSelectedSession).not.toHaveBeenCalled();
     });
   });
 

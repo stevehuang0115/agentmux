@@ -30,14 +30,13 @@ export const AGENTMUX_CONSTANTS = {
 	...CONFIG_AGENTMUX_CONSTANTS,
 	// Backend-specific extensions
 	INIT_SCRIPTS: {
-		TMUX: 'initialize_tmux.sh',
 		CLAUDE: 'initialize_claude.sh',
-		TMUX_ROBOSEND: 'tmux_robosend.sh',
 	},
 } as const;
 
 // Environment variable names (duplicated from config/constants.ts for backend use)
 export const ENV_CONSTANTS = {
+	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
 	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
 } as const;
@@ -69,10 +68,10 @@ export const PTY_CONSTANTS = {
 
 // Session command timing delays (in milliseconds)
 export const SESSION_COMMAND_DELAYS = {
-	/** Delay after sending a message (allows terminal to process) */
-	MESSAGE_DELAY: 100,
+	/** Delay after sending a message (allows terminal to process bracketed paste) */
+	MESSAGE_DELAY: 1000,
 	/** Delay after sending a key (allows key to be processed) */
-	KEY_DELAY: 50,
+	KEY_DELAY: 200,
 	/** Delay after clearing command line (allows terminal to reset) */
 	CLEAR_COMMAND_DELAY: 100,
 	/** Delay after setting environment variable */
@@ -98,6 +97,99 @@ export const CHAT_CONSTANTS = {
 	CONVERSATION_ID_PATTERN: /\[CHAT:([^\]]+)\]/,
 	/** Message format prefix for chat routing */
 	MESSAGE_PREFIX: 'CHAT',
+} as const;
+
+// Event-driven message delivery constants
+export const EVENT_DELIVERY_CONSTANTS = {
+	/** Timeout for waiting for prompt detection (ms) */
+	PROMPT_DETECTION_TIMEOUT: 10000,
+	/** Timeout for waiting for delivery confirmation (ms) */
+	DELIVERY_CONFIRMATION_TIMEOUT: 5000,
+	/** Total timeout for message delivery with retries (ms) */
+	TOTAL_DELIVERY_TIMEOUT: 30000,
+	/** Default timeout for pattern matching (ms) */
+	DEFAULT_PATTERN_TIMEOUT: 30000,
+	/** Initial delay for terminal to echo short messages (ms) */
+	INITIAL_MESSAGE_DELAY: 300,
+	/** Extra time for multi-line paste indicator detection (ms) */
+	PASTE_CHECK_DELAY: 1200,
+	/** Delay between Enter key retry attempts (ms) */
+	ENTER_RETRY_DELAY: 800,
+	/** Maximum number of Enter key retry attempts */
+	MAX_ENTER_RETRIES: 3,
+	/** Maximum buffer size for terminal output collection (bytes) */
+	MAX_BUFFER_SIZE: 10000,
+	/** Minimum buffer length to consider processing detection valid */
+	MIN_BUFFER_FOR_PROCESSING_DETECTION: 50,
+} as const;
+
+/**
+ * Constants for terminal content formatting.
+ * Used by formatMessageContent to safely process terminal output.
+ */
+export const TERMINAL_FORMATTING_CONSTANTS = {
+	/** Maximum repeat count for cursor movement sequences (prevents memory exhaustion) */
+	MAX_CURSOR_REPEAT: 1000,
+} as const;
+
+/**
+ * Terminal detection patterns for Claude Code interaction.
+ * These patterns are used across multiple services to detect terminal state.
+ */
+export const TERMINAL_PATTERNS = {
+	/**
+	 * Braille spinner characters used by Claude Code to indicate processing.
+	 * Pattern: ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏
+	 */
+	SPINNER: /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/,
+
+	/**
+	 * Claude Code's "working" indicator (filled circle).
+	 */
+	WORKING_INDICATOR: /⏺/,
+
+	/**
+	 * Combined pattern for detecting any processing activity.
+	 * Includes spinner, working indicator, and status text.
+	 */
+	PROCESSING: /⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/,
+
+	/**
+	 * Pattern for detecting paste indicator in bracketed paste mode.
+	 * Appears as "[Pasted text #N +M lines]" in Claude Code.
+	 */
+	PASTE_INDICATOR: /\[Pasted text/,
+
+	/**
+	 * Pattern to detect if paste indicator is still visible (stuck state).
+	 */
+	PASTE_STUCK: /\[Pasted text #\d+ \+\d+ lines\]/,
+
+	/**
+	 * Claude Code prompt indicators (characters that appear at input prompts).
+	 */
+	PROMPT_CHARS: ['❯', '>', '⏵', '$'] as const,
+
+	/**
+	 * Pattern for detecting Claude Code prompt in terminal stream.
+	 * Matches a line with single ❯ or > prompt (not ❯❯ which is mode indicator).
+	 */
+	PROMPT_STREAM: /(?:^|\n)\s*[>❯⏵]\s*(?:\n|$)/,
+
+	/**
+	 * Processing indicators including status text patterns.
+	 */
+	PROCESSING_INDICATORS: [
+		/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/, // Spinner characters
+		/Thinking|Processing|Analyzing|Running/i, // Status text
+		/\[\d+\/\d+\]/, // Progress indicators like [1/3]
+		/\.\.\.$/, // Trailing dots indicating activity
+	] as const,
+
+	/**
+	 * Pattern for detecting Claude Code processing with status text.
+	 */
+	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
 } as const;
 
 // Type helpers

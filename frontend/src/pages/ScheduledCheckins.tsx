@@ -17,6 +17,7 @@ export const ScheduledCheckins: React.FC = () => {
     // State
     scheduledMessages,
     deliveryLogs,
+    teamOptions,
     loading,
     showCreateModal,
     editingMessage,
@@ -129,6 +130,7 @@ export const ScheduledCheckins: React.FC = () => {
         setFormData={setFormData}
         onClose={handleCloseModal}
         onSubmit={handleSubmit}
+        teamOptions={teamOptions}
       />
 
       {/* Global dialogs for this page */}

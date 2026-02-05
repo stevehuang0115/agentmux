@@ -22,6 +22,7 @@ export interface TeamHeaderProps {
   onDeleteTeam: () => void;
   onEditTeam: () => void;
   isStoppingTeam?: boolean;
+  isStartingTeam?: boolean;
 }
 
 export interface TeamStatsProps {
@@ -50,6 +51,9 @@ export interface MembersListProps {
   onStartMember: (memberId: string) => Promise<void>;
   onStopMember: (memberId: string) => Promise<void>;
   onViewTerminal?: (member: TeamMember) => void;
+  onViewAgent?: (member: TeamMember) => void;
+  /** When true, shows loading state for all members (team is starting) */
+  isStartingTeam?: boolean;
 }
 
 export interface NewMember {

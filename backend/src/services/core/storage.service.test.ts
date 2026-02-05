@@ -47,7 +47,7 @@ describe('StorageService', () => {
   });
 
   describe('Team Management', () => {
-    test('should save and retrieve teams', async () => {
+    test('should save team to directory structure', async () => {
       const testTeam: Team = {
         id: 'test-id',
         name: 'Test Team',
@@ -70,22 +70,32 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      const initialData = { teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } };
-
-      // Mock file operations
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(initialData));
+      // Mock file operations - team is saved to directory structure
       mockFsPromises.writeFile.mockResolvedValue(undefined);
+      mockFsPromises.readdir.mockResolvedValue([]); // No existing teams
 
       await storageService.saveTeam(testTeam);
 
+      // Team config should be written to teams/{teamId}/config.json.tmp.*
       expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
-        expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/),
-        expect.stringContaining('"teams"'),
+        expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/),
+        expect.stringContaining('"id": "test-id"'),
+        'utf8'
+      );
+      // Then renamed to teams/{teamId}/config.json
+      expect(mockFsPromises.rename).toHaveBeenCalledWith(
+        expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/),
+        path.join(testHome, 'teams', 'test-id', 'config.json')
+      );
+      // Member prompt should also be saved to teams/{teamId}/prompts/{memberId}.md
+      expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/teams\/test-id\/prompts\/member-1\.md\.tmp\.\d+\.[a-z0-9]+$/),
+        'Test prompt',
         'utf8'
       );
     });
 
-    test('should update existing team', async () => {
+    test('should update existing team file', async () => {
       const existingTeam: Team = {
         id: 'test-id',
         name: 'Test Team',
@@ -95,11 +105,15 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      const initialData = {
-        teams: [existingTeam],
-        orchestrator: { sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, agentStatus: 'activating', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
-      };
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(initialData));
+      // Mock team directory and config file exists
+      mockFs.existsSync.mockImplementation((p: fs.PathLike) => {
+        const pathStr = String(p);
+        if (pathStr.includes('test-id/config.json')) return true;
+        if (pathStr.includes('test-id')) return true;
+        return true; // Default
+      });
+      mockFsPromises.readdir.mockResolvedValue([{ name: 'test-id', isDirectory: () => true }]);
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(existingTeam));
 
       const updatedTeam = { ...existingTeam, name: 'Updated Team' };
       await storageService.saveTeam(updatedTeam);
@@ -107,7 +121,7 @@ describe('StorageService', () => {
       expect(mockFsPromises.writeFile).toHaveBeenCalled();
       const writeCall = mockFsPromises.writeFile.mock.calls[0];
       const parsedContent = JSON.parse(writeCall[1]);
-      expect(parsedContent.teams[0].name).toBe('Updated Team');
+      expect(parsedContent.name).toBe('Updated Team');
     });
   });
 
@@ -174,7 +188,7 @@ describe('StorageService', () => {
   });
 
   describe('Atomic File Operations', () => {
-    test('should use atomic writes for teams.json operations', async () => {
+    test('should use atomic writes for team config files', async () => {
       const testTeam: Team = {
         id: 'test-id',
         name: 'Test Team',
@@ -184,23 +198,23 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readdir.mockResolvedValue([]);
 
       await storageService.saveTeam(testTeam);
 
-      // Verify atomic write was used (writeFile to temp, then rename)
+      // Verify atomic write was used (writeFile to temp, then rename to team config file)
       expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
-        expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/),
+        expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/),
         expect.stringContaining('"test-id"'),
         'utf8'
       );
       expect(mockFsPromises.rename).toHaveBeenCalledWith(
-        expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/),
-        path.join(testHome, 'teams.json')
+        expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/),
+        path.join(testHome, 'teams', 'test-id', 'config.json')
       );
     });
 
-    test('should handle concurrent writes without race conditions', async () => {
+    test('should handle concurrent writes to different team directories', async () => {
       const team1: Team = {
         id: 'team-1',
         name: 'Team 1',
@@ -219,15 +233,15 @@ describe('StorageService', () => {
         updatedAt: '2023-01-01T00:00:00.000Z',
       };
 
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', runtimeType: 'claude-code', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readdir.mockResolvedValue([]);
 
-      // Start concurrent writes
+      // Start concurrent writes - each team goes to its own directory
       const write1 = storageService.saveTeam(team1);
       const write2 = storageService.saveTeam(team2);
 
       await Promise.all([write1, write2]);
 
-      // Both operations should complete successfully with atomic writes
+      // Both operations should complete successfully with atomic writes to separate directories
       expect(mockFsPromises.writeFile).toHaveBeenCalledTimes(2);
       expect(mockFsPromises.rename).toHaveBeenCalledTimes(2);
     });
@@ -244,13 +258,13 @@ describe('StorageService', () => {
 
       // Mock rename to fail
       mockFsPromises.rename.mockRejectedValue(new Error('Rename failed'));
-      mockFsPromises.readFile.mockResolvedValue(JSON.stringify({ teams: [], orchestrator: { sessionName: 'agentmux-orc', agentStatus: 'inactive', workingStatus: 'idle', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }));
+      mockFsPromises.readdir.mockResolvedValue([]);
 
       await expect(storageService.saveTeam(testTeam)).rejects.toThrow('Rename failed');
 
-      // Verify temp file cleanup was attempted
+      // Verify temp file cleanup was attempted for the team config file
       expect(mockFsPromises.unlink).toHaveBeenCalledWith(
-        expect.stringMatching(/teams\.json\.tmp\.\d+\.[a-z0-9]+$/)
+        expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/)
       );
     });
   });

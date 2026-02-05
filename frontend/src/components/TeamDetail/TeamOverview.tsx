@@ -36,6 +36,10 @@ interface TeamOverviewProps {
   onProjectChange?: (projectId: string | null) => void;
   /** Handler for viewing a member's terminal */
   onViewTerminal?: (member: TeamMember) => void;
+  /** Handler for viewing agent details */
+  onViewAgent?: (member: TeamMember) => void;
+  /** When true, shows loading state for all members (team is starting) */
+  isStartingTeam?: boolean;
 }
 
 /**
@@ -54,10 +58,13 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   onStopMember,
   onProjectChange,
   onViewTerminal,
+  onViewAgent,
+  isStartingTeam,
 }) => {
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.currentProject || '');
   const { projectOptions } = useProjects();
+  const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
 
   useEffect(() => {
     setSelectedProjectId(team?.currentProject || '');
@@ -77,10 +84,12 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2">
+    <div className={`grid grid-cols-1 ${isOrchestratorTeam ? '' : 'lg:grid-cols-3'} gap-6`}>
+      <div className={isOrchestratorTeam ? '' : 'lg:col-span-2'}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xl font-semibold">Team Members ({team.members?.length || 0})</h3>
+          <h3 className="text-xl font-semibold">
+            {isOrchestratorTeam ? 'Orchestrator' : `Team Members (${team.members?.length || 0})`}
+          </h3>
         </div>
         <MembersList
           team={team}
@@ -90,59 +99,64 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
           onStartMember={onStartMember}
           onStopMember={onStopMember}
           onViewTerminal={onViewTerminal}
+          onViewAgent={onViewAgent}
+          isStartingTeam={isStartingTeam}
         />
       </div>
-      <div className="space-y-6">
-        <div className="bg-surface-dark border border-border-dark rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="text-lg font-semibold">Assigned Project</h4>
-            <button
-              onClick={() => setShowProjectSelector(!showProjectSelector)}
-              className="p-1.5 hover:bg-background-dark rounded-lg transition-colors text-text-secondary-dark hover:text-primary"
-              title="Change project"
-            >
-              <Edit2 className="h-4 w-4" />
-            </button>
-          </div>
-          {showProjectSelector ? (
-            <div className="space-y-3">
-              <FormSelect
-                value={selectedProjectId}
-                onChange={(e) => handleProjectSelect(e.target.value)}
-              >
-                <option value="">No project assigned</option>
-                {projectOptions.map(project => (
-                  <option key={project.id} value={project.id}>{project.name}</option>
-                ))}
-              </FormSelect>
+      {/* Hide project assignment and activity sections for Orchestrator */}
+      {!isOrchestratorTeam && (
+        <div className="space-y-6">
+          <div className="bg-surface-dark border border-border-dark rounded-xl p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-lg font-semibold">Assigned Project</h4>
               <button
-                onClick={() => setShowProjectSelector(false)}
-                className="text-sm text-text-secondary-dark hover:text-primary"
+                onClick={() => setShowProjectSelector(!showProjectSelector)}
+                className="p-1.5 hover:bg-background-dark rounded-lg transition-colors text-text-secondary-dark hover:text-primary"
+                title="Change project"
               >
-                Cancel
+                <Edit2 className="h-4 w-4" />
               </button>
             </div>
-          ) : (
-            <div
-              className="flex items-center gap-3 cursor-pointer hover:bg-background-dark/50 -mx-3 px-3 py-2 rounded-lg transition-colors"
-              onClick={() => setShowProjectSelector(true)}
-              title="Click to change project"
-            >
-              <FolderOpen className="h-5 w-5 text-primary" />
-              <div className="flex-1">
-                <div className="font-semibold text-white">{projectName || 'No Project Assigned'}</div>
-                {!projectName && (
-                  <div className="text-sm text-text-secondary-dark">Click to assign a project</div>
-                )}
+            {showProjectSelector ? (
+              <div className="space-y-3">
+                <FormSelect
+                  value={selectedProjectId}
+                  onChange={(e) => handleProjectSelect(e.target.value)}
+                >
+                  <option value="">No project assigned</option>
+                  {projectOptions.map(project => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </FormSelect>
+                <button
+                  onClick={() => setShowProjectSelector(false)}
+                  className="text-sm text-text-secondary-dark hover:text-primary"
+                >
+                  Cancel
+                </button>
               </div>
-            </div>
-          )}
+            ) : (
+              <div
+                className="flex items-center gap-3 cursor-pointer hover:bg-background-dark/50 -mx-3 px-3 py-2 rounded-lg transition-colors"
+                onClick={() => setShowProjectSelector(true)}
+                title="Click to change project"
+              >
+                <FolderOpen className="h-5 w-5 text-primary" />
+                <div className="flex-1">
+                  <div className="font-semibold text-white">{projectName || 'No Project Assigned'}</div>
+                  {!projectName && (
+                    <div className="text-sm text-text-secondary-dark">Click to assign a project</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
+            <h4 className="text-lg font-semibold mb-3">Recent Activity</h4>
+            <p className="text-sm text-text-secondary-dark">No recent activity.</p>
+          </div>
         </div>
-        <div className="bg-surface-dark border border-border-dark rounded-xl p-5">
-          <h4 className="text-lg font-semibold mb-3">Recent Activity</h4>
-          <p className="text-sm text-text-secondary-dark">No recent activity.</p>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

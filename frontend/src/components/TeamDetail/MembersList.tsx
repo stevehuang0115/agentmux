@@ -10,6 +10,8 @@ export const MembersList: React.FC<MembersListProps> = ({
   onStartMember,
   onStopMember,
   onViewTerminal,
+  onViewAgent,
+  isStartingTeam,
 }) => {
   return (
     <div className="space-y-4">
@@ -21,6 +23,8 @@ export const MembersList: React.FC<MembersListProps> = ({
           onStart={onStartMember}
           onStop={onStopMember}
           onViewTerminal={onViewTerminal}
+          onViewAgent={onViewAgent}
+          isStartingTeam={isStartingTeam}
         />
       ))}
       {!team?.members?.length && (

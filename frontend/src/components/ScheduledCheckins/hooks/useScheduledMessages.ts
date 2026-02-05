@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useAlert, useConfirm } from '../../UI/Dialog';
-import { ScheduledMessage, ScheduledMessageFormData, MessageDeliveryLog, DEFAULT_FORM_DATA } from '../types';
+import { ScheduledMessage, ScheduledMessageFormData, MessageDeliveryLog, TeamOption, DEFAULT_FORM_DATA } from '../types';
 
 export const useScheduledMessages = () => {
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
   const [deliveryLogs, setDeliveryLogs] = useState<MessageDeliveryLog[]>([]);
+  const [teamOptions, setTeamOptions] = useState<TeamOption[]>([{ value: 'orchestrator', label: 'Orchestrator' }]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingMessage, setEditingMessage] = useState<ScheduledMessage | null>(null);
@@ -15,6 +16,7 @@ export const useScheduledMessages = () => {
   useEffect(() => {
     loadScheduledMessages();
     loadDeliveryLogs();
+    loadTeamOptions();
   }, []);
 
   const loadScheduledMessages = async () => {
@@ -41,6 +43,35 @@ export const useScheduledMessages = () => {
       }
     } catch (error) {
       console.error('Error loading delivery logs:', error);
+    }
+  };
+
+  /**
+   * Load team options from the API - combines orchestrator with actual team members
+   */
+  const loadTeamOptions = async () => {
+    try {
+      const response = await fetch('/api/teams');
+      if (response.ok) {
+        const result = await response.json();
+        const teams = result.data || result || [];
+
+        // Build options from actual team members
+        const options: TeamOption[] = [{ value: 'orchestrator', label: 'Orchestrator' }];
+
+        for (const team of teams) {
+          for (const member of team.members || []) {
+            options.push({
+              value: member.sessionName || `${team.id}-${member.id}`,
+              label: `${team.name} ${member.name}`
+            });
+          }
+        }
+
+        setTeamOptions(options);
+      }
+    } catch (error) {
+      console.error('Error loading team options:', error);
     }
   };
 
@@ -203,6 +234,7 @@ export const useScheduledMessages = () => {
     // State
     scheduledMessages,
     deliveryLogs,
+    teamOptions,
     loading,
     showCreateModal,
     editingMessage,

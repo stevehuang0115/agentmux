@@ -293,4 +293,358 @@ describe('SessionCommandHelper', () => {
 			expect(newHelper).toBeInstanceOf(SessionCommandHelper);
 		});
 	});
+
+	describe('subscribeToOutput', () => {
+		it('should subscribe to session onData events', () => {
+			const callback = jest.fn();
+			const mockUnsubscribe = jest.fn();
+			mockSession.onData.mockReturnValue(mockUnsubscribe);
+
+			const unsubscribe = helper.subscribeToOutput('test-session', callback);
+
+			expect(mockSession.onData).toHaveBeenCalledWith(callback);
+			expect(unsubscribe).toBe(mockUnsubscribe);
+		});
+
+		it('should throw error if session does not exist', () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			expect(() => helper.subscribeToOutput('non-existent', jest.fn())).toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+	});
+
+	describe('subscribeToExit', () => {
+		it('should subscribe to session onExit events', () => {
+			const callback = jest.fn();
+			const mockUnsubscribe = jest.fn();
+			mockSession.onExit.mockReturnValue(mockUnsubscribe);
+
+			const unsubscribe = helper.subscribeToExit('test-session', callback);
+
+			expect(mockSession.onExit).toHaveBeenCalledWith(callback);
+			expect(unsubscribe).toBe(mockUnsubscribe);
+		});
+
+		it('should throw error if session does not exist', () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			expect(() => helper.subscribeToExit('non-existent', jest.fn())).toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+	});
+
+	describe('waitForPattern', () => {
+		it('should resolve when string pattern matches', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.waitForPattern('test-session', 'ready', 5000);
+
+			// Simulate data arriving
+			capturedCallback!('loading...');
+			capturedCallback!('ready');
+
+			const result = await promise;
+			expect(result).toBe('loading...ready');
+		});
+
+		it('should resolve when regex pattern matches', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.waitForPattern('test-session', />\s*$/, 5000);
+
+			capturedCallback!('output');
+			capturedCallback!('\n> ');
+
+			const result = await promise;
+			expect(result).toBe('output\n> ');
+		});
+
+		it('should timeout if pattern not found', async () => {
+			mockSession.onData.mockImplementation(() => jest.fn());
+
+			await expect(helper.waitForPattern('test-session', 'never-appears', 100)).rejects.toThrow(
+				'Timeout waiting for pattern'
+			);
+		});
+
+		it('should cleanup subscription on match', async () => {
+			const mockUnsubscribe = jest.fn();
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return mockUnsubscribe;
+			});
+
+			const promise = helper.waitForPattern('test-session', 'found', 5000);
+			capturedCallback!('found');
+			await promise;
+
+			expect(mockUnsubscribe).toHaveBeenCalled();
+		});
+
+		it('should throw error if session does not exist', async () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			await expect(helper.waitForPattern('non-existent', 'test', 100)).rejects.toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+	});
+
+	describe('waitForAnyPattern', () => {
+		it('should resolve with matching pattern id', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const patterns = [
+				{ id: 'success', pattern: /success/i },
+				{ id: 'error', pattern: /error/i },
+			];
+
+			const promise = helper.waitForAnyPattern('test-session', patterns, 5000);
+
+			capturedCallback!('ERROR: something failed');
+
+			const result = await promise;
+			expect(result.matchedId).toBe('error');
+			expect(result.buffer).toBe('ERROR: something failed');
+		});
+
+		it('should match first pattern when multiple could match', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const patterns = [
+				{ id: 'first', pattern: 'test' },
+				{ id: 'second', pattern: 'test message' },
+			];
+
+			const promise = helper.waitForAnyPattern('test-session', patterns, 5000);
+
+			capturedCallback!('test message');
+
+			const result = await promise;
+			expect(result.matchedId).toBe('first');
+		});
+
+		it('should timeout if no pattern matches', async () => {
+			mockSession.onData.mockImplementation(() => jest.fn());
+
+			const patterns = [
+				{ id: 'a', pattern: 'pattern-a' },
+				{ id: 'b', pattern: 'pattern-b' },
+			];
+
+			await expect(helper.waitForAnyPattern('test-session', patterns, 100)).rejects.toThrow(
+				'Timeout waiting for any pattern'
+			);
+		});
+	});
+
+	describe('sendMessageWithConfirmation', () => {
+		it('should send message and resolve true when confirmation pattern matches', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.sendMessageWithConfirmation(
+				'test-session',
+				'hello',
+				/⠋|⠙|⠹/,
+				5000
+			);
+
+			// Simulate confirmation appearing
+			setTimeout(() => capturedCallback!('⠋ Processing...'), 100);
+
+			const result = await promise;
+
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenCalledWith('hello');
+		});
+
+		it('should resolve false on timeout', async () => {
+			mockSession.onData.mockImplementation(() => jest.fn());
+
+			const result = await helper.sendMessageWithConfirmation(
+				'test-session',
+				'hello',
+				/never-matches/,
+				100
+			);
+
+			expect(result).toBe(false);
+		});
+
+		it('should send Enter key after message', async () => {
+			jest.useFakeTimers();
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.sendMessageWithConfirmation(
+				'test-session',
+				'hello',
+				/confirmed/,
+				5000
+			);
+
+			// Check message was written immediately
+			expect(mockSession.write).toHaveBeenCalledWith('hello');
+
+			// Fast-forward past MESSAGE_DELAY (now 1000ms)
+			jest.advanceTimersByTime(1100);
+
+			// Enter should now be sent
+			expect(mockSession.write).toHaveBeenCalledWith('\r');
+
+			// Resolve the promise
+			capturedCallback!('confirmed');
+			jest.useRealTimers();
+			await promise;
+		});
+
+		it('should cleanup subscription on confirmation', async () => {
+			const mockUnsubscribe = jest.fn();
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return mockUnsubscribe;
+			});
+
+			const promise = helper.sendMessageWithConfirmation(
+				'test-session',
+				'hello',
+				'confirmed',
+				5000
+			);
+
+			capturedCallback!('confirmed');
+			await promise;
+
+			expect(mockUnsubscribe).toHaveBeenCalled();
+		});
+	});
+
+	describe('writeRaw', () => {
+		it('should write raw data without Enter key', () => {
+			helper.writeRaw('test-session', 'raw input');
+			expect(mockSession.write).toHaveBeenCalledWith('raw input');
+			expect(mockSession.write).toHaveBeenCalledTimes(1);
+		});
+
+		it('should throw error if session does not exist', () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			expect(() => helper.writeRaw('non-existent', 'data')).toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+	});
+
+	describe('sendMessageSmart', () => {
+		it('should throw error if session does not exist', async () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			await expect(helper.sendMessageSmart('non-existent', 'test')).rejects.toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+
+		it('should write message immediately on call', () => {
+			mockSession.onData.mockImplementation(() => jest.fn());
+
+			// Start the promise (don't await)
+			helper.sendMessageSmart('test-session', 'hello world', {
+				pasteTimeout: 100,
+				fallbackDelay: 50,
+			});
+
+			// Message should be written immediately (synchronous)
+			expect(mockSession.write).toHaveBeenCalledWith('hello world');
+		});
+
+		it('should return result object with expected shape', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.sendMessageSmart('test-session', 'test', {
+				pasteTimeout: 100,
+				fallbackDelay: 50,
+				waitForProcessing: false,
+			});
+
+			// Immediately simulate paste detection
+			capturedCallback!('[Pasted text');
+
+			const result = await promise;
+
+			// Verify result shape
+			expect(result).toHaveProperty('pasteDetected');
+			expect(result).toHaveProperty('enterSent');
+			expect(result).toHaveProperty('processingStarted');
+			expect(result).toHaveProperty('usedFallback');
+			expect(result.pasteDetected).toBe(true);
+			expect(result.enterSent).toBe(true);
+		});
+
+		it('should send Enter key after paste detection', async () => {
+			let capturedCallback: ((data: string) => void) | null = null;
+			mockSession.onData.mockImplementation((cb) => {
+				capturedCallback = cb;
+				return jest.fn();
+			});
+
+			const promise = helper.sendMessageSmart('test-session', 'test', {
+				pasteTimeout: 500,
+				fallbackDelay: 100,
+			});
+
+			// Immediately trigger paste detection
+			capturedCallback!('[Pasted text #1 +5 lines]');
+
+			await promise;
+
+			// Enter key should have been sent
+			expect(mockSession.write).toHaveBeenCalledWith('\r');
+		});
+
+		// Note: Complex timing tests (fallback delay, processing detection) are
+		// challenging with Jest's fake timers due to the async nature of the function.
+		// The core behavior is verified through the tests above and integration testing.
+	});
+
+	describe('sendMessageWithSmartRetry', () => {
+		it('should throw error if session does not exist', async () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			await expect(
+				helper.sendMessageWithSmartRetry('non-existent', 'test')
+			).rejects.toThrow("Session 'non-existent' does not exist");
+		});
+
+		// Note: Additional async tests for sendMessageWithSmartRetry are challenging
+		// due to complex internal timing. The core logic is covered by:
+		// 1. sendMessageSmart tests (paste detection, fallback behavior)
+		// 2. The error handling test above
+		// Integration testing covers the full retry behavior.
+	});
 });

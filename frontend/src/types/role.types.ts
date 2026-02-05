@@ -10,7 +10,7 @@
 /**
  * Role category types
  */
-export type RoleCategory = 'development' | 'management' | 'quality' | 'design' | 'sales' | 'support';
+export type RoleCategory = 'development' | 'management' | 'quality' | 'design' | 'sales' | 'support' | 'automation';
 
 /**
  * Available role categories
@@ -22,6 +22,7 @@ export const ROLE_CATEGORIES: RoleCategory[] = [
   'design',
   'sales',
   'support',
+  'automation',
 ];
 
 /**
@@ -34,6 +35,7 @@ export const ROLE_CATEGORY_DISPLAY_NAMES: Record<RoleCategory, string> = {
   design: 'Design',
   sales: 'Sales',
   support: 'Support',
+  automation: 'Automation',
 };
 
 /**
@@ -46,6 +48,7 @@ export const ROLE_CATEGORY_ICONS: Record<RoleCategory, string> = {
   design: '🎨',
   sales: '💼',
   support: '🎧',
+  automation: '🤖',
 };
 
 /**
@@ -60,7 +63,9 @@ export interface Role {
   systemPromptFile: string;
   assignedSkills: string[];
   isDefault: boolean;
+  isHidden: boolean;
   isBuiltin: boolean;
+  hasOverride?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,7 +88,9 @@ export interface RoleSummary {
   category: RoleCategory;
   skillCount: number;
   isDefault: boolean;
+  isHidden: boolean;
   isBuiltin: boolean;
+  hasOverride?: boolean;
 }
 
 /**

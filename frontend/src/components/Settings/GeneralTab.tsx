@@ -7,9 +7,11 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { Save, RotateCcw, ExternalLink, Check, AlertCircle } from 'lucide-react';
 import { useSettings } from '../../hooks/useSettings';
 import { AgentMuxSettings, AIRuntime, AI_RUNTIME_DISPLAY_NAMES } from '../../types/settings.types';
-import './GeneralTab.css';
+import { Button } from '../UI/Button';
+import { FormInput, FormLabel, FormSelect } from '../UI/Form';
 
 /**
  * Save status states
@@ -89,11 +91,21 @@ export const GeneralTab: React.FC = () => {
   };
 
   if (isLoading) {
-    return <div className="loading">Loading settings...</div>;
+    return (
+      <div className="flex flex-col items-center justify-center py-16">
+        <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
+        <p className="text-text-secondary-dark">Loading settings...</p>
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="error">Error loading settings: {error}</div>;
+    return (
+      <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 px-4 py-3 rounded-lg flex items-center gap-2">
+        <AlertCircle className="w-5 h-5" />
+        Error loading settings: {error}
+      </div>
+    );
   }
 
   if (!localSettings) {
@@ -101,224 +113,268 @@ export const GeneralTab: React.FC = () => {
   }
 
   return (
-    <div className="general-tab">
-      <section className="settings-section">
-        <h2>Runtime Settings</h2>
+    <div className="space-y-8 max-w-3xl">
+      {/* Runtime Settings Section */}
+      <section className="bg-surface-dark border border-border-dark rounded-lg p-6">
+        <h2 className="text-lg font-semibold mb-4">Runtime Settings</h2>
 
-        <div className="setting-row">
-          <label htmlFor="defaultRuntime">Default AI Runtime</label>
-          <select
-            id="defaultRuntime"
-            value={localSettings.general.defaultRuntime}
-            onChange={(e) => handleChange('general', 'defaultRuntime', e.target.value as AIRuntime)}
-          >
-            {(Object.keys(AI_RUNTIME_DISPLAY_NAMES) as AIRuntime[]).map((runtime) => (
-              <option key={runtime} value={runtime}>
-                {AI_RUNTIME_DISPLAY_NAMES[runtime]}
-              </option>
-            ))}
-          </select>
-          <p className="setting-description">
-            The default AI runtime to use for new agents
-          </p>
-        </div>
+        <div className="space-y-5">
+          <div>
+            <FormLabel htmlFor="defaultRuntime">Default AI Runtime</FormLabel>
+            <FormSelect
+              id="defaultRuntime"
+              value={localSettings.general.defaultRuntime}
+              onChange={(e) => handleChange('general', 'defaultRuntime', e.target.value as AIRuntime)}
+            >
+              {(Object.keys(AI_RUNTIME_DISPLAY_NAMES) as AIRuntime[]).map((runtime) => (
+                <option key={runtime} value={runtime}>
+                  {AI_RUNTIME_DISPLAY_NAMES[runtime]}
+                </option>
+              ))}
+            </FormSelect>
+            <p className="text-xs text-text-secondary-dark mt-1">
+              The default AI runtime to use for new agents
+            </p>
+          </div>
 
-        <div className="setting-row">
-          <label htmlFor="autoStart">Auto-Start Orchestrator</label>
-          <input
-            type="checkbox"
-            id="autoStart"
-            checked={localSettings.general.autoStartOrchestrator}
-            onChange={(e) => handleChange('general', 'autoStartOrchestrator', e.target.checked)}
-          />
-          <p className="setting-description">
-            Automatically start the orchestrator when AgentMux launches
-          </p>
-        </div>
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="autoStart" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Auto-Start Orchestrator
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Automatically start the orchestrator when AgentMux launches
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="autoStart"
+              checked={localSettings.general.autoStartOrchestrator}
+              onChange={(e) => handleChange('general', 'autoStartOrchestrator', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
 
-        <div className="setting-row">
-          <label htmlFor="checkInInterval">Check-in Interval (minutes)</label>
-          <input
-            type="number"
-            id="checkInInterval"
-            min="1"
-            max="60"
-            value={localSettings.general.checkInIntervalMinutes}
-            onChange={(e) => handleChange('general', 'checkInIntervalMinutes', parseInt(e.target.value) || 5)}
-          />
-          <p className="setting-description">
-            How often agents should check in with the orchestrator
-          </p>
-        </div>
+          <div>
+            <FormLabel htmlFor="checkInInterval">Check-in Interval (minutes)</FormLabel>
+            <FormInput
+              id="checkInInterval"
+              type="number"
+              min={1}
+              max={60}
+              value={localSettings.general.checkInIntervalMinutes}
+              onChange={(e) => handleChange('general', 'checkInIntervalMinutes', parseInt(e.target.value) || 5)}
+            />
+            <p className="text-xs text-text-secondary-dark mt-1">
+              How often agents should check in with the orchestrator
+            </p>
+          </div>
 
-        <div className="setting-row">
-          <label htmlFor="maxAgents">Max Concurrent Agents</label>
-          <input
-            type="number"
-            id="maxAgents"
-            min="1"
-            max="50"
-            value={localSettings.general.maxConcurrentAgents}
-            onChange={(e) => handleChange('general', 'maxConcurrentAgents', parseInt(e.target.value) || 10)}
-          />
-          <p className="setting-description">
-            Maximum number of agents that can run simultaneously
-          </p>
-        </div>
+          <div>
+            <FormLabel htmlFor="maxAgents">Max Concurrent Agents</FormLabel>
+            <FormInput
+              id="maxAgents"
+              type="number"
+              min={1}
+              max={50}
+              value={localSettings.general.maxConcurrentAgents}
+              onChange={(e) => handleChange('general', 'maxConcurrentAgents', parseInt(e.target.value) || 10)}
+            />
+            <p className="text-xs text-text-secondary-dark mt-1">
+              Maximum number of agents that can run simultaneously
+            </p>
+          </div>
 
-        <div className="setting-row">
-          <label htmlFor="verboseLogging">Verbose Logging</label>
-          <input
-            type="checkbox"
-            id="verboseLogging"
-            checked={localSettings.general.verboseLogging}
-            onChange={(e) => handleChange('general', 'verboseLogging', e.target.checked)}
-          />
-          <p className="setting-description">
-            Enable detailed logging for debugging
-          </p>
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="verboseLogging" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Verbose Logging
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Enable detailed logging for debugging
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="verboseLogging"
+              checked={localSettings.general.verboseLogging}
+              onChange={(e) => handleChange('general', 'verboseLogging', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
         </div>
       </section>
 
-      <section className="settings-section">
-        <h2>Claude Code Configuration</h2>
-        <p className="section-description">
+      {/* Claude Code Configuration Section */}
+      <section className="bg-surface-dark border border-border-dark rounded-lg p-6">
+        <h2 className="text-lg font-semibold mb-2">Claude Code Configuration</h2>
+        <p className="text-sm text-text-secondary-dark mb-4">
           Configure how AgentMux initializes Claude Code agents.
         </p>
 
-        <div className="setting-row">
-          <label htmlFor="claudeCodeCommand">Startup Command</label>
-          <input
-            type="text"
-            id="claudeCodeCommand"
-            value={localSettings.general.claudeCodeCommand}
-            onChange={(e) => handleChange('general', 'claudeCodeCommand', e.target.value)}
-            className="text-input"
-          />
-          <p className="setting-description">
-            The command used to start Claude Code agents. Edit the initialization script below to apply changes.
-          </p>
-        </div>
+        <div className="space-y-5">
+          <div>
+            <FormLabel htmlFor="claudeCodeCommand">Startup Command</FormLabel>
+            <FormInput
+              id="claudeCodeCommand"
+              type="text"
+              value={localSettings.general.claudeCodeCommand}
+              onChange={(e) => handleChange('general', 'claudeCodeCommand', e.target.value)}
+            />
+            <p className="text-xs text-text-secondary-dark mt-1">
+              The command used to start Claude Code agents
+            </p>
+          </div>
 
-        <div className="setting-row">
-          <label htmlFor="claudeCodeInitScript">Initialization Script</label>
-          <input
-            type="text"
-            id="claudeCodeInitScript"
-            value={localSettings.general.claudeCodeInitScript}
-            onChange={(e) => handleChange('general', 'claudeCodeInitScript', e.target.value)}
-            className="text-input"
-          />
-          <p className="setting-description">
-            Path to the initialization script (relative to AgentMux root). This script runs when starting new Claude Code agents.
-          </p>
-        </div>
+          <div>
+            <FormLabel htmlFor="claudeCodeInitScript">Initialization Script</FormLabel>
+            <FormInput
+              id="claudeCodeInitScript"
+              type="text"
+              value={localSettings.general.claudeCodeInitScript}
+              onChange={(e) => handleChange('general', 'claudeCodeInitScript', e.target.value)}
+            />
+            <p className="text-xs text-text-secondary-dark mt-1">
+              Path to the initialization script (relative to AgentMux root)
+            </p>
+          </div>
 
-        <div className="setting-row">
-          <label>Detection Priority</label>
-          <ol className="detection-priority-list">
-            <li><code>~/.claude/local/claude</code> - Local installation (preferred)</li>
-            <li><code>claude</code> - System PATH via <code>type</code> command</li>
-            <li><code>claude</code> - System PATH via <code>command -v</code></li>
-          </ol>
-          <p className="setting-description">
-            Claude Code must be installed on your system. Visit{' '}
-            <a href="https://docs.anthropic.com/en/docs/claude-code/getting-started" target="_blank" rel="noopener noreferrer">
-              Claude Code documentation
-            </a>
-            {' '}for installation instructions.
-          </p>
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h2>Chat Settings</h2>
-
-        <div className="setting-row">
-          <label htmlFor="showRawOutput">Show Raw Terminal Output</label>
-          <input
-            type="checkbox"
-            id="showRawOutput"
-            checked={localSettings.chat.showRawTerminalOutput}
-            onChange={(e) => handleChange('chat', 'showRawTerminalOutput', e.target.checked)}
-          />
-          <p className="setting-description">
-            Display raw terminal output alongside formatted messages
-          </p>
-        </div>
-
-        <div className="setting-row">
-          <label htmlFor="typingIndicator">Enable Typing Indicator</label>
-          <input
-            type="checkbox"
-            id="typingIndicator"
-            checked={localSettings.chat.enableTypingIndicator}
-            onChange={(e) => handleChange('chat', 'enableTypingIndicator', e.target.checked)}
-          />
-          <p className="setting-description">
-            Show typing animation when agents are processing
-          </p>
-        </div>
-
-        <div className="setting-row">
-          <label htmlFor="maxHistory">Message History Limit</label>
-          <input
-            type="number"
-            id="maxHistory"
-            min="10"
-            max="10000"
-            value={localSettings.chat.maxMessageHistory}
-            onChange={(e) => handleChange('chat', 'maxMessageHistory', parseInt(e.target.value) || 1000)}
-          />
-          <p className="setting-description">
-            Maximum number of messages to keep in chat history
-          </p>
-        </div>
-
-        <div className="setting-row">
-          <label htmlFor="autoScroll">Auto-Scroll to Bottom</label>
-          <input
-            type="checkbox"
-            id="autoScroll"
-            checked={localSettings.chat.autoScrollToBottom}
-            onChange={(e) => handleChange('chat', 'autoScrollToBottom', e.target.checked)}
-          />
-          <p className="setting-description">
-            Automatically scroll to new messages
-          </p>
-        </div>
-
-        <div className="setting-row">
-          <label htmlFor="showTimestamps">Show Timestamps</label>
-          <input
-            type="checkbox"
-            id="showTimestamps"
-            checked={localSettings.chat.showTimestamps}
-            onChange={(e) => handleChange('chat', 'showTimestamps', e.target.checked)}
-          />
-          <p className="setting-description">
-            Display timestamps on chat messages
-          </p>
+          <div>
+            <label className="text-sm font-medium text-text-primary-dark">Detection Priority</label>
+            <ol className="list-decimal list-inside text-sm text-text-secondary-dark mt-2 space-y-1.5">
+              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">~/.claude/local/claude</code> - Local installation (preferred)</li>
+              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">claude</code> - System PATH via <code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">type</code> command</li>
+              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">claude</code> - System PATH via <code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">command -v</code></li>
+            </ol>
+            <p className="text-xs text-text-secondary-dark mt-2">
+              Claude Code must be installed on your system. Visit{' '}
+              <a
+                href="https://docs.anthropic.com/en/docs/claude-code/getting-started"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline inline-flex items-center gap-1"
+              >
+                Claude Code documentation
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              {' '}for installation instructions.
+            </p>
+          </div>
         </div>
       </section>
 
-      <div className="settings-actions">
-        <button
-          className="btn-secondary"
-          onClick={handleReset}
-        >
+      {/* Chat Settings Section */}
+      <section className="bg-surface-dark border border-border-dark rounded-lg p-6">
+        <h2 className="text-lg font-semibold mb-4">Chat Settings</h2>
+
+        <div className="space-y-5">
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="showRawOutput" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Show Raw Terminal Output
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Display raw terminal output alongside formatted messages
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="showRawOutput"
+              checked={localSettings.chat.showRawTerminalOutput}
+              onChange={(e) => handleChange('chat', 'showRawTerminalOutput', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="typingIndicator" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Enable Typing Indicator
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Show typing animation when agents are processing
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="typingIndicator"
+              checked={localSettings.chat.enableTypingIndicator}
+              onChange={(e) => handleChange('chat', 'enableTypingIndicator', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+
+          <div>
+            <FormLabel htmlFor="maxHistory">Message History Limit</FormLabel>
+            <FormInput
+              id="maxHistory"
+              type="number"
+              min={10}
+              max={10000}
+              value={localSettings.chat.maxMessageHistory}
+              onChange={(e) => handleChange('chat', 'maxMessageHistory', parseInt(e.target.value) || 1000)}
+            />
+            <p className="text-xs text-text-secondary-dark mt-1">
+              Maximum number of messages to keep in chat history
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="autoScroll" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Auto-Scroll to Bottom
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Automatically scroll to new messages
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="autoScroll"
+              checked={localSettings.chat.autoScrollToBottom}
+              onChange={(e) => handleChange('chat', 'autoScrollToBottom', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="showTimestamps" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Show Timestamps
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Display timestamps on chat messages
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="showTimestamps"
+              checked={localSettings.chat.showTimestamps}
+              onChange={(e) => handleChange('chat', 'showTimestamps', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Action Buttons */}
+      <div className="flex items-center justify-end gap-3 pb-4">
+        <Button variant="secondary" onClick={handleReset} icon={RotateCcw}>
           Reset to Defaults
-        </button>
-        <button
-          className="btn-primary"
+        </Button>
+        <Button
           onClick={handleSave}
           disabled={!hasChanges || saveStatus === 'saving'}
+          icon={saveStatus === 'saved' ? Check : Save}
         >
-          {saveStatus === 'saving' ? 'Saving...' :
-           saveStatus === 'saved' ? 'Saved!' :
-           saveStatus === 'error' ? 'Error - Retry' :
-           'Save Changes'}
-        </button>
+          {saveStatus === 'saving'
+            ? 'Saving...'
+            : saveStatus === 'saved'
+            ? 'Saved!'
+            : saveStatus === 'error'
+            ? 'Error - Retry'
+            : 'Save Changes'}
+        </Button>
       </div>
     </div>
   );

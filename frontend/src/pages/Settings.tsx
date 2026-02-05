@@ -1,17 +1,17 @@
 /**
  * Settings Page
  *
- * Main settings page with tab navigation for General, Roles, and Skills sections.
+ * Main settings page with tab navigation for General, Roles, Skills, and Slack sections.
  *
  * @module pages/Settings
  */
 
 import React, { useState } from 'react';
+import { Settings as SettingsIcon, User, Wrench, MessageSquare, LucideIcon } from 'lucide-react';
 import { GeneralTab } from '../components/Settings/GeneralTab';
 import { RolesTab } from '../components/Settings/RolesTab';
 import { SkillsTab } from '../components/Settings/SkillsTab';
 import { SlackTab } from '../components/Settings/SlackTab';
-import './Settings.css';
 
 /**
  * Available settings tabs
@@ -24,7 +24,7 @@ type SettingsTab = 'general' | 'roles' | 'skills' | 'slack';
 interface TabConfig {
   id: SettingsTab;
   label: string;
-  icon: string;
+  icon: LucideIcon;
 }
 
 /**
@@ -36,10 +36,10 @@ export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
   const tabs: TabConfig[] = [
-    { id: 'general', label: 'General', icon: '⚙️' },
-    { id: 'roles', label: 'Roles', icon: '👤' },
-    { id: 'skills', label: 'Skills', icon: '🛠️' },
-    { id: 'slack', label: 'Slack', icon: '💬' },
+    { id: 'general', label: 'General', icon: SettingsIcon },
+    { id: 'roles', label: 'Roles', icon: User },
+    { id: 'skills', label: 'Skills', icon: Wrench },
+    { id: 'slack', label: 'Slack', icon: MessageSquare },
   ];
 
   /**
@@ -61,31 +61,39 @@ export const Settings: React.FC = () => {
   };
 
   return (
-    <div className="settings-page">
-      <header className="settings-header">
-        <h1>Settings</h1>
-        <p>Configure AgentMux behavior and manage roles and skills</p>
-      </header>
+    <div className="max-w-7xl mx-auto">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
+        <p className="text-sm text-text-secondary-dark mt-1">
+          Configure AgentMux behavior and manage roles and skills
+        </p>
+      </div>
 
-      <nav className="settings-tabs" role="tablist">
+      {/* Tab Navigation */}
+      <nav className="flex gap-1 border-b border-border-dark mb-6" role="tablist">
         {tabs.map((tab) => (
           <button
             key={tab.id}
-            className={`settings-tab ${activeTab === tab.id ? 'active' : ''}`}
+            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              activeTab === tab.id
+                ? 'border-primary text-primary'
+                : 'border-transparent text-text-secondary-dark hover:text-text-primary-dark hover:bg-surface-dark'
+            }`}
             onClick={() => setActiveTab(tab.id)}
             aria-selected={activeTab === tab.id}
             role="tab"
             id={`tab-${tab.id}`}
             aria-controls={`panel-${tab.id}`}
           >
-            <span className="tab-icon">{tab.icon}</span>
-            <span className="tab-label">{tab.label}</span>
+            <tab.icon className="w-4 h-4" />
+            <span>{tab.label}</span>
           </button>
         ))}
       </nav>
 
+      {/* Tab Content */}
       <main
-        className="settings-content"
         role="tabpanel"
         id={`panel-${activeTab}`}
         aria-labelledby={`tab-${activeTab}`}

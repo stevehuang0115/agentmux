@@ -20,6 +20,14 @@ export type SkillCategory =
   | 'integration';
 
 /**
+ * Skill type - defines the nature of the skill
+ * - mcp: MCP-related skills that require MCP installation or runtime flags
+ * - claude-skill: Specialized domain knowledge with optional bash scripts
+ * - web-page: Page-specific skills with domain knowledge and actions
+ */
+export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
+
+/**
  * Type of skill execution
  */
 export type SkillExecutionType =
@@ -90,6 +98,34 @@ export interface SkillEnvironmentConfig {
 }
 
 /**
+ * Runtime configuration for skills that modify agent startup
+ */
+export interface SkillRuntimeConfig {
+  /** Runtime this skill is compatible with (e.g., 'claude-code') */
+  runtime?: string;
+  /** Additional flags to pass to the runtime (e.g., ['--chrome']) */
+  flags?: string[];
+  /** MCP servers required for this skill */
+  requiredMcpServers?: string[];
+}
+
+/**
+ * User notice configuration for skills
+ */
+export interface SkillNotice {
+  /** Notice type for styling */
+  type: 'info' | 'warning' | 'requirement';
+  /** Notice title */
+  title: string;
+  /** Notice message */
+  message: string;
+  /** Optional link for more information */
+  link?: string;
+  /** Link text */
+  linkText?: string;
+}
+
+/**
  * Full Skill definition
  */
 export interface Skill {
@@ -97,9 +133,12 @@ export interface Skill {
   name: string;
   description: string;
   category: SkillCategory;
+  skillType: SkillType;
   promptFile: string;
   execution?: SkillExecutionConfig;
   environment?: SkillEnvironmentConfig;
+  runtime?: SkillRuntimeConfig;
+  notices?: SkillNotice[];
   assignableRoles: string[];
   triggers: string[];
   tags: string[];
@@ -125,11 +164,14 @@ export interface SkillSummary {
   name: string;
   description: string;
   category: SkillCategory;
+  skillType: SkillType;
   executionType: SkillExecutionType;
   triggerCount: number;
   roleCount: number;
   isBuiltin: boolean;
   isEnabled: boolean;
+  notices?: SkillNotice[];
+  runtime?: SkillRuntimeConfig;
 }
 
 /**
@@ -139,9 +181,12 @@ export interface CreateSkillInput {
   name: string;
   description: string;
   category: SkillCategory;
+  skillType?: SkillType;
   promptContent: string;
   execution?: SkillExecutionConfig;
   environment?: SkillEnvironmentConfig;
+  runtime?: SkillRuntimeConfig;
+  notices?: SkillNotice[];
   assignableRoles?: string[];
   triggers?: string[];
   tags?: string[];
@@ -154,9 +199,12 @@ export interface UpdateSkillInput {
   name?: string;
   description?: string;
   category?: SkillCategory;
+  skillType?: SkillType;
   promptContent?: string;
   execution?: SkillExecutionConfig;
   environment?: SkillEnvironmentConfig;
+  runtime?: SkillRuntimeConfig;
+  notices?: SkillNotice[];
   assignableRoles?: string[];
   triggers?: string[];
   tags?: string[];
@@ -191,6 +239,11 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
 ];
 
 /**
+ * Valid skill types list
+ */
+export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
+
+/**
  * Valid execution types list
  */
 export const EXECUTION_TYPES: SkillExecutionType[] = [
@@ -209,6 +262,16 @@ export const EXECUTION_TYPES: SkillExecutionType[] = [
  */
 export function isValidSkillCategory(value: string): value is SkillCategory {
   return SKILL_CATEGORIES.includes(value as SkillCategory);
+}
+
+/**
+ * Check if a value is a valid skill type
+ *
+ * @param value - String to check
+ * @returns True if value is a valid SkillType
+ */
+export function isValidSkillType(value: string): value is SkillType {
+  return SKILL_TYPES.includes(value as SkillType);
 }
 
 /**
@@ -242,23 +305,18 @@ export function getSkillCategoryLabel(category: SkillCategory): string {
 }
 
 /**
- * Get icon for skill category
+ * Get display label for skill type
  *
- * @param category - Skill category
- * @returns Emoji icon for the category
+ * @param skillType - Skill type
+ * @returns Human-readable label
  */
-export function getSkillCategoryIcon(category: SkillCategory): string {
-  const icons: Record<SkillCategory, string> = {
-    development: '💻',
-    design: '🎨',
-    communication: '💬',
-    research: '🔍',
-    'content-creation': '✍️',
-    automation: '⚙️',
-    analysis: '📊',
-    integration: '🔗',
+export function getSkillTypeLabel(skillType: SkillType): string {
+  const labels: Record<SkillType, string> = {
+    mcp: 'MCP Integration',
+    'claude-skill': 'Claude Skill',
+    'web-page': 'Web Page',
   };
-  return icons[category] || '📦';
+  return labels[skillType] || skillType;
 }
 
 /**

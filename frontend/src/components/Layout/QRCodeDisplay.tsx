@@ -118,16 +118,14 @@ export const QRCodeDisplay: React.FC<QRCodeDisplayProps> = ({ isCollapsed }) => 
       <button
         onClick={handleOpenModal}
         className={clsx(
-          'flex items-center w-full p-2 text-text-secondary-dark hover:bg-background-dark/60 hover:text-text-primary-dark rounded-lg transition-colors',
-          isCollapsed ? 'justify-center' : ''
+          'group flex items-center w-full px-4 py-2 text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark rounded-lg transition-colors text-sm',
+          isCollapsed ? 'md:justify-center' : ''
         )}
         title="Scan QR code for mobile access"
         aria-label="Open QR code for mobile access"
       >
         <QrCode className="h-5 w-5 flex-shrink-0" />
-        {!isCollapsed && (
-          <span className="ml-3 text-sm">Mobile Access</span>
-        )}
+        <span className={clsx('ml-3', isCollapsed ? 'md:hidden' : '')}>Mobile Access</span>
       </button>
 
       {/* Modal - rendered via portal to ensure proper centering */}

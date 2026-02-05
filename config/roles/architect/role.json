@@ -1,0 +1,13 @@
+{
+  "id": "architect",
+  "name": "architect",
+  "displayName": "System Architect",
+  "description": "System architect and dev lead responsible for system design, ensuring frontend, backend, and server/client integration works seamlessly",
+  "category": "development",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["code-review", "documentation", "github"],
+  "isDefault": true,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

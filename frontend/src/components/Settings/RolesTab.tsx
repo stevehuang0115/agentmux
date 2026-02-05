@@ -7,15 +7,43 @@
  */
 
 import React, { useState, useMemo } from 'react';
+import { Plus, Trash2, User, RefreshCw } from 'lucide-react';
 import { useRoles } from '../../hooks/useRoles';
 import {
   RoleSummary,
   RoleCategory,
-  ROLE_CATEGORY_ICONS,
   ROLE_CATEGORY_DISPLAY_NAMES,
 } from '../../types/role.types';
 import { RoleEditor } from './RoleEditor';
-import './RolesTab.css';
+import { Button } from '../UI/Button';
+import { FormInput, FormLabel, FormSelect } from '../UI/Form';
+
+/**
+ * Role category badge color mapping
+ */
+const CATEGORY_COLORS: Record<RoleCategory, string> = {
+  development: 'bg-blue-500/15 text-blue-400',
+  management: 'bg-amber-500/15 text-amber-400',
+  quality: 'bg-emerald-500/15 text-emerald-400',
+  design: 'bg-pink-500/15 text-pink-400',
+  sales: 'bg-purple-500/15 text-purple-400',
+  support: 'bg-cyan-500/15 text-cyan-400',
+  automation: 'bg-orange-500/15 text-orange-400',
+};
+
+/**
+ * Category filter options
+ */
+const CATEGORY_OPTIONS: { value: RoleCategory | ''; label: string }[] = [
+  { value: '', label: 'All Categories' },
+  { value: 'development', label: 'Development' },
+  { value: 'management', label: 'Management' },
+  { value: 'quality', label: 'Quality' },
+  { value: 'design', label: 'Design' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'support', label: 'Support' },
+  { value: 'automation', label: 'Automation' },
+];
 
 /**
  * Roles management tab for viewing and editing agent roles
@@ -23,41 +51,39 @@ import './RolesTab.css';
  * @returns RolesTab component
  */
 export const RolesTab: React.FC = () => {
-  const { roles, isLoading, error, createRole, updateRole, deleteRole } = useRoles();
+  const { roles, isLoading, error, createRole, updateRole, deleteRole, refreshFromDisk } = useRoles();
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [filter, setFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<RoleCategory | ''>('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   /**
-   * Filter roles by search query
+   * Filter roles by search query and category
    */
   const filteredRoles = useMemo(() => {
     if (!roles) return [];
-    if (!filter) return roles;
 
-    const lowerFilter = filter.toLowerCase();
-    return roles.filter(
-      (role) =>
-        role.displayName.toLowerCase().includes(lowerFilter) ||
-        role.description.toLowerCase().includes(lowerFilter) ||
-        role.category.toLowerCase().includes(lowerFilter)
-    );
-  }, [roles, filter]);
-
-  /**
-   * Group roles by category
-   */
-  const groupedRoles = useMemo(() => {
-    return filteredRoles.reduce((acc, role) => {
-      const category = role.category;
-      if (!acc[category]) {
-        acc[category] = [];
+    return roles.filter((role) => {
+      // Filter by category
+      if (categoryFilter && role.category !== categoryFilter) {
+        return false;
       }
-      acc[category].push(role);
-      return acc;
-    }, {} as Record<RoleCategory, RoleSummary[]>);
-  }, [filteredRoles]);
+
+      // Filter by search
+      if (filter) {
+        const lowerFilter = filter.toLowerCase();
+        return (
+          role.displayName.toLowerCase().includes(lowerFilter) ||
+          role.description.toLowerCase().includes(lowerFilter) ||
+          role.category.toLowerCase().includes(lowerFilter)
+        );
+      }
+
+      return true;
+    });
+  }, [roles, filter, categoryFilter]);
 
   /**
    * Handle create new role
@@ -101,89 +127,173 @@ export const RolesTab: React.FC = () => {
   };
 
   /**
-   * Get category label with icon
+   * Handle refresh from disk
    */
-  const getCategoryLabel = (category: RoleCategory): string => {
-    const icon = ROLE_CATEGORY_ICONS[category] || '👤';
-    const name = ROLE_CATEGORY_DISPLAY_NAMES[category] || category;
-    return `${icon} ${name}`;
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshFromDisk();
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
-  if (isLoading) {
-    return <div className="loading">Loading roles...</div>;
-  }
-
-  if (error) {
-    return <div className="error">Error loading roles: {error}</div>;
-  }
-
   return (
-    <div className="roles-tab">
-      <div className="roles-header">
-        <div className="search-bar">
-          <input
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">Roles Management</h2>
+          <p className="text-sm text-text-secondary-dark mt-1">Create and manage AI agent roles</p>
+        </div>
+        <Button onClick={handleCreateNew} icon={Plus}>
+          New Role
+        </Button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-col md:flex-row items-end gap-4">
+        <div className="flex-1 w-full md:w-auto">
+          <FormLabel htmlFor="category-filter">Category</FormLabel>
+          <FormSelect
+            id="category-filter"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value as RoleCategory | '')}
+          >
+            {CATEGORY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </FormSelect>
+        </div>
+
+        <div className="flex-1 w-full md:w-auto">
+          <FormLabel htmlFor="search-filter">Search</FormLabel>
+          <FormInput
+            id="search-filter"
             type="text"
             placeholder="Search roles..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            aria-label="Search roles"
           />
         </div>
-        <button className="btn-primary" onClick={handleCreateNew}>
-          + Create Role
-        </button>
+
+        <Button
+          variant="secondary"
+          onClick={handleRefresh}
+          disabled={isLoading || isRefreshing}
+          icon={RefreshCw}
+          className={isRefreshing ? 'animate-spin' : ''}
+        >
+          {isRefreshing ? 'Refreshing...' : 'Refresh'}
+        </Button>
       </div>
 
-      <div className="roles-list">
-        {Object.entries(groupedRoles).map(([category, categoryRoles]) => (
-          <div key={category} className="role-category">
-            <h3>{getCategoryLabel(category as RoleCategory)}</h3>
-            <div className="role-cards">
-              {categoryRoles.map((role) => (
-                <div
-                  key={role.id}
-                  className={`role-card ${role.isBuiltin ? 'builtin' : 'custom'}`}
-                >
-                  <div className="role-card-header">
-                    <h4>{role.displayName}</h4>
-                    <div className="role-badges">
-                      {role.isDefault && <span className="default-badge">Default</span>}
-                      {role.isBuiltin && <span className="builtin-badge">Built-in</span>}
-                    </div>
-                  </div>
-                  <p className="role-description">{role.description}</p>
-                  <div className="role-meta">
-                    <span>{role.skillCount} skills assigned</span>
-                  </div>
-                  <div className="role-actions">
-                    <button
-                      className="btn-secondary btn-small"
-                      onClick={() => handleEdit(role.id)}
+      {/* Error state */}
+      {error && (
+        <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>Error: {error}</span>
+          <Button variant="outline" size="sm" onClick={handleRefresh}>
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {isLoading && filteredRoles.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16">
+          <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
+          <p className="text-text-secondary-dark">Loading roles...</p>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!isLoading && filteredRoles.length === 0 && !error && (
+        <div className="text-center py-16">
+          <div className="flex justify-center mb-4">
+            <User className="w-12 h-12 text-text-secondary-dark" />
+          </div>
+          <h3 className="text-lg font-semibold mb-2">No Roles Found</h3>
+          <p className="text-sm text-text-secondary-dark mb-6">
+            {filter || categoryFilter
+              ? 'Try adjusting your filters'
+              : 'Create your first role to get started'}
+          </p>
+          {!filter && !categoryFilter && (
+            <Button onClick={handleCreateNew} icon={Plus}>
+              Create Role
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Roles grid */}
+      {filteredRoles.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredRoles.map((role) => (
+            <div
+              key={role.id}
+              className="bg-surface-dark border border-border-dark rounded-lg p-4 hover:border-primary/50 transition-colors flex flex-col"
+            >
+              {/* Card Header */}
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <h3 className="font-medium text-text-primary-dark">{role.displayName}</h3>
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${CATEGORY_COLORS[role.category]}`}>
+                  {ROLE_CATEGORY_DISPLAY_NAMES[role.category]}
+                </span>
+              </div>
+
+              {/* Description */}
+              <p className="text-sm text-text-secondary-dark flex-grow mb-3 line-clamp-2">
+                {role.description}
+              </p>
+
+              {/* Meta */}
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs text-text-secondary-dark">
+                  {role.skillCount} skills assigned
+                </span>
+                {role.isDefault && (
+                  <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-primary/15 text-primary">
+                    Default
+                  </span>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between pt-3 border-t border-border-dark mt-auto">
+                {role.isBuiltin && (
+                  <span className="text-xs text-text-secondary-dark italic">Built-in</span>
+                )}
+                {!role.isBuiltin && <span />}
+                <div className="flex gap-2 ml-auto">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => handleEdit(role.id)}
+                  >
+                    Edit
+                  </Button>
+                  {!role.isBuiltin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleDelete(role.id, role.isBuiltin)}
+                      className="text-rose-400 hover:text-rose-300 hover:border-rose-400"
+                      icon={Trash2}
                     >
-                      {role.isBuiltin ? 'View' : 'Edit'}
-                    </button>
-                    {!role.isBuiltin && (
-                      <button
-                        className="btn-danger btn-small"
-                        onClick={() => handleDelete(role.id, role.isBuiltin)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
+                      Delete
+                    </Button>
+                  )}
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
+      )}
 
-        {filteredRoles.length === 0 && (
-          <div className="empty-state">
-            <p>No roles found matching your search.</p>
-          </div>
-        )}
-      </div>
-
+      {/* Role Editor Modal */}
       {isEditorOpen && (
         <RoleEditor
           roleId={isCreating ? null : selectedRoleId}

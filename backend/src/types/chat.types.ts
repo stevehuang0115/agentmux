@@ -8,6 +8,8 @@
  * @module types/chat
  */
 
+import { TERMINAL_FORMATTING_CONSTANTS } from '../constants.js';
+
 // =============================================================================
 // Enums and Constants
 // =============================================================================
@@ -583,7 +585,8 @@ export function createConversation(title?: string): ChatConversation {
 /**
  * Format message content by cleaning terminal output
  *
- * Removes ANSI escape codes, control characters, and trims whitespace.
+ * Removes ANSI escape codes, control characters, carriage returns (which cause
+ * text to overwrite itself in terminals), and trims whitespace.
  *
  * @param content - Raw content to format
  * @returns Cleaned content string
@@ -595,17 +598,73 @@ export function createConversation(title?: string): ChatConversation {
  * ```
  */
 export function formatMessageContent(content: string): string {
-  // Remove ANSI color codes
-  let cleaned = content.replace(/\x1b\[[0-9;]*m/g, '');
+  let cleaned = content;
 
-  // Remove other ANSI escape sequences (cursor movement, etc.)
+  // IMPORTANT: Convert cursor movement sequences to spaces BEFORE stripping other ANSI codes
+  // Terminal uses \x1b[nC (cursor forward n positions) to create visual spacing
+  // We need to convert these to actual spaces to preserve word separation
+  // Uses TERMINAL_FORMATTING_CONSTANTS.MAX_CURSOR_REPEAT to cap repeat count
+  const maxRepeat = TERMINAL_FORMATTING_CONSTANTS.MAX_CURSOR_REPEAT;
+  cleaned = cleaned.replace(/\x1b\[(\d+)C/g, (_match, count) => {
+    const num = parseInt(count, 10);
+    if (Number.isNaN(num) || num < 0) return '';
+    return ' '.repeat(Math.min(num, maxRepeat));
+  });
+
+  // Convert cursor down sequences to newlines
+  cleaned = cleaned.replace(/\x1b\[(\d+)B/g, (_match, count) => {
+    const num = parseInt(count, 10);
+    if (Number.isNaN(num) || num < 0) return '';
+    return '\n'.repeat(Math.min(num, maxRepeat));
+  });
+
+  // Remove ANSI color/style codes (SGR sequences)
+  cleaned = cleaned.replace(/\x1b\[[0-9;]*m/g, '');
+
+  // Remove remaining ANSI escape sequences (cursor position, clear screen, etc.)
   cleaned = cleaned.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+
+  // Remove OSC (Operating System Command) sequences (e.g., terminal title changes)
+  cleaned = cleaned.replace(/\x1b\][^\x07]*\x07/g, '');
+
+  // Remove CSI sequences that might not be caught above
+  cleaned = cleaned.replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, '');
+
+  // Handle carriage returns - terminal uses \r to return cursor to start of line
+  // This can cause text overwriting. Split by \r and keep the last segment of each line
+  cleaned = cleaned
+    .split('\n')
+    .map((line) => {
+      // If line contains \r, split by it and keep the last non-empty segment
+      if (line.includes('\r')) {
+        const segments = line.split('\r');
+        // Find the last non-empty segment
+        for (let i = segments.length - 1; i >= 0; i--) {
+          if (segments[i].trim()) {
+            return segments[i];
+          }
+        }
+        return '';
+      }
+      return line;
+    })
+    .join('\n');
 
   // Remove other control characters except newlines and tabs
   cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
-  // Trim whitespace
-  cleaned = cleaned.trim();
+  // Normalize multiple consecutive spaces to single space (but preserve newlines)
+  cleaned = cleaned.replace(/ +/g, ' ');
+
+  // Clean up multiple blank lines (more than 2 consecutive newlines become 2)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  // Trim whitespace from each line and remove leading/trailing whitespace
+  cleaned = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .join('\n')
+    .trim();
 
   return cleaned;
 }

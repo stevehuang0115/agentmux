@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, watch, FSWatcher } from 'fs';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { Team, Project, Ticket, TicketFilter, ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
+import { Team, TeamMember, Project, Ticket, TicketFilter, ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
 import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDeliveryLogModel } from '../../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
@@ -16,18 +16,30 @@ export class StorageService {
   private static instanceHome: string | null = null;
 
   private agentmuxHome: string;
+  /** @deprecated Use teamsDir instead - kept for migration */
   private teamsFile: string;
+  /** Directory containing individual team files */
+  private teamsDir: string;
+  /** Orchestrator status file */
+  private orchestratorFile: string;
   private projectsFile: string;
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
   private fileLocks: Map<string, Promise<void>> = new Map();
+  /** Mutex locks for read-modify-write operations to prevent race conditions */
+  private operationLocks: Map<string, Promise<void>> = new Map();
   private logger: ComponentLogger;
+  /** Flag to track if migration has been performed */
+  private migrationDone: boolean = false;
 
   constructor(agentmuxHome?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('StorageService');
     this.agentmuxHome = agentmuxHome || path.join(os.homedir(), '.agentmux');
-    this.teamsFile = path.join(this.agentmuxHome, 'teams.json');
+    this.teamsFile = path.join(this.agentmuxHome, 'teams.json'); // Legacy, kept for migration
+    this.teamsDir = path.join(this.agentmuxHome, 'teams');
+    // Orchestrator now uses directory structure: teams/orchestrator/config.json
+    this.orchestratorFile = path.join(this.teamsDir, 'orchestrator', 'config.json');
     this.projectsFile = path.join(this.agentmuxHome, 'projects.json');
     this.runtimeFile = path.join(this.agentmuxHome, 'runtime.json');
     this.scheduledMessagesFile = path.join(this.agentmuxHome, 'scheduled-messages.json');
@@ -65,12 +77,214 @@ export class StorageService {
   }
 
   /**
-   * Ensures the agentmux home directory exists, creating it if necessary
+   * Ensures the agentmux home and teams directories exist, creating them if necessary
    */
   private ensureDirectories(): void {
     if (!existsSync(this.agentmuxHome)) {
       mkdirSync(this.agentmuxHome, { recursive: true });
     }
+    if (!existsSync(this.teamsDir)) {
+      mkdirSync(this.teamsDir, { recursive: true });
+    }
+    // Ensure orchestrator directory exists
+    const orchestratorDir = path.join(this.teamsDir, 'orchestrator');
+    if (!existsSync(orchestratorDir)) {
+      mkdirSync(orchestratorDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Get the directory path for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Path to the team directory
+   */
+  getTeamDir(teamId: string): string {
+    return path.join(this.teamsDir, teamId);
+  }
+
+  /**
+   * Get the prompts directory path for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Path to the team's prompts directory
+   */
+  getTeamPromptsDir(teamId: string): string {
+    return path.join(this.teamsDir, teamId, 'prompts');
+  }
+
+  /**
+   * Get the prompt file path for a team member.
+   *
+   * @param teamId - The team ID
+   * @param memberId - The member ID
+   * @returns Path to the member's prompt file
+   */
+  getMemberPromptPath(teamId: string, memberId: string): string {
+    return path.join(this.getTeamPromptsDir(teamId), `${memberId}.md`);
+  }
+
+  /**
+   * Get the orchestrator prompt file path.
+   *
+   * @returns Path to the orchestrator's prompt file
+   */
+  getOrchestratorPromptPath(): string {
+    return path.join(this.teamsDir, 'orchestrator', 'prompt.md');
+  }
+
+  /**
+   * Migrate from old storage formats to new directory structure.
+   * Handles: teams.json -> teams/{team-id}/config.json
+   *          teams/{team-id}.json -> teams/{team-id}/config.json
+   *          teams/orchestrator.json -> teams/orchestrator/config.json
+   */
+  private async migrateFromLegacyTeamsFile(): Promise<void> {
+    if (this.migrationDone) {
+      return;
+    }
+    this.migrationDone = true;
+
+    // Migration 1: From old teams.json (single file with all teams)
+    if (existsSync(this.teamsFile)) {
+      try {
+        const content = await fs.readFile(this.teamsFile, 'utf-8');
+        const data = JSON.parse(content);
+
+        // Migrate orchestrator to directory structure
+        if (data.orchestrator) {
+          const orchestratorDir = path.join(this.teamsDir, 'orchestrator');
+          if (!existsSync(orchestratorDir)) {
+            mkdirSync(orchestratorDir, { recursive: true });
+          }
+          if (!existsSync(this.orchestratorFile)) {
+            await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(data.orchestrator, null, 2));
+            this.logger.info('Migrated orchestrator to directory structure');
+          }
+        }
+
+        // Migrate teams to directory structure
+        const teams = data.teams || (Array.isArray(data) ? data : []);
+        for (const team of teams) {
+          if (team.id) {
+            await this.migrateTeamToDirectory(team);
+          }
+        }
+
+        // Backup legacy file
+        const backupPath = `${this.teamsFile}.migrated.${Date.now()}`;
+        await fs.rename(this.teamsFile, backupPath);
+        this.logger.info('Legacy teams.json backed up after migration', { backupPath });
+      } catch (error) {
+        this.logger.warn('Error during legacy teams.json migration (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Migration 2: From flat team files (teams/{team-id}.json) to directory structure
+    await this.migrateFlatTeamFiles();
+
+    // Migration 3: From flat orchestrator file (teams/orchestrator.json) to directory
+    const flatOrchestratorFile = path.join(this.teamsDir, 'orchestrator.json');
+    if (existsSync(flatOrchestratorFile) && !existsSync(this.orchestratorFile)) {
+      try {
+        const content = await fs.readFile(flatOrchestratorFile, 'utf-8');
+        const orchestrator = JSON.parse(content);
+        const orchestratorDir = path.join(this.teamsDir, 'orchestrator');
+        if (!existsSync(orchestratorDir)) {
+          mkdirSync(orchestratorDir, { recursive: true });
+        }
+        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        await fs.rename(flatOrchestratorFile, `${flatOrchestratorFile}.migrated.${Date.now()}`);
+        this.logger.info('Migrated flat orchestrator.json to directory structure');
+      } catch (error) {
+        this.logger.warn('Error migrating flat orchestrator.json (non-fatal)', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
+   * Migrate flat team files (teams/{team-id}.json) to directory structure (teams/{team-id}/config.json).
+   */
+  private async migrateFlatTeamFiles(): Promise<void> {
+    try {
+      const files = await fs.readdir(this.teamsDir);
+      for (const file of files) {
+        // Skip directories and non-json files
+        if (!file.endsWith('.json') || file === 'orchestrator.json') continue;
+
+        const filePath = path.join(this.teamsDir, file);
+        const stat = await fs.stat(filePath);
+        if (stat.isDirectory()) continue;
+
+        try {
+          const content = await fs.readFile(filePath, 'utf-8');
+          const team = JSON.parse(content);
+          if (team.id) {
+            await this.migrateTeamToDirectory(team);
+            // Backup flat file
+            await fs.rename(filePath, `${filePath}.migrated.${Date.now()}`);
+            this.logger.info('Migrated flat team file to directory', { teamId: team.id });
+          }
+        } catch (error) {
+          this.logger.warn('Error migrating flat team file (non-fatal)', {
+            file,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Error scanning for flat team files (non-fatal)', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Migrate a team to the new directory structure.
+   * Creates teams/{team-id}/config.json and teams/{team-id}/prompts/{member-id}.md
+   */
+  private async migrateTeamToDirectory(team: Team): Promise<void> {
+    const teamDir = this.getTeamDir(team.id);
+    const teamConfigFile = path.join(teamDir, 'config.json');
+    const promptsDir = this.getTeamPromptsDir(team.id);
+
+    // Create team directory structure
+    if (!existsSync(teamDir)) {
+      mkdirSync(teamDir, { recursive: true });
+    }
+    if (!existsSync(promptsDir)) {
+      mkdirSync(promptsDir, { recursive: true });
+    }
+
+    // Save team config (without inline prompts if they exist)
+    if (!existsSync(teamConfigFile)) {
+      await this.atomicWriteFile(teamConfigFile, JSON.stringify(team, null, 2));
+    }
+
+    // Extract member prompts to individual files
+    for (const member of team.members || []) {
+      if (member.systemPrompt) {
+        const promptPath = this.getMemberPromptPath(team.id, member.id);
+        if (!existsSync(promptPath)) {
+          await this.atomicWriteFile(promptPath, member.systemPrompt);
+          this.logger.debug('Extracted member prompt to file', {
+            teamId: team.id,
+            memberId: member.id,
+            promptPath,
+          });
+        }
+      }
+    }
+
+    this.logger.info('Migrated team to directory structure', {
+      teamId: team.id,
+      teamName: team.name,
+      memberCount: team.members?.length || 0,
+    });
   }
 
   /**
@@ -142,6 +356,36 @@ export class StorageService {
   }
 
   /**
+   * Acquire a lock for read-modify-write operations on a specific file.
+   * This prevents race conditions where concurrent operations read stale data.
+   *
+   * @param lockKey - Unique key for the lock (usually the file path)
+   * @param operation - The async operation to perform while holding the lock
+   * @returns The result of the operation
+   */
+  private async withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
+    // Wait for any existing operation on this file to complete
+    if (this.operationLocks.has(lockKey)) {
+      await this.operationLocks.get(lockKey);
+    }
+
+    // Create a deferred promise for this operation
+    let resolveOperation: () => void;
+    const operationPromise = new Promise<void>((resolve) => {
+      resolveOperation = resolve;
+    });
+
+    this.operationLocks.set(lockKey, operationPromise);
+
+    try {
+      return await operation();
+    } finally {
+      resolveOperation!();
+      this.operationLocks.delete(lockKey);
+    }
+  }
+
+  /**
    * Atomic write operation with file locking to prevent race conditions
    * @param filePath - Path to the file to write
    * @param content - Content to write to the file
@@ -198,36 +442,48 @@ export class StorageService {
   }
 
   // Team management
+  /**
+   * Get all teams from team directories.
+   * Each team is stored as teams/{teamId}/config.json for isolation.
+   *
+   * @returns Array of all teams
+   */
   async getTeams(): Promise<Team[]> {
     try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
+      // Migrate from legacy format if needed
+      await this.migrateFromLegacyTeamsFile();
 
-      // Handle both old array format and new object format
-      if (Array.isArray(data)) {
-        // Convert old format to new format
-        this.logger.info('Converting teams.json from old array format to new object format');
-        const newData = {
-          teams: data,
-          orchestrator: this.createDefaultOrchestrator()
-        };
-        await this.atomicWriteFile(this.teamsFile, JSON.stringify(newData, null, 2));
-        const processedTeams = data.map((team: Team) => {
-          return TeamModel.fromJSON(team).toJSON();
-        });
-        return processedTeams;
+      // Ensure teams directory exists
+      if (!existsSync(this.teamsDir)) {
+        mkdirSync(this.teamsDir, { recursive: true });
+        return [];
       }
 
-      const teams = data.teams || [];
+      // Read all team directories
+      const entries = await fs.readdir(this.teamsDir, { withFileTypes: true });
+      const teamDirs = entries.filter(e => e.isDirectory() && e.name !== 'orchestrator');
 
-      const processedTeams = teams.map((team: Team) => {
-        const processedTeam = TeamModel.fromJSON(team).toJSON();
-        return processedTeam;
-      });
+      const teams: Team[] = [];
+      for (const dir of teamDirs) {
+        try {
+          const configPath = path.join(this.teamsDir, dir.name, 'config.json');
+          if (!existsSync(configPath)) {
+            continue; // Skip directories without config.json
+          }
+          const content = await fs.readFile(configPath, 'utf-8');
+          const team = JSON.parse(content);
+          const processedTeam = TeamModel.fromJSON(team).toJSON();
+          teams.push(processedTeam);
+        } catch (fileError) {
+          this.logger.warn('Error reading team config, skipping', {
+            teamDir: dir.name,
+            error: fileError instanceof Error ? fileError.message : String(fileError),
+          });
+        }
+      }
 
-      this.logger.debug('Retrieved teams from storage', { count: processedTeams.length });
-      return processedTeams;
+      this.logger.debug('Retrieved teams from storage', { count: teams.length });
+      return teams;
     } catch (error) {
       this.logger.error('Error reading teams', {
         error: error instanceof Error ? error.message : String(error),
@@ -236,74 +492,198 @@ export class StorageService {
     }
   }
 
+  /**
+   * Save a team to its directory structure.
+   * Each team is stored as teams/{teamId}/config.json for isolation and resilience.
+   * Member prompts are saved to teams/{teamId}/prompts/{memberId}.md
+   *
+   * @param team - The team to save
+   */
   async saveTeam(team: Team): Promise<void> {
+    const teamDir = this.getTeamDir(team.id);
+    const teamFile = path.join(teamDir, 'config.json');
+    const promptsDir = this.getTeamPromptsDir(team.id);
+
+    // Use operation lock on the team directory
+    return this.withOperationLock(teamDir, async () => {
+      try {
+        // Ensure team directory structure exists
+        if (!existsSync(teamDir)) {
+          mkdirSync(teamDir, { recursive: true });
+        }
+        if (!existsSync(promptsDir)) {
+          mkdirSync(promptsDir, { recursive: true });
+        }
+
+        // Check if this is an update or create
+        const isUpdate = existsSync(teamFile);
+
+        // Write team config to file
+        await this.atomicWriteFile(teamFile, JSON.stringify(team, null, 2));
+
+        // Save member prompts to individual files
+        for (const member of team.members || []) {
+          if (member.systemPrompt) {
+            const promptPath = this.getMemberPromptPath(team.id, member.id);
+            await this.atomicWriteFile(promptPath, member.systemPrompt);
+          }
+        }
+
+        this.logger.info('Team saved successfully', {
+          teamId: team.id,
+          teamName: team.name,
+          action: isUpdate ? 'updated' : 'created',
+          memberCount: team.members?.length || 0,
+          filePath: teamFile,
+        });
+      } catch (error) {
+        this.logger.error('Error saving team', {
+          teamId: team.id,
+          teamName: team.name,
+          error: error instanceof Error ? error.message : String(error),
+          filePath: teamFile,
+        });
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Save a member's prompt file.
+   *
+   * @param teamId - The team ID
+   * @param memberId - The member ID
+   * @param prompt - The prompt content
+   */
+  async saveMemberPrompt(teamId: string, memberId: string, prompt: string): Promise<void> {
+    const promptsDir = this.getTeamPromptsDir(teamId);
+    const promptPath = this.getMemberPromptPath(teamId, memberId);
+
+    if (!existsSync(promptsDir)) {
+      mkdirSync(promptsDir, { recursive: true });
+    }
+
+    await this.atomicWriteFile(promptPath, prompt);
+    this.logger.debug('Saved member prompt', { teamId, memberId, promptPath });
+  }
+
+  /**
+   * Get a member's prompt from file.
+   *
+   * @param teamId - The team ID
+   * @param memberId - The member ID
+   * @returns The prompt content or null if not found
+   */
+  async getMemberPrompt(teamId: string, memberId: string): Promise<string | null> {
+    const promptPath = this.getMemberPromptPath(teamId, memberId);
+
+    if (!existsSync(promptPath)) {
+      return null;
+    }
+
     try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
-
-      let teamsData = data;
-      if (!data.teams) {
-        // Convert old format or initialize
-        teamsData = {
-          teams: Array.isArray(data) ? data : [],
-          orchestrator: data.orchestrator || this.createDefaultOrchestrator()
-        };
-      }
-
-      const teams = teamsData.teams;
-      const existingIndex = teams.findIndex((t: Team) => t.id === team.id);
-      const isUpdate = existingIndex >= 0;
-
-      if (isUpdate) {
-        teams[existingIndex] = team;
-      } else {
-        teams.push(team);
-      }
-
-      teamsData.teams = teams;
-
-      await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
-
-      this.logger.info('Team saved successfully', {
-        teamId: team.id,
-        teamName: team.name,
-        action: isUpdate ? 'updated' : 'created',
-        totalTeams: teams.length,
-        memberCount: team.members?.length || 0,
-        filePath: this.teamsFile,
-      });
+      return await fs.readFile(promptPath, 'utf-8');
     } catch (error) {
-      this.logger.error('Error saving team', {
-        teamId: team.id,
-        teamName: team.name,
+      this.logger.warn('Error reading member prompt', {
+        teamId,
+        memberId,
         error: error instanceof Error ? error.message : String(error),
-        filePath: this.teamsFile,
       });
-      throw error;
+      return null;
+    }
+  }
+
+  /**
+   * Find a team member by their session name.
+   *
+   * @param sessionName - The session name to search for
+   * @returns Object with team and member, or null if not found
+   */
+  async findMemberBySessionName(sessionName: string): Promise<{
+    team: Team;
+    member: TeamMember;
+  } | null> {
+    try {
+      const teams = await this.getTeams();
+
+      for (const team of teams) {
+        for (const member of team.members || []) {
+          if (member.sessionName === sessionName) {
+            return { team, member };
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error('Error finding member by session name', {
+        sessionName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Save the orchestrator's prompt file.
+   *
+   * @param prompt - The prompt content
+   */
+  async saveOrchestratorPrompt(prompt: string): Promise<void> {
+    const orchestratorDir = path.join(this.teamsDir, 'orchestrator');
+    if (!existsSync(orchestratorDir)) {
+      mkdirSync(orchestratorDir, { recursive: true });
+    }
+
+    const promptPath = this.getOrchestratorPromptPath();
+    await this.atomicWriteFile(promptPath, prompt);
+    this.logger.debug('Saved orchestrator prompt', { promptPath });
+  }
+
+  /**
+   * Get the orchestrator's prompt from file.
+   *
+   * @returns The prompt content or null if not found
+   */
+  async getOrchestratorPrompt(): Promise<string | null> {
+    const promptPath = this.getOrchestratorPromptPath();
+
+    if (!existsSync(promptPath)) {
+      return null;
+    }
+
+    try {
+      return await fs.readFile(promptPath, 'utf-8');
+    } catch (error) {
+      this.logger.warn('Error reading orchestrator prompt', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 
 
+  /**
+   * Delete a team by removing its directory.
+   *
+   * @param id - The team ID to delete
+   */
   async deleteTeam(id: string): Promise<void> {
+    const teamDir = this.getTeamDir(id);
+
     try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
-      
-      let teamsData = data;
-      if (!data.teams) {
-        teamsData = {
-          teams: Array.isArray(data) ? data : [],
-          orchestrator: data.orchestrator || this.createDefaultOrchestrator()
-        };
+      if (existsSync(teamDir)) {
+        // Remove team directory recursively
+        await fs.rm(teamDir, { recursive: true, force: true });
+        this.logger.info('Team deleted successfully', { teamId: id, teamDir });
+      } else {
+        this.logger.warn('Team directory not found for deletion', { teamId: id, teamDir });
       }
-      
-      const filteredTeams = teamsData.teams.filter((t: Team) => t.id !== id);
-      teamsData.teams = filteredTeams;
-      await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
     } catch (error) {
-      console.error('Error deleting team:', error);
+      this.logger.error('Error deleting team', {
+        teamId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -814,76 +1194,103 @@ This is a foundational task that should be completed first before other developm
   }
 
   // Orchestrator management
+  /**
+   * Get orchestrator status from dedicated orchestrator.json file.
+   *
+   * @returns Orchestrator status object or null if not found
+   */
   async getOrchestratorStatus(): Promise<{ sessionName: string; agentStatus: AgentStatus; workingStatus: WorkingStatus; runtimeType: RuntimeType; createdAt: string; updatedAt: string } | null> {
     try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
-      
-      if (data.orchestrator) {
-        return data.orchestrator;
+      // Migrate from legacy format if needed
+      await this.migrateFromLegacyTeamsFile();
+
+      // Check if orchestrator file exists
+      if (!existsSync(this.orchestratorFile)) {
+        // Create default orchestrator
+        const orchestrator = this.createDefaultOrchestrator();
+        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        return orchestrator;
       }
-      
-      // If no orchestrator in new format, create one with inactive status
-      const orchestrator = this.createDefaultOrchestrator();
-      await this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+
+      const content = await fs.readFile(this.orchestratorFile, 'utf-8');
+      const orchestrator = JSON.parse(content);
       return orchestrator;
     } catch (error) {
-      console.error('Error reading orchestrator status:', error);
+      this.logger.error('Error reading orchestrator status', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
 
   /**
-   * Update agent status for orchestrator or any team member
+   * Update agent status for orchestrator or any team member.
+   * Orchestrator status is stored in teams/orchestrator.json.
+   * Team member status is stored in the respective team's file.
+   *
    * @param sessionName - Session name of the agent (AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
    * @param status - New agent status (AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE)
    */
   async updateAgentStatus(sessionName: string, status: AgentStatus): Promise<void> {
-    try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
-      
-      let teamsData = data;
-      if (!data.teams) {
-        // Convert old format
-        teamsData = {
-          teams: Array.isArray(data) ? data : [],
-          orchestrator: this.createDefaultOrchestrator()
-        };
-      }
-      
-      // Handle orchestrator
-      if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
-        if (!teamsData.orchestrator) {
-          teamsData.orchestrator = this.createDefaultOrchestrator();
-        }
-        teamsData.orchestrator.agentStatus = status;
-        teamsData.orchestrator.updatedAt = new Date().toISOString();
-      } else {
-        // Handle regular team members
-        let memberFound = false;
-        for (const team of teamsData.teams) {
-          for (const member of team.members || []) {
-            if (member.sessionName === sessionName) {
-              member.agentStatus = status;
-              member.updatedAt = new Date().toISOString();
-              memberFound = true;
-              break;
-            }
+    // Handle orchestrator separately
+    if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+      return this.withOperationLock(this.orchestratorFile, async () => {
+        try {
+          let orchestrator;
+          if (existsSync(this.orchestratorFile)) {
+            const content = await fs.readFile(this.orchestratorFile, 'utf-8');
+            orchestrator = JSON.parse(content);
+          } else {
+            orchestrator = this.createDefaultOrchestrator();
           }
-          if (memberFound) break;
+
+          orchestrator.agentStatus = status;
+          orchestrator.updatedAt = new Date().toISOString();
+
+          await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+          this.logger.debug('Updated orchestrator status', { status });
+        } catch (error) {
+          this.logger.error('Error updating orchestrator status', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
         }
-        
-        if (!memberFound) {
-          console.warn(`Agent with session ${sessionName} not found in teams data`);
+      });
+    }
+
+    // Handle regular team members - find the team containing this member
+    try {
+      const teams = await this.getTeams();
+      let memberFound = false;
+
+      for (const team of teams) {
+        for (const member of team.members || []) {
+          if (member.sessionName === sessionName) {
+            member.agentStatus = status;
+            member.updatedAt = new Date().toISOString();
+            memberFound = true;
+
+            // Save the updated team
+            await this.saveTeam(team);
+            this.logger.debug('Updated team member status', {
+              sessionName,
+              status,
+              teamId: team.id,
+            });
+            break;
+          }
         }
+        if (memberFound) break;
       }
-      
-      await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
+
+      if (!memberFound) {
+        this.logger.warn('Agent not found in teams data', { sessionName });
+      }
     } catch (error) {
-      console.error('Error updating agent status:', error);
+      this.logger.error('Error updating agent status', {
+        sessionName,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }
@@ -916,35 +1323,33 @@ This is a foundational task that should be completed first before other developm
   }
 
   /**
-   * Update orchestrator runtime type
+   * Update orchestrator runtime type in teams/orchestrator.json.
+   *
+   * @param runtimeType - The runtime type to set
    */
   async updateOrchestratorRuntimeType(runtimeType: RuntimeType): Promise<void> {
-    try {
-      await this.ensureFile(this.teamsFile, { teams: [], orchestrator: this.createDefaultOrchestrator() });
-      const content = await fs.readFile(this.teamsFile, 'utf-8');
-      const data = JSON.parse(content);
-      
-      let teamsData = data;
-      if (!data.teams) {
-        // Convert old format
-        teamsData = {
-          teams: Array.isArray(data) ? data : [],
-          orchestrator: this.createDefaultOrchestrator()
-        };
+    return this.withOperationLock(this.orchestratorFile, async () => {
+      try {
+        let orchestrator;
+        if (existsSync(this.orchestratorFile)) {
+          const content = await fs.readFile(this.orchestratorFile, 'utf-8');
+          orchestrator = JSON.parse(content);
+        } else {
+          orchestrator = this.createDefaultOrchestrator();
+        }
+
+        orchestrator.runtimeType = runtimeType;
+        orchestrator.updatedAt = new Date().toISOString();
+
+        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        this.logger.debug('Updated orchestrator runtime type', { runtimeType });
+      } catch (error) {
+        this.logger.error('Error updating orchestrator runtime type', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
-      
-      if (!teamsData.orchestrator) {
-        teamsData.orchestrator = this.createDefaultOrchestrator();
-      }
-      
-      teamsData.orchestrator.runtimeType = runtimeType;
-      teamsData.orchestrator.updatedAt = new Date().toISOString();
-      
-      await this.atomicWriteFile(this.teamsFile, JSON.stringify(teamsData, null, 2));
-    } catch (error) {
-      console.error('Error updating orchestrator runtime type:', error);
-      throw error;
-    }
+    });
   }
 
 

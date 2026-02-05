@@ -7,7 +7,7 @@ export interface EnhancedTeamMember {
   memberName: string;
   role: string;
   sessionName: string;
-  agentStatus: 'inactive' | 'activating' | 'active';
+  agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'activating';
   workingStatus: 'idle' | 'in_progress';
   lastActivityCheck: string;
   activityDetected: boolean;

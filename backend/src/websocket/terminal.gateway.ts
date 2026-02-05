@@ -37,8 +37,17 @@ export class TerminalGateway {
 	/** Map of session name to unsubscribe function for PTY onData */
 	private sessionSubscriptions: Map<string, () => void> = new Map();
 
+	/** Set of sessions with persistent monitoring (not stopped on client disconnect) */
+	private persistentMonitoringSessions: Set<string> = new Set();
+
 	/** Current active chat conversation ID for orchestrator responses */
 	private activeConversationId: string | null = null;
+
+	/** Buffer to accumulate orchestrator output for complete [CHAT_RESPONSE] detection */
+	private orchestratorOutputBuffer: string = '';
+
+	/** Maximum buffer size to prevent memory issues (100KB) */
+	private readonly MAX_BUFFER_SIZE = 100 * 1024;
 
 	/**
 	 * Create a new TerminalGateway.
@@ -216,16 +225,56 @@ export class TerminalGateway {
 
 	/**
 	 * Stop streaming output from a PTY session.
+	 * Does not stop sessions with persistent monitoring enabled.
 	 *
 	 * @param sessionName - The session to stop streaming from
+	 * @param force - Force stop even for persistent monitoring sessions
 	 */
-	private stopPtyStreaming(sessionName: string): void {
+	private stopPtyStreaming(sessionName: string, force: boolean = false): void {
+		// Don't stop persistent monitoring sessions unless forced
+		if (!force && this.persistentMonitoringSessions.has(sessionName)) {
+			this.logger.debug('Skipping stop for persistent monitoring session', { sessionName });
+			return;
+		}
+
 		const unsubscribe = this.sessionSubscriptions.get(sessionName);
 		if (unsubscribe) {
 			unsubscribe();
 			this.sessionSubscriptions.delete(sessionName);
+			this.persistentMonitoringSessions.delete(sessionName);
 			this.logger.info('Stopped PTY streaming for session', { sessionName });
 		}
+	}
+
+	/**
+	 * Start persistent monitoring for the orchestrator session.
+	 * This ensures chat responses are captured even when no WebSocket clients are viewing the terminal.
+	 *
+	 * @param sessionName - The orchestrator session name to monitor
+	 * @returns True if monitoring started successfully
+	 */
+	startOrchestratorChatMonitoring(sessionName: string): boolean {
+		this.logger.info('Starting persistent orchestrator chat monitoring', { sessionName });
+
+		// Mark session as persistent so it won't be stopped when clients disconnect
+		this.persistentMonitoringSessions.add(sessionName);
+
+		const started = this.startPtyStreaming(sessionName);
+		if (!started) {
+			this.logger.warn('Failed to start orchestrator chat monitoring', { sessionName });
+			this.persistentMonitoringSessions.delete(sessionName);
+		}
+		return started;
+	}
+
+	/**
+	 * Stop persistent monitoring for the orchestrator session.
+	 *
+	 * @param sessionName - The orchestrator session name
+	 */
+	stopOrchestratorChatMonitoring(sessionName: string): void {
+		this.logger.info('Stopping persistent orchestrator chat monitoring', { sessionName });
+		this.stopPtyStreaming(sessionName, true);
 	}
 
 	/**
@@ -413,7 +462,7 @@ export class TerminalGateway {
 
 	/**
 	 * Process orchestrator terminal output for potential chat responses.
-	 * Extracts conversation ID from output and forwards to chat gateway.
+	 * Buffers output and extracts complete [CHAT_RESPONSE]...[/CHAT_RESPONSE] blocks.
 	 *
 	 * @param sessionName - The orchestrator session name
 	 * @param content - The terminal output content
@@ -421,6 +470,7 @@ export class TerminalGateway {
 	private processOrchestratorOutputForChat(sessionName: string, content: string): void {
 		const chatGateway = getChatGateway();
 		if (!chatGateway) {
+			this.logger.debug('Chat gateway not available for response processing');
 			return;
 		}
 
@@ -428,32 +478,94 @@ export class TerminalGateway {
 		// The format is [CHAT:conversationId] at the start of a response
 		const chatIdMatch = content.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
 		if (chatIdMatch) {
+			this.logger.debug('Extracted conversation ID from output', { conversationId: chatIdMatch[1] });
 			this.activeConversationId = chatIdMatch[1];
 		}
 
 		// Only process if we have an active conversation
 		if (!this.activeConversationId) {
+			this.logger.debug('No active conversation ID, skipping chat response processing');
 			return;
 		}
 
-		// Process the output through the chat gateway
-		chatGateway.processTerminalOutput(
-			sessionName,
-			content,
-			this.activeConversationId
-		).catch(error => {
-			this.logger.warn('Failed to process orchestrator output for chat', {
-				error: error instanceof Error ? error.message : String(error),
+		// Log that we're processing output
+		if (content.includes('[CHAT_RESPONSE]') || content.includes('[/CHAT_RESPONSE]')) {
+			this.logger.info('Detected CHAT_RESPONSE marker in output', {
+				contentLength: content.length,
+				conversationId: this.activeConversationId
 			});
-		});
+		}
+
+		// Add content to buffer for complete response detection
+		this.orchestratorOutputBuffer += content;
+
+		// Prevent buffer from growing too large
+		if (this.orchestratorOutputBuffer.length > this.MAX_BUFFER_SIZE) {
+			// Keep only the last portion of the buffer
+			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(-this.MAX_BUFFER_SIZE / 2);
+		}
+
+		// Look for complete [CHAT_RESPONSE]...[/CHAT_RESPONSE] blocks
+		const responsePattern = /\[CHAT_RESPONSE\]([\s\S]*?)\[\/CHAT_RESPONSE\]/g;
+		let match: RegExpExecArray | null;
+		let lastMatchEnd = 0;
+
+		while ((match = responsePattern.exec(this.orchestratorOutputBuffer)) !== null) {
+			const responseContent = match[1].trim();
+			lastMatchEnd = match.index + match[0].length;
+
+			this.logger.info('Extracted chat response from orchestrator output', {
+				contentLength: responseContent.length,
+				conversationId: this.activeConversationId,
+			});
+
+			// Send the extracted response to the chat gateway
+			chatGateway.processTerminalOutput(
+				sessionName,
+				`[CHAT_RESPONSE]${responseContent}[/CHAT_RESPONSE]`,
+				this.activeConversationId
+			).catch(error => {
+				this.logger.warn('Failed to process orchestrator chat response', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		}
+
+		// Remove processed content from buffer, keep any partial response at the end
+		if (lastMatchEnd > 0) {
+			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+		}
+
+		// If buffer has [CHAT_RESPONSE] but no closing tag yet, keep buffering
+		// If buffer doesn't have [CHAT_RESPONSE] at all, clear old content to avoid buildup
+		if (!this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE]')) {
+			// Keep a small trailing buffer in case the tag is split across chunks
+			const lastNewline = this.orchestratorOutputBuffer.lastIndexOf('\n');
+			if (lastNewline > 1000) {
+				this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastNewline);
+			}
+		}
+	}
+
+	/**
+	 * Clear the orchestrator output buffer.
+	 * Called when conversation changes or on cleanup.
+	 */
+	clearOrchestratorBuffer(): void {
+		this.orchestratorOutputBuffer = '';
 	}
 
 	/**
 	 * Set the active conversation ID for orchestrator chat responses.
+	 * Clears the output buffer when conversation changes.
 	 *
 	 * @param conversationId - The conversation ID to set
 	 */
 	setActiveConversationId(conversationId: string | null): void {
+		// Clear buffer when conversation changes
+		if (conversationId !== this.activeConversationId) {
+			this.clearOrchestratorBuffer();
+		}
 		this.activeConversationId = conversationId;
 	}
 
@@ -670,6 +782,7 @@ export class TerminalGateway {
 		}
 		this.sessionSubscriptions.clear();
 		this.connectedClients.clear();
+		this.persistentMonitoringSessions.clear();
 
 		this.logger.info('TerminalGateway destroyed');
 	}

@@ -43,6 +43,7 @@ export function setAgentRegistrationService(service: AgentRegistrationService): 
 
 /**
  * Forward a message to the orchestrator terminal.
+ * Sends an immediate acknowledgment to the user while orchestrator processes.
  *
  * @param content - Message content to send
  * @param conversationId - Conversation ID for context
@@ -62,6 +63,16 @@ async function forwardToOrchestrator(
     if (terminalGateway) {
       terminalGateway.setActiveConversationId(conversationId);
     }
+
+    // Send immediate acknowledgment to the user (non-blocking)
+    const chatService = getChatService();
+    chatService.addSystemMessage(
+      conversationId,
+      'Processing your request...',
+      { isTypingIndicator: true }
+    ).catch((err: Error) => {
+      logger.warn('Failed to send acknowledgment message', { error: err.message });
+    });
 
     // Format message with conversation context using constant prefix
     const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;

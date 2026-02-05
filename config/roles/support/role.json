@@ -1,12 +1,13 @@
 {
   "id": "support",
   "name": "support",
-  "displayName": "Customer Support",
-  "description": "Customer support agent focused on helping users and resolving issues",
+  "displayName": "Support Specialist",
+  "description": "Customer support specialist who handles inquiries, troubleshooting, and customer satisfaction",
   "category": "support",
   "systemPromptFile": "prompt.md",
-  "assignedSkills": ["slack"],
+  "assignedSkills": [],
   "isDefault": false,
+  "isHidden": false,
   "createdAt": "2024-01-01T00:00:00.000Z",
   "updatedAt": "2024-01-01T00:00:00.000Z"
 }

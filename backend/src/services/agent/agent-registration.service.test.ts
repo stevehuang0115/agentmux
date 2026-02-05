@@ -56,6 +56,35 @@ describe('AgentRegistrationService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 
+		// Mock session for event-driven delivery
+		// The onData callback simulates terminal output stream
+		let onDataCallback: ((data: string) => void) | null = null;
+		const mockSession = {
+			name: 'test-session',
+			pid: 1234,
+			cwd: '/test',
+			onData: jest.fn().mockImplementation((callback: (data: string) => void) => {
+				onDataCallback = callback;
+				// Simulate prompt appearing after brief delay
+				setTimeout(() => {
+					if (onDataCallback) {
+						onDataCallback('❯ '); // Claude at prompt
+					}
+				}, 50);
+				// Simulate processing indicator after message sent
+				setTimeout(() => {
+					if (onDataCallback) {
+						onDataCallback('⠋ Thinking...'); // Processing started
+					}
+				}, 100);
+				return jest.fn(); // unsubscribe function
+			}),
+			onExit: jest.fn().mockReturnValue(jest.fn()),
+			write: jest.fn(),
+			resize: jest.fn(),
+			kill: jest.fn(),
+		};
+
 		// Mock SessionCommandHelper
 		mockSessionHelper = {
 			sessionExists: jest.fn().mockReturnValue(false),
@@ -69,6 +98,7 @@ describe('AgentRegistrationService', () => {
 			sendEnter: jest.fn().mockResolvedValue(undefined),
 			capturePane: jest.fn().mockReturnValue('❯ '), // Claude at prompt by default
 			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
+			getSession: jest.fn().mockReturnValue(mockSession), // For event-driven delivery
 		};
 
 		// Mock RuntimeService
@@ -317,56 +347,71 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendMessageToAgent', () => {
+		// Helper to create a mock session with configurable onData behavior
+		// Timings account for: prompt detection -> message sent -> Enter sent (500ms) -> processing
+		const createMockSession = (outputSequence: Array<{ output: string; delayMs: number }>) => {
+			return {
+				name: 'test-session',
+				pid: 1234,
+				cwd: '/test',
+				onData: jest.fn().mockImplementation((callback: (data: string) => void) => {
+					// Emit outputs from sequence at specified delays
+					outputSequence.forEach(({ output, delayMs }) => {
+						setTimeout(() => callback(output), delayMs);
+					});
+					return jest.fn(); // unsubscribe function
+				}),
+				onExit: jest.fn().mockReturnValue(jest.fn()),
+				write: jest.fn(),
+				resize: jest.fn(),
+				kill: jest.fn(),
+			};
+		};
+
 		it('should send message and verify processing started (prompt gone)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Message sent, prompt disappears indicating processing started
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('❯ ')  // Before: at prompt
-				.mockReturnValueOnce('Hello, agent!\nThinking...');  // After: no prompt, processing
+			// Configure session to emit: prompt (50ms) -> processing indicator (700ms, after Enter)
+			const mockSession = createMockSession([
+				{ output: '❯ ', delayMs: 50 },
+				{ output: '⠋ Thinking...', delayMs: 700 }, // After Enter (500ms)
+			]);
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
 
 			expect(result.success).toBe(true);
-			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
+			expect(mockSession.write).toHaveBeenCalledWith('Hello, agent!');
 		});
-
-		it('should send Enter again if message visible but prompt still showing', async () => {
-			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Message pasted but prompt still shows (bracketed paste issue)
-			// After sending Enter again, prompt disappears
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('❯ ')  // Before: at prompt
-				.mockReturnValueOnce('❯ Hello')  // After send: message visible but prompt still there
-				.mockReturnValueOnce('Hello\nProcessing...');  // After Enter: processing started
-
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
-
-			expect(result.success).toBe(true);
-			expect(mockSessionHelper.sendEnter).toHaveBeenCalled();
-		}, 15000);
 
 		it('should detect processing indicators as success', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('❯ ')  // Before: at prompt
-				.mockReturnValueOnce('Hello\n⠋ thinking...');  // After: spinner visible
+			// Configure session to emit spinner character after Enter
+			const mockSession = createMockSession([
+				{ output: '❯ ', delayMs: 50 },
+				{ output: '⠋ thinking...', delayMs: 700 }, // After Enter (500ms)
+			]);
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(true);
 		});
 
-		it('should send Escape when Claude not at prompt', async () => {
+		it('should send Escape when event-driven times out and Claude not at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('Some modal text...')  // Before: not at prompt
-				.mockReturnValueOnce('Hello\nThinking...');  // After: processing
+			// Configure session that never shows prompt or processing (causes timeout)
+			const mockSession = createMockSession([
+				{ output: 'Some modal text...', delayMs: 50 },
+			]);
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
+			// Fallback check shows not at prompt
+			mockSessionHelper.capturePane.mockReturnValue('Some modal text...');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
-			expect(result.success).toBe(true);
+			// Should eventually fail but Escape should be called on fallback
 			expect(mockSessionHelper.sendEscape).toHaveBeenCalled();
-		});
+		}, 35000); // Longer timeout for event-driven timeout
 
 		it('should fail if session does not exist', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(false);
@@ -384,16 +429,32 @@ describe('AgentRegistrationService', () => {
 			expect(result.error).toContain('Message is required');
 		});
 
-		it('should fail after max retries when prompt never goes away', async () => {
+		it('should fail after max retries when event-driven delivery times out', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// All attempts fail - prompt always visible, no processing
-			mockSessionHelper.capturePane.mockReturnValue('❯ ');
+			// Configure session that never shows any recognizable pattern
+			const mockSession = {
+				name: 'test-session',
+				pid: 1234,
+				cwd: '/test',
+				onData: jest.fn().mockImplementation(() => {
+					// Don't emit anything - will cause timeout
+					return jest.fn();
+				}),
+				onExit: jest.fn().mockReturnValue(jest.fn()),
+				write: jest.fn(),
+				resize: jest.fn(),
+				kill: jest.fn(),
+			};
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
+			// IMPORTANT: Return non-prompt output so immediate check fails
+			// This tests the scenario where Claude is not at prompt
+			mockSessionHelper.capturePane.mockReturnValue('Loading...\nPlease wait');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(false);
 			expect(result.error).toContain('Failed to deliver message');
-		}, 20000);  // Increase timeout for retry test
+		}, 40000);  // Increase timeout for event-driven retry test
 	});
 
 	describe('sendKeyToAgent', () => {

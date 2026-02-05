@@ -14,9 +14,6 @@ import {
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { PtySessionBackend } from './pty/index.js';
 
-// DORMANT: Uncomment to re-enable tmux backend
-// import { TmuxSessionBackend } from './tmux/index.js';
-
 /**
  * Singleton instance of the session backend
  */
@@ -47,7 +44,7 @@ const getLogger = (): ComponentLogger => {
  * If a backend already exists and is of a different type, the existing
  * backend will be destroyed before creating the new one.
  *
- * @param type - Type of backend to create ('pty' or 'tmux'). Defaults to 'pty'.
+ * @param type - Type of backend to create. Defaults to 'pty'.
  * @returns The created session backend instance
  * @throws Error if the backend type is not supported or creation fails
  *
@@ -58,7 +55,6 @@ const getLogger = (): ComponentLogger => {
  *
  * // Create a specific backend type
  * const ptyBackend = await createSessionBackend('pty');
- * const tmuxBackend = await createSessionBackend('tmux');
  * ```
  */
 export async function createSessionBackend(
@@ -106,21 +102,6 @@ export async function createSessionBackend(
 					logger.info('PTY session backend created');
 					return sessionBackendInstance;
 				}
-
-				case 'tmux':
-					// DORMANT: tmux backend is available but disabled in favor of PTY.
-					// To re-enable tmux support:
-					// 1. Uncomment the import at the top of this file
-					// 2. Uncomment the lines below
-					// sessionBackendInstance = new TmuxSessionBackend();
-					// currentBackendType = 'tmux';
-					// logger.info('Tmux session backend created');
-					// return sessionBackendInstance;
-					throw new Error(
-						'tmux backend is currently disabled. ' +
-							'PTY backend is preferred. ' +
-							'To re-enable tmux, see session-backend.factory.ts'
-					);
 
 				default: {
 					const exhaustiveCheck: never = type;

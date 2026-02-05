@@ -12,6 +12,7 @@ import {
 	getOrchestratorStatus as getOrchestratorStatusFromService,
 	getOrchestratorOfflineMessage,
 } from '../../services/orchestrator/index.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 
 // Delegate to existing ApiController methods to preserve complex logic without duplication
 export async function getOrchestratorCommands(
@@ -267,6 +268,15 @@ export async function setupOrchestrator(
 		}
 
 		console.log('[OrchestratorController] Orchestrator session created successfully');
+
+		// Start persistent chat monitoring for the orchestrator
+		// This ensures chat responses are captured even when no terminal panel is open
+		const terminalGateway = getTerminalGateway();
+		if (terminalGateway) {
+			terminalGateway.startOrchestratorChatMonitoring(ORCHESTRATOR_SESSION_NAME);
+		} else {
+			console.warn('[OrchestratorController] Terminal gateway not available, chat monitoring disabled');
+		}
 
 		// For Gemini CLI orchestrator, add all existing project paths to allowlist
 		if (runtimeType === 'gemini-cli') {

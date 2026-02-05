@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ChevronDown, ChevronRight, Plus, Check, X } from 'lucide-react';
 import { FormLabel, FormInput, FormSelect, Button } from '../UI';
 import { useAlert } from '../UI/Dialog';
 import { useRoles } from '../../hooks/useRoles';
 import { useProjects } from '../../hooks/useProjects';
+import { useSkills } from '../../hooks/useSkills';
+import { rolesService } from '../../services/roles.service';
 import type { Project } from '../../types';
+import type { RoleWithPrompt } from '../../types/role.types';
+import type { SkillSummary } from '../../types/skill.types';
 
 interface TeamRole {
   key: string;
@@ -22,6 +27,8 @@ interface TeamMember {
   systemPrompt: string;
   runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli';
   avatar?: string;
+  skillOverrides?: string[]; // Additional skill IDs beyond what the role provides
+  excludedRoleSkills?: string[]; // Role skills to exclude for this specific member
 }
 
 interface TeamModalProps {
@@ -37,12 +44,17 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
   const { showWarning, AlertComponent } = useAlert();
   const { roles: fetchedRoles, isLoading: rolesLoading } = useRoles();
   const { projects, isLoading: projectsLoading } = useProjects();
+  const { skills: allSkills, loading: skillsLoading } = useSkills();
   const [formData, setFormData] = useState({
     name: '',
     projectPath: '',
   });
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(false);
+  // Track expanded skill sections per member
+  const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
+  // Cache role details including assignedSkills
+  const [roleDetailsCache, setRoleDetailsCache] = useState<Record<string, RoleWithPrompt>>({});
 
   // Transform fetched roles into TeamRole format
   const availableRoles: TeamRole[] = (fetchedRoles || []).map(role => ({
@@ -55,6 +67,91 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     isDefault: role.isDefault,
   }));
 
+  /**
+   * Fetch role details including assignedSkills
+   */
+  const fetchRoleDetails = useCallback(async (roleKey: string): Promise<RoleWithPrompt | null> => {
+    if (roleDetailsCache[roleKey]) {
+      return roleDetailsCache[roleKey];
+    }
+    try {
+      const roleData = await rolesService.getRole(roleKey);
+      setRoleDetailsCache(prev => ({ ...prev, [roleKey]: roleData }));
+      return roleData;
+    } catch (err) {
+      console.error('Failed to fetch role details:', err);
+      return null;
+    }
+  }, [roleDetailsCache]);
+
+  /**
+   * Toggle skill section expansion for a member
+   */
+  const toggleSkillSection = (memberId: string) => {
+    setExpandedSkills(prev => ({
+      ...prev,
+      [memberId]: !prev[memberId]
+    }));
+  };
+
+  /**
+   * Toggle a skill override for a member
+   */
+  const toggleSkillOverride = (memberId: string, skillId: string) => {
+    setMembers(prev => prev.map(member => {
+      if (member.id !== memberId) return member;
+      const currentOverrides = member.skillOverrides || [];
+      const hasSkill = currentOverrides.includes(skillId);
+      return {
+        ...member,
+        skillOverrides: hasSkill
+          ? currentOverrides.filter(id => id !== skillId)
+          : [...currentOverrides, skillId]
+      };
+    }));
+  };
+
+  /**
+   * Toggle exclusion of a role skill for a specific member
+   */
+  const toggleRoleSkillExclusion = (memberId: string, skillId: string) => {
+    setMembers(prev => prev.map(member => {
+      if (member.id !== memberId) return member;
+      const currentExcluded = member.excludedRoleSkills || [];
+      const isExcluded = currentExcluded.includes(skillId);
+      return {
+        ...member,
+        excludedRoleSkills: isExcluded
+          ? currentExcluded.filter(id => id !== skillId)
+          : [...currentExcluded, skillId]
+      };
+    }));
+  };
+
+  /**
+   * Get the effective role skills for a member (excluding excluded ones)
+   */
+  const getEffectiveRoleSkills = (member: TeamMember): string[] => {
+    const roleSkills = getRoleSkills(member.role);
+    const excluded = member.excludedRoleSkills || [];
+    return roleSkills.filter(skillId => !excluded.includes(skillId));
+  };
+
+  /**
+   * Get skills assigned to a role
+   */
+  const getRoleSkills = (roleKey: string): string[] => {
+    const roleDetails = roleDetailsCache[roleKey];
+    return roleDetails?.assignedSkills || [];
+  };
+
+  /**
+   * Get skill info by ID
+   */
+  const getSkillById = (skillId: string): SkillSummary | undefined => {
+    return allSkills.find(s => s.id === skillId);
+  };
+
   useEffect(() => {
     if (team) {
       setFormData({
@@ -62,16 +159,24 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         projectPath: team.currentProject || team.projectPath || '',
       });
       if (team.members && Array.isArray(team.members)) {
-        // Ensure all members have runtimeType and avatar (for backward compatibility)
+        // Ensure all members have runtimeType, avatar, skillOverrides, and excludedRoleSkills (for backward compatibility)
         const migratedMembers = team.members.map((member: TeamMember, index: number) => ({
           ...member,
           runtimeType: member.runtimeType || 'claude-code',
-          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
+          avatar: member.avatar || avatarChoices[index % avatarChoices.length],
+          skillOverrides: member.skillOverrides || [],
+          excludedRoleSkills: member.excludedRoleSkills || []
         }));
         setMembers(migratedMembers);
+        // Fetch role details for all members' roles
+        migratedMembers.forEach((member: TeamMember) => {
+          if (member.role) {
+            fetchRoleDetails(member.role);
+          }
+        });
       }
     }
-  }, [team]);
+  }, [team, fetchRoleDetails]);
 
   // Initialize default members when roles are loaded and no existing team
   useEffect(() => {
@@ -84,14 +189,20 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         role: role.key,
         systemPrompt: `Load from ${role.promptFile}`,
         runtimeType: 'claude-code',
-        avatar: avatarChoices[index % avatarChoices.length]
+        avatar: avatarChoices[index % avatarChoices.length],
+        skillOverrides: [],
+        excludedRoleSkills: []
       }));
 
       if (defaultMembers.length > 0) {
         setMembers(defaultMembers);
+        // Fetch role details for default members
+        defaultMembers.forEach(member => {
+          fetchRoleDetails(member.role);
+        });
       }
     }
-  }, [availableRoles, members.length, team]);
+  }, [availableRoles, members.length, team, fetchRoleDetails]);
 
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -106,15 +217,20 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     setMembers(prev => prev.map(member => {
       if (member.id === memberId) {
         const updatedMember = { ...member, [field]: value };
-        
+
         // Auto-update system prompt when role changes
         if (field === 'role') {
           const selectedRole = availableRoles.find(role => role.key === value);
           if (selectedRole) {
             updatedMember.systemPrompt = `Load from ${selectedRole.promptFile}`;
           }
+          // Clear skill overrides and exclusions when role changes (they may not be relevant anymore)
+          updatedMember.skillOverrides = [];
+          updatedMember.excludedRoleSkills = [];
+          // Fetch role details to know assigned skills
+          fetchRoleDetails(value);
         }
-        
+
         return updatedMember;
       }
       return member;
@@ -139,9 +255,13 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       role: 'fullstack-dev',
       systemPrompt: fullstackDevRole ? `Load from ${fullstackDevRole.promptFile}` : 'Default fullstack developer prompt',
       runtimeType: 'claude-code',
-      avatar: avatarChoices[members.length % avatarChoices.length]
+      avatar: avatarChoices[members.length % avatarChoices.length],
+      skillOverrides: [],
+      excludedRoleSkills: []
     };
     setMembers(prev => [...prev, newMember]);
+    // Fetch role details for the new member
+    fetchRoleDetails('fullstack-dev');
   };
 
   const removeMember = (memberId: string) => {
@@ -173,7 +293,9 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
           role: member.role,
           systemPrompt: member.systemPrompt,
           runtimeType: member.runtimeType,
-          avatar: member.avatar
+          avatar: member.avatar,
+          skillOverrides: member.skillOverrides || [],
+          excludedRoleSkills: member.excludedRoleSkills || []
         })),
         currentProject: formData.projectPath || undefined, // Send project ID, not path
         projectPath: selectedProject ? selectedProject.path : undefined, // Keep path for backend processing
@@ -316,6 +438,106 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                           <option value="codex-cli">Codex CLI</option>
                         </FormSelect>
                       </div>
+
+                      {/* Skills Section */}
+                      {member.role && (
+                        <div className="border-t border-border-dark pt-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleSkillSection(member.id)}
+                            className="flex items-center gap-2 text-sm font-medium text-text-primary-dark hover:text-primary w-full"
+                          >
+                            {expandedSkills[member.id] ? (
+                              <ChevronDown className="w-4 h-4" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4" />
+                            )}
+                            <span>Skills</span>
+                            <span className="text-xs text-text-secondary-dark ml-1">
+                              ({getEffectiveRoleSkills(member).length} from role
+                              {(member.excludedRoleSkills?.length || 0) > 0 && ` - ${member.excludedRoleSkills?.length} excluded`}
+                              {(member.skillOverrides?.length || 0) > 0 && ` + ${member.skillOverrides?.length} additional`})
+                            </span>
+                          </button>
+
+                          {expandedSkills[member.id] && (
+                            <div className="mt-3 space-y-2">
+                              {/* Skills from Role (can be excluded for this member) */}
+                              {getRoleSkills(member.role).length > 0 && (
+                                <div className="space-y-1">
+                                  <p className="text-xs text-text-secondary-dark font-medium uppercase tracking-wide">
+                                    From Role <span className="font-normal">(click to exclude for this member)</span>
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {getRoleSkills(member.role).map(skillId => {
+                                      const skill = getSkillById(skillId);
+                                      const isExcluded = member.excludedRoleSkills?.includes(skillId);
+                                      return (
+                                        <button
+                                          key={skillId}
+                                          type="button"
+                                          onClick={() => toggleRoleSkillExclusion(member.id, skillId)}
+                                          className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border transition-colors cursor-pointer ${
+                                            isExcluded
+                                              ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+                                              : 'bg-primary/10 border-primary/30 text-primary hover:bg-primary/20'
+                                          }`}
+                                          title={isExcluded ? `Click to re-enable "${skill?.name || skillId}" for this member` : `Click to exclude "${skill?.name || skillId}" for this member`}
+                                        >
+                                          {isExcluded ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                                          {skill?.name || skillId}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Additional Skills (can be toggled) */}
+                              <div className="space-y-1">
+                                <p className="text-xs text-text-secondary-dark font-medium uppercase tracking-wide">
+                                  Additional Skills
+                                </p>
+                                {skillsLoading ? (
+                                  <p className="text-xs text-text-secondary-dark">Loading skills...</p>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {allSkills
+                                      .filter(skill => !getRoleSkills(member.role).includes(skill.id))
+                                      .map(skill => {
+                                        const isSelected = member.skillOverrides?.includes(skill.id);
+                                        return (
+                                          <button
+                                            key={skill.id}
+                                            type="button"
+                                            onClick={() => toggleSkillOverride(member.id, skill.id)}
+                                            className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border transition-colors ${
+                                              isSelected
+                                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                                : 'bg-background-dark border-border-dark text-text-secondary-dark hover:border-primary/50 hover:text-text-primary-dark'
+                                            }`}
+                                            title={skill.description}
+                                          >
+                                            {isSelected ? (
+                                              <Check className="w-3 h-3" />
+                                            ) : (
+                                              <Plus className="w-3 h-3" />
+                                            )}
+                                            {skill.name}
+                                          </button>
+                                        );
+                                      })}
+                                    {allSkills.filter(skill => !getRoleSkills(member.role).includes(skill.id)).length === 0 && (
+                                      <p className="text-xs text-text-secondary-dark">No additional skills available</p>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="flex justify-end">
                         <button
                           type="button"
@@ -357,12 +579,12 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
               {loading ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />
               ) : (
-                <>
+                <span className="inline-flex items-center gap-2">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={team ? "M5 13l4 4L19 7" : "M12 6v6m0 0v6m0-6h6m-6 0H6"} />
                   </svg>
                   {team ? 'Save Changes' : 'Create Team'}
-                </>
+                </span>
               )}
             </Button>
           </div>

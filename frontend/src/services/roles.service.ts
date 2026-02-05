@@ -150,6 +150,21 @@ class RolesService {
     }
     return response.data.data;
   }
+
+  /**
+   * Refresh roles from disk
+   *
+   * Forces the backend to reload all roles from the filesystem.
+   * Use this after adding/modifying role files to see changes without server restart.
+   *
+   * @throws Error if request fails
+   */
+  async refreshFromDisk(): Promise<void> {
+    const response = await axios.post<ApiResponse<void>>(`${ROLES_API_BASE}/refresh`);
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Failed to refresh roles');
+    }
+  }
 }
 
 /** Singleton instance */

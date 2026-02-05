@@ -7,6 +7,9 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import * as os from 'os';
 import { getSkillService } from '../../services/skill/skill.service.js';
 import { getSkillExecutorService } from '../../services/skill/skill-executor.service.js';
 import type {
@@ -17,6 +20,52 @@ import type {
   SkillCategory,
   SkillExecutionType,
 } from '../../types/skill.types.js';
+
+/**
+ * MCP server configuration structure
+ */
+interface McpServerConfig {
+  command?: string;
+  args?: string[];
+  transport?: string;
+  url?: string;
+  type?: string;
+  env?: Record<string, string>;
+}
+
+/**
+ * Interface for Claude Code ~/.claude.json structure
+ */
+interface ClaudeJsonConfig {
+  /** Global MCP servers (User MCPs) */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** Project-specific settings */
+  projects?: Record<string, {
+    mcpServers?: Record<string, McpServerConfig>;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
+/**
+ * Interface for Claude Code settings.json structure (legacy)
+ */
+interface ClaudeSettings {
+  mcpServers?: Record<string, McpServerConfig>;
+  [key: string]: unknown;
+}
+
+/**
+ * MCP server installation status
+ */
+interface McpServerStatus {
+  /** Package name (e.g., @anthropic/mcp-server-playwright) */
+  packageName: string;
+  /** Whether the MCP server is installed/configured */
+  isInstalled: boolean;
+  /** The configured name in Claude settings (if installed) */
+  configuredName?: string;
+}
 
 const router = Router();
 
@@ -123,6 +172,144 @@ router.post('/refresh', async (_req: Request, res: Response, next: NextFunction)
     res.json({
       success: true,
       message: 'Skills refreshed from disk',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/skills/mcp-status
+ * Check which MCP servers are installed in Claude Code
+ *
+ * Query params:
+ * - packages: Comma-separated list of package names to check
+ * - projectPath: Optional project path to also check project-level settings
+ */
+router.get('/mcp-status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const packagesToCheck = req.query.packages
+      ? (req.query.packages as string).split(',').map(p => p.trim())
+      : [];
+    const projectPath = req.query.projectPath as string | undefined;
+
+    // Read ~/.claude.json which contains both global and project-specific MCP servers
+    const claudeJsonPath = path.join(os.homedir(), '.claude.json');
+    let claudeConfig: ClaudeJsonConfig = {};
+
+    try {
+      const configContent = await fs.readFile(claudeJsonPath, 'utf-8');
+      claudeConfig = JSON.parse(configContent);
+    } catch (error) {
+      console.log('Could not read ~/.claude.json:', (error as Error).message);
+    }
+
+    // Also read ~/.claude/settings.json for User MCPs (legacy location)
+    const globalSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+    let globalSettings: ClaudeSettings = {};
+
+    try {
+      const settingsContent = await fs.readFile(globalSettingsPath, 'utf-8');
+      globalSettings = JSON.parse(settingsContent);
+    } catch (error) {
+      // Settings file doesn't exist or is invalid - that's ok
+    }
+
+    // Get global MCP servers (User MCPs) from both locations
+    const globalMcpServers: Record<string, McpServerConfig> = {
+      ...(globalSettings.mcpServers || {}),
+      ...(claudeConfig.mcpServers || {}),
+    };
+
+    // Get project-specific MCP servers (Local MCPs) from ~/.claude.json projects section
+    let projectMcpServers: Record<string, McpServerConfig> = {};
+    let projectSettingsFound = false;
+
+    if (projectPath && claudeConfig.projects) {
+      const projectConfig = claudeConfig.projects[projectPath];
+      if (projectConfig && projectConfig.mcpServers) {
+        projectMcpServers = projectConfig.mcpServers;
+        projectSettingsFound = true;
+      }
+    }
+
+    // Merge global and project MCP servers (project takes precedence)
+    const allMcpServers = {
+      ...globalMcpServers,
+      ...projectMcpServers,
+    };
+
+    // Build status for each requested package
+    const statuses: McpServerStatus[] = packagesToCheck.map(packageName => {
+      // Check if the package is configured by looking at:
+      // 1. The server name matches the package name
+      // 2. The command/args contain the package name
+      // Prefer project matches over global, and prefer exact matches over partial
+      let bestMatch: { serverName: string; source: 'global' | 'project'; score: number } | null = null;
+
+      const shortPackageName = packageName.replace(/^@[^/]+\//, '');
+
+      // Helper to calculate match score (higher is better)
+      const getMatchScore = (serverName: string, serverConfig: McpServerConfig, isProject: boolean): number => {
+        let score = 0;
+
+        // Project matches get a base bonus
+        if (isProject) score += 100;
+
+        // Check args for package match (most reliable)
+        const argsMatch = serverConfig.args?.some(arg => arg.includes(packageName));
+        if (argsMatch) score += 50;
+
+        // Check server name matches
+        if (serverName.toLowerCase() === shortPackageName.toLowerCase()) {
+          // Exact name match (e.g., "playwright" matches "@playwright/mcp")
+          score += 40;
+        } else if (serverName.toLowerCase().includes(shortPackageName.toLowerCase())) {
+          // Partial name match - only count if the short name is specific enough (> 3 chars)
+          if (shortPackageName.length > 3) {
+            score += 10;
+          }
+        }
+
+        return score;
+      };
+
+      // Check project MCP servers first
+      for (const [serverName, serverConfig] of Object.entries(projectMcpServers)) {
+        const score = getMatchScore(serverName, serverConfig, true);
+        if (score > 0 && (!bestMatch || score > bestMatch.score)) {
+          bestMatch = { serverName, source: 'project', score };
+        }
+      }
+
+      // Then check global MCP servers
+      for (const [serverName, serverConfig] of Object.entries(globalMcpServers)) {
+        const score = getMatchScore(serverName, serverConfig, false);
+        if (score > 0 && (!bestMatch || score > bestMatch.score)) {
+          bestMatch = { serverName, source: 'global', score };
+        }
+      }
+
+      return {
+        packageName,
+        isInstalled: bestMatch !== null,
+        configuredName: bestMatch?.serverName,
+        source: bestMatch?.source,
+      };
+    });
+
+    // Return all configured MCP servers with their source
+    const allConfiguredServers = Object.keys(allMcpServers);
+
+    res.json({
+      success: true,
+      data: {
+        statuses,
+        allConfiguredServers,
+        globalSettingsFound: Object.keys(globalMcpServers).length > 0,
+        projectSettingsFound,
+        projectPath: projectPath || null,
+      },
     });
   } catch (error) {
     next(error);

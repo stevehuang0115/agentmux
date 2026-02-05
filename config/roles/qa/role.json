@@ -1,0 +1,13 @@
+{
+  "id": "qa",
+  "name": "qa",
+  "displayName": "QA Engineer",
+  "description": "Quality assurance and test engineer responsible for testing, quality control, and test infrastructure",
+  "category": "quality",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["testing", "documentation"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

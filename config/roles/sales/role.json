@@ -2,11 +2,12 @@
   "id": "sales",
   "name": "sales",
   "displayName": "Sales Representative",
-  "description": "Sales representative focused on customer relationships and revenue growth",
+  "description": "Sales professional focused on customer relationships, lead qualification, and closing deals",
   "category": "sales",
   "systemPromptFile": "prompt.md",
-  "assignedSkills": ["slack"],
+  "assignedSkills": [],
   "isDefault": false,
+  "isHidden": false,
   "createdAt": "2024-01-01T00:00:00.000Z",
   "updatedAt": "2024-01-01T00:00:00.000Z"
 }

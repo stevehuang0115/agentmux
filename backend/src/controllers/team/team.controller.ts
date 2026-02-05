@@ -29,6 +29,7 @@ import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync } from '../../services/session/index.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 
 // Internal helper function types
 interface StartTeamMemberResult {
@@ -462,10 +463,13 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
         name: member.name,
         sessionName: '',
         role: member.role,
+        avatar: member.avatar,
         systemPrompt: member.systemPrompt,
         agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
         workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
         runtimeType: member.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
+        skillOverrides: member.skillOverrides || [],
+        excludedRoleSkills: member.excludedRoleSkills || [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -622,6 +626,22 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse);
       return;
     }
+
+    // Verify actual session existence for each member to avoid stale status
+    const backend = getSessionBackendSync();
+    if (backend) {
+      for (const member of team.members) {
+        if (member.sessionName) {
+          const sessionExists = backend.sessionExists(member.sessionName);
+          // Update agentStatus based on actual session existence
+          if (!sessionExists && member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+            (member as MutableTeamMember).agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+            (member as MutableTeamMember).sessionName = '';
+          }
+        }
+      }
+    }
+
     res.json({ success: true, data: team } as ApiResponse<Team>);
   } catch (error) {
     console.error('Error getting team:', error);
@@ -651,6 +671,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
 
     const projects = await this.storageService.getProjects();
     let targetProjectId = projectId || team.currentProject;
+
     if (!targetProjectId) {
       res.status(400).json({ success: false, error: 'No project specified. Please select a project to assign this team to.' } as ApiResponse);
       return;
@@ -671,10 +692,10 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
     let sessionsAlreadyRunning = 0;
     const results: TeamMemberOperationResult[] = [];
 
-    // PHASE 2: Immediately set ALL members to 'activating' for instant UI feedback
+    // PHASE 2: Immediately set ALL members to 'starting' for instant UI feedback
     for (const member of team.members) {
       const mutableMember = member as MutableTeamMember;
-      mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
+      mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING;
       mutableMember.updatedAt = new Date().toISOString();
     }
     await this.storageService.saveTeam(team);
@@ -994,9 +1015,9 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
       return;
     }
 
-    // PHASE 3: Immediately set target member to 'activating' for instant UI feedback
+    // PHASE 3: Immediately set target member to 'starting' for instant UI feedback
     const mutableMember = member as MutableTeamMember;
-    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING;
+    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING;
     mutableMember.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
@@ -1153,6 +1174,18 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
       try {
         await this.storageService.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
         console.log(`[API] ✅ Orchestrator registered as active`);
+
+        // Broadcast orchestrator status change via WebSocket for real-time UI updates
+        const terminalGateway = getTerminalGateway();
+        if (terminalGateway) {
+          terminalGateway.broadcastOrchestratorStatus({
+            sessionName,
+            agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+            workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+          });
+          console.log(`[API] 📡 Broadcast orchestrator status change via WebSocket`);
+        }
+
         res.json({ success: true, message: `Orchestrator ${sessionName} registered as active`, sessionName } as ApiResponse);
         return;
       } catch (error) {
@@ -1664,6 +1697,51 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     }
     if (updates.description !== undefined) {
       team.description = updates.description;
+    }
+
+    // Update members if provided (from TeamModal edit)
+    if (updates.members !== undefined && Array.isArray(updates.members)) {
+      // Map over existing members and update them, or add new ones
+      const existingMemberIds = team.members.map(m => m.id);
+      const updatedMemberIds: string[] = [];
+
+      team.members = updates.members.map((memberUpdate: any, index: number) => {
+        // Find existing member by name (since the modal doesn't send IDs)
+        const existingMember = team.members.find(m => m.name === memberUpdate.name);
+
+        if (existingMember) {
+          updatedMemberIds.push(existingMember.id);
+          return {
+            ...existingMember,
+            name: memberUpdate.name,
+            role: memberUpdate.role,
+            systemPrompt: memberUpdate.systemPrompt,
+            runtimeType: memberUpdate.runtimeType || existingMember.runtimeType,
+            avatar: memberUpdate.avatar || existingMember.avatar,
+            skillOverrides: memberUpdate.skillOverrides || [],
+            excludedRoleSkills: memberUpdate.excludedRoleSkills || [],
+            updatedAt: new Date().toISOString()
+          } as MutableTeamMember;
+        } else {
+          // New member
+          const newId = `member-${Date.now()}-${index}`;
+          updatedMemberIds.push(newId);
+          return {
+            id: newId,
+            name: memberUpdate.name,
+            role: memberUpdate.role,
+            systemPrompt: memberUpdate.systemPrompt,
+            agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+            workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+            runtimeType: memberUpdate.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
+            avatar: memberUpdate.avatar,
+            skillOverrides: memberUpdate.skillOverrides || [],
+            excludedRoleSkills: memberUpdate.excludedRoleSkills || [],
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          } as MutableTeamMember;
+        }
+      });
     }
 
     // Update timestamp

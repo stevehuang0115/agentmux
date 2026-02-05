@@ -45,6 +45,15 @@ jest.mock('../sop/sop.service.js', () => ({
 	},
 }));
 
+// Mock RoleService - return null to force file fallback for testing file paths
+const mockGetRoleByName = jest.fn().mockResolvedValue(null);
+
+jest.mock('../settings/role.service.js', () => ({
+	getRoleService: jest.fn(() => ({
+		getRoleByName: mockGetRoleByName,
+	})),
+}));
+
 describe('PromptBuilderService', () => {
 	let service: PromptBuilderService;
 	let mockReadFile: jest.Mock;
@@ -130,10 +139,10 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toContain('Role-specific prompt for developer with session test-session');
 			expect(mockAccess).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/developer-prompt.md')
+				expect.stringContaining('/config/roles/developer/prompt.md')
 			);
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/developer-prompt.md'),
+				expect.stringContaining('/config/roles/developer/prompt.md'),
 				'utf8'
 			);
 		});
@@ -169,7 +178,7 @@ describe('PromptBuilderService', () => {
 
 			expect(result).toBe('Register as dev with session test-session and member member-123');
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/dev-prompt.md'),
+				expect.stringContaining('/config/roles/dev/prompt.md'),
 				'utf8'
 			);
 		});
@@ -188,10 +197,12 @@ describe('PromptBuilderService', () => {
 
 			const result = await service.loadRegistrationPrompt('dev', 'test-session', 'member-123');
 
-			expect(result).toContain('Please immediately run: register_agent_status');
+			// Fallback prompt contains registration instructions
+			expect(result).toContain('IMMEDIATELY');
+			expect(result).toContain('register_agent_status');
 			expect(result).toContain('"role": "dev"');
 			expect(result).toContain('"sessionName": "test-session"');
-			expect(result).toContain('"memberId": "member-123"');
+			expect(result).toContain('member-123');
 		});
 
 		it('should exclude member ID from fallback when not provided', async () => {
@@ -210,11 +221,12 @@ describe('PromptBuilderService', () => {
 			const templateContent = 'Template content';
 			mockReadFile.mockResolvedValue(templateContent);
 
-			const result = await service.loadPromptTemplate('test-template.md');
+			// Pass role name (test-template) or old filename (test-template-prompt.md)
+			const result = await service.loadPromptTemplate('test-template-prompt.md');
 
 			expect(result).toBe(templateContent);
 			expect(mockReadFile).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/test-template.md'),
+				expect.stringContaining('/config/roles/test-template/prompt.md'),
 				'utf8'
 			);
 		});
@@ -222,7 +234,7 @@ describe('PromptBuilderService', () => {
 		it('should return null when template not found', async () => {
 			mockReadFile.mockRejectedValue(new Error('File not found'));
 
-			const result = await service.loadPromptTemplate('nonexistent.md');
+			const result = await service.loadPromptTemplate('nonexistent-prompt.md');
 
 			expect(result).toBeNull();
 		});
@@ -232,18 +244,19 @@ describe('PromptBuilderService', () => {
 		it('should return true when template exists', async () => {
 			mockAccess.mockResolvedValue(undefined);
 
-			const result = await service.promptTemplateExists('existing-template.md');
+			// Pass role name directly or old filename pattern
+			const result = await service.promptTemplateExists('existing-template-prompt.md');
 
 			expect(result).toBe(true);
 			expect(mockAccess).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/existing-template.md')
+				expect.stringContaining('/config/roles/existing-template/prompt.md')
 			);
 		});
 
 		it('should return false when template does not exist', async () => {
 			mockAccess.mockRejectedValue(new Error('File not found'));
 
-			const result = await service.promptTemplateExists('nonexistent.md');
+			const result = await service.promptTemplateExists('nonexistent-prompt.md');
 
 			expect(result).toBe(false);
 		});
@@ -300,20 +313,20 @@ describe('PromptBuilderService', () => {
 		});
 	});
 
-	describe('getPromptsDirectory', () => {
-		it('should return prompts directory path', () => {
-			const result = service.getPromptsDirectory();
+	describe('getRolesDirectory', () => {
+		it('should return roles directory path', () => {
+			const result = service.getRolesDirectory();
 
-			expect(result).toContain('/config/teams/prompts');
+			expect(result).toContain('/config/roles');
 		});
 	});
 
 	describe('config path resolution', () => {
-		it('should construct correct path for team prompts directory', () => {
+		it('should construct correct path for roles directory', () => {
 			const testService = new PromptBuilderService('/test/project');
-			const promptsDir = testService.getPromptsDirectory();
+			const rolesDir = testService.getRolesDirectory();
 
-			expect(promptsDir).toBe('/test/project/config/teams/prompts');
+			expect(rolesDir).toBe('/test/project/config/roles');
 		});
 
 		it('should use correct path structure when loading prompts', async () => {
@@ -323,10 +336,11 @@ describe('PromptBuilderService', () => {
 
 			const testService = new PromptBuilderService('/custom/project/root');
 
+			// Pass the old filename format which gets converted to role name
 			await testService.loadPromptTemplate('developer-prompt.md');
 
 			expect(mockReadFile).toHaveBeenCalledWith(
-				'/custom/project/root/config/teams/prompts/developer-prompt.md',
+				'/custom/project/root/config/roles/developer/prompt.md',
 				'utf8'
 			);
 		});
@@ -339,7 +353,7 @@ describe('PromptBuilderService', () => {
 			await testService.promptTemplateExists('tpm-prompt.md');
 
 			expect(mockAccess).toHaveBeenCalledWith(
-				'/test/root/config/teams/prompts/tpm-prompt.md'
+				'/test/root/config/roles/tpm/prompt.md'
 			);
 		});
 
@@ -353,7 +367,7 @@ describe('PromptBuilderService', () => {
 				await service.loadPromptTemplate(`${role}-prompt.md`);
 
 				expect(mockReadFile).toHaveBeenCalledWith(
-					expect.stringContaining(`/config/teams/prompts/${role}-prompt.md`),
+					expect.stringContaining(`/config/roles/${role}/prompt.md`),
 					'utf8'
 				);
 			}
@@ -376,7 +390,7 @@ describe('PromptBuilderService', () => {
 
 			// Should attempt to load prompt from teams prompts directory
 			expect(mockAccess).toHaveBeenCalledWith(
-				expect.stringContaining('/config/teams/prompts/tpm-prompt.md')
+				expect.stringContaining('/config/roles/tpm/prompt.md')
 			);
 		});
 	});

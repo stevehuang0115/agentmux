@@ -1,6 +1,6 @@
 import React from 'react';
 import { FormLabel, FormInput, FormTextarea, FormSelect } from '../UI';
-import { ScheduledMessage, ScheduledMessageFormData, TEAM_OPTIONS } from './types';
+import { ScheduledMessage, ScheduledMessageFormData, TeamOption } from './types';
 
 interface MessageFormProps {
   isOpen: boolean;
@@ -9,6 +9,8 @@ interface MessageFormProps {
   setFormData: React.Dispatch<React.SetStateAction<ScheduledMessageFormData>>;
   onClose: () => void;
   onSubmit: (e: React.FormEvent) => void;
+  /** Dynamic team options loaded from the API */
+  teamOptions: TeamOption[];
 }
 
 export const MessageForm: React.FC<MessageFormProps> = ({
@@ -17,7 +19,8 @@ export const MessageForm: React.FC<MessageFormProps> = ({
   formData,
   setFormData,
   onClose,
-  onSubmit
+  onSubmit,
+  teamOptions
 }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,7 +71,7 @@ export const MessageForm: React.FC<MessageFormProps> = ({
                   required
                 >
                   <option value="">Select a target</option>
-                  {TEAM_OPTIONS.map(option => (
+                  {teamOptions.map(option => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </FormSelect>

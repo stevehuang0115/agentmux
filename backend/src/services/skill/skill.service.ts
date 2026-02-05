@@ -205,9 +205,11 @@ export class SkillService {
       throw new SkillValidationError(errors);
     }
 
-    const skill = createDefaultSkill(input);
+    const skill = createDefaultSkill({ ...input, skillType: input.skillType });
     skill.execution = input.execution;
     skill.environment = input.environment;
+    skill.runtime = input.runtime;
+    skill.notices = input.notices;
     skill.assignableRoles = input.assignableRoles ?? [];
     skill.triggers = input.triggers ?? [];
     skill.tags = input.tags ?? [];
@@ -249,8 +251,11 @@ export class SkillService {
       name: input.name ?? existing.name,
       description: input.description ?? existing.description,
       category: input.category ?? existing.category,
+      skillType: input.skillType ?? existing.skillType,
       execution: input.execution ?? existing.execution,
       environment: input.environment ?? existing.environment,
+      runtime: input.runtime ?? existing.runtime,
+      notices: input.notices ?? existing.notices,
       assignableRoles: input.assignableRoles ?? existing.assignableRoles,
       triggers: input.triggers ?? existing.triggers,
       tags: input.tags ?? existing.tags,
@@ -526,9 +531,12 @@ export class SkillService {
       name: skill.name,
       description: skill.description,
       category: skill.category,
+      skillType: skill.skillType,
       promptFile: 'instructions.md',
       execution: skill.execution,
       environment: skill.environment,
+      runtime: skill.runtime,
+      notices: skill.notices,
       assignableRoles: skill.assignableRoles,
       triggers: skill.triggers,
       tags: skill.tags,
