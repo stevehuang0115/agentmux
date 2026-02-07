@@ -256,7 +256,7 @@ export interface TeamMember {
   sessionName: string;
   role: string;
   systemPrompt?: string;
-  agentStatus: 'inactive' | 'activating' | 'active';
+  agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'activating';
   workingStatus: 'idle' | 'in_progress';
   runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli';
   currentTickets?: string[];

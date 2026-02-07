@@ -11,18 +11,15 @@ import type {
   GenerateMemberContextQuery,
   UpdateTeamMemberRuntimeRequestBody,
   UpdateTeamRequestBody,
+  TeamMemberUpdate,
   MutableTeamMember,
   MutableTeam,
 } from '../request-types.js';
 import { v4 as uuidv4 } from 'uuid';
-import * as fs from 'fs/promises';
-import * as fsSync from 'fs';
-import * as path from 'path';
 import { Team, TeamMember, ApiResponse, ScheduledMessage } from '../../types/index.js';
 import {
   ORCHESTRATOR_SESSION_NAME,
   ORCHESTRATOR_ROLE,
-  ORCHESTRATOR_WINDOW_NAME,
   RUNTIME_TYPES
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
@@ -484,7 +481,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
 
     const existingTeams = await this.storageService.getTeams();
     if (existingTeams.find(t => t.name === name)) {
-      res.status(500).json({
+      res.status(409).json({
         success: false,
         error: `Team with name "${name}" already exists`
       } as ApiResponse);
@@ -1666,16 +1663,11 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
 
     // Update members if provided (from TeamModal edit)
     if (updates.members !== undefined && Array.isArray(updates.members)) {
-      // Map over existing members and update them, or add new ones
-      const existingMemberIds = team.members.map(m => m.id);
-      const updatedMemberIds: string[] = [];
-
-      team.members = updates.members.map((memberUpdate: any, index: number) => {
+      team.members = updates.members.map((memberUpdate: TeamMemberUpdate) => {
         // Find existing member by name (since the modal doesn't send IDs)
         const existingMember = team.members.find(m => m.name === memberUpdate.name);
 
         if (existingMember) {
-          updatedMemberIds.push(existingMember.id);
           return {
             ...existingMember,
             name: memberUpdate.name,
@@ -1689,10 +1681,8 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
           } as MutableTeamMember;
         } else {
           // New member
-          const newId = `member-${Date.now()}-${index}`;
-          updatedMemberIds.push(newId);
           return {
-            id: newId,
+            id: uuidv4(),
             name: memberUpdate.name,
             role: memberUpdate.role,
             systemPrompt: memberUpdate.systemPrompt,

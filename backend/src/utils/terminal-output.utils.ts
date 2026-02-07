@@ -19,7 +19,8 @@
  */
 export function stripAnsiCodes(content: string): string {
 	return content
-		// Replace cursor forward/back movements with a space (these act as whitespace in rendered output)
+		// Replace cursor forward movements with a space (\d* is safe here because \x1b prefix
+		// prevents false matches with text like [CHAT_RESPONSE]; orphaned CSI below uses \d+)
 		.replace(/\x1b\[\d*C/g, ' ')
 		// Remove other CSI sequences (colors, cursor positioning, etc.)
 		.replace(/\x1b\[[0-9;]*[A-Za-zH]/g, '')
