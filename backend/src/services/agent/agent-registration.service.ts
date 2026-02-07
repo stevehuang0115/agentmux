@@ -533,8 +533,8 @@ export class AgentRegistrationService {
 		memberId?: string
 	): Promise<string> {
 		try {
-			// Create cache key based on role and whether memberId is used
-			const cacheKey = `${role}-${!!memberId}`;
+			// Cache key is role only - the template file is the same regardless of memberId
+			const cacheKey = role;
 
 			// Check cache first to avoid file I/O during concurrent operations
 			if (!this.promptCache.has(cacheKey)) {
