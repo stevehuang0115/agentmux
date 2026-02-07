@@ -152,9 +152,8 @@ describe('PromptBuilderService', () => {
 
 			const result = await service.buildSystemPrompt(mockConfig);
 
-			expect(result).toContain('AgentMux Agent: DEVELOPER');
-			expect(result).toContain('You are a developer agent');
-			expect(result).toContain('register_agent_status({ "role": "developer" })');
+			expect(result).toContain('developer tasks');
+			expect(result).toContain('register_agent_status');
 			expect(result).toContain('Session: test-session');
 		});
 
@@ -471,7 +470,7 @@ describe('PromptBuilderService', () => {
 
 			const result = await service.buildSystemPromptWithMemory(mockConfig);
 
-			expect(result).toContain('AgentMux Agent');
+			expect(result).toContain('developer tasks');
 			expect(result).toContain('Your Knowledge Base');
 			expect(result).toContain('Important fact');
 			expect(result).toContain('Your Identity');
@@ -483,7 +482,7 @@ describe('PromptBuilderService', () => {
 
 			const result = await service.buildSystemPromptWithMemory(mockConfig);
 
-			expect(result).toContain('AgentMux Agent');
+			expect(result).toContain('developer tasks');
 			expect(result).not.toContain('Your Knowledge Base');
 		});
 
@@ -666,7 +665,7 @@ describe('PromptBuilderService', () => {
 				taskContext: 'writing code'
 			});
 
-			expect(result).toContain('AgentMux Agent');
+			expect(result).toContain('developer tasks');
 			expect(result).toContain('Standard Operating Procedures');
 			expect(result).toContain('Coding Standards');
 		});
