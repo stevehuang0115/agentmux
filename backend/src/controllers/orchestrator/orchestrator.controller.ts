@@ -13,6 +13,7 @@ import {
 	getOrchestratorOfflineMessage,
 } from '../../services/orchestrator/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { MemoryService } from '../../services/memory/memory.service.js';
 
 // Delegate to existing ApiController methods to preserve complex logic without duplication
 export async function getOrchestratorCommands(
@@ -268,6 +269,19 @@ export async function setupOrchestrator(
 		}
 
 		console.log('[OrchestratorController] Orchestrator session created successfully');
+
+		// Initialize orchestrator memory so remember/recall MCP tools work
+		try {
+			const memoryService = MemoryService.getInstance();
+			await memoryService.initializeForSession(
+				ORCHESTRATOR_SESSION_NAME,
+				ORCHESTRATOR_ROLE,
+				process.cwd()
+			);
+			console.log('[OrchestratorController] Orchestrator memory initialized successfully');
+		} catch (memoryError) {
+			console.warn('[OrchestratorController] Failed to initialize orchestrator memory:', memoryError);
+		}
 
 		// Start persistent chat monitoring for the orchestrator
 		// This ensures chat responses are captured even when no terminal panel is open

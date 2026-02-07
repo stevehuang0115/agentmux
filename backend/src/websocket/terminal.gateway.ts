@@ -49,6 +49,12 @@ export class TerminalGateway {
 	/** Maximum buffer size to prevent memory issues (100KB) */
 	private readonly MAX_BUFFER_SIZE = 100 * 1024;
 
+	/** Set of recently sent response hashes to prevent duplicate messages */
+	private recentResponseHashes: Set<string> = new Set();
+
+	/** Maximum number of recent response hashes to track */
+	private readonly MAX_RECENT_HASHES = 20;
+
 	/**
 	 * Create a new TerminalGateway.
 	 *
@@ -255,6 +261,21 @@ export class TerminalGateway {
 	 */
 	startOrchestratorChatMonitoring(sessionName: string): boolean {
 		this.logger.info('Starting persistent orchestrator chat monitoring', { sessionName });
+
+		// Force cleanup any stale subscription from a previous session.
+		// When the orchestrator is restarted, the old PTY session is destroyed but
+		// the subscription entry may still exist pointing to the dead session.
+		// We must remove it so startPtyStreaming creates a fresh subscription.
+		if (this.sessionSubscriptions.has(sessionName)) {
+			this.logger.info('Cleaning up existing subscription for orchestrator chat monitoring', { sessionName });
+			const unsubscribe = this.sessionSubscriptions.get(sessionName)!;
+			unsubscribe();
+			this.sessionSubscriptions.delete(sessionName);
+		}
+
+		// Clear the output buffer and response hash cache for fresh monitoring
+		this.orchestratorOutputBuffer = '';
+		this.recentResponseHashes.clear();
 
 		// Mark session as persistent so it won't be stopped when clients disconnect
 		this.persistentMonitoringSessions.add(sessionName);
@@ -474,9 +495,33 @@ export class TerminalGateway {
 			return;
 		}
 
+		// Strip ANSI escape codes for reliable pattern matching.
+		// PTY output contains color codes, cursor movements, etc. that break regex matching.
+		// Important: Replace cursor movement sequences with spaces to preserve word boundaries.
+		const cleanContent = content
+			// Replace cursor forward/back movements with a space (these act as whitespace in rendered output)
+			.replace(/\x1b\[\d*C/g, ' ')
+			// Remove other CSI sequences (colors, cursor positioning, etc.)
+			.replace(/\x1b\[[0-9;]*[A-Za-zH]/g, '')
+			// Remove OSC sequences (title changes, hyperlinks, etc.)
+			.replace(/\x1b\][^\x07]*\x07/g, '')
+			// Remove other escape sequences
+			.replace(/\x1b[^[\]].?/g, '')
+			// Clean orphaned CSI fragments from PTY buffer boundary splits
+			// When ESC char lands in one chunk and the CSI params in the next,
+			// artifacts like "[1C" or "[22m" appear mid-word (e.g. "about[1Cyour")
+			// Note: \d+ (one or more digits) required to avoid matching [C in [CHAT_RESPONSE]
+			.replace(/\[\d+C/g, ' ')
+			.replace(/\[\d+[A-BJKHfm]/g, '')
+			// Replace carriage returns with newline (CR/LF normalization)
+			.replace(/\r\n/g, '\n')
+			.replace(/\r/g, '\n')
+			// Remove remaining control characters but keep tabs and newlines
+			.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
 		// Extract conversation ID from the output if present
 		// The format is [CHAT:conversationId] at the start of a response
-		const chatIdMatch = content.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
+		const chatIdMatch = cleanContent.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
 		if (chatIdMatch) {
 			this.logger.debug('Extracted conversation ID from output', { conversationId: chatIdMatch[1] });
 			this.activeConversationId = chatIdMatch[1];
@@ -489,15 +534,15 @@ export class TerminalGateway {
 		}
 
 		// Log that we're processing output
-		if (content.includes('[CHAT_RESPONSE]') || content.includes('[/CHAT_RESPONSE]')) {
+		if (cleanContent.includes('[CHAT_RESPONSE]') || cleanContent.includes('[/CHAT_RESPONSE]')) {
 			this.logger.info('Detected CHAT_RESPONSE marker in output', {
-				contentLength: content.length,
+				contentLength: cleanContent.length,
 				conversationId: this.activeConversationId
 			});
 		}
 
-		// Add content to buffer for complete response detection
-		this.orchestratorOutputBuffer += content;
+		// Add ANSI-stripped content to buffer for complete response detection
+		this.orchestratorOutputBuffer += cleanContent;
 
 		// Prevent buffer from growing too large
 		if (this.orchestratorOutputBuffer.length > this.MAX_BUFFER_SIZE) {
@@ -513,6 +558,29 @@ export class TerminalGateway {
 		while ((match = responsePattern.exec(this.orchestratorOutputBuffer)) !== null) {
 			const responseContent = match[1].trim();
 			lastMatchEnd = match.index + match[0].length;
+
+			// Deduplicate: PTY re-renders can cause the same response to appear multiple times.
+			// Use a simple hash of the normalized content to detect duplicates.
+			const normalizedForHash = responseContent.replace(/\s+/g, ' ').trim();
+			const responseHash = `${this.activeConversationId}:${normalizedForHash.substring(0, 200)}`;
+
+			if (this.recentResponseHashes.has(responseHash)) {
+				this.logger.debug('Skipping duplicate chat response', {
+					conversationId: this.activeConversationId,
+					contentLength: responseContent.length,
+				});
+				continue;
+			}
+
+			// Track this response hash
+			this.recentResponseHashes.add(responseHash);
+			// Evict oldest hashes if over limit
+			if (this.recentResponseHashes.size > this.MAX_RECENT_HASHES) {
+				const first = this.recentResponseHashes.values().next().value;
+				if (first !== undefined) {
+					this.recentResponseHashes.delete(first);
+				}
+			}
 
 			this.logger.info('Extracted chat response from orchestrator output', {
 				contentLength: responseContent.length,
@@ -553,6 +621,7 @@ export class TerminalGateway {
 	 */
 	clearOrchestratorBuffer(): void {
 		this.orchestratorOutputBuffer = '';
+		this.recentResponseHashes.clear();
 	}
 
 	/**

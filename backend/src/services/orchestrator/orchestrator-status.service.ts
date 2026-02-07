@@ -92,13 +92,15 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
 
     const agentStatus = orchestratorStatus.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
 
-    // Consider the orchestrator active if:
-    // 1. The storage status is 'active', OR
-    // 2. The PTY session exists AND status is 'started' (runtime running, awaiting registration)
-    const isActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE ||
-                     (sessionExists && agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED);
+    // Orchestrator is active when fully registered via MCP
+    const isRegisteredActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
-    if (isActive) {
+    // Also treat as active when the PTY session exists and the runtime is running
+    // ("started" means Claude Code is running). This aligns with the teams controller
+    // which uses session existence as ground truth for status.
+    const isSessionActive = sessionExists && agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED;
+
+    if (isRegisteredActive || isSessionActive) {
       return {
         isActive: true,
         agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
@@ -107,8 +109,10 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     }
 
     // Provide context-appropriate message based on status
+    // Note: STARTED without a live session falls here (session died or config is stale)
     if (agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING ||
-        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING) {
+        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING ||
+        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED) {
       return {
         isActive: false,
         agentStatus,

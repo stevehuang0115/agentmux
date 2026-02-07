@@ -394,6 +394,7 @@ ${fullContext}
 			if (parts.memberId) sections.push(`- **Member ID:** ${parts.memberId}`);
 			if (parts.role) sections.push(`- **Role:** ${parts.role}`);
 			if (parts.teamId) sections.push(`- **Team:** ${parts.teamId}`);
+			if (parts.projectPath) sections.push(`- **Project Path:** ${parts.projectPath}`);
 		}
 
 		// Add communication instructions
@@ -403,9 +404,17 @@ ${fullContext}
 Use MCP tools for all team communication:
 - \`send_message\` to communicate with other agents
 - \`report_progress\` to update on task status
-- \`remember\` to store important learnings
-- \`recall\` to retrieve relevant knowledge
-- \`get_sops\` to request relevant SOPs for your current situation`);
+- \`remember\` to store important learnings (always pass your \`teamMemberId\` and \`projectPath\`)
+- \`recall\` to retrieve relevant knowledge (always pass your \`teamMemberId\` and \`projectPath\`)
+- \`record_learning\` to record learnings (always pass your \`teamMemberId\` and \`projectPath\`)
+- \`get_sops\` to request relevant SOPs for your current situation
+
+**IMPORTANT for memory tools:** When calling \`remember\`, \`recall\`, or \`record_learning\`, you MUST pass:
+- \`teamMemberId\`: Your **Session Name** from the Identity section above
+- \`projectPath\`: Your **Project Path** from the Identity section above
+This ensures your knowledge is stored under your identity and in the correct project.
+
+**IMPORTANT for recall:** Before answering questions about the project, deployment, architecture, or past decisions, ALWAYS call \`recall\` first to check your stored knowledge.`);
 
 		return sections.join('\n').trim();
 	}
@@ -571,25 +580,25 @@ Then wait for explicit task assignments from the orchestrator.`;
 	 * Build a fallback system prompt when role-specific prompt is not found
 	 */
 	private buildFallbackSystemPrompt(config: TeamMemberSessionConfig): string {
-		const fallbackPrompt = `
-# AgentMux Agent: ${config.role.toUpperCase()}
+		const fallbackPrompt = `Hey! I need your help with ${config.role} tasks on this project.
 
-You are a ${config.role} agent in the AgentMux system.
+## Quick context about this setup
 
-## IMPORTANT: Registration Required
-Immediately call the 'register_agent_status' tool with your role to register as active, then await further instructions.
+This project uses AgentMux for team coordination. The \`register_agent_status\` tool is an MCP tool that's already configured in your MCP server settings (check your .mcp.json if you want to verify). The AgentMux backend is running locally as part of this development environment.
 
-Example:
-register_agent_status({ "role": "${config.role}" })
+## First thing - please check in
 
-After registration, respond with "Agent registered and awaiting instructions" and do nothing else until you receive explicit task assignments.
+Please call the \`register_agent_status\` MCP tool to let the team dashboard know you're available. All it does is update a local status flag so the web UI shows you as online - nothing more.
 
-## Project Context
+\`\`\`json
+{ "role": "${config.role}" }
+\`\`\`
+
+After checking in, just say "Ready for tasks" and wait for me to send you work.
+
+## Project context
 - Session: ${config.name}
-- Role: ${config.role}
 - Project Path: ${config.projectPath || 'Not specified'}
-
-Do not take autonomous action. Wait for explicit instructions.
 `;
 
 		this.logger.info('Built fallback system prompt', {

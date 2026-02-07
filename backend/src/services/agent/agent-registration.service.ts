@@ -6,6 +6,7 @@ import {
 	createSessionCommandHelper,
 	getSessionBackendSync,
 	createSessionBackend,
+	getSessionStatePersistence,
 } from '../session/index.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
@@ -560,6 +561,31 @@ export class AgentRegistrationService {
 				prompt = prompt.replace(/,\s*"memberId":\s*"\{\{MEMBER_ID\}\}"/g, '');
 			}
 
+			// Look up project path for team members
+			let projectPath = process.cwd();
+			try {
+				const teams = await this.storageService.getTeams();
+				for (const team of teams) {
+					const member = team.members?.find((m) => m.sessionName === sessionName);
+					if (member && team.currentProject) {
+						const projects = await this.storageService.getProjects();
+						const project = projects.find((p) => p.id === team.currentProject);
+						if (project?.path) {
+							projectPath = project.path;
+						}
+						break;
+					}
+				}
+			} catch {
+				// Non-critical - use default project path
+			}
+
+			// Append identity section so the agent knows its session name and project path
+			prompt += `\n\n---\n\n## Your Identity\n- **Session Name:** ${sessionName}\n- **Project Path:** ${projectPath}`;
+			if (memberId) {
+				prompt += `\n- **Member ID:** ${memberId}`;
+			}
+
 			return prompt;
 		} catch (error) {
 			// Fallback to inline prompt if file doesn't exist
@@ -573,19 +599,17 @@ export class AgentRegistrationService {
 			});
 
 			const memberIdParam = memberId ? `, "teamMemberId": "${memberId}"` : '';
-			const memberIdApiParam = memberId ? `, "memberId": "${memberId}"` : '';
 
-			return `# AgentMux Agent Registration
+			return `Hey! I need your help with some tasks on this project.
 
-You are running in the **AgentMux multi-agent orchestration environment**.
+## Quick context about this setup
 
-## Registration Required
+This project uses AgentMux for team coordination. The \`register_agent_status\` tool is an MCP tool that's already configured in your MCP server settings (check your .mcp.json if you want to verify). The AgentMux backend is running locally as part of this development environment.
 
-**IMMEDIATELY** register yourself with the AgentMux system.
+## First thing - please check in
 
-### Primary Method: MCP Tool (Preferred)
+Please call the \`register_agent_status\` MCP tool to let the team dashboard know you're available. All it does is update a local status flag so the web UI shows you as online - nothing more.
 
-Call the \`register_agent_status\` MCP tool with these parameters:
 \`\`\`json
 {
   "role": "${role}",
@@ -593,33 +617,7 @@ Call the \`register_agent_status\` MCP tool with these parameters:
 }
 \`\`\`
 
-### Fallback Method: Direct API Call
-
-If the MCP tool is unavailable or fails, use curl to call the registration API directly:
-\`\`\`bash
-curl -X POST "http://localhost:8787/api/teams/members/register" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "role": "${role}",
-    "sessionName": "${sessionName}"${memberIdApiParam},
-    "status": "active",
-    "registeredAt": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
-  }'
-\`\`\`
-
-**IMPORTANT:** You MUST complete registration before proceeding. Try the MCP method first; only use the API fallback if MCP fails.
-
-## Instructions
-
-After successful registration, respond with:
-\`\`\`
-Agent registered and awaiting instructions from orchestrator.
-Environment: AgentMux
-Role: ${role}
-Status: Active and ready for task assignments
-\`\`\`
-
-Then wait for explicit task assignments from the orchestrator.`;
+After checking in, just say "Ready for tasks" and wait for me to send you work.`;
 		}
 	}
 
@@ -915,6 +913,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 		windowName?: string;
 		memberId?: string;
 		runtimeType?: RuntimeType;
+		teamId?: string;
 	}): Promise<{
 		success: boolean;
 		sessionName?: string;
@@ -1082,8 +1081,23 @@ Then wait for explicit task assignments from the orchestrator.`;
 					});
 				}
 
-				// If recovery succeeded, set environment variables and return early
+				// If recovery succeeded, register for persistence and return early
 				if (recoverySuccess) {
+					// Register session for state persistence so it survives restarts
+					try {
+						const persistence = getSessionStatePersistence();
+						persistence.registerSession(sessionName, {
+							cwd: projectPath || process.cwd(),
+							command: process.env.SHELL || '/bin/bash',
+							args: [],
+						}, runtimeType, role, config.teamId);
+					} catch (persistError) {
+						this.logger.warn('Failed to register recovered session for persistence (non-critical)', {
+							sessionName,
+							error: persistError instanceof Error ? persistError.message : String(persistError),
+						});
+					}
+
 					return {
 						success: true,
 						sessionName,
@@ -1135,6 +1149,21 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 			if (!sessionCreatedCheck) {
 				throw new Error(`Session '${sessionName}' was not created successfully`);
+			}
+
+			// Register session for state persistence so it survives restarts
+			try {
+				const persistence = getSessionStatePersistence();
+				persistence.registerSession(sessionName, {
+					cwd: cwdToUse,
+					command: process.env.SHELL || '/bin/bash',
+					args: [],
+				}, runtimeType, role, config.teamId);
+			} catch (persistError) {
+				this.logger.warn('Failed to register session for persistence (non-critical)', {
+					sessionName,
+					error: persistError instanceof Error ? persistError.message : String(persistError),
+				});
 			}
 
 			// Set environment variables for MCP connection

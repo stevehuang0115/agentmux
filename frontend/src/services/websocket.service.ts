@@ -144,6 +144,27 @@ export class WebSocketService {
         this.emit('connected', message.payload);
       });
 
+      // Chat events
+      this.socket.on('chat_message', (message: WebSocketMessage) => {
+        this.emit('chat_message', message);
+      });
+
+      this.socket.on('chat_typing', (message: WebSocketMessage) => {
+        this.emit('chat_typing', message);
+      });
+
+      this.socket.on('conversation_updated', (message: WebSocketMessage) => {
+        this.emit('conversation_updated', message);
+      });
+
+      this.socket.on('chat_subscribed', (message: WebSocketMessage) => {
+        this.emit('chat_subscribed', message);
+      });
+
+      this.socket.on('chat_conversation', (message: WebSocketMessage) => {
+        this.emit('chat_conversation', message);
+      });
+
       // Team activity events
       this.socket.on('orchestrator_status_changed', (message: WebSocketMessage) => {
         this.emit('orchestrator_status_changed', message.payload);
@@ -198,6 +219,25 @@ export class WebSocketService {
     }
 
     console.log('WebSocket intentionally disconnected');
+  }
+
+  // Chat subscription management
+  subscribeToChat(conversationId?: string): void {
+    if (!this.socket?.connected) {
+      console.error('Cannot subscribe to chat: WebSocket not connected');
+      return;
+    }
+
+    this.socket.emit('subscribe_to_chat', conversationId);
+  }
+
+  unsubscribeFromChat(conversationId?: string): void {
+    if (!this.socket?.connected) {
+      console.error('Cannot unsubscribe from chat: WebSocket not connected');
+      return;
+    }
+
+    this.socket.emit('unsubscribe_from_chat', conversationId);
   }
 
   // Terminal session management

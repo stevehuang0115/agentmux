@@ -98,16 +98,33 @@ export class SessionAdapter {
 	 */
 	async sendMessage(sessionName: string, message: string): Promise<void> {
 		try {
+			// Write message text first
 			const response = await fetch(
 				`${this.apiBaseUrl}/api/sessions/${encodeURIComponent(sessionName)}/write`,
 				{
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ data: message + '\n' }),
+					body: JSON.stringify({ data: message }),
 				}
 			);
 			if (!response.ok) {
 				throw new Error(`Failed to send message: ${response.statusText}`);
+			}
+
+			// Wait for Claude Code to process the pasted text before sending Enter
+			await new Promise(resolve => setTimeout(resolve, 1000));
+
+			// Send Enter key separately so it's not consumed by bracketed paste mode
+			const enterResponse = await fetch(
+				`${this.apiBaseUrl}/api/sessions/${encodeURIComponent(sessionName)}/write`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ data: '\r' }),
+				}
+			);
+			if (!enterResponse.ok) {
+				throw new Error(`Failed to send Enter key: ${enterResponse.statusText}`);
 			}
 		} catch (error) {
 			logger.error(`[SessionAdapter] Failed to send message to ${sessionName}:`, error);

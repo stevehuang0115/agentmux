@@ -7,6 +7,7 @@ import { AgentRegistrationService } from './agent-registration.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import * as sessionModule from '../session/index.js';
+import { getSessionStatePersistence } from '../session/index.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
@@ -37,6 +38,7 @@ jest.mock('../session/index.js', () => ({
 	getSessionBackendSync: jest.fn(),
 	createSessionBackend: jest.fn(),
 	createSessionCommandHelper: jest.fn(),
+	getSessionStatePersistence: jest.fn(),
 }));
 
 // Mock RuntimeServiceFactory
@@ -128,6 +130,13 @@ describe('AgentRegistrationService', () => {
 		mockReadFile = require('fs/promises').readFile;
 		mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orchestrator-prompt.md"}]}');
 
+		// Mock SessionStatePersistence
+		(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
+			registerSession: jest.fn(),
+			unregisterSession: jest.fn(),
+			isSessionRegistered: jest.fn().mockReturnValue(false),
+		});
+
 		service = new AgentRegistrationService(null, '/test/project', mockStorageService);
 	});
 
@@ -184,7 +193,7 @@ describe('AgentRegistrationService', () => {
 			expect(result.error).toContain('Failed to initialize agent after optimized escalation attempts');
 		});
 
-		it('should update agent status to active when runtime is ready', async () => {
+		it('should update agent status to started when runtime is ready', async () => {
 			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
 
@@ -197,7 +206,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
 				'test-session',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
 			);
 		});
 	});
@@ -511,9 +520,7 @@ describe('AgentRegistrationService', () => {
 	describe('loadRegistrationPrompt (private method)', () => {
 		it('should load prompt from file and replace placeholders', async () => {
 			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}}';
-			mockReadFile.mockResolvedValue('{"roles": [{"key": "dev", "promptFile": "dev-prompt.md"}]}');
-			mockReadFile.mockResolvedValueOnce('{"roles": [{"key": "dev", "promptFile": "dev-prompt.md"}]}');
-			mockReadFile.mockResolvedValueOnce(promptTemplate);
+			mockReadFile.mockResolvedValue(promptTemplate);
 
 			// Access private method via reflection
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
@@ -525,9 +532,7 @@ describe('AgentRegistrationService', () => {
 
 		it('should remove member ID parameter when not provided', async () => {
 			const promptTemplate = 'Register {"sessionName": "{{SESSION_ID}}", "memberId": "{{MEMBER_ID}}"}';
-			mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orc-prompt.md"}]}');
-			mockReadFile.mockResolvedValueOnce('{"roles": [{"key": "orchestrator", "promptFile": "orc-prompt.md"}]}');
-			mockReadFile.mockResolvedValueOnce(promptTemplate);
+			mockReadFile.mockResolvedValue(promptTemplate);
 
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
 			const result = await loadRegistrationPrompt('orchestrator', 'test-session');
@@ -600,7 +605,96 @@ describe('AgentRegistrationService', () => {
 		});
 	});
 
-	describe('waitForRegistration (private method)', () => {
+	describe('session state persistence registration', () => {
+		it('should register session for persistence after creating a new session', async () => {
+			// Ensure session does not exist initially
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)  // Initial check
+				.mockReturnValueOnce(true);  // After creation check
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+
+			mockReadFile
+				.mockResolvedValueOnce('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}')
+				.mockResolvedValueOnce('Register {{SESSION_ID}}');
+
+			await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+				teamId: 'team-123',
+			});
+
+			const mockPersistence = (sessionModule.getSessionStatePersistence as jest.Mock).mock.results[0]?.value;
+			expect(mockPersistence.registerSession).toHaveBeenCalledWith(
+				'test-session',
+				expect.objectContaining({
+					cwd: '/test/project',
+					args: [],
+				}),
+				'claude-code',
+				'developer',
+				'team-123'
+			);
+		});
+
+		it('should register recovered session for persistence', async () => {
+			// Session already exists and runtime is running
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			// Mock successful registration check
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-1',
+				members: [{
+					sessionName: 'test-session',
+					role: 'developer',
+					agentStatus: 'active',
+				}],
+			}] as any);
+
+			await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+				teamId: 'team-456',
+			});
+
+			const mockPersistence = (sessionModule.getSessionStatePersistence as jest.Mock).mock.results[0]?.value;
+			expect(mockPersistence.registerSession).toHaveBeenCalledWith(
+				'test-session',
+				expect.objectContaining({
+					cwd: '/test/project',
+				}),
+				expect.any(String),
+				'developer',
+				'team-456'
+			);
+		});
+
+		it('should not fail session creation if persistence registration fails', async () => {
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)
+				.mockReturnValueOnce(true);
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			// Make persistence throw
+			(sessionModule.getSessionStatePersistence as jest.Mock).mockImplementation(() => {
+				throw new Error('Persistence unavailable');
+			});
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			// Session creation should still succeed
+			expect(result.success).toBe(true);
+		});
+	});
+
+		describe('waitForRegistration (private method)', () => {
 		it('should return true when registration is confirmed', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
 				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,

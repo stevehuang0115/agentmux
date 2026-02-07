@@ -30,6 +30,7 @@ import { AGENTMUX_CONSTANTS as CONFIG_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { MemoryService } from '../../services/memory/memory.service.js';
 
 // Internal helper function types
 interface StartTeamMemberResult {
@@ -156,7 +157,7 @@ async function _startTeamMemberCore(
               };
             } else {
               // Session exists but appears zombie - kill it and proceed with new creation
-              console.log(`Cleaning up zombie session: ${member.sessionName}`);
+              console.warn(`Cleaning up zombie session: ${member.sessionName}`);
               await context.tmuxService.killSession(member.sessionName).catch(() => {
                 // Ignore errors if session doesn't exist
               });
@@ -166,7 +167,7 @@ async function _startTeamMemberCore(
             }
           } catch (error) {
             // If we can't check the session, assume it's zombie and clean it up
-            console.log(`Error checking session ${member.sessionName}, treating as zombie:`, error);
+            console.warn(`Error checking session ${member.sessionName}, treating as zombie:`, error);
             await context.tmuxService.killSession(member.sessionName).catch(() => {
               // Ignore errors if session doesn't exist
             });
@@ -238,7 +239,6 @@ async function _startTeamMemberCore(
     currentMember.workingStatus = currentMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
     currentMember.updatedAt = new Date().toISOString();
 
-    console.log(`[TEAM-CONTROLLER-DEBUG] About to save team before session creation - member ${currentMember.name} agentStatus: ${currentMember.agentStatus}`);
     await context.storageService.saveTeam(currentTeam);
 
     // Use the unified agent registration service for team member creation with retry logic
@@ -248,32 +248,40 @@ async function _startTeamMemberCore(
     let lastError: string | undefined;
 
     for (let attempt = 1; attempt <= MAX_CREATION_RETRIES; attempt++) {
-      console.log(`[TEAM-CONTROLLER-DEBUG] Attempting session creation for ${currentMember.name}, attempt ${attempt}/${MAX_CREATION_RETRIES}`);
-
       createResult = await context.agentRegistrationService.createAgentSession({
         sessionName,
         role: currentMember.role,
         projectPath: projectPath,
-        memberId: currentMember.id
+        memberId: currentMember.id,
+        teamId: team.id,
       });
 
       if (createResult.success) {
-        console.log(`[TEAM-CONTROLLER-DEBUG] Session creation succeeded for ${currentMember.name} on attempt ${attempt}`);
         break;
       }
 
       lastError = createResult.error;
-      console.log(`[TEAM-CONTROLLER-DEBUG] Session creation failed for ${currentMember.name} on attempt ${attempt}: ${lastError}`);
 
       // If this isn't the last attempt, wait before retrying with exponential backoff
       if (attempt < MAX_CREATION_RETRIES) {
         const retryDelay = 1000 * attempt; // 1s, 2s exponential backoff
-        console.log(`[TEAM-CONTROLLER-DEBUG] Waiting ${retryDelay}ms before retry attempt ${attempt + 1}`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
     }
 
     if (createResult.success) {
+      // Initialize memory for this team member so remember/recall MCP tools work
+      try {
+        const memoryService = MemoryService.getInstance();
+        await memoryService.initializeForSession(
+          sessionName,
+          currentMember.role,
+          projectPath || process.cwd()
+        );
+      } catch (memError) {
+        console.warn(`[TeamController] Failed to initialize memory for ${sessionName}:`, memError);
+      }
+
       // CRITICAL: Load fresh data again after session creation to preserve MCP registration updates
       const finalTeams = await context.storageService.getTeams();
       const finalTeam = finalTeams.find(t => t.id === team.id);
@@ -287,7 +295,6 @@ async function _startTeamMemberCore(
           finalMember.sessionName = createResult.sessionName || sessionName;
           finalMember.updatedAt = new Date().toISOString();
 
-          console.log(`[TEAM-CONTROLLER-DEBUG] Saving final team after session creation - member ${finalMember.name} agentStatus: ${finalMember.agentStatus}`);
           await context.storageService.saveTeam(finalTeam);
         }
 
@@ -323,7 +330,7 @@ async function _startTeamMemberCore(
         await context.storageService.saveTeam(failureTeam);
       }
 
-      console.log(`[TEAM-CONTROLLER-DEBUG] All ${MAX_CREATION_RETRIES} session creation attempts failed for ${member.name}`);
+      console.error(`All ${MAX_CREATION_RETRIES} session creation attempts failed for ${member.name}: ${lastError}`);
       return {
         success: false,
         memberName: member.name,
@@ -491,7 +498,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
 
     for (const member of teamMembers) {
       if (member.role === 'tpm') {
-        console.log(`TPM ${member.sessionName}: File-based workflow (no duplicate messages)`);
+        // TPM uses file-based workflow (no duplicate messages)
       } else {
         this.schedulerService.scheduleDefaultCheckins(member.sessionName);
       }
@@ -1151,29 +1158,25 @@ export async function reportMemberReady(this: ApiContext, req: Request, res: Res
 }
 
 export async function registerMemberStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
-  console.log(`[API] 🚀 registerMemberStatus called`);
-  console.log(`[API] 📋 Request headers:`, JSON.stringify(req.headers, null, 2));
-  console.log(`[API] 📤 Request body:`, JSON.stringify(req.body, null, 2));
-  console.log(`[API] 🌐 Request URL:`, req.url);
-  console.log(`[API] 🔧 Request method:`, req.method);
   try {
     const { sessionName, role, status, registeredAt, memberId } = req.body as RegisterMemberStatusRequestBody;
-    console.log(`[API] 📋 Extracted parameters:`, { sessionName, role, status, registeredAt, memberId });
 
     // Update agent heartbeat (proof of life)
     try {
       await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
-      console.log(`[API] ✅ Agent heartbeat updated successfully for session: ${sessionName}`);
-    } catch (error) {
-      console.log(`[API] ⚠️ Failed to update agent heartbeat:`, error);
+    } catch {
       // Continue execution - heartbeat failures shouldn't break registration
     }
-    if (!sessionName || !role) { res.status(400).json({ success: false, error: 'sessionName and role are required' } as ApiResponse); return; }
+
+    if (!sessionName || !role) {
+      res.status(400).json({ success: false, error: 'sessionName and role are required' } as ApiResponse);
+      return;
+    }
+
+    // Handle orchestrator registration separately
     if (role === 'orchestrator' && sessionName === CONFIG_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
-      console.log(`[API] 🎭 Handling orchestrator registration`);
       try {
         await this.storageService.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
-        console.log(`[API] ✅ Orchestrator registered as active`);
 
         // Broadcast orchestrator status change via WebSocket for real-time UI updates
         const terminalGateway = getTerminalGateway();
@@ -1183,31 +1186,27 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
             agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
             workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
           });
-          console.log(`[API] 📡 Broadcast orchestrator status change via WebSocket`);
         }
 
         res.json({ success: true, message: `Orchestrator ${sessionName} registered as active`, sessionName } as ApiResponse);
         return;
       } catch (error) {
-        console.log(`[API] ❌ Error updating orchestrator status:`, error);
+        console.error('Error updating orchestrator status:', error);
         res.status(500).json({ success: false, error: 'Failed to update orchestrator status' } as ApiResponse);
         return;
       }
     }
-    console.log(`[API] 🔍 Looking up team member with memberId: ${memberId}, sessionName: ${sessionName}`);
+
+    // Find the team member to update
     const teams = await this.storageService.getTeams();
-    console.log(`[API] 📋 Found ${teams.length} teams to search`);
     let targetTeamId: string | null = null;
     let targetMemberId: string | null = null;
 
-    // First pass: Find which team and member to update
     for (const team of teams) {
-      console.log(`[API] 🏗️ Searching team: ${team.name} (${team.members.length} members)`);
       for (const member of team.members) {
         const matchesId = memberId && member.id === memberId;
         const matchesSession = member.sessionName === sessionName;
         if (matchesId || matchesSession) {
-          console.log(`[API] ✅ Found matching member: ${member.name} (${member.role})`);
           targetTeamId = team.id;
           targetMemberId = member.id;
           break;
@@ -1216,41 +1215,30 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
       if (targetTeamId) break;
     }
 
-    // Second pass: Load fresh team data and apply registration changes
+    // Load fresh team data and apply registration changes to avoid race conditions
     if (targetTeamId && targetMemberId) {
-      console.log(`[API] 🔄 Loading fresh team data to prevent race conditions`);
       const freshTeams = await this.storageService.getTeams();
       const freshTeam = freshTeams.find(t => t.id === targetTeamId);
 
       if (freshTeam) {
         const freshMember = freshTeam.members.find(m => m.id === targetMemberId) as MutableTeamMember | undefined;
         if (freshMember) {
-          console.log(`[API] 📝 Applying registration updates to fresh member data: ${freshMember.name}`);
-          console.log(`[API] 🔍 BEFORE UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${freshMember.workingStatus}`);
-
-          // Apply registration changes to fresh member data
           freshMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
           freshMember.workingStatus = freshMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
           freshMember.readyAt = registeredAt || new Date().toISOString();
           if (memberId && freshMember.id === memberId && !freshMember.sessionName) {
             freshMember.sessionName = sessionName;
-            console.log(`[API] 📝 Updated fresh member sessionName to: ${sessionName}`);
           }
           (freshTeam as MutableTeam).updatedAt = new Date().toISOString();
 
-          console.log(`[API] ✅ AFTER UPDATE - Member status: agentStatus=${freshMember.agentStatus}, workingStatus=${freshMember.workingStatus}, readyAt=${freshMember.readyAt}`);
-          console.log(`[API] 💾 Saving fresh team with registration updates: ${freshTeam.name} at ${new Date().toISOString()}`);
           await this.storageService.saveTeam(freshTeam);
-          console.log(`[API] 🎯 SAVE COMPLETED for ${freshMember.name} at ${new Date().toISOString()}`);
         }
       }
     }
-    if (!targetTeamId || !targetMemberId) { console.log(`[API] ⚠️ Session ${sessionName}${memberId ? ` (member ID: ${memberId})` : ''} not found in any team, but registering status anyway`); }
-    console.log(`[API] ✅ Registration successful, sending response`);
+
     res.json({ success: true, message: `Agent ${sessionName} registered as active with role ${role}`, data: { sessionName, role, status: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, registeredAt: registeredAt || new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.log(`[API] ❌ Exception in registerMemberStatus:`, error);
-    console.log(`[API] 📋 Error details:`, { name: error instanceof Error ? error.name : 'Unknown', message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : 'No stack trace' });
+    console.error('Error in registerMemberStatus:', error);
     res.status(500).json({ success: false, error: 'Failed to register member status' } as ApiResponse);
   }
 }
