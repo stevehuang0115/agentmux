@@ -1,6 +1,25 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
 import * as orchestratorHandlers from './orchestrator.controller.js';
+import { MemoryService } from '../../services/memory/memory.service.js';
+
+// Mock MemoryService
+jest.mock('../../services/memory/memory.service.js', () => ({
+  MemoryService: {
+    getInstance: jest.fn().mockReturnValue({
+      initializeForSession: jest.fn().mockResolvedValue(undefined),
+    }),
+  },
+}));
+
+// Mock terminal gateway
+jest.mock('../../websocket/terminal.gateway.js', () => ({
+  getTerminalGateway: jest.fn().mockReturnValue({
+    startOrchestratorChatMonitoring: jest.fn(),
+    broadcastOrchestratorStatus: jest.fn(),
+  }),
+}));
 import type { ApiContext } from '../types.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
@@ -762,9 +781,87 @@ describe('Orchestrator Handlers', () => {
     });
   });
 
-  describe('getOrchestratorStatusEndpoint', () => {
+  describe('setupOrchestrator memory initialization', () => {
+    it('should initialize orchestrator memory during setup', async () => {
+      // Re-setup mock since clearAllMocks resets the return value
+      (MemoryService.getInstance as jest.Mock).mockReturnValue({
+        initializeForSession: jest.fn<any>().mockResolvedValue(undefined),
+      });
+
+      const mockSetupStorage = {
+        getTeams: jest.fn<any>().mockResolvedValue([]),
+        getProjects: jest.fn<any>().mockResolvedValue([]),
+        getOrchestratorStatus: jest.fn<any>().mockResolvedValue({ runtimeType: 'claude-code' }),
+      };
+      const mockSetupRegistration = {
+        createAgentSession: jest.fn<any>().mockResolvedValue({
+          success: true,
+          sessionName: 'agentmux-orc',
+          message: 'Orchestrator created',
+        }),
+      };
+      const setupContext = {
+        storageService: mockSetupStorage,
+        agentRegistrationService: mockSetupRegistration,
+      } as any;
+
+      await orchestratorHandlers.setupOrchestrator.call(
+        setupContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Verify MemoryService.getInstance was called
+      expect(MemoryService.getInstance).toHaveBeenCalled();
+
+      // Verify initializeForSession was called with orchestrator params
+      const memoryInstance = (MemoryService.getInstance as jest.Mock).mock.results[0]?.value as any;
+      expect(memoryInstance.initializeForSession).toHaveBeenCalledWith(
+        'agentmux-orc',
+        'orchestrator',
+        process.cwd()
+      );
+    });
+
+    it('should not fail setup if memory initialization fails', async () => {
+      // Make memory initialization throw
+      (MemoryService.getInstance as jest.Mock).mockReturnValue({
+        initializeForSession: jest.fn<any>().mockRejectedValue(new Error('Memory init failed')),
+      });
+
+      const mockFailStorage = {
+        getTeams: jest.fn<any>().mockResolvedValue([]),
+        getProjects: jest.fn<any>().mockResolvedValue([]),
+        getOrchestratorStatus: jest.fn<any>().mockResolvedValue({ runtimeType: 'claude-code' }),
+      };
+      const mockFailRegistration = {
+        createAgentSession: jest.fn<any>().mockResolvedValue({
+          success: true,
+          sessionName: 'agentmux-orc',
+          message: 'Orchestrator created',
+        }),
+      };
+      const setupContext = {
+        storageService: mockFailStorage,
+        agentRegistrationService: mockFailRegistration,
+      } as any;
+
+      await orchestratorHandlers.setupOrchestrator.call(
+        setupContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Setup should still succeed despite memory init failure
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+    });
+  });
+
+    describe('getOrchestratorStatus', () => {
     it('should have the status endpoint function exported', () => {
-      expect(typeof orchestratorHandlers.getOrchestratorStatusEndpoint).toBe('function');
+      expect(typeof orchestratorHandlers.getOrchestratorStatus).toBe('function');
     });
   });
 });

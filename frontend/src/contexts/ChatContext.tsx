@@ -226,11 +226,15 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     webSocketService.on('chat_typing', handleTypingIndicator);
     webSocketService.on('conversation_updated', handleConversationUpdate);
 
+    // Subscribe to the chat room so we receive broadcasts from ChatGateway
+    webSocketService.subscribeToChat();
+
     // Cleanup on unmount
     return () => {
       webSocketService.off('chat_message', handleNewMessage);
       webSocketService.off('chat_typing', handleTypingIndicator);
       webSocketService.off('conversation_updated', handleConversationUpdate);
+      webSocketService.unsubscribeFromChat();
     };
   }, [handleNewMessage, handleTypingIndicator, handleConversationUpdate]);
 

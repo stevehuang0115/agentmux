@@ -10,6 +10,9 @@ import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockOrchestratorData: { value: any | null | Error } = { value: null };
 
+// Whether the mock session backend reports the session as existing
+const mockSessionState: { exists: boolean } = { exists: false };
+
 // Mock storage service (using path without .js since moduleNameMapper strips it)
 jest.mock('../core/storage.service', () => ({
   StorageService: {
@@ -23,6 +26,13 @@ jest.mock('../core/storage.service', () => ({
       },
     }),
   },
+}));
+
+// Mock session backend to control sessionExists behavior
+jest.mock('../session/index', () => ({
+  getSessionBackendSync: () => ({
+    sessionExists: () => mockSessionState.exists,
+  }),
 }));
 
 jest.mock('../core/logger.service.js', () => ({
@@ -43,6 +53,8 @@ jest.mock('../../../../config/index.js', () => ({
   AGENTMUX_CONSTANTS: {
     AGENT_STATUSES: {
       INACTIVE: 'inactive',
+      STARTING: 'starting',
+      STARTED: 'started',
       ACTIVATING: 'activating',
       ACTIVE: 'active',
     },
@@ -82,10 +94,12 @@ describe('OrchestratorStatusService', () => {
   beforeEach(() => {
     // Reset mock data to null before each test
     mockOrchestratorData.value = null;
+    mockSessionState.exists = false;
   });
 
   afterEach(() => {
     mockOrchestratorData.value = null;
+    mockSessionState.exists = false;
   });
 
   describe('isOrchestratorActive', () => {
@@ -116,6 +130,29 @@ describe('OrchestratorStatusService', () => {
       const result = await isOrchestratorActive();
       expect(result).toBe(false);
     });
+
+    it('should return false when orchestrator is started but session does not exist', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('started');
+      mockSessionState.exists = false;
+
+      const result = await isOrchestratorActive();
+      expect(result).toBe(false);
+    });
+
+    it('should return true when orchestrator is started and session exists', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('started');
+      mockSessionState.exists = true;
+
+      const result = await isOrchestratorActive();
+      expect(result).toBe(true);
+    });
+
+    it('should return false when orchestrator is starting', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('starting');
+
+      const result = await isOrchestratorActive();
+      expect(result).toBe(false);
+    });
   });
 
   describe('getOrchestratorStatus', () => {
@@ -134,6 +171,35 @@ describe('OrchestratorStatusService', () => {
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
       expect(result.agentStatus).toBe('activating');
+      expect(result.message).toContain('starting up');
+    });
+
+    it('should return started status with starting up message when session does not exist', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('started');
+      mockSessionState.exists = false;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      expect(result.agentStatus).toBe('started');
+      expect(result.message).toContain('starting up');
+    });
+
+    it('should return active when started and session exists', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('started');
+      mockSessionState.exists = true;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(true);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('active and ready');
+    });
+
+    it('should return starting status with starting up message', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('starting');
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      expect(result.agentStatus).toBe('starting');
       expect(result.message).toContain('starting up');
     });
 

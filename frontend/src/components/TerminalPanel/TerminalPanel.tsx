@@ -476,8 +476,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     webSocketService.off('session_pending', handleSessionPending);
     webSocketService.off('session_not_found', handleSessionNotFound);
 
-    // Disconnect WebSocket
-    webSocketService.disconnect();
+    // Note: Do NOT disconnect the shared WebSocket singleton here.
+    // Other components (ChatContext, OrchestratorStatusBanner) rely on it.
     setConnectionStatus('disconnected');
     if (xtermRef.current) {
       xtermRef.current.clear();

@@ -11,6 +11,7 @@
 import { Router, Request, Response } from 'express';
 import { AgentMuxMCPServer } from '../../../mcp-server/src/server.js';
 import { LoggerService } from '../services/core/logger.service.js';
+import { AGENTMUX_CONSTANTS } from '../../../config/constants.js';
 
 const logger = LoggerService.getInstance();
 
@@ -23,6 +24,10 @@ let mcpServer: AgentMuxMCPServer | null = null;
  */
 export async function initializeMCPServer(): Promise<void> {
 	logger.info('[MCP Routes] Initializing MCP server...');
+	// Set session name for MCP server so memory tools work for the orchestrator
+	if (!process.env.TMUX_SESSION_NAME) {
+		process.env.TMUX_SESSION_NAME = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+	}
 	mcpServer = new AgentMuxMCPServer();
 	await mcpServer.initialize();
 	logger.info('[MCP Routes] MCP server initialized successfully');
@@ -260,6 +265,7 @@ async function callMCPTool(
 		register_agent_status: 'registerAgentStatus',
 		accept_task: 'acceptTask',
 		complete_task: 'completeTask',
+		check_quality_gates: 'checkQualityGates',
 		read_task: 'readTask',
 		block_task: 'blockTask',
 		assign_task: 'assignTask',
@@ -273,6 +279,14 @@ async function callMCPTool(
 		delegate_task: 'delegateTask',
 		terminate_agent: 'terminateAgent',
 		terminate_agents: 'terminateAgents',
+		// Memory Management Tools
+		remember: 'rememberKnowledge',
+		recall: 'recallKnowledge',
+		record_learning: 'recordLearning',
+		get_my_context: 'getMyContext',
+		get_sops: 'getSOPs',
+		// Chat Response
+		send_chat_response: 'sendChatResponse',
 	};
 
 	const handlerName = toolHandlers[toolName];

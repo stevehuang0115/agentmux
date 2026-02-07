@@ -2219,12 +2219,13 @@ export class AgentMuxMCPServer {
     try {
       logger.info(`[REMEMBER] Storing knowledge: category=${params.category}, scope=${params.scope}`);
 
-      // Get agent ID from session name (using session name as agent ID for now)
-      const agentId = this.sessionName;
+      // Get agent ID: prefer teamMemberId if provided, fall back to session name
+      const agentId = params.teamMemberId || this.sessionName;
+      const projectPath = params.projectPath || this.projectPath;
 
       const memoryId = await this.memoryService.remember({
         agentId,
-        projectPath: this.projectPath,
+        projectPath,
         content: params.content,
         category: params.category,
         scope: params.scope,
@@ -2265,11 +2266,13 @@ export class AgentMuxMCPServer {
       const scope = params.scope || 'both';
       logger.info(`[RECALL] Searching memories: context="${params.context.substring(0, 50)}...", scope=${scope}`);
 
-      const agentId = this.sessionName;
+      // Get agent ID: prefer teamMemberId if provided, fall back to session name
+      const agentId = params.teamMemberId || this.sessionName;
+      const projectPath = params.projectPath || this.projectPath;
 
       const result = await this.memoryService.recall({
         agentId,
-        projectPath: this.projectPath,
+        projectPath,
         context: params.context,
         scope: scope,
         limit: params.limit || 10,
@@ -2334,12 +2337,13 @@ export class AgentMuxMCPServer {
     try {
       logger.info(`[RECORD_LEARNING] Recording learning${params.relatedTask ? ` for task ${params.relatedTask}` : ''}`);
 
-      const agentId = this.sessionName;
+      const agentId = params.teamMemberId || this.sessionName;
+      const projectPath = params.projectPath || this.projectPath;
 
       await this.memoryService.recordLearning({
         agentId,
         agentRole: this.agentRole,
-        projectPath: this.projectPath,
+        projectPath,
         learning: params.learning,
         relatedTask: params.relatedTask,
         relatedFiles: params.relatedFiles,
@@ -3577,6 +3581,14 @@ The knowledge will persist across sessions.`,
             metadata: {
               type: 'object',
               description: 'Additional context (files, severity, rationale, etc.)'
+            },
+            teamMemberId: {
+              type: 'string',
+              description: 'Your session name for identifying yourself. Pass your Session Name from Your Identity section.'
+            },
+            projectPath: {
+              type: 'string',
+              description: 'Your project root path. Pass your project path so knowledge is stored in the correct project.'
             }
           },
           required: ['content', 'category', 'scope']
@@ -3608,6 +3620,14 @@ Returns relevant memories from your agent knowledge and/or project knowledge.`,
             limit: {
               type: 'number',
               description: 'Maximum number of memories to return (default: 10)'
+            },
+            teamMemberId: {
+              type: 'string',
+              description: 'Your session name for identifying yourself. Pass your Session Name from Your Identity section.'
+            },
+            projectPath: {
+              type: 'string',
+              description: 'Your project root path. Pass your project path so knowledge is retrieved from the correct project.'
             }
           },
           required: ['context']
@@ -3639,6 +3659,14 @@ Good learnings are:
               type: 'array',
               items: { type: 'string' },
               description: 'Related file paths (optional)'
+            },
+            teamMemberId: {
+              type: 'string',
+              description: 'Your session name for identifying yourself. Pass your Session Name from Your Identity section.'
+            },
+            projectPath: {
+              type: 'string',
+              description: 'Your project root path. Pass your project path so the learning is recorded in the correct project.'
             }
           },
           required: ['learning']

@@ -17,6 +17,7 @@ import {
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
 import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../constants.js';
+import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from '../utils/terminal-output.utils.js';
 
 /**
  * Terminal Gateway class for WebSocket-based terminal streaming.
@@ -48,6 +49,9 @@ export class TerminalGateway {
 
 	/** Maximum buffer size to prevent memory issues (100KB) */
 	private readonly MAX_BUFFER_SIZE = 100 * 1024;
+
+	/** Deduplicator for recently sent chat responses */
+	private responseDeduplicator = new ResponseDeduplicator();
 
 	/**
 	 * Create a new TerminalGateway.
@@ -255,6 +259,21 @@ export class TerminalGateway {
 	 */
 	startOrchestratorChatMonitoring(sessionName: string): boolean {
 		this.logger.info('Starting persistent orchestrator chat monitoring', { sessionName });
+
+		// Force cleanup any stale subscription from a previous session.
+		// When the orchestrator is restarted, the old PTY session is destroyed but
+		// the subscription entry may still exist pointing to the dead session.
+		// We must remove it so startPtyStreaming creates a fresh subscription.
+		if (this.sessionSubscriptions.has(sessionName)) {
+			this.logger.info('Cleaning up existing subscription for orchestrator chat monitoring', { sessionName });
+			const unsubscribe = this.sessionSubscriptions.get(sessionName)!;
+			unsubscribe();
+			this.sessionSubscriptions.delete(sessionName);
+		}
+
+		// Clear the output buffer and response hash cache for fresh monitoring
+		this.orchestratorOutputBuffer = '';
+		this.responseDeduplicator.clear();
 
 		// Mark session as persistent so it won't be stopped when clients disconnect
 		this.persistentMonitoringSessions.add(sessionName);
@@ -474,9 +493,11 @@ export class TerminalGateway {
 			return;
 		}
 
+		const cleanContent = stripAnsiCodes(content);
+
 		// Extract conversation ID from the output if present
 		// The format is [CHAT:conversationId] at the start of a response
-		const chatIdMatch = content.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
+		const chatIdMatch = cleanContent.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
 		if (chatIdMatch) {
 			this.logger.debug('Extracted conversation ID from output', { conversationId: chatIdMatch[1] });
 			this.activeConversationId = chatIdMatch[1];
@@ -489,15 +510,15 @@ export class TerminalGateway {
 		}
 
 		// Log that we're processing output
-		if (content.includes('[CHAT_RESPONSE]') || content.includes('[/CHAT_RESPONSE]')) {
+		if (cleanContent.includes('[CHAT_RESPONSE]') || cleanContent.includes('[/CHAT_RESPONSE]')) {
 			this.logger.info('Detected CHAT_RESPONSE marker in output', {
-				contentLength: content.length,
+				contentLength: cleanContent.length,
 				conversationId: this.activeConversationId
 			});
 		}
 
-		// Add content to buffer for complete response detection
-		this.orchestratorOutputBuffer += content;
+		// Add ANSI-stripped content to buffer for complete response detection
+		this.orchestratorOutputBuffer += cleanContent;
 
 		// Prevent buffer from growing too large
 		if (this.orchestratorOutputBuffer.length > this.MAX_BUFFER_SIZE) {
@@ -513,6 +534,16 @@ export class TerminalGateway {
 		while ((match = responsePattern.exec(this.orchestratorOutputBuffer)) !== null) {
 			const responseContent = match[1].trim();
 			lastMatchEnd = match.index + match[0].length;
+
+			// Deduplicate: PTY re-renders can cause the same response to appear multiple times.
+			const responseHash = generateResponseHash(this.activeConversationId, responseContent);
+			if (this.responseDeduplicator.isDuplicate(responseHash)) {
+				this.logger.debug('Skipping duplicate chat response', {
+					conversationId: this.activeConversationId,
+					contentLength: responseContent.length,
+				});
+				continue;
+			}
 
 			this.logger.info('Extracted chat response from orchestrator output', {
 				contentLength: responseContent.length,
@@ -553,6 +584,7 @@ export class TerminalGateway {
 	 */
 	clearOrchestratorBuffer(): void {
 		this.orchestratorOutputBuffer = '';
+		this.responseDeduplicator.clear();
 	}
 
 	/**

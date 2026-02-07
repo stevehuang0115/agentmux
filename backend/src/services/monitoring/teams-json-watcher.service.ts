@@ -7,97 +7,203 @@ import { TeamActivityWebSocketService } from './team-activity-websocket.service.
 import { Team, TeamMember } from '../../types/index.js';
 
 /**
- * Service that watches the global teams.json file for changes and triggers
+ * Service that watches the teams directory for changes and triggers
  * real-time WebSocket updates when agent registrations or team status changes occur.
+ *
+ * Watches: ~/.agentmux/teams/{team-id}/config.json files
  */
 export class TeamsJsonWatcherService extends EventEmitter {
   private logger: ComponentLogger;
   private teamActivityService: TeamActivityWebSocketService | null = null;
   private watcher: fs.FSWatcher | null = null;
+  private teamWatchers: Map<string, fs.FSWatcher> = new Map();
   private debounceTimer: NodeJS.Timeout | null = null;
   private readonly DEBOUNCE_DELAY = 1000; // 1 second debounce
-  private teamsJsonPath: string;
+  private teamsDir: string;
   private lastTeamsData: Team[] = []; // Cache of previous teams data for comparison
 
   constructor() {
     super();
-    this.logger = LoggerService.getInstance().createComponentLogger('TeamsJsonWatcher');
-    this.teamsJsonPath = path.join(os.homedir(), '.agentmux', 'teams.json');
-    
+    this.logger = LoggerService.getInstance().createComponentLogger('TeamsDirectoryWatcher');
+    this.teamsDir = path.join(os.homedir(), '.agentmux', 'teams');
+
     // Cleanup on process exit
     process.on('SIGINT', () => this.cleanup());
     process.on('SIGTERM', () => this.cleanup());
   }
 
   /**
-   * Set the TeamActivityWebSocketService instance to trigger when teams.json changes
+   * Set the TeamActivityWebSocketService instance to trigger when team changes occur
    */
   setTeamActivityService(teamActivityService: TeamActivityWebSocketService): void {
     this.teamActivityService = teamActivityService;
   }
 
   /**
-   * Start watching the teams.json file for changes
+   * Start watching the teams directory for changes
    */
   start(): void {
-    this.logger.info('Starting teams.json file watcher...', {
-      path: this.teamsJsonPath
+    this.logger.info('Starting teams directory watcher...', {
+      path: this.teamsDir
     });
 
-    // Ensure the directory exists
-    const agentmuxDir = path.dirname(this.teamsJsonPath);
-    if (!fs.existsSync(agentmuxDir)) {
-      this.logger.warn('AgentMux directory does not exist, creating it...', { 
-        dir: agentmuxDir 
+    // Ensure the teams directory exists
+    if (!fs.existsSync(this.teamsDir)) {
+      this.logger.warn('Teams directory does not exist, creating it...', {
+        dir: this.teamsDir
       });
-      fs.mkdirSync(agentmuxDir, { recursive: true });
+      fs.mkdirSync(this.teamsDir, { recursive: true });
     }
 
-    // Stop existing watcher if any
+    // Stop existing watchers if any
     this.stop();
 
     try {
-      // Watch the entire .agentmux directory to catch teams.json creation/modification/deletion
-      this.watcher = fs.watch(agentmuxDir, { persistent: true }, (eventType, filename) => {
-        // Only respond to teams.json changes
-        if (filename === 'teams.json') {
-          this.handleTeamsJsonChange(eventType);
+      // Watch the teams directory for new team folders being added/removed
+      this.watcher = fs.watch(this.teamsDir, { persistent: true }, (eventType, filename) => {
+        // Ignore hidden files and non-directory events
+        if (filename && !filename.startsWith('.')) {
+          this.logger.debug('Teams directory change detected', { eventType, filename });
+          this.handleTeamsDirChange(eventType, filename);
         }
       });
 
       this.watcher.on('error', (error) => {
-        this.logger.error('Teams.json watcher error:', {
+        this.logger.error('Teams directory watcher error:', {
           error: error instanceof Error ? error.message : String(error),
-          path: this.teamsJsonPath
+          path: this.teamsDir
         });
-        
+
         // Emit error event for handling by parent services
         this.emit('watcher_error', error);
-        
+
         // Attempt to restart watcher after a delay
         setTimeout(() => {
-          this.logger.info('Attempting to restart teams.json watcher...');
+          this.logger.info('Attempting to restart teams directory watcher...');
           this.start();
         }, 5000);
       });
 
+      // Set up watchers for existing team directories
+      this.watchExistingTeamDirs();
+
       // Perform initial check to ensure current state is broadcasted
       this.triggerTeamActivityUpdate('initial_check');
 
-      this.logger.info('Teams.json file watcher started successfully');
+      this.logger.info('Teams directory watcher started successfully');
 
     } catch (error) {
-      this.logger.error('Failed to start teams.json file watcher:', {
+      this.logger.error('Failed to start teams directory watcher:', {
         error: error instanceof Error ? error.message : String(error),
-        path: this.teamsJsonPath
+        path: this.teamsDir
       });
-      
+
       throw error;
     }
   }
 
   /**
-   * Stop watching the teams.json file
+   * Watch existing team directories for config.json changes
+   */
+  private watchExistingTeamDirs(): void {
+    try {
+      const entries = fs.readdirSync(this.teamsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          this.watchTeamDir(entry.name);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Error scanning existing team directories', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
+   * Watch a specific team directory for config.json changes
+   */
+  private watchTeamDir(teamId: string): void {
+    const teamDir = path.join(this.teamsDir, teamId);
+
+    // Skip if already watching
+    if (this.teamWatchers.has(teamId)) {
+      return;
+    }
+
+    try {
+      const watcher = fs.watch(teamDir, { persistent: true }, (eventType, filename) => {
+        // Only watch config.json changes
+        if (filename === 'config.json') {
+          this.logger.debug('Team config change detected', { teamId, eventType });
+          this.handleTeamConfigChange(teamId, eventType);
+        }
+      });
+
+      watcher.on('error', (error) => {
+        this.logger.warn('Team directory watcher error', {
+          teamId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        // Remove failed watcher
+        this.teamWatchers.delete(teamId);
+      });
+
+      this.teamWatchers.set(teamId, watcher);
+      this.logger.debug('Started watching team directory', { teamId });
+    } catch (error) {
+      this.logger.warn('Failed to watch team directory', {
+        teamId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  /**
+   * Stop watching a specific team directory
+   */
+  private unwatchTeamDir(teamId: string): void {
+    const watcher = this.teamWatchers.get(teamId);
+    if (watcher) {
+      try {
+        watcher.close();
+      } catch (error) {
+        // Ignore close errors
+      }
+      this.teamWatchers.delete(teamId);
+      this.logger.debug('Stopped watching team directory', { teamId });
+    }
+  }
+
+  /**
+   * Handle changes in the teams directory (new teams added/removed)
+   */
+  private handleTeamsDirChange(eventType: string, filename: string): void {
+    const teamDir = path.join(this.teamsDir, filename);
+
+    // Check if it's a directory
+    if (fs.existsSync(teamDir) && fs.statSync(teamDir).isDirectory()) {
+      // New team directory - start watching it
+      this.watchTeamDir(filename);
+    } else if (!fs.existsSync(teamDir)) {
+      // Team directory removed - stop watching it
+      this.unwatchTeamDir(filename);
+    }
+
+    // Trigger debounced update
+    this.handleTeamsJsonChange(eventType);
+  }
+
+  /**
+   * Handle changes in a team's config.json
+   */
+  private handleTeamConfigChange(teamId: string, eventType: string): void {
+    this.logger.debug('Team config changed', { teamId, eventType });
+    this.handleTeamsJsonChange(eventType);
+  }
+
+  /**
+   * Stop watching the teams directory
    */
   stop(): void {
     if (this.debounceTimer) {
@@ -105,12 +211,22 @@ export class TeamsJsonWatcherService extends EventEmitter {
       this.debounceTimer = null;
     }
 
+    // Stop all team directory watchers
+    this.teamWatchers.forEach((watcher, teamId) => {
+      try {
+        watcher.close();
+      } catch (error) {
+        // Ignore close errors
+      }
+    });
+    this.teamWatchers.clear();
+
     if (this.watcher) {
       try {
         this.watcher.close();
-        this.logger.debug('Teams.json file watcher stopped');
+        this.logger.debug('Teams directory watcher stopped');
       } catch (error) {
-        this.logger.error('Error stopping teams.json watcher:', {
+        this.logger.error('Error stopping teams directory watcher:', {
           error: error instanceof Error ? error.message : String(error)
         });
       } finally {
@@ -138,30 +254,30 @@ export class TeamsJsonWatcherService extends EventEmitter {
   }
 
   /**
-   * Process the actual teams.json change after debouncing
+   * Process the actual teams change after debouncing
    */
   private async processTeamsJsonChange(eventType: string): Promise<void> {
     try {
-      // Check if file exists (might be deleted)
-      const fileExists = fs.existsSync(this.teamsJsonPath);
-      
-      this.logger.info('Processing teams.json change', {
+      // Check if teams directory exists
+      const dirExists = fs.existsSync(this.teamsDir);
+
+      this.logger.info('Processing teams directory change', {
         eventType,
-        fileExists,
+        dirExists,
         timestamp: new Date().toISOString()
       });
 
       // Emit change event for other services that might be interested
-      this.emit('teams_json_changed', {
+      this.emit('teams_changed', {
         eventType,
-        fileExists,
-        path: this.teamsJsonPath,
+        dirExists,
+        path: this.teamsDir,
         timestamp: new Date()
       });
 
       // Smart change detection - only trigger activity refresh for relevant changes
-      const shouldTriggerActivityRefresh = await this.shouldTriggerActivityRefresh(fileExists);
-      
+      const shouldTriggerActivityRefresh = await this.shouldTriggerActivityRefresh();
+
       if (shouldTriggerActivityRefresh) {
         this.logger.info('Activity-relevant change detected, triggering team activity refresh', {
           eventType
@@ -174,7 +290,7 @@ export class TeamsJsonWatcherService extends EventEmitter {
       }
 
     } catch (error) {
-      this.logger.error('Error processing teams.json change:', {
+      this.logger.error('Error processing teams change:', {
         error: error instanceof Error ? error.message : String(error),
         eventType
       });
@@ -182,20 +298,14 @@ export class TeamsJsonWatcherService extends EventEmitter {
   }
 
   /**
-   * Determine if the teams.json change should trigger an activity refresh
+   * Determine if the teams change should trigger an activity refresh
    * Only session/activity-relevant changes should trigger tmux commands
    */
-  private async shouldTriggerActivityRefresh(fileExists: boolean): Promise<boolean> {
+  private async shouldTriggerActivityRefresh(): Promise<boolean> {
     try {
-      // If file was deleted or doesn't exist, this affects team activity
-      if (!fileExists) {
-        this.lastTeamsData = [];
-        return true;
-      }
+      // Read current teams data from directory structure
+      const currentData = await this.readTeamsFromDirectory();
 
-      // Read current teams data
-      const currentData = JSON.parse(fs.readFileSync(this.teamsJsonPath, 'utf8'));
-      
       // If this is the first time or we don't have cached data, trigger refresh
       if (!this.lastTeamsData || this.lastTeamsData.length === 0) {
         this.lastTeamsData = JSON.parse(JSON.stringify(currentData)); // Deep copy
@@ -204,18 +314,56 @@ export class TeamsJsonWatcherService extends EventEmitter {
 
       // Compare teams data for activity-relevant changes
       const hasActivityRelevantChange = this.hasActivityRelevantChanges(this.lastTeamsData, currentData);
-      
+
       // Update cached data for next comparison
       this.lastTeamsData = JSON.parse(JSON.stringify(currentData)); // Deep copy
-      
+
       return hasActivityRelevantChange;
-      
+
     } catch (error) {
       this.logger.warn('Error comparing teams data, defaulting to trigger refresh', {
         error: error instanceof Error ? error.message : String(error)
       });
       return true; // Default to safe behavior
     }
+  }
+
+  /**
+   * Read all teams from the directory structure
+   */
+  private async readTeamsFromDirectory(): Promise<Team[]> {
+    const teams: Team[] = [];
+
+    if (!fs.existsSync(this.teamsDir)) {
+      return teams;
+    }
+
+    try {
+      const entries = fs.readdirSync(this.teamsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name !== 'orchestrator' && !entry.name.startsWith('.')) {
+          const configPath = path.join(this.teamsDir, entry.name, 'config.json');
+          if (fs.existsSync(configPath)) {
+            try {
+              const content = fs.readFileSync(configPath, 'utf8');
+              const team = JSON.parse(content) as Team;
+              teams.push(team);
+            } catch (parseError) {
+              this.logger.warn('Error parsing team config', {
+                teamId: entry.name,
+                error: parseError instanceof Error ? parseError.message : String(parseError)
+              });
+            }
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Error reading teams directory', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    return teams;
   }
 
   /**
@@ -357,19 +505,20 @@ export class TeamsJsonWatcherService extends EventEmitter {
    */
   getStatus(): {
     isWatching: boolean;
-    teamsJsonPath: string;
-    fileExists: boolean;
-    lastModified?: Date;
+    teamsDir: string;
+    dirExists: boolean;
+    teamCount: number;
+    watchedTeams: string[];
   } {
-    const fileExists = fs.existsSync(this.teamsJsonPath);
-    let lastModified: Date | undefined;
+    const dirExists = fs.existsSync(this.teamsDir);
+    let teamCount = 0;
 
-    if (fileExists) {
+    if (dirExists) {
       try {
-        const stats = fs.statSync(this.teamsJsonPath);
-        lastModified = stats.mtime;
+        const entries = fs.readdirSync(this.teamsDir, { withFileTypes: true });
+        teamCount = entries.filter(e => e.isDirectory() && e.name !== 'orchestrator' && !e.name.startsWith('.')).length;
       } catch (error) {
-        this.logger.warn('Error getting teams.json file stats:', {
+        this.logger.warn('Error counting teams:', {
           error: error instanceof Error ? error.message : String(error)
         });
       }
@@ -377,9 +526,10 @@ export class TeamsJsonWatcherService extends EventEmitter {
 
     return {
       isWatching: this.watcher !== null,
-      teamsJsonPath: this.teamsJsonPath,
-      fileExists,
-      lastModified
+      teamsDir: this.teamsDir,
+      dirExists,
+      teamCount,
+      watchedTeams: Array.from(this.teamWatchers.keys())
     };
   }
 
@@ -395,7 +545,7 @@ export class TeamsJsonWatcherService extends EventEmitter {
    * Cleanup resources
    */
   private cleanup(): void {
-    this.logger.info('Cleaning up teams.json watcher...');
+    this.logger.info('Cleaning up teams directory watcher...');
     this.stop();
     this.removeAllListeners();
   }

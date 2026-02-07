@@ -256,7 +256,7 @@ export interface TeamMember {
   sessionName: string;
   role: string;
   systemPrompt?: string;
-  agentStatus: 'inactive' | 'activating' | 'active';
+  agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'activating';
   workingStatus: 'idle' | 'in_progress';
   runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli';
   currentTickets?: string[];
@@ -444,6 +444,10 @@ export interface RememberToolParams {
   scope: 'agent' | 'project';
   /** Optional short title for the knowledge */
   title?: string;
+  /** Team member session ID to identify the agent (optional, uses session name if not provided) */
+  teamMemberId?: string;
+  /** Project path for project-scope knowledge (optional, uses server default if not provided) */
+  projectPath?: string;
   /** Additional metadata */
   metadata?: {
     /** Pattern category for project patterns */
@@ -479,6 +483,10 @@ export interface RecallToolParams {
   scope?: 'agent' | 'project' | 'both';
   /** Maximum number of results to return */
   limit?: number;
+  /** Team member session ID to identify the agent (optional, uses session name if not provided) */
+  teamMemberId?: string;
+  /** Project path for project-scope knowledge (optional, uses server default if not provided) */
+  projectPath?: string;
 }
 
 /**
@@ -491,6 +499,10 @@ export interface RecordLearningToolParams {
   relatedTask?: string;
   /** Related file paths */
   relatedFiles?: string[];
+  /** Team member session ID to identify the agent (optional, uses session name if not provided) */
+  teamMemberId?: string;
+  /** Project path for project-scope knowledge (optional, uses server default if not provided) */
+  projectPath?: string;
 }
 
 /**
