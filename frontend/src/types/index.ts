@@ -94,6 +94,96 @@ export interface ApiResponse<T = any> {
   message?: string;
 }
 
+/**
+ * A previously running session that can be resumed after app restart
+ */
+export interface PreviousSession {
+  name: string;
+  role?: string;
+  teamId?: string;
+  runtimeType: string;
+  hasResumeId: boolean;
+}
+
+/**
+ * Status of the teams backup compared to current state
+ */
+export interface TeamsBackupStatus {
+  /** Whether current teams are empty but backup has data */
+  hasMismatch: boolean;
+  /** Number of teams in the backup file */
+  backupTeamCount: number;
+  /** Number of teams currently in storage */
+  currentTeamCount: number;
+  /** ISO timestamp of the most recent backup */
+  backupTimestamp: string | null;
+}
+
+/**
+ * Result of a teams restore operation
+ */
+export interface TeamsRestoreResult {
+  /** Number of teams successfully restored */
+  restoredCount: number;
+  /** Total number of teams that were in the backup */
+  totalInBackup: number;
+  /** Error messages for individual team restore failures */
+  errors?: string[];
+}
+
+// =============================================================================
+// Message Queue Types
+// =============================================================================
+
+/**
+ * Status of a message in the queue
+ */
+export type QueueMessageStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * A message in the processing queue
+ */
+export interface QueuedMessage {
+  /** Unique queue entry ID */
+  id: string;
+  /** Message content */
+  content: string;
+  /** Conversation ID for routing */
+  conversationId: string;
+  /** Source of the message */
+  source: 'web_chat' | 'slack';
+  /** Current status in the queue */
+  status: QueueMessageStatus;
+  /** ISO timestamp when enqueued */
+  enqueuedAt: string;
+  /** ISO timestamp when processing started */
+  processingStartedAt?: string;
+  /** ISO timestamp when completed or failed */
+  completedAt?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Response content from the orchestrator */
+  response?: string;
+}
+
+/**
+ * Queue status summary for monitoring
+ */
+export interface QueueStatus {
+  /** Number of messages waiting */
+  pendingCount: number;
+  /** Whether a message is currently being processed */
+  isProcessing: boolean;
+  /** The message currently being processed, if any */
+  currentMessage?: QueuedMessage;
+  /** Total messages processed since startup */
+  totalProcessed: number;
+  /** Total messages that failed since startup */
+  totalFailed: number;
+  /** Number of completed messages in history */
+  historyCount: number;
+}
+
 // Re-export factory types
 export * from './factory.types';
 

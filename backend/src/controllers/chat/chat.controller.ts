@@ -13,10 +13,10 @@ import {
   MessageValidationError,
   ConversationNotFoundError,
 } from '../../services/chat/chat.service.js';
-import { AgentRegistrationService } from '../../services/agent/agent-registration.service.js';
-import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../../constants.js';
-import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { getSessionBackendSync } from '../../services/session/session-backend.factory.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
+import type { MessageQueueService } from '../../services/messaging/message-queue.service.js';
 import type {
   SendMessageInput,
   ChatMessageFilter,
@@ -25,74 +25,20 @@ import type {
   ChatContentType,
 } from '../../types/chat.types.js';
 
-// Module-level agent registration service instance
-let agentRegistrationService: AgentRegistrationService | null = null;
+// Module-level message queue service instance
+let messageQueueService: MessageQueueService | null = null;
 
 // Logger instance for chat controller
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('ChatController');
 
 /**
- * Set the agent registration service for forwarding messages to orchestrator.
+ * Set the message queue service for enqueuing messages to the orchestrator.
  * Called during server initialization.
  *
- * @param service - The AgentRegistrationService instance
+ * @param service - The MessageQueueService instance
  */
-export function setAgentRegistrationService(service: AgentRegistrationService): void {
-  agentRegistrationService = service;
-}
-
-/**
- * Forward a message to the orchestrator terminal.
- * Sends an immediate acknowledgment to the user while orchestrator processes.
- *
- * @param content - Message content to send
- * @param conversationId - Conversation ID for context
- * @returns Success status and any error message
- */
-async function forwardToOrchestrator(
-  content: string,
-  conversationId: string
-): Promise<{ success: boolean; error?: string }> {
-  if (!agentRegistrationService) {
-    return { success: false, error: 'Agent registration service not available' };
-  }
-
-  try {
-    // Set active conversation ID for response routing
-    const terminalGateway = getTerminalGateway();
-    if (terminalGateway) {
-      terminalGateway.setActiveConversationId(conversationId);
-    }
-
-    // Send immediate acknowledgment to the user (non-blocking)
-    const chatService = getChatService();
-    chatService.addSystemMessage(
-      conversationId,
-      'Processing your request...',
-      { isTypingIndicator: true }
-    ).catch((err: Error) => {
-      logger.warn('Failed to send acknowledgment message', { error: err.message });
-    });
-
-    // Format message with conversation context using constant prefix
-    const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;
-
-    const result = await agentRegistrationService.sendMessageToAgent(
-      ORCHESTRATOR_SESSION_NAME,
-      formattedMessage
-    );
-
-    return result;
-  } catch (error) {
-    logger.error('Failed to forward message to orchestrator', {
-      error: error instanceof Error ? error.message : String(error),
-      conversationId,
-    });
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
-  }
+export function setMessageQueueService(service: MessageQueueService): void {
+  messageQueueService = service;
 }
 
 // =============================================================================
@@ -133,22 +79,41 @@ export async function sendMessage(
     const chatService = getChatService();
     const result = await chatService.sendMessage(input);
 
-    // Forward to orchestrator if enabled (default: true)
-    let orchestratorStatus: { forwarded: boolean; error?: string } = { forwarded: false };
+    // Enqueue message for orchestrator processing if enabled (default: true)
+    let orchestratorStatus: { forwarded: boolean; queued?: boolean; queueId?: string; error?: string } = { forwarded: false };
 
     if (shouldForward) {
-      const forwardResult = await forwardToOrchestrator(content, result.conversation.id);
-      orchestratorStatus = {
-        forwarded: forwardResult.success,
-        error: forwardResult.error,
-      };
+      const backend = getSessionBackendSync();
+      const sessionExists = backend?.sessionExists(ORCHESTRATOR_SESSION_NAME) ?? false;
 
-      // Update message status if forwarding failed
-      if (!forwardResult.success) {
-        logger.warn('Failed to forward message to orchestrator', {
-          error: forwardResult.error,
-          conversationId: result.conversation.id,
-        });
+      if (!sessionExists) {
+        orchestratorStatus = {
+          forwarded: false,
+          error: 'Orchestrator is not running. Please start the orchestrator first.',
+        };
+      } else if (!messageQueueService) {
+        orchestratorStatus = {
+          forwarded: false,
+          error: 'Message queue service not initialized',
+        };
+      } else {
+        try {
+          const queued = messageQueueService.enqueue({
+            content,
+            conversationId: result.conversation.id,
+            source: 'web_chat',
+          });
+          orchestratorStatus = { forwarded: true, queued: true, queueId: queued.id };
+        } catch (enqueueErr) {
+          logger.warn('Failed to enqueue message', {
+            error: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+            conversationId: result.conversation.id,
+          });
+          orchestratorStatus = {
+            forwarded: false,
+            error: enqueueErr instanceof Error ? enqueueErr.message : 'Failed to enqueue message',
+          };
+        }
       }
     }
 

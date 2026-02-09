@@ -71,12 +71,15 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     const orchestratorStatus = await storageService.getOrchestratorStatus();
 
     // Also check if the PTY session exists - this provides a real-time view
-    // of whether the orchestrator is actually running
+    // of whether the orchestrator is actually running.
+    // Use the well-known constant as fallback when sessionName isn't stored,
+    // aligning with how the teams controller checks session existence.
     let sessionExists = false;
     try {
       const sessionBackend = getSessionBackendSync();
-      if (sessionBackend && orchestratorStatus?.sessionName) {
-        sessionExists = sessionBackend.sessionExists(orchestratorStatus.sessionName);
+      const sessionName = orchestratorStatus?.sessionName || AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+      if (sessionBackend && sessionName) {
+        sessionExists = sessionBackend.sessionExists(sessionName);
       }
     } catch {
       // Ignore session check errors - fall back to storage-based status

@@ -21,10 +21,9 @@ import {
   ParsedSlackCommand,
   parseCommandIntent,
 } from '../../types/slack.types.js';
-import { ChatMessage } from '../../types/chat.types.js';
-import { AgentRegistrationService } from '../agent/agent-registration.service.js';
-import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
-import { CHAT_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import type { MessageQueueService } from '../messaging/message-queue.service.js';
+import type { SlackThreadStoreService } from './slack-thread-store.service.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
 
 /**
  * Bridge configuration
@@ -50,7 +49,7 @@ const DEFAULT_CONFIG: SlackBridgeConfig = {
   showTypingIndicator: true,
   maxResponseLength: 3000,
   enableNotifications: true,
-  responseTimeoutMs: 30000,
+  responseTimeoutMs: MESSAGE_QUEUE_CONSTANTS.DEFAULT_MESSAGE_TIMEOUT + 5000,
 };
 
 /**
@@ -76,7 +75,8 @@ let bridgeInstance: SlackOrchestratorBridge | null = null;
 export class SlackOrchestratorBridge extends EventEmitter {
   private slackService: SlackService;
   private chatService: ChatService;
-  private agentRegistrationService: AgentRegistrationService | null = null;
+  private messageQueueService: MessageQueueService | null = null;
+  private threadStore: SlackThreadStoreService | null = null;
   private config: SlackBridgeConfig;
   private initialized = false;
   /** Track if we've already logged the missing scope warning */
@@ -121,13 +121,23 @@ export class SlackOrchestratorBridge extends EventEmitter {
   }
 
   /**
-   * Set the agent registration service for forwarding messages to orchestrator.
+   * Set the message queue service for enqueuing messages to the orchestrator.
    * Called during server initialization.
    *
-   * @param service - The AgentRegistrationService instance
+   * @param service - The MessageQueueService instance
    */
-  setAgentRegistrationService(service: AgentRegistrationService): void {
-    this.agentRegistrationService = service;
+  setMessageQueueService(service: MessageQueueService): void {
+    this.messageQueueService = service;
+  }
+
+  /**
+   * Set the Slack thread store service for persisting thread conversations.
+   * Called during server initialization.
+   *
+   * @param store - The SlackThreadStoreService instance
+   */
+  setSlackThreadStore(store: SlackThreadStoreService): void {
+    this.threadStore = store;
   }
 
   /**
@@ -156,6 +166,17 @@ export class SlackOrchestratorBridge extends EventEmitter {
         message.channelId,
         message.userId
       );
+
+      // Store inbound message in thread file
+      if (this.threadStore) {
+        const threadTs = message.threadTs || message.ts;
+        try {
+          const userName = message.user?.realName || message.user?.name || message.userId;
+          await this.threadStore.appendUserMessage(message.channelId, threadTs, userName, message.text);
+        } catch (err) {
+          console.warn('[SlackBridge] Failed to store thread message:', err instanceof Error ? err.message : String(err));
+        }
+      }
 
       // Parse command intent
       const command = this.parseCommand(message.text);
@@ -339,57 +360,14 @@ Just type naturally to chat with the orchestrator!`;
   }
 
   /**
-   * Forward a message to the orchestrator terminal.
+   * Send message to orchestrator via the message queue and wait for response.
    *
-   * @param content - Message content to send
-   * @param conversationId - Conversation ID for context
-   * @returns Success status and any error message
-   */
-  private async forwardToOrchestratorTerminal(
-    content: string,
-    conversationId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    if (!this.agentRegistrationService) {
-      return { success: false, error: 'Agent registration service not available' };
-    }
-
-    try {
-      // Set active conversation ID for response routing
-      const terminalGateway = getTerminalGateway();
-      if (terminalGateway) {
-        terminalGateway.setActiveConversationId(conversationId);
-      }
-
-      // Format message with conversation context using constant prefix
-      const formattedMessage = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${conversationId}] ${content}`;
-
-      const result = await this.agentRegistrationService.sendMessageToAgent(
-        this.config.orchestratorSession,
-        formattedMessage
-      );
-
-      return result;
-    } catch (error) {
-      console.error('[SlackBridge] Failed to forward message to orchestrator', {
-        error: error instanceof Error ? error.message : String(error),
-        conversationId,
-      });
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
-    }
-  }
-
-  /**
-   * Send message to orchestrator and get response
-   *
-   * Checks if the orchestrator is active before sending. Returns a clear
-   * error message if the orchestrator is offline.
+   * Checks if the orchestrator is active before sending. Enqueues the message
+   * and waits for the response via a resolve callback injected into sourceMetadata.
    *
    * @param message - Message to send
    * @param context - Optional conversation context
-   * @returns Orchestrator response or offline message
+   * @returns Orchestrator response or offline/error message
    */
   private async sendToOrchestrator(
     message: string,
@@ -403,15 +381,22 @@ Just type naturally to chat with the orchestrator!`;
         return getOrchestratorOfflineMessage(true);
       }
 
-      // Check if agent registration service is available
-      if (!this.agentRegistrationService) {
-        console.error('[SlackBridge] Agent registration service not configured');
+      // Check if message queue service is available
+      if (!this.messageQueueService) {
+        console.error('[SlackBridge] Message queue service not configured');
         return 'The Slack bridge is not properly configured. Please restart the server.';
+      }
+
+      // Enrich message with thread file path hint for orchestrator context
+      let enrichedMessage = message;
+      if (this.threadStore && context) {
+        const threadFilePath = this.threadStore.getThreadFilePath(context.channelId, context.threadTs);
+        enrichedMessage = `${message}\n\n[Thread context file: ${threadFilePath}]`;
       }
 
       // Send message via chat service to store it
       const result = await this.chatService.sendMessage({
-        content: message,
+        content: enrichedMessage,
         conversationId: context?.conversationId,
         metadata: {
           source: 'slack',
@@ -420,79 +405,39 @@ Just type naturally to chat with the orchestrator!`;
         },
       });
 
-      // Forward the message to the orchestrator terminal
-      const forwardResult = await this.forwardToOrchestratorTerminal(
-        message,
-        result.conversation.id
-      );
+      // Enqueue the message with a resolve callback for response routing.
+      // The QueueProcessorService will call slackResolve() when the
+      // orchestrator responds, unblocking this promise.
+      const response = await new Promise<string>((resolve) => {
+        const timeoutId = setTimeout(() => {
+          resolve('The orchestrator is taking longer than expected. Please try again.');
+        }, this.config.responseTimeoutMs);
 
-      if (!forwardResult.success) {
-        console.warn('[SlackBridge] Failed to forward message to orchestrator', {
-          error: forwardResult.error,
-          conversationId: result.conversation.id,
-        });
-        return `Failed to send message to orchestrator: ${forwardResult.error}`;
-      }
-
-      // Wait for orchestrator response
-      const response = await this.waitForOrchestratorResponse(
-        result.conversation.id,
-        this.config.responseTimeoutMs
-      );
+        try {
+          this.messageQueueService!.enqueue({
+            content: enrichedMessage,
+            conversationId: result.conversation.id,
+            source: 'slack',
+            sourceMetadata: {
+              slackResolve: (resp: string) => {
+                clearTimeout(timeoutId);
+                resolve(resp);
+              },
+              userId: context?.userId,
+              channelId: context?.channelId,
+            },
+          });
+        } catch (enqueueErr) {
+          clearTimeout(timeoutId);
+          resolve(`Failed to enqueue message: ${enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)}`);
+        }
+      });
 
       return response;
     } catch (error) {
       console.error('[SlackBridge] Error sending to orchestrator:', error);
       throw error;
     }
-  }
-
-  /**
-   * Wait for orchestrator response
-   *
-   * Polls for a response from the orchestrator with timeout.
-   *
-   * @param conversationId - Conversation to monitor
-   * @param timeoutMs - Timeout in milliseconds
-   * @returns Response content
-   */
-  private async waitForOrchestratorResponse(
-    conversationId: string,
-    timeoutMs: number
-  ): Promise<string> {
-    return new Promise((resolve) => {
-      const startTime = Date.now();
-
-      const checkResponse = async (): Promise<void> => {
-        // Get recent messages
-        const messages = await this.chatService.getMessages({
-          conversationId,
-          after: new Date(startTime).toISOString(),
-        });
-
-        // Find orchestrator response
-        const orchestratorMessages = messages.filter(
-          (m: ChatMessage) => m.from.type === 'orchestrator'
-        );
-
-        if (orchestratorMessages.length > 0) {
-          const latestResponse = orchestratorMessages[orchestratorMessages.length - 1];
-          resolve(latestResponse.content);
-          return;
-        }
-
-        // Check timeout
-        if (Date.now() - startTime > timeoutMs) {
-          resolve('The orchestrator is taking longer than expected. Please try again.');
-          return;
-        }
-
-        // Check again in 500ms
-        setTimeout(checkResponse, 500);
-      };
-
-      checkResponse();
-    });
   }
 
   /**
@@ -562,6 +507,16 @@ Just type naturally to chat with the orchestrator!`;
       text: formattedResponse,
       threadTs: originalMessage.threadTs || originalMessage.ts,
     });
+
+    // Store outbound reply in thread file
+    if (this.threadStore) {
+      const threadTs = originalMessage.threadTs || originalMessage.ts;
+      try {
+        await this.threadStore.appendOrchestratorReply(originalMessage.channelId, threadTs, response);
+      } catch (err) {
+        console.warn('[SlackBridge] Failed to store thread reply:', err instanceof Error ? err.message : String(err));
+      }
+    }
   }
 
   /**

@@ -20,6 +20,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import os from 'os';
+import { promises as fs } from 'fs';
 
 import {
 	StorageService,
@@ -43,8 +44,26 @@ import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gatewa
 import { initializeChatGateway } from './websocket/chat.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
+import {
+	AGENTMUX_CONSTANTS,
+	ORCHESTRATOR_SESSION_NAME,
+	ORCHESTRATOR_ROLE,
+	ORCHESTRATOR_WINDOW_NAME,
+	MESSAGE_QUEUE_CONSTANTS,
+} from './constants.js';
+import { getSettingsService } from './services/settings/index.js';
+import { MemoryService } from './services/memory/memory.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
 import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/index.js';
+import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
+import { EventBusService } from './services/event-bus/index.js';
+import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
+import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
+import { setTeamControllerEventBusService } from './controllers/team/team.controller.js';
+import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.js';
+import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
+import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
+import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
 
 // Use the early-defined __dirname for consistency
 const __dirname = __dirname_early;
@@ -106,6 +125,9 @@ export class AgentMuxServer {
 	private teamsJsonWatcherService!: TeamsJsonWatcherService;
 	private apiController!: ApiController;
 	private terminalGateway!: TerminalGateway;
+	private messageQueueService!: MessageQueueService;
+	private queueProcessorService!: QueueProcessorService;
+	private eventBusService!: EventBusService;
 
 	// Shutdown state
 	private isShuttingDown = false;
@@ -199,6 +221,48 @@ export class AgentMuxServer {
 
 		// Connect teams.json watcher to team activity service for real-time updates
 		this.teamsJsonWatcherService.setTeamActivityService(this.teamActivityWebSocketService);
+
+		// Initialize message queue services (with disk persistence)
+		this.messageQueueService = new MessageQueueService(this.config.agentmuxHome);
+		const responseRouter = new ResponseRouterService();
+		this.queueProcessorService = new QueueProcessorService(
+			this.messageQueueService,
+			responseRouter,
+			this.apiController.agentRegistrationService
+		);
+
+		// Wire queue service into controllers
+		setChatMessageQueueService(this.messageQueueService);
+		setMessagingControllerQueueService(this.messageQueueService);
+
+		// Initialize event bus service for agent lifecycle pub/sub
+		this.eventBusService = new EventBusService();
+		this.eventBusService.setMessageQueueService(this.messageQueueService);
+		this.teamsJsonWatcherService.setEventBusService(this.eventBusService);
+		setEventBusControllerService(this.eventBusService);
+		setTeamControllerEventBusService(this.eventBusService);
+
+		// Initialize Slack thread store for persistent thread conversations
+		const slackThreadStore = new SlackThreadStoreService(this.config.agentmuxHome);
+		setSlackThreadStore(slackThreadStore);
+		this.eventBusService.setSlackThreadStore(slackThreadStore);
+
+		// Broadcast queue events via Socket.IO
+		this.messageQueueService.on('enqueued', (msg) => {
+			this.io.emit(MESSAGE_QUEUE_CONSTANTS.SOCKET_EVENTS.MESSAGE_ENQUEUED, msg);
+		});
+		this.messageQueueService.on('processing', (msg) => {
+			this.io.emit(MESSAGE_QUEUE_CONSTANTS.SOCKET_EVENTS.MESSAGE_PROCESSING, msg);
+		});
+		this.messageQueueService.on('completed', (msg) => {
+			this.io.emit(MESSAGE_QUEUE_CONSTANTS.SOCKET_EVENTS.MESSAGE_COMPLETED, msg);
+		});
+		this.messageQueueService.on('failed', (msg) => {
+			this.io.emit(MESSAGE_QUEUE_CONSTANTS.SOCKET_EVENTS.MESSAGE_FAILED, msg);
+		});
+		this.messageQueueService.on('statusUpdate', (status) => {
+			this.io.emit(MESSAGE_QUEUE_CONSTANTS.SOCKET_EVENTS.STATUS_UPDATE, status);
+		});
 	}
 
 	private configureMiddleware(): void {
@@ -340,13 +404,52 @@ export class AgentMuxServer {
 				// Ignore tmux initialization errors - PTY backend is primary
 			}
 
-			// Initialize PTY session backend and restore saved sessions
+			// Reset orchestrator status to inactive on startup.
+			// The persisted status file may still say "active" from the previous session,
+			// but a fresh app start has no running agent. Without this reset, the UI
+			// would show "Active" for a bare shell that has no Claude running inside it.
+			try {
+				await this.storageService.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+				this.logger.info('Reset orchestrator status to inactive on startup');
+			} catch (resetErr) {
+				this.logger.warn('Failed to reset orchestrator status on startup', {
+					error: resetErr instanceof Error ? resetErr.message : String(resetErr),
+				});
+			}
+
+			// Initialize PTY session backend.
+			// We load persisted session metadata (including Claude session IDs) so that
+			// when agents are re-started, they can resume their previous conversations
+			// using --resume. The actual PTY sessions are NOT restored here — they are
+			// recreated when the user starts teams again.
 			this.logger.info('Initializing PTY session backend...');
-			const sessionBackend = await getSessionBackend();
-			const persistence = getSessionStatePersistence();
-			const restoredCount = await persistence.restoreState(sessionBackend);
-			if (restoredCount > 0) {
-				this.logger.info('Restored PTY sessions from saved state', { count: restoredCount });
+			await getSessionBackend();
+
+			// Load persisted session metadata for resume-on-restart support
+			try {
+				const persistence = getSessionStatePersistence();
+				const savedState = await persistence.loadState();
+				if (savedState && savedState.sessions.length > 0) {
+					for (const sessionInfo of savedState.sessions) {
+						persistence.registerSession(sessionInfo.name, {
+							cwd: sessionInfo.cwd,
+							command: sessionInfo.command,
+							args: sessionInfo.args,
+							env: sessionInfo.env,
+						}, sessionInfo.runtimeType, sessionInfo.role, sessionInfo.teamId);
+						if (sessionInfo.claudeSessionId) {
+							persistence.updateSessionId(sessionInfo.name, sessionInfo.claudeSessionId);
+						}
+					}
+					this.logger.info('Loaded persisted session metadata for resume support', {
+						count: savedState.sessions.length,
+						sessionsWithResumeId: savedState.sessions.filter(s => s.claudeSessionId).length,
+					});
+				}
+			} catch (loadError) {
+				this.logger.debug('No persisted session state to load (first run or cleared)', {
+					error: loadError instanceof Error ? loadError.message : String(loadError),
+				});
 			}
 
 			// Start message scheduler
@@ -371,6 +474,26 @@ export class AgentMuxServer {
 			await initializeMCPServer();
 			this.logger.info('MCP server integrated at /mcp endpoint');
 
+			// Restore persisted message queue state (pending messages survive restarts)
+			this.logger.info('Loading persisted message queue state...');
+			try {
+				await this.messageQueueService.loadPersistedState();
+				const queueStatus = this.messageQueueService.getStatus();
+				if (queueStatus.pendingCount > 0) {
+					this.logger.info('Restored pending messages from previous session', {
+						pendingCount: queueStatus.pendingCount,
+					});
+				}
+			} catch (error) {
+				this.logger.warn('Failed to load persisted queue state', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Start message queue processor
+			this.logger.info('Starting message queue processor...');
+			this.queueProcessorService.start();
+
 			// Initialize Slack if configured
 			await this.initializeSlackIfConfigured();
 
@@ -382,6 +505,9 @@ export class AgentMuxServer {
 
 			// Start health monitoring
 			this.startHealthMonitoring();
+
+			// Auto-start orchestrator if enabled in settings
+			await this.autoStartOrchestratorIfEnabled();
 
 		} catch (error) {
 			this.logger.error('Failed to start server', { error: error instanceof Error ? error.message : String(error) });
@@ -402,10 +528,16 @@ export class AgentMuxServer {
 		try {
 			this.logger.info('Checking Slack configuration...');
 			const result = await initializeSlackIfConfigured({
-				agentRegistrationService: this.apiController.agentRegistrationService,
+				messageQueueService: this.messageQueueService,
 			});
 
 			if (result.success) {
+				// Wire thread store into the bridge for persistent thread tracking
+				const threadStore = getSlackThreadStore();
+				if (threadStore) {
+					const { getSlackOrchestratorBridge } = await import('./services/slack/slack-orchestrator-bridge.js');
+					getSlackOrchestratorBridge().setSlackThreadStore(threadStore);
+				}
 				this.logger.info('Slack integration initialized successfully');
 			} else if (result.attempted) {
 				this.logger.warn('Slack initialization failed', { error: result.error });
@@ -417,6 +549,78 @@ export class AgentMuxServer {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			// Don't fail startup if Slack fails
+		}
+	}
+
+	/**
+	 * Auto-start the orchestrator if the autoStartOrchestrator setting is enabled.
+	 * Reads the setting from persistent storage and triggers orchestrator setup.
+	 * Failures are logged but do not prevent the server from starting.
+	 */
+	private async autoStartOrchestratorIfEnabled(): Promise<void> {
+		try {
+			const settingsService = getSettingsService();
+			const settings = await settingsService.getSettings();
+
+			if (!settings.general.autoStartOrchestrator) {
+				this.logger.info('Auto-start orchestrator is disabled, skipping');
+				return;
+			}
+
+			this.logger.info('Auto-start orchestrator is enabled, starting orchestrator...');
+
+			// Determine runtime type from orchestrator status
+			let runtimeType = 'claude-code';
+			try {
+				const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+				if (orchestratorStatus?.runtimeType) {
+					runtimeType = orchestratorStatus.runtimeType;
+				}
+			} catch {
+				// Use default runtime type
+			}
+
+			// Create orchestrator agent session
+			const result = await this.apiController.agentRegistrationService.createAgentSession({
+				sessionName: ORCHESTRATOR_SESSION_NAME,
+				role: ORCHESTRATOR_ROLE,
+				projectPath: process.cwd(),
+				windowName: ORCHESTRATOR_WINDOW_NAME,
+				runtimeType: runtimeType as any,
+			});
+
+			if (!result.success) {
+				this.logger.warn('Auto-start orchestrator failed to create session', {
+					error: result.error,
+				});
+				return;
+			}
+
+			// Initialize orchestrator memory
+			try {
+				const memoryService = MemoryService.getInstance();
+				await memoryService.initializeForSession(
+					ORCHESTRATOR_SESSION_NAME,
+					ORCHESTRATOR_ROLE,
+					process.cwd()
+				);
+			} catch (memoryError) {
+				this.logger.warn('Failed to initialize orchestrator memory during auto-start', {
+					error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+				});
+			}
+
+			// Start persistent chat monitoring
+			if (this.terminalGateway) {
+				this.terminalGateway.startOrchestratorChatMonitoring(ORCHESTRATOR_SESSION_NAME);
+			}
+
+			this.logger.info('Orchestrator auto-started successfully');
+		} catch (error) {
+			this.logger.error('Failed to auto-start orchestrator', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Don't fail startup if auto-start fails
 		}
 	}
 
@@ -449,6 +653,38 @@ export class AgentMuxServer {
 			});
 			// Continue startup even if self-improvement check fails
 		}
+	}
+
+	/**
+	 * Ensure .mcp.json exists at the project root with the AgentMux MCP server configured.
+	 * Preserves any existing MCP server entries the user may have added.
+	 */
+	private async ensureMcpConfig(): Promise<void> {
+		const mcpConfigPath = path.join(process.cwd(), '.mcp.json');
+		const mcpUrl = `http://localhost:${this.config.webPort}/mcp`;
+
+		let config: { mcpServers?: Record<string, unknown> } = {};
+
+		// Read existing .mcp.json if it exists (preserve other servers)
+		try {
+			const existing = await fs.readFile(mcpConfigPath, 'utf-8');
+			config = JSON.parse(existing);
+		} catch {
+			// File doesn't exist or invalid JSON — start fresh
+		}
+
+		if (!config.mcpServers) {
+			config.mcpServers = {};
+		}
+
+		// Add/update the agentmux MCP server entry
+		config.mcpServers['agentmux'] = {
+			type: 'url',
+			url: mcpUrl,
+		};
+
+		await fs.writeFile(mcpConfigPath, JSON.stringify(config, null, 2) + '\n');
+		this.logger.info('Generated .mcp.json for Claude Code agents', { mcpConfigPath, mcpUrl });
 	}
 
 	private async checkPortAvailability(): Promise<void> {
@@ -490,6 +726,15 @@ export class AgentMuxServer {
 				this.logger.info('To configure Claude Code, run:', {
 					command: `claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`
 				});
+
+				// Generate .mcp.json at project root so Claude Code agents
+				// automatically discover the AgentMux MCP server
+				this.ensureMcpConfig().catch((err) => {
+					this.logger.warn('Failed to generate .mcp.json (non-critical)', {
+						error: err instanceof Error ? err.message : String(err),
+					});
+				});
+
 				resolve();
 			});
 
@@ -624,6 +869,22 @@ export class AgentMuxServer {
 			} catch (error) {
 				this.logger.warn('Failed to save PTY session state', { error: error instanceof Error ? error.message : String(error) });
 			}
+
+			// Flush message queue to disk before stopping processor
+			this.logger.info('Flushing message queue to disk...');
+			try {
+				await this.messageQueueService.flushPersist();
+			} catch (error) {
+				this.logger.warn('Failed to flush message queue', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Stop message queue processor
+			this.queueProcessorService.stop();
+
+			// Clean up event bus service
+			this.eventBusService.cleanup();
 
 			// Clean up schedulers
 			this.schedulerService.cleanup();

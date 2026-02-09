@@ -40,6 +40,8 @@ export interface PersistedSessionInfo {
 	teamId?: string;
 	/** Environment variables */
 	env?: Record<string, string>;
+	/** Claude session ID for resuming conversations on restart */
+	claudeSessionId?: string;
 }
 
 /**
@@ -122,6 +124,11 @@ export class SessionStatePersistence {
 		});
 
 		this.logger.debug('Registered session for persistence', { name, runtimeType, role });
+		this.autoSave().catch((err) => {
+			this.logger.warn('Auto-save after register failed', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
 	}
 
 	/**
@@ -133,6 +140,11 @@ export class SessionStatePersistence {
 		const deleted = this.sessionMetadata.delete(name);
 		if (deleted) {
 			this.logger.debug('Unregistered session from persistence', { name });
+			this.autoSave().catch((err) => {
+				this.logger.warn('Auto-save after unregister failed', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
 		}
 	}
 
@@ -157,6 +169,38 @@ export class SessionStatePersistence {
 	}
 
 	/**
+	 * Update the Claude session ID for a registered session.
+	 * Called when an agent registers via MCP and reports its session ID.
+	 *
+	 * @param name - Session name
+	 * @param claudeSessionId - The Claude conversation/session ID
+	 */
+	updateSessionId(name: string, claudeSessionId: string): void {
+		const metadata = this.sessionMetadata.get(name);
+		if (metadata) {
+			metadata.claudeSessionId = claudeSessionId;
+			this.logger.info('Updated Claude session ID for persistence', { name, claudeSessionId });
+			this.autoSave().catch((err) => {
+				this.logger.warn('Auto-save after session ID update failed', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+		} else {
+			this.logger.warn('Cannot update session ID - session not registered', { name });
+		}
+	}
+
+	/**
+	 * Get the Claude session ID for a registered session.
+	 *
+	 * @param name - Session name
+	 * @returns Claude session ID or undefined
+	 */
+	getSessionId(name: string): string | undefined {
+		return this.sessionMetadata.get(name)?.claudeSessionId;
+	}
+
+	/**
 	 * Get all registered session names.
 	 *
 	 * @returns Array of registered session names
@@ -166,24 +210,50 @@ export class SessionStatePersistence {
 	}
 
 	/**
+	 * Get all registered session metadata as a Map.
+	 *
+	 * @returns Map of session name to metadata
+	 */
+	getRegisteredSessionsMap(): Map<string, PersistedSessionInfo> {
+		return new Map(this.sessionMetadata);
+	}
+
+	/**
+	 * Auto-save current session metadata to disk.
+	 * Called after register/unregister/updateSessionId to keep the state file
+	 * in sync with in-memory metadata at all times. This ensures the state file
+	 * is always up-to-date even if the process is killed before graceful shutdown.
+	 */
+	private async autoSave(): Promise<void> {
+		const state: PersistedState = {
+			version: STATE_VERSION,
+			savedAt: new Date().toISOString(),
+			sessions: Array.from(this.sessionMetadata.values()),
+		};
+		try {
+			await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+			await fs.writeFile(this.filePath, JSON.stringify(state, null, 2));
+		} catch (error) {
+			this.logger.warn('Failed to auto-save session state', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
 	 * Save current session state to disk.
 	 *
-	 * Only saves sessions that are both active in the backend and registered
-	 * for persistence.
+	 * Saves all sessions registered in sessionMetadata, which is the source
+	 * of truth for what should persist.
 	 *
-	 * @param backend - Session backend to query for active sessions
+	 * @param backend - Session backend (kept for backward compatibility, no longer used)
 	 * @returns Number of sessions saved
 	 */
 	async saveState(backend: ISessionBackend): Promise<number> {
-		const activeSessions = backend.listSessions();
-		const sessionsToSave: PersistedSessionInfo[] = [];
-
-		for (const name of activeSessions) {
-			const metadata = this.sessionMetadata.get(name);
-			if (metadata) {
-				sessionsToSave.push(metadata);
-			}
-		}
+		// Use sessionMetadata as the source of truth instead of cross-referencing
+		// with backend.listSessions(). By shutdown time, PTY processes may already
+		// be killed, so backend.listSessions() would return empty.
+		const sessionsToSave = Array.from(this.sessionMetadata.values());
 
 		const state: PersistedState = {
 			version: STATE_VERSION,
@@ -253,6 +323,7 @@ export class SessionStatePersistence {
 					this.logger.info('Restored session', {
 						name: sessionInfo.name,
 						runtimeType: sessionInfo.runtimeType,
+						hasClaudeSessionId: !!sessionInfo.claudeSessionId,
 					});
 				} catch (error) {
 					failed.push(sessionInfo.name);
@@ -286,23 +357,19 @@ export class SessionStatePersistence {
 	/**
 	 * Get the arguments to use when restoring a session.
 	 *
-	 * For Claude, adds --resume flag to restore conversation.
+	 * The persisted command is the shell (e.g. /bin/zsh), not the Claude binary.
+	 * Claude Code is launched inside the shell by initializeAgentWithRegistration,
+	 * so we must NOT add --resume to the shell args — it would cause
+	 * "/bin/zsh: no such option: resume".
 	 *
 	 * @param sessionInfo - Session metadata
 	 * @returns Arguments array for session creation
 	 */
 	private getRestoreArgs(sessionInfo: PersistedSessionInfo): string[] {
-		if (sessionInfo.runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
-			// Always use --resume for Claude to restore conversation
-			const args = [...sessionInfo.args];
-			if (!args.includes('--resume')) {
-				args.push('--resume');
-			}
-			return args;
-		}
-
-		// Other runtimes use original args
-		return sessionInfo.args;
+		// Return original args as-is. The persisted command is the shell,
+		// not the runtime binary — flags like --resume belong on the runtime
+		// command which is launched separately during initialization.
+		return [...sessionInfo.args];
 	}
 
 	/**
@@ -320,6 +387,16 @@ export class SessionStatePersistence {
 				});
 			}
 		}
+	}
+
+	/**
+	 * Clear both in-memory metadata and the state file on disk.
+	 * Used when the user dismisses the session resume popup.
+	 */
+	async clearStateAndMetadata(): Promise<void> {
+		this.sessionMetadata.clear();
+		await this.clearState();
+		this.logger.info('Cleared session metadata and state file');
 	}
 
 	/**

@@ -19,15 +19,9 @@ jest.mock('../orchestrator/index.js', () => ({
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
-// Mock the terminal gateway
-jest.mock('../../websocket/terminal.gateway.js', () => ({
-  getTerminalGateway: jest.fn().mockReturnValue({
-    setActiveConversationId: jest.fn(),
-  }),
-}));
-
 import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
-import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { getChatService } from '../chat/chat.service.js';
+import { ChatMessage } from '../../types/chat.types.js';
 
 describe('SlackOrchestratorBridge', () => {
   beforeEach(() => {
@@ -314,15 +308,15 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
-  describe('setAgentRegistrationService', () => {
-    it('should accept an AgentRegistrationService', () => {
+  describe('setMessageQueueService', () => {
+    it('should accept a MessageQueueService', () => {
       const bridge = new SlackOrchestratorBridge();
       const mockService = {
-        sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+        enqueue: jest.fn(),
       } as any;
 
       // Should not throw
-      expect(() => bridge.setAgentRegistrationService(mockService)).not.toThrow();
+      expect(() => bridge.setMessageQueueService(mockService)).not.toThrow();
     });
 
     it('should allow setting service after initialization', async () => {
@@ -330,10 +324,10 @@ describe('SlackOrchestratorBridge', () => {
       await bridge.initialize();
 
       const mockService = {
-        sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+        enqueue: jest.fn(),
       } as any;
 
-      expect(() => bridge.setAgentRegistrationService(mockService)).not.toThrow();
+      expect(() => bridge.setMessageQueueService(mockService)).not.toThrow();
     });
   });
 
@@ -367,74 +361,56 @@ describe('SlackOrchestratorBridge', () => {
       expect(config).toHaveProperty('enableNotifications');
       expect(config).toHaveProperty('responseTimeoutMs');
     });
+
+    it('should have responseTimeoutMs longer than queue processor timeout', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const config = bridge.getConfig();
+
+      // The Slack bridge timeout must exceed the queue processor timeout
+      // to prevent the bridge from timing out before the queue processor
+      expect(config.responseTimeoutMs).toBeGreaterThan(120000);
+    });
   });
 
-  describe('orchestrator message forwarding', () => {
-    let mockAgentService: any;
+  describe('orchestrator message forwarding via queue', () => {
+    let mockQueueService: any;
 
     beforeEach(() => {
-      mockAgentService = {
-        sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+      mockQueueService = {
+        enqueue: jest.fn().mockReturnValue({ id: 'q-1' }),
       };
       (isOrchestratorActive as jest.Mock).mockResolvedValue(true);
-      (getTerminalGateway as jest.Mock).mockReturnValue({
-        setActiveConversationId: jest.fn(),
-      });
     });
 
-    it('should set active conversation ID when forwarding to orchestrator', async () => {
-      const bridge = new SlackOrchestratorBridge();
-      bridge.setAgentRegistrationService(mockAgentService);
-      await bridge.initialize();
-
-      const mockTerminalGateway = { setActiveConversationId: jest.fn() };
-      (getTerminalGateway as jest.Mock).mockReturnValue(mockTerminalGateway);
-
-      // We can't directly test private methods, but we can verify behavior through the agent service
-      // When the bridge forwards messages, it should call sendMessageToAgent
-      expect(mockAgentService.sendMessageToAgent).not.toHaveBeenCalled();
-    });
-
-    it('should return error when agent registration service is not set', async () => {
+    it('should return error when message queue service is not set', async () => {
       const bridge = new SlackOrchestratorBridge();
       await bridge.initialize();
 
-      // Without agent service, message forwarding should not work
+      // Without queue service, message forwarding should not work
       // The bridge should handle this gracefully
       expect(bridge.isInitialized()).toBe(true);
     });
 
-    it('should format messages with CHAT prefix when forwarding', async () => {
+    it('should allow setting queue service after initialization', async () => {
       const bridge = new SlackOrchestratorBridge();
-      bridge.setAgentRegistrationService(mockAgentService);
+      bridge.setMessageQueueService(mockQueueService);
       await bridge.initialize();
 
-      // The agent service should be callable
-      expect(typeof mockAgentService.sendMessageToAgent).toBe('function');
+      // The queue service should be set
+      expect(typeof mockQueueService.enqueue).toBe('function');
     });
 
-    it('should handle terminal gateway being null', async () => {
-      const bridge = new SlackOrchestratorBridge();
-      bridge.setAgentRegistrationService(mockAgentService);
-      await bridge.initialize();
-
-      (getTerminalGateway as jest.Mock).mockReturnValue(null);
-
-      // Should not throw when terminal gateway is not available
-      expect(bridge.isInitialized()).toBe(true);
-    });
-
-    it('should handle sendMessageToAgent failure gracefully', async () => {
+    it('should handle queue service enqueue failure gracefully', async () => {
       const failingService = {
-        sendMessageToAgent: jest.fn().mockResolvedValue({ success: false, error: 'Test error' }),
+        enqueue: jest.fn().mockImplementation(() => { throw new Error('Queue full'); }),
       } as any;
 
       const bridge = new SlackOrchestratorBridge();
-      bridge.setAgentRegistrationService(failingService);
+      bridge.setMessageQueueService(failingService);
       await bridge.initialize();
 
       // Service failure should be handled gracefully
-      expect(failingService.sendMessageToAgent).not.toThrow();
+      expect(bridge.isInitialized()).toBe(true);
     });
   });
 
@@ -477,6 +453,155 @@ describe('SlackOrchestratorBridge', () => {
 
       // Missing scope should not prevent message handling
       expect(bridge.isInitialized()).toBe(true);
+    });
+  });
+
+  describe('sendToOrchestrator (queue-based)', () => {
+    let mockQueueService: any;
+    let chatService: ReturnType<typeof getChatService>;
+
+    /**
+     * Helper to build a ChatMessage for testing
+     */
+    function makeChatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+      return {
+        id: 'msg-1',
+        conversationId: 'conv-123',
+        from: { type: 'orchestrator', name: 'Orchestrator' },
+        content: 'Hello from orchestrator',
+        contentType: 'text',
+        timestamp: new Date().toISOString(),
+        ...overrides,
+      } as ChatMessage;
+    }
+
+    beforeEach(() => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(true);
+      chatService = getChatService();
+
+      // Mock sendMessage to return a conversation with a known ID
+      jest.spyOn(chatService, 'sendMessage').mockResolvedValue({
+        message: makeChatMessage(),
+        conversation: { id: 'conv-123', title: 'test', messages: [], createdAt: '', updatedAt: '' } as any,
+      });
+
+      // Create a mock queue service that captures the slackResolve callback
+      mockQueueService = {
+        enqueue: jest.fn().mockReturnValue({ id: 'q-1' }),
+      };
+    });
+
+    it('should enqueue with slackResolve callback and resolve when called', async () => {
+      // Configure enqueue to immediately call slackResolve
+      mockQueueService.enqueue.mockImplementation((input: any) => {
+        // Simulate the processor calling slackResolve after a tick
+        setTimeout(() => {
+          input.sourceMetadata.slackResolve('Task completed successfully');
+        }, 10);
+        return { id: 'q-1' };
+      });
+
+      const bridge = new SlackOrchestratorBridge({ responseTimeoutMs: 5000 });
+      bridge.setMessageQueueService(mockQueueService);
+      await bridge.initialize();
+
+      const messagePromise = new Promise<string>((resolve) => {
+        bridge.on('message_handled', (event: any) => {
+          resolve(event.response);
+        });
+      });
+
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-123',
+        channelId: 'C123',
+        userId: 'U123',
+      });
+
+      slackService.emit('message', {
+        text: 'hello orchestrator',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '1234567890.123456',
+      });
+
+      const response = await messagePromise;
+      expect(response).toBe('Task completed successfully');
+      expect(mockQueueService.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'slack',
+          content: 'hello orchestrator',
+        })
+      );
+    });
+
+    it('should timeout if slackResolve is never called', async () => {
+      // enqueue does NOT call slackResolve — so the bridge times out
+      const bridge = new SlackOrchestratorBridge({ responseTimeoutMs: 200 });
+      bridge.setMessageQueueService(mockQueueService);
+      await bridge.initialize();
+
+      const messagePromise = new Promise<string>((resolve) => {
+        bridge.on('message_handled', (event: any) => {
+          resolve(event.response);
+        });
+      });
+
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-123',
+        channelId: 'C123',
+        userId: 'U123',
+      });
+
+      slackService.emit('message', {
+        text: 'hello',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '1234567890.123456',
+      });
+
+      const response = await messagePromise;
+      expect(response).toBe('The orchestrator is taking longer than expected. Please try again.');
+    });
+
+    it('should handle enqueue failure gracefully', async () => {
+      mockQueueService.enqueue.mockImplementation(() => {
+        throw new Error('Queue is full');
+      });
+
+      const bridge = new SlackOrchestratorBridge({ responseTimeoutMs: 5000 });
+      bridge.setMessageQueueService(mockQueueService);
+      await bridge.initialize();
+
+      const messagePromise = new Promise<string>((resolve) => {
+        bridge.on('message_handled', (event: any) => {
+          resolve(event.response);
+        });
+      });
+
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-123',
+        channelId: 'C123',
+        userId: 'U123',
+      });
+
+      slackService.emit('message', {
+        text: 'hello',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '1234567890.123456',
+      });
+
+      const response = await messagePromise;
+      expect(response).toContain('Failed to enqueue message');
     });
   });
 });

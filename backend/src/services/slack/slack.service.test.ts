@@ -228,4 +228,32 @@ describe('SlackService', () => {
       await expect(service.initialize(mockConfig)).rejects.toThrow();
     });
   });
+
+  describe('formatNotificationBlocks', () => {
+    it('should generate valid Slack blocks with plain string context text', () => {
+      const service = new SlackService();
+
+      // Access private method via any for testing
+      const blocks = (service as any).formatNotificationBlocks({
+        type: 'task_completed',
+        title: 'Task Done',
+        message: 'Agent finished work.',
+        urgency: 'normal',
+        timestamp: '2026-02-09T12:00:00.000Z',
+      } as SlackNotification);
+
+      // Should have header, section, and context blocks
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0].type).toBe('header');
+      expect(blocks[1].type).toBe('section');
+      expect(blocks[2].type).toBe('context');
+
+      // Context element should be a text object with type and plain string text
+      const contextElement = blocks[2].elements[0];
+      expect(contextElement.type).toBe('mrkdwn');
+      // text should be a plain string (Slack context element format), not a nested object
+      expect(typeof contextElement.text).toBe('string');
+      expect(contextElement.text).toContain('Sent at');
+    });
+  });
 });

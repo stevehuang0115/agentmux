@@ -21,3 +21,11 @@ export {
   type SlackInitResult,
   type SlackInitOptions,
 } from './slack-initializer.js';
+export {
+  SlackThreadStoreService,
+  getSlackThreadStore,
+  setSlackThreadStore,
+  resetSlackThreadStore,
+  type AgentThreadMapping,
+  type ThreadInfo,
+} from './slack-thread-store.service.js';

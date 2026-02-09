@@ -10,6 +10,7 @@ import {
 } from '../session/index.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
+import { ClaudeRuntimeService } from './claude-runtime.service.js';
 import { StorageService } from '../core/storage.service.js';
 import {
 	AGENTMUX_CONSTANTS,
@@ -126,6 +127,66 @@ export class AgentRegistrationService {
 	}
 
 	/**
+	 * Resolve runtime flags from the agent's effective skills.
+	 * Reads role config and skill configs to collect flags compatible with the runtime.
+	 *
+	 * @param role - The agent's role name
+	 * @param runtimeType - The agent's runtime type (e.g. 'claude-code')
+	 * @param skillOverrides - Additional skills assigned to the member
+	 * @param excludedRoleSkills - Skills excluded from the role's default set
+	 * @returns Array of CLI flags to inject (e.g. ['--chrome'])
+	 */
+	private async resolveRuntimeFlags(
+		role: string,
+		runtimeType: RuntimeType,
+		skillOverrides?: string[],
+		excludedRoleSkills?: string[]
+	): Promise<string[]> {
+		const flags = new Set<string>();
+		try {
+			// 1. Get role's assigned skills from config/roles/{role}/role.json
+			const roleName = role.toLowerCase().replace(/\s+/g, '-');
+			const rolePath = path.join(this.projectRoot, 'config', 'roles', roleName, 'role.json');
+			const roleContent = await readFile(rolePath, 'utf8');
+			const roleConfig = JSON.parse(roleContent);
+			const roleSkills: string[] = roleConfig.assignedSkills || [];
+
+			// 2. Apply skill overrides and exclusions
+			const effectiveSkills = new Set([...roleSkills, ...(skillOverrides || [])]);
+			for (const excluded of (excludedRoleSkills || [])) {
+				effectiveSkills.delete(excluded);
+			}
+
+			// 3. For each skill, read skill.json and collect flags matching runtime
+			for (const skillId of effectiveSkills) {
+				try {
+					const skillPath = path.join(this.projectRoot, 'config', 'skills', skillId, 'skill.json');
+					const skillContent = await readFile(skillPath, 'utf8');
+					const skillConfig = JSON.parse(skillContent);
+					if (skillConfig.runtime?.runtime === runtimeType && Array.isArray(skillConfig.runtime?.flags)) {
+						for (const flag of skillConfig.runtime.flags) {
+							flags.add(flag);
+						}
+					}
+				} catch {
+					// Skill config not found — skip silently
+				}
+			}
+
+			if (flags.size > 0) {
+				this.logger.info('Resolved runtime flags from skills', {
+					role, runtimeType, flags: Array.from(flags),
+				});
+			}
+		} catch (error) {
+			this.logger.debug('Could not resolve runtime flags (no role config or read error)', {
+				role, runtimeType, error: error instanceof Error ? error.message : String(error),
+			});
+		}
+		return Array.from(flags);
+	}
+
+	/**
 	 * Create a runtime service instance for the given runtime type.
 	 * Centralizes RuntimeServiceFactory creation to reduce code duplication.
 	 */
@@ -183,7 +244,8 @@ export class AgentRegistrationService {
 		projectPath?: string,
 		timeout: number = AGENT_TIMEOUTS.REGULAR_AGENT_INITIALIZATION,
 		memberId?: string,
-		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
+		runtimeFlags?: string[]
 	): Promise<{
 		success: boolean;
 		message?: string;
@@ -218,7 +280,8 @@ export class AgentRegistrationService {
 				40000, // 40 seconds for cleanup and reinit
 				projectPath,
 				memberId,
-				runtimeType
+				runtimeType,
+				runtimeFlags
 			);
 			if (step1Success) {
 				return {
@@ -243,7 +306,8 @@ export class AgentRegistrationService {
 					30000, // Reduced from 45000 to 30000
 					projectPath,
 					memberId,
-					runtimeType
+					runtimeType,
+					runtimeFlags
 				);
 				if (step2Success) {
 					return {
@@ -323,16 +387,32 @@ export class AgentRegistrationService {
 		timeout: number,
 		projectPath?: string,
 		memberId?: string,
-		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
+		runtimeFlags?: string[]
 	): Promise<boolean> {
 		// Clear Commandline
 		await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
+
+		// Check for persisted session ID to resume previous conversation
+		let claudeSessionId: string | undefined;
+		try {
+			const persistence = getSessionStatePersistence();
+			claudeSessionId = persistence.getSessionId(sessionName);
+		} catch (error) {
+			this.logger.warn('Failed to get persisted session ID for resume', { sessionName, error: error instanceof Error ? error.message : String(error) });
+		}
 
 		// Reinitialize runtime using the appropriate initialization script
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
 		const runtimeService2 = this.createRuntimeService(runtimeType);
-		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath);
+
+		if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService2 instanceof ClaudeRuntimeService) {
+			this.logger.info('Resuming Claude session with persisted ID', { sessionName, claudeSessionId });
+			await runtimeService2.executeRuntimeInitScriptWithResume(sessionName, projectPath, claudeSessionId, runtimeFlags);
+		} else {
+			await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
+		}
 
 		// Wait for runtime to be ready (simplified detection)
 		// Use shorter check interval in test environment, and reasonable interval in production
@@ -353,6 +433,9 @@ export class AgentRegistrationService {
 			role,
 			runtimeType,
 		});
+
+		// Detect and store Claude session ID for future resume-on-restart
+		this.detectAndStoreSessionId(sessionName, runtimeType, projectPath);
 
 		// Send the registration prompt in background (don't block on it)
 		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
@@ -378,6 +461,41 @@ export class AgentRegistrationService {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Detect and store Claude session ID for resume-on-restart support.
+	 * Runs in background (non-blocking) to avoid slowing down initialization.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param runtimeType - Runtime type
+	 * @param projectPath - Project working directory
+	 */
+	private detectAndStoreSessionId(
+		sessionName: string,
+		runtimeType: RuntimeType,
+		projectPath?: string,
+	): void {
+		if (runtimeType !== RUNTIME_TYPES.CLAUDE_CODE) return;
+
+		const cwdToUse = projectPath || process.cwd();
+		const runtimeService = this.createRuntimeService(runtimeType);
+
+		if (!(runtimeService instanceof ClaudeRuntimeService)) return;
+
+		// Run detection in background (non-blocking)
+		runtimeService.detectClaudeSessionId(cwdToUse).then((detectedId) => {
+			if (detectedId) {
+				const persistence = getSessionStatePersistence();
+				persistence.updateSessionId(sessionName, detectedId);
+				this.logger.info('Stored detected Claude session ID', { sessionName, detectedId });
+			}
+		}).catch((err) => {
+			this.logger.debug('Failed to detect Claude session ID (non-critical)', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
 	}
 
 	/**
@@ -411,13 +529,23 @@ export class AgentRegistrationService {
 		timeout: number,
 		projectPath?: string,
 		memberId?: string,
-		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
+		runtimeFlags?: string[]
 	): Promise<boolean> {
 		// Kill existing session
 		await (await this.getSessionHelper()).killSession(sessionName);
 
 		// Wait for cleanup
 		await delay(1000);
+
+		// Check for persisted session ID to resume previous conversation
+		let claudeSessionId: string | undefined;
+		try {
+			const persistence = getSessionStatePersistence();
+			claudeSessionId = persistence.getSessionId(sessionName);
+		} catch (error) {
+			this.logger.warn('Failed to get persisted session ID for resume', { sessionName, error: error instanceof Error ? error.message : String(error) });
+		}
 
 		// Recreate session based on role
 		if (role === ORCHESTRATOR_ROLE) {
@@ -428,7 +556,12 @@ export class AgentRegistrationService {
 
 			// Initialize runtime for orchestrator using script (stay in agentmux project)
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd());
+			if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService instanceof ClaudeRuntimeService) {
+				this.logger.info('Resuming orchestrator Claude session', { sessionName, claudeSessionId });
+				await runtimeService.executeRuntimeInitScriptWithResume(sessionName, process.cwd(), claudeSessionId, runtimeFlags);
+			} else {
+				await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), runtimeFlags);
+			}
 
 			// Wait for runtime to be ready
 			const checkInterval = this.getCheckInterval();
@@ -478,7 +611,12 @@ export class AgentRegistrationService {
 
 			// Initialize runtime using the initialization script
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, projectPath);
+			if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService instanceof ClaudeRuntimeService) {
+				this.logger.info('Resuming team member Claude session', { sessionName, claudeSessionId });
+				await runtimeService.executeRuntimeInitScriptWithResume(sessionName, projectPath, claudeSessionId, runtimeFlags);
+			} else {
+				await runtimeService.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
+			}
 
 			// Wait for runtime to be ready (simplified detection)
 			const checkInterval = this.getCheckInterval();
@@ -497,6 +635,9 @@ export class AgentRegistrationService {
 			role,
 			runtimeType,
 		});
+
+		// Detect and store Claude session ID for future resume-on-restart
+		this.detectAndStoreSessionId(sessionName, runtimeType, projectPath);
 
 		// Send the registration prompt in background (don't block on it)
 		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
@@ -925,21 +1066,49 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		// Get runtime type from config or default to claude-code
 		let runtimeType = config.runtimeType || RUNTIME_TYPES.CLAUDE_CODE;
 
-		// For team members, try to get runtime type from storage
+		// Resolve runtime flags from the agent's effective skills
+		let runtimeFlags: string[] = [];
+
+		// For team members, try to get runtime type from storage and resolve skill flags
 		if (!config.runtimeType && role !== ORCHESTRATOR_ROLE) {
 			try {
 				const teams = await this.storageService.getTeams();
 				for (const team of teams) {
 					const member = team.members?.find((m) => m.sessionName === sessionName);
-					if (member && member.runtimeType) {
-						runtimeType = member.runtimeType as RuntimeType;
+					if (member) {
+						if (member.runtimeType) {
+							runtimeType = member.runtimeType as RuntimeType;
+						}
+						// Resolve runtime flags from role skills + member overrides
+						runtimeFlags = await this.resolveRuntimeFlags(
+							role, runtimeType, member.skillOverrides, member.excludedRoleSkills
+						);
 						break;
 					}
 				}
 			} catch (error) {
-				this.logger.warn('Failed to get runtime type from storage, using default', {
+				this.logger.warn('Failed to get runtime type or flags from storage, using defaults', {
 					sessionName,
 					role,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		} else if (role !== ORCHESTRATOR_ROLE) {
+			// Config-provided runtimeType, still resolve flags
+			try {
+				const teams = await this.storageService.getTeams();
+				for (const team of teams) {
+					const member = team.members?.find((m) => m.sessionName === sessionName);
+					if (member) {
+						runtimeFlags = await this.resolveRuntimeFlags(
+							role, runtimeType, member.skillOverrides, member.excludedRoleSkills
+						);
+						break;
+					}
+				}
+			} catch (error) {
+				this.logger.warn('Failed to resolve runtime flags', {
+					sessionName, role,
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -1195,7 +1364,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				projectPath,
 				timeout,
 				memberId,
-				runtimeType
+				runtimeType,
+				runtimeFlags
 			);
 
 			if (!initResult.success) {
@@ -1262,6 +1432,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 			this.logger.info('Agent status updated to inactive', { sessionName, role });
+
+			// Unregister from persistence so explicitly stopped agents don't reappear in resume popup
+			try {
+				const persistence = getSessionStatePersistence();
+				persistence.unregisterSession(sessionName);
+			} catch (persistError) {
+				this.logger.warn('Failed to unregister session from persistence (non-critical)', {
+					sessionName,
+					error: persistError instanceof Error ? persistError.message : String(persistError),
+				});
+			}
 
 			return {
 				success: true,
@@ -1368,19 +1549,95 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
-	 * Send message using event-driven delivery with output stream subscription.
+	 * Wait for an agent session to be at a ready prompt before sending messages.
 	 *
-	 * This method subscribes to the terminal output stream to:
-	 * 1. Detect when Claude is at a prompt (ready for input)
-	 * 2. Send the message when ready
-	 * 3. Confirm delivery via processing indicators in the stream
+	 * Subscribes to terminal output and polls capturePane to detect when the
+	 * agent returns to an input prompt. This is critical for sequential message
+	 * processing: after the orchestrator responds to a message it may continue
+	 * working (managing agents, running commands) before returning to prompt.
 	 *
-	 * @param sessionName - The session name
-	 * @param message - The message to send
-	 * @param timeoutMs - Maximum time to wait for delivery confirmation
-	 * @returns true if message was delivered and processing confirmed
+	 * @param sessionName - The session name to wait on
+	 * @param timeoutMs - Maximum time to wait (default 120s)
+	 * @returns true if agent is ready, false if timed out
 	 */
-	private async sendMessageEventDriven(
+	async waitForAgentReady(
+		sessionName: string,
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+	): Promise<boolean> {
+		const sessionHelper = await this.getSessionHelper();
+
+		// Check if session exists
+		if (!sessionHelper.sessionExists(sessionName)) {
+			this.logger.warn('Session does not exist for waitForAgentReady', { sessionName });
+			return false;
+		}
+
+		// Quick check - already at prompt?
+		const currentOutput = sessionHelper.capturePane(sessionName);
+		if (this.isClaudeAtPrompt(currentOutput)) {
+			this.logger.debug('Agent already at prompt', { sessionName });
+			return true;
+		}
+
+		this.logger.info('Waiting for agent to return to prompt', { sessionName, timeoutMs });
+
+		const session = sessionHelper.getSession(sessionName);
+		if (!session) {
+			return false;
+		}
+
+		return new Promise<boolean>((resolve) => {
+			let resolved = false;
+			const pollInterval = EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL;
+
+			const cleanup = () => {
+				if (resolved) return;
+				resolved = true;
+				clearTimeout(timeoutId);
+				clearInterval(pollId);
+				unsubscribe();
+			};
+
+			// Timeout - give up waiting
+			const timeoutId = setTimeout(() => {
+				this.logger.warn('Timed out waiting for agent to be ready', { sessionName, timeoutMs });
+				cleanup();
+				resolve(false);
+			}, timeoutMs);
+
+			// Poll capturePane periodically as a fallback
+			const pollId = setInterval(() => {
+				if (resolved) return;
+				const output = sessionHelper.capturePane(sessionName);
+				if (this.isClaudeAtPrompt(output)) {
+					this.logger.debug('Agent at prompt (detected via polling)', { sessionName });
+					cleanup();
+					resolve(true);
+				}
+			}, pollInterval);
+
+			// Also subscribe to terminal data for faster detection
+			const unsubscribe = session.onData((data) => {
+				if (resolved) return;
+				if (TERMINAL_PATTERNS.PROMPT_STREAM.test(data)) {
+					// Double-check with capturePane to avoid false positives from partial data
+					const output = sessionHelper.capturePane(sessionName);
+					if (this.isClaudeAtPrompt(output)) {
+						this.logger.debug('Agent at prompt (detected via stream)', { sessionName });
+						cleanup();
+						resolve(true);
+					}
+				}
+			});
+		});
+	}
+
+	/**
+	 * @deprecated Replaced by SessionCommandHelper.sendMessage() in sendMessageWithRetry.
+	 * Complex event-driven state machine was fragile — Enter key often got lost.
+	 * Kept as dead code for reference during transition.
+	 */
+	private async _deprecated_sendMessageEventDriven(
 		sessionName: string,
 		message: string,
 		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.TOTAL_DELIVERY_TIMEOUT
@@ -1397,12 +1654,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			let buffer = '';
 			let messageSent = false;
 			let enterSent = false;
+			let enterAccepted = false;
 			let deliveryConfirmed = false;
 			let resolved = false;
 
 			// Track all timeouts to prevent memory leaks (P1.1 fix)
 			const pendingTimeouts: NodeJS.Timeout[] = [];
-			const scheduleTimeout = (fn: () => void, delayMs: number): NodeJS.Timeout => {
+			const scheduleTimeout = (fn: () => void | Promise<void>, delayMs: number): NodeJS.Timeout => {
 				const id = setTimeout(fn, delayMs);
 				pendingTimeouts.push(id);
 				return id;
@@ -1483,14 +1741,28 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// Check if processing already started
 					if (checkProcessingStarted()) {
 						processingDetected = true;
+						enterAccepted = true;
 						this.logger.debug('Processing detected, message accepted', { sessionName, attemptNum });
 						buffer = ''; // Reset for processing indicator detection
 						return;
 					}
 
 					if (attemptNum > MAX_ENTER_RETRIES) {
-						this.logger.debug('Max Enter retries reached, proceeding', { sessionName });
-						buffer = '';
+						this.logger.warn('Max Enter retries reached, verifying message acceptance', { sessionName });
+						scheduleTimeout(async () => {
+							if (resolved) return;
+							const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
+							if (stuck) {
+								this.logger.warn('Message stuck at prompt after all Enter retries', { sessionName });
+								const stuckHelper = await this.getSessionHelper();
+								await stuckHelper.clearCurrentCommandLine(sessionName);
+								enterAccepted = false;
+							} else {
+								this.logger.debug('Message appears accepted (no longer at prompt)', { sessionName });
+								enterAccepted = true;
+								buffer = '';
+							}
+						}, EVENT_DELIVERY_CONSTANTS.POST_ENTER_VERIFICATION_DELAY);
 						return;
 					}
 
@@ -1502,6 +1774,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 						if (checkProcessingStarted()) {
 							processingDetected = true;
+							enterAccepted = true;
 							this.logger.debug('Processing detected after Enter', { sessionName, attemptNum });
 							buffer = '';
 						} else {
@@ -1533,26 +1806,64 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				}, initialWait);
 			};
 
-			const timeoutId = setTimeout(() => {
+			const timeoutId = setTimeout(async () => {
 				this.logger.debug('Event-driven delivery timed out', {
 					sessionName,
 					messageSent,
 					enterSent,
+					enterAccepted,
 					deliveryConfirmed,
 					bufferLength: buffer.length,
 				});
+
+				// If Enter was sent but not confirmed accepted, verify via terminal capture
+				if (enterSent && !enterAccepted && !deliveryConfirmed) {
+					const timeoutHelper = await this.getSessionHelper();
+					const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
+					if (stuck) {
+						this.logger.warn('Timeout: message stuck at prompt, clearing and failing', { sessionName });
+						await timeoutHelper.clearCurrentCommandLine(sessionName);
+						cleanup();
+						resolve(false);
+						return;
+					}
+					this.logger.debug('Timeout: message not at prompt, treating as accepted', { sessionName });
+				}
+
 				cleanup();
-				// Partial success if Enter was sent (message was fully submitted)
-				resolve(enterSent);
+				resolve(enterAccepted || deliveryConfirmed);
 			}, timeoutMs);
 
-			// IMPORTANT: Check current terminal state immediately
-			// Claude may already be at prompt with no new output coming
-			const currentOutput = sessionHelper.capturePane(sessionName, 10);
-			if (this.isClaudeAtPrompt(currentOutput)) {
-				this.logger.debug('Claude already at prompt (immediate check)', { sessionName });
-				sendMessageNow();
-			}
+			// IMPORTANT: Check current terminal state, but wait for output to settle first.
+			// If the orchestrator just finished outputting (greeting, notification, status bar),
+			// the prompt may not be cleanly detectable. We capture the pane, wait briefly,
+			// and re-capture. If output is still changing, wait again before checking prompt.
+			// Use 50 lines to account for status bars and notifications that can
+			// wrap across many lines and push the prompt out of a smaller window.
+			const waitForSettled = async () => {
+				let prevOutput = sessionHelper.capturePane(sessionName);
+				for (let i = 0; i < 5; i++) { // Max 5 checks, 500ms apart = 2.5s max
+					if (resolved) return;
+					await delay(500);
+					if (resolved) return;
+					const currentOutput = sessionHelper.capturePane(sessionName);
+					if (currentOutput === prevOutput) {
+						// Output settled
+						if (this.isClaudeAtPrompt(currentOutput)) {
+							this.logger.debug('Claude at prompt after output settled', { sessionName, settleChecks: i + 1 });
+							sendMessageNow();
+						}
+						return;
+					}
+					prevOutput = currentOutput;
+				}
+				// Output still changing after 2.5s - check anyway
+				if (!resolved && this.isClaudeAtPrompt(prevOutput)) {
+					this.logger.debug('Claude at prompt (output still changing, checking anyway)', { sessionName });
+					sendMessageNow();
+				}
+			};
+			waitForSettled();
 
 			const unsubscribe = session.onData((data) => {
 				if (resolved) return;
@@ -1606,7 +1917,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 	/**
 	 * Send message with retry logic for reliable delivery to Claude Code.
-	 * Uses event-driven delivery as primary method with polling fallback.
+	 * Uses SessionCommandHelper.sendMessage() (proven two-step write pattern)
+	 * with stuck-message detection and retry on failure.
 	 *
 	 * @param sessionName - The session name
 	 * @param message - The message to send
@@ -1627,42 +1939,39 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					attempt,
 					maxAttempts,
 					messageLength: message.length,
-					method: 'event-driven',
 				});
 
-				// Try event-driven delivery first (primary method)
-				const delivered = await this.sendMessageEventDriven(
-					sessionName,
-					message,
-					EVENT_DELIVERY_CONSTANTS.PROMPT_DETECTION_TIMEOUT
-				);
+				// Verify Claude is at prompt before sending
+				const output = sessionHelper.capturePane(sessionName);
+				if (!this.isClaudeAtPrompt(output)) {
+					this.logger.debug('Not at prompt, waiting before retry', { sessionName, attempt });
+					await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+					continue;
+				}
 
-				if (delivered) {
-					this.logger.debug('Message delivered via event-driven method', {
-						sessionName,
-						attempt,
-					});
+				// Use SessionCommandHelper.sendMessage() — proven two-step write:
+				// 1. session.write(message)    — triggers bracketed paste
+				// 2. await delay(scaled)       — waits for paste processing
+				// 3. session.write('\r')       — sends Enter separately
+				// 4. await delay(KEY_DELAY)    — waits for key processing
+				await sessionHelper.sendMessage(sessionName, message);
+
+				// Wait for Claude Code to start processing, then verify delivery
+				await delay(SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY);
+
+				const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
+				if (!stuck) {
+					this.logger.debug('Message delivered successfully', { sessionName, attempt });
 					return true;
 				}
 
-				// Event-driven failed, check if we need to clear terminal state
-				// Only do this on first failed attempt to avoid interrupting processing
-				if (attempt === 1) {
-					const output = sessionHelper.capturePane(sessionName, 5);
-					const isAtPrompt = this.isClaudeAtPrompt(output);
-
-					if (!isAtPrompt) {
-						this.logger.debug('Clearing terminal state before retry', { sessionName });
-						await sessionHelper.sendEscape(sessionName);
-						await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
-					}
-				}
-
-				this.logger.warn('Event-driven delivery failed, retrying', {
+				// Message stuck at prompt — clear line and retry
+				this.logger.warn('Message stuck at prompt after send, clearing for retry', {
 					sessionName,
 					attempt,
-					nextAttempt: attempt < maxAttempts,
 				});
+				await sessionHelper.clearCurrentCommandLine(sessionName);
+				await delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
 				if (attempt < maxAttempts) {
 					await delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
@@ -1680,7 +1989,6 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		// Log exhaustion of all retries
 		this.logger.error('Message delivery failed after all retry attempts', {
 			sessionName,
 			maxAttempts,
@@ -1690,6 +1998,64 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		return false;
 	}
 
+
+	/**
+	 * Check if a sent message is stuck at the terminal prompt (Enter was not accepted).
+	 *
+	 * Captures the current terminal pane and looks for the message text still visible
+	 * on the last few lines. If the text is found, Enter was not processed and the
+	 * message is stuck.
+	 *
+	 * @param sessionName - The session to check
+	 * @param message - The original message that was sent
+	 * @returns true if the message text is still visible at the prompt (stuck)
+	 */
+	private async isMessageStuckAtPrompt(sessionName: string, message: string): Promise<boolean> {
+		try {
+			const sessionHelper = await this.getSessionHelper();
+			const output = sessionHelper.capturePane(sessionName);
+
+			if (!output || output.trim().length === 0) {
+				return false;
+			}
+
+			// Extract a search token from the message:
+			// Strip [CHAT:uuid] prefix if present, then take the first 40 chars
+			const chatPrefixMatch = message.match(/^\[CHAT:[^\]]+\]\s*/);
+			const contentAfterPrefix = chatPrefixMatch
+				? message.slice(chatPrefixMatch[0].length)
+				: message;
+			const searchToken = contentAfterPrefix.slice(0, 40).trim();
+
+			// Also use [CHAT: as a secondary token if message has a CHAT prefix
+			const chatToken = chatPrefixMatch ? '[CHAT:' : null;
+
+			// Check last 5 non-empty lines for either token
+			const lines = output.split('\n').filter((line) => line.trim().length > 0);
+			const linesToCheck = lines.slice(-5);
+
+			const isStuck = linesToCheck.some((line) => {
+				if (searchToken && line.includes(searchToken)) return true;
+				if (chatToken && line.includes(chatToken)) return true;
+				return false;
+			});
+
+			this.logger.debug('isMessageStuckAtPrompt result', {
+				sessionName,
+				isStuck,
+				searchToken: searchToken.slice(0, 20),
+				linesChecked: linesToCheck.length,
+			});
+
+			return isStuck;
+		} catch (error) {
+			this.logger.warn('Error checking if message stuck at prompt', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+	}
 
 	/**
 	 * Check if Claude Code appears to be at an input prompt.
@@ -1705,13 +2071,34 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return true; // Assume at prompt if no output (safer for message delivery)
 		}
 
-		// Check last few lines for prompt indicators
-		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
-		const lastLine = lines[lines.length - 1] || '';
+		// Use the PROMPT_STREAM regex which precisely matches a prompt character
+		// on its own line (e.g., ❯ or >), not as part of a status bar like ⏵⏵.
+		// This checks the entire captured output, not just the last line, because
+		// status bars and notifications can appear below the prompt line.
+		if (TERMINAL_PATTERNS.PROMPT_STREAM.test(terminalOutput)) {
+			return true;
+		}
 
-		return AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
-			(indicator) => lastLine.includes(indicator)
-		);
+		// Fallback: check last several lines for prompt indicators.
+		// The prompt may not be on the very last line due to status bars,
+		// notifications, or terminal wrapping below the prompt.
+		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
+		const linesToCheck = lines.slice(-10);
+
+		return linesToCheck.some((line) => {
+			const trimmed = line.trim();
+			// Exact match for single-char prompts (❯, >, ⏵, $)
+			if (AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
+				(indicator) => trimmed === indicator
+			)) {
+				return true;
+			}
+			// Bypass permissions mode: line starts with ❯❯ followed by space
+			if (trimmed.startsWith('❯❯ ')) {
+				return true;
+			}
+			return false;
+		});
 	}
 
 	/**
@@ -1859,11 +2246,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// Send the prompt with proper timing
 				await sessionHelper.sendMessage(sessionName, prompt);
 
-				// Claude Code with bracketed paste mode may need explicit Enter presses after paste
-				// Send additional Enter keys to ensure the prompt is submitted
-				await delay(500);
+				// Claude Code with bracketed paste mode may need explicit Enter presses after paste.
+				// Scale wait time based on prompt size to ensure paste processing completes.
+				const enterDelay = Math.min(1000 + Math.ceil(prompt.length / 10), 5000);
+				await delay(enterDelay);
 				await sessionHelper.sendEnter(sessionName);
-				await delay(300);
+				await delay(500);
 				await sessionHelper.sendEnter(sessionName);
 
 				// Wait for Claude to start processing

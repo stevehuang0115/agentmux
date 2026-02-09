@@ -165,6 +165,31 @@ export class WebSocketService {
         this.emit('chat_conversation', message);
       });
 
+      // Message queue events
+      this.socket.on('queue:message_enqueued', (message: WebSocketMessage) => {
+        this.emit('queue:message_enqueued', message);
+      });
+
+      this.socket.on('queue:message_processing', (message: WebSocketMessage) => {
+        this.emit('queue:message_processing', message);
+      });
+
+      this.socket.on('queue:message_completed', (message: WebSocketMessage) => {
+        this.emit('queue:message_completed', message);
+      });
+
+      this.socket.on('queue:message_failed', (message: WebSocketMessage) => {
+        this.emit('queue:message_failed', message);
+      });
+
+      this.socket.on('queue:message_cancelled', (message: WebSocketMessage) => {
+        this.emit('queue:message_cancelled', message);
+      });
+
+      this.socket.on('queue:status_update', (message: WebSocketMessage) => {
+        this.emit('queue:status_update', message);
+      });
+
       // Team activity events
       this.socket.on('orchestrator_status_changed', (message: WebSocketMessage) => {
         this.emit('orchestrator_status_changed', message.payload);

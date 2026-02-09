@@ -102,6 +102,9 @@ $RECYCLE.BIN/
 # .agentmux/
 # secrets/
 
+# Auto-generated MCP config (contains localhost URLs, environment-specific)
+.mcp.json
+
 # Prototype and development files
 frontend_prototype/
 

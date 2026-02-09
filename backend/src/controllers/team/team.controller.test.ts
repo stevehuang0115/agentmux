@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
 import * as teamsHandlers from './team.controller.js';
+import { setTeamControllerEventBusService } from './team.controller.js';
 import type { ApiContext } from '../types.js';
 import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from '../../services/index.js';
 import { ActiveProjectsService } from '../../services/index.js';
@@ -1153,6 +1154,146 @@ describe('Teams Handlers', () => {
       expect(savedTeam!.members[0]).not.toHaveProperty('status');
       expect(savedTeam!.members[0]).toHaveProperty('agentStatus');
       expect(savedTeam!.members[0]).toHaveProperty('workingStatus');
+    });
+  });
+
+  describe('orchestrator auto-subscription to agent events', () => {
+    let mockEventBusService: {
+      subscribe: jest.Mock;
+      unsubscribe: jest.Mock;
+      listSubscriptions: jest.Mock;
+    };
+
+    beforeEach(() => {
+      mockEventBusService = {
+        subscribe: jest.fn().mockReturnValue({ id: 'sub-1' }),
+        unsubscribe: jest.fn().mockReturnValue(true),
+        listSubscriptions: jest.fn().mockReturnValue([]),
+      };
+      setTeamControllerEventBusService(mockEventBusService as any);
+    });
+
+    afterEach(() => {
+      // Reset module-level state by setting to null
+      setTeamControllerEventBusService(null as any);
+    });
+
+    it('should auto-subscribe orchestrator to agent events on registration', async () => {
+      mockRequest.body = {
+        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        role: 'orchestrator',
+        status: 'active',
+        registeredAt: new Date().toISOString(),
+      };
+
+      (mockStorageService as any).updateOrchestratorStatus = jest.fn<any>().mockResolvedValue(undefined);
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockEventBusService.listSubscriptions).toHaveBeenCalledWith(
+        AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+      );
+      expect(mockEventBusService.subscribe).toHaveBeenCalledWith({
+        eventType: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
+        filter: {},
+        subscriberSession: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        oneShot: false,
+        ttlMinutes: 1440,
+      });
+    });
+
+    it('should clear existing subscriptions before re-subscribing', async () => {
+      mockEventBusService.listSubscriptions.mockReturnValue([
+        { id: 'old-sub-1' },
+        { id: 'old-sub-2' },
+      ]);
+
+      mockRequest.body = {
+        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        role: 'orchestrator',
+        status: 'active',
+      };
+
+      (mockStorageService as any).updateOrchestratorStatus = jest.fn<any>().mockResolvedValue(undefined);
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockEventBusService.unsubscribe).toHaveBeenCalledWith('old-sub-1');
+      expect(mockEventBusService.unsubscribe).toHaveBeenCalledWith('old-sub-2');
+      expect(mockEventBusService.subscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it('should gracefully handle missing eventBusService', async () => {
+      // Reset to null
+      setTeamControllerEventBusService(null as any);
+
+      mockRequest.body = {
+        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        role: 'orchestrator',
+        status: 'active',
+      };
+
+      (mockStorageService as any).updateOrchestratorStatus = jest.fn<any>().mockResolvedValue(undefined);
+
+      // Should not throw
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+      // subscribe should not be called since eventBusService is null
+      expect(mockEventBusService.subscribe).not.toHaveBeenCalled();
+    });
+
+    it('should NOT subscribe for non-orchestrator agents', async () => {
+      const mockTeam: Team = {
+        id: 'team-123',
+        name: 'Test Team',
+        members: [{
+          id: 'member-1',
+          name: 'Alice',
+          sessionName: 'agentmux_alice',
+          role: 'developer',
+          systemPrompt: 'Test',
+          agentStatus: 'activating',
+          workingStatus: 'idle',
+          runtimeType: 'claude-code',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      mockRequest.body = {
+        sessionName: 'agentmux_alice',
+        role: 'developer',
+        status: 'active',
+        memberId: 'member-1',
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([mockTeam]);
+      mockStorageService.saveTeam.mockResolvedValue(undefined);
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockEventBusService.subscribe).not.toHaveBeenCalled();
     });
   });
 

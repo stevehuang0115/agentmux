@@ -4,6 +4,8 @@ import { Terminal, Menu, X } from 'lucide-react';
 import { Navigation } from './Navigation';
 import { TerminalPanel } from '../TerminalPanel/TerminalPanel';
 import { OrchestratorStatusBanner } from '../OrchestratorStatusBanner';
+import { SessionResumePopup } from '../SessionResumePopup';
+import { TeamsRestorePopup } from '../TeamsRestorePopup';
 import { useTerminal } from '../../contexts/TerminalContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { IconButton } from '../UI';
@@ -24,6 +26,12 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background-dark">
+      {/* Session Resume Popup (shown once on app restart if previous sessions exist) */}
+      <SessionResumePopup />
+
+      {/* Teams Restore Popup (shown when teams data is missing but backup exists) */}
+      <TeamsRestorePopup />
+
       {/* Mobile Backdrop */}
       <div
         className={`fixed inset-0 bg-black/60 z-40 md:hidden transition-opacity ${isMobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
@@ -61,7 +69,7 @@ export const AppLayout: React.FC = () => {
 
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <OrchestratorStatusBanner />
-          <div className="flex-1 p-4 md:p-6 min-h-0 overflow-hidden">
+          <div className="flex-1 p-4 md:p-6 min-h-0 overflow-y-auto">
             <Outlet />
           </div>
         </main>

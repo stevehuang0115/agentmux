@@ -24,9 +24,26 @@ import {
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
-import { getSessionBackendSync } from '../../services/session/index.js';
+import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
+import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
+
+/**
+ * Module-level EventBusService instance, injected at startup.
+ * Used to auto-subscribe the orchestrator to agent lifecycle events.
+ */
+let eventBusService: EventBusService | null = null;
+
+/**
+ * Set the EventBusService instance for auto-subscribing the orchestrator.
+ * Called during server initialization in index.ts.
+ *
+ * @param service - The EventBusService instance
+ */
+export function setTeamControllerEventBusService(service: EventBusService): void {
+  eventBusService = service;
+}
 
 /**
  * Result of a team member start/stop operation
@@ -457,6 +474,32 @@ async function _stopTeamMemberCore(
   }
 }
 
+/**
+ * Creates (or refreshes) orchestrator subscriptions to agent lifecycle events.
+ *
+ * Clears any existing subscriptions for the orchestrator session first to avoid
+ * duplicates on re-registration, then subscribes to all agent status change events
+ * with the maximum TTL (24 hours). Re-created each time the orchestrator registers.
+ */
+function ensureOrchestratorSubscriptions(): void {
+  if (!eventBusService) return;
+
+  // Clear any existing orchestrator subscriptions to avoid duplicates on re-registration
+  const existing = eventBusService.listSubscriptions(ORCHESTRATOR_SESSION_NAME);
+  for (const sub of existing) {
+    eventBusService.unsubscribe(sub.id);
+  }
+
+  // Subscribe to all agent lifecycle events with max TTL
+  eventBusService.subscribe({
+    eventType: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
+    filter: {},
+    subscriberSession: ORCHESTRATOR_SESSION_NAME,
+    oneShot: false,
+    ttlMinutes: 1440,
+  });
+}
+
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { name, description, members, projectPath, currentProject } = req.body as CreateTeamRequestBody;
@@ -648,7 +691,7 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
 export async function startTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { id } = req.params;
-    const { projectId, enableGitReminder = false } = req.body as StartTeamRequestBody;
+    const { projectId } = req.body as StartTeamRequestBody;
 
     if (id === ORCHESTRATOR_ROLE) {
       res.status(400).json({
@@ -729,42 +772,11 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
     // No need to save the team object here as it would overwrite the updated agentStatus
     // from MCP registration with stale data
 
-    let scheduledMessageId: string | null = null;
-    if (enableGitReminder && this.messageSchedulerService) {
-      const messageId = `git-reminder-${team.id}-${Date.now()}`;
-      const gitReminderMessage: ScheduledMessage = {
-        id: messageId,
-        name: `Git Reminder for ${team.name}`,
-        targetTeam: team.id,
-        targetProject: assignedProject.id,
-        message: `📝 Git Reminder: Time to commit your changes! Remember our 30-minute commit discipline.\n\n` +
-                `Project: ${assignedProject.name}\n` +
-                `Please check your progress and commit any pending changes:\n` +
-                `- Review your modified files\n` +
-                `- Add meaningful commit messages\n` +
-                `- Push changes if ready\n\n` +
-                `This is an automated reminder to help maintain good development practices.`,
-        delayAmount: 30,
-        delayUnit: 'minutes',
-        isRecurring: true,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      try {
-        await this.storageService.saveScheduledMessage(gitReminderMessage);
-        this.messageSchedulerService.scheduleMessage(gitReminderMessage);
-        scheduledMessageId = messageId;
-      } catch (error) {
-        console.error('Error creating git reminder:', error);
-      }
-    }
-
-    const responseMessage = `Team started. Created ${sessionsCreated} new sessions, ${sessionsAlreadyRunning} already running. Sessions are working in project: ${assignedProject.name}` + (enableGitReminder ? '. Git reminders enabled every 30 minutes.' : '');
+    const responseMessage = `Team started. Created ${sessionsCreated} new sessions, ${sessionsAlreadyRunning} already running. Sessions are working in project: ${assignedProject.name}`;
     res.json({
       success: true,
       message: responseMessage,
-      data: { sessionsCreated, sessionsAlreadyRunning, projectName: assignedProject.name, projectPath: assignedProject.path, gitReminderEnabled: enableGitReminder, scheduledMessageId, results }
+      data: { sessionsCreated, sessionsAlreadyRunning, projectName: assignedProject.name, projectPath: assignedProject.path, results }
     } as ApiResponse);
   } catch (error) {
     console.error('Error starting team:', error);
@@ -1150,13 +1162,23 @@ export async function reportMemberReady(this: ApiContext, req: Request, res: Res
 
 export async function registerMemberStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { sessionName, role, status, registeredAt, memberId } = req.body as RegisterMemberStatusRequestBody;
+    const { sessionName, role, status, registeredAt, memberId, claudeSessionId } = req.body as RegisterMemberStatusRequestBody;
 
     // Update agent heartbeat (proof of life)
     try {
       await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
     } catch {
       // Continue execution - heartbeat failures shouldn't break registration
+    }
+
+    // Store Claude session ID for resume-on-restart support
+    if (claudeSessionId && sessionName) {
+      try {
+        const persistence = getSessionStatePersistence();
+        persistence.updateSessionId(sessionName, claudeSessionId);
+      } catch {
+        // Non-critical - session persistence may not be initialized yet
+      }
     }
 
     if (!sessionName || !role) {
@@ -1178,6 +1200,9 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
             workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
           });
         }
+
+        // Auto-subscribe orchestrator to agent lifecycle events for real-time notifications
+        ensureOrchestratorSubscriptions();
 
         res.json({ success: true, message: `Orchestrator ${sessionName} registered as active`, sessionName } as ApiResponse);
         return;

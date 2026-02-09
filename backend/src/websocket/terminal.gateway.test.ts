@@ -19,6 +19,16 @@ jest.mock('../services/session/index.js', () => ({
 jest.mock('./chat.gateway.js', () => ({
 	getChatGateway: jest.fn(() => ({
 		processTerminalOutput: jest.fn().mockResolvedValue(undefined),
+		processNotifyMessage: jest.fn().mockResolvedValue(undefined),
+	})),
+}));
+
+// Mock the Slack bridge
+const mockBridgeSendNotification = jest.fn().mockResolvedValue(undefined);
+jest.mock('../services/slack/slack-orchestrator-bridge.js', () => ({
+	getSlackOrchestratorBridge: jest.fn(() => ({
+		isInitialized: jest.fn(() => true),
+		sendNotification: mockBridgeSendNotification,
 	})),
 }));
 
@@ -347,6 +357,489 @@ describe('TerminalGateway', () => {
 			gateway.setActiveConversationId('conv-1');
 
 			expect(gateway.getActiveConversationId()).toBe('conv-1');
+		});
+	});
+
+	describe('processOrchestratorOutputForChat', () => {
+		let mockChatGateway: any;
+
+		beforeEach(() => {
+			const { getChatGateway } = require('./chat.gateway.js');
+			mockChatGateway = {
+				processTerminalOutput: jest.fn().mockResolvedValue(undefined),
+			};
+			getChatGateway.mockReturnValue(mockChatGateway);
+		});
+
+		it('should extract conversation ID from [CHAT_RESPONSE:convId] and route to it', () => {
+			// Set up orchestrator session streaming
+			const onDataCallbacks: ((data: string) => void)[] = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			// Set a fallback active conversation ID
+			gateway.setActiveConversationId('fallback-conv');
+
+			// Subscribe to orchestrator session to start streaming
+			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+
+			// Simulate orchestrator output with embedded conversation ID
+			const output = '[CHAT_RESPONSE:conv-123]Hello from conv-123[/CHAT_RESPONSE]';
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			// Should route to the embedded conversation ID, not the fallback
+			expect(mockChatGateway.processTerminalOutput).toHaveBeenCalledWith(
+				'agentmux-orc',
+				expect.stringContaining('Hello from conv-123'),
+				'conv-123'
+			);
+		});
+
+		it('should fall back to activeConversationId for old [CHAT_RESPONSE] format', () => {
+			const onDataCallbacks: ((data: string) => void)[] = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			gateway.setActiveConversationId('active-conv');
+
+			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+
+			// Simulate old-format orchestrator output without conversation ID
+			const output = '[CHAT_RESPONSE]Hello from old format[/CHAT_RESPONSE]';
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			// Should route to activeConversationId since no embedded ID
+			expect(mockChatGateway.processTerminalOutput).toHaveBeenCalledWith(
+				'agentmux-orc',
+				expect.stringContaining('Hello from old format'),
+				'active-conv'
+			);
+		});
+	});
+
+	describe('proactive Slack notifications', () => {
+		let onDataCallbacks: ((data: string) => void)[];
+
+		beforeEach(() => {
+			onDataCallbacks = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			gateway.setActiveConversationId('conv-1');
+			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			mockBridgeSendNotification.mockClear();
+		});
+
+		it('should detect [SLACK_NOTIFY] markers and send notification to bridge', () => {
+			const notification = JSON.stringify({
+				type: 'task_completed',
+				title: 'Task Done',
+				message: '*Fix bug* completed by Joe',
+				urgency: 'normal',
+			});
+			const output = `[SLACK_NOTIFY]${notification}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'task_completed',
+					title: 'Task Done',
+					message: '*Fix bug* completed by Joe',
+					urgency: 'normal',
+				})
+			);
+		});
+
+		it('should apply default urgency and title when not provided', () => {
+			const notification = JSON.stringify({
+				type: 'alert',
+				message: 'Something happened',
+			});
+			const output = `[SLACK_NOTIFY]${notification}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'alert',
+					title: 'alert',
+					message: 'Something happened',
+					urgency: 'normal',
+				})
+			);
+		});
+
+		it('should skip invalid JSON in SLACK_NOTIFY markers', () => {
+			const output = '[SLACK_NOTIFY]not valid json[/SLACK_NOTIFY]';
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should skip notifications missing required fields', () => {
+			const output = `[SLACK_NOTIFY]${JSON.stringify({ title: 'No type or message' })}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should process multiple SLACK_NOTIFY blocks in same output', () => {
+			const n1 = JSON.stringify({ type: 'task_completed', message: 'First' });
+			const n2 = JSON.stringify({ type: 'agent_error', message: 'Second', urgency: 'high' });
+			const output = `[SLACK_NOTIFY]${n1}[/SLACK_NOTIFY]\n[SLACK_NOTIFY]${n2}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledTimes(2);
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({ type: 'task_completed', message: 'First' })
+			);
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({ type: 'agent_error', message: 'Second', urgency: 'high' })
+			);
+		});
+
+		it('should send Slack notifications even without an active conversation ID', () => {
+			// Reset — clear the active conversation set in beforeEach
+			gateway.setActiveConversationId(null);
+
+			const notification = JSON.stringify({
+				type: 'proactive_update',
+				title: 'Status Update',
+				message: 'Agent completed a background task',
+				urgency: 'normal',
+			});
+			const output = `[SLACK_NOTIFY]${notification}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'proactive_update',
+					title: 'Status Update',
+					message: 'Agent completed a background task',
+				})
+			);
+		});
+
+		it('should clean terminal line-wrapping artifacts from JSON before parsing', () => {
+			// Simulate PTY wrapping: newlines and padding spaces injected into JSON
+			const wrappedJson = '{"type":"task_completed","title":"Task                         \n\n  Assigned","message":"Emily is working on the      \n\n  support task.","urgency":"normal","channelId":"C123"}';
+			const output = `[SLACK_NOTIFY]${wrappedJson}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'task_completed',
+					title: 'Task Assigned',
+					message: 'Emily is working on the support task.',
+					channelId: 'C123',
+				})
+			);
+		});
+
+		it('should skip non-JSON SLACK_NOTIFY content from prompt templates', () => {
+			// The orchestrator prompt contains [SLACK_NOTIFY] examples with backtick fences
+			const output = '[SLACK_NOTIFY]` or `[CHAT_RESPONSE]` markers for every status update.[/SLACK_NOTIFY]';
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should strip residual ANSI codes from SLACK_NOTIFY JSON', () => {
+			// Sometimes ANSI codes survive the initial stripAnsiCodes pass
+			const json = '{"type":"agent_error","title":"Error","message":"*Joe*\x1b[39m encountered a failure","urgency":"high"}';
+			const output = `[SLACK_NOTIFY]${json}[/SLACK_NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'agent_error',
+					message: '*Joe* encountered a failure',
+				})
+			);
+		});
+	});
+
+	describe('unified [NOTIFY] markers', () => {
+		let onDataCallbacks: ((data: string) => void)[];
+		let mockChatGateway: any;
+
+		beforeEach(() => {
+			onDataCallbacks = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			const { getChatGateway } = require('./chat.gateway.js');
+			mockChatGateway = {
+				processTerminalOutput: jest.fn().mockResolvedValue(undefined),
+				processNotifyMessage: jest.fn().mockResolvedValue(undefined),
+			};
+			getChatGateway.mockReturnValue(mockChatGateway);
+
+			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			gateway.setActiveConversationId('conv-1');
+			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			mockBridgeSendNotification.mockClear();
+		});
+
+		it('should route [NOTIFY] with conversationId to chat (header+body format)', () => {
+			const output = `[NOTIFY]\nconversationId: conv-abc\n---\n## Update\n\nDetails here.\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'## Update\n\nDetails here.',
+				'conv-abc'
+			);
+			// No Slack routing (no channelId)
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should route [NOTIFY] with channelId to Slack (header+body format)', () => {
+			// No conversationId, no activeConversationId
+			gateway.setActiveConversationId(null);
+
+			const output = `[NOTIFY]\nchannelId: C0123\nthreadTs: 170743.001\ntype: task_completed\n---\nAgent done\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'task_completed',
+					message: 'Agent done',
+					channelId: 'C0123',
+					threadTs: '170743.001',
+				})
+			);
+			// No chat routing (no conversationId, no activeConversationId)
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+		});
+
+		it('should route [NOTIFY] to BOTH chat and Slack when both fields present', () => {
+			const output = `[NOTIFY]\nconversationId: conv-abc\nchannelId: C0123\nthreadTs: 170743.001\ntype: task_completed\nurgency: normal\n---\n## Task Done\n\nJoe finished.\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			// Chat routing
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'## Task Done\n\nJoe finished.',
+				'conv-abc'
+			);
+
+			// Slack routing
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'task_completed',
+					message: '## Task Done\n\nJoe finished.',
+					channelId: 'C0123',
+					urgency: 'normal',
+				})
+			);
+		});
+
+		it('should NOT route to Slack when type is present but channelId is missing', () => {
+			gateway.setActiveConversationId('conv-123');
+
+			const output = `[NOTIFY]\nconversationId: conv-123\ntype: daily_summary\n---\nDaily progress update\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			// Should route to chat
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'Daily progress update',
+				'conv-123'
+			);
+			// Should NOT route to Slack — type alone is not a routing signal
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should fallback to activeConversationId when no conversationId in payload', () => {
+			gateway.setActiveConversationId('active-conv-fallback');
+
+			const output = `[NOTIFY]\n---\nFallback test\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'Fallback test',
+				'active-conv-fallback'
+			);
+		});
+
+		it('should skip legacy JSON NOTIFY payloads missing required message field', () => {
+			const output = `[NOTIFY]${JSON.stringify({ type: 'alert', conversationId: 'conv-1' })}[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should skip empty NOTIFY blocks', () => {
+			const output = '[NOTIFY]   [/NOTIFY]';
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should skip NOTIFY with headers but empty body', () => {
+			const output = '[NOTIFY]\nconversationId: conv-1\n---\n[/NOTIFY]';
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
+		it('should handle legacy JSON NOTIFY via fallback (transition period)', () => {
+			const payload = JSON.stringify({
+				message: '## Task Done\n\nJoe finished.',
+				conversationId: 'conv-abc',
+				channelId: 'C123',
+				type: 'task_completed',
+			});
+			const output = `[NOTIFY]${payload}[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'## Task Done\n\nJoe finished.',
+				'conv-abc'
+			);
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					channelId: 'C123',
+					type: 'task_completed',
+				})
+			);
+		});
+
+		it('should clean terminal line-wrapping artifacts from legacy JSON NOTIFY', () => {
+			const wrappedJson = '{"message":"## Task Done\\n\\nJoe                         \n\n  finished the work.","conversationId":"conv-abc","type":"task_completed","channelId":"C123"}';
+			const output = `[NOTIFY]${wrappedJson}[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalled();
+			expect(mockBridgeSendNotification).toHaveBeenCalled();
+		});
+
+		it('should process multiple NOTIFY blocks in same output', () => {
+			gateway.setActiveConversationId(null);
+
+			const n1 = `[NOTIFY]\nconversationId: conv-1\n---\nFirst update\n[/NOTIFY]`;
+			const n2 = `[NOTIFY]\nchannelId: C123\ntype: alert\n---\nSecond update\n[/NOTIFY]`;
+			const output = `${n1}\n${n2}`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledTimes(1);
+			expect(mockBridgeSendNotification).toHaveBeenCalledTimes(1);
+		});
+
+		it('should deduplicate identical NOTIFY messages', () => {
+			const output = `[NOTIFY]\nconversationId: conv-1\n---\nDuplicate test\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+				onDataCallbacks[0](output);
+			}
+
+			// Should only be called once (second is a duplicate)
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('should route header+body NOTIFY with all headers to both chat and Slack', () => {
+			const output = `[NOTIFY]\nconversationId: conv-1\nchannelId: C456\nthreadTs: 12345.001\ntype: project_update\ntitle: Update\nurgency: high\n---\n## Progress\n\nAll done.\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'agentmux-orc',
+				'## Progress\n\nAll done.',
+				'conv-1'
+			);
+			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
+				expect.objectContaining({
+					type: 'project_update',
+					title: 'Update',
+					urgency: 'high',
+					channelId: 'C456',
+					threadTs: '12345.001',
+					message: '## Progress\n\nAll done.',
+				})
+			);
 		});
 	});
 });

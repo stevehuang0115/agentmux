@@ -4,8 +4,9 @@ import { TmuxService } from '../agent/tmux.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { AGENTMUX_CONSTANTS, TERMINAL_PATTERNS } from '../../constants.js';
 import { getSessionBackendSync } from '../session/index.js';
+import { SessionCommandHelper } from '../session/session-command-helper.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -137,28 +138,38 @@ export class MessageSchedulerService extends EventEmitter {
         ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
         : message.targetTeam;
 
-      // Use PTY session backend to check if session exists and send message
+      // Use PTY session backend via SessionCommandHelper (proven two-step write pattern)
       const backend = getSessionBackendSync();
       if (!backend) {
         throw new Error('Session backend not initialized');
       }
 
-      // Check if session exists using PTY backend
-      if (!backend.sessionExists(sessionName)) {
+      const commandHelper = new SessionCommandHelper(backend);
+
+      if (!commandHelper.sessionExists(sessionName)) {
         throw new Error(`Target session "${sessionName}" does not exist`);
       }
 
-      // Get the session
-      const session = backend.getSession(sessionName);
-      if (!session) {
-        throw new Error(`Could not get session "${sessionName}"`);
+      // Check if Claude is at a prompt before sending - skip if busy
+      const terminalOutput = commandHelper.capturePane(sessionName);
+      if (!this.isClaudeAtPrompt(terminalOutput)) {
+        this.logger.info('Skipping scheduled message - agent is busy', {
+          name: message.name,
+          targetTeam: message.targetTeam,
+        });
+        // Don't count as failure - just skip this cycle; recurring messages will try again
+        return;
       }
 
       // Enhance message with continuation instructions to handle interruptions gracefully
       enhancedMessage = this.addContinuationInstructions(message.message);
 
-      // Send message to PTY session (write message + Enter key)
-      session.write(enhancedMessage + '\r');
+      // Use SessionCommandHelper.sendMessage() which handles bracketed paste mode correctly:
+      // 1. Writes message text (triggers bracketed paste)
+      // 2. Waits scaled delay for paste processing
+      // 3. Sends Enter (\r) separately so it's not swallowed by paste mode
+      await commandHelper.sendMessage(sessionName, enhancedMessage);
+
       success = true;
 
       this.logger.info('Executed scheduled message', {
@@ -329,6 +340,41 @@ export class MessageSchedulerService extends EventEmitter {
       this.logger.error('Error validating project existence', { error: error instanceof Error ? error.message : String(error) });
       return false; // Assume project doesn't exist if we can't verify
     }
+  }
+
+  /**
+   * Check if Claude Code appears to be at an input prompt.
+   * Uses TERMINAL_PATTERNS.PROMPT_STREAM to detect prompt characters on their own line,
+   * with fallback to checking last 10 lines for exact prompt char matches.
+   *
+   * @param terminalOutput - The captured terminal output to check
+   * @returns true if Claude Code appears to be at a prompt
+   */
+  private isClaudeAtPrompt(terminalOutput: string): boolean {
+    if (!terminalOutput || typeof terminalOutput !== 'string') {
+      return true; // Assume at prompt if no output (safer for delivery)
+    }
+
+    // Primary: regex matches a prompt character alone on a line
+    if (TERMINAL_PATTERNS.PROMPT_STREAM.test(terminalOutput)) {
+      return true;
+    }
+
+    // Fallback: check last 10 non-empty lines for prompt indicators
+    const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
+    const linesToCheck = lines.slice(-10);
+    return linesToCheck.some((line) => {
+      const trimmed = line.trim();
+      // Exact match for single-char prompts (❯, >, ⏵, $)
+      if (TERMINAL_PATTERNS.PROMPT_CHARS.some((indicator) => trimmed === indicator)) {
+        return true;
+      }
+      // Bypass permissions mode: line starts with ❯❯ followed by space
+      if (trimmed.startsWith('❯❯ ')) {
+        return true;
+      }
+      return false;
+    });
   }
 
   /**

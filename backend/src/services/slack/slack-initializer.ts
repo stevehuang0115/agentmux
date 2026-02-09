@@ -10,7 +10,7 @@
 import { getSlackService } from './slack.service.js';
 import { getSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
 import { SlackConfig } from '../../types/slack.types.js';
-import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
+import type { MessageQueueService } from '../messaging/message-queue.service.js';
 
 /**
  * Result of initialization attempt
@@ -65,8 +65,8 @@ export function getSlackConfigFromEnv(): SlackConfig | null {
  * Options for Slack initialization
  */
 export interface SlackInitOptions {
-  /** Optional AgentRegistrationService for forwarding messages to orchestrator */
-  agentRegistrationService?: AgentRegistrationService;
+  /** Optional MessageQueueService for enqueuing messages to orchestrator */
+  messageQueueService?: MessageQueueService;
 }
 
 /**
@@ -108,9 +108,9 @@ export async function initializeSlackIfConfigured(
 
     const bridge = getSlackOrchestratorBridge();
 
-    // Set the agent registration service if provided
-    if (options?.agentRegistrationService) {
-      bridge.setAgentRegistrationService(options.agentRegistrationService);
+    // Set the message queue service if provided
+    if (options?.messageQueueService) {
+      bridge.setMessageQueueService(options.messageQueueService);
     }
 
     await bridge.initialize();

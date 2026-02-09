@@ -72,19 +72,6 @@ vi.mock('./UI', () => ({
       </select>
     </div>
   ),
-  Toggle: ({ checked, onChange, label, description }: any) => (
-    <div data-testid="toggle">
-      <label>
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={onChange}
-        />
-        {label}
-      </label>
-      {description && <p>{description}</p>}
-    </div>
-  )
 }));
 
 // Test data
@@ -220,7 +207,8 @@ describe('StartTeamModal Component', () => {
       });
       
       await waitFor(() => {
-        expect(screen.getByText('Already assigned to: Frontend App')).toBeInTheDocument();
+        expect(screen.getByText('Already assigned to:')).toBeInTheDocument();
+        expect(screen.getByText('Frontend App')).toBeInTheDocument();
       });
 
       // Should not show dropdown for assigned teams
@@ -281,47 +269,6 @@ describe('StartTeamModal Component', () => {
     });
   });
 
-  describe('Git Reminder Toggle', () => {
-    it('should render git reminder toggle', async () => {
-      await act(async () => {
-        render(<StartTeamModal {...defaultProps} />);
-      });
-      
-      await waitFor(() => {
-        expect(screen.getByTestId('toggle')).toBeInTheDocument();
-        expect(screen.getByText('Enable git reminder every 30 minutes')).toBeInTheDocument();
-        expect(screen.getByText('Team members will receive automated reminders to commit their changes every 30 minutes')).toBeInTheDocument();
-      });
-    });
-
-    it('should have git reminder enabled by default', async () => {
-      await act(async () => {
-        render(<StartTeamModal {...defaultProps} />);
-      });
-      
-      await waitFor(() => {
-        const checkbox = screen.getByRole('checkbox');
-        expect(checkbox).toBeChecked();
-      });
-    });
-
-    it('should toggle git reminder setting', async () => {
-      await act(async () => {
-        render(<StartTeamModal {...defaultProps} />);
-      });
-      
-      await waitFor(() => {
-        const checkbox = screen.getByRole('checkbox');
-        expect(checkbox).toBeChecked();
-      });
-
-      const checkbox = screen.getByRole('checkbox');
-      fireEvent.click(checkbox);
-      
-      expect(checkbox).not.toBeChecked();
-    });
-  });
-
   describe('Form Submission', () => {
     it('should disable submit button when no project is selected', async () => {
       await act(async () => {
@@ -371,7 +318,7 @@ describe('StartTeamModal Component', () => {
       fireEvent.click(submitButton);
 
       await waitFor(() => {
-        expect(defaultProps.onStartTeam).toHaveBeenCalledWith('project-1', true);
+        expect(defaultProps.onStartTeam).toHaveBeenCalledWith('project-1');
         expect(defaultProps.onClose).toHaveBeenCalled();
       });
     });
@@ -389,27 +336,8 @@ describe('StartTeamModal Component', () => {
       fireEvent.click(submitButton);
 
       await waitFor(() => {
-        expect(props.onStartTeam).toHaveBeenCalledWith('project-1', true);
+        expect(props.onStartTeam).toHaveBeenCalledWith('project-1');
         expect(props.onClose).toHaveBeenCalled();
-      });
-    });
-
-    it('should handle form submission with git reminder disabled', async () => {
-      render(<StartTeamModal {...defaultProps} />);
-      
-      await waitFor(() => {
-        const select = screen.getByRole('combobox');
-        fireEvent.change(select, { target: { value: 'project-1' } });
-        
-        const checkbox = screen.getByRole('checkbox');
-        fireEvent.click(checkbox);
-      });
-
-      const submitButton = screen.getByTestId('submit-button');
-      fireEvent.click(submitButton);
-
-      await waitFor(() => {
-        expect(defaultProps.onStartTeam).toHaveBeenCalledWith('project-1', false);
       });
     });
 
@@ -556,7 +484,8 @@ describe('StartTeamModal Component', () => {
       });
       
       await waitFor(() => {
-        expect(screen.getByText('Already assigned to: Frontend App')).toBeInTheDocument();
+        expect(screen.getByText('Already assigned to:')).toBeInTheDocument();
+        expect(screen.getByText('Frontend App')).toBeInTheDocument();
       });
     });
   });
@@ -569,14 +498,6 @@ describe('StartTeamModal Component', () => {
       
       expect(screen.getByText('Project Assignment')).toBeInTheDocument();
       expect(screen.getByText('Select which project this team will work on')).toBeInTheDocument();
-    });
-
-    it('should render team settings section', async () => {
-      await act(async () => {
-        render(<StartTeamModal {...defaultProps} />);
-      });
-      
-      expect(screen.getByText('Team Settings')).toBeInTheDocument();
     });
 
     it('should not show project selection description for assigned teams', async () => {

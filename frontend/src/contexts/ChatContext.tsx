@@ -286,12 +286,23 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
         conversationId: currentConversation?.id,
       });
 
-      // Update local state optimistically
-      setMessages((prev) => [...prev, result.message]);
+      // Update local state optimistically (with dedup — WebSocket broadcast
+      // of the same message may arrive before or after this HTTP response)
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === result.message.id)) {
+          return prev;
+        }
+        return [...prev, result.message];
+      });
 
       if (!currentConversation) {
         setCurrentConversation(result.conversation);
         setConversations((prev) => [result.conversation, ...prev]);
+      }
+
+      // Surface orchestrator delivery failure as a non-blocking error
+      if (result.orchestrator && !result.orchestrator.forwarded && result.orchestrator.error) {
+        setError(result.orchestrator.error);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');

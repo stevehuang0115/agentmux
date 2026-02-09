@@ -170,6 +170,8 @@ export interface RegisterAgentStatusParams {
   role: string;
   sessionName: string;
   teamMemberId?: string;
+  /** Claude conversation/session ID for resuming on restart */
+  claudeSessionId?: string;
 }
 
 export interface GetAgentLogsParams {
@@ -752,6 +754,38 @@ export type SelfImproveToolParams =
   | SelfImproveStatusParams
   | SelfImproveRollbackParams
   | SelfImproveCancelParams;
+
+// ============================================
+// Event Bus Tool Types
+// ============================================
+
+/**
+ * Parameters for the subscribe_event tool
+ */
+export interface SubscribeEventParams {
+  /** Event type(s) to subscribe to */
+  eventType: string | string[];
+  /** Filter criteria for matching events */
+  filter: {
+    sessionName?: string;
+    memberId?: string;
+    teamId?: string;
+  };
+  /** If true, subscription is removed after first match (default: true) */
+  oneShot?: boolean;
+  /** Time-to-live in minutes (default: 30) */
+  ttlMinutes?: number;
+  /** Custom notification template with placeholders */
+  messageTemplate?: string;
+}
+
+/**
+ * Parameters for the unsubscribe_event tool
+ */
+export interface UnsubscribeEventParams {
+  /** ID of the subscription to cancel */
+  subscriptionId: string;
+}
 
 // ============================================
 // Tool Result Types

@@ -5,6 +5,8 @@ import { EventEmitter } from 'events';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { TeamActivityWebSocketService } from './team-activity-websocket.service.js';
 import { Team, TeamMember } from '../../types/index.js';
+import type { EventBusService } from '../event-bus/event-bus.service.js';
+import type { AgentEvent, EventType } from '../../types/event-bus.types.js';
 
 /**
  * Service that watches the teams directory for changes and triggers
@@ -15,6 +17,7 @@ import { Team, TeamMember } from '../../types/index.js';
 export class TeamsJsonWatcherService extends EventEmitter {
   private logger: ComponentLogger;
   private teamActivityService: TeamActivityWebSocketService | null = null;
+  private eventBusService: EventBusService | null = null;
   private watcher: fs.FSWatcher | null = null;
   private teamWatchers: Map<string, fs.FSWatcher> = new Map();
   private debounceTimer: NodeJS.Timeout | null = null;
@@ -37,6 +40,13 @@ export class TeamsJsonWatcherService extends EventEmitter {
    */
   setTeamActivityService(teamActivityService: TeamActivityWebSocketService): void {
     this.teamActivityService = teamActivityService;
+  }
+
+  /**
+   * Set the EventBusService instance for publishing agent lifecycle events
+   */
+  setEventBusService(service: EventBusService): void {
+    this.eventBusService = service;
   }
 
   /**
@@ -315,6 +325,9 @@ export class TeamsJsonWatcherService extends EventEmitter {
       // Compare teams data for activity-relevant changes
       const hasActivityRelevantChange = this.hasActivityRelevantChanges(this.lastTeamsData, currentData);
 
+      // Publish granular agent lifecycle events to the event bus
+      this.publishAgentEvents(this.lastTeamsData, currentData);
+
       // Update cached data for next comparison
       this.lastTeamsData = JSON.parse(JSON.stringify(currentData)); // Deep copy
 
@@ -364,6 +377,85 @@ export class TeamsJsonWatcherService extends EventEmitter {
     }
 
     return teams;
+  }
+
+  /**
+   * Compare old and new teams data and publish granular agent lifecycle events
+   * to the event bus for each status change detected.
+   */
+  private publishAgentEvents(oldTeams: Team[], newTeams: Team[]): void {
+    if (!this.eventBusService) {
+      return;
+    }
+
+    for (const newTeam of newTeams) {
+      const oldTeam = oldTeams.find((t: Team) => t.id === newTeam.id);
+      if (!oldTeam) {
+        continue;
+      }
+
+      for (const newMember of newTeam.members) {
+        const oldMember = oldTeam.members.find((m: TeamMember) => m.id === newMember.id);
+        if (!oldMember) {
+          continue;
+        }
+
+        // Detect agentStatus changes
+        if (oldMember.agentStatus !== newMember.agentStatus) {
+          const baseEvent: AgentEvent = {
+            id: crypto.randomUUID(),
+            type: 'agent:status_changed',
+            timestamp: new Date().toISOString(),
+            teamId: newTeam.id,
+            teamName: newTeam.name,
+            memberId: newMember.id,
+            memberName: newMember.name,
+            sessionName: newMember.sessionName,
+            previousValue: oldMember.agentStatus,
+            newValue: newMember.agentStatus,
+            changedField: 'agentStatus',
+          };
+
+          // Publish generic status_changed event
+          this.eventBusService.publish(baseEvent);
+
+          // Publish specific event based on new status
+          let specificType: EventType | null = null;
+          if (newMember.agentStatus === 'active') {
+            specificType = 'agent:active';
+          } else if (newMember.agentStatus === 'inactive') {
+            specificType = 'agent:inactive';
+          }
+
+          if (specificType) {
+            this.eventBusService.publish({
+              ...baseEvent,
+              id: crypto.randomUUID(),
+              type: specificType,
+            });
+          }
+        }
+
+        // Detect workingStatus changes
+        if (oldMember.workingStatus !== newMember.workingStatus) {
+          const workingEvent: AgentEvent = {
+            id: crypto.randomUUID(),
+            type: newMember.workingStatus === 'idle' ? 'agent:idle' : 'agent:busy',
+            timestamp: new Date().toISOString(),
+            teamId: newTeam.id,
+            teamName: newTeam.name,
+            memberId: newMember.id,
+            memberName: newMember.name,
+            sessionName: newMember.sessionName,
+            previousValue: oldMember.workingStatus,
+            newValue: newMember.workingStatus,
+            changedField: 'workingStatus',
+          };
+
+          this.eventBusService.publish(workingEvent);
+        }
+      }
+    }
   }
 
   /**

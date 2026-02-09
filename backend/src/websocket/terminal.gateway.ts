@@ -16,8 +16,11 @@ import {
 	type ISessionBackend,
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
-import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS } from '../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
+import { getSlackOrchestratorBridge } from '../services/slack/slack-orchestrator-bridge.js';
+import type { SlackNotification } from '../types/slack.types.js';
 import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from '../utils/terminal-output.utils.js';
+import { parseNotifyContent, type NotifyPayload } from '../types/chat.types.js';
 
 /**
  * Terminal Gateway class for WebSocket-based terminal streaming.
@@ -44,7 +47,7 @@ export class TerminalGateway {
 	/** Current active chat conversation ID for orchestrator responses */
 	private activeConversationId: string | null = null;
 
-	/** Buffer to accumulate orchestrator output for complete [CHAT_RESPONSE] detection */
+	/** Buffer to accumulate orchestrator output for [NOTIFY] / legacy marker detection */
 	private orchestratorOutputBuffer: string = '';
 
 	/** Maximum buffer size to prevent memory issues (100KB) */
@@ -413,7 +416,7 @@ export class TerminalGateway {
 
 			const session = backend.getSession(sessionName);
 			if (!session) {
-				this.logger.warn('Cannot resize: session not found', { sessionName });
+				this.logger.debug('Cannot resize: session not found', { sessionName });
 				return;
 			}
 
@@ -480,8 +483,12 @@ export class TerminalGateway {
 	}
 
 	/**
-	 * Process orchestrator terminal output for potential chat responses.
-	 * Buffers output and extracts complete [CHAT_RESPONSE]...[/CHAT_RESPONSE] blocks.
+	 * Process orchestrator terminal output for [NOTIFY], legacy [CHAT_RESPONSE],
+	 * and legacy [SLACK_NOTIFY] markers.
+	 *
+	 * Buffers output, then runs the unified [NOTIFY] handler first, followed by
+	 * legacy handlers for backward compatibility with orchestrators that haven't
+	 * restarted yet.
 	 *
 	 * @param sessionName - The orchestrator session name
 	 * @param content - The terminal output content
@@ -503,78 +510,287 @@ export class TerminalGateway {
 			this.activeConversationId = chatIdMatch[1];
 		}
 
-		// Only process if we have an active conversation
-		if (!this.activeConversationId) {
-			this.logger.debug('No active conversation ID, skipping chat response processing');
-			return;
-		}
-
-		// Log that we're processing output
-		if (cleanContent.includes('[CHAT_RESPONSE]') || cleanContent.includes('[/CHAT_RESPONSE]')) {
-			this.logger.info('Detected CHAT_RESPONSE marker in output', {
-				contentLength: cleanContent.length,
-				conversationId: this.activeConversationId
-			});
-		}
-
-		// Add ANSI-stripped content to buffer for complete response detection
+		// Always buffer content — notifications don't require a conversation ID
 		this.orchestratorOutputBuffer += cleanContent;
 
 		// Prevent buffer from growing too large
 		if (this.orchestratorOutputBuffer.length > this.MAX_BUFFER_SIZE) {
-			// Keep only the last portion of the buffer
 			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(-this.MAX_BUFFER_SIZE / 2);
 		}
 
-		// Look for complete [CHAT_RESPONSE]...[/CHAT_RESPONSE] blocks
-		const responsePattern = /\[CHAT_RESPONSE\]([\s\S]*?)\[\/CHAT_RESPONSE\]/g;
+		// Process unified [NOTIFY] markers first (preferred format)
+		this.processNotifyMarkers(sessionName);
+
+		// Process legacy [CHAT_RESPONSE] markers for backward compatibility
+		this.processLegacyChatResponse(sessionName);
+
+		// Process legacy [SLACK_NOTIFY] markers for backward compatibility
+		this.processLegacySlackNotifications();
+
+		this.trimBufferIfNoOpenMarkers();
+	}
+
+	/**
+	 * Build a SlackNotification from a NotifyPayload.
+	 *
+	 * @param payload - Parsed notify payload
+	 * @returns SlackNotification with defaults applied
+	 */
+	private buildSlackNotification(payload: NotifyPayload): SlackNotification {
+		return {
+			type: (payload.type || 'alert') as SlackNotification['type'],
+			title: payload.title || payload.type || 'Notification',
+			message: payload.message,
+			urgency: payload.urgency || 'normal',
+			timestamp: new Date().toISOString(),
+			channelId: payload.channelId,
+			threadTs: payload.threadTs,
+		};
+	}
+
+	/**
+	 * Send a notification to the Slack bridge with error handling.
+	 *
+	 * @param notification - The Slack notification to send
+	 * @param context - Description of the call site for logging
+	 */
+	private sendToSlackBridge(notification: SlackNotification, context: string): void {
+		const bridge = getSlackOrchestratorBridge();
+		if (bridge.isInitialized()) {
+			this.logger.info(`Routing ${context} to Slack`, {
+				type: notification.type,
+				channelId: notification.channelId,
+			});
+			bridge.sendNotification(notification).catch((error) => {
+				this.logger.warn(`Failed to route ${context} to Slack`, {
+					error: error instanceof Error ? error.message : String(error),
+					type: notification.type,
+				});
+			});
+		} else {
+			this.logger.warn(`Slack bridge not initialized, skipping ${context}`, {
+				type: notification.type,
+			});
+		}
+	}
+
+	/**
+	 * Process unified [NOTIFY]...[/NOTIFY] markers from the orchestrator output buffer.
+	 *
+	 * Parses header+body (or legacy JSON) payload via `parseNotifyContent()` and
+	 * routes to chat, Slack, or both based on which fields are present:
+	 * - `conversationId` present → route to chat UI
+	 * - `channelId` present → route to Slack
+	 * - Both → both (common case)
+	 * - Neither + activeConversationId exists → fallback to chat
+	 * - `type` alone (no channelId) → chat only (type is metadata, not a routing signal)
+	 *
+	 * @param sessionName - The orchestrator session name
+	 */
+	private processNotifyMarkers(sessionName: string): void {
+		if (!this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
+			return;
+		}
+
+		NOTIFY_CONSTANTS.MARKER_PATTERN.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		let lastMatchEnd = 0;
 
-		while ((match = responsePattern.exec(this.orchestratorOutputBuffer)) !== null) {
-			const responseContent = match[1].trim();
+		while ((match = NOTIFY_CONSTANTS.MARKER_PATTERN.exec(this.orchestratorOutputBuffer)) !== null) {
+			const rawContent = match[1].trim();
 			lastMatchEnd = match.index + match[0].length;
 
-			// Deduplicate: PTY re-renders can cause the same response to appear multiple times.
-			const responseHash = generateResponseHash(this.activeConversationId, responseContent);
-			if (this.responseDeduplicator.isDuplicate(responseHash)) {
-				this.logger.debug('Skipping duplicate chat response', {
-					conversationId: this.activeConversationId,
-					contentLength: responseContent.length,
+			const payload = parseNotifyContent(rawContent);
+			if (!payload) {
+				this.logger.warn('Invalid or empty NOTIFY payload', {
+					rawContent: rawContent.slice(0, 200),
 				});
 				continue;
 			}
 
-			this.logger.info('Extracted chat response from orchestrator output', {
-				contentLength: responseContent.length,
-				conversationId: this.activeConversationId,
+			this.logger.info('Detected NOTIFY marker in orchestrator output', {
+				contentLength: payload.message.length,
 			});
 
-			// Send the extracted response to the chat gateway
-			chatGateway.processTerminalOutput(
-				sessionName,
-				`[CHAT_RESPONSE]${responseContent}[/CHAT_RESPONSE]`,
-				this.activeConversationId
-			).catch(error => {
-				this.logger.warn('Failed to process orchestrator chat response', {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			});
+			// Route to chat UI
+			const conversationId = payload.conversationId || this.activeConversationId;
+			if (conversationId) {
+				const responseHash = generateResponseHash(conversationId, payload.message);
+				if (!this.responseDeduplicator.isDuplicate(responseHash)) {
+					this.logger.info('Routing NOTIFY to chat', {
+						conversationId,
+						contentLength: payload.message.length,
+					});
+
+					const chatGateway = getChatGateway();
+					if (chatGateway) {
+						chatGateway.processNotifyMessage(
+							sessionName,
+							payload.message,
+							conversationId
+						).catch(error => {
+							this.logger.warn('Failed to route NOTIFY to chat', {
+								error: error instanceof Error ? error.message : String(error),
+							});
+						});
+					}
+				} else {
+					this.logger.debug('Skipping duplicate NOTIFY chat message', {
+						conversationId,
+						contentLength: payload.message.length,
+					});
+				}
+			}
+
+			// Route to Slack — only when an explicit channelId is provided.
+			// `type` alone is metadata, not a routing signal. Without channelId the
+			// notification would fall back to defaultChannelId which may not be
+			// configured, causing channel_not_found errors.
+			if (payload.channelId) {
+				const slackNotification = this.buildSlackNotification(payload);
+				this.sendToSlackBridge(slackNotification, 'NOTIFY');
+			}
 		}
 
-		// Remove processed content from buffer, keep any partial response at the end
+		// Remove processed NOTIFY blocks from buffer
 		if (lastMatchEnd > 0) {
 			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
 		}
+	}
 
-		// If buffer has [CHAT_RESPONSE] but no closing tag yet, keep buffering
-		// If buffer doesn't have [CHAT_RESPONSE] at all, clear old content to avoid buildup
-		if (!this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE]')) {
+	/**
+	 * Trim the orchestrator output buffer if there are no pending open markers.
+	 * Prevents unbounded growth when output doesn't contain any markers.
+	 */
+	private trimBufferIfNoOpenMarkers(): void {
+		const hasPendingMarker =
+			this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG) ||
+			this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE') ||
+			this.orchestratorOutputBuffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG);
+		if (!hasPendingMarker) {
 			// Keep a small trailing buffer in case the tag is split across chunks
 			const lastNewline = this.orchestratorOutputBuffer.lastIndexOf('\n');
 			if (lastNewline > 1000) {
 				this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastNewline);
 			}
+		}
+	}
+
+	/**
+	 * Process legacy [CHAT_RESPONSE]...[/CHAT_RESPONSE] markers from the buffer.
+	 * @deprecated Use [NOTIFY] markers instead. Kept for backward compatibility.
+	 *
+	 * @param sessionName - The orchestrator session name
+	 */
+	private processLegacyChatResponse(sessionName: string): void {
+		if (!this.activeConversationId) {
+			return;
+		}
+
+		if (!this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE')) {
+			return;
+		}
+
+		this.logger.debug('Processing legacy [CHAT_RESPONSE] markers (deprecated — use [NOTIFY])');
+
+		const chatGateway = getChatGateway();
+		if (!chatGateway) {
+			return;
+		}
+
+		const responsePattern = /\[CHAT_RESPONSE(?::([^\]]*))?\]([\s\S]*?)\[\/CHAT_RESPONSE\]/g;
+		let match: RegExpExecArray | null;
+		let lastMatchEnd = 0;
+
+		while ((match = responsePattern.exec(this.orchestratorOutputBuffer)) !== null) {
+			const embeddedConversationId = match[1] || null;
+			const responseContent = match[2].trim();
+			lastMatchEnd = match.index + match[0].length;
+
+			const conversationId = embeddedConversationId || this.activeConversationId;
+
+			if (!conversationId) {
+				continue;
+			}
+
+			const responseHash = generateResponseHash(conversationId, responseContent);
+			if (this.responseDeduplicator.isDuplicate(responseHash)) {
+				this.logger.debug('Skipping duplicate legacy chat response', {
+					conversationId,
+					contentLength: responseContent.length,
+				});
+				continue;
+			}
+
+			this.logger.info('Extracted legacy chat response from orchestrator output', {
+				contentLength: responseContent.length,
+				conversationId,
+				embeddedConversationId,
+			});
+
+			chatGateway.processTerminalOutput(
+				sessionName,
+				`[CHAT_RESPONSE]${responseContent}[/CHAT_RESPONSE]`,
+				conversationId
+			).catch(error => {
+				this.logger.warn('Failed to process legacy chat response', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		}
+
+		if (lastMatchEnd > 0) {
+			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+		}
+	}
+
+	/**
+	 * Process legacy [SLACK_NOTIFY]...[/SLACK_NOTIFY] markers from the buffer.
+	 * @deprecated Use [NOTIFY] markers instead. Kept for backward compatibility.
+	 */
+	private processLegacySlackNotifications(): void {
+		if (!this.orchestratorOutputBuffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG)) {
+			return;
+		}
+
+		this.logger.debug('Processing legacy [SLACK_NOTIFY] markers (deprecated — use [NOTIFY])');
+
+		SLACK_NOTIFY_CONSTANTS.MARKER_PATTERN.lastIndex = 0;
+		let match: RegExpExecArray | null;
+		let lastMatchEnd = 0;
+
+		while ((match = SLACK_NOTIFY_CONSTANTS.MARKER_PATTERN.exec(this.orchestratorOutputBuffer)) !== null) {
+			const rawContent = match[1].trim();
+			lastMatchEnd = match.index + match[0].length;
+
+			// Legacy SLACK_NOTIFY is always JSON — use parseNotifyContent which
+			// auto-detects JSON and applies PTY cleanup
+			const payload = parseNotifyContent(rawContent);
+			if (!payload) {
+				this.logger.warn('Invalid legacy SLACK_NOTIFY payload', {
+					rawContent: rawContent.slice(0, 200),
+				});
+				continue;
+			}
+
+			// Legacy format required `type` — skip if missing
+			if (!payload.type) {
+				this.logger.warn('Invalid legacy SLACK_NOTIFY payload: missing type', {
+					rawContent: rawContent.slice(0, 200),
+				});
+				continue;
+			}
+
+			this.logger.info('Detected legacy SLACK_NOTIFY marker in orchestrator output', {
+				contentLength: payload.message.length,
+			});
+
+			const fullNotification = this.buildSlackNotification(payload);
+			this.sendToSlackBridge(fullNotification, 'legacy SLACK_NOTIFY');
+		}
+
+		if (lastMatchEnd > 0) {
+			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
 		}
 	}
 

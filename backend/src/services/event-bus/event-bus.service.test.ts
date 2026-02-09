@@ -1,0 +1,337 @@
+/**
+ * Tests for Event Bus Service
+ *
+ * @module services/event-bus/event-bus.test
+ */
+
+import { EventBusService } from './event-bus.service.js';
+import type { AgentEvent, CreateSubscriptionInput } from '../../types/event-bus.types.js';
+
+// Mock logger
+jest.mock('../core/logger.service.js', () => ({
+  LoggerService: {
+    getInstance: () => ({
+      createComponentLogger: () => ({
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn(),
+      }),
+    }),
+  },
+}));
+
+/**
+ * Create a sample agent event for testing
+ */
+function createTestEvent(overrides?: Partial<AgentEvent>): AgentEvent {
+  return {
+    id: crypto.randomUUID(),
+    type: 'agent:idle',
+    timestamp: new Date().toISOString(),
+    teamId: 'team-1',
+    teamName: 'Web Team',
+    memberId: 'member-1',
+    memberName: 'Joe',
+    sessionName: 'agent-joe',
+    previousValue: 'in_progress',
+    newValue: 'idle',
+    changedField: 'workingStatus',
+    ...overrides,
+  };
+}
+
+/**
+ * Create a sample subscription input for testing
+ */
+function createTestSubscriptionInput(overrides?: Partial<CreateSubscriptionInput>): CreateSubscriptionInput {
+  return {
+    eventType: 'agent:idle',
+    filter: { sessionName: 'agent-joe' },
+    subscriberSession: 'agentmux-orc',
+    ...overrides,
+  };
+}
+
+describe('EventBusService', () => {
+  let eventBus: EventBusService;
+  let mockQueueService: any;
+
+  beforeEach(() => {
+    eventBus = new EventBusService();
+    mockQueueService = {
+      enqueue: jest.fn().mockReturnValue({ id: 'msg-1' }),
+    };
+    eventBus.setMessageQueueService(mockQueueService);
+  });
+
+  afterEach(() => {
+    eventBus.cleanup();
+  });
+
+  describe('subscribe', () => {
+    it('should create a subscription with defaults', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput());
+
+      expect(sub.id).toBeDefined();
+      expect(sub.eventType).toBe('agent:idle');
+      expect(sub.filter.sessionName).toBe('agent-joe');
+      expect(sub.subscriberSession).toBe('agentmux-orc');
+      expect(sub.oneShot).toBe(true);
+      expect(sub.createdAt).toBeDefined();
+      expect(sub.expiresAt).toBeDefined();
+    });
+
+    it('should create a subscription with custom options', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        ttlMinutes: 60,
+        messageTemplate: 'Agent {memberName} is now {newValue}',
+      }));
+
+      expect(sub.oneShot).toBe(false);
+      expect(sub.messageTemplate).toBe('Agent {memberName} is now {newValue}');
+    });
+
+    it('should accept an array of event types', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput({
+        eventType: ['agent:idle', 'agent:busy'],
+      }));
+
+      expect(sub.eventType).toEqual(['agent:idle', 'agent:busy']);
+    });
+
+    it('should throw for invalid input', () => {
+      expect(() => {
+        eventBus.subscribe({} as any);
+      }).toThrow('Invalid subscription input');
+    });
+
+    it('should cap TTL at maximum', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput({
+        ttlMinutes: 99999,
+      }));
+
+      const created = new Date(sub.createdAt!).getTime();
+      const expires = new Date(sub.expiresAt!).getTime();
+      const diffMinutes = (expires - created) / 60000;
+
+      expect(diffMinutes).toBe(1440); // MAX_SUBSCRIPTION_TTL_MINUTES
+    });
+
+    it('should enforce per-session subscription limit', () => {
+      // Create max subscriptions
+      for (let i = 0; i < 50; i++) {
+        eventBus.subscribe(createTestSubscriptionInput());
+      }
+
+      expect(() => {
+        eventBus.subscribe(createTestSubscriptionInput());
+      }).toThrow(/Subscription limit reached/);
+    });
+  });
+
+  describe('unsubscribe', () => {
+    it('should remove an existing subscription', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput());
+      const result = eventBus.unsubscribe(sub.id);
+
+      expect(result).toBe(true);
+      expect(eventBus.listSubscriptions()).toHaveLength(0);
+    });
+
+    it('should return false for non-existent subscription', () => {
+      expect(eventBus.unsubscribe('non-existent')).toBe(false);
+    });
+  });
+
+  describe('publish', () => {
+    it('should deliver notification when event matches subscription', () => {
+      eventBus.subscribe(createTestSubscriptionInput());
+      eventBus.publish(createTestEvent());
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+      const call = mockQueueService.enqueue.mock.calls[0][0];
+      expect(call.content).toContain('[EVENT:');
+      expect(call.content).toContain('agent:idle');
+      expect(call.content).toContain('Joe');
+      expect(call.conversationId).toBe('system');
+      expect(call.source).toBe('system_event');
+    });
+
+    it('should not deliver when event type does not match', () => {
+      eventBus.subscribe(createTestSubscriptionInput({ eventType: 'agent:busy' }));
+      eventBus.publish(createTestEvent({ type: 'agent:idle' }));
+
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should not deliver when session name filter does not match', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        filter: { sessionName: 'agent-bob' },
+      }));
+      eventBus.publish(createTestEvent({ sessionName: 'agent-joe' }));
+
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should match when filter has teamId', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        filter: { teamId: 'team-1' },
+      }));
+      eventBus.publish(createTestEvent({ teamId: 'team-1' }));
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not match when teamId filter differs', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        filter: { teamId: 'team-other' },
+      }));
+      eventBus.publish(createTestEvent({ teamId: 'team-1' }));
+
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should remove one-shot subscription after delivery', () => {
+      eventBus.subscribe(createTestSubscriptionInput({ oneShot: true }));
+      expect(eventBus.listSubscriptions()).toHaveLength(1);
+
+      eventBus.publish(createTestEvent());
+
+      expect(eventBus.listSubscriptions()).toHaveLength(0);
+    });
+
+    it('should keep non-one-shot subscription after delivery', () => {
+      eventBus.subscribe(createTestSubscriptionInput({ oneShot: false }));
+
+      eventBus.publish(createTestEvent());
+
+      expect(eventBus.listSubscriptions()).toHaveLength(1);
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should use custom message template when provided', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        messageTemplate: 'Hey! {memberName} on {sessionName} went {newValue}',
+      }));
+      eventBus.publish(createTestEvent());
+
+      const call = mockQueueService.enqueue.mock.calls[0][0];
+      expect(call.content).toBe('Hey! Joe on agent-joe went idle');
+    });
+
+    it('should emit event_delivered when notification is sent', () => {
+      const handler = jest.fn();
+      eventBus.on('event_delivered', handler);
+
+      eventBus.subscribe(createTestSubscriptionInput());
+      eventBus.publish(createTestEvent());
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'agent:idle',
+        })
+      );
+    });
+
+    it('should match array of event types', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        eventType: ['agent:idle', 'agent:active'],
+      }));
+
+      eventBus.publish(createTestEvent({ type: 'agent:active' }));
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should skip expired subscriptions during publish', () => {
+      const sub = eventBus.subscribe(createTestSubscriptionInput({ ttlMinutes: 1 }));
+
+      // Manually expire the subscription
+      const stored = eventBus.getSubscription(sub.id);
+      if (stored) {
+        (stored as any).expiresAt = new Date(Date.now() - 60000).toISOString();
+      }
+
+      eventBus.publish(createTestEvent());
+
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+      expect(eventBus.listSubscriptions()).toHaveLength(0);
+    });
+
+    it('should handle missing messageQueueService gracefully', () => {
+      const busNoQueue = new EventBusService();
+      busNoQueue.subscribe(createTestSubscriptionInput());
+
+      // Should not throw
+      expect(() => {
+        busNoQueue.publish(createTestEvent());
+      }).not.toThrow();
+
+      busNoQueue.cleanup();
+    });
+  });
+
+  describe('listSubscriptions', () => {
+    it('should return all subscriptions', () => {
+      eventBus.subscribe(createTestSubscriptionInput());
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'other-session',
+      }));
+
+      expect(eventBus.listSubscriptions()).toHaveLength(2);
+    });
+
+    it('should filter by subscriber session', () => {
+      eventBus.subscribe(createTestSubscriptionInput());
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'other-session',
+      }));
+
+      expect(eventBus.listSubscriptions('agentmux-orc')).toHaveLength(1);
+      expect(eventBus.listSubscriptions('other-session')).toHaveLength(1);
+      expect(eventBus.listSubscriptions('nonexistent')).toHaveLength(0);
+    });
+  });
+
+  describe('getStats', () => {
+    it('should return correct initial stats', () => {
+      const stats = eventBus.getStats();
+      expect(stats.subscriptionCount).toBe(0);
+      expect(stats.deliveryCount).toBe(0);
+    });
+
+    it('should track subscription count', () => {
+      eventBus.subscribe(createTestSubscriptionInput({ oneShot: false }));
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'other',
+        oneShot: false,
+      }));
+
+      expect(eventBus.getStats().subscriptionCount).toBe(2);
+    });
+
+    it('should track delivery count', () => {
+      eventBus.subscribe(createTestSubscriptionInput({ oneShot: false }));
+
+      eventBus.publish(createTestEvent());
+      eventBus.publish(createTestEvent());
+
+      expect(eventBus.getStats().deliveryCount).toBe(2);
+    });
+  });
+
+  describe('cleanup', () => {
+    it('should clear all subscriptions', () => {
+      eventBus.subscribe(createTestSubscriptionInput());
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'other',
+      }));
+
+      eventBus.cleanup();
+
+      expect(eventBus.listSubscriptions()).toHaveLength(0);
+    });
+  });
+});

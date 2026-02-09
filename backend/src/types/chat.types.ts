@@ -9,6 +9,7 @@
  */
 
 import { TERMINAL_FORMATTING_CONSTANTS } from '../constants.js';
+import { stripAnsiCodes } from '../utils/terminal-output.utils.js';
 
 // =============================================================================
 // Enums and Constants
@@ -356,6 +357,202 @@ export interface CreateChatMessageInput {
 }
 
 /**
+ * Urgency levels for notifications
+ */
+export const NOTIFY_URGENCY_LEVELS = ['low', 'normal', 'high', 'critical'] as const;
+
+/**
+ * Urgency level type
+ */
+export type NotifyUrgency = (typeof NOTIFY_URGENCY_LEVELS)[number];
+
+/**
+ * Unified notification payload from [NOTIFY]...[/NOTIFY] markers.
+ *
+ * The orchestrator outputs header+body content inside [NOTIFY] markers to route
+ * messages to chat, Slack, or both depending on which header fields are present:
+ * - `conversationId` present → route to chat UI
+ * - `channelId` present → route to Slack
+ * - Both → both (common case)
+ * - Neither + activeConversationId exists → fallback to chat
+ *
+ * Format:
+ * ```
+ * [NOTIFY]
+ * conversationId: conv-abc123
+ * channelId: D0AC7NF5N7L
+ * type: task_completed
+ * ---
+ * ## Message body here
+ * [/NOTIFY]
+ * ```
+ */
+export interface NotifyPayload {
+  /** Required — markdown content for the notification */
+  message: string;
+
+  /** Route to chat UI conversation (copied from incoming [CHAT:convId]) */
+  conversationId?: string;
+
+  /** Route to Slack channel */
+  channelId?: string;
+
+  /** Slack thread timestamp for threaded replies */
+  threadTs?: string;
+
+  /** Notification type (e.g. task_completed, agent_error, project_update) */
+  type?: string;
+
+  /** Header text for Slack notifications */
+  title?: string;
+
+  /** Urgency level for notification routing */
+  urgency?: NotifyUrgency;
+}
+
+/**
+ * Check if a value is a valid NotifyPayload
+ *
+ * Validates that the payload has a required `message` string field
+ * and that optional fields have correct types when present.
+ *
+ * @param value - Value to check
+ * @returns True if value is a valid NotifyPayload
+ */
+export function isValidNotifyPayload(value: unknown): value is NotifyPayload {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const payload = value as Record<string, unknown>;
+
+  // message is required and must be a non-empty string
+  if (typeof payload.message !== 'string' || !payload.message.trim()) {
+    return false;
+  }
+
+  // Optional string fields
+  const optionalStringFields = ['conversationId', 'channelId', 'threadTs', 'type', 'title'] as const;
+  for (const field of optionalStringFields) {
+    if (payload[field] !== undefined && typeof payload[field] !== 'string') {
+      return false;
+    }
+  }
+
+  // urgency must be a valid level if present
+  if (payload.urgency !== undefined) {
+    if (typeof payload.urgency !== 'string' || !NOTIFY_URGENCY_LEVELS.includes(payload.urgency as NotifyUrgency)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Parse raw content from a [NOTIFY]...[/NOTIFY] block into a NotifyPayload.
+ *
+ * Supports two formats:
+ * 1. **Header+body** (preferred): key-value headers before a `---` separator,
+ *    with the message body after it. Headers are short (~25 chars), so they are
+ *    never corrupted by PTY line-wrapping.
+ * 2. **Legacy JSON** (fallback): if the content starts with `{`, it is parsed as
+ *    JSON with PTY artifact cleanup for backward compatibility.
+ *
+ * @param raw - Raw content between [NOTIFY] and [/NOTIFY] markers
+ * @returns Parsed NotifyPayload or null if content is invalid
+ *
+ * @example
+ * ```typescript
+ * // Header+body format
+ * const payload = parseNotifyContent(
+ *   'conversationId: conv-abc\ntype: task_completed\n---\n## Done\nTask finished.'
+ * );
+ * // => { message: '## Done\nTask finished.', conversationId: 'conv-abc', type: 'task_completed' }
+ *
+ * // Legacy JSON format (auto-detected)
+ * const legacy = parseNotifyContent('{"message":"Hello","conversationId":"conv-1"}');
+ * // => { message: 'Hello', conversationId: 'conv-1' }
+ * ```
+ */
+export function parseNotifyContent(raw: string): NotifyPayload | null {
+  // Strip ANSI escape sequences using the canonical utility
+  const cleaned = stripAnsiCodes(raw).trim();
+
+  if (!cleaned) {
+    return null;
+  }
+
+  // JSON fallback for transition period
+  if (cleaned.startsWith('{')) {
+    return parseLegacyJsonNotify(cleaned);
+  }
+
+  // Split on --- separator line (separator may be followed by content or end of string)
+  // The \n before --- is optional to handle content that starts directly with ---
+  const sepMatch = cleaned.match(/^([\s\S]*?)(?:^|\n)---(?:\n([\s\S]*))?$/);
+  if (!sepMatch) {
+    // No headers — entire content is the message
+    const msg = cleaned.trim();
+    return msg ? { message: msg } : null;
+  }
+
+  const headerSection = sepMatch[1].trim();
+  const body = (sepMatch[2] || '').trim();
+  if (!body) {
+    return null;
+  }
+
+  const payload: NotifyPayload = { message: body };
+  for (const line of headerSection.split('\n')) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) continue;
+    const key = line.slice(0, colonIdx).trim();
+    const value = line.slice(colonIdx + 1).trim();
+    if (!value) continue;
+    switch (key) {
+      case 'conversationId': payload.conversationId = value; break;
+      case 'channelId': payload.channelId = value; break;
+      case 'threadTs': payload.threadTs = value; break;
+      case 'type': payload.type = value; break;
+      case 'title': payload.title = value; break;
+      case 'urgency':
+        if (NOTIFY_URGENCY_LEVELS.includes(value as NotifyUrgency)) {
+          payload.urgency = value as NotifyUrgency;
+        }
+        break;
+    }
+  }
+
+  return payload;
+}
+
+/**
+ * Parse legacy JSON notify content with PTY artifact cleanup.
+ *
+ * Cleans terminal line-wrapping artifacts (newlines, padding spaces, orphaned
+ * ANSI sequences) before parsing as JSON, then validates via isValidNotifyPayload.
+ *
+ * @param cleaned - Pre-cleaned content that starts with '{'
+ * @returns Parsed NotifyPayload or null if parsing/validation fails
+ */
+function parseLegacyJsonNotify(cleaned: string): NotifyPayload | null {
+  const jsonCleaned = cleaned
+    .replace(/[\r\n]+\s*/g, '')     // remove newlines and trailing padding (PTY indent)
+    .replace(/\s{2,}/g, ' ');       // collapse remaining multi-space runs
+
+  try {
+    const parsed = JSON.parse(jsonCleaned);
+    if (!isValidNotifyPayload(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Storage format for chat data
  */
 export interface ChatStorageFormat {
@@ -650,6 +847,13 @@ export function formatMessageContent(content: string): string {
     })
     .join('\n');
 
+  // Clean orphaned CSI fragments from PTY buffer boundary splits.
+  // When ESC char lands in one chunk and the CSI params in the next,
+  // artifacts like "[1C" or "[22m" appear mid-word.
+  // Note: \d+ (one or more digits) to avoid matching [C in [CHAT_RESPONSE]
+  cleaned = cleaned.replace(/\[\d+C/g, ' ');
+  cleaned = cleaned.replace(/\[\d+[A-BJKHfm]/g, '');
+
   // Remove other control characters except newlines and tabs
   cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
@@ -680,7 +884,7 @@ export const DEFAULT_RESPONSE_PATTERNS: ResponsePattern[] = [
   },
   {
     name: CHAT_CONSTANTS.PATTERNS.CHAT,
-    pattern: /\[CHAT_RESPONSE\]([\s\S]*?)\[\/CHAT_RESPONSE\]/i,
+    pattern: /\[CHAT_RESPONSE(?::[^\]]*)?\]([\s\S]*?)\[\/CHAT_RESPONSE\]/i,
     groupIndex: 1,
   },
   {
