@@ -7,7 +7,7 @@
  */
 
 import { renderHook, waitFor, act } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach } from 'vitest';
 import axios from 'axios';
 import { useOrchestratorStatus } from './useOrchestratorStatus';
 
@@ -25,6 +25,16 @@ const mockedAxios = {
   isCancel: axios.isCancel as ReturnType<typeof vi.fn>,
 };
 
+// Mock webSocketService
+const mockOn = vi.fn();
+const mockOff = vi.fn();
+vi.mock('../services/websocket.service', () => ({
+  webSocketService: {
+    on: (...args: unknown[]) => mockOn(...args),
+    off: (...args: unknown[]) => mockOff(...args),
+  },
+}));
+
 describe('useOrchestratorStatus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -35,7 +45,7 @@ describe('useOrchestratorStatus', () => {
     it('should start with loading state', () => {
       mockedAxios.get.mockImplementation(() => new Promise(() => {}));
 
-      const { result } = renderHook(() => useOrchestratorStatus({ enablePolling: false }));
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       expect(result.current.isLoading).toBe(true);
       expect(result.current.status).toBeNull();
@@ -56,9 +66,7 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -80,9 +88,7 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -97,9 +103,7 @@ describe('useOrchestratorStatus', () => {
     it('should handle API errors gracefully', async () => {
       mockedAxios.get.mockRejectedValueOnce(new Error('Network error'));
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -114,9 +118,7 @@ describe('useOrchestratorStatus', () => {
         data: { success: false, error: 'Server error' },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -126,65 +128,120 @@ describe('useOrchestratorStatus', () => {
     });
   });
 
-  describe('polling', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
+  describe('WebSocket integration', () => {
+    it('should subscribe to orchestrator_status_changed and connected events', () => {
+      mockedAxios.get.mockImplementation(() => new Promise(() => {}));
+
+      renderHook(() => useOrchestratorStatus());
+
+      expect(mockOn).toHaveBeenCalledWith('orchestrator_status_changed', expect.any(Function));
+      expect(mockOn).toHaveBeenCalledWith('connected', expect.any(Function));
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it('should poll for status when enablePolling is true', async () => {
-      const mockStatus = {
-        isActive: true,
-        agentStatus: 'active',
-        message: 'Orchestrator is active.',
-        offlineMessage: null,
-      };
-
-      mockedAxios.get.mockResolvedValue({
-        data: { success: true, data: mockStatus },
+    it('should update status from WebSocket event', async () => {
+      mockedAxios.get.mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            isActive: false,
+            agentStatus: 'inactive',
+            message: 'Not running',
+            offlineMessage: 'Offline',
+          },
+        },
       });
 
-      renderHook(() =>
-        useOrchestratorStatus({ enablePolling: true, pollingInterval: 1000 })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
-      // Initial call
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
 
-      // Advance timer to trigger polling
-      await vi.advanceTimersByTimeAsync(1000);
+      expect(result.current.status?.isActive).toBe(false);
+
+      // Simulate WebSocket status change
+      const statusChangeHandler = mockOn.mock.calls.find(
+        (call) => call[0] === 'orchestrator_status_changed'
+      )?.[1];
+
+      act(() => {
+        statusChangeHandler({ agentStatus: 'active' });
+      });
+
+      expect(result.current.status?.isActive).toBe(true);
+      expect(result.current.status?.agentStatus).toBe('active');
+    });
+
+    it('should re-fetch status on WebSocket reconnect', async () => {
+      mockedAxios.get.mockResolvedValue({
+        data: {
+          success: true,
+          data: {
+            isActive: true,
+            agentStatus: 'active',
+            message: 'Active',
+            offlineMessage: null,
+          },
+        },
+      });
+
+      renderHook(() => useOrchestratorStatus());
+
+      await waitFor(() => {
+        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      });
+
+      // Simulate WebSocket reconnection
+      const reconnectHandler = mockOn.mock.calls.find(
+        (call) => call[0] === 'connected'
+      )?.[1];
+
+      await act(async () => {
+        reconnectHandler();
+      });
+
       expect(mockedAxios.get).toHaveBeenCalledTimes(2);
     });
 
-    it('should not poll when enablePolling is false', async () => {
-      const mockStatus = {
-        isActive: true,
-        agentStatus: 'active',
-        message: 'Orchestrator is active.',
-        offlineMessage: null,
-      };
+    it('should not poll — only fetches on mount and reconnect', async () => {
+      vi.useFakeTimers();
 
       mockedAxios.get.mockResolvedValue({
-        data: { success: true, data: mockStatus },
+        data: {
+          success: true,
+          data: {
+            isActive: true,
+            agentStatus: 'active',
+            message: 'Active',
+            offlineMessage: null,
+          },
+        },
       });
 
-      renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      renderHook(() => useOrchestratorStatus());
 
       // Initial call
       await vi.advanceTimersByTimeAsync(0);
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
 
-      // Advance timer
-      await vi.advanceTimersByTimeAsync(15000);
+      // Advance timer well past any polling interval
+      await vi.advanceTimersByTimeAsync(60000);
 
-      // Should still be 1 (no polling)
+      // Should still be 1 — no polling
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+
+    it('should unsubscribe from WebSocket events on unmount', () => {
+      mockedAxios.get.mockImplementation(() => new Promise(() => {}));
+
+      const { unmount } = renderHook(() => useOrchestratorStatus());
+
+      unmount();
+
+      expect(mockOff).toHaveBeenCalledWith('orchestrator_status_changed', expect.any(Function));
+      expect(mockOff).toHaveBeenCalledWith('connected', expect.any(Function));
     });
   });
 
@@ -201,9 +258,7 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);
@@ -231,9 +286,7 @@ describe('useOrchestratorStatus', () => {
         data: { success: true, data: mockStatus },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       // Wait for initial load
       await waitFor(() => {
@@ -257,44 +310,6 @@ describe('useOrchestratorStatus', () => {
   });
 
   describe('cleanup', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it('should cleanup polling interval on unmount', async () => {
-      const mockStatus = {
-        isActive: true,
-        agentStatus: 'active',
-        message: 'Orchestrator is active.',
-        offlineMessage: null,
-      };
-
-      mockedAxios.get.mockResolvedValue({
-        data: { success: true, data: mockStatus },
-      });
-
-      const { unmount } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: true, pollingInterval: 1000 })
-      );
-
-      // Initial call
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-
-      // Unmount the hook
-      unmount();
-
-      // Advance timer
-      await vi.advanceTimersByTimeAsync(5000);
-
-      // Should only have initial call (polling stopped on unmount)
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-    });
-
     it('should abort in-flight requests on unmount', async () => {
       let rejectPromise: (error: Error) => void;
       const mockPromise = new Promise((_, reject) => {
@@ -303,9 +318,7 @@ describe('useOrchestratorStatus', () => {
 
       mockedAxios.get.mockImplementation(() => mockPromise);
 
-      const { unmount } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { unmount } = renderHook(() => useOrchestratorStatus());
 
       // Unmount while request is in-flight
       unmount();
@@ -335,9 +348,7 @@ describe('useOrchestratorStatus', () => {
       mockedAxios.isCancel.mockReturnValue(true);
       mockedAxios.get.mockRejectedValueOnce(cancelError);
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      renderHook(() => useOrchestratorStatus());
 
       // Give the hook time to process
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -360,9 +371,7 @@ describe('useOrchestratorStatus', () => {
         },
       });
 
-      const { result } = renderHook(() =>
-        useOrchestratorStatus({ enablePolling: false })
-      );
+      const { result } = renderHook(() => useOrchestratorStatus());
 
       await waitFor(() => {
         expect(result.current.isLoading).toBe(false);

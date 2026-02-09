@@ -9,7 +9,7 @@
  */
 
 import type { Request, Response } from 'express';
-import { getSessionBackendSync, getSessionBackend } from '../../services/session/index.js';
+import { getSessionBackendSync, getSessionBackend, getSessionStatePersistence } from '../../services/session/index.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('SessionController');
@@ -247,6 +247,89 @@ export async function killSession(
 		res.status(500).json({
 			error: 'Failed to kill session',
 			message: error instanceof Error ? error.message : 'Unknown error',
+		});
+	}
+}
+
+/**
+ * Get previously running sessions that can be resumed.
+ *
+ * Returns sessions that have persisted metadata but no active PTY session.
+ * Used by the frontend to show a resume popup on app restart.
+ *
+ * @route GET /api/sessions/previous
+ * @returns {object} JSON response with previous sessions
+ */
+export async function getPreviousSessions(
+	this: unknown,
+	req: Request,
+	res: Response
+): Promise<void> {
+	try {
+		const persistence = getSessionStatePersistence();
+		const sessions = persistence.getRegisteredSessionsMap();
+		const backend = getSessionBackendSync();
+
+		const previousSessions: Array<{
+			name: string;
+			role?: string;
+			teamId?: string;
+			runtimeType: string;
+			hasResumeId: boolean;
+		}> = [];
+
+		for (const [name, info] of sessions) {
+			// Only include sessions that don't have an active PTY
+			if (!backend?.sessionExists(name)) {
+				previousSessions.push({
+					name: info.name,
+					role: info.role,
+					teamId: info.teamId,
+					runtimeType: info.runtimeType,
+					hasResumeId: !!info.claudeSessionId,
+				});
+			}
+		}
+
+		res.json({ success: true, data: { sessions: previousSessions } });
+	} catch (error) {
+		logger.error('Failed to get previous sessions', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to get previous sessions',
+		});
+	}
+}
+
+/**
+ * Dismiss previous sessions by clearing persisted state.
+ *
+ * Clears both in-memory metadata and the state file so the resume
+ * popup won't appear again until new sessions are created and stopped.
+ *
+ * @route POST /api/sessions/previous/dismiss
+ * @returns {object} JSON response confirming dismissal
+ */
+export async function dismissPreviousSessions(
+	this: unknown,
+	req: Request,
+	res: Response
+): Promise<void> {
+	try {
+		const persistence = getSessionStatePersistence();
+		await persistence.clearStateAndMetadata();
+
+		logger.info('Dismissed previous sessions');
+		res.json({ success: true });
+	} catch (error) {
+		logger.error('Failed to dismiss previous sessions', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to dismiss previous sessions',
 		});
 	}
 }

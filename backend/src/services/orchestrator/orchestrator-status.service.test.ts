@@ -58,6 +58,9 @@ jest.mock('../../../../config/index.js', () => ({
       ACTIVATING: 'activating',
       ACTIVE: 'active',
     },
+    SESSIONS: {
+      ORCHESTRATOR_NAME: 'agentmux-orc',
+    },
   },
   WEB_CONSTANTS: {
     PORTS: {
@@ -228,6 +231,41 @@ describe('OrchestratorStatusService', () => {
       expect(result.isActive).toBe(false);
       expect(result.message).toContain('Unable to check');
       expect(result.message).toContain('Storage error');
+    });
+
+    it('should use fallback session name when orchestratorStatus has no sessionName', async () => {
+      // Simulate orchestratorStatus without sessionName (the root cause of the banner mismatch)
+      mockOrchestratorData.value = {
+        agentStatus: 'started',
+        workingStatus: 'idle',
+        runtimeType: 'claude-code',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // No sessionName field
+      };
+      mockSessionState.exists = true;
+
+      const result = await getOrchestratorStatus();
+      // Should detect the session via the fallback constant and report active
+      expect(result.isActive).toBe(true);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('active and ready');
+    });
+
+    it('should report not running when sessionName is missing and session does not exist', async () => {
+      mockOrchestratorData.value = {
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
+        runtimeType: 'claude-code',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        // No sessionName field
+      };
+      mockSessionState.exists = false;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      expect(result.message).toContain('not running');
     });
 
     it('should default to inactive when agentStatus is undefined', async () => {

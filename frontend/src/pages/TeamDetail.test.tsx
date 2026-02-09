@@ -763,7 +763,6 @@ describe('TeamDetail Page', () => {
           },
           body: JSON.stringify({
             projectId: 'project-1',
-            enableGitReminder: true
           })
         });
         expect(alertSpy).toHaveBeenCalledWith('Team started successfully');

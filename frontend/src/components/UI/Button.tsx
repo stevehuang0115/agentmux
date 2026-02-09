@@ -71,7 +71,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         )}
 
         {children && (
-          <span className={loading ? 'opacity-0' : ''}>{children}</span>
+          <span>{children}</span>
         )}
 
         {!loading && Icon && iconPosition === 'right' && (

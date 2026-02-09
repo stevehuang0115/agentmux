@@ -13,6 +13,7 @@ import { useOrchestratorStatus } from '../../hooks/useOrchestratorStatus';
 import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { TypingIndicator } from './TypingIndicator';
+import { QueueStatusBar } from './QueueStatusBar';
 import './ChatPanel.css';
 
 // =============================================================================
@@ -85,6 +86,8 @@ export const ChatPanel: React.FC = () => {
           {messages.length} {messages.length === 1 ? 'message' : 'messages'}
         </span>
       </header>
+
+      <QueueStatusBar />
 
       {isOrchestratorOffline && (
         <div className="orchestrator-offline-banner" data-testid="orchestrator-offline-banner">

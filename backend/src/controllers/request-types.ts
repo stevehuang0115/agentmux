@@ -131,7 +131,6 @@ export interface CreateTeamRequestBody {
  */
 export interface StartTeamRequestBody {
   projectId?: string;
-  enableGitReminder?: boolean;
 }
 
 /**
@@ -181,6 +180,8 @@ export interface RegisterMemberStatusRequestBody {
   status?: string;
   registeredAt?: string;
   memberId?: string;
+  /** Claude conversation/session ID for resuming on restart */
+  claudeSessionId?: string;
 }
 
 /**

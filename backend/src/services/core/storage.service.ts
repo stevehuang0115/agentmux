@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
+import { TeamsBackupService } from './teams-backup.service.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
@@ -536,6 +537,9 @@ export class StorageService {
           memberCount: team.members?.length || 0,
           filePath: teamFile,
         });
+
+        // Update teams backup (fire-and-forget, non-blocking)
+        this.updateTeamsBackup();
       } catch (error) {
         this.logger.error('Error saving team', {
           teamId: team.id,
@@ -676,6 +680,9 @@ export class StorageService {
         // Remove team directory recursively
         await fs.rm(teamDir, { recursive: true, force: true });
         this.logger.info('Team deleted successfully', { teamId: id, teamDir });
+
+        // Update teams backup (fire-and-forget, non-blocking)
+        this.updateTeamsBackup();
       } else {
         this.logger.warn('Team directory not found for deletion', { teamId: id, teamDir });
       }
@@ -1352,6 +1359,20 @@ This is a foundational task that should be completed first before other developm
     });
   }
 
+
+  /**
+   * Update the teams backup file asynchronously.
+   * Reads current teams and writes backup. Errors are logged but not thrown.
+   */
+  private updateTeamsBackup(): void {
+    this.getTeams()
+      .then((teams) => TeamsBackupService.getInstance().updateBackup(teams))
+      .catch((error) => {
+        this.logger.warn('Failed to update teams backup', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
 
   /**
    * @deprecated Use updateAgentStatus instead

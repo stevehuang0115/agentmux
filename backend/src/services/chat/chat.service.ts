@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'events';
 import { promises as fs } from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
   ChatMessage,
@@ -104,6 +105,8 @@ export class ChatService extends EventEmitter {
   private conversations: Map<string, ChatConversation> = new Map();
   private messages: Map<string, ChatMessage[]> = new Map();
   private initialized = false;
+  /** Per-conversation save serialization to prevent concurrent write corruption */
+  private savePromises: Map<string, Promise<void>> = new Map();
 
   /**
    * Create a new ChatService instance
@@ -259,6 +262,59 @@ export class ChatService extends EventEmitter {
         ...metadata,
         rawOutput,
       },
+    });
+
+    await this.saveMessage(message);
+    await this.updateConversationWithMessage(conversationId, message);
+
+    this.emit('message', message);
+    this.emitChatMessageEvent(message);
+
+    return message;
+  }
+
+  /**
+   * Add a message with pre-extracted content (no regex extraction).
+   *
+   * Unlike `addAgentMessage`, this method skips `extractResponseFromOutput()`
+   * and takes already-cleaned content directly. Used by the unified [NOTIFY]
+   * marker handler where content is extracted from JSON payload.
+   *
+   * Emits the `'message'` event that QueueProcessor's `waitForResponse()` depends on.
+   *
+   * @param conversationId - Conversation to add the message to
+   * @param content - Pre-extracted markdown content
+   * @param sender - Sender information
+   * @param metadata - Optional metadata
+   * @returns The created message
+   *
+   * @example
+   * ```typescript
+   * const message = await chatService.addDirectMessage(
+   *   'conv-123',
+   *   '## Status Update\n\nEmily is working...',
+   *   { type: 'orchestrator', name: 'Orchestrator' }
+   * );
+   * ```
+   */
+  async addDirectMessage(
+    conversationId: string,
+    content: string,
+    sender: ChatSender,
+    metadata?: Record<string, unknown>
+  ): Promise<ChatMessage> {
+    await this.ensureInitialized();
+
+    const formattedContent = formatMessageContent(content);
+    const contentType = detectContentType(formattedContent);
+
+    const message = createChatMessage({
+      conversationId,
+      content: formattedContent,
+      from: sender,
+      contentType,
+      status: 'delivered',
+      metadata,
     });
 
     await this.saveMessage(message);
@@ -530,6 +586,13 @@ export class ChatService extends EventEmitter {
     this.conversations.delete(id);
     this.messages.delete(id);
 
+    // Wait for any pending save to finish before deleting the file
+    const pending = this.savePromises.get(id);
+    if (pending) {
+      await pending.catch(() => {});
+      this.savePromises.delete(id);
+    }
+
     const conversationFile = path.join(this.chatDir, `${id}.json`);
     await fs.rm(conversationFile, { force: true });
   }
@@ -675,16 +738,35 @@ export class ChatService extends EventEmitter {
   }
 
   /**
-   * Save a conversation and its messages to disk
+   * Save a conversation and its messages to disk using atomic write (write-to-tmp + rename).
+   * Serialized per conversation to prevent concurrent writes from corrupting the file.
    *
    * @param conversation - Conversation to save
    */
   private async saveConversation(conversation: ChatConversation): Promise<void> {
+    const id = conversation.id;
+    const prev = this.savePromises.get(id) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(() => this.doSaveConversation(conversation));
+    this.savePromises.set(id, next);
+    await next;
+  }
+
+  /**
+   * Perform the actual atomic file write for a conversation.
+   * Writes to a temporary file first, then renames to the final path to prevent corruption.
+   *
+   * @param conversation - Conversation to save
+   */
+  private async doSaveConversation(conversation: ChatConversation): Promise<void> {
     const messages = this.messages.get(conversation.id) ?? [];
     const storage: ChatStorageFormat = { conversation, messages };
     const content = JSON.stringify(storage, null, 2);
     const filePath = path.join(this.chatDir, `${conversation.id}.json`);
-    await fs.writeFile(filePath, content);
+    const tmpPath = filePath + `.${process.pid}.tmp`;
+    await fs.writeFile(tmpPath, content);
+    await fs.rename(tmpPath, filePath);
   }
 
   /**

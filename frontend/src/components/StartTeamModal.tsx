@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAlert } from './UI/Dialog';
-import { FormPopup, FormSection, FormGroup, FormLabel, Dropdown, Toggle } from './UI';
+import { FormPopup, FormSection, FormGroup, FormLabel, Dropdown } from './UI';
 
 interface Project {
 	id: string;
@@ -12,7 +12,7 @@ interface Project {
 interface StartTeamModalProps {
 	isOpen: boolean;
 	onClose: () => void;
-	onStartTeam: (projectId: string, enableGitReminder: boolean) => void;
+	onStartTeam: (projectId: string) => void;
 	team: any;
 	loading: boolean;
 }
@@ -26,7 +26,6 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 } ) => {
 	const { showWarning, AlertComponent } = useAlert();
 	const [selectedProject, setSelectedProject] = useState<string>('');
-	const [enableGitReminder, setEnableGitReminder] = useState<boolean>(true);
 	const [projects, setProjects] = useState<Project[]>([]);
 	const [fetchingProjects, setFetchingProjects] = useState(false);
 
@@ -67,7 +66,7 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 		}
 
 		const projectId = isAlreadyAssigned ? team.currentProject : selectedProject;
-		onStartTeam(projectId, enableGitReminder);
+		onStartTeam(projectId);
 		onClose(); // Close popup after starting team
 	};
 
@@ -121,17 +120,6 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 						/>
 					</FormGroup>
 				)}
-			</FormSection>
-
-			<FormSection title="Team Settings">
-				<FormGroup>
-					<Toggle
-						checked={enableGitReminder}
-						onChange={(e) => setEnableGitReminder(e.target.checked)}
-						label="Enable git reminder every 30 minutes"
-						description="Team members will receive automated reminders to commit their changes every 30 minutes"
-					/>
-				</FormGroup>
 			</FormSection>
 
 			<div className="form-info-box form-info-box--info">

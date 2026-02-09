@@ -166,6 +166,12 @@ export interface SendMessageResult {
 
   /** The conversation (may be newly created) */
   conversation: ChatConversation;
+
+  /** Orchestrator delivery status */
+  orchestrator?: {
+    forwarded: boolean;
+    error?: string;
+  };
 }
 
 /**

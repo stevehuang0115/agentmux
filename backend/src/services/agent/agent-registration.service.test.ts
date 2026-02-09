@@ -135,6 +135,8 @@ describe('AgentRegistrationService', () => {
 			registerSession: jest.fn(),
 			unregisterSession: jest.fn(),
 			isSessionRegistered: jest.fn().mockReturnValue(false),
+			getSessionId: jest.fn().mockReturnValue(undefined),
+			updateSessionId: jest.fn(),
 		});
 
 		service = new AgentRegistrationService(null, '/test/project', mockStorageService);
@@ -353,6 +355,16 @@ describe('AgentRegistrationService', () => {
 				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 		});
+
+		it('should unregister session from persistence on termination', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			const result = await service.terminateAgentSession('test-session', 'developer');
+
+			expect(result.success).toBe(true);
+			const mockPersistence = (sessionModule.getSessionStatePersistence as jest.Mock).mock.results[0]?.value;
+			expect(mockPersistence.unregisterSession).toHaveBeenCalledWith('test-session');
+		});
 	});
 
 	describe('sendMessageToAgent', () => {
@@ -379,17 +391,14 @@ describe('AgentRegistrationService', () => {
 
 		it('should send message and verify processing started (prompt gone)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Configure session to emit: prompt (50ms) -> processing indicator (700ms, after Enter)
-			const mockSession = createMockSession([
-				{ output: '❯ ', delayMs: 50 },
-				{ output: '⠋ Thinking...', delayMs: 700 }, // After Enter (500ms)
-			]);
-			mockSessionHelper.getSession.mockReturnValue(mockSession);
+			// capturePane shows clean prompt (isClaudeAtPrompt passes)
+			// then message not stuck (isMessageStuckAtPrompt returns false)
+			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
 
 			expect(result.success).toBe(true);
-			expect(mockSession.write).toHaveBeenCalledWith('Hello, agent!');
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
 		});
 
 		it('should detect processing indicators as success', async () => {
@@ -406,21 +415,17 @@ describe('AgentRegistrationService', () => {
 			expect(result.success).toBe(true);
 		});
 
-		it('should send Escape when event-driven times out and Claude not at prompt', async () => {
+		it('should fail gracefully when agent is not at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Configure session that never shows prompt or processing (causes timeout)
-			const mockSession = createMockSession([
-				{ output: 'Some modal text...', delayMs: 50 },
-			]);
-			mockSessionHelper.getSession.mockReturnValue(mockSession);
-			// Fallback check shows not at prompt
+			// capturePane shows non-prompt content (agent is busy/modal)
 			mockSessionHelper.capturePane.mockReturnValue('Some modal text...');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
-			// Should eventually fail but Escape should be called on fallback
-			expect(mockSessionHelper.sendEscape).toHaveBeenCalled();
-		}, 35000); // Longer timeout for event-driven timeout
+			// Should fail — message never sent since agent was never at prompt
+			expect(result.success).toBe(false);
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+		});
 
 		it('should fail if session does not exist', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(false);
@@ -718,6 +723,313 @@ describe('AgentRegistrationService', () => {
 
 			expect(result).toBe(false);
 			expect(elapsed).toBeGreaterThanOrEqual(900);
+		});
+	});
+
+	describe('isMessageStuckAtPrompt (private method)', () => {
+		it('should detect CHAT prefix message stuck at prompt', async () => {
+			// capturePane shows the message text still on the last line
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some output\n❯ [CHAT:abc-123] Hello orchestrator\n'
+			);
+
+			const isStuck = (service as any).isMessageStuckAtPrompt.bind(service);
+			const result = await isStuck('test-session', '[CHAT:abc-123] Hello orchestrator');
+
+			expect(result).toBe(true);
+		});
+
+		it('should return false for clean prompt (no message text)', async () => {
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Previous output\n❯ \n'
+			);
+
+			const isStuck = (service as any).isMessageStuckAtPrompt.bind(service);
+			const result = await isStuck('test-session', '[CHAT:abc-123] Hello orchestrator');
+
+			expect(result).toBe(false);
+		});
+
+		it('should detect plain message without CHAT prefix', async () => {
+			mockSessionHelper.capturePane.mockReturnValue(
+				'❯ Register as developer with session test\n'
+			);
+
+			const isStuck = (service as any).isMessageStuckAtPrompt.bind(service);
+			const result = await isStuck('test-session', 'Register as developer with session test');
+
+			expect(result).toBe(true);
+		});
+
+		it('should return false when capturePane returns empty output', async () => {
+			mockSessionHelper.capturePane.mockReturnValue('');
+
+			const isStuck = (service as any).isMessageStuckAtPrompt.bind(service);
+			const result = await isStuck('test-session', 'Hello');
+
+			expect(result).toBe(false);
+		});
+	});
+
+	describe('stuck Enter detection in message delivery', () => {
+		// Helper to create a mock session with configurable onData behavior
+		const createMockSession = (outputSequence: Array<{ output: string; delayMs: number }>) => {
+			return {
+				name: 'test-session',
+				pid: 1234,
+				cwd: '/test',
+				onData: jest.fn().mockImplementation((callback: (data: string) => void) => {
+					outputSequence.forEach(({ output, delayMs }) => {
+						setTimeout(() => callback(output), delayMs);
+					});
+					return jest.fn();
+				}),
+				onExit: jest.fn().mockReturnValue(jest.fn()),
+				write: jest.fn(),
+				resize: jest.fn(),
+				kill: jest.fn(),
+			};
+		};
+
+		it('should detect stuck message and return false on timeout', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			// First capturePane call: clean prompt (isClaudeAtPrompt passes)
+			// Second capturePane call: message stuck at prompt (isMessageStuckAtPrompt detects stuck)
+			// Repeat for each retry attempt
+			let capturePaneCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				capturePaneCount++;
+				// Odd calls = isClaudeAtPrompt check (clean prompt)
+				// Even calls = isMessageStuckAtPrompt check (stuck message)
+				if (capturePaneCount % 2 === 1) {
+					return '❯ \n';
+				}
+				return '❯ [CHAT:abc] Hello orchestrator';
+			});
+
+			const result = await service.sendMessageToAgent(
+				'test-session',
+				'[CHAT:abc] Hello orchestrator'
+			);
+
+			expect(result.success).toBe(false);
+			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
+		});
+
+		it('should succeed when Enter accepted after retry', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			// Session emits prompt, then processing indicator after 2nd Enter attempt
+			const mockSession = createMockSession([
+				{ output: '❯ ', delayMs: 50 },
+				{ output: '⠋ Thinking...', delayMs: 1800 }, // After 2nd Enter attempt
+			]);
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(true);
+		}, 15000);
+
+		it('should accept when text disappears on timeout (no false negative)', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			// Session emits prompt, Enter sent, but no processing indicators detected
+			const mockSession = createMockSession([
+				{ output: '❯ ', delayMs: 50 },
+			]);
+			mockSessionHelper.getSession.mockReturnValue(mockSession);
+
+			// capturePane shows clean prompt (message was accepted, text is gone)
+			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			// Should succeed because the message text is not stuck at the prompt
+			expect(result.success).toBe(true);
+		}, 40000);
+
+		it('should clear leftover input on retry when at prompt', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			// Track capturePane calls:
+			// Attempt 1: isClaudeAtPrompt → clean prompt, isMessageStuckAtPrompt → stuck
+			// Attempt 2: isClaudeAtPrompt → clean prompt, isMessageStuckAtPrompt → clean (success)
+			let capturePaneCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				capturePaneCount++;
+				// Call 1 (attempt 1, isClaudeAtPrompt): clean prompt
+				if (capturePaneCount === 1) return '❯ \n';
+				// Call 2 (attempt 1, isMessageStuckAtPrompt): stuck message
+				if (capturePaneCount === 2) return '❯ Hello stuck message';
+				// Call 3 (attempt 2, isClaudeAtPrompt): clean prompt
+				if (capturePaneCount === 3) return '❯ \n';
+				// Call 4+ (attempt 2, isMessageStuckAtPrompt): clean prompt (message gone)
+				return '❯ \n';
+			});
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello stuck message');
+
+			// clearCurrentCommandLine should have been called during retry after stuck detection
+			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
+			// Second attempt succeeds
+			expect(result.success).toBe(true);
+		});
+
+		it('should run retry cleanup on every failed attempt, not just first', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+
+			// All attempts: at prompt but message always stuck after send
+			// isClaudeAtPrompt (odd calls) → clean prompt
+			// isMessageStuckAtPrompt (even calls) → stuck message
+			let capturePaneCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				capturePaneCount++;
+				if (capturePaneCount % 2 === 1) {
+					return '❯ \n';
+				}
+				return '❯ Hello stuck';
+			});
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(false);
+			// clearCurrentCommandLine should be called on every failed attempt
+			// With 3 attempts all stuck, expect 3 cleanup calls
+			expect(mockSessionHelper.clearCurrentCommandLine.mock.calls.length).toBeGreaterThanOrEqual(2);
+		});
+	});
+
+	describe('resolveRuntimeFlags (private method)', () => {
+		it('should return flags from role skills', async () => {
+			// Mock role.json with assignedSkills
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: ['chrome-browser'],
+					}));
+				}
+				if (filePath.includes('skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
+					}));
+				}
+				return Promise.resolve('{}');
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			const flags = await resolveRuntimeFlags('generalist', 'claude-code');
+
+			expect(flags).toEqual(['--chrome']);
+		});
+
+		it('should apply skill overrides and exclusions', async () => {
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: ['skill-alpha', 'skill-beta'],
+					}));
+				}
+				if (filePath.endsWith('skill-alpha/skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--alpha'] },
+					}));
+				}
+				if (filePath.endsWith('skill-beta/skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--beta'] },
+					}));
+				}
+				if (filePath.endsWith('skill-gamma/skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--gamma'] },
+					}));
+				}
+				return Promise.resolve('{}');
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			// Exclude skill-alpha, add skill-gamma
+			const flags = await resolveRuntimeFlags(
+				'generalist', 'claude-code',
+				['skill-gamma'],
+				['skill-alpha']
+			);
+
+			expect(flags).toContain('--gamma');
+			expect(flags).toContain('--beta');
+			expect(flags).not.toContain('--alpha');
+		});
+
+		it('should return empty for non-matching runtime', async () => {
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: ['chrome-browser'],
+					}));
+				}
+				if (filePath.includes('skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
+					}));
+				}
+				return Promise.resolve('{}');
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			// Query for gemini-cli runtime — chrome-browser's flags are claude-code only
+			const flags = await resolveRuntimeFlags('generalist', 'gemini-cli');
+
+			expect(flags).toEqual([]);
+		});
+
+		it('should handle missing role config gracefully', async () => {
+			mockReadFile.mockRejectedValue(new Error('ENOENT: no such file'));
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			const flags = await resolveRuntimeFlags('nonexistent-role', 'claude-code');
+
+			expect(flags).toEqual([]);
+		});
+
+		it('should handle missing skill config gracefully', async () => {
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: ['nonexistent-skill'],
+					}));
+				}
+				// Skill file doesn't exist
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			const flags = await resolveRuntimeFlags('generalist', 'claude-code');
+
+			expect(flags).toEqual([]);
+		});
+
+		it('should deduplicate flags from multiple skills', async () => {
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: ['skill-a', 'skill-b'],
+					}));
+				}
+				// Both skills produce the same flag
+				if (filePath.includes('skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
+					}));
+				}
+				return Promise.resolve('{}');
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			const flags = await resolveRuntimeFlags('generalist', 'claude-code');
+
+			expect(flags).toEqual(['--chrome']);
 		});
 	});
 });

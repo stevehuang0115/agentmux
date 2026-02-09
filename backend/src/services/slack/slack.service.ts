@@ -16,7 +16,6 @@ import type {
   SlackConversationContext,
   SlackNotification,
   SlackBlock,
-  SlackTextObject,
 } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
 
@@ -282,17 +281,19 @@ export class SlackService extends EventEmitter {
    * @param notification - Notification to send
    */
   async sendNotification(notification: SlackNotification): Promise<void> {
-    if (!this.config?.defaultChannelId) {
-      console.warn('[SlackService] No default channel configured for notifications');
+    const targetChannelId = notification.channelId || this.config?.defaultChannelId;
+    if (!targetChannelId) {
+      console.warn('[SlackService] No channel configured for notification');
       return;
     }
 
     const blocks = this.formatNotificationBlocks(notification);
 
     await this.sendMessage({
-      channelId: this.config.defaultChannelId,
+      channelId: targetChannelId,
       text: `${notification.title}: ${notification.message}`,
       blocks,
+      threadTs: notification.threadTs,
     });
   }
 
@@ -328,46 +329,16 @@ export class SlackService extends EventEmitter {
       },
     ];
 
-    // Add metadata fields if present
-    if (notification.metadata) {
-      const fields: SlackTextObject[] = [];
-      if (notification.metadata.projectId) {
-        fields.push({
-          type: 'mrkdwn',
-          text: `*Project:* ${notification.metadata.projectId}`,
-        });
-      }
-      if (notification.metadata.teamId) {
-        fields.push({
-          type: 'mrkdwn',
-          text: `*Team:* ${notification.metadata.teamId}`,
-        });
-      }
-      if (notification.metadata.agentId) {
-        fields.push({
-          type: 'mrkdwn',
-          text: `*Agent:* ${notification.metadata.agentId}`,
-        });
-      }
-
-      if (fields.length > 0) {
-        blocks.push({
-          type: 'section',
-          fields,
-        });
-      }
-    }
-
+    // Context block elements are text objects where `text` is a plain string.
+    // Using type assertion because SlackElement.text is typed as SlackTextObject
+    // but Slack API context elements use text objects directly as elements.
     blocks.push({
       type: 'context',
       elements: [
         {
           type: 'mrkdwn',
-          text: {
-            type: 'mrkdwn',
-            text: `Sent at ${new Date(notification.timestamp).toLocaleString()}`,
-          },
-        },
+          text: `Sent at ${new Date(notification.timestamp).toLocaleString()}`,
+        } as unknown as import('../../types/slack.types.js').SlackElement,
       ],
     });
 

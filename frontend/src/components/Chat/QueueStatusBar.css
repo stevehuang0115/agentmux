@@ -1,0 +1,193 @@
+/**
+ * Queue Status Bar Styles
+ *
+ * Collapsible bar showing message queue status in the chat panel.
+ * Uses design token CSS variables for consistent dark theming.
+ */
+
+/* Container - hidden when empty */
+.queue-status-bar {
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-bg-secondary);
+  overflow: hidden;
+}
+
+/* Collapsed summary row */
+.queue-status-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--transition-fast);
+}
+
+.queue-status-summary:hover {
+  background-color: var(--color-bg-hover);
+}
+
+/* Processing spinner (small inline) */
+.queue-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: var(--radius-full);
+  animation: queue-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes queue-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Summary text */
+.queue-status-text {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-tight);
+}
+
+/* Chevron toggle */
+.queue-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: transform var(--transition-fast), color var(--transition-fast);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.queue-toggle-btn:hover {
+  color: var(--color-text-secondary);
+}
+
+.queue-toggle-btn.expanded {
+  transform: rotate(180deg);
+}
+
+/* Expanded message list */
+.queue-message-list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height var(--transition-slow);
+}
+
+.queue-message-list.expanded {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Individual queue message item */
+.queue-message-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  border-top: 1px solid var(--color-border);
+}
+
+.queue-message-item.processing {
+  animation: queue-pulse 2s ease-in-out infinite;
+}
+
+@keyframes queue-pulse {
+  0%, 100% { background-color: transparent; }
+  50% { background-color: var(--color-primary-light); }
+}
+
+/* Status icon area */
+.queue-item-status {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+}
+
+/* Message content preview */
+.queue-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-item-preview {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+.queue-item-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: 2px;
+}
+
+/* Source badge */
+.queue-source-badge {
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-tertiary);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  line-height: var(--line-height-tight);
+}
+
+/* Timestamp */
+.queue-item-time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Cancel button */
+.queue-cancel-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+  background: none;
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.queue-cancel-btn:hover {
+  background-color: var(--color-error-light);
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .queue-status-summary {
+    padding: var(--space-sm) var(--space-md);
+  }
+
+  .queue-message-item {
+    padding: var(--space-sm) var(--space-md);
+    flex-wrap: wrap;
+  }
+
+  .queue-item-content {
+    width: calc(100% - 60px);
+  }
+
+  .queue-cancel-btn {
+    margin-left: auto;
+  }
+}

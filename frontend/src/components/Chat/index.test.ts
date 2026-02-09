@@ -13,6 +13,7 @@ import {
   ChatInput,
   ChatSidebar,
   TypingIndicator,
+  QueueStatusBar,
 } from './index';
 
 describe('Chat Components Index', () => {
@@ -39,5 +40,10 @@ describe('Chat Components Index', () => {
   it('exports TypingIndicator', () => {
     expect(TypingIndicator).toBeDefined();
     expect(typeof TypingIndicator).toBe('function');
+  });
+
+  it('exports QueueStatusBar', () => {
+    expect(QueueStatusBar).toBeDefined();
+    expect(typeof QueueStatusBar).toBe('function');
   });
 });

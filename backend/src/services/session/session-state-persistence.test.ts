@@ -154,25 +154,26 @@ describe('SessionStatePersistence', () => {
 			expect(state.sessions.map((s: PersistedSessionInfo) => s.name)).toContain('session2');
 		});
 
-		it('should only save active sessions', async () => {
+		it('should save all registered sessions regardless of backend state', async () => {
 			const options: SessionOptions = {
 				cwd: '/home/user',
 				command: 'claude',
 			};
 
-			persistence.registerSession('active-session', options, RUNTIME_TYPES.CLAUDE_CODE);
-			persistence.registerSession('inactive-session', options, RUNTIME_TYPES.CLAUDE_CODE);
+			persistence.registerSession('session-a', options, RUNTIME_TYPES.CLAUDE_CODE);
+			persistence.registerSession('session-b', options, RUNTIME_TYPES.CLAUDE_CODE);
 
-			// Only one session is active in the backend
-			(mockBackend.listSessions as jest.Mock).mockReturnValue(['active-session']);
+			// Backend returns empty (simulates PTY processes already killed at shutdown)
+			(mockBackend.listSessions as jest.Mock).mockReturnValue([]);
 
 			const saved = await persistence.saveState(mockBackend);
 
-			expect(saved).toBe(1);
+			expect(saved).toBe(2);
 
 			const state = await persistence.loadState();
-			expect(state?.sessions).toHaveLength(1);
-			expect(state?.sessions[0].name).toBe('active-session');
+			expect(state?.sessions).toHaveLength(2);
+			expect(state?.sessions.map((s: PersistedSessionInfo) => s.name)).toContain('session-a');
+			expect(state?.sessions.map((s: PersistedSessionInfo) => s.name)).toContain('session-b');
 		});
 
 		it('should create directory if it does not exist', async () => {
@@ -223,13 +224,16 @@ describe('SessionStatePersistence', () => {
 			expect(mockBackend.createSession).toHaveBeenCalledWith('restored-session', {
 				cwd: '/home/user/project',
 				command: 'claude',
-				args: ['--resume'], // Should add --resume for Claude
+				args: [], // Args passed as-is; --resume not added since persisted command is the shell
 				env: undefined,
 			});
 			expect(persistence.isSessionRegistered('restored-session')).toBe(true);
 		});
 
-		it('should add --resume flag for Claude sessions', async () => {
+		it('should not add --resume to shell args for Claude sessions', async () => {
+			// The persisted command is the shell (e.g. /bin/zsh), not claude.
+			// --resume should NOT be added since it would cause "zsh: no such option: resume".
+			// Claude is launched inside the shell by initializeAgentWithRegistration.
 			const state: PersistedState = {
 				version: 1,
 				savedAt: new Date().toISOString(),
@@ -237,8 +241,8 @@ describe('SessionStatePersistence', () => {
 					{
 						name: 'claude-session',
 						cwd: '/home/user',
-						command: 'claude',
-						args: ['--dangerously-skip-permissions'],
+						command: '/bin/zsh',
+						args: [],
 						runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
 					},
 				],
@@ -249,11 +253,11 @@ describe('SessionStatePersistence', () => {
 			await persistence.restoreState(mockBackend);
 
 			const callArgs = (mockBackend.createSession as jest.Mock).mock.calls[0][1] as SessionOptions;
-			expect(callArgs.args).toContain('--resume');
-			expect(callArgs.args).toContain('--dangerously-skip-permissions');
+			expect(callArgs.args).not.toContain('--resume');
+			expect(callArgs.args).toEqual([]);
 		});
 
-		it('should not add --resume for non-Claude sessions', async () => {
+		it('should preserve original args for non-Claude sessions', async () => {
 			const state: PersistedState = {
 				version: 1,
 				savedAt: new Date().toISOString(),
@@ -329,6 +333,149 @@ describe('SessionStatePersistence', () => {
 		});
 	});
 
+	describe('updateSessionId', () => {
+		it('should update Claude session ID for a registered session', () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: '/bin/zsh',
+			};
+
+			persistence.registerSession('test-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev');
+			persistence.updateSessionId('test-session', 'abc-123-def');
+
+			expect(persistence.getSessionId('test-session')).toBe('abc-123-def');
+		});
+
+		it('should not throw for non-existent session', () => {
+			expect(() => {
+				persistence.updateSessionId('non-existent', 'abc-123');
+			}).not.toThrow();
+
+			expect(persistence.getSessionId('non-existent')).toBeUndefined();
+		});
+
+		it('should persist claudeSessionId through save/load cycle', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: '/bin/zsh',
+			};
+
+			persistence.registerSession('claude-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev');
+			persistence.updateSessionId('claude-session', 'session-uuid-456');
+
+			(mockBackend.listSessions as jest.Mock).mockReturnValue(['claude-session']);
+			await persistence.saveState(mockBackend);
+
+			// Verify the saved state includes claudeSessionId
+			const loaded = await persistence.loadState();
+			expect(loaded?.sessions[0].claudeSessionId).toBe('session-uuid-456');
+		});
+
+		it('should restore sessions with claudeSessionId metadata', async () => {
+			const state: PersistedState = {
+				version: 1,
+				savedAt: new Date().toISOString(),
+				sessions: [
+					{
+						name: 'resumable-session',
+						cwd: '/home/user',
+						command: '/bin/zsh',
+						args: [],
+						runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+						role: 'dev',
+						claudeSessionId: 'resume-this-id',
+					},
+				],
+			};
+
+			await fs.writeFile(testFilePath, JSON.stringify(state));
+
+			await persistence.restoreState(mockBackend);
+
+			// After restore, the session metadata should include the claudeSessionId
+			const metadata = persistence.getSessionMetadata('resumable-session');
+			expect(metadata?.claudeSessionId).toBe('resume-this-id');
+			expect(persistence.getSessionId('resumable-session')).toBe('resume-this-id');
+		});
+	});
+
+	describe('getRegisteredSessionsMap', () => {
+		it('should return a Map of all registered sessions', () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: 'claude',
+				args: [],
+			};
+
+			persistence.registerSession('session-a', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev', 'team-1');
+			persistence.registerSession('session-b', options, RUNTIME_TYPES.GEMINI_CLI, 'qa');
+
+			const sessionsMap = persistence.getRegisteredSessionsMap();
+
+			expect(sessionsMap).toBeInstanceOf(Map);
+			expect(sessionsMap.size).toBe(2);
+			expect(sessionsMap.get('session-a')?.role).toBe('dev');
+			expect(sessionsMap.get('session-a')?.teamId).toBe('team-1');
+			expect(sessionsMap.get('session-b')?.runtimeType).toBe(RUNTIME_TYPES.GEMINI_CLI);
+		});
+
+		it('should return a copy (mutations do not affect internal state)', () => {
+			const options: SessionOptions = { cwd: '/', command: 'bash' };
+			persistence.registerSession('test', options, RUNTIME_TYPES.CLAUDE_CODE);
+
+			const map = persistence.getRegisteredSessionsMap();
+			map.delete('test');
+
+			// Internal state should be unaffected
+			expect(persistence.isSessionRegistered('test')).toBe(true);
+		});
+
+		it('should return empty Map when no sessions registered', () => {
+			const sessionsMap = persistence.getRegisteredSessionsMap();
+			expect(sessionsMap.size).toBe(0);
+		});
+	});
+
+	describe('clearStateAndMetadata', () => {
+		it('should clear both in-memory metadata and state file', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user',
+				command: 'claude',
+			};
+
+			persistence.registerSession('session1', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev');
+			persistence.registerSession('session2', options, RUNTIME_TYPES.GEMINI_CLI, 'qa');
+
+			// Save state file
+			(mockBackend.listSessions as jest.Mock).mockReturnValue(['session1', 'session2']);
+			await persistence.saveState(mockBackend);
+
+			// Verify data exists
+			expect(persistence.getRegisteredSessions()).toHaveLength(2);
+			const loadedBefore = await persistence.loadState();
+			expect(loadedBefore?.sessions).toHaveLength(2);
+
+			// Clear everything
+			await persistence.clearStateAndMetadata();
+
+			// Verify in-memory is cleared
+			expect(persistence.getRegisteredSessions()).toHaveLength(0);
+
+			// Verify state file is deleted
+			const loadedAfter = await persistence.loadState();
+			expect(loadedAfter).toBeNull();
+		});
+
+		it('should handle missing state file gracefully', async () => {
+			const options: SessionOptions = { cwd: '/', command: 'bash' };
+			persistence.registerSession('test', options, RUNTIME_TYPES.CLAUDE_CODE);
+
+			// Don't save state file, but clear should still work
+			await expect(persistence.clearStateAndMetadata()).resolves.not.toThrow();
+			expect(persistence.getRegisteredSessions()).toHaveLength(0);
+		});
+	});
+
 	describe('clearState', () => {
 		it('should delete the state file', async () => {
 			// Create state file
@@ -356,6 +503,70 @@ describe('SessionStatePersistence', () => {
 			persistence.clearMetadata();
 
 			expect(persistence.getRegisteredSessions()).toHaveLength(0);
+		});
+	});
+
+	describe('autoSave', () => {
+		it('should auto-save to disk when registerSession is called', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: 'claude',
+				args: ['--flag'],
+			};
+
+			persistence.registerSession('auto-saved-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev');
+
+			// Wait for fire-and-forget autoSave to complete
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			const state = await persistence.loadState();
+			expect(state).not.toBeNull();
+			expect(state?.sessions).toHaveLength(1);
+			expect(state?.sessions[0].name).toBe('auto-saved-session');
+		});
+
+		it('should auto-save to disk when unregisterSession is called', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user',
+				command: 'claude',
+			};
+
+			persistence.registerSession('session-to-remove', options, RUNTIME_TYPES.CLAUDE_CODE);
+			persistence.registerSession('session-to-keep', options, RUNTIME_TYPES.CLAUDE_CODE);
+
+			// Wait for register auto-saves
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			persistence.unregisterSession('session-to-remove');
+
+			// Wait for unregister auto-save
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			const state = await persistence.loadState();
+			expect(state).not.toBeNull();
+			expect(state?.sessions).toHaveLength(1);
+			expect(state?.sessions[0].name).toBe('session-to-keep');
+		});
+
+		it('should auto-save to disk when updateSessionId is called', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user',
+				command: '/bin/zsh',
+			};
+
+			persistence.registerSession('claude-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev');
+
+			// Wait for register auto-save
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			persistence.updateSessionId('claude-session', 'session-uuid-789');
+
+			// Wait for updateSessionId auto-save
+			await new Promise(resolve => setTimeout(resolve, 100));
+
+			const state = await persistence.loadState();
+			expect(state).not.toBeNull();
+			expect(state?.sessions[0].claudeSessionId).toBe('session-uuid-789');
 		});
 	});
 

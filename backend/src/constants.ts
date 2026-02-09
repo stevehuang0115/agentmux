@@ -95,8 +95,38 @@ export const TERMINAL_CONTROLLER_CONSTANTS = {
 export const CHAT_CONSTANTS = {
 	/** Regex pattern for extracting conversation ID from chat messages */
 	CONVERSATION_ID_PATTERN: /\[CHAT:([^\]]+)\]/,
+	/** Regex pattern for extracting conversation ID from response markers */
+	RESPONSE_CONVERSATION_ID_PATTERN: /\[CHAT_RESPONSE:([^\]]+)\]/,
 	/** Message format prefix for chat routing */
 	MESSAGE_PREFIX: 'CHAT',
+} as const;
+
+/**
+ * Unified notification marker constants.
+ * Used by the orchestrator to send messages to chat, Slack, or both
+ * via a single `[NOTIFY]...[/NOTIFY]` block with a JSON payload.
+ */
+export const NOTIFY_CONSTANTS = {
+	/** Regex for extracting complete [NOTIFY]...[/NOTIFY] blocks from terminal output */
+	MARKER_PATTERN: /\[NOTIFY\]([\s\S]*?)\[\/NOTIFY\]/g,
+	/** Opening marker string for detection */
+	OPEN_TAG: '[NOTIFY]',
+	/** Closing marker string */
+	CLOSE_TAG: '[/NOTIFY]',
+} as const;
+
+/**
+ * Slack proactive notification constants.
+ * @deprecated Use NOTIFY_CONSTANTS instead. Legacy [SLACK_NOTIFY] markers are still
+ * processed for backward compatibility but new orchestrator output should use [NOTIFY].
+ */
+export const SLACK_NOTIFY_CONSTANTS = {
+	/** Regex for extracting complete [SLACK_NOTIFY]...[/SLACK_NOTIFY] blocks from terminal output */
+	MARKER_PATTERN: /\[SLACK_NOTIFY\]([\s\S]*?)\[\/SLACK_NOTIFY\]/g,
+	/** Opening marker string for detection */
+	OPEN_TAG: '[SLACK_NOTIFY]',
+	/** Closing marker string */
+	CLOSE_TAG: '[/SLACK_NOTIFY]',
 } as const;
 
 // Event-driven message delivery constants
@@ -117,10 +147,16 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	ENTER_RETRY_DELAY: 800,
 	/** Maximum number of Enter key retry attempts */
 	MAX_ENTER_RETRIES: 3,
+	/** Delay after Enter retries exhausted before verifying message left input line (ms) */
+	POST_ENTER_VERIFICATION_DELAY: 500,
 	/** Maximum buffer size for terminal output collection (bytes) */
 	MAX_BUFFER_SIZE: 10000,
 	/** Minimum buffer length to consider processing detection valid */
 	MIN_BUFFER_FOR_PROCESSING_DETECTION: 50,
+	/** Timeout for waiting for agent to return to prompt before delivery (ms) */
+	AGENT_READY_TIMEOUT: 120000,
+	/** Interval for polling agent prompt readiness (ms) */
+	AGENT_READY_POLL_INTERVAL: 2000,
 } as const;
 
 /**
@@ -172,9 +208,12 @@ export const TERMINAL_PATTERNS = {
 
 	/**
 	 * Pattern for detecting Claude Code prompt in terminal stream.
-	 * Matches a line with single ❯ or > prompt (not ❯❯ which is mode indicator).
+	 * Matches either:
+	 * - A single prompt char (❯, >, ⏵) alone on a line (normal prompt)
+	 * - ❯❯ at start of a line followed by space (bypass permissions mode prompt)
+	 * Both indicate Claude Code is idle and ready for input.
 	 */
-	PROMPT_STREAM: /(?:^|\n)\s*[>❯⏵]\s*(?:\n|$)/,
+	PROMPT_STREAM: /(?:^|\n)\s*(?:[>❯⏵]\s*(?:\n|$)|❯❯\s)/,
 
 	/**
 	 * Processing indicators including status text patterns.
@@ -190,6 +229,75 @@ export const TERMINAL_PATTERNS = {
 	 * Pattern for detecting Claude Code processing with status text.
 	 */
 	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
+} as const;
+
+/**
+ * Message queue constants for sequential message processing.
+ * Used by the MessageQueueService for orchestrator communication.
+ */
+export const MESSAGE_QUEUE_CONSTANTS = {
+	/** Maximum number of messages allowed in the queue */
+	MAX_QUEUE_SIZE: 100,
+	/** Default timeout for a single message response (ms) */
+	DEFAULT_MESSAGE_TIMEOUT: 120000,
+	/** Maximum number of completed/failed messages retained in history */
+	MAX_HISTORY_SIZE: 50,
+	/** Delay between processing consecutive messages (ms) */
+	INTER_MESSAGE_DELAY: 500,
+	/** Queue persistence file name (stored under agentmux home) */
+	PERSISTENCE_FILE: 'message-queue.json',
+	/** Queue persistence directory name */
+	PERSISTENCE_DIR: 'queue',
+	/** Socket.IO event names for queue status updates */
+	SOCKET_EVENTS: {
+		/** Emitted when a new message is enqueued */
+		MESSAGE_ENQUEUED: 'queue:message_enqueued',
+		/** Emitted when a message starts processing */
+		MESSAGE_PROCESSING: 'queue:message_processing',
+		/** Emitted when a message is completed */
+		MESSAGE_COMPLETED: 'queue:message_completed',
+		/** Emitted when a message fails */
+		MESSAGE_FAILED: 'queue:message_failed',
+		/** Emitted when a message is cancelled */
+		MESSAGE_CANCELLED: 'queue:message_cancelled',
+		/** Emitted with full queue status update */
+		STATUS_UPDATE: 'queue:status_update',
+	},
+} as const;
+
+/**
+ * Event bus constants for the agent event pub/sub system.
+ * Used by EventBusService for subscription management and notification delivery.
+ */
+export const EVENT_BUS_CONSTANTS = {
+	/** Default subscription time-to-live in minutes */
+	DEFAULT_SUBSCRIPTION_TTL_MINUTES: 30,
+	/** Maximum allowed subscription TTL in minutes (24 hours) */
+	MAX_SUBSCRIPTION_TTL_MINUTES: 1440,
+	/** Maximum subscriptions per subscriber session */
+	MAX_SUBSCRIPTIONS_PER_SESSION: 50,
+	/** Maximum total subscriptions across all sessions */
+	MAX_TOTAL_SUBSCRIPTIONS: 200,
+	/** Interval for cleaning up expired subscriptions (ms) */
+	CLEANUP_INTERVAL: 60000,
+	/** Prefix for event notification messages delivered to orchestrator */
+	EVENT_MESSAGE_PREFIX: 'EVENT',
+} as const;
+
+/**
+ * Constants for Slack thread file storage.
+ * Used by SlackThreadStoreService to persist thread conversations
+ * and agent-thread associations.
+ */
+export const SLACK_THREAD_CONSTANTS = {
+	/** Directory name under agentmux home for thread files */
+	STORAGE_DIR: 'slack-threads',
+	/** JSON file mapping agents to their originating threads */
+	AGENT_INDEX_FILE: 'agent-index.json',
+	/** File extension for thread conversation files */
+	FILE_EXTENSION: '.md',
+	/** Maximum age for thread files before cleanup (30 days) */
+	MAX_THREAD_AGE_MS: 30 * 24 * 60 * 60 * 1000,
 } as const;
 
 // Type helpers

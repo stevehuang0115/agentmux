@@ -175,15 +175,24 @@ describe('SessionCommandHelper', () => {
 	});
 
 	describe('capturePane', () => {
-		it('should return captured output', () => {
+		it('should return captured output with trailing empty lines stripped', () => {
+			mockBackend.captureOutput.mockReturnValue('content\n❯ \n\n\n');
 			const output = helper.capturePane('test-session', 50);
-			expect(output).toBe('terminal output');
+			expect(output).toBe('content\n❯ \n');
 			expect(mockBackend.captureOutput).toHaveBeenCalledWith('test-session', 50);
 		});
 
-		it('should use default lines value', () => {
+		it('should use default lines value of 200', () => {
 			helper.capturePane('test-session');
-			expect(mockBackend.captureOutput).toHaveBeenCalledWith('test-session', 100);
+			expect(mockBackend.captureOutput).toHaveBeenCalledWith('test-session', 200);
+		});
+
+		it('should strip trailing whitespace-only lines from terminal buffer', () => {
+			// Simulate a terminal with 50+ empty rows below content
+			const emptyRows = '\n'.repeat(50);
+			mockBackend.captureOutput.mockReturnValue('❯ ' + emptyRows);
+			const output = helper.capturePane('test-session');
+			expect(output).toBe('❯ \n');
 		});
 	});
 

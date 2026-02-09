@@ -48,8 +48,12 @@ export abstract class RuntimeAgentService {
 	/**
 	 * Template method for executing runtime initialization script.
 	 * Most logic is shared, only runtime-specific parts are delegated to abstract methods.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param targetPath - Working directory for the session
+	 * @param runtimeFlags - Optional CLI flags to inject before --dangerously-skip-permissions
 	 */
-	async executeRuntimeInitScript(sessionName: string, targetPath?: string): Promise<void> {
+	async executeRuntimeInitScript(sessionName: string, targetPath?: string, runtimeFlags?: string[]): Promise<void> {
 		try {
 			const config = this.getRuntimeConfig();
 			const commands = await this.loadInitScript(config.initScript);
@@ -62,9 +66,25 @@ export abstract class RuntimeAgentService {
 				targetPath: targetPath || process.cwd(),
 			});
 
+			// Inject runtime flags (e.g. --chrome) before --dangerously-skip-permissions
+			let finalCommands = commands;
+			if (runtimeFlags && runtimeFlags.length > 0) {
+				const flagStr = runtimeFlags.join(' ');
+				finalCommands = commands.map(cmd =>
+					cmd.replace(
+						/--dangerously-skip-permissions/g,
+						`${flagStr} --dangerously-skip-permissions`,
+					),
+				);
+				this.logger.info('Injected runtime flags into init commands', {
+					sessionName,
+					flags: flagStr,
+				});
+			}
+
 			// Clear the commandline before execute
 			await this.sessionHelper.clearCurrentCommandLine(sessionName);
-			await this.sendShellCommandsToSession(sessionName, commands, targetPath);
+			await this.sendShellCommandsToSession(sessionName, finalCommands, targetPath);
 
 			this.logger.info('Runtime initialization script completed', {
 				sessionName,
@@ -190,7 +210,7 @@ export abstract class RuntimeAgentService {
 		while (Date.now() - startTime < timeout) {
 			try {
 				// Capture terminal output
-				const output = this.sessionHelper.capturePane(sessionName, 30);
+				const output = this.sessionHelper.capturePane(sessionName);
 
 				// Get runtime-specific ready patterns
 				const readyPatterns = this.getRuntimeReadyPatterns();

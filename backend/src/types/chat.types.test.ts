@@ -14,6 +14,7 @@ import {
   CHAT_MESSAGE_STATUSES,
   CHAT_CONSTANTS,
   DEFAULT_RESPONSE_PATTERNS,
+  NOTIFY_URGENCY_LEVELS,
   // Types
   ChatSenderType,
   ChatContentType,
@@ -31,6 +32,8 @@ import {
   CreateChatMessageInput,
   ChatStorageFormat,
   LastMessagePreview,
+  NotifyPayload,
+  NotifyUrgency,
   // Type guards
   isValidSenderType,
   isValidContentType,
@@ -38,6 +41,7 @@ import {
   isValidChatSender,
   isValidChatMessage,
   isValidChatConversation,
+  isValidNotifyPayload,
   // Utility functions
   generateChatId,
   createChatMessage,
@@ -49,6 +53,7 @@ import {
   validateSendMessageInput,
   validateChatMessageFilter,
   validateConversationFilter,
+  parseNotifyContent,
 } from './chat.types.js';
 
 // =============================================================================
@@ -495,6 +500,17 @@ describe('Utility Functions', () => {
       const output = '\x1b[32mGreen\x1b[0m\x1b[5C\x1b[31mRed\x1b[0m';
       expect(formatMessageContent(output)).toBe('Green Red');
     });
+
+    it('should clean orphaned CSI fragments from PTY buffer splits', () => {
+      // When ESC byte lands in a previous PTY chunk, artifacts like [1C remain
+      expect(formatMessageContent('What would[1Cyou like to do?')).toBe('What would you like to do?');
+      // [22m is an orphaned SGR reset
+      expect(formatMessageContent('Hello[22m World')).toBe('Hello World');
+      // Should NOT match [C with zero digits (would break [CHAT_RESPONSE])
+      expect(formatMessageContent('[CHAT_RESPONSE]test[/CHAT_RESPONSE]')).toContain('CHAT_RESPONSE');
+      // Multiple orphaned fragments: [3C] → space, [1K] and [22m] → removed
+      expect(formatMessageContent('A[3CB[1KC[22mD')).toBe('A BCD');
+    });
   });
 
   describe('extractResponseFromOutput', () => {
@@ -559,6 +575,27 @@ describe('Utility Functions', () => {
     it('should trim extracted content', () => {
       const output = '[RESPONSE]   Trimmed content   [/RESPONSE]';
       expect(extractResponseFromOutput(output)).toBe('Trimmed content');
+    });
+
+    it('should extract content from [CHAT_RESPONSE:conversationId] markers', () => {
+      const output = '[CHAT_RESPONSE:conv-abc123]Hello from conversation[/CHAT_RESPONSE]';
+      expect(extractResponseFromOutput(output)).toBe('Hello from conversation');
+    });
+
+    it('should extract content without including conversation ID suffix', () => {
+      const output = '[CHAT_RESPONSE:my-conv-id]\n## Status\n\nAll good!\n[/CHAT_RESPONSE]';
+      const extracted = extractResponseFromOutput(output);
+      expect(extracted).toContain('Status');
+      expect(extracted).toContain('All good!');
+      expect(extracted).not.toContain('my-conv-id');
+    });
+
+    it('should handle both old and new CHAT_RESPONSE formats', () => {
+      const oldFormat = '[CHAT_RESPONSE]Old format content[/CHAT_RESPONSE]';
+      const newFormat = '[CHAT_RESPONSE:conv-123]New format content[/CHAT_RESPONSE]';
+
+      expect(extractResponseFromOutput(oldFormat)).toBe('Old format content');
+      expect(extractResponseFromOutput(newFormat)).toBe('New format content');
     });
   });
 
@@ -966,6 +1003,299 @@ describe('Type Definitions', () => {
       messages: [],
     };
     expect(storage).toBeDefined();
+  });
+});
+
+// =============================================================================
+// NotifyPayload Tests
+// =============================================================================
+
+describe('NotifyPayload', () => {
+  describe('NOTIFY_URGENCY_LEVELS', () => {
+    it('should contain all expected urgency levels', () => {
+      expect(NOTIFY_URGENCY_LEVELS).toContain('low');
+      expect(NOTIFY_URGENCY_LEVELS).toContain('normal');
+      expect(NOTIFY_URGENCY_LEVELS).toContain('high');
+      expect(NOTIFY_URGENCY_LEVELS).toContain('critical');
+      expect(NOTIFY_URGENCY_LEVELS).toHaveLength(4);
+    });
+  });
+
+  describe('isValidNotifyPayload', () => {
+    it('should return true for a minimal valid payload', () => {
+      expect(isValidNotifyPayload({ message: 'Hello' })).toBe(true);
+    });
+
+    it('should return true for a full valid payload', () => {
+      const payload: NotifyPayload = {
+        message: '## Update\n\nDetails here.',
+        conversationId: 'conv-123',
+        channelId: 'C0123',
+        threadTs: '170743.001',
+        type: 'task_completed',
+        title: 'Task Done',
+        urgency: 'normal',
+      };
+      expect(isValidNotifyPayload(payload)).toBe(true);
+    });
+
+    it('should return true for chat-only payload', () => {
+      expect(isValidNotifyPayload({
+        message: 'Status update',
+        conversationId: 'conv-abc',
+      })).toBe(true);
+    });
+
+    it('should return true for Slack-only payload', () => {
+      expect(isValidNotifyPayload({
+        message: 'Agent done',
+        channelId: 'C0123',
+        type: 'task_completed',
+      })).toBe(true);
+    });
+
+    it('should return false for null/undefined', () => {
+      expect(isValidNotifyPayload(null)).toBe(false);
+      expect(isValidNotifyPayload(undefined)).toBe(false);
+    });
+
+    it('should return false for non-object', () => {
+      expect(isValidNotifyPayload('string')).toBe(false);
+      expect(isValidNotifyPayload(123)).toBe(false);
+    });
+
+    it('should return false for missing message', () => {
+      expect(isValidNotifyPayload({})).toBe(false);
+      expect(isValidNotifyPayload({ type: 'alert' })).toBe(false);
+    });
+
+    it('should return false for empty message', () => {
+      expect(isValidNotifyPayload({ message: '' })).toBe(false);
+      expect(isValidNotifyPayload({ message: '   ' })).toBe(false);
+    });
+
+    it('should return false for non-string message', () => {
+      expect(isValidNotifyPayload({ message: 123 })).toBe(false);
+      expect(isValidNotifyPayload({ message: true })).toBe(false);
+    });
+
+    it('should return false for non-string optional string fields', () => {
+      expect(isValidNotifyPayload({ message: 'ok', conversationId: 123 })).toBe(false);
+      expect(isValidNotifyPayload({ message: 'ok', channelId: 123 })).toBe(false);
+      expect(isValidNotifyPayload({ message: 'ok', threadTs: 123 })).toBe(false);
+      expect(isValidNotifyPayload({ message: 'ok', type: 123 })).toBe(false);
+      expect(isValidNotifyPayload({ message: 'ok', title: 123 })).toBe(false);
+    });
+
+    it('should return false for invalid urgency', () => {
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 'extreme' })).toBe(false);
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 123 })).toBe(false);
+    });
+
+    it('should return true for valid urgency values', () => {
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 'low' })).toBe(true);
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 'normal' })).toBe(true);
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 'high' })).toBe(true);
+      expect(isValidNotifyPayload({ message: 'ok', urgency: 'critical' })).toBe(true);
+    });
+
+    it('should accept payloads with extra properties (backward compat)', () => {
+      // Extra properties are ignored by isValidNotifyPayload (it checks known fields)
+      expect(isValidNotifyPayload({ message: 'ok', metadata: { key: 'value' } })).toBe(true);
+    });
+  });
+
+  describe('NotifyPayload type compilation', () => {
+    it('should compile NotifyPayload type correctly', () => {
+      const payload: NotifyPayload = {
+        message: 'Test',
+        conversationId: 'conv-1',
+        channelId: 'C0123',
+        threadTs: '170743.001',
+        type: 'alert',
+        title: 'Alert',
+        urgency: 'high',
+      };
+      expect(payload).toBeDefined();
+    });
+
+    it('should compile NotifyUrgency type correctly', () => {
+      const urgency: NotifyUrgency = 'normal';
+      expect(urgency).toBe('normal');
+    });
+  });
+});
+
+// =============================================================================
+// parseNotifyContent Tests
+// =============================================================================
+
+describe('parseNotifyContent', () => {
+  describe('header+body format', () => {
+    it('should parse a full header+body payload', () => {
+      const raw = 'conversationId: conv-abc123\nchannelId: D0AC7NF5N7L\nthreadTs: 1770611081.834419\ntype: task_completed\ntitle: Task Completed\nurgency: normal\n---\n## Emily Status Update\n\nEmily is now **active**.';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('## Emily Status Update\n\nEmily is now **active**.');
+      expect(payload!.conversationId).toBe('conv-abc123');
+      expect(payload!.channelId).toBe('D0AC7NF5N7L');
+      expect(payload!.threadTs).toBe('1770611081.834419');
+      expect(payload!.type).toBe('task_completed');
+      expect(payload!.title).toBe('Task Completed');
+      expect(payload!.urgency).toBe('normal');
+    });
+
+    it('should parse a minimal header+body payload', () => {
+      const raw = 'conversationId: conv-1\n---\nHello world';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('Hello world');
+      expect(payload!.conversationId).toBe('conv-1');
+    });
+
+    it('should handle body-only content (no headers, no separator)', () => {
+      const raw = '## Status Update\n\nAll systems go.';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('## Status Update\n\nAll systems go.');
+      expect(payload!.conversationId).toBeUndefined();
+      expect(payload!.channelId).toBeUndefined();
+    });
+
+    it('should return null for empty content', () => {
+      expect(parseNotifyContent('')).toBeNull();
+      expect(parseNotifyContent('   ')).toBeNull();
+    });
+
+    it('should return null for empty body after separator', () => {
+      const raw = 'conversationId: conv-1\n---\n';
+      expect(parseNotifyContent(raw)).toBeNull();
+    });
+
+    it('should ignore unknown header keys', () => {
+      const raw = 'conversationId: conv-1\nunknownKey: some-value\n---\nBody text';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Body text');
+      // unknownKey should not appear
+      expect((payload as unknown as Record<string, unknown>)['unknownKey']).toBeUndefined();
+    });
+
+    it('should ignore header lines without colons', () => {
+      const raw = 'conversationId: conv-1\nmalformed line\n---\nBody';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Body');
+    });
+
+    it('should ignore headers with empty values', () => {
+      const raw = 'conversationId: conv-1\nchannelId: \n---\nBody';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.channelId).toBeUndefined();
+    });
+
+    it('should handle colon in header value (e.g., threadTs)', () => {
+      const raw = 'threadTs: 1770611081.834419\n---\nBody';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.threadTs).toBe('1770611081.834419');
+    });
+
+    it('should strip ANSI escape sequences from raw content', () => {
+      const raw = '\x1b[32mconversationId: conv-1\x1b[0m\n---\n\x1b[31mRed body\x1b[0m';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Red body');
+    });
+
+    it('should strip orphaned SGR sequences', () => {
+      const raw = '[39mconversationId: conv-1\n---\nBody text[0m';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Body text');
+    });
+
+    it('should handle multiline body with markdown', () => {
+      const raw = 'conversationId: conv-1\ntype: task_completed\n---\n## Task Done\n\nJoe finished:\n- ✅ Tests pass\n- ✅ Deployed\n\nShould I assign next task?';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toContain('## Task Done');
+      expect(payload!.message).toContain('- ✅ Tests pass');
+      expect(payload!.message).toContain('Should I assign next task?');
+      expect(payload!.type).toBe('task_completed');
+    });
+  });
+
+  describe('legacy JSON fallback', () => {
+    it('should parse valid JSON payload', () => {
+      const raw = '{"message":"Hello","conversationId":"conv-1"}';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('Hello');
+      expect(payload!.conversationId).toBe('conv-1');
+    });
+
+    it('should parse full JSON payload', () => {
+      const raw = JSON.stringify({
+        message: '## Update\n\nDetails.',
+        conversationId: 'conv-abc',
+        channelId: 'C0123',
+        threadTs: '170743.001',
+        type: 'task_completed',
+        title: 'Done',
+        urgency: 'normal',
+      });
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('## Update\n\nDetails.');
+      expect(payload!.channelId).toBe('C0123');
+    });
+
+    it('should clean PTY line-wrapping artifacts from JSON', () => {
+      // PTY wraps JSON, injecting newlines + padding
+      const raw = '{"message":"Hello","conversationId":"conv-1","cha\n      nnelId":"C0123"}';
+      const payload = parseNotifyContent(raw);
+
+      expect(payload).not.toBeNull();
+      expect(payload!.channelId).toBe('C0123');
+    });
+
+    it('should return null for invalid JSON', () => {
+      const raw = '{not valid json}';
+      expect(parseNotifyContent(raw)).toBeNull();
+    });
+
+    it('should return null for JSON missing required message field', () => {
+      const raw = '{"type":"alert","conversationId":"conv-1"}';
+      expect(parseNotifyContent(raw)).toBeNull();
+    });
+
+    it('should skip non-JSON content that starts with backtick (prompt templates)', () => {
+      const raw = '` or `[CHAT_RESPONSE]` markers for every status update.';
+      // This doesn't start with { so it's treated as body-only (no headers)
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      // It becomes the message body since it has no --- separator
+      expect(payload!.message).toContain('markers for every status update');
+    });
   });
 });
 

@@ -263,6 +263,10 @@ export interface SlackNotification {
     errorDetails?: string;
   };
   timestamp: string;
+  /** Reply in this Slack thread instead of top-level */
+  threadTs?: string;
+  /** Post to this channel (fallback: defaultChannelId) */
+  channelId?: string;
 }
 
 /**

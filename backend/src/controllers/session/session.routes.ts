@@ -17,6 +17,8 @@ import {
 	writeToSession,
 	getSessionOutput,
 	killSession,
+	getPreviousSessions,
+	dismissPreviousSessions,
 } from './session.controller.js';
 
 /**
@@ -27,6 +29,10 @@ import {
  */
 export function createSessionRouter(context: ApiContext): Router {
 	const router = Router();
+
+	// Previous sessions endpoints (must come before /:name to avoid route conflicts)
+	router.get('/previous', getPreviousSessions.bind(context));
+	router.post('/previous/dismiss', dismissPreviousSessions.bind(context));
 
 	// Session management endpoints
 	router.get('/', listSessions.bind(context));

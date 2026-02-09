@@ -72,6 +72,8 @@ import {
   SetupProjectStructureToolParams,
   CreateTeamForProjectToolParams,
   SendChatResponseParams,
+  SubscribeEventParams,
+  UnsubscribeEventParams,
 } from './types.js';
 import {
   handleCreateRole,
@@ -805,7 +807,8 @@ export class AgentMuxMCPServer {
       role: params.role,
       status: 'active',
       registeredAt: new Date().toISOString(),
-      memberId: params.teamMemberId
+      memberId: params.teamMemberId,
+      claudeSessionId: params.claudeSessionId
     };
 
     logger.info(`[MCP] 📤 Request body:`, JSON.stringify(requestBody, null, 2));
@@ -1731,24 +1734,39 @@ export class AgentMuxMCPServer {
       logger.info(`⏰ Scheduling check in ${minutes} minutes`);
 
       const checkTime = new Date(Date.now() + minutes * 60 * 1000);
-      const scheduleMessage = `SCHEDULED CHECK - ${checkTime.toISOString()}\nFrom: ${this.sessionName}\nMessage: ${message}`;
+      const targetTeam = target || 'orchestrator';
 
-      // Use setTimeout for the schedule (simple implementation)
-      setTimeout(async () => {
-        try {
-          if (target && await this.sessionAdapter.sessionExists(target)) {
-            await this.sessionAdapter.sendMessage(target, `⏰ ${message}`);
-          } else {
-            // Send back to self
-            await this.sessionAdapter.sendMessage(this.sessionName, `⏰ REMINDER: ${message}`);
-          }
-        } catch (error) {
-          logger.error('Scheduled check failed:', error);
-        }
-      }, minutes * 60 * 1000);
+      // Determine delay unit and amount for optimal representation
+      let delayAmount: number;
+      let delayUnit: 'seconds' | 'minutes' | 'hours';
+      if (minutes >= 60 && minutes % 60 === 0) {
+        delayAmount = minutes / 60;
+        delayUnit = 'hours';
+      } else {
+        delayAmount = minutes;
+        delayUnit = 'minutes';
+      }
 
-      // Log the scheduled check
-      await this.logSchedule(scheduleMessage);
+      // Create scheduled message via backend API so it persists and shows in UI
+      const response = await fetch(`${this.apiBaseUrl}/api/scheduled-messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `Check: ${message.substring(0, 60)}${message.length > 60 ? '...' : ''}`,
+          targetTeam,
+          message,
+          delayAmount,
+          delayUnit,
+          isRecurring: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(`Backend API error: ${(errorData as any).error || response.statusText}`);
+      }
+
+      const result = await response.json() as { success: boolean; data?: { id: string } };
 
       return {
         content: [{
@@ -1879,6 +1897,17 @@ export class AgentMuxMCPServer {
         throw new Error('Only orchestrator can create teams');
       }
 
+      // Check if an agent session with this name already exists
+      if (await this.sessionAdapter.sessionExists(name)) {
+        logger.info(`Agent session "${name}" already exists, skipping creation`);
+        return {
+          content: [{
+            type: 'text',
+            text: `⚠️ Agent "${name}" already exists and is running. Use \`delegate_task\` to assign work to this agent instead of creating a new one. Example: delegate_task({ to: "${name}", task: "...", priority: "normal" })`
+          }]
+        };
+      }
+
       // Create tmux session using SessionAdapter
       const sessionConfig = {
         name: name,
@@ -1969,6 +1998,17 @@ export class AgentMuxMCPServer {
 
         // Log delegation
         await this.logDelegation(this.sessionName, to, task, priority);
+
+        // Register agent-thread association for Slack thread tracking
+        try {
+          await fetch(`${this.apiBaseUrl}/api/slack-threads/register-agent`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentSession: to, agentName: to }),
+          });
+        } catch {
+          // Non-critical: thread registration failure should not block delegation
+        }
 
         return {
           content: [{
@@ -3151,6 +3191,17 @@ Please respond promptly with either acceptance or delegation.`;
                   result = await this.wrapToolResult(handleCreateTeamForProject(toolArgs as CreateTeamForProjectToolParams));
                   break;
 
+                // Event Bus Tools
+                case 'subscribe_event':
+                  result = await this.subscribeEvent(toolArgs as SubscribeEventParams);
+                  break;
+                case 'unsubscribe_event':
+                  result = await this.unsubscribeEvent(toolArgs as UnsubscribeEventParams);
+                  break;
+                case 'list_event_subscriptions':
+                  result = await this.listEventSubscriptions();
+                  break;
+
                 default:
                   throw new Error(`Unknown tool: ${toolName}`);
               }
@@ -3213,6 +3264,106 @@ Please respond promptly with either acceptance or delegation.`;
       logger.info(`claude mcp add --transport http agentmux http://localhost:${port}/mcp`);
       logger.info('');
     });
+  }
+
+  /**
+   * Subscribe to agent lifecycle events via the event bus API.
+   *
+   * @param params - Subscription parameters
+   * @returns Tool result with subscription details
+   */
+  async subscribeEvent(params: SubscribeEventParams): Promise<MCPToolResult> {
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/api/events/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...params,
+          subscriberSession: this.sessionName,
+        }),
+      });
+
+      const data = await response.json() as { success: boolean; data?: unknown; error?: string };
+
+      if (!data.success) {
+        return {
+          content: [{ type: 'text', text: `Failed to subscribe: ${data.error || 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Failed to subscribe to event: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+        isError: true,
+      };
+    }
+  }
+
+  /**
+   * Unsubscribe from a previously created event subscription.
+   *
+   * @param params - Unsubscribe parameters
+   * @returns Tool result indicating success or failure
+   */
+  async unsubscribeEvent(params: UnsubscribeEventParams): Promise<MCPToolResult> {
+    try {
+      const response = await fetch(`${this.apiBaseUrl}/api/events/subscribe/${params.subscriptionId}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json() as { success: boolean; error?: string };
+
+      if (!data.success) {
+        return {
+          content: [{ type: 'text', text: `Failed to unsubscribe: ${data.error || 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: 'text', text: `Subscription ${params.subscriptionId} cancelled.` }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Failed to unsubscribe: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+        isError: true,
+      };
+    }
+  }
+
+  /**
+   * List active event subscriptions for this session.
+   *
+   * @returns Tool result with list of subscriptions
+   */
+  async listEventSubscriptions(): Promise<MCPToolResult> {
+    try {
+      const response = await fetch(
+        `${this.apiBaseUrl}/api/events/subscriptions?subscriberSession=${encodeURIComponent(this.sessionName)}`
+      );
+
+      const data = await response.json() as { success: boolean; data?: unknown; error?: string };
+
+      if (!data.success) {
+        return {
+          content: [{ type: 'text', text: `Failed to list subscriptions: ${data.error || 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: 'text', text: JSON.stringify(data.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Failed to list subscriptions: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+        isError: true,
+      };
+    }
   }
 
   private getToolDefinitions(): ToolSchema[] {
@@ -3292,7 +3443,8 @@ Please respond promptly with either acceptance or delegation.`;
           properties: {
             role: { type: 'string', description: 'Agent role (orchestrator, tpm, dev, qa)' },
             sessionName: { type: 'string', description: 'Tmux session identifier' },
-            teamMemberId: { type: 'string', description: 'Team member ID for association' }
+            teamMemberId: { type: 'string', description: 'Team member ID for association' },
+            claudeSessionId: { type: 'string', description: 'Claude conversation/session ID for resuming on restart' }
           },
           required: ['role', 'sessionName']
         }
@@ -3487,7 +3639,7 @@ Gates checked: typecheck, tests, build, lint (optional)`,
       // Orchestration Tools
       {
         name: 'create_team',
-        description: 'Create a new team member session (orchestrator only)',
+        description: 'Create a NEW team member session (orchestrator only). IMPORTANT: If the agent already exists, this will return an error — use delegate_task instead to assign work to existing agents. Check get_team_status first to see who is already running.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -3502,7 +3654,7 @@ Gates checked: typecheck, tests, build, lint (optional)`,
       },
       {
         name: 'delegate_task',
-        description: 'Delegate a task to another team member',
+        description: 'Delegate a task to an existing team member. Use this to assign work to agents that are already running (visible in get_team_status). The agent must already exist — use create_team first if needed.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -3761,6 +3913,57 @@ user messages, creating a full conversational experience.`,
             }
           },
           required: ['content']
+        }
+      },
+
+      // Event Bus Tools
+      {
+        name: 'subscribe_event',
+        description: 'Subscribe to agent lifecycle events (e.g. agent becomes idle, active, inactive, busy). Returns a subscription ID. Matched events are delivered as terminal messages with [EVENT:subId:eventType] prefix.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            eventType: {
+              oneOf: [
+                { type: 'string', enum: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'] },
+                { type: 'array', items: { type: 'string', enum: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'] } }
+              ],
+              description: 'Event type(s) to subscribe to'
+            },
+            filter: {
+              type: 'object',
+              properties: {
+                sessionName: { type: 'string', description: 'Match events for a specific agent session name' },
+                memberId: { type: 'string', description: 'Match events for a specific team member ID' },
+                teamId: { type: 'string', description: 'Match events for a specific team ID' }
+              },
+              description: 'Filter criteria for matching events'
+            },
+            oneShot: { type: 'boolean', description: 'If true (default), subscription is removed after first match' },
+            ttlMinutes: { type: 'number', description: 'Time-to-live in minutes (default: 30, max: 1440)' },
+            messageTemplate: { type: 'string', description: 'Custom notification template. Placeholders: {memberName}, {sessionName}, {eventType}, {previousValue}, {newValue}, {teamName}' }
+          },
+          required: ['eventType', 'filter']
+        }
+      },
+      {
+        name: 'unsubscribe_event',
+        description: 'Cancel an active event subscription by its ID',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            subscriptionId: { type: 'string', description: 'ID of the subscription to cancel' }
+          },
+          required: ['subscriptionId']
+        }
+      },
+      {
+        name: 'list_event_subscriptions',
+        description: 'List your active event subscriptions',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+          required: []
         }
       },
 

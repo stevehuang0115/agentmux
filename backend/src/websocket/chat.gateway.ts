@@ -251,6 +251,50 @@ export class ChatGateway {
   }
 
   /**
+   * Process a unified [NOTIFY] message and add it directly to a conversation.
+   *
+   * Unlike `processTerminalOutput`, this method takes pre-extracted content
+   * from a [NOTIFY] payload — no regex extraction needed.
+   *
+   * @param sessionId - The session/agent ID that produced the output
+   * @param content - Pre-extracted markdown content from NotifyPayload.message
+   * @param conversationId - Target conversation ID
+   * @returns The created chat message, or null on failure
+   */
+  async processNotifyMessage(
+    sessionId: string,
+    content: string,
+    conversationId: string
+  ): Promise<ChatMessage | null> {
+    try {
+      const message = await this.chatService.addDirectMessage(
+        conversationId,
+        content,
+        {
+          type: 'orchestrator',
+          id: sessionId,
+          name: 'Orchestrator',
+        },
+        { sessionId }
+      );
+
+      this.logger.debug('Added notify message to chat', {
+        messageId: message.id,
+        conversationId,
+      });
+
+      return message;
+    } catch (error) {
+      this.logger.error('Failed to process notify message for chat', {
+        sessionId,
+        conversationId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return null;
+    }
+  }
+
+  /**
    * Emit a typing indicator for the orchestrator.
    *
    * Call this when the orchestrator starts/stops processing a message.

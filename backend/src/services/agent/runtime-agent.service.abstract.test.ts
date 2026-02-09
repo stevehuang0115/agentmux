@@ -1,11 +1,11 @@
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
-import { TmuxCommandService } from './tmux-command.service.js';
+import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 
 // Test implementation of abstract class
 class TestRuntimeService extends RuntimeAgentService {
-	constructor(tmuxCommandService: TmuxCommandService, projectRoot: string) {
-		super(tmuxCommandService, projectRoot);
+	constructor(sessionHelper: SessionCommandHelper, projectRoot: string) {
+		super(sessionHelper, projectRoot);
 	}
 
 	protected getRuntimeType(): RuntimeType {
@@ -27,23 +27,34 @@ class TestRuntimeService extends RuntimeAgentService {
 
 describe('RuntimeAgentService (Abstract)', () => {
 	let service: TestRuntimeService;
-	let mockTmuxCommandService: jest.Mocked<TmuxCommandService>;
+	let mockSessionHelper: jest.Mocked<SessionCommandHelper>;
 
 	beforeEach(() => {
-		mockTmuxCommandService = {
+		mockSessionHelper = {
 			capturePane: jest.fn(),
 			sendKey: jest.fn(),
 			sendEnter: jest.fn(),
 			sendCtrlC: jest.fn(),
-			executeScript: jest.fn(),
+			sendMessage: jest.fn(),
+			sendEscape: jest.fn(),
+			clearCurrentCommandLine: jest.fn(),
+			sessionExists: jest.fn(),
+			createSession: jest.fn(),
+			killSession: jest.fn(),
+			setEnvironmentVariable: jest.fn(),
+			writeRaw: jest.fn(),
+			getSession: jest.fn(),
+			getRawHistory: jest.fn(),
+			getTerminalBuffer: jest.fn(),
+			backend: {},
 		} as any;
 
-		service = new TestRuntimeService(mockTmuxCommandService, '/test/project');
+		service = new TestRuntimeService(mockSessionHelper, '/test/project');
 	});
 
 	describe('constructor', () => {
-		it('should initialize with tmux command service and project root', () => {
-			expect(service['tmuxCommand']).toBe(mockTmuxCommandService);
+		it('should initialize with session helper and project root', () => {
+			expect(service['sessionHelper']).toBe(mockSessionHelper);
 			expect(service['projectRoot']).toBe('/test/project');
 			expect(service['logger']).toBeDefined();
 		});
@@ -120,7 +131,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 
 	describe('waitForRuntimeReady', () => {
 		it('should return true when ready pattern is found', async () => {
-			mockTmuxCommandService.capturePane.mockResolvedValue('Welcome to the system');
+			mockSessionHelper.capturePane.mockReturnValue('Welcome to the system');
 
 			const result = await service['waitForRuntimeReady']('test-session', 1000);
 			
@@ -128,7 +139,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 		});
 
 		it('should return false when error pattern is found', async () => {
-			mockTmuxCommandService.capturePane.mockResolvedValue('Error: Failed to start');
+			mockSessionHelper.capturePane.mockReturnValue('Error: Failed to start');
 
 			const result = await service['waitForRuntimeReady']('test-session', 1000);
 			
@@ -136,7 +147,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 		});
 
 		it('should return false when timeout is reached', async () => {
-			mockTmuxCommandService.capturePane.mockResolvedValue('Loading...');
+			mockSessionHelper.capturePane.mockReturnValue('Loading...');
 
 			const result = await service['waitForRuntimeReady']('test-session', 100);
 			
@@ -190,7 +201,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockReadFile.mockResolvedValue(scriptContent);
 
 			const projectRoot = '/test/project';
-			const testService = new TestRuntimeService(mockTmuxCommandService, projectRoot);
+			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
 
 			const commands = await testService['loadInitScript']('initialize_gemini.sh');
 
@@ -207,7 +218,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockReadFile.mockResolvedValue(scriptContent);
 
 			const projectRoot = '/test/project';
-			const testService = new TestRuntimeService(mockTmuxCommandService, projectRoot);
+			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
 
 			await testService['loadInitScript']('initialize_claude.sh');
 
@@ -222,7 +233,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockReadFile.mockResolvedValue(scriptContent);
 
 			const projectRoot = '/test/project';
-			const testService = new TestRuntimeService(mockTmuxCommandService, projectRoot);
+			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
 
 			await testService['loadInitScript']('initialize_codex.sh');
 
@@ -244,11 +255,101 @@ echo "second command"
 			mockReadFile.mockResolvedValue(scriptContent);
 
 			const projectRoot = '/test/project';
-			const testService = new TestRuntimeService(mockTmuxCommandService, projectRoot);
+			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
 
 			const commands = await testService['loadInitScript']('test_script.sh');
 
 			expect(commands).toEqual(['echo "first command"', 'echo "second command"']);
+		});
+	});
+
+	describe('runtime flag injection', () => {
+		it('should inject runtime flags before --dangerously-skip-permissions', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path', ['--chrome']);
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --chrome --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should inject multiple runtime flags', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path', ['--chrome', '--verbose']);
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --chrome --verbose --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should not modify commands when runtimeFlags is undefined', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path', undefined);
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should not modify commands when runtimeFlags is empty array', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path', []);
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
 		});
 	});
 

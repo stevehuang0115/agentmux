@@ -50,9 +50,6 @@ export interface UseOrchestratorStatusResult {
 /** API endpoint for orchestrator status */
 const ORCHESTRATOR_STATUS_ENDPOINT = '/api/orchestrator/status';
 
-/** Polling interval in milliseconds (10 seconds) */
-const POLLING_INTERVAL = 10000;
-
 /** Request timeout in milliseconds (5 seconds) */
 const REQUEST_TIMEOUT = 5000;
 
@@ -63,12 +60,9 @@ const REQUEST_TIMEOUT = 5000;
 /**
  * Hook to check and monitor orchestrator status.
  *
- * Fetches status on mount and polls at regular intervals.
- * Provides real-time orchestrator availability information for UI components.
+ * Fetches status once on mount and then relies on WebSocket events for real-time updates.
+ * Falls back to a single re-fetch when the WebSocket reconnects.
  *
- * @param options - Hook options
- * @param options.enablePolling - Whether to poll for status updates (default: true)
- * @param options.pollingInterval - Polling interval in ms (default: 10000)
  * @returns Object with status, loading state, error, and refresh function
  *
  * @example
@@ -79,11 +73,7 @@ const REQUEST_TIMEOUT = 5000;
  * if (!status?.isActive) return <OrchestratorOffline message={status?.offlineMessage} />;
  * ```
  */
-export function useOrchestratorStatus(options?: {
-  enablePolling?: boolean;
-  pollingInterval?: number;
-}): UseOrchestratorStatusResult {
-  const { enablePolling = true, pollingInterval = POLLING_INTERVAL } = options || {};
+export function useOrchestratorStatus(): UseOrchestratorStatusResult {
 
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -173,17 +163,6 @@ export function useOrchestratorStatus(options?: {
     };
   }, [fetchStatus]);
 
-  // Polling for status updates
-  useEffect(() => {
-    if (!enablePolling) return;
-
-    const intervalId = setInterval(fetchStatus, pollingInterval);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [enablePolling, pollingInterval, fetchStatus]);
-
   // Listen for WebSocket orchestrator status changes for real-time updates
   useEffect(() => {
     const handleOrchestratorStatusChange = (payload: {
@@ -212,12 +191,21 @@ export function useOrchestratorStatus(options?: {
       setError(null);
     };
 
+    // Re-fetch status when WebSocket reconnects (may have missed events while disconnected)
+    const handleReconnect = () => {
+      if (isMountedRef.current) {
+        fetchStatus();
+      }
+    };
+
     webSocketService.on('orchestrator_status_changed', handleOrchestratorStatusChange);
+    webSocketService.on('connected', handleReconnect);
 
     return () => {
       webSocketService.off('orchestrator_status_changed', handleOrchestratorStatusChange);
+      webSocketService.off('connected', handleReconnect);
     };
-  }, []);
+  }, [fetchStatus]);
 
   return {
     status,

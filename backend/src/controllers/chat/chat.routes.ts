@@ -22,22 +22,17 @@ import {
   deleteConversation,
   clearConversation,
   getStatistics,
-  setAgentRegistrationService,
 } from './chat.controller.js';
 
 /**
- * Creates chat router with all chat-related endpoints
+ * Creates chat router with all chat-related endpoints.
+ * Note: MessageQueueService is wired via setMessageQueueService() from index.ts.
  *
- * @param context - API context with services (required for orchestrator message forwarding)
+ * @param context - API context with services (optional, for backward compatibility)
  * @returns Express router configured with chat routes
  */
 export function createChatRouter(context?: ApiContext): Router {
   const router = Router();
-
-  // Set up agent registration service for message forwarding if context is provided
-  if (context?.agentRegistrationService) {
-    setAgentRegistrationService(context.agentRegistrationService);
-  }
 
   // Message endpoints
   router.post('/send', sendMessage);

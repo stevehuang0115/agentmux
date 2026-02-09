@@ -11,3 +11,4 @@ export { ChatMessage } from './ChatMessage';
 export { ChatInput } from './ChatInput';
 export { ChatSidebar } from './ChatSidebar';
 export { TypingIndicator } from './TypingIndicator';
+export { QueueStatusBar } from './QueueStatusBar';

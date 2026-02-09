@@ -110,9 +110,14 @@ export class SessionCommandHelper {
 		// Send text first, then Enter separately to ensure submission
 		session.write(message);
 
-		// Longer delay for paste to complete (important for bracketed paste mode)
-		// Claude Code needs time to process the pasted text before accepting Enter
-		await delay(SESSION_COMMAND_DELAYS.MESSAGE_DELAY);
+		// Scale delay based on message size: large prompts (e.g. 409-line registration
+		// prompts) need more time for Claude Code to process the bracketed paste.
+		// Base delay + 1ms per 10 characters, capped at 5 seconds.
+		const scaledDelay = Math.min(
+			SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
+			5000
+		);
+		await delay(scaledDelay);
 
 		// Send Enter explicitly as a separate keystroke
 		// Use \r (carriage return) which is the standard Enter key in terminals
@@ -125,6 +130,7 @@ export class SessionCommandHelper {
 		this.logger.debug('Message sent with Enter key', {
 			sessionName,
 			messageLength: message.length,
+			pasteDelay: scaledDelay,
 		});
 	}
 
@@ -204,14 +210,22 @@ export class SessionCommandHelper {
 	}
 
 	/**
-	 * Capture terminal output from a session
+	 * Capture terminal output from a session.
+	 *
+	 * Strips trailing empty lines that result from empty terminal rows below
+	 * the actual content. Large terminals (e.g., maximized browser windows)
+	 * can have 50+ empty rows below the prompt, which would cause prompt
+	 * detection to fail if the capture window is too small.
 	 *
 	 * @param sessionName - The session to capture from
-	 * @param lines - Number of lines to capture (default: 100)
-	 * @returns The captured terminal content
+	 * @param lines - Number of lines to capture (default: 200)
+	 * @returns The captured terminal content with trailing empty lines removed
 	 */
-	capturePane(sessionName: string, lines: number = 100): string {
-		return this.backend.captureOutput(sessionName, lines);
+	capturePane(sessionName: string, lines: number = 200): string {
+		const output = this.backend.captureOutput(sessionName, lines);
+		// Strip trailing empty/whitespace-only lines from terminal buffer.
+		// xterm.js returns empty rows for unused terminal space below content.
+		return output.replace(/(\n\s*)+$/, '\n');
 	}
 
 	/**

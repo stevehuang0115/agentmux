@@ -12,6 +12,10 @@ import { registerDeliveryLogRoutes } from './modules/delivery-logs.routes.js';
 import { registerConfigRoutes } from './modules/config.routes.js';
 import { createFactoryRoutes } from './factory.routes.js';
 import { selfImprovementRouter } from '../controllers/self-improvement/index.js';
+import { createMessagingRouter } from '../controllers/messaging/messaging.routes.js';
+import { createTeamsBackupRouter } from '../controllers/teams-backup/teams-backup.routes.js';
+import { createEventBusRouter } from '../controllers/event-bus/event-bus.routes.js';
+import { createSlackThreadRouter } from '../controllers/slack/slack-thread.routes.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -47,6 +51,18 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Self-improvement routes for orchestrator codebase modifications
   router.use('/self-improvement', selfImprovementRouter);
+
+  // Message queue routes
+  router.use('/messaging', createMessagingRouter());
+
+  // Teams backup and restore routes
+  router.use('/teams/backup', createTeamsBackupRouter());
+
+  // Event bus subscription routes
+  router.use('/events', createEventBusRouter());
+
+  // Slack thread storage routes
+  router.use('/slack-threads', createSlackThreadRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

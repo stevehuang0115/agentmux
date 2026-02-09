@@ -1,109 +1,70 @@
-import React, { useState, useEffect } from 'react';
+/**
+ * Orchestrator Status Banner
+ *
+ * Displays a warning/error banner when the orchestrator is not active.
+ * Uses the shared useOrchestratorStatus hook for consistent status across the app.
+ *
+ * @module components/OrchestratorStatusBanner
+ */
+
+import React, { useState } from 'react';
 import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import { IconButton } from './UI';
-import { webSocketService } from '../services/websocket.service';
-
-interface OrchestratorStatus {
-  sessionId: string;
-  status: 'activating' | 'active' | 'inactive';
-  createdAt: string;
-  updatedAt: string;
-}
+import { useOrchestratorStatus } from '../hooks/useOrchestratorStatus';
 
 export const OrchestratorStatusBanner: React.FC = () => {
-  const [orchestratorStatus, setOrchestratorStatus] = useState<OrchestratorStatus | null>(null);
+  const { status, isLoading, refresh } = useOrchestratorStatus();
   const [dismissed, setDismissed] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchOrchestratorStatus = async () => {
-    // Note: Initial orchestrator status is now provided via WebSocket events
-    // The WebSocket listener will handle all status updates
-    console.log('Orchestrator status will be loaded via WebSocket events');
-  };
-
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await fetchOrchestratorStatus();
+    await refresh();
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  const initializeWebSocket = async () => {
-    try {
-      if (!webSocketService.isConnected()) {
-        await webSocketService.connect();
-      }
-      
-      // Listen for orchestrator status updates
-      webSocketService.on('orchestrator_status_changed', handleOrchestratorStatusUpdate);
-      
-      console.log('WebSocket initialized for orchestrator status monitoring');
-    } catch (error) {
-      console.error('Failed to initialize WebSocket for orchestrator status:', error);
-    }
-  };
+  // Reset dismissed state when status goes non-active
+  const isActive = status?.isActive ?? true;
+  const agentStatus = status?.agentStatus;
 
-  const handleOrchestratorStatusUpdate = (orchestratorData: any) => {
-    console.log('Received orchestrator status update:', orchestratorData);
-    
-    // Convert the new format to the expected format
-    const orchestratorStatus: OrchestratorStatus = {
-      sessionId: orchestratorData.sessionName || 'agentmux-orc',
-      status: orchestratorData.running ? 'active' : 'inactive',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-    
-    setOrchestratorStatus(orchestratorStatus);
-  };
-
-  useEffect(() => {
-    fetchOrchestratorStatus();
-    initializeWebSocket();
-    
-    return () => {
-      // Clean up WebSocket listeners
-      webSocketService.off('orchestrator_status_changed', handleOrchestratorStatusUpdate);
-    };
-  }, []);
-
-  // Reset dismissed state when status changes to show banner again
-  useEffect(() => {
-    if (orchestratorStatus?.status !== 'active') {
-      setDismissed(false);
-    }
-  }, [orchestratorStatus?.status]);
-
-  // Don't show banner if orchestrator is active, doesn't exist, or was dismissed
-  if (!orchestratorStatus || orchestratorStatus.status === 'active' || dismissed) {
+  // Don't show banner while loading, if active, if no status yet, or if dismissed
+  if (isLoading || isActive || !status || dismissed) {
     return null;
   }
 
-  const isActivating = orchestratorStatus.status === 'activating';
-  const isInactive = orchestratorStatus.status === 'inactive';
+  const isActivating = agentStatus === 'activating' || agentStatus === 'starting' || agentStatus === 'started';
+
+  const bgColor = isActivating
+    ? 'bg-yellow-500/10 border-yellow-500/30'
+    : 'bg-rose-500/10 border-rose-500/30';
+
+  const iconColor = isActivating ? 'text-yellow-400' : 'text-rose-400';
+  const titleColor = isActivating ? 'text-yellow-300' : 'text-rose-300';
+  const messageColor = isActivating ? 'text-yellow-200/80' : 'text-rose-200/80';
 
   return (
-    <div className={`orchestrator-status-banner ${isActivating ? 'warning' : 'error'}`}>
-      <div className="banner-content">
-        <AlertTriangle className="banner-icon" size={20} />
-        <div className="banner-text">
-          <span className="banner-title">
+    <div className={`flex items-center justify-between px-4 py-2.5 border-b ${bgColor}`}>
+      <div className="flex items-center gap-3">
+        <AlertTriangle className={`shrink-0 ${iconColor}`} size={18} />
+        <div className="flex items-center gap-2 text-sm">
+          <span className={`font-semibold ${titleColor}`}>
             {isActivating ? 'Orchestrator Initializing' : 'Orchestrator Not Running'}
           </span>
-          <span className="banner-message">
-            {isActivating 
+          <span className={messageColor}>
+            {isActivating
               ? 'The AgentMux orchestrator is starting up. This may take a few moments...'
               : 'The AgentMux orchestrator is not running. Check the application logs for issues.'
             }
           </span>
         </div>
       </div>
-      <div className="banner-actions">
+      <div className="flex items-center gap-1">
         <IconButton
           icon={RefreshCw}
           onClick={handleRefresh}
           variant="ghost"
           size="sm"
-          className={`refresh-btn ${isRefreshing ? 'spinning' : ''}`}
+          className={isRefreshing ? 'animate-spin' : ''}
           aria-label="Refresh status"
         />
         <IconButton

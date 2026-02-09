@@ -304,6 +304,136 @@ describe('ChatService', () => {
   });
 
   // ===========================================================================
+  // addDirectMessage Tests
+  // ===========================================================================
+
+  describe('addDirectMessage', () => {
+    it('should add a message with pre-extracted content', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        '## Status Update\n\nEmily is working...',
+        { type: 'orchestrator', name: 'Orchestrator' }
+      );
+
+      expect(message.content).toContain('Status Update');
+      expect(message.content).toContain('Emily is working');
+      expect(message.from.type).toBe('orchestrator');
+    });
+
+    it('should NOT run extractResponseFromOutput (no regex extraction)', async () => {
+      const conv = await service.createNewConversation();
+
+      // Pass content that would be mangled by extractResponseFromOutput
+      // if it were called (i.e. content WITHOUT [RESPONSE] markers)
+      const rawContent = 'Just plain markdown without markers';
+      const message = await service.addDirectMessage(
+        conv.id,
+        rawContent,
+        { type: 'orchestrator' }
+      );
+
+      // Should get the content as-is (after formatMessageContent cleaning)
+      expect(message.content).toBe('Just plain markdown without markers');
+    });
+
+    it('should not store rawOutput in metadata (unlike addAgentMessage)', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Test content',
+        { type: 'orchestrator' }
+      );
+
+      expect(message.metadata?.rawOutput).toBeUndefined();
+    });
+
+    it('should emit message event (critical for QueueProcessor)', async () => {
+      const conv = await service.createNewConversation();
+      const eventSpy = jest.fn();
+      service.on('message', eventSpy);
+
+      await service.addDirectMessage(conv.id, 'Test', { type: 'orchestrator' });
+
+      expect(eventSpy).toHaveBeenCalled();
+      expect(eventSpy.mock.calls[0][0].conversationId).toBe(conv.id);
+    });
+
+    it('should emit chat_message event', async () => {
+      const conv = await service.createNewConversation();
+      const eventSpy = jest.fn();
+      service.on('chat_message', eventSpy);
+
+      await service.addDirectMessage(conv.id, 'Test', { type: 'orchestrator' });
+
+      expect(eventSpy).toHaveBeenCalled();
+      expect(eventSpy.mock.calls[0][0].type).toBe('chat_message');
+    });
+
+    it('should detect content type', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        '## Heading\n\n- Item 1\n- Item 2',
+        { type: 'orchestrator' }
+      );
+
+      expect(message.contentType).toBe('markdown');
+    });
+
+    it('should set status to delivered', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Test',
+        { type: 'orchestrator' }
+      );
+
+      expect(message.status).toBe('delivered');
+    });
+
+    it('should include metadata when provided', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Test',
+        { type: 'orchestrator' },
+        { notifyType: 'task_completed', urgency: 'high' }
+      );
+
+      expect(message.metadata?.notifyType).toBe('task_completed');
+      expect(message.metadata?.urgency).toBe('high');
+    });
+
+    it('should update conversation message count', async () => {
+      const conv = await service.createNewConversation();
+
+      await service.addDirectMessage(conv.id, 'Message 1', { type: 'orchestrator' });
+      await service.addDirectMessage(conv.id, 'Message 2', { type: 'orchestrator' });
+
+      const updated = await service.getConversation(conv.id);
+      expect(updated?.messageCount).toBe(2);
+    });
+
+    it('should clean ANSI codes from content', async () => {
+      const conv = await service.createNewConversation();
+
+      const message = await service.addDirectMessage(
+        conv.id,
+        '\x1b[32m✓ Success\x1b[0m',
+        { type: 'orchestrator' }
+      );
+
+      expect(message.content).toBe('✓ Success');
+    });
+  });
+
+  // ===========================================================================
   // addSystemMessage Tests
   // ===========================================================================
 

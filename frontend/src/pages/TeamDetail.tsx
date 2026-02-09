@@ -208,7 +208,7 @@ export const TeamDetail: React.FC = () => {
     setShowStartTeamModal(true);
   };
 
-  const handleStartTeamSubmit = async (projectId: string, enableGitReminder: boolean) => {
+  const handleStartTeamSubmit = async (projectId: string) => {
     setStartTeamLoading(true);
     try {
       const response = await fetch(`/api/teams/${id}/start`, {
@@ -218,7 +218,6 @@ export const TeamDetail: React.FC = () => {
         },
         body: JSON.stringify({
           projectId,
-          enableGitReminder,
         }),
       });
 

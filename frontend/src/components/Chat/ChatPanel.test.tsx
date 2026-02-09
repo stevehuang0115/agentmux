@@ -44,6 +44,10 @@ vi.mock('./TypingIndicator', () => ({
   TypingIndicator: () => <div data-testid="typing-indicator">Typing...</div>,
 }));
 
+vi.mock('./QueueStatusBar', () => ({
+  QueueStatusBar: () => <div data-testid="queue-status-bar-mock" />,
+}));
+
 const mockUseChat = useChat as jest.MockedFunction<typeof useChat>;
 const mockUseOrchestratorStatus = useOrchestratorStatus as jest.MockedFunction<typeof useOrchestratorStatus>;
 

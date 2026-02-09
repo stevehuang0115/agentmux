@@ -6,7 +6,7 @@
  */
 
 import axios from 'axios';
-import { Project, Team, Ticket, ApiResponse } from '../types';
+import { Project, Team, Ticket, ApiResponse, PreviousSession, TeamsBackupStatus, TeamsRestoreResult, QueueStatus, QueuedMessage } from '../types';
 
 /** Base URL for all API requests */
 const API_BASE = '/api';
@@ -264,6 +264,16 @@ class ApiService {
     }
   }
 
+  /**
+   * Starts a team by ID, resuming agents with stored session IDs when available.
+   *
+   * @param teamId - ID of the team to start
+   * @throws Error if the start request fails
+   */
+  async startTeam(teamId: string): Promise<void> {
+    await axios.post(`${API_BASE}/teams/${teamId}/start`, {});
+  }
+
   // ============ Ticket Methods ============
 
   /**
@@ -323,6 +333,25 @@ class ApiService {
     }
   }
 
+  // ============ Session Resume Methods ============
+
+  /**
+   * Get previously running sessions that can be resumed.
+   *
+   * @returns Promise resolving to array of previous sessions
+   */
+  async getPreviousSessions(): Promise<{ sessions: PreviousSession[] }> {
+    const response = await axios.get<ApiResponse<{ sessions: PreviousSession[] }>>(`${API_BASE}/sessions/previous`);
+    return response.data.data || { sessions: [] };
+  }
+
+  /**
+   * Dismiss previous sessions (clears persisted state).
+   */
+  async dismissPreviousSessions(): Promise<void> {
+    await axios.post(`${API_BASE}/sessions/previous/dismiss`);
+  }
+
   // ============ Task Methods (from markdown files) ============
 
   /**
@@ -380,6 +409,73 @@ class ApiService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks/milestone/${milestoneId}`);
     return response.data.data || [];
+  }
+
+  // ============ Teams Backup Methods ============
+
+  /**
+   * Get backup status comparing current teams against backup file.
+   *
+   * @returns Promise resolving to backup status with mismatch flag
+   */
+  async getTeamsBackupStatus(): Promise<TeamsBackupStatus> {
+    const response = await axios.get<ApiResponse<TeamsBackupStatus>>(`${API_BASE}/teams/backup/status`);
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to get backup status');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Restore teams from the backup file.
+   *
+   * @returns Promise resolving to restore result with count
+   */
+  async restoreTeamsFromBackup(): Promise<TeamsRestoreResult> {
+    const response = await axios.post<ApiResponse<TeamsRestoreResult>>(`${API_BASE}/teams/backup/restore`);
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to restore from backup');
+    }
+    return response.data.data;
+  }
+  // ============ Message Queue Methods ============
+
+  /**
+   * Get the current queue status summary.
+   *
+   * @returns Promise resolving to queue status
+   * @throws Error if the request fails
+   */
+  async getQueueStatus(): Promise<QueueStatus> {
+    const response = await axios.get<ApiResponse<QueueStatus>>(`${API_BASE}/messaging/queue/status`);
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to get queue status');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Get all pending and processing messages in the queue.
+   *
+   * @returns Promise resolving to array of queued messages
+   * @throws Error if the request fails
+   */
+  async getPendingMessages(): Promise<QueuedMessage[]> {
+    const response = await axios.get<ApiResponse<QueuedMessage[]>>(`${API_BASE}/messaging/queue/messages`);
+    return response.data.data || [];
+  }
+
+  /**
+   * Cancel a pending message in the queue.
+   *
+   * @param messageId - ID of the message to cancel
+   * @throws Error if cancellation fails
+   */
+  async cancelQueueMessage(messageId: string): Promise<void> {
+    const response = await axios.delete<ApiResponse<void>>(`${API_BASE}/messaging/queue/messages/${messageId}`);
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Failed to cancel message');
+    }
   }
 }
 
