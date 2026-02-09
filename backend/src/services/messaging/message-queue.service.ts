@@ -17,6 +17,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
+import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import type {
   QueuedMessage,
   EnqueueMessageInput,
@@ -49,6 +50,9 @@ import {
  * ```
  */
 export class MessageQueueService extends EventEmitter {
+  /** Logger for this service */
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('MessageQueueService');
+
   /** Pending messages waiting to be processed (FIFO) */
   private queue: QueuedMessage[] = [];
 
@@ -433,7 +437,7 @@ export class MessageQueueService extends EventEmitter {
     this.history.unshift(message);
 
     if (this.history.length > MESSAGE_QUEUE_CONSTANTS.MAX_HISTORY_SIZE) {
-      this.history = this.history.slice(0, MESSAGE_QUEUE_CONSTANTS.MAX_HISTORY_SIZE);
+      this.history.length = MESSAGE_QUEUE_CONSTANTS.MAX_HISTORY_SIZE;
     }
   }
 
@@ -497,7 +501,10 @@ export class MessageQueueService extends EventEmitter {
       await handle.close();
 
       await fs.rename(tempPath, this.persistPath);
-    } catch {
+    } catch (error) {
+      this.logger.warn('Failed to persist queue state', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       // Clean up temp file on error
       try {
         await fs.unlink(tempPath);

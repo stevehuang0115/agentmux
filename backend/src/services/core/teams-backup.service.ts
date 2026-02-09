@@ -10,7 +10,6 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { existsSync } from 'fs';
 import * as os from 'os';
 import type { Team } from '../../types/index.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
@@ -118,12 +117,12 @@ export class TeamsBackupService {
    */
   async readBackup(): Promise<TeamsBackup | null> {
     try {
-      if (!existsSync(this.backupPath)) {
-        return null;
-      }
       const content = await fs.readFile(this.backupPath, 'utf-8');
       return JSON.parse(content) as TeamsBackup;
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return null;
+      }
       this.logger.warn('Failed to read teams backup', {
         error: error instanceof Error ? error.message : String(error),
       });

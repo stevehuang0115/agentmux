@@ -593,11 +593,11 @@ export class TerminalGateway {
 			return;
 		}
 
-		const pattern = new RegExp(NOTIFY_CONSTANTS.MARKER_PATTERN.source, 'g');
+		NOTIFY_CONSTANTS.MARKER_PATTERN.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		let lastMatchEnd = 0;
 
-		while ((match = pattern.exec(this.orchestratorOutputBuffer)) !== null) {
+		while ((match = NOTIFY_CONSTANTS.MARKER_PATTERN.exec(this.orchestratorOutputBuffer)) !== null) {
 			const rawContent = match[1].trim();
 			lastMatchEnd = match.index + match[0].length;
 
@@ -756,11 +756,11 @@ export class TerminalGateway {
 
 		this.logger.debug('Processing legacy [SLACK_NOTIFY] markers (deprecated — use [NOTIFY])');
 
-		const pattern = new RegExp(SLACK_NOTIFY_CONSTANTS.MARKER_PATTERN.source, 'g');
+		SLACK_NOTIFY_CONSTANTS.MARKER_PATTERN.lastIndex = 0;
 		let match: RegExpExecArray | null;
 		let lastMatchEnd = 0;
 
-		while ((match = pattern.exec(this.orchestratorOutputBuffer)) !== null) {
+		while ((match = SLACK_NOTIFY_CONSTANTS.MARKER_PATTERN.exec(this.orchestratorOutputBuffer)) !== null) {
 			const rawContent = match[1].trim();
 			lastMatchEnd = match.index + match[0].length;
 

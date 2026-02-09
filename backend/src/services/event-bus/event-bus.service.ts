@@ -167,9 +167,10 @@ export class EventBusService extends EventEmitter {
 
     const toRemove: string[] = [];
 
+    const now = new Date();
     for (const [id, sub] of this.subscriptions) {
       // Check expiration
-      if (sub.expiresAt && new Date(sub.expiresAt) < new Date()) {
+      if (sub.expiresAt && new Date(sub.expiresAt) < now) {
         toRemove.push(id);
         continue;
       }
@@ -367,6 +368,8 @@ export class EventBusService extends EventEmitter {
     this.cleanupInterval = setInterval(() => {
       this.cleanupExpired();
     }, EVENT_BUS_CONSTANTS.CLEANUP_INTERVAL);
+    // Don't prevent graceful shutdown
+    this.cleanupInterval.unref();
   }
 
   /**
