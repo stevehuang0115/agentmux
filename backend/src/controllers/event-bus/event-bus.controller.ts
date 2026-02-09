@@ -8,14 +8,10 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 
 /** Module-level reference to the event bus service */
 let eventBusService: EventBusService | null = null;
-
-/** Logger instance */
-const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('EventBusController');
 
 /**
  * Set the EventBusService instance.

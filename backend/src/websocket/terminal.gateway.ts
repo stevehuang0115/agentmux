@@ -531,20 +531,6 @@ export class TerminalGateway {
 	}
 
 	/**
-	 * Process unified [NOTIFY]...[/NOTIFY] markers from the orchestrator output buffer.
-	 *
-	 * Parses header+body (or legacy JSON) payload via `parseNotifyContent()` and
-	 * routes to chat, Slack, or both based on which fields are present:
-	 * - `conversationId` present → route to chat UI
-	 * - `channelId` present → route to Slack
-	 * - Both → both (common case)
-	 * - Neither + activeConversationId exists → fallback to chat
-	 * - `type` alone (no channelId) → chat only (type is metadata, not a routing signal)
-	 *
-	 * @param sessionName - The orchestrator session name
-	 */
-
-	/**
 	 * Build a SlackNotification from a NotifyPayload.
 	 *
 	 * @param payload - Parsed notify payload
@@ -588,6 +574,19 @@ export class TerminalGateway {
 		}
 	}
 
+	/**
+	 * Process unified [NOTIFY]...[/NOTIFY] markers from the orchestrator output buffer.
+	 *
+	 * Parses header+body (or legacy JSON) payload via `parseNotifyContent()` and
+	 * routes to chat, Slack, or both based on which fields are present:
+	 * - `conversationId` present → route to chat UI
+	 * - `channelId` present → route to Slack
+	 * - Both → both (common case)
+	 * - Neither + activeConversationId exists → fallback to chat
+	 * - `type` alone (no channelId) → chat only (type is metadata, not a routing signal)
+	 *
+	 * @param sessionName - The orchestrator session name
+	 */
 	private processNotifyMarkers(sessionName: string): void {
 		if (!this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
 			return;

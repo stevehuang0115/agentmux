@@ -8,14 +8,10 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
 import type { MessageQueueService } from '../../services/messaging/message-queue.service.js';
 
 /** Module-level reference to the queue service */
 let messageQueueService: MessageQueueService | null = null;
-
-/** Logger instance */
-const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('MessagingController');
 
 /**
  * Set the message queue service instance.

@@ -119,8 +119,8 @@ export class TeamsBackupService {
     try {
       const content = await fs.readFile(this.backupPath, 'utf-8');
       return JSON.parse(content) as TeamsBackup;
-    } catch (error: any) {
-      if (error?.code === 'ENOENT') {
+    } catch (error: unknown) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
       }
       this.logger.warn('Failed to read teams backup', {
