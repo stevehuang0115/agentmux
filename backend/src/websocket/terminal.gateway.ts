@@ -543,6 +543,51 @@ export class TerminalGateway {
 	 *
 	 * @param sessionName - The orchestrator session name
 	 */
+
+	/**
+	 * Build a SlackNotification from a NotifyPayload.
+	 *
+	 * @param payload - Parsed notify payload
+	 * @returns SlackNotification with defaults applied
+	 */
+	private buildSlackNotification(payload: NotifyPayload): SlackNotification {
+		return {
+			type: (payload.type || 'alert') as SlackNotification['type'],
+			title: payload.title || payload.type || 'Notification',
+			message: payload.message,
+			urgency: payload.urgency || 'normal',
+			timestamp: new Date().toISOString(),
+			channelId: payload.channelId,
+			threadTs: payload.threadTs,
+		};
+	}
+
+	/**
+	 * Send a notification to the Slack bridge with error handling.
+	 *
+	 * @param notification - The Slack notification to send
+	 * @param context - Description of the call site for logging
+	 */
+	private sendToSlackBridge(notification: SlackNotification, context: string): void {
+		const bridge = getSlackOrchestratorBridge();
+		if (bridge.isInitialized()) {
+			this.logger.info(`Routing ${context} to Slack`, {
+				type: notification.type,
+				channelId: notification.channelId,
+			});
+			bridge.sendNotification(notification).catch((error) => {
+				this.logger.warn(`Failed to route ${context} to Slack`, {
+					error: error instanceof Error ? error.message : String(error),
+					type: notification.type,
+				});
+			});
+		} else {
+			this.logger.warn(`Slack bridge not initialized, skipping ${context}`, {
+				type: notification.type,
+			});
+		}
+	}
+
 	private processNotifyMarkers(sessionName: string): void {
 		if (!this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
 			return;
@@ -603,34 +648,8 @@ export class TerminalGateway {
 			// notification would fall back to defaultChannelId which may not be
 			// configured, causing channel_not_found errors.
 			if (payload.channelId) {
-				const bridge = getSlackOrchestratorBridge();
-				if (bridge.isInitialized()) {
-					const slackNotification: SlackNotification = {
-						type: (payload.type || 'alert') as SlackNotification['type'],
-						title: payload.title || payload.type || 'Notification',
-						message: payload.message,
-						urgency: payload.urgency || 'normal',
-						timestamp: new Date().toISOString(),
-						channelId: payload.channelId,
-						threadTs: payload.threadTs,
-					};
-
-					this.logger.info('Routing NOTIFY to Slack', {
-						type: slackNotification.type,
-						channelId: payload.channelId,
-					});
-
-					bridge.sendNotification(slackNotification).catch((error) => {
-						this.logger.warn('Failed to route NOTIFY to Slack', {
-							error: error instanceof Error ? error.message : String(error),
-							type: slackNotification.type,
-						});
-					});
-				} else {
-					this.logger.warn('Slack bridge not initialized, skipping NOTIFY Slack routing', {
-						type: payload.type,
-					});
-				}
+				const slackNotification = this.buildSlackNotification(payload);
+				this.sendToSlackBridge(slackNotification, 'NOTIFY');
 			}
 		}
 
@@ -767,33 +786,8 @@ export class TerminalGateway {
 				contentLength: payload.message.length,
 			});
 
-			const fullNotification: SlackNotification = {
-				type: payload.type as SlackNotification['type'],
-				title: payload.title || payload.type,
-				message: payload.message,
-				urgency: payload.urgency || 'normal',
-				timestamp: new Date().toISOString(),
-				channelId: payload.channelId,
-				threadTs: payload.threadTs,
-			};
-
-			const bridge = getSlackOrchestratorBridge();
-			if (bridge.isInitialized()) {
-				this.logger.info('Sending legacy proactive Slack notification', {
-					type: fullNotification.type,
-					title: fullNotification.title,
-				});
-				bridge.sendNotification(fullNotification).catch((error) => {
-					this.logger.warn('Failed to send legacy Slack notification', {
-						error: error instanceof Error ? error.message : String(error),
-						type: fullNotification.type,
-					});
-				});
-			} else {
-				this.logger.warn('Slack bridge not initialized, skipping legacy notification', {
-					type: fullNotification.type,
-				});
-			}
+			const fullNotification = this.buildSlackNotification(payload);
+			this.sendToSlackBridge(fullNotification, 'legacy SLACK_NOTIFY');
 		}
 
 		if (lastMatchEnd > 0) {

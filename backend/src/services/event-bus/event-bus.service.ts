@@ -329,7 +329,7 @@ export class EventBusService extends EventEmitter {
       this.messageQueueService.enqueue({
         content: message,
         conversationId: 'system',
-        source: 'system_event' as any,
+        source: 'system_event',
       });
 
       this.logger.debug('Event notification enqueued', {

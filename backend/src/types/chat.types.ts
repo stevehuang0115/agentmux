@@ -9,6 +9,7 @@
  */
 
 import { TERMINAL_FORMATTING_CONSTANTS } from '../constants.js';
+import { stripAnsiCodes } from '../utils/terminal-output.utils.js';
 
 // =============================================================================
 // Enums and Constants
@@ -475,11 +476,8 @@ export function isValidNotifyPayload(value: unknown): value is NotifyPayload {
  * ```
  */
 export function parseNotifyContent(raw: string): NotifyPayload | null {
-  // Strip ANSI escape sequences
-  const cleaned = raw
-    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
-    .replace(/\[\d+m/g, '')
-    .trim();
+  // Strip ANSI escape sequences using the canonical utility
+  const cleaned = stripAnsiCodes(raw).trim();
 
   if (!cleaned) {
     return null;
@@ -518,7 +516,11 @@ export function parseNotifyContent(raw: string): NotifyPayload | null {
       case 'threadTs': payload.threadTs = value; break;
       case 'type': payload.type = value; break;
       case 'title': payload.title = value; break;
-      case 'urgency': payload.urgency = value as NotifyUrgency; break;
+      case 'urgency':
+        if (NOTIFY_URGENCY_LEVELS.includes(value as NotifyUrgency)) {
+          payload.urgency = value as NotifyUrgency;
+        }
+        break;
     }
   }
 
