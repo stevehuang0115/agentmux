@@ -47,28 +47,33 @@ export async function ensureDir(dirPath: string): Promise<void> {
 /**
  * Acquire and hold a lock from the given map for the duration of the operation.
  *
- * Uses a `while` loop (not `if`) so that when multiple callers await
- * the same lock promise, each one re-checks after waking — only the
- * first waiter proceeds, and subsequent waiters queue again.
+ * Uses promise-chaining so each caller queues behind the previous one.
+ * This avoids the race condition where multiple awaiters of the same
+ * promise all wake up and proceed past a `while` check simultaneously.
  */
 async function withLock<T>(
   lockMap: Map<string, Promise<void>>,
   lockKey: string,
   operation: () => Promise<T>,
 ): Promise<T> {
-  while (lockMap.has(lockKey)) {
-    await lockMap.get(lockKey);
-  }
+  // Chain behind whatever is currently queued (or resolve immediately)
+  const prevLock = lockMap.get(lockKey) ?? Promise.resolve();
 
-  let resolve: () => void;
-  const lockPromise = new Promise<void>((r) => { resolve = r; });
-  lockMap.set(lockKey, lockPromise);
+  let releaseLock: () => void;
+  const myLock = new Promise<void>((resolve) => { releaseLock = resolve; });
+  lockMap.set(lockKey, myLock);
+
+  // Wait for the previous holder to finish
+  await prevLock;
 
   try {
     return await operation();
   } finally {
-    resolve!();
-    lockMap.delete(lockKey);
+    releaseLock!();
+    // Only clean up if we're still the tail of the chain
+    if (lockMap.get(lockKey) === myLock) {
+      lockMap.delete(lockKey);
+    }
   }
 }
 

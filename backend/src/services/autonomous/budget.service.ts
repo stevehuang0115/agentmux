@@ -12,7 +12,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { EventEmitter } from 'events';
 import { parse as parseYAML } from 'yaml';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
+import { atomicWriteJson, safeReadJson, modifyJsonFile } from '../../utils/file-io.utils.js';
 import {
   UsageRecord,
   UsageSummary,
@@ -358,9 +358,9 @@ export class BudgetService extends EventEmitter implements IBudgetService {
    * @param record - Usage record
    */
   private async appendUsage(filePath: string, record: UsageRecord): Promise<void> {
-    const records = await safeReadJson<UsageRecord[]>(filePath, []);
-    records.push(record);
-    await atomicWriteJson(filePath, records);
+    await modifyJsonFile<UsageRecord[]>(filePath, [], (records) => {
+      records.push(record);
+    });
   }
 
   /**
@@ -375,15 +375,8 @@ export class BudgetService extends EventEmitter implements IBudgetService {
 
     for (const date of dates) {
       const filePath = path.join(this.usagePath, `${date}.json`);
-      try {
-        if (existsSync(filePath)) {
-          const content = await fs.readFile(filePath, 'utf-8');
-          const dayRecords = JSON.parse(content) as UsageRecord[];
-          records.push(...dayRecords);
-        }
-      } catch {
-        // Skip invalid files
-      }
+      const dayRecords = await safeReadJson<UsageRecord[]>(filePath, []);
+      records.push(...dayRecords);
     }
 
     return records;
