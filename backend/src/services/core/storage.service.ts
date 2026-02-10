@@ -11,6 +11,7 @@ import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
 import { TeamsBackupService } from './teams-backup.service.js';
+import { atomicWriteFile as utilAtomicWriteFile, withOperationLock as utilWithOperationLock } from '../../utils/file-io.utils.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
@@ -27,9 +28,6 @@ export class StorageService {
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
-  private fileLocks: Map<string, Promise<void>> = new Map();
-  /** Mutex locks for read-modify-write operations to prevent race conditions */
-  private operationLocks: Map<string, Promise<void>> = new Map();
   private logger: ComponentLogger;
   /** Flag to track if migration has been performed */
   private migrationDone: boolean = false;
@@ -358,88 +356,25 @@ export class StorageService {
 
   /**
    * Acquire a lock for read-modify-write operations on a specific file.
-   * This prevents race conditions where concurrent operations read stale data.
+   * Delegates to the centralized utility lock.
    *
    * @param lockKey - Unique key for the lock (usually the file path)
    * @param operation - The async operation to perform while holding the lock
    * @returns The result of the operation
    */
-  private async withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
-    // Wait for any existing operation on this file to complete
-    if (this.operationLocks.has(lockKey)) {
-      await this.operationLocks.get(lockKey);
-    }
-
-    // Create a deferred promise for this operation
-    let resolveOperation: () => void;
-    const operationPromise = new Promise<void>((resolve) => {
-      resolveOperation = resolve;
-    });
-
-    this.operationLocks.set(lockKey, operationPromise);
-
-    try {
-      return await operation();
-    } finally {
-      resolveOperation!();
-      this.operationLocks.delete(lockKey);
-    }
+  private withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
+    return utilWithOperationLock(lockKey, operation);
   }
 
   /**
-   * Atomic write operation with file locking to prevent race conditions
+   * Atomic write operation with file locking.
+   * Delegates to the centralized utility.
+   *
    * @param filePath - Path to the file to write
    * @param content - Content to write to the file
    */
-  private async atomicWriteFile(filePath: string, content: string): Promise<void> {
-    // Use file-based locking to prevent concurrent writes
-    const lockKey = filePath;
-    
-    // Wait for any existing write operation on this file to complete
-    if (this.fileLocks.has(lockKey)) {
-      await this.fileLocks.get(lockKey);
-    }
-    
-    // Create a new lock for this write operation
-    const writeOperation = this.performAtomicWrite(filePath, content);
-    this.fileLocks.set(lockKey, writeOperation);
-    
-    try {
-      await writeOperation;
-    } finally {
-      // Clean up the lock after operation completes
-      this.fileLocks.delete(lockKey);
-    }
-  }
-  
-  /**
-   * Performs the actual atomic write using a temporary file and rename
-   * @param filePath - Target file path
-   * @param content - Content to write
-   */
-  private async performAtomicWrite(filePath: string, content: string): Promise<void> {
-    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
-    
-    try {
-      // Write to temporary file first
-      await fs.writeFile(tempPath, content, 'utf8');
-      
-      // Ensure data is written to disk before rename
-      const fileHandle = await fs.open(tempPath, 'r+');
-      await fileHandle.sync();
-      await fileHandle.close();
-      
-      // Atomically move temp file to target (this is atomic on most filesystems)
-      await fs.rename(tempPath, filePath);
-    } catch (error) {
-      // Clean up temp file if something went wrong
-      try {
-        await fs.unlink(tempPath);
-      } catch (unlinkError) {
-        // Ignore cleanup errors
-      }
-      throw error;
-    }
+  private atomicWriteFile(filePath: string, content: string): Promise<void> {
+    return utilAtomicWriteFile(filePath, content);
   }
 
   // Team management

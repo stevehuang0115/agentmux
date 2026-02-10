@@ -13,6 +13,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { Team } from '../../types/index.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
 /** File name for the teams backup */
 const BACKUP_FILENAME = 'teams-backup.json';
@@ -101,7 +102,7 @@ export class TeamsBackupService {
         timestamp: new Date().toISOString(),
         teams,
       };
-      await fs.writeFile(this.backupPath, JSON.stringify(backup, null, 2), 'utf-8');
+      await atomicWriteJson(this.backupPath, backup);
       this.logger.debug('Teams backup updated', { teamCount: teams.length });
     } catch (error) {
       this.logger.warn('Failed to update teams backup', {
@@ -116,18 +117,7 @@ export class TeamsBackupService {
    * @returns The parsed backup or null if no backup exists
    */
   async readBackup(): Promise<TeamsBackup | null> {
-    try {
-      const content = await fs.readFile(this.backupPath, 'utf-8');
-      return JSON.parse(content) as TeamsBackup;
-    } catch (error: unknown) {
-      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      this.logger.warn('Failed to read teams backup', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
+    return safeReadJson<TeamsBackup | null>(this.backupPath, null, this.logger);
   }
 
   /**

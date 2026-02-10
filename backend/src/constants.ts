@@ -39,6 +39,8 @@ export const ENV_CONSTANTS = {
 	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
 	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
+	/** Base URL for the AgentMux backend API (used by orchestrator bash skills) */
+	AGENTMUX_API_URL: 'AGENTMUX_API_URL',
 } as const;
 
 // Agent-specific timeout values (in milliseconds)
@@ -298,6 +300,33 @@ export const SLACK_THREAD_CONSTANTS = {
 	FILE_EXTENSION: '.md',
 	/** Maximum age for thread files before cleanup (30 days) */
 	MAX_THREAD_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+} as const;
+
+/**
+ * Constants for NOTIFY Slack delivery reconciliation.
+ * Used by NotifyReconciliationService to retry failed Slack deliveries
+ * using persisted chat messages as the source of truth.
+ */
+export const NOTIFY_RECONCILIATION_CONSTANTS = {
+	/** Interval between reconciliation runs (5 minutes) */
+	RECONCILIATION_INTERVAL_MS: 5 * 60 * 1000,
+	/** Maximum age of messages to consider for reconciliation (24 hours) */
+	MAX_MESSAGE_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Maximum number of delivery attempts before marking as failed */
+	MAX_DELIVERY_ATTEMPTS: 5,
+	/** Delay before first reconciliation run after startup (30 seconds) */
+	STARTUP_DELAY_MS: 30 * 1000,
+} as const;
+
+/**
+ * Constants for Claude Code session resume via /resume slash command.
+ * Used when restarting agents that were previously running before a backend restart.
+ */
+export const CLAUDE_RESUME_CONSTANTS = {
+	/** Delay after sending /resume for the session picker to appear (ms) */
+	SESSION_PICKER_DELAY_MS: 3000,
+	/** Timeout for Claude to resume and return to prompt (ms) */
+	RESUME_READY_TIMEOUT_MS: 30000,
 } as const;
 
 // Type helpers

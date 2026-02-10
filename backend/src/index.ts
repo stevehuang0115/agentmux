@@ -58,8 +58,10 @@ import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/ind
 import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
 import { EventBusService } from './services/event-bus/index.js';
 import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
+import { NotifyReconciliationService } from './services/slack/notify-reconciliation.service.js';
 import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
 import { setTeamControllerEventBusService } from './controllers/team/team.controller.js';
+import { SkillCatalogService } from './services/skill/skill-catalog.service.js';
 import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.js';
 import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
@@ -128,6 +130,7 @@ export class AgentMuxServer {
 	private messageQueueService!: MessageQueueService;
 	private queueProcessorService!: QueueProcessorService;
 	private eventBusService!: EventBusService;
+	private notifyReconciliationService!: NotifyReconciliationService;
 
 	// Shutdown state
 	private isShuttingDown = false;
@@ -474,6 +477,21 @@ export class AgentMuxServer {
 			await initializeMCPServer();
 			this.logger.info('MCP server integrated at /mcp endpoint');
 
+			// Generate orchestrator skills catalog
+			try {
+				const skillCatalogProjectRoot = path.resolve(__dirname, '../..');
+				const catalogService = SkillCatalogService.getInstance(skillCatalogProjectRoot);
+				const catalogResult = await catalogService.generateCatalog();
+				this.logger.info('Skills catalog generated', {
+					catalogPath: catalogResult.catalogPath,
+					skillCount: catalogResult.skillCount,
+				});
+			} catch (error) {
+				this.logger.warn('Failed to generate skills catalog (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
 			// Restore persisted message queue state (pending messages survive restarts)
 			this.logger.info('Loading persisted message queue state...');
 			try {
@@ -496,6 +514,10 @@ export class AgentMuxServer {
 
 			// Initialize Slack if configured
 			await this.initializeSlackIfConfigured();
+
+			// Start NOTIFY reconciliation service (retries failed Slack deliveries)
+			this.notifyReconciliationService = new NotifyReconciliationService();
+			this.notifyReconciliationService.start();
 
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
@@ -878,6 +900,11 @@ export class AgentMuxServer {
 				this.logger.warn('Failed to flush message queue', {
 					error: error instanceof Error ? error.message : String(error),
 				});
+			}
+
+			// Stop NOTIFY reconciliation service
+			if (this.notifyReconciliationService) {
+				this.notifyReconciliationService.stop();
 			}
 
 			// Stop message queue processor

@@ -1,0 +1,20 @@
+{
+  "id": "orc-delegate-task",
+  "name": "Delegate Task",
+  "description": "Send a structured task assignment to an agent with priority and context.",
+  "category": "management",
+  "skillType": "claude-skill",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "script",
+    "script": {
+      "file": "execute.sh",
+      "interpreter": "bash",
+      "timeoutMs": 30000
+    }
+  },
+  "assignableRoles": ["orchestrator"],
+  "triggers": ["delegate task", "assign work", "task agent"],
+  "tags": ["task", "delegation", "management"],
+  "version": "1.0.0"
+}

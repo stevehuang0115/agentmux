@@ -229,7 +229,7 @@ describe('Settings Types', () => {
       const defaults = getDefaultSettings();
 
       expect(defaults.general.defaultRuntime).toBe('claude-code');
-      expect(defaults.general.autoStartOrchestrator).toBe(false);
+      expect(defaults.general.autoStartOrchestrator).toBe(true);
       expect(defaults.general.checkInIntervalMinutes).toBe(5);
       expect(defaults.general.maxConcurrentAgents).toBe(10);
       expect(defaults.general.verboseLogging).toBe(false);

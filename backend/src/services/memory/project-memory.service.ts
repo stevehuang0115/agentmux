@@ -11,6 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 import {
   ProjectMemory,
   PatternEntry,
@@ -78,7 +79,6 @@ export interface IProjectMemoryService {
 export class ProjectMemoryService implements IProjectMemoryService {
   private static instance: ProjectMemoryService | null = null;
 
-  private readonly fileLocks: Map<string, Promise<void>> = new Map();
   private readonly logger = LoggerService.getInstance().createComponentLogger('ProjectMemoryService');
 
   // In-memory cache for frequently accessed data
@@ -144,72 +144,6 @@ export class ProjectMemoryService implements IProjectMemoryService {
       return true;
     } catch {
       return false;
-    }
-  }
-
-  /**
-   * Reads a JSON file with default fallback
-   *
-   * @param filePath - Path to the JSON file
-   * @param defaultValue - Default value if file doesn't exist or is corrupted
-   * @returns Parsed JSON content or default value
-   */
-  private async readJson<T>(filePath: string, defaultValue: T): Promise<T> {
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content) as T;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.logger.warn('Failed to read JSON file, using default', { filePath, error });
-      }
-      return defaultValue;
-    }
-  }
-
-  /**
-   * Writes JSON data atomically to prevent corruption
-   *
-   * @param filePath - Path to the JSON file
-   * @param data - Data to write
-   */
-  private async writeJson<T>(filePath: string, data: T): Promise<void> {
-    const lockKey = filePath;
-
-    if (this.fileLocks.has(lockKey)) {
-      await this.fileLocks.get(lockKey);
-    }
-
-    const writeOperation = this.performAtomicWrite(filePath, data);
-    this.fileLocks.set(lockKey, writeOperation);
-
-    try {
-      await writeOperation;
-    } finally {
-      this.fileLocks.delete(lockKey);
-    }
-  }
-
-  /**
-   * Performs atomic write using temporary file and rename
-   *
-   * @param filePath - Target file path
-   * @param data - Data to write
-   */
-  private async performAtomicWrite<T>(filePath: string, data: T): Promise<void> {
-    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
-    const content = JSON.stringify(data, null, 2);
-
-    try {
-      await fs.writeFile(tempPath, content, 'utf8');
-      await fs.rename(tempPath, filePath);
-      this.logger.debug('Atomic write completed', { filePath });
-    } catch (error) {
-      try {
-        await fs.unlink(tempPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-      throw error;
     }
   }
 
@@ -284,9 +218,9 @@ export class ProjectMemoryService implements IProjectMemoryService {
             updatedAt: now,
             ...DEFAULT_PROJECT_MEMORY,
           };
-          await this.writeJson(filePath, indexData);
+          await atomicWriteJson(filePath, indexData);
         } else {
-          await this.writeJson(filePath, []);
+          await atomicWriteJson(filePath, []);
         }
       }
     }
@@ -375,7 +309,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   public async getPatterns(projectPath: string, category?: PatternCategory): Promise<PatternEntry[]> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.PATTERNS);
-    const patterns = await this.readJson<PatternEntry[]>(filePath, []);
+    const patterns = await safeReadJson<PatternEntry[]>(filePath, []);
 
     if (category) {
       return patterns.filter(p => p.category === category);
@@ -388,7 +322,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   private async savePatterns(projectPath: string, patterns: PatternEntry[]): Promise<void> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.PATTERNS);
-    await this.writeJson(filePath, patterns);
+    await atomicWriteJson(filePath, patterns);
     this.invalidateCache(projectPath);
   }
 
@@ -474,7 +408,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   public async getDecisions(projectPath: string): Promise<DecisionEntry[]> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.DECISIONS);
-    const decisions = await this.readJson<DecisionEntry[]>(filePath, []);
+    const decisions = await safeReadJson<DecisionEntry[]>(filePath, []);
     // Sort: active first, then by date
     return decisions.sort((a, b) => {
       if (a.status === 'active' && b.status !== 'active') return -1;
@@ -488,7 +422,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   private async saveDecisions(projectPath: string, decisions: DecisionEntry[]): Promise<void> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.DECISIONS);
-    await this.writeJson(filePath, decisions);
+    await atomicWriteJson(filePath, decisions);
     this.invalidateCache(projectPath);
   }
 
@@ -562,7 +496,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   public async getGotchas(projectPath: string, severity?: GotchaSeverity): Promise<GotchaEntry[]> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.GOTCHAS);
-    let gotchas = await this.readJson<GotchaEntry[]>(filePath, []);
+    let gotchas = await safeReadJson<GotchaEntry[]>(filePath, []);
 
     if (severity) {
       gotchas = gotchas.filter(g => g.severity === severity);
@@ -578,7 +512,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   private async saveGotchas(projectPath: string, gotchas: GotchaEntry[]): Promise<void> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.GOTCHAS);
-    await this.writeJson(filePath, gotchas);
+    await atomicWriteJson(filePath, gotchas);
     this.invalidateCache(projectPath);
   }
 
@@ -637,7 +571,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   public async getRelationships(projectPath: string, componentName?: string): Promise<RelationshipEntry[]> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.RELATIONSHIPS);
-    const relationships = await this.readJson<RelationshipEntry[]>(filePath, []);
+    const relationships = await safeReadJson<RelationshipEntry[]>(filePath, []);
 
     if (componentName) {
       return relationships.filter(r =>
@@ -652,7 +586,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   private async saveRelationships(projectPath: string, relationships: RelationshipEntry[]): Promise<void> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.RELATIONSHIPS);
-    await this.writeJson(filePath, relationships);
+    await atomicWriteJson(filePath, relationships);
     this.invalidateCache(projectPath);
   }
 
@@ -846,6 +780,6 @@ export class ProjectMemoryService implements IProjectMemoryService {
    */
   public async getProjectMemory(projectPath: string): Promise<ProjectMemory | null> {
     const filePath = this.getFilePath(projectPath, MEMORY_CONSTANTS.PROJECT_FILES.INDEX);
-    return this.readJson<ProjectMemory | null>(filePath, null);
+    return safeReadJson<ProjectMemory | null>(filePath, null, this.logger);
   }
 }

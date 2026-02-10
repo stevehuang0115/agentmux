@@ -12,6 +12,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { EventEmitter } from 'events';
 import { parse as parseYAML } from 'yaml';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 import {
   UsageRecord,
   UsageSummary,
@@ -357,19 +358,9 @@ export class BudgetService extends EventEmitter implements IBudgetService {
    * @param record - Usage record
    */
   private async appendUsage(filePath: string, record: UsageRecord): Promise<void> {
-    let records: UsageRecord[] = [];
-
-    try {
-      if (existsSync(filePath)) {
-        const content = await fs.readFile(filePath, 'utf-8');
-        records = JSON.parse(content);
-      }
-    } catch {
-      // File doesn't exist or is invalid, start fresh
-    }
-
+    const records = await safeReadJson<UsageRecord[]>(filePath, []);
     records.push(record);
-    await fs.writeFile(filePath, JSON.stringify(records, null, 2), 'utf-8');
+    await atomicWriteJson(filePath, records);
   }
 
   /**
@@ -548,7 +539,7 @@ export class BudgetService extends EventEmitter implements IBudgetService {
       }
     }
 
-    await fs.writeFile(this.configPath, JSON.stringify(config, null, 2), 'utf-8');
+    await atomicWriteJson(this.configPath, config);
   }
 
   /**

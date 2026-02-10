@@ -1,0 +1,239 @@
+/**
+ * Memory REST Controller
+ *
+ * Exposes agent memory operations via REST API for orchestrator bash skills.
+ * Wraps the unified MemoryService to provide HTTP endpoints for storing,
+ * retrieving, and recording learnings in agent and project memory.
+ *
+ * @module controllers/memory/memory.controller
+ */
+
+import type { Request, Response, NextFunction } from 'express';
+import { MemoryService } from '../../services/memory/memory.service.js';
+import type { RememberCategory, MemoryScope } from '../../services/memory/memory.service.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('MemoryController');
+
+/** Valid categories for the remember endpoint */
+const VALID_REMEMBER_CATEGORIES: ReadonlySet<string> = new Set([
+  'fact', 'pattern', 'decision', 'gotcha', 'preference', 'relationship',
+]);
+
+/** Valid scopes for the remember endpoint */
+const VALID_REMEMBER_SCOPES: ReadonlySet<string> = new Set(['agent', 'project']);
+
+/** Valid scopes for the recall endpoint */
+const VALID_RECALL_SCOPES: ReadonlySet<string> = new Set(['agent', 'project', 'both']);
+
+/**
+ * POST /api/memory/remember
+ *
+ * Store knowledge in agent or project memory. The content is categorized
+ * and routed to the appropriate memory store based on the scope parameter.
+ *
+ * @param req - Express request with body: { agentId, content, category, scope, projectPath?, metadata? }
+ * @param res - Express response returning { success, entryId }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/memory/remember
+ * {
+ *   "agentId": "dev-001",
+ *   "content": "Always validate user input before processing",
+ *   "category": "pattern",
+ *   "scope": "agent"
+ * }
+ * ```
+ */
+export async function remember(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { agentId, content, category, scope, projectPath, metadata } = req.body;
+
+    if (!agentId || !content || !category) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: agentId, content, category',
+      });
+      return;
+    }
+
+    if (!VALID_REMEMBER_CATEGORIES.has(category)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid category '${category}'. Must be one of: ${[...VALID_REMEMBER_CATEGORIES].join(', ')}`,
+      });
+      return;
+    }
+
+    const resolvedScope: 'agent' | 'project' = scope || 'agent';
+    if (!VALID_REMEMBER_SCOPES.has(resolvedScope)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid scope '${resolvedScope}'. Must be one of: ${[...VALID_REMEMBER_SCOPES].join(', ')}`,
+      });
+      return;
+    }
+
+    if (resolvedScope === 'project' && !projectPath) {
+      res.status(400).json({
+        success: false,
+        error: 'projectPath is required when scope is "project"',
+      });
+      return;
+    }
+
+    const memoryService = MemoryService.getInstance();
+    const entryId = await memoryService.remember({
+      agentId,
+      content,
+      category: category as RememberCategory,
+      scope: resolvedScope,
+      projectPath,
+      metadata,
+    });
+
+    logger.info('Memory stored via REST', { agentId, category, scope: resolvedScope });
+
+    res.json({ success: true, entryId });
+  } catch (error) {
+    logger.error('Failed to store memory', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/recall
+ *
+ * Retrieve relevant knowledge from agent and/or project memory.
+ * Performs relevance-based search across the specified scope(s).
+ *
+ * @param req - Express request with body: { agentId, context, scope?, limit?, projectPath? }
+ * @param res - Express response returning { success, data: RecallResult }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/memory/recall
+ * {
+ *   "agentId": "dev-001",
+ *   "context": "error handling in API endpoints",
+ *   "scope": "both",
+ *   "projectPath": "/path/to/project",
+ *   "limit": 10
+ * }
+ * ```
+ */
+export async function recall(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { agentId, context, scope, limit, projectPath } = req.body;
+
+    if (!agentId || !context) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: agentId, context',
+      });
+      return;
+    }
+
+    const resolvedScope: MemoryScope = scope || 'both';
+    if (!VALID_RECALL_SCOPES.has(resolvedScope)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid scope '${resolvedScope}'. Must be one of: ${[...VALID_RECALL_SCOPES].join(', ')}`,
+      });
+      return;
+    }
+
+    if ((resolvedScope === 'project' || resolvedScope === 'both') && !projectPath) {
+      res.status(400).json({
+        success: false,
+        error: 'projectPath is required when scope is "project" or "both"',
+      });
+      return;
+    }
+
+    const memoryService = MemoryService.getInstance();
+    const result = await memoryService.recall({
+      agentId,
+      context,
+      scope: resolvedScope,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      projectPath,
+    });
+
+    logger.debug('Memory recalled via REST', {
+      agentId,
+      scope: resolvedScope,
+      agentCount: result.agentMemories.length,
+      projectCount: result.projectMemories.length,
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    logger.error('Failed to recall memory', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/record-learning
+ *
+ * Quickly record a learning or discovery. The learning is stored in
+ * project memory and optionally promoted to agent memory if it contains
+ * role-relevant patterns.
+ *
+ * @param req - Express request with body: { agentId, agentRole, projectPath, learning, relatedTask?, relatedFiles? }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/memory/record-learning
+ * {
+ *   "agentId": "dev-001",
+ *   "agentRole": "developer",
+ *   "projectPath": "/path/to/project",
+ *   "learning": "Always use async/await for database operations",
+ *   "relatedTask": "TICKET-456",
+ *   "relatedFiles": ["src/db/queries.ts"]
+ * }
+ * ```
+ */
+export async function recordLearning(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { agentId, agentRole, projectPath, learning, relatedTask, relatedFiles } = req.body;
+
+    if (!agentId || !agentRole || !projectPath || !learning) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: agentId, agentRole, projectPath, learning',
+      });
+      return;
+    }
+
+    const memoryService = MemoryService.getInstance();
+    await memoryService.recordLearning({
+      agentId,
+      agentRole,
+      projectPath,
+      learning,
+      relatedTask,
+      relatedFiles,
+    });
+
+    logger.info('Learning recorded via REST', { agentId, agentRole, projectPath });
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to record learning', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}

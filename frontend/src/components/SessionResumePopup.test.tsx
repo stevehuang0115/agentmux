@@ -98,7 +98,7 @@ describe('SessionResumePopup', () => {
   it('should call dismiss API and close when Dismiss is clicked', async () => {
     vi.mocked(apiService.getPreviousSessions).mockResolvedValue({
       sessions: [
-        { name: 'agent-1', role: 'dev', runtimeType: 'claude-code', hasResumeId: false },
+        { name: 'agent-1', role: 'dev', runtimeType: 'claude-code', hasResumeId: true },
       ],
     });
     vi.mocked(apiService.dismissPreviousSessions).mockResolvedValue(undefined);
@@ -156,7 +156,7 @@ describe('SessionResumePopup', () => {
     vi.mocked(apiService.getPreviousSessions).mockResolvedValue({
       sessions: [
         { name: 'agent-1', role: 'dev', runtimeType: 'claude-code', hasResumeId: true },
-        { name: 'agent-2', role: 'qa', runtimeType: 'claude-code', hasResumeId: false },
+        { name: 'agent-2', role: 'qa', runtimeType: 'claude-code', hasResumeId: true },
       ],
     });
 
@@ -174,7 +174,7 @@ describe('SessionResumePopup', () => {
       sessions: [
         { name: 'agent-1', role: 'dev', teamId: 'team-1', runtimeType: 'claude-code', hasResumeId: true },
         { name: 'agent-2', role: 'qa', teamId: 'team-1', runtimeType: 'claude-code', hasResumeId: true },
-        { name: 'agent-3', role: 'dev', teamId: 'team-2', runtimeType: 'claude-code', hasResumeId: false },
+        { name: 'agent-3', role: 'dev', teamId: 'team-2', runtimeType: 'claude-code', hasResumeId: true },
       ],
     });
     vi.mocked(apiService.startTeam).mockResolvedValue(undefined);

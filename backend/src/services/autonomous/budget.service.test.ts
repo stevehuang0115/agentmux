@@ -31,6 +31,12 @@ jest.mock('fs/promises', () => ({
   readFile: jest.fn(),
   writeFile: jest.fn(),
   mkdir: jest.fn(),
+  rename: jest.fn().mockResolvedValue(undefined),
+  unlink: jest.fn().mockResolvedValue(undefined),
+  open: jest.fn().mockResolvedValue({
+    sync: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn().mockResolvedValue(undefined),
+  }),
 }));
 
 jest.mock('fs', () => ({

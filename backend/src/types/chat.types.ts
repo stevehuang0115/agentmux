@@ -97,6 +97,16 @@ export interface ChatSender {
 }
 
 /**
+ * Valid Slack delivery statuses for NOTIFY reconciliation
+ */
+export const SLACK_DELIVERY_STATUSES = ['pending', 'delivered', 'failed'] as const;
+
+/**
+ * Slack delivery status type
+ */
+export type SlackDeliveryStatus = (typeof SLACK_DELIVERY_STATUSES)[number];
+
+/**
  * Metadata attached to a chat message
  */
 export interface ChatMessageMetadata {
@@ -117,6 +127,33 @@ export interface ChatMessageMetadata {
 
   /** Time taken to generate response in ms */
   responseTimeMs?: number;
+
+  /** Slack delivery status for NOTIFY reconciliation */
+  slackDeliveryStatus?: SlackDeliveryStatus;
+
+  /** ISO timestamp of last Slack delivery attempt */
+  slackDeliveryAttemptedAt?: string;
+
+  /** Number of Slack delivery attempts */
+  slackDeliveryAttempts?: number;
+
+  /** Error message from last failed Slack delivery attempt */
+  slackDeliveryError?: string;
+
+  /** Slack channel ID for delivery/reconciliation */
+  slackChannelId?: string;
+
+  /** Slack thread timestamp for threaded replies */
+  slackThreadTs?: string;
+
+  /** NOTIFY type (e.g. task_completed, agent_error) */
+  notifyType?: string;
+
+  /** NOTIFY title header */
+  notifyTitle?: string;
+
+  /** NOTIFY urgency level */
+  notifyUrgency?: string;
 
   /** Additional custom metadata */
   [key: string]: unknown;
@@ -449,14 +486,53 @@ export function isValidNotifyPayload(value: unknown): value is NotifyPayload {
   return true;
 }
 
+/** Known header keys that can appear in NOTIFY blocks */
+const KNOWN_HEADER_KEYS = new Set([
+  'conversationId', 'channelId', 'threadTs', 'type', 'title', 'urgency',
+]);
+
+/**
+ * Attempt to parse headers from content where a blank line is used as separator
+ * instead of `---`. This handles the common LLM behavior of omitting the `---`.
+ *
+ * Only activates if the first line matches a known header key pattern.
+ *
+ * @param cleaned - ANSI-stripped, trimmed content
+ * @returns Object with headers and body strings, or null if not header-like
+ */
+function parseHeadersWithBlankLineSeparator(cleaned: string): { headers: string; body: string } | null {
+  // Check if first line looks like a known header
+  const firstNewline = cleaned.indexOf('\n');
+  if (firstNewline === -1) return null;
+
+  const firstLine = cleaned.slice(0, firstNewline).trim();
+  const colonIdx = firstLine.indexOf(':');
+  if (colonIdx === -1) return null;
+
+  const firstKey = firstLine.slice(0, colonIdx).trim();
+  if (!KNOWN_HEADER_KEYS.has(firstKey)) return null;
+
+  // Split on first blank line (two consecutive newlines)
+  const blankMatch = cleaned.match(/^([\s\S]*?)\n\s*\n([\s\S]*)$/);
+  if (!blankMatch) return null;
+
+  const headers = blankMatch[1].trim();
+  const body = blankMatch[2].trim();
+  if (!body) return null;
+
+  return { headers, body };
+}
+
 /**
  * Parse raw content from a [NOTIFY]...[/NOTIFY] block into a NotifyPayload.
  *
- * Supports two formats:
- * 1. **Header+body** (preferred): key-value headers before a `---` separator,
+ * Supports three formats:
+ * 1. **Header+body with `---`** (preferred): key-value headers before a `---` separator,
  *    with the message body after it. Headers are short (~25 chars), so they are
  *    never corrupted by PTY line-wrapping.
- * 2. **Legacy JSON** (fallback): if the content starts with `{`, it is parsed as
+ * 2. **Header+body with blank line** (fallback): same as above but with a blank
+ *    line instead of `---`. Activated only when the first line is a known header.
+ * 3. **Legacy JSON** (fallback): if the content starts with `{`, it is parsed as
  *    JSON with PTY artifact cleanup for backward compatibility.
  *
  * @param raw - Raw content between [NOTIFY] and [/NOTIFY] markers
@@ -491,14 +567,27 @@ export function parseNotifyContent(raw: string): NotifyPayload | null {
   // Split on --- separator line (separator may be followed by content or end of string)
   // The \n before --- is optional to handle content that starts directly with ---
   const sepMatch = cleaned.match(/^([\s\S]*?)(?:^|\n)---(?:\n([\s\S]*))?$/);
-  if (!sepMatch) {
-    // No headers — entire content is the message
-    const msg = cleaned.trim();
-    return msg ? { message: msg } : null;
+
+  let headerSection: string;
+  let body: string;
+
+  if (sepMatch) {
+    headerSection = sepMatch[1].trim();
+    body = (sepMatch[2] || '').trim();
+  } else {
+    // Fallback: LLMs sometimes use a blank line instead of ---
+    // If the content starts with known header-like lines, split on first blank line
+    const blankLineResult = parseHeadersWithBlankLineSeparator(cleaned);
+    if (blankLineResult) {
+      headerSection = blankLineResult.headers;
+      body = blankLineResult.body;
+    } else {
+      // No headers — entire content is the message
+      const msg = cleaned.trim();
+      return msg ? { message: msg } : null;
+    }
   }
 
-  const headerSection = sepMatch[1].trim();
-  const body = (sepMatch[2] || '').trim();
   if (!body) {
     return null;
   }

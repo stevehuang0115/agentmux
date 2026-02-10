@@ -506,6 +506,91 @@ describe('SessionStatePersistence', () => {
 		});
 	});
 
+	describe('isRestoredSession', () => {
+		it('should return false before any restore', () => {
+			expect(persistence.isRestoredSession('some-session')).toBe(false);
+		});
+
+		it('should return true for sessions restored from state file', async () => {
+			const state: PersistedState = {
+				version: 1,
+				savedAt: new Date().toISOString(),
+				sessions: [
+					{
+						name: 'restored-session',
+						cwd: '/home/user/project',
+						command: '/bin/zsh',
+						args: [],
+						runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+						role: 'dev',
+					},
+				],
+			};
+
+			await fs.writeFile(testFilePath, JSON.stringify(state));
+			await persistence.restoreState(mockBackend);
+
+			expect(persistence.isRestoredSession('restored-session')).toBe(true);
+		});
+
+		it('should return false for newly registered sessions', () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: '/bin/zsh',
+			};
+
+			persistence.registerSession('new-session', options, RUNTIME_TYPES.CLAUDE_CODE);
+
+			expect(persistence.isRestoredSession('new-session')).toBe(false);
+		});
+
+		it('should be cleared by clearStateAndMetadata', async () => {
+			const state: PersistedState = {
+				version: 1,
+				savedAt: new Date().toISOString(),
+				sessions: [
+					{
+						name: 'restored-session',
+						cwd: '/home/user',
+						command: '/bin/zsh',
+						args: [],
+						runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+					},
+				],
+			};
+
+			await fs.writeFile(testFilePath, JSON.stringify(state));
+			await persistence.restoreState(mockBackend);
+			expect(persistence.isRestoredSession('restored-session')).toBe(true);
+
+			await persistence.clearStateAndMetadata();
+			expect(persistence.isRestoredSession('restored-session')).toBe(false);
+		});
+
+		it('should be cleared by clearMetadata', async () => {
+			const state: PersistedState = {
+				version: 1,
+				savedAt: new Date().toISOString(),
+				sessions: [
+					{
+						name: 'restored-session',
+						cwd: '/home/user',
+						command: '/bin/zsh',
+						args: [],
+						runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+					},
+				],
+			};
+
+			await fs.writeFile(testFilePath, JSON.stringify(state));
+			await persistence.restoreState(mockBackend);
+			expect(persistence.isRestoredSession('restored-session')).toBe(true);
+
+			persistence.clearMetadata();
+			expect(persistence.isRestoredSession('restored-session')).toBe(false);
+		});
+	});
+
 	describe('autoSave', () => {
 		it('should auto-save to disk when registerSession is called', async () => {
 			const options: SessionOptions = {

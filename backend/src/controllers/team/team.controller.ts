@@ -24,7 +24,7 @@ import {
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
-import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
+import { getSessionBackendSync } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
@@ -1162,23 +1162,13 @@ export async function reportMemberReady(this: ApiContext, req: Request, res: Res
 
 export async function registerMemberStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { sessionName, role, status, registeredAt, memberId, claudeSessionId } = req.body as RegisterMemberStatusRequestBody;
+    const { sessionName, role, status, registeredAt, memberId } = req.body as RegisterMemberStatusRequestBody;
 
     // Update agent heartbeat (proof of life)
     try {
       await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
     } catch {
       // Continue execution - heartbeat failures shouldn't break registration
-    }
-
-    // Store Claude session ID for resume-on-restart support
-    if (claudeSessionId && sessionName) {
-      try {
-        const persistence = getSessionStatePersistence();
-        persistence.updateSessionId(sessionName, claudeSessionId);
-      } catch {
-        // Non-critical - session persistence may not be initialized yet
-      }
     }
 
     if (!sessionName || !role) {

@@ -18,6 +18,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { SLACK_THREAD_CONSTANTS } from '../../constants.js';
+import { atomicWriteFile, atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
 /**
  * Represents an agent-to-thread mapping stored in the agent index
@@ -123,7 +124,7 @@ export class SlackThreadStoreService {
         '',
       ].join('\n');
 
-      await fs.writeFile(filePath, frontmatter, 'utf-8');
+      await atomicWriteFile(filePath, frontmatter);
     }
 
     return filePath;
@@ -244,15 +245,7 @@ export class SlackThreadStoreService {
     if (this.indexLoaded) return;
 
     const indexPath = path.join(this.baseDir, SLACK_THREAD_CONSTANTS.AGENT_INDEX_FILE);
-
-    try {
-      const data = await fs.readFile(indexPath, 'utf-8');
-      this.agentIndex = JSON.parse(data);
-    } catch {
-      // File doesn't exist or is corrupt — start fresh
-      this.agentIndex = {};
-    }
-
+    this.agentIndex = await safeReadJson(indexPath, {});
     this.indexLoaded = true;
   }
 
@@ -262,7 +255,7 @@ export class SlackThreadStoreService {
   private async saveIndex(): Promise<void> {
     await fs.mkdir(this.baseDir, { recursive: true });
     const indexPath = path.join(this.baseDir, SLACK_THREAD_CONSTANTS.AGENT_INDEX_FILE);
-    await fs.writeFile(indexPath, JSON.stringify(this.agentIndex, null, 2), 'utf-8');
+    await atomicWriteJson(indexPath, this.agentIndex);
   }
 
   /**
@@ -292,7 +285,7 @@ export class SlackThreadStoreService {
           'agents: []',
           `agents:\n${agentEntry}`
         );
-        await fs.writeFile(filePath, updated, 'utf-8');
+        await atomicWriteFile(filePath, updated);
       } else if (content.includes('agents:')) {
         // Agents list already has entries — append before the closing ---
         const endOfFrontmatter = content.indexOf('---', content.indexOf('---') + 3);
@@ -302,7 +295,7 @@ export class SlackThreadStoreService {
             agentEntry +
             '\n' +
             content.slice(endOfFrontmatter);
-          await fs.writeFile(filePath, updated, 'utf-8');
+          await atomicWriteFile(filePath, updated);
         }
       }
     } catch {
