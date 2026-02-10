@@ -508,6 +508,108 @@ export interface RecordLearningToolParams {
 }
 
 /**
+ * Parameters for the set_goal tool
+ */
+export interface SetGoalToolParams {
+  /** The goal to set */
+  goal: string;
+  /** Who set the goal */
+  setBy?: string;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the get_goals tool
+ */
+export interface GetGoalsToolParams {
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the update_focus tool
+ */
+export interface UpdateFocusToolParams {
+  /** The new focus description */
+  focus: string;
+  /** Who updated the focus */
+  updatedBy?: string;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the get_focus tool
+ */
+export interface GetFocusToolParams {
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the log_daily tool
+ */
+export interface LogDailyToolParams {
+  /** The log entry text */
+  entry: string;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the recall_team_knowledge tool
+ */
+export interface RecallTeamKnowledgeToolParams {
+  /** Context/query for finding relevant knowledge */
+  context: string;
+  /** Maximum number of results */
+  limit?: number;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the record_success tool
+ */
+export interface RecordSuccessToolParams {
+  /** Description of what worked */
+  description: string;
+  /** Additional context */
+  context?: string;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
+ * Parameters for the record_failure tool
+ */
+export interface RecordFailureToolParams {
+  /** Description of what failed */
+  description: string;
+  /** Additional context */
+  context?: string;
+  /** Team member session ID */
+  teamMemberId?: string;
+  /** Project path */
+  projectPath?: string;
+}
+
+/**
  * Parameters for the get_sops tool
  */
 export interface GetSOPsParams {

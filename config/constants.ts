@@ -569,6 +569,32 @@ export const MEMORY_CONSTANTS = {
     AGENTS_DIR: 'agents',
     /** Project knowledge directory (relative to project .agentmux) */
     KNOWLEDGE_DIR: 'knowledge',
+    /** Agent session archives directory name (under agent dir) */
+    SESSIONS_DIR: 'sessions',
+    /** Latest session summary file name */
+    LATEST_SUMMARY: 'latest-summary.md',
+    /** Daily log directory (under project .agentmux) */
+    DAILY_LOG_DIR: 'logs/daily',
+    /** Goals directory (under project .agentmux) */
+    GOALS_DIR: 'goals',
+    /** Goals file */
+    GOALS_FILE: 'goals.md',
+    /** Current focus file */
+    FOCUS_FILE: 'current_focus.md',
+    /** Decisions log file (with retrospective outcomes) */
+    DECISIONS_LOG: 'decisions_log.md',
+    /** Learning accumulation directory (under project .agentmux) */
+    LEARNING_DIR: 'learning',
+    /** What worked file */
+    WHAT_WORKED_FILE: 'what_worked.md',
+    /** What failed file */
+    WHAT_FAILED_FILE: 'what_failed.md',
+    /** Global learning directory (under AGENTMUX_HOME) */
+    GLOBAL_LEARNING_DIR: 'learning',
+    /** Cross-project insights file */
+    CROSS_PROJECT_INSIGHTS: 'cross_project_insights.md',
+    /** Agents index file (under project .agentmux) */
+    AGENTS_INDEX: 'agents-index.json',
   },
 
   /**

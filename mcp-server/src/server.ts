@@ -10,7 +10,7 @@ import { logger, createLogger } from './logger.js';
 import { SessionAdapter } from './session-adapter.js';
 import { WEB_CONSTANTS, TIMING_CONSTANTS, MCP_CONSTANTS } from '../../config/index.js';
 import { sanitizeGitCommitMessage } from './security.js';
-import { MemoryService } from '../../backend/src/services/memory/index.js';
+import { MemoryService, GoalTrackingService, DailyLogService, LearningAccumulationService } from '../../backend/src/services/memory/index.js';
 import {
   MCPRequest,
   MCPResponse,
@@ -74,6 +74,14 @@ import {
   SendChatResponseParams,
   SubscribeEventParams,
   UnsubscribeEventParams,
+  SetGoalToolParams,
+  GetGoalsToolParams,
+  UpdateFocusToolParams,
+  GetFocusToolParams,
+  LogDailyToolParams,
+  RecallTeamKnowledgeToolParams,
+  RecordSuccessToolParams,
+  RecordFailureToolParams,
 } from './types.js';
 import {
   handleCreateRole,
@@ -2462,6 +2470,130 @@ export class AgentMuxMCPServer {
   }
 
   /**
+   * Set a project goal (set_goal tool)
+   */
+  async handleSetGoal(params: SetGoalToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const service = GoalTrackingService.getInstance();
+      await service.setGoal(projectPath, params.goal, params.setBy || 'orchestrator');
+      return { content: [{ type: 'text', text: `✅ Goal set: "${params.goal}"` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to set goal: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Get active project goals (get_goals tool)
+   */
+  async handleGetGoals(params: GetGoalsToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const service = GoalTrackingService.getInstance();
+      const goals = await service.getGoals(projectPath);
+      return { content: [{ type: 'text', text: goals || 'No goals set yet.' }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to get goals: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Update team focus (update_focus tool)
+   */
+  async handleUpdateFocus(params: UpdateFocusToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const service = GoalTrackingService.getInstance();
+      await service.updateFocus(projectPath, params.focus, params.updatedBy || 'orchestrator');
+      return { content: [{ type: 'text', text: `✅ Focus updated: "${params.focus}"` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to update focus: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Get current team focus (get_focus tool)
+   */
+  async handleGetFocus(params: GetFocusToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const service = GoalTrackingService.getInstance();
+      const focus = await service.getCurrentFocus(projectPath);
+      return { content: [{ type: 'text', text: focus || 'No focus set yet.' }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to get focus: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Append to daily log (log_daily tool)
+   */
+  async handleLogDaily(params: LogDailyToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const agentId = params.teamMemberId || this.sessionName;
+      const service = DailyLogService.getInstance();
+      await service.appendEntry(projectPath, agentId, this.agentRole || 'unknown', params.entry);
+      return { content: [{ type: 'text', text: `✅ Daily log entry recorded.` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to log daily entry: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Recall knowledge from all agents (recall_team_knowledge tool)
+   */
+  async handleRecallTeamKnowledge(params: RecallTeamKnowledgeToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const results = await this.memoryService.recallFromAllAgents(
+        projectPath,
+        params.context,
+        params.limit || 20,
+      );
+
+      if (results.length === 0) {
+        return { content: [{ type: 'text', text: `No team knowledge found for: "${params.context}"` }] };
+      }
+
+      const formatted = results.map(m => `- ${m}`).join('\n');
+      return { content: [{ type: 'text', text: `# Team Knowledge\n\n${formatted}` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to recall team knowledge: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Record a successful approach (record_success tool)
+   */
+  async handleRecordSuccess(params: RecordSuccessToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const agentId = params.teamMemberId || this.sessionName;
+      const service = LearningAccumulationService.getInstance();
+      await service.recordSuccess(projectPath, agentId, this.agentRole || 'unknown', params.description, params.context);
+      return { content: [{ type: 'text', text: `✅ Success recorded: "${params.description.substring(0, 80)}..."` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to record success: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
+   * Record a failed approach (record_failure tool)
+   */
+  async handleRecordFailure(params: RecordFailureToolParams): Promise<MCPToolResult> {
+    try {
+      const projectPath = params.projectPath || this.projectPath;
+      const agentId = params.teamMemberId || this.sessionName;
+      const service = LearningAccumulationService.getInstance();
+      await service.recordFailure(projectPath, agentId, this.agentRole || 'unknown', params.description, params.context);
+      return { content: [{ type: 'text', text: `✅ Failure recorded: "${params.description.substring(0, 80)}..."` }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `❌ Failed to record failure: ${error instanceof Error ? error.message : 'Unknown error'}` }], isError: true };
+    }
+  }
+
+  /**
    * Get relevant SOPs for the current situation (get_sops tool)
    *
    * @param params - Parameters including context and optional category
@@ -3148,6 +3280,31 @@ Please respond promptly with either acceptance or delegation.`;
                   break;
                 case 'get_my_context':
                   result = await this.getMyContext();
+                  break;
+                // Goal & Focus Tools
+                case 'set_goal':
+                  result = await this.handleSetGoal(toolArgs);
+                  break;
+                case 'get_goals':
+                  result = await this.handleGetGoals(toolArgs);
+                  break;
+                case 'update_focus':
+                  result = await this.handleUpdateFocus(toolArgs);
+                  break;
+                case 'get_focus':
+                  result = await this.handleGetFocus(toolArgs);
+                  break;
+                case 'log_daily':
+                  result = await this.handleLogDaily(toolArgs);
+                  break;
+                case 'recall_team_knowledge':
+                  result = await this.handleRecallTeamKnowledge(toolArgs);
+                  break;
+                case 'record_success':
+                  result = await this.handleRecordSuccess(toolArgs);
+                  break;
+                case 'record_failure':
+                  result = await this.handleRecordFailure(toolArgs);
                   break;
                 case 'get_sops':
                   result = await this.getSOPs(toolArgs);
@@ -3837,6 +3994,124 @@ Use this when you:
           properties: {},
           required: []
         }
+      },
+
+      // Goal & Focus Tools
+      {
+        name: 'set_goal',
+        description: `Set a project goal. Use this when the user states a goal or objective for the team.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            goal: { type: 'string', description: 'The goal to set' },
+            setBy: { type: 'string', description: 'Who set the goal (default: orchestrator)' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['goal'],
+        },
+      },
+      {
+        name: 'get_goals',
+        description: `Get the project's active goals. Use this to review what the team is working towards.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: [],
+        },
+      },
+      {
+        name: 'update_focus',
+        description: `Update the team's current focus. Use this to signal what the team should be working on right now.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            focus: { type: 'string', description: 'Description of the current focus' },
+            updatedBy: { type: 'string', description: 'Who updated the focus (default: orchestrator)' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['focus'],
+        },
+      },
+      {
+        name: 'get_focus',
+        description: `Get the team's current focus. Use this to check what the team is actively working on.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: [],
+        },
+      },
+
+      // Daily Log Tool
+      {
+        name: 'log_daily',
+        description: `Add an entry to today's daily activity log. Use this to record significant actions and events.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            entry: { type: 'string', description: 'The log entry text' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['entry'],
+        },
+      },
+
+      // Cross-Agent Knowledge Tool
+      {
+        name: 'recall_team_knowledge',
+        description: `Search for relevant knowledge across ALL agents that have worked on this project.
+Use this to find patterns, decisions, or gotchas discovered by any team member.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            context: { type: 'string', description: 'What you are looking for (be specific)' },
+            limit: { type: 'number', description: 'Maximum results to return (default: 20)' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['context'],
+        },
+      },
+
+      // Learning Accumulation Tools
+      {
+        name: 'record_success',
+        description: `Record a successful pattern or approach that worked well.
+The team will see this in future startup briefings to replicate success.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', description: 'What worked well (be specific and actionable)' },
+            context: { type: 'string', description: 'Additional context about when/why this works' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['description'],
+        },
+      },
+      {
+        name: 'record_failure',
+        description: `Record a failed approach or pitfall to avoid.
+The team will see this in future startup briefings to avoid repeating mistakes.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            description: { type: 'string', description: 'What failed or should be avoided (be specific)' },
+            context: { type: 'string', description: 'Additional context about why it failed' },
+            teamMemberId: { type: 'string', description: 'Your session name' },
+            projectPath: { type: 'string', description: 'Your project root path' },
+          },
+          required: ['description'],
+        },
       },
 
       // SOP Tool

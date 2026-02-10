@@ -25,6 +25,7 @@ import {
 } from '../../constants.js';
 import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
+import { SessionMemoryService } from '../memory/session-memory.service.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -726,6 +727,23 @@ export class AgentRegistrationService {
 				}
 			} catch {
 				// Non-critical - use default project path
+			}
+
+			// Generate and inject startup briefing from session memory
+			try {
+				const sessionMemoryService = SessionMemoryService.getInstance();
+				await sessionMemoryService.onSessionStart(sessionName, role, projectPath);
+				const briefing = await sessionMemoryService.generateStartupBriefing(sessionName, role, projectPath);
+				const briefingMd = sessionMemoryService.formatBriefingAsMarkdown(briefing);
+				if (briefingMd && briefingMd.length > 30) {
+					prompt += `\n\n---\n\n${briefingMd}`;
+					this.logger.info('Startup briefing injected into prompt', { sessionName, role, briefingLength: briefingMd.length });
+				}
+			} catch (briefingError) {
+				this.logger.warn('Failed to generate startup briefing (non-critical)', {
+					sessionName,
+					error: briefingError instanceof Error ? briefingError.message : String(briefingError),
+				});
 			}
 
 			// Append identity section so the agent knows its session name and project path
@@ -1436,6 +1454,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				this.logger.info('Session terminated successfully', { sessionName });
 			} else {
 				this.logger.info('Session already terminated or does not exist', { sessionName });
+			}
+
+			// Capture session end for memory persistence
+			try {
+				const sessionMemoryService = SessionMemoryService.getInstance();
+				await sessionMemoryService.onSessionEnd(sessionName, role, process.cwd());
+				this.logger.info('Session memory captured on termination', { sessionName, role });
+			} catch (memoryError) {
+				this.logger.warn('Failed to capture session memory on termination (non-critical)', {
+					sessionName,
+					error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+				});
 			}
 
 			// Update agent status to inactive (works for both orchestrator and team members)

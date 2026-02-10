@@ -7,15 +7,19 @@
  * @module services/memory/memory.service
  */
 
+import * as path from 'path';
 import { AgentMemoryService, IAgentMemoryService } from './agent-memory.service.js';
 import { ProjectMemoryService, IProjectMemoryService, SearchResults } from './project-memory.service.js';
 import { LoggerService } from '../core/logger.service.js';
+import { safeReadJson } from '../../utils/file-io.utils.js';
+import { AGENTMUX_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
 import type {
   RoleKnowledgeEntry,
   RoleKnowledgeCategory,
   PatternCategory,
   GotchaSeverity,
   AgentPreferences,
+  ProjectAgentsIndex,
 } from '../../types/memory.types.js';
 
 /**
@@ -587,5 +591,72 @@ export class MemoryService implements IMemoryService {
     ]);
 
     this.logger.info('Memory initialized for session', { agentId, role, projectPath });
+  }
+
+  /**
+   * Recalls knowledge from all agents that have worked on a project
+   *
+   * Reads the project's agents-index.json, then searches each agent's role
+   * knowledge for entries relevant to the given context. Results are merged,
+   * deduplicated, and sorted by relevance.
+   *
+   * @param projectPath - Absolute path to the project
+   * @param context - Search context for relevance filtering
+   * @param limit - Maximum number of results (default 20)
+   * @returns Array of formatted memory strings from all agents
+   *
+   * @example
+   * ```typescript
+   * const teamKnowledge = await memoryService.recallFromAllAgents(
+   *   '/projects/app',
+   *   'authentication middleware',
+   *   15,
+   * );
+   * ```
+   */
+  public async recallFromAllAgents(
+    projectPath: string,
+    context: string,
+    limit: number = 20,
+  ): Promise<string[]> {
+    this.logger.debug('Recalling from all agents', { projectPath, context: context.substring(0, 50) });
+
+    const indexPath = path.join(
+      projectPath,
+      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
+    );
+
+    const defaultIndex: ProjectAgentsIndex = { agents: [] };
+    const index = await safeReadJson<ProjectAgentsIndex>(indexPath, defaultIndex, this.logger);
+
+    if (index.agents.length === 0) {
+      return [];
+    }
+
+    const allMemories: string[] = [];
+
+    for (const agent of index.agents) {
+      try {
+        const knowledge = await this.agentMemory.getRoleKnowledge(agent.agentId);
+        const relevant = this.filterRelevant(knowledge, context, Math.ceil(limit / index.agents.length));
+        relevant.forEach(m => {
+          allMemories.push(`[${agent.role}/${agent.agentId}] ${m}`);
+        });
+      } catch {
+        this.logger.debug('Failed to read knowledge for agent', { agentId: agent.agentId });
+      }
+    }
+
+    // Also include project-level knowledge
+    try {
+      const searchResults = await this.projectMemory.searchAll(projectPath, context);
+      const projectMemories = this.formatSearchResults(searchResults, Math.ceil(limit / 2));
+      allMemories.push(...projectMemories);
+    } catch {
+      this.logger.debug('Failed to search project knowledge', { projectPath });
+    }
+
+    return allMemories.slice(0, limit);
   }
 }

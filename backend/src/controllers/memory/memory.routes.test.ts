@@ -23,6 +23,10 @@ describe('Memory Routes', () => {
     expect(router.stack.length).toBeGreaterThan(0);
   });
 
+  // ---------------------------------------------------------------
+  // Original POST-only routes
+  // ---------------------------------------------------------------
+
   it('should have POST route for /remember', () => {
     const route = (router.stack as any[]).find(
       (layer: any) => layer.route?.path === '/remember' && layer.route?.methods?.post
@@ -44,18 +48,101 @@ describe('Memory Routes', () => {
     expect(route).toBeDefined();
   });
 
-  it('should register exactly 3 routes', () => {
-    const routes = (router.stack as any[]).filter((layer: any) => layer.route);
-    expect(routes).toHaveLength(3);
+  // ---------------------------------------------------------------
+  // Goal routes
+  // ---------------------------------------------------------------
+
+  it('should have POST route for /goals', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/goals' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
   });
 
-  it('should only register POST methods', () => {
+  it('should have GET route for /goals', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/goals' && layer.route?.methods?.get
+    );
+    expect(route).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------
+  // Focus routes
+  // ---------------------------------------------------------------
+
+  it('should have POST route for /focus', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/focus' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have GET route for /focus', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/focus' && layer.route?.methods?.get
+    );
+    expect(route).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------
+  // Daily log routes
+  // ---------------------------------------------------------------
+
+  it('should have POST route for /daily-log', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/daily-log' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have GET route for /daily-log', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/daily-log' && layer.route?.methods?.get
+    );
+    expect(route).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------
+  // Learning accumulation routes
+  // ---------------------------------------------------------------
+
+  it('should have POST route for /record-success', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/record-success' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have POST route for /record-failure', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/record-failure' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------
+  // Route count and method restrictions
+  // ---------------------------------------------------------------
+
+  it('should register exactly 11 routes', () => {
+    const routes = (router.stack as any[]).filter((layer: any) => layer.route);
+    expect(routes).toHaveLength(11);
+  });
+
+  it('should only use POST or GET methods', () => {
     const routes = (router.stack as any[]).filter((layer: any) => layer.route);
     for (const route of routes) {
-      expect(route.route.methods.post).toBe(true);
-      expect(route.route.methods.get).toBeUndefined();
       expect(route.route.methods.delete).toBeUndefined();
       expect(route.route.methods.put).toBeUndefined();
+      expect(route.route.methods.patch).toBeUndefined();
     }
+  });
+
+  it('should have 8 POST routes and 3 GET routes', () => {
+    const routes = (router.stack as any[]).filter((layer: any) => layer.route);
+    const postRoutes = routes.filter((r: any) => r.route.methods.post);
+    const getRoutes = routes.filter((r: any) => r.route.methods.get);
+    expect(postRoutes).toHaveLength(8);
+    expect(getRoutes).toHaveLength(3);
   });
 });
