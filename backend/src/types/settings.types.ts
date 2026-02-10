@@ -173,7 +173,7 @@ export function getDefaultSettings(): AgentMuxSettings {
   return {
     general: {
       defaultRuntime: 'claude-code',
-      autoStartOrchestrator: false,
+      autoStartOrchestrator: true,
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,

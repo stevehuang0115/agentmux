@@ -17,6 +17,7 @@ import {
   validateSettings,
   mergeSettings,
 } from '../../types/settings.types.js';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
 // ============================================================================
 // Custom Error Classes
@@ -100,16 +101,12 @@ export class SettingsService {
       return this.settingsCache;
     }
 
-    try {
-      const content = await fs.readFile(this.settingsFile, 'utf-8');
-      const loaded = JSON.parse(content);
-      // Merge with defaults to fill in any missing properties
+    const loaded = await safeReadJson<Partial<AgentMuxSettings> | null>(this.settingsFile, null);
+    if (loaded) {
       this.settingsCache = mergeSettings(getDefaultSettings(), loaded);
       return this.settingsCache;
-    } catch {
-      // File doesn't exist or is invalid, return defaults
-      return getDefaultSettings();
     }
+    return getDefaultSettings();
   }
 
   /**
@@ -188,7 +185,7 @@ export class SettingsService {
    */
   async exportSettings(exportPath: string): Promise<void> {
     const settings = await this.getSettings();
-    await fs.writeFile(exportPath, JSON.stringify(settings, null, 2), 'utf-8');
+    await atomicWriteJson(exportPath, settings);
   }
 
   /**
@@ -273,11 +270,7 @@ export class SettingsService {
    */
   private async saveSettings(settings: AgentMuxSettings): Promise<void> {
     await fs.mkdir(this.settingsDir, { recursive: true });
-    await fs.writeFile(
-      this.settingsFile,
-      JSON.stringify(settings, null, 2),
-      'utf-8'
-    );
+    await atomicWriteJson(this.settingsFile, settings);
   }
 }
 

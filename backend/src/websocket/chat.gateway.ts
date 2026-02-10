@@ -254,17 +254,20 @@ export class ChatGateway {
    * Process a unified [NOTIFY] message and add it directly to a conversation.
    *
    * Unlike `processTerminalOutput`, this method takes pre-extracted content
-   * from a [NOTIFY] payload — no regex extraction needed.
+   * from a [NOTIFY] payload — no regex extraction needed. Optional metadata
+   * (e.g. Slack delivery tracking fields) is merged into the message metadata.
    *
    * @param sessionId - The session/agent ID that produced the output
    * @param content - Pre-extracted markdown content from NotifyPayload.message
    * @param conversationId - Target conversation ID
+   * @param metadata - Optional additional metadata to attach to the message
    * @returns The created chat message, or null on failure
    */
   async processNotifyMessage(
     sessionId: string,
     content: string,
-    conversationId: string
+    conversationId: string,
+    metadata?: Record<string, unknown>
   ): Promise<ChatMessage | null> {
     try {
       const message = await this.chatService.addDirectMessage(
@@ -275,7 +278,7 @@ export class ChatGateway {
           id: sessionId,
           name: 'Orchestrator',
         },
-        { sessionId }
+        { sessionId, ...metadata }
       );
 
       this.logger.debug('Added notify message to chat', {

@@ -11,6 +11,7 @@ import * as os from 'os';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
 import { TeamsBackupService } from './teams-backup.service.js';
+import { atomicWriteFile, withOperationLock } from '../../utils/file-io.utils.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
@@ -27,9 +28,6 @@ export class StorageService {
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
-  private fileLocks: Map<string, Promise<void>> = new Map();
-  /** Mutex locks for read-modify-write operations to prevent race conditions */
-  private operationLocks: Map<string, Promise<void>> = new Map();
   private logger: ComponentLogger;
   /** Flag to track if migration has been performed */
   private migrationDone: boolean = false;
@@ -159,7 +157,7 @@ export class StorageService {
             mkdirSync(orchestratorDir, { recursive: true });
           }
           if (!existsSync(this.orchestratorFile)) {
-            await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(data.orchestrator, null, 2));
+            await atomicWriteFile(this.orchestratorFile, JSON.stringify(data.orchestrator, null, 2));
             this.logger.info('Migrated orchestrator to directory structure');
           }
         }
@@ -196,7 +194,7 @@ export class StorageService {
         if (!existsSync(orchestratorDir)) {
           mkdirSync(orchestratorDir, { recursive: true });
         }
-        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        await atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
         await fs.rename(flatOrchestratorFile, `${flatOrchestratorFile}.migrated.${Date.now()}`);
         this.logger.info('Migrated flat orchestrator.json to directory structure');
       } catch (error) {
@@ -263,7 +261,7 @@ export class StorageService {
 
     // Save team config (without inline prompts if they exist)
     if (!existsSync(teamConfigFile)) {
-      await this.atomicWriteFile(teamConfigFile, JSON.stringify(team, null, 2));
+      await atomicWriteFile(teamConfigFile, JSON.stringify(team, null, 2));
     }
 
     // Extract member prompts to individual files
@@ -271,7 +269,7 @@ export class StorageService {
       if (member.systemPrompt) {
         const promptPath = this.getMemberPromptPath(team.id, member.id);
         if (!existsSync(promptPath)) {
-          await this.atomicWriteFile(promptPath, member.systemPrompt);
+          await atomicWriteFile(promptPath, member.systemPrompt);
           this.logger.debug('Extracted member prompt to file', {
             teamId: team.id,
             memberId: member.id,
@@ -313,7 +311,7 @@ export class StorageService {
 
     if (!existsSync(filePath)) {
       this.logger.info('Creating new storage file', { file: fileName });
-      await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
+      await atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
     } else {
       // File exists - validate it's not corrupted
       try {
@@ -334,7 +332,7 @@ export class StorageService {
           } catch {
             // Ignore backup errors
           }
-          await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
+          await atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
         }
       } catch (error) {
         // File exists but can't be parsed - back it up and create new one
@@ -351,94 +349,8 @@ export class StorageService {
             error: backupError instanceof Error ? backupError.message : String(backupError),
           });
         }
-        await this.atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
+        await atomicWriteFile(filePath, JSON.stringify(defaultContent, null, 2));
       }
-    }
-  }
-
-  /**
-   * Acquire a lock for read-modify-write operations on a specific file.
-   * This prevents race conditions where concurrent operations read stale data.
-   *
-   * @param lockKey - Unique key for the lock (usually the file path)
-   * @param operation - The async operation to perform while holding the lock
-   * @returns The result of the operation
-   */
-  private async withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
-    // Wait for any existing operation on this file to complete
-    if (this.operationLocks.has(lockKey)) {
-      await this.operationLocks.get(lockKey);
-    }
-
-    // Create a deferred promise for this operation
-    let resolveOperation: () => void;
-    const operationPromise = new Promise<void>((resolve) => {
-      resolveOperation = resolve;
-    });
-
-    this.operationLocks.set(lockKey, operationPromise);
-
-    try {
-      return await operation();
-    } finally {
-      resolveOperation!();
-      this.operationLocks.delete(lockKey);
-    }
-  }
-
-  /**
-   * Atomic write operation with file locking to prevent race conditions
-   * @param filePath - Path to the file to write
-   * @param content - Content to write to the file
-   */
-  private async atomicWriteFile(filePath: string, content: string): Promise<void> {
-    // Use file-based locking to prevent concurrent writes
-    const lockKey = filePath;
-    
-    // Wait for any existing write operation on this file to complete
-    if (this.fileLocks.has(lockKey)) {
-      await this.fileLocks.get(lockKey);
-    }
-    
-    // Create a new lock for this write operation
-    const writeOperation = this.performAtomicWrite(filePath, content);
-    this.fileLocks.set(lockKey, writeOperation);
-    
-    try {
-      await writeOperation;
-    } finally {
-      // Clean up the lock after operation completes
-      this.fileLocks.delete(lockKey);
-    }
-  }
-  
-  /**
-   * Performs the actual atomic write using a temporary file and rename
-   * @param filePath - Target file path
-   * @param content - Content to write
-   */
-  private async performAtomicWrite(filePath: string, content: string): Promise<void> {
-    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
-    
-    try {
-      // Write to temporary file first
-      await fs.writeFile(tempPath, content, 'utf8');
-      
-      // Ensure data is written to disk before rename
-      const fileHandle = await fs.open(tempPath, 'r+');
-      await fileHandle.sync();
-      await fileHandle.close();
-      
-      // Atomically move temp file to target (this is atomic on most filesystems)
-      await fs.rename(tempPath, filePath);
-    } catch (error) {
-      // Clean up temp file if something went wrong
-      try {
-        await fs.unlink(tempPath);
-      } catch (unlinkError) {
-        // Ignore cleanup errors
-      }
-      throw error;
     }
   }
 
@@ -506,7 +418,7 @@ export class StorageService {
     const promptsDir = this.getTeamPromptsDir(team.id);
 
     // Use operation lock on the team directory
-    return this.withOperationLock(teamDir, async () => {
+    return withOperationLock(teamDir, async () => {
       try {
         // Ensure team directory structure exists
         if (!existsSync(teamDir)) {
@@ -520,13 +432,13 @@ export class StorageService {
         const isUpdate = existsSync(teamFile);
 
         // Write team config to file
-        await this.atomicWriteFile(teamFile, JSON.stringify(team, null, 2));
+        await atomicWriteFile(teamFile, JSON.stringify(team, null, 2));
 
         // Save member prompts to individual files
         for (const member of team.members || []) {
           if (member.systemPrompt) {
             const promptPath = this.getMemberPromptPath(team.id, member.id);
-            await this.atomicWriteFile(promptPath, member.systemPrompt);
+            await atomicWriteFile(promptPath, member.systemPrompt);
           }
         }
 
@@ -567,7 +479,7 @@ export class StorageService {
       mkdirSync(promptsDir, { recursive: true });
     }
 
-    await this.atomicWriteFile(promptPath, prompt);
+    await atomicWriteFile(promptPath, prompt);
     this.logger.debug('Saved member prompt', { teamId, memberId, promptPath });
   }
 
@@ -640,7 +552,7 @@ export class StorageService {
     }
 
     const promptPath = this.getOrchestratorPromptPath();
-    await this.atomicWriteFile(promptPath, prompt);
+    await atomicWriteFile(promptPath, prompt);
     this.logger.debug('Saved orchestrator prompt', { promptPath });
   }
 
@@ -770,7 +682,7 @@ export class StorageService {
       }
 
       const newContent = JSON.stringify(projects, null, 2);
-      await this.atomicWriteFile(this.projectsFile, newContent);
+      await atomicWriteFile(this.projectsFile, newContent);
 
       this.logger.info('Project saved successfully', {
         projectId: project.id,
@@ -794,7 +706,7 @@ export class StorageService {
     try {
       const projects = await this.getProjects();
       const filteredProjects = projects.filter(p => p.id !== id);
-      await this.atomicWriteFile(this.projectsFile, JSON.stringify(filteredProjects, null, 2));
+      await atomicWriteFile(this.projectsFile, JSON.stringify(filteredProjects, null, 2));
     } catch (error) {
       console.error('Error deleting project:', error);
       throw error;
@@ -956,7 +868,7 @@ export class StorageService {
 
   async saveRuntimeState(state: any): Promise<void> {
     try {
-      await this.atomicWriteFile(this.runtimeFile, JSON.stringify(state, null, 2));
+      await atomicWriteFile(this.runtimeFile, JSON.stringify(state, null, 2));
     } catch (error) {
       console.error('Error saving runtime state:', error);
       throw error;
@@ -1099,7 +1011,7 @@ This is a foundational task that should be completed first before other developm
       
       // Handle empty content or malformed JSON
       if (!content.trim()) {
-        await this.atomicWriteFile(this.scheduledMessagesFile, JSON.stringify([], null, 2));
+        await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify([], null, 2));
         return [];
       }
       
@@ -1108,7 +1020,7 @@ This is a foundational task that should be completed first before other developm
       } catch (parseError) {
         console.error('Error parsing scheduled messages JSON, resetting file:', parseError);
         // Reset the file with empty array if JSON is corrupted
-        await this.atomicWriteFile(this.scheduledMessagesFile, JSON.stringify([], null, 2));
+        await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify([], null, 2));
         return [];
       }
     } catch (error) {
@@ -1128,7 +1040,7 @@ This is a foundational task that should be completed first before other developm
         messages.push(scheduledMessage);
       }
 
-      await this.atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(messages, null, 2));
+      await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(messages, null, 2));
     } catch (error) {
       console.error('Error saving scheduled message:', error);
       throw error;
@@ -1154,7 +1066,7 @@ This is a foundational task that should be completed first before other developm
         return false; // Message not found
       }
 
-      await this.atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(filteredMessages, null, 2));
+      await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(filteredMessages, null, 2));
       return true;
     } catch (error) {
       console.error('Error deleting scheduled message:', error);
@@ -1184,7 +1096,7 @@ This is a foundational task that should be completed first before other developm
       // Keep only last 1000 logs to prevent file from getting too large
       const trimmedLogs = logs.slice(0, 1000);
       
-      await this.atomicWriteFile(this.deliveryLogsFile, JSON.stringify(trimmedLogs, null, 2));
+      await atomicWriteFile(this.deliveryLogsFile, JSON.stringify(trimmedLogs, null, 2));
     } catch (error) {
       console.error('Error saving delivery log:', error);
       throw error;
@@ -1193,7 +1105,7 @@ This is a foundational task that should be completed first before other developm
 
   async clearDeliveryLogs(): Promise<void> {
     try {
-      await this.atomicWriteFile(this.deliveryLogsFile, JSON.stringify([], null, 2));
+      await atomicWriteFile(this.deliveryLogsFile, JSON.stringify([], null, 2));
     } catch (error) {
       console.error('Error clearing delivery logs:', error);
       throw error;
@@ -1215,7 +1127,7 @@ This is a foundational task that should be completed first before other developm
       if (!existsSync(this.orchestratorFile)) {
         // Create default orchestrator
         const orchestrator = this.createDefaultOrchestrator();
-        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        await atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
         return orchestrator;
       }
 
@@ -1241,7 +1153,7 @@ This is a foundational task that should be completed first before other developm
   async updateAgentStatus(sessionName: string, status: AgentStatus): Promise<void> {
     // Handle orchestrator separately
     if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
-      return this.withOperationLock(this.orchestratorFile, async () => {
+      return withOperationLock(this.orchestratorFile, async () => {
         try {
           let orchestrator;
           if (existsSync(this.orchestratorFile)) {
@@ -1254,7 +1166,7 @@ This is a foundational task that should be completed first before other developm
           orchestrator.agentStatus = status;
           orchestrator.updatedAt = new Date().toISOString();
 
-          await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+          await atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
           this.logger.debug('Updated orchestrator status', { status });
         } catch (error) {
           this.logger.error('Error updating orchestrator status', {
@@ -1335,7 +1247,7 @@ This is a foundational task that should be completed first before other developm
    * @param runtimeType - The runtime type to set
    */
   async updateOrchestratorRuntimeType(runtimeType: RuntimeType): Promise<void> {
-    return this.withOperationLock(this.orchestratorFile, async () => {
+    return withOperationLock(this.orchestratorFile, async () => {
       try {
         let orchestrator;
         if (existsSync(this.orchestratorFile)) {
@@ -1348,7 +1260,7 @@ This is a foundational task that should be completed first before other developm
         orchestrator.runtimeType = runtimeType;
         orchestrator.updatedAt = new Date().toISOString();
 
-        await this.atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
+        await atomicWriteFile(this.orchestratorFile, JSON.stringify(orchestrator, null, 2));
         this.logger.debug('Updated orchestrator runtime type', { runtimeType });
       } catch (error) {
         this.logger.error('Error updating orchestrator runtime type', {

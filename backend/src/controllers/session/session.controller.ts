@@ -11,6 +11,7 @@
 import type { Request, Response } from 'express';
 import { getSessionBackendSync, getSessionBackend, getSessionStatePersistence } from '../../services/session/index.js';
 import { LoggerService } from '../../services/core/logger.service.js';
+import { RUNTIME_TYPES } from '../../constants.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('SessionController');
 
@@ -286,7 +287,7 @@ export async function getPreviousSessions(
 					role: info.role,
 					teamId: info.teamId,
 					runtimeType: info.runtimeType,
-					hasResumeId: !!info.claudeSessionId,
+					hasResumeId: info.runtimeType === RUNTIME_TYPES.CLAUDE_CODE,
 				});
 			}
 		}

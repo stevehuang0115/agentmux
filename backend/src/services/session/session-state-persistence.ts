@@ -13,6 +13,7 @@ import * as fs from 'fs/promises';
 import type { ISessionBackend, SessionOptions } from './session-backend.interface.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { RuntimeType, RUNTIME_TYPES } from '../../constants.js';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
 /** Current version of the state file schema */
 const STATE_VERSION = 1;
@@ -82,6 +83,9 @@ export class SessionStatePersistence {
 
 	/** Map of session name to metadata for persistence */
 	private sessionMetadata: Map<string, PersistedSessionInfo> = new Map();
+
+	/** Set of session names that were restored from the state file on startup */
+	private restoredSessionNames = new Set<string>();
 
 	/** Logger instance */
 	private logger: ComponentLogger;
@@ -201,6 +205,20 @@ export class SessionStatePersistence {
 	}
 
 	/**
+	 * Check if a session was restored from the state file on startup.
+	 *
+	 * Sessions loaded during restoreState() are tracked separately from
+	 * newly created sessions. This allows the resume logic to determine
+	 * whether an agent was running before the backend restart.
+	 *
+	 * @param name - Session name to check
+	 * @returns true if the session was restored from persisted state
+	 */
+	isRestoredSession(name: string): boolean {
+		return this.restoredSessionNames.has(name);
+	}
+
+	/**
 	 * Get all registered session names.
 	 *
 	 * @returns Array of registered session names
@@ -219,20 +237,28 @@ export class SessionStatePersistence {
 	}
 
 	/**
+	 * Build the current persisted state object from in-memory metadata.
+	 *
+	 * @returns PersistedState snapshot
+	 */
+	private buildState(): PersistedState {
+		return {
+			version: STATE_VERSION,
+			savedAt: new Date().toISOString(),
+			sessions: Array.from(this.sessionMetadata.values()),
+		};
+	}
+
+	/**
 	 * Auto-save current session metadata to disk.
 	 * Called after register/unregister/updateSessionId to keep the state file
 	 * in sync with in-memory metadata at all times. This ensures the state file
 	 * is always up-to-date even if the process is killed before graceful shutdown.
 	 */
 	private async autoSave(): Promise<void> {
-		const state: PersistedState = {
-			version: STATE_VERSION,
-			savedAt: new Date().toISOString(),
-			sessions: Array.from(this.sessionMetadata.values()),
-		};
 		try {
 			await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-			await fs.writeFile(this.filePath, JSON.stringify(state, null, 2));
+			await atomicWriteJson(this.filePath, this.buildState());
 		} catch (error) {
 			this.logger.warn('Failed to auto-save session state', {
 				error: error instanceof Error ? error.message : String(error),
@@ -250,28 +276,16 @@ export class SessionStatePersistence {
 	 * @returns Number of sessions saved
 	 */
 	async saveState(backend: ISessionBackend): Promise<number> {
-		// Use sessionMetadata as the source of truth instead of cross-referencing
-		// with backend.listSessions(). By shutdown time, PTY processes may already
-		// be killed, so backend.listSessions() would return empty.
-		const sessionsToSave = Array.from(this.sessionMetadata.values());
-
-		const state: PersistedState = {
-			version: STATE_VERSION,
-			savedAt: new Date().toISOString(),
-			sessions: sessionsToSave,
-		};
-
 		try {
-			// Ensure directory exists
-			await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-			await fs.writeFile(this.filePath, JSON.stringify(state, null, 2));
+			await this.autoSave();
+			const count = this.sessionMetadata.size;
 
 			this.logger.info('Saved session state', {
-				count: sessionsToSave.length,
-				sessions: sessionsToSave.map((s) => s.name),
+				count,
+				sessions: Array.from(this.sessionMetadata.keys()),
 			});
 
-			return sessionsToSave.length;
+			return count;
 		} catch (error) {
 			this.logger.error('Failed to save session state', {
 				error: error instanceof Error ? error.message : String(error),
@@ -290,8 +304,12 @@ export class SessionStatePersistence {
 	 */
 	async restoreState(backend: ISessionBackend): Promise<number> {
 		try {
-			const content = await fs.readFile(this.filePath, 'utf-8');
-			const state: PersistedState = JSON.parse(content);
+			const state = await safeReadJson<PersistedState | null>(this.filePath, null, this.logger);
+
+			if (!state) {
+				this.logger.info('No saved session state found');
+				return 0;
+			}
 
 			if (state.version !== STATE_VERSION) {
 				this.logger.warn('Unknown state version, skipping restore', {
@@ -318,6 +336,7 @@ export class SessionStatePersistence {
 
 					// Re-register metadata for future saves
 					this.sessionMetadata.set(sessionInfo.name, sessionInfo);
+					this.restoredSessionNames.add(sessionInfo.name);
 					restored++;
 
 					this.logger.info('Restored session', {
@@ -342,14 +361,9 @@ export class SessionStatePersistence {
 
 			return restored;
 		} catch (error) {
-			const errno = error as NodeJS.ErrnoException;
-			if (errno.code === 'ENOENT') {
-				this.logger.info('No saved session state found');
-			} else {
-				this.logger.error('Failed to restore session state', {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			this.logger.error('Failed to restore session state', {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			return 0;
 		}
 	}
@@ -395,6 +409,7 @@ export class SessionStatePersistence {
 	 */
 	async clearStateAndMetadata(): Promise<void> {
 		this.sessionMetadata.clear();
+		this.restoredSessionNames.clear();
 		await this.clearState();
 		this.logger.info('Cleared session metadata and state file');
 	}
@@ -404,6 +419,7 @@ export class SessionStatePersistence {
 	 */
 	clearMetadata(): void {
 		this.sessionMetadata.clear();
+		this.restoredSessionNames.clear();
 		this.logger.debug('Cleared session metadata');
 	}
 
@@ -422,19 +438,18 @@ export class SessionStatePersistence {
 	 * @returns Persisted state or null if not found/invalid
 	 */
 	async loadState(): Promise<PersistedState | null> {
-		try {
-			const content = await fs.readFile(this.filePath, 'utf-8');
-			const state: PersistedState = JSON.parse(content);
+		const state = await safeReadJson<PersistedState | null>(this.filePath, null, this.logger);
 
-			if (state.version !== STATE_VERSION) {
-				this.logger.warn('Unknown state version', { version: state.version });
-				return null;
-			}
-
-			return state;
-		} catch {
+		if (!state) {
 			return null;
 		}
+
+		if (state.version !== STATE_VERSION) {
+			this.logger.warn('Unknown state version', { version: state.version });
+			return null;
+		}
+
+		return state;
 	}
 }
 

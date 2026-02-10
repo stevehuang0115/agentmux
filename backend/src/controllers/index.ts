@@ -13,6 +13,7 @@ import { createChatRouter } from './chat/index.js';
 import { createSkillRouter } from './skill/index.js';
 import { createSlackRouter } from './slack/index.js';
 import { selfImprovementRouter } from './self-improvement/index.js';
+import { createMemoryRouter } from './memory/index.js';
 
 /**
  * Creates the main API router that aggregates all feature routers
@@ -34,6 +35,7 @@ export function createApiRouter(context: ApiContext): Router {
   router.use('/skills', createSkillRouter());
   router.use('/slack', createSlackRouter());
   router.use('/self-improvement', selfImprovementRouter);
+  router.use('/memory', createMemoryRouter());
 
   return router;
 }

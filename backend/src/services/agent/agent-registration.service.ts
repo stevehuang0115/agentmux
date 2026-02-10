@@ -10,7 +10,6 @@ import {
 } from '../session/index.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
-import { ClaudeRuntimeService } from './claude-runtime.service.js';
 import { StorageService } from '../core/storage.service.js';
 import {
 	AGENTMUX_CONSTANTS,
@@ -22,7 +21,9 @@ import {
 	SESSION_COMMAND_DELAYS,
 	EVENT_DELIVERY_CONSTANTS,
 	TERMINAL_PATTERNS,
+	CLAUDE_RESUME_CONSTANTS,
 } from '../../constants.js';
+import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
 
 export interface OrchestratorConfig {
@@ -393,26 +394,11 @@ export class AgentRegistrationService {
 		// Clear Commandline
 		await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
 
-		// Check for persisted session ID to resume previous conversation
-		let claudeSessionId: string | undefined;
-		try {
-			const persistence = getSessionStatePersistence();
-			claudeSessionId = persistence.getSessionId(sessionName);
-		} catch (error) {
-			this.logger.warn('Failed to get persisted session ID for resume', { sessionName, error: error instanceof Error ? error.message : String(error) });
-		}
-
-		// Reinitialize runtime using the appropriate initialization script
+		// Reinitialize runtime using the appropriate initialization script (always fresh start)
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
 		const runtimeService2 = this.createRuntimeService(runtimeType);
-
-		if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService2 instanceof ClaudeRuntimeService) {
-			this.logger.info('Resuming Claude session with persisted ID', { sessionName, claudeSessionId });
-			await runtimeService2.executeRuntimeInitScriptWithResume(sessionName, projectPath, claudeSessionId, runtimeFlags);
-		} else {
-			await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
-		}
+		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
 
 		// Wait for runtime to be ready (simplified detection)
 		// Use shorter check interval in test environment, and reasonable interval in production
@@ -434,8 +420,20 @@ export class AgentRegistrationService {
 			runtimeType,
 		});
 
-		// Detect and store Claude session ID for future resume-on-restart
-		this.detectAndStoreSessionId(sessionName, runtimeType, projectPath);
+		// Resume via /resume command if this was a previously running Claude Code session
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const persistence = getSessionStatePersistence();
+				if (persistence.isRestoredSession(sessionName)) {
+					await this.resumeClaudeCodeSession(sessionName);
+				}
+			} catch (resumeError) {
+				this.logger.warn('Resume attempt failed (non-fatal, continuing with fresh session)', {
+					sessionName,
+					error: resumeError instanceof Error ? resumeError.message : String(resumeError),
+				});
+			}
+		}
 
 		// Send the registration prompt in background (don't block on it)
 		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
@@ -464,38 +462,55 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Detect and store Claude session ID for resume-on-restart support.
-	 * Runs in background (non-blocking) to avoid slowing down initialization.
+	 * Resume a Claude Code session via the /resume slash command.
+	 *
+	 * Sends /resume to the running Claude Code instance, waits for the session
+	 * picker to appear, then presses Enter to select the most recent session.
+	 * This is non-fatal — if it fails, the agent continues with a fresh session.
 	 *
 	 * @param sessionName - PTY session name
-	 * @param runtimeType - Runtime type
-	 * @param projectPath - Project working directory
+	 * @returns true if resume succeeded, false otherwise
 	 */
-	private detectAndStoreSessionId(
-		sessionName: string,
-		runtimeType: RuntimeType,
-		projectPath?: string,
-	): void {
-		if (runtimeType !== RUNTIME_TYPES.CLAUDE_CODE) return;
+	private async resumeClaudeCodeSession(sessionName: string): Promise<boolean> {
+		this.logger.info('Attempting Claude Code session resume via /resume command', { sessionName });
 
-		const cwdToUse = projectPath || process.cwd();
-		const runtimeService = this.createRuntimeService(runtimeType);
+		try {
+			const helper = await this.getSessionHelper();
 
-		if (!(runtimeService instanceof ClaudeRuntimeService)) return;
+			// Send /resume slash command
+			await helper.sendMessage(sessionName, '/resume');
 
-		// Run detection in background (non-blocking)
-		runtimeService.detectClaudeSessionId(cwdToUse).then((detectedId) => {
-			if (detectedId) {
-				const persistence = getSessionStatePersistence();
-				persistence.updateSessionId(sessionName, detectedId);
-				this.logger.info('Stored detected Claude session ID', { sessionName, detectedId });
-			}
-		}).catch((err) => {
-			this.logger.debug('Failed to detect Claude session ID (non-critical)', {
+			// Wait for the session picker to appear
+			await delay(CLAUDE_RESUME_CONSTANTS.SESSION_PICKER_DELAY_MS);
+
+			// Press Enter to select the first (most recent) session
+			await helper.sendKey(sessionName, 'Enter');
+
+			// Brief settle time
+			await delay(1000);
+
+			// Wait for Claude to resume and return to prompt
+			const runtimeService = this.createRuntimeService(RUNTIME_TYPES.CLAUDE_CODE);
+			const isReady = await runtimeService.waitForRuntimeReady(
 				sessionName,
-				error: err instanceof Error ? err.message : String(err),
+				CLAUDE_RESUME_CONSTANTS.RESUME_READY_TIMEOUT_MS,
+				2000
+			);
+
+			if (isReady) {
+				this.logger.info('Claude Code session resumed successfully via /resume', { sessionName });
+				return true;
+			}
+
+			this.logger.warn('Claude Code /resume did not return to ready state within timeout', { sessionName });
+			return false;
+		} catch (error) {
+			this.logger.warn('Claude Code /resume failed (non-fatal)', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
 			});
-		});
+			return false;
+		}
 	}
 
 	/**
@@ -538,15 +553,6 @@ export class AgentRegistrationService {
 		// Wait for cleanup
 		await delay(1000);
 
-		// Check for persisted session ID to resume previous conversation
-		let claudeSessionId: string | undefined;
-		try {
-			const persistence = getSessionStatePersistence();
-			claudeSessionId = persistence.getSessionId(sessionName);
-		} catch (error) {
-			this.logger.warn('Failed to get persisted session ID for resume', { sessionName, error: error instanceof Error ? error.message : String(error) });
-		}
-
 		// Recreate session based on role
 		if (role === ORCHESTRATOR_ROLE) {
 			await this.createOrchestratorSession({
@@ -554,14 +560,9 @@ export class AgentRegistrationService {
 				projectPath: projectPath || process.cwd(),
 			});
 
-			// Initialize runtime for orchestrator using script (stay in agentmux project)
+			// Initialize runtime for orchestrator using script (always fresh start)
 			const runtimeService = this.createRuntimeService(runtimeType);
-			if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService instanceof ClaudeRuntimeService) {
-				this.logger.info('Resuming orchestrator Claude session', { sessionName, claudeSessionId });
-				await runtimeService.executeRuntimeInitScriptWithResume(sessionName, process.cwd(), claudeSessionId, runtimeFlags);
-			} else {
-				await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), runtimeFlags);
-			}
+			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), runtimeFlags);
 
 			// Wait for runtime to be ready
 			const checkInterval = this.getCheckInterval();
@@ -606,17 +607,11 @@ export class AgentRegistrationService {
 				{ sessionName, runtimeType }
 			);
 		} else {
-			// For other roles, create basic session and initialize Claude
+			// For other roles, create basic session and initialize Claude (always fresh start)
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
-			// Initialize runtime using the initialization script
 			const runtimeService = this.createRuntimeService(runtimeType);
-			if (claudeSessionId && runtimeType === RUNTIME_TYPES.CLAUDE_CODE && runtimeService instanceof ClaudeRuntimeService) {
-				this.logger.info('Resuming team member Claude session', { sessionName, claudeSessionId });
-				await runtimeService.executeRuntimeInitScriptWithResume(sessionName, projectPath, claudeSessionId, runtimeFlags);
-			} else {
-				await runtimeService.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
-			}
+			await runtimeService.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
 
 			// Wait for runtime to be ready (simplified detection)
 			const checkInterval = this.getCheckInterval();
@@ -636,8 +631,20 @@ export class AgentRegistrationService {
 			runtimeType,
 		});
 
-		// Detect and store Claude session ID for future resume-on-restart
-		this.detectAndStoreSessionId(sessionName, runtimeType, projectPath);
+		// Resume via /resume command if this was a previously running Claude Code session
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const persistence = getSessionStatePersistence();
+				if (persistence.isRestoredSession(sessionName)) {
+					await this.resumeClaudeCodeSession(sessionName);
+				}
+			} catch (resumeError) {
+				this.logger.warn('Resume attempt failed (non-fatal, continuing with fresh session)', {
+					sessionName,
+					error: resumeError instanceof Error ? resumeError.message : String(resumeError),
+				});
+			}
+		}
 
 		// Send the registration prompt in background (don't block on it)
 		this.sendRegistrationPromptAsync(sessionName, role, memberId, runtimeType).catch((err) => {
@@ -1345,6 +1352,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				sessionName,
 				ENV_CONSTANTS.AGENTMUX_ROLE,
 				role
+			);
+			await sessionHelper.setEnvironmentVariable(
+				sessionName,
+				ENV_CONSTANTS.AGENTMUX_API_URL,
+				`http://localhost:${WEB_CONSTANTS.PORTS.BACKEND}`
 			);
 
 			this.logger.info('Agent session created and environment variables set, initializing with registration', {

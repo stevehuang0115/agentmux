@@ -12,6 +12,8 @@ import { EventEmitter } from 'events';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
   ChatMessage,
   ChatConversation,
@@ -102,6 +104,7 @@ export interface ChatServiceOptions {
  */
 export class ChatService extends EventEmitter {
   private readonly chatDir: string;
+  private readonly logger: ComponentLogger;
   private conversations: Map<string, ChatConversation> = new Map();
   private messages: Map<string, ChatMessage[]> = new Map();
   private initialized = false;
@@ -117,6 +120,7 @@ export class ChatService extends EventEmitter {
     super();
     this.chatDir =
       options?.chatDir ?? path.join(process.env.HOME || '~', '.agentmux', 'chat');
+    this.logger = LoggerService.getInstance().createComponentLogger('ChatService');
   }
 
   // ===========================================================================
@@ -423,6 +427,72 @@ export class ChatService extends EventEmitter {
     return messages.find((m) => m.id === messageId) ?? null;
   }
 
+  /**
+   * Update metadata on an existing message (partial merge).
+   *
+   * Merges the provided metadata fields into the message's existing metadata
+   * and persists the change to disk. Used by the NOTIFY reconciliation system
+   * to track Slack delivery status on chat messages.
+   *
+   * @param conversationId - Conversation the message belongs to
+   * @param messageId - ID of the message to update
+   * @param metadataPatch - Partial metadata to merge into existing metadata
+   * @returns The updated message, or null if message not found
+   */
+  async updateMessageMetadata(
+    conversationId: string,
+    messageId: string,
+    metadataPatch: Record<string, unknown>
+  ): Promise<ChatMessage | null> {
+    await this.ensureInitialized();
+
+    const messages = this.messages.get(conversationId);
+    if (!messages) return null;
+
+    const message = messages.find((m) => m.id === messageId);
+    if (!message) return null;
+
+    message.metadata = { ...message.metadata, ...metadataPatch };
+
+    const conversation = this.conversations.get(conversationId);
+    if (conversation) {
+      await this.saveConversation(conversation);
+    }
+
+    return message;
+  }
+
+  /**
+   * Find all messages with pending Slack delivery within a time window.
+   *
+   * Scans all conversations for messages where `slackDeliveryStatus === 'pending'`
+   * and `slackChannelId` is present, filtering out messages older than `maxAgeMs`.
+   * Used by NotifyReconciliationService to find messages that need retry.
+   *
+   * @param maxAgeMs - Maximum message age in milliseconds
+   * @returns Array of messages with pending Slack delivery
+   */
+  async getMessagesWithPendingSlackDelivery(maxAgeMs: number): Promise<ChatMessage[]> {
+    await this.ensureInitialized();
+
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const pending: ChatMessage[] = [];
+
+    for (const messages of this.messages.values()) {
+      for (const msg of messages) {
+        if (
+          msg.metadata?.slackDeliveryStatus === 'pending' &&
+          msg.metadata?.slackChannelId &&
+          msg.timestamp >= cutoff
+        ) {
+          pending.push(msg);
+        }
+      }
+    }
+
+    return pending;
+  }
+
   // ===========================================================================
   // Conversation Operations
   // ===========================================================================
@@ -719,21 +789,19 @@ export class ChatService extends EventEmitter {
       const jsonFiles = files.filter((f) => f.endsWith('.json'));
 
       for (const file of jsonFiles) {
-        try {
-          const content = await fs.readFile(path.join(this.chatDir, file), 'utf-8');
-          const data = JSON.parse(content) as ChatStorageFormat;
+        const filePath = path.join(this.chatDir, file);
+        const data = await safeReadJson<ChatStorageFormat | null>(filePath, null);
 
-          if (data.conversation) {
-            this.conversations.set(data.conversation.id, data.conversation);
-            this.messages.set(data.conversation.id, data.messages ?? []);
-          }
-        } catch (error) {
-          console.warn(`Failed to load conversation from ${file}:`, error);
+        if (data?.conversation) {
+          this.conversations.set(data.conversation.id, data.conversation);
+          this.messages.set(data.conversation.id, data.messages ?? []);
         }
       }
     } catch (error) {
       // Directory might not exist yet, which is fine
-      console.warn('Failed to load conversations:', error);
+      this.logger.debug('Failed to load conversations', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -762,11 +830,8 @@ export class ChatService extends EventEmitter {
   private async doSaveConversation(conversation: ChatConversation): Promise<void> {
     const messages = this.messages.get(conversation.id) ?? [];
     const storage: ChatStorageFormat = { conversation, messages };
-    const content = JSON.stringify(storage, null, 2);
     const filePath = path.join(this.chatDir, `${conversation.id}.json`);
-    const tmpPath = filePath + `.${process.pid}.tmp`;
-    await fs.writeFile(tmpPath, content);
-    await fs.rename(tmpPath, filePath);
+    await atomicWriteJson(filePath, storage);
   }
 
   /**

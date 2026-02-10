@@ -10,6 +10,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { atomicWriteJson } from '../../utils/file-io.utils.js';
 import {
   OrchestratorState,
   ConversationState,
@@ -198,11 +199,7 @@ export class StatePersistenceService {
     this.currentState.metadata = this.createMetadata();
 
     const statePath = path.join(this.stateDir, STATE_PATHS.CURRENT_STATE);
-
-    // Write to temp file first, then rename (atomic)
-    const tempPath = `${statePath}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(this.currentState, null, 2));
-    await fs.rename(tempPath, statePath);
+    await atomicWriteJson(statePath, this.currentState);
 
     console.log(`[StatePersistence] Checkpointed state (${reason})`);
   }

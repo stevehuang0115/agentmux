@@ -18,6 +18,7 @@ import {
 import { getChatGateway } from './chat.gateway.js';
 import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
 import { getSlackOrchestratorBridge } from '../services/slack/slack-orchestrator-bridge.js';
+import { getChatService } from '../services/chat/chat.service.js';
 import type { SlackNotification } from '../types/slack.types.js';
 import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from '../utils/terminal-output.utils.js';
 import { parseNotifyContent, type NotifyPayload } from '../types/chat.types.js';
@@ -612,49 +613,117 @@ export class TerminalGateway {
 				contentLength: payload.message.length,
 			});
 
-			// Route to chat UI
-			const conversationId = payload.conversationId || this.activeConversationId;
-			if (conversationId) {
-				const responseHash = generateResponseHash(conversationId, payload.message);
-				if (!this.responseDeduplicator.isDuplicate(responseHash)) {
-					this.logger.info('Routing NOTIFY to chat', {
-						conversationId,
-						contentLength: payload.message.length,
-					});
-
-					const chatGateway = getChatGateway();
-					if (chatGateway) {
-						chatGateway.processNotifyMessage(
-							sessionName,
-							payload.message,
-							conversationId
-						).catch(error => {
-							this.logger.warn('Failed to route NOTIFY to chat', {
-								error: error instanceof Error ? error.message : String(error),
-							});
-						});
-					}
-				} else {
-					this.logger.debug('Skipping duplicate NOTIFY chat message', {
-						conversationId,
-						contentLength: payload.message.length,
-					});
-				}
-			}
-
-			// Route to Slack — only when an explicit channelId is provided.
-			// `type` alone is metadata, not a routing signal. Without channelId the
-			// notification would fall back to defaultChannelId which may not be
-			// configured, causing channel_not_found errors.
-			if (payload.channelId) {
-				const slackNotification = this.buildSlackNotification(payload);
-				this.sendToSlackBridge(slackNotification, 'NOTIFY');
-			}
+			// Fire-and-forget to keep PTY non-blocking
+			void this.handleNotifyPayload(sessionName, payload).catch(error => {
+				this.logger.warn('Error handling NOTIFY payload', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
 		}
 
 		// Remove processed NOTIFY blocks from buffer
 		if (lastMatchEnd > 0) {
 			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+		}
+	}
+
+	/**
+	 * Handle a single parsed NOTIFY payload — route to chat and/or Slack.
+	 *
+	 * When a channelId is present, Slack delivery metadata is stored on the chat
+	 * message with `slackDeliveryStatus: 'pending'`. On successful Slack delivery,
+	 * the status is updated to `'delivered'`. On failure, the error and attempt count
+	 * are recorded, and the reconciliation service will retry later.
+	 *
+	 * @param sessionName - The orchestrator session name
+	 * @param payload - Parsed NOTIFY payload
+	 */
+	private async handleNotifyPayload(sessionName: string, payload: NotifyPayload): Promise<void> {
+		const conversationId = payload.conversationId || this.activeConversationId;
+
+		// Build metadata dict with NOTIFY fields for the chat message
+		const metadata: Record<string, unknown> = {};
+		if (payload.channelId) {
+			metadata.slackChannelId = payload.channelId;
+			metadata.slackDeliveryStatus = 'pending';
+			metadata.slackDeliveryAttempts = 0;
+			if (payload.threadTs) metadata.slackThreadTs = payload.threadTs;
+		}
+		if (payload.type) metadata.notifyType = payload.type;
+		if (payload.title) metadata.notifyTitle = payload.title;
+		if (payload.urgency) metadata.notifyUrgency = payload.urgency;
+
+		// Route to chat UI
+		let chatMessage: import('../types/chat.types.js').ChatMessage | null = null;
+		if (conversationId) {
+			const responseHash = generateResponseHash(conversationId, payload.message);
+			if (!this.responseDeduplicator.isDuplicate(responseHash)) {
+				this.logger.info('Routing NOTIFY to chat', {
+					conversationId,
+					contentLength: payload.message.length,
+				});
+
+				const chatGateway = getChatGateway();
+				if (chatGateway) {
+					chatMessage = await chatGateway.processNotifyMessage(
+						sessionName,
+						payload.message,
+						conversationId,
+						Object.keys(metadata).length > 0 ? metadata : undefined
+					);
+				}
+			} else {
+				this.logger.debug('Skipping duplicate NOTIFY chat message', {
+					conversationId,
+					contentLength: payload.message.length,
+				});
+			}
+		}
+
+		// Route to Slack — only when an explicit channelId is provided.
+		if (payload.channelId) {
+			const slackNotification = this.buildSlackNotification(payload);
+			try {
+				const bridge = getSlackOrchestratorBridge();
+				if (bridge.isInitialized()) {
+					this.logger.info('Routing NOTIFY to Slack', {
+						type: slackNotification.type,
+						channelId: slackNotification.channelId,
+					});
+					await bridge.sendNotification(slackNotification);
+
+					// Mark delivery successful on the chat message
+					if (chatMessage && conversationId) {
+						const chatService = getChatService();
+						await chatService.updateMessageMetadata(conversationId, chatMessage.id, {
+							slackDeliveryStatus: 'delivered',
+							slackDeliveryAttemptedAt: new Date().toISOString(),
+							slackDeliveryAttempts: 1,
+						});
+					}
+				} else {
+					this.logger.warn('Slack bridge not initialized, skipping NOTIFY delivery (reconciliation will retry)', {
+						type: slackNotification.type,
+					});
+					// Message already has 'pending' status — reconciliation will pick it up
+				}
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : String(error);
+				this.logger.warn('Failed to route NOTIFY to Slack (reconciliation will retry)', {
+					error: errorMsg,
+					type: slackNotification.type,
+				});
+
+				// Record failure on the chat message for reconciliation
+				if (chatMessage && conversationId) {
+					const chatService = getChatService();
+					await chatService.updateMessageMetadata(conversationId, chatMessage.id, {
+						slackDeliveryAttemptedAt: new Date().toISOString(),
+						slackDeliveryAttempts: 1,
+						slackDeliveryError: errorMsg,
+					});
+				}
+			}
 		}
 	}
 

@@ -18,6 +18,7 @@ import path from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
+import { atomicWriteFile, safeReadJson } from '../../utils/file-io.utils.js';
 import type {
   QueuedMessage,
   EnqueueMessageInput,
@@ -111,44 +112,39 @@ export class MessageQueueService extends EventEmitter {
       return;
     }
 
-    try {
-      const content = await fs.readFile(this.persistPath, 'utf-8');
-      const data = JSON.parse(content);
+    const data = await safeReadJson<unknown>(this.persistPath, null);
 
-      if (!isValidPersistedQueueState(data)) {
-        return;
-      }
-
-      // Restore counters
-      this.totalProcessed = data.totalProcessed;
-      this.totalFailed = data.totalFailed;
-
-      // Restore history, filtering out system events
-      this.history = data.history.filter((m) => m.source !== 'system_event');
-
-      // Build restored queue: if there was an in-flight message, prepend it as pending
-      const restoredQueue: QueuedMessage[] = [];
-
-      if (data.currentMessage) {
-        const msg = data.currentMessage as QueuedMessage;
-        msg.status = 'pending';
-        msg.processingStartedAt = undefined;
-        if (msg.source !== 'system_event') {
-          restoredQueue.push(msg);
-        }
-      }
-
-      for (const msg of data.queue) {
-        if (msg.source !== 'system_event') {
-          restoredQueue.push(msg as QueuedMessage);
-        }
-      }
-
-      this.queue = restoredQueue;
-      this.currentMessage = null;
-    } catch {
-      // Missing file or corrupt JSON — start empty
+    if (!data || !isValidPersistedQueueState(data)) {
+      return;
     }
+
+    // Restore counters
+    this.totalProcessed = data.totalProcessed;
+    this.totalFailed = data.totalFailed;
+
+    // Restore history, filtering out system events
+    this.history = data.history.filter((m) => m.source !== 'system_event');
+
+    // Build restored queue: if there was an in-flight message, prepend it as pending
+    const restoredQueue: QueuedMessage[] = [];
+
+    if (data.currentMessage) {
+      const msg = data.currentMessage as QueuedMessage;
+      msg.status = 'pending';
+      msg.processingStartedAt = undefined;
+      if (msg.source !== 'system_event') {
+        restoredQueue.push(msg);
+      }
+    }
+
+    for (const msg of data.queue) {
+      if (msg.source !== 'system_event') {
+        restoredQueue.push(msg as QueuedMessage);
+      }
+    }
+
+    this.queue = restoredQueue;
+    this.currentMessage = null;
   }
 
   /**
@@ -490,27 +486,13 @@ export class MessageQueueService extends EventEmitter {
     };
 
     const content = JSON.stringify(state, null, 2);
-    const tempPath = `${this.persistPath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
 
     try {
-      await fs.writeFile(tempPath, content, 'utf-8');
-
-      // fsync to ensure data hits disk before rename
-      const handle = await fs.open(tempPath, 'r+');
-      await handle.sync();
-      await handle.close();
-
-      await fs.rename(tempPath, this.persistPath);
+      await atomicWriteFile(this.persistPath, content);
     } catch (error) {
       this.logger.warn('Failed to persist queue state', {
         error: error instanceof Error ? error.message : String(error),
       });
-      // Clean up temp file on error
-      try {
-        await fs.unlink(tempPath);
-      } catch {
-        // Ignore cleanup errors
-      }
     }
   }
 }

@@ -12,6 +12,7 @@ import * as path from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 import {
   AgentMemory,
   AgentPreferences,
@@ -79,7 +80,6 @@ export class AgentMemoryService implements IAgentMemoryService {
   private static instanceHome: string | null = null;
 
   private readonly basePath: string;
-  private readonly fileLocks: Map<string, Promise<void>> = new Map();
   private readonly logger = LoggerService.getInstance().createComponentLogger('AgentMemoryService');
 
   // In-memory cache for frequently accessed data
@@ -167,74 +167,6 @@ export class AgentMemoryService implements IAgentMemoryService {
   }
 
   /**
-   * Reads a JSON file with default fallback
-   *
-   * @param filePath - Path to the JSON file
-   * @param defaultValue - Default value if file doesn't exist or is corrupted
-   * @returns Parsed JSON content or default value
-   */
-  private async readJson<T>(filePath: string, defaultValue: T): Promise<T> {
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      return JSON.parse(content) as T;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.logger.warn('Failed to read JSON file, using default', { filePath, error });
-      }
-      return defaultValue;
-    }
-  }
-
-  /**
-   * Writes JSON data atomically to prevent corruption
-   *
-   * @param filePath - Path to the JSON file
-   * @param data - Data to write
-   */
-  private async writeJson<T>(filePath: string, data: T): Promise<void> {
-    const lockKey = filePath;
-
-    // Wait for any existing write operation on this file
-    if (this.fileLocks.has(lockKey)) {
-      await this.fileLocks.get(lockKey);
-    }
-
-    const writeOperation = this.performAtomicWrite(filePath, data);
-    this.fileLocks.set(lockKey, writeOperation);
-
-    try {
-      await writeOperation;
-    } finally {
-      this.fileLocks.delete(lockKey);
-    }
-  }
-
-  /**
-   * Performs atomic write using temporary file and rename
-   *
-   * @param filePath - Target file path
-   * @param data - Data to write
-   */
-  private async performAtomicWrite<T>(filePath: string, data: T): Promise<void> {
-    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
-    const content = JSON.stringify(data, null, 2);
-
-    try {
-      await fs.writeFile(tempPath, content, 'utf8');
-      await fs.rename(tempPath, filePath);
-      this.logger.debug('Atomic write completed', { filePath });
-    } catch (error) {
-      // Clean up temp file if rename failed
-      try {
-        await fs.unlink(tempPath);
-      } catch {
-        // Ignore cleanup errors
-      }
-      throw error;
-    }
-  }
-
-  /**
    * Invalidates the cache for an agent
    *
    * @param agentId - The agent's unique identifier
@@ -270,8 +202,7 @@ export class AgentMemoryService implements IAgentMemoryService {
    */
   private async loadAgentMemory(agentId: string): Promise<AgentMemory | null> {
     const memoryPath = this.getFilePath(agentId, MEMORY_CONSTANTS.AGENT_FILES.MEMORY);
-    const memory = await this.readJson<AgentMemory | null>(memoryPath, null);
-    return memory;
+    return safeReadJson<AgentMemory | null>(memoryPath, null, this.logger);
   }
 
   /**
@@ -283,7 +214,7 @@ export class AgentMemoryService implements IAgentMemoryService {
   private async saveAgentMemory(agentId: string, memory: AgentMemory): Promise<void> {
     memory.updatedAt = new Date().toISOString();
     const memoryPath = this.getFilePath(agentId, MEMORY_CONSTANTS.AGENT_FILES.MEMORY);
-    await this.writeJson(memoryPath, memory);
+    await atomicWriteJson(memoryPath, memory);
     this.invalidateCache(agentId);
   }
 

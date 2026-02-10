@@ -123,7 +123,7 @@ describe('SettingsService', () => {
 
       expect(updated.general.defaultRuntime).toBe('gemini-cli');
       // Other settings should be defaults
-      expect(updated.general.autoStartOrchestrator).toBe(false);
+      expect(updated.general.autoStartOrchestrator).toBe(true);
     });
 
     it('should persist settings to file', async () => {

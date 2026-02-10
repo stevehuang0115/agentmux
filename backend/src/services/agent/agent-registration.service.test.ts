@@ -135,6 +135,7 @@ describe('AgentRegistrationService', () => {
 			registerSession: jest.fn(),
 			unregisterSession: jest.fn(),
 			isSessionRegistered: jest.fn().mockReturnValue(false),
+			isRestoredSession: jest.fn().mockReturnValue(false),
 			getSessionId: jest.fn().mockReturnValue(undefined),
 			updateSessionId: jest.fn(),
 		});
@@ -695,6 +696,113 @@ describe('AgentRegistrationService', () => {
 			});
 
 			// Session creation should still succeed
+			expect(result.success).toBe(true);
+		});
+	});
+
+	describe('resumeClaudeCodeSession via /resume command', () => {
+		it('should send /resume and Enter for restored Claude Code sessions', async () => {
+			// Mark session as restored by updating the mock persistence to return true for isRestoredSession
+			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
+				registerSession: jest.fn(),
+				unregisterSession: jest.fn(),
+				isSessionRegistered: jest.fn().mockReturnValue(false),
+				isRestoredSession: jest.fn().mockReturnValue(true),
+				getSessionId: jest.fn().mockReturnValue(undefined),
+				updateSessionId: jest.fn(),
+			});
+
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'orchestrator',
+				'/test/path',
+				90000,
+				undefined, // memberId
+				RUNTIME_TYPES.CLAUDE_CODE
+			);
+
+			// Should have sent /resume command and Enter key
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', '/resume');
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', 'Enter');
+		});
+
+		it('should not send /resume for non-restored sessions', async () => {
+			// Session is NOT restored (default mock)
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'orchestrator',
+				'/test/path',
+				90000,
+				undefined, // memberId
+				RUNTIME_TYPES.CLAUDE_CODE
+			);
+
+			// sendMessage should only be called for registration prompt, not /resume
+			const sendMessageCalls = mockSessionHelper.sendMessage.mock.calls;
+			const resumeCalls = sendMessageCalls.filter((call: any[]) => call[1] === '/resume');
+			expect(resumeCalls).toHaveLength(0);
+		});
+
+		it('should not send /resume for non-Claude runtimes', async () => {
+			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
+				registerSession: jest.fn(),
+				unregisterSession: jest.fn(),
+				isSessionRegistered: jest.fn().mockReturnValue(false),
+				isRestoredSession: jest.fn().mockReturnValue(true),
+				getSessionId: jest.fn().mockReturnValue(undefined),
+				updateSessionId: jest.fn(),
+			});
+
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'developer',
+				'/test/path',
+				90000,
+				undefined, // memberId
+				RUNTIME_TYPES.GEMINI_CLI
+			);
+
+			// sendMessage should NOT include /resume for Gemini
+			const sendMessageCalls = mockSessionHelper.sendMessage.mock.calls;
+			const resumeCalls = sendMessageCalls.filter((call: any[]) => call[1] === '/resume');
+			expect(resumeCalls).toHaveLength(0);
+		});
+
+		it('should continue gracefully if resume fails', async () => {
+			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
+				registerSession: jest.fn(),
+				unregisterSession: jest.fn(),
+				isSessionRegistered: jest.fn().mockReturnValue(false),
+				isRestoredSession: jest.fn().mockReturnValue(true),
+				getSessionId: jest.fn().mockReturnValue(undefined),
+				updateSessionId: jest.fn(),
+			});
+
+			// First waitForRuntimeReady call succeeds (init), second fails (resume ready check)
+			mockRuntimeService.waitForRuntimeReady
+				.mockResolvedValueOnce(true)  // tryCleanupAndReinit ready check
+				.mockResolvedValueOnce(false); // resume ready check fails
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			const result = await service.initializeAgentWithRegistration(
+				'test-session',
+				'orchestrator',
+				'/test/path',
+				90000,
+				undefined, // memberId
+				RUNTIME_TYPES.CLAUDE_CODE
+			);
+
+			// Should still succeed overall — resume failure is non-fatal
 			expect(result.success).toBe(true);
 		});
 	});

@@ -12,6 +12,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { EventEmitter } from 'events';
 import { parse as parseYAML } from 'yaml';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { atomicWriteJson, safeReadJson, modifyJsonFile } from '../../utils/file-io.utils.js';
 import {
   UsageRecord,
   UsageSummary,
@@ -231,10 +232,11 @@ export class BudgetService extends EventEmitter implements IBudgetService {
   private async loadConfig(): Promise<void> {
     try {
       // Try JSON config first
-      if (existsSync(this.configPath)) {
-        const content = await fs.readFile(this.configPath, 'utf-8');
-        const config = JSON.parse(content) as BudgetConfigFile;
-        this.applyConfig(config);
+      const jsonConfig = await safeReadJson<BudgetConfigFile | null>(
+        this.configPath, null, this.logger
+      );
+      if (jsonConfig) {
+        this.applyConfig(jsonConfig);
         return;
       }
 
@@ -357,19 +359,9 @@ export class BudgetService extends EventEmitter implements IBudgetService {
    * @param record - Usage record
    */
   private async appendUsage(filePath: string, record: UsageRecord): Promise<void> {
-    let records: UsageRecord[] = [];
-
-    try {
-      if (existsSync(filePath)) {
-        const content = await fs.readFile(filePath, 'utf-8');
-        records = JSON.parse(content);
-      }
-    } catch {
-      // File doesn't exist or is invalid, start fresh
-    }
-
-    records.push(record);
-    await fs.writeFile(filePath, JSON.stringify(records, null, 2), 'utf-8');
+    await modifyJsonFile<UsageRecord[]>(filePath, [], (records) => {
+      records.push(record);
+    });
   }
 
   /**
@@ -384,15 +376,8 @@ export class BudgetService extends EventEmitter implements IBudgetService {
 
     for (const date of dates) {
       const filePath = path.join(this.usagePath, `${date}.json`);
-      try {
-        if (existsSync(filePath)) {
-          const content = await fs.readFile(filePath, 'utf-8');
-          const dayRecords = JSON.parse(content) as UsageRecord[];
-          records.push(...dayRecords);
-        }
-      } catch {
-        // Skip invalid files
-      }
+      const dayRecords = await safeReadJson<UsageRecord[]>(filePath, []);
+      records.push(...dayRecords);
     }
 
     return records;
@@ -548,7 +533,7 @@ export class BudgetService extends EventEmitter implements IBudgetService {
       }
     }
 
-    await fs.writeFile(this.configPath, JSON.stringify(config, null, 2), 'utf-8');
+    await atomicWriteJson(this.configPath, config);
   }
 
   /**

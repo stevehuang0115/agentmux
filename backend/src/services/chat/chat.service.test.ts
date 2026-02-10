@@ -616,6 +616,188 @@ describe('ChatService', () => {
   });
 
   // ===========================================================================
+  // updateMessageMetadata Tests
+  // ===========================================================================
+
+  describe('updateMessageMetadata', () => {
+    it('should merge metadata into existing message', async () => {
+      const conv = await service.createNewConversation();
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Test content',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'pending' }
+      );
+
+      const updated = await service.updateMessageMetadata(
+        conv.id,
+        message.id,
+        { slackDeliveryStatus: 'delivered', slackDeliveryAttemptedAt: '2026-02-09T00:00:00Z' }
+      );
+
+      expect(updated).not.toBeNull();
+      expect(updated?.metadata?.slackDeliveryStatus).toBe('delivered');
+      expect(updated?.metadata?.slackDeliveryAttemptedAt).toBe('2026-02-09T00:00:00Z');
+    });
+
+    it('should return null for non-existent conversation', async () => {
+      const result = await service.updateMessageMetadata(
+        'non-existent-conv',
+        'msg-id',
+        { slackDeliveryStatus: 'delivered' }
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null for non-existent message', async () => {
+      const conv = await service.createNewConversation();
+
+      const result = await service.updateMessageMetadata(
+        conv.id,
+        'non-existent-msg',
+        { slackDeliveryStatus: 'delivered' }
+      );
+
+      expect(result).toBeNull();
+    });
+
+    it('should persist the update to disk', async () => {
+      const conv = await service.createNewConversation();
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Persistent metadata test',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'pending' }
+      );
+
+      await service.updateMessageMetadata(
+        conv.id,
+        message.id,
+        { slackDeliveryStatus: 'delivered' }
+      );
+
+      // Create a new service instance from the same directory and verify
+      const newService = new ChatService({ chatDir: testDir });
+      await newService.initialize();
+
+      const reloaded = await newService.getMessage(conv.id, message.id);
+      expect(reloaded).not.toBeNull();
+      expect(reloaded?.metadata?.slackDeliveryStatus).toBe('delivered');
+    });
+
+    it('should preserve existing metadata fields when merging', async () => {
+      const conv = await service.createNewConversation();
+      const message = await service.addDirectMessage(
+        conv.id,
+        'Metadata merge test',
+        { type: 'orchestrator' },
+        {
+          notifyType: 'task_completed',
+          slackChannelId: 'C12345',
+          slackDeliveryStatus: 'pending',
+        }
+      );
+
+      const updated = await service.updateMessageMetadata(
+        conv.id,
+        message.id,
+        { slackDeliveryStatus: 'delivered', slackDeliveryAttempts: 1 }
+      );
+
+      expect(updated).not.toBeNull();
+      // Original fields preserved
+      expect(updated?.metadata?.notifyType).toBe('task_completed');
+      expect(updated?.metadata?.slackChannelId).toBe('C12345');
+      // New/updated fields applied
+      expect(updated?.metadata?.slackDeliveryStatus).toBe('delivered');
+      expect(updated?.metadata?.slackDeliveryAttempts).toBe(1);
+    });
+  });
+
+  // ===========================================================================
+  // getMessagesWithPendingSlackDelivery Tests
+  // ===========================================================================
+
+  describe('getMessagesWithPendingSlackDelivery', () => {
+    it('should return empty array when no pending messages', async () => {
+      const conv = await service.createNewConversation();
+      await service.addDirectMessage(
+        conv.id,
+        'No slack metadata',
+        { type: 'orchestrator' }
+      );
+
+      const pending = await service.getMessagesWithPendingSlackDelivery(60000);
+
+      expect(pending).toEqual([]);
+    });
+
+    it('should find messages with pending Slack delivery', async () => {
+      const conv = await service.createNewConversation();
+      await service.addDirectMessage(
+        conv.id,
+        'Pending slack message',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'pending', slackChannelId: 'C12345' }
+      );
+
+      const pending = await service.getMessagesWithPendingSlackDelivery(60000);
+
+      expect(pending.length).toBe(1);
+      expect(pending[0].content).toBe('Pending slack message');
+      expect(pending[0].metadata?.slackDeliveryStatus).toBe('pending');
+      expect(pending[0].metadata?.slackChannelId).toBe('C12345');
+    });
+
+    it('should not return messages older than maxAgeMs', async () => {
+      const conv = await service.createNewConversation();
+      await service.addDirectMessage(
+        conv.id,
+        'Old pending message',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'pending', slackChannelId: 'C12345' }
+      );
+
+      // Wait to ensure the message timestamp is older than the cutoff
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // Use a very small maxAgeMs so the message falls outside the window
+      const pending = await service.getMessagesWithPendingSlackDelivery(1);
+
+      expect(pending).toEqual([]);
+    });
+
+    it('should not return messages without slackChannelId', async () => {
+      const conv = await service.createNewConversation();
+      await service.addDirectMessage(
+        conv.id,
+        'Pending but no channel',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'pending' }
+      );
+
+      const pending = await service.getMessagesWithPendingSlackDelivery(60000);
+
+      expect(pending).toEqual([]);
+    });
+
+    it('should not return messages with delivered status', async () => {
+      const conv = await service.createNewConversation();
+      await service.addDirectMessage(
+        conv.id,
+        'Already delivered',
+        { type: 'orchestrator' },
+        { slackDeliveryStatus: 'delivered', slackChannelId: 'C12345' }
+      );
+
+      const pending = await service.getMessagesWithPendingSlackDelivery(60000);
+
+      expect(pending).toEqual([]);
+    });
+  });
+
+  // ===========================================================================
   // getConversations Tests
   // ===========================================================================
 

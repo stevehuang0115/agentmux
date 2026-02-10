@@ -15,6 +15,7 @@ import {
   CHAT_CONSTANTS,
   DEFAULT_RESPONSE_PATTERNS,
   NOTIFY_URGENCY_LEVELS,
+  SLACK_DELIVERY_STATUSES,
   // Types
   ChatSenderType,
   ChatContentType,
@@ -34,6 +35,7 @@ import {
   LastMessagePreview,
   NotifyPayload,
   NotifyUrgency,
+  SlackDeliveryStatus,
   // Type guards
   isValidSenderType,
   isValidContentType,
@@ -137,6 +139,31 @@ describe('Chat Constants', () => {
       const codeblock = DEFAULT_RESPONSE_PATTERNS.find((p) => p.name === 'codeblock');
       expect(codeblock).toBeDefined();
       expect(codeblock?.pattern).toBeInstanceOf(RegExp);
+    });
+  });
+
+  describe('SLACK_DELIVERY_STATUSES', () => {
+    it('should contain all expected Slack delivery statuses', () => {
+      expect(SLACK_DELIVERY_STATUSES).toContain('pending');
+      expect(SLACK_DELIVERY_STATUSES).toContain('delivered');
+      expect(SLACK_DELIVERY_STATUSES).toContain('failed');
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
+    });
+
+    it('should be a readonly tuple at compile time', () => {
+      expect(Array.isArray(SLACK_DELIVERY_STATUSES)).toBe(true);
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
+    });
+
+    it('should derive SlackDeliveryStatus type from the constant', () => {
+      // Verify each value satisfies the SlackDeliveryStatus type
+      const pending: SlackDeliveryStatus = 'pending';
+      const delivered: SlackDeliveryStatus = 'delivered';
+      const failed: SlackDeliveryStatus = 'failed';
+
+      expect(pending).toBe('pending');
+      expect(delivered).toBe('delivered');
+      expect(failed).toBe('failed');
     });
   });
 });
@@ -900,6 +927,55 @@ describe('Type Definitions', () => {
     expect(metadata).toBeDefined();
   });
 
+  it('should compile ChatMessageMetadata with Slack delivery tracking fields', () => {
+    const metadata: ChatMessageMetadata = {
+      slackDeliveryStatus: 'pending',
+      slackDeliveryAttemptedAt: '2026-02-09T12:00:00.000Z',
+      slackDeliveryAttempts: 1,
+      slackDeliveryError: 'timeout',
+      slackChannelId: 'C0123ABC',
+      slackThreadTs: '1770611081.834419',
+      notifyType: 'task_completed',
+      notifyTitle: 'Task Done',
+      notifyUrgency: 'high',
+    };
+    expect(metadata).toBeDefined();
+    expect(metadata.slackDeliveryStatus).toBe('pending');
+    expect(metadata.slackDeliveryAttemptedAt).toBe('2026-02-09T12:00:00.000Z');
+    expect(metadata.slackDeliveryAttempts).toBe(1);
+    expect(metadata.slackDeliveryError).toBe('timeout');
+    expect(metadata.slackChannelId).toBe('C0123ABC');
+    expect(metadata.slackThreadTs).toBe('1770611081.834419');
+    expect(metadata.notifyType).toBe('task_completed');
+    expect(metadata.notifyTitle).toBe('Task Done');
+    expect(metadata.notifyUrgency).toBe('high');
+  });
+
+  it('should compile ChatMessageMetadata with all SlackDeliveryStatus values', () => {
+    const pending: ChatMessageMetadata = { slackDeliveryStatus: 'pending' };
+    const delivered: ChatMessageMetadata = { slackDeliveryStatus: 'delivered' };
+    const failed: ChatMessageMetadata = { slackDeliveryStatus: 'failed' };
+
+    expect(pending.slackDeliveryStatus).toBe('pending');
+    expect(delivered.slackDeliveryStatus).toBe('delivered');
+    expect(failed.slackDeliveryStatus).toBe('failed');
+  });
+
+  it('should compile ChatMessageMetadata without optional Slack fields', () => {
+    const metadata: ChatMessageMetadata = {
+      skillUsed: 'skill-1',
+    };
+    expect(metadata.slackDeliveryStatus).toBeUndefined();
+    expect(metadata.slackDeliveryAttemptedAt).toBeUndefined();
+    expect(metadata.slackDeliveryAttempts).toBeUndefined();
+    expect(metadata.slackDeliveryError).toBeUndefined();
+    expect(metadata.slackChannelId).toBeUndefined();
+    expect(metadata.slackThreadTs).toBeUndefined();
+    expect(metadata.notifyType).toBeUndefined();
+    expect(metadata.notifyTitle).toBeUndefined();
+    expect(metadata.notifyUrgency).toBeUndefined();
+  });
+
   it('should compile SendMessageInput type correctly', () => {
     const input: SendMessageInput = {
       content: 'Hello',
@@ -1295,6 +1371,54 @@ describe('parseNotifyContent', () => {
       expect(payload).not.toBeNull();
       // It becomes the message body since it has no --- separator
       expect(payload!.message).toContain('markers for every status update');
+    });
+
+    it('should parse headers with blank line separator (no ---)', () => {
+      const raw = 'conversationId: conv-123\nchannelId: C123\nthreadTs: 1234.5678\n\nHello from the orchestrator';
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-123');
+      expect(payload!.channelId).toBe('C123');
+      expect(payload!.threadTs).toBe('1234.5678');
+      expect(payload!.message).toBe('Hello from the orchestrator');
+    });
+
+    it('should parse real-world NOTIFY with blank line separator', () => {
+      const raw = [
+        'conversationId: 98ce3d99-a083-479a-bd14-93152eef65af',
+        'channelId: D0AC7NF5N7L',
+        'threadTs: 1770656628.683769',
+        '',
+        'Setup Complete – Innovation Team is Live',
+        '',
+        'Here\'s everything I set up:',
+        '- Team created',
+        '- Agent is active',
+      ].join('\n');
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('98ce3d99-a083-479a-bd14-93152eef65af');
+      expect(payload!.channelId).toBe('D0AC7NF5N7L');
+      expect(payload!.threadTs).toBe('1770656628.683769');
+      expect(payload!.message).toContain('Setup Complete');
+      expect(payload!.message).toContain('Agent is active');
+    });
+
+    it('should not use blank-line fallback if first line is not a known header', () => {
+      const raw = 'Hello world\n\nThis is a message';
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      // Should be treated as full message (no header parsing)
+      expect(payload!.message).toContain('Hello world');
+      expect(payload!.channelId).toBeUndefined();
+    });
+
+    it('should prefer --- separator over blank line', () => {
+      const raw = 'conversationId: conv-1\nchannelId: C1\n\nextra line\n---\nActual body';
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('Actual body');
+      expect(payload!.conversationId).toBe('conv-1');
     });
   });
 });

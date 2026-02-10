@@ -1,0 +1,564 @@
+/**
+ * Skill Catalog Service
+ *
+ * Scans orchestrator skill directories, reads skill.json and instructions.md
+ * from each, and generates a formatted SKILLS_CATALOG.md file at
+ * ~/.agentmux/skills/SKILLS_CATALOG.md.
+ *
+ * The catalog provides a human-readable and LLM-readable reference of all
+ * available orchestrator skills grouped by category, including usage examples
+ * and parameter documentation extracted from each skill's instructions.md.
+ *
+ * @module services/skill/skill-catalog.service
+ */
+
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { existsSync, mkdirSync } from 'fs';
+import * as os from 'os';
+import { LoggerService } from '../core/logger.service.js';
+import { AGENTMUX_CONSTANTS } from '../../constants.js';
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/** Name of the generated catalog file */
+const CATALOG_FILENAME = 'SKILLS_CATALOG.md';
+
+/** Subdirectory under ~/.agentmux where the catalog is written */
+const CATALOG_SUBDIR = 'skills';
+
+/** Relative path from project root to orchestrator skills */
+const ORCHESTRATOR_SKILLS_RELATIVE_PATH = 'config/skills/orchestrator';
+
+/** Directory names to skip when scanning for skills */
+const SKIP_DIRECTORIES = ['_common'] as const;
+
+/** Skill definition file name expected in each skill directory */
+const SKILL_DEFINITION_FILE = 'skill.json';
+
+/** Instructions file name expected in each skill directory */
+const INSTRUCTIONS_FILE = 'instructions.md';
+
+/** Markdown heading pattern for detecting section boundaries */
+const HEADING_PATTERN = /^#{1,2}\s/;
+
+// =============================================================================
+// Interfaces
+// =============================================================================
+
+/**
+ * Represents the JSON structure read from a skill.json file.
+ *
+ * This mirrors the on-disk format used by orchestrator skills in
+ * config/skills/orchestrator/{skill-name}/skill.json.
+ */
+interface SkillDefinition {
+  /** Unique identifier for the skill (e.g., "orc-assign-task") */
+  id: string;
+  /** Human-readable display name */
+  name: string;
+  /** Brief description of what the skill does */
+  description: string;
+  /** Category for grouping (e.g., "management", "monitoring", "communication") */
+  category: string;
+  /** Execution configuration for the skill */
+  execution?: {
+    /** Execution type (e.g., "script", "browser", "mcp-tool") */
+    type: string;
+    /** Script execution configuration */
+    script?: {
+      /** Script file name relative to the skill directory */
+      file: string;
+      /** Script interpreter (e.g., "bash", "python", "node") */
+      interpreter: string;
+      /** Maximum execution time in milliseconds */
+      timeoutMs: number;
+    };
+  };
+  /** Searchable tags for the skill */
+  tags?: string[];
+  /** Semantic version string */
+  version?: string;
+}
+
+/**
+ * Internal representation of a loaded skill with its instructions content
+ * and directory name for catalog generation.
+ */
+interface LoadedSkill {
+  /** The parsed skill.json definition */
+  definition: SkillDefinition;
+  /** Raw content of instructions.md, or empty string if not found */
+  instructions: string;
+  /** Directory name (basename) of the skill folder */
+  dirName: string;
+}
+
+/**
+ * Result of the catalog generation process.
+ */
+export interface CatalogGenerationResult {
+  /** Whether the catalog was successfully generated */
+  success: boolean;
+  /** Absolute path to the generated catalog file */
+  catalogPath: string;
+  /** Total number of skills included in the catalog */
+  skillCount: number;
+  /** Number of distinct categories in the catalog */
+  categoryCount: number;
+  /** Error message if generation failed */
+  error?: string;
+}
+
+// =============================================================================
+// Service
+// =============================================================================
+
+/**
+ * Service for generating a Markdown skills catalog from orchestrator skill directories.
+ *
+ * Scans config/skills/orchestrator/ for subdirectories (skipping _common),
+ * reads skill.json and instructions.md from each, groups skills by category,
+ * and writes a formatted SKILLS_CATALOG.md to ~/.agentmux/skills/.
+ *
+ * Uses a singleton pattern consistent with other AgentMux services.
+ *
+ * @example
+ * ```typescript
+ * const catalogService = SkillCatalogService.getInstance('/path/to/project');
+ * const result = await catalogService.generateCatalog();
+ * console.log(`Generated catalog at ${result.catalogPath} with ${result.skillCount} skills`);
+ * ```
+ */
+export class SkillCatalogService {
+  private static instance: SkillCatalogService | null = null;
+  private readonly logger;
+  private readonly projectRoot: string;
+  private readonly catalogDir: string;
+
+  /**
+   * Create a new SkillCatalogService instance.
+   *
+   * @param projectRoot - Absolute path to the project root directory.
+   *   Defaults to the current working directory if not provided.
+   */
+  constructor(projectRoot?: string) {
+    this.logger = LoggerService.getInstance().createComponentLogger('SkillCatalogService');
+    this.projectRoot = projectRoot || process.cwd();
+    this.catalogDir = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, CATALOG_SUBDIR);
+  }
+
+  /**
+   * Get the singleton SkillCatalogService instance.
+   *
+   * Creates a new instance on first call with the provided project root,
+   * or returns the existing instance on subsequent calls.
+   *
+   * @param projectRoot - Absolute path to the project root directory
+   * @returns The shared SkillCatalogService instance
+   */
+  public static getInstance(projectRoot?: string): SkillCatalogService {
+    if (!SkillCatalogService.instance) {
+      SkillCatalogService.instance = new SkillCatalogService(projectRoot);
+    }
+    return SkillCatalogService.instance;
+  }
+
+  /**
+   * Reset the singleton instance.
+   *
+   * Used primarily for testing to ensure a clean state between test runs.
+   */
+  public static clearInstance(): void {
+    SkillCatalogService.instance = null;
+  }
+
+  /**
+   * Generate the skills catalog by scanning skill directories and writing
+   * the formatted Markdown file.
+   *
+   * This method performs the following steps:
+   * 1. Ensures the output directory (~/.agentmux/skills/) exists
+   * 2. Scans config/skills/orchestrator/ for skill subdirectories
+   * 3. Reads skill.json and instructions.md from each valid directory
+   * 4. Groups loaded skills by their category field
+   * 5. Renders a Markdown catalog document
+   * 6. Writes the catalog to ~/.agentmux/skills/SKILLS_CATALOG.md
+   *
+   * @returns A result object with success status, path, and counts
+   *
+   * @example
+   * ```typescript
+   * const result = await catalogService.generateCatalog();
+   * if (result.success) {
+   *   console.log(`Catalog written to ${result.catalogPath}`);
+   * } else {
+   *   console.error(`Catalog generation failed: ${result.error}`);
+   * }
+   * ```
+   */
+  public async generateCatalog(): Promise<CatalogGenerationResult> {
+    const catalogPath = this.getCatalogPath();
+
+    try {
+      this.logger.info('Starting skills catalog generation', {
+        projectRoot: this.projectRoot,
+        catalogPath,
+      });
+
+      // Ensure the output directory exists
+      this.ensureCatalogDirectory();
+
+      // Scan and load all skill directories
+      const skills = await this.scanSkillDirectories();
+
+      if (skills.length === 0) {
+        this.logger.warn('No skills found during catalog generation');
+        const emptyMarkdown = this.renderCatalog(new Map());
+        await fs.writeFile(catalogPath, emptyMarkdown, 'utf-8');
+
+        return {
+          success: true,
+          catalogPath,
+          skillCount: 0,
+          categoryCount: 0,
+        };
+      }
+
+      // Group skills by category
+      const grouped = this.groupByCategory(skills);
+
+      // Render the Markdown catalog
+      const markdown = this.renderCatalog(grouped);
+
+      // Write the catalog file
+      await fs.writeFile(catalogPath, markdown, 'utf-8');
+
+      const categoryCount = grouped.size;
+      this.logger.info('Skills catalog generated successfully', {
+        skillCount: skills.length,
+        categoryCount,
+        catalogPath,
+      });
+
+      return {
+        success: true,
+        catalogPath,
+        skillCount: skills.length,
+        categoryCount,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Failed to generate skills catalog', {
+        error: errorMessage,
+      });
+
+      return {
+        success: false,
+        catalogPath,
+        skillCount: 0,
+        categoryCount: 0,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Get the absolute path where the catalog file will be written.
+   *
+   * @returns Absolute path to ~/.agentmux/skills/SKILLS_CATALOG.md
+   */
+  public getCatalogPath(): string {
+    return path.join(this.catalogDir, CATALOG_FILENAME);
+  }
+
+  // ==========================================================================
+  // Private methods
+  // ==========================================================================
+
+  /**
+   * Ensure the catalog output directory exists, creating it recursively
+   * if necessary.
+   *
+   * Uses synchronous mkdirSync since this is a one-time setup operation
+   * that must complete before writing the catalog.
+   */
+  private ensureCatalogDirectory(): void {
+    if (!existsSync(this.catalogDir)) {
+      mkdirSync(this.catalogDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Scan the orchestrator skills directory for valid skill subdirectories.
+   *
+   * Reads each subdirectory (skipping entries in SKIP_DIRECTORIES),
+   * loads skill.json and instructions.md from each, and returns an array
+   * of successfully loaded skills. Directories that fail to load are
+   * logged as warnings but do not cause the entire scan to fail.
+   *
+   * @returns Array of loaded skills with their definitions and instructions
+   */
+  private async scanSkillDirectories(): Promise<LoadedSkill[]> {
+    const skillsRootDir = path.join(this.projectRoot, ORCHESTRATOR_SKILLS_RELATIVE_PATH);
+
+    if (!existsSync(skillsRootDir)) {
+      this.logger.warn('Orchestrator skills directory not found', {
+        path: skillsRootDir,
+      });
+      return [];
+    }
+
+    const entries = await fs.readdir(skillsRootDir, { withFileTypes: true });
+    const skills: LoadedSkill[] = [];
+
+    for (const entry of entries) {
+      // Only process directories, skip non-directories and excluded names
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      if ((SKIP_DIRECTORIES as readonly string[]).includes(entry.name)) {
+        this.logger.debug('Skipping excluded directory', { dirName: entry.name });
+        continue;
+      }
+
+      const skill = await this.loadSkillFromDirectory(skillsRootDir, entry.name);
+      if (skill) {
+        skills.push(skill);
+      }
+    }
+
+    // Sort skills alphabetically by name within their categories
+    skills.sort((a, b) => a.definition.name.localeCompare(b.definition.name));
+
+    return skills;
+  }
+
+  /**
+   * Load a single skill from a directory by reading its skill.json
+   * and instructions.md files.
+   *
+   * @param parentDir - Absolute path to the parent skills directory
+   * @param dirName - Name of the skill subdirectory
+   * @returns A LoadedSkill object, or null if loading fails
+   */
+  private async loadSkillFromDirectory(
+    parentDir: string,
+    dirName: string
+  ): Promise<LoadedSkill | null> {
+    const skillDir = path.join(parentDir, dirName);
+    const skillJsonPath = path.join(skillDir, SKILL_DEFINITION_FILE);
+    const instructionsPath = path.join(skillDir, INSTRUCTIONS_FILE);
+
+    // skill.json is required
+    if (!existsSync(skillJsonPath)) {
+      this.logger.debug('No skill.json found, skipping directory', {
+        dirName,
+      });
+      return null;
+    }
+
+    try {
+      // Read and parse skill.json
+      const skillJsonContent = await fs.readFile(skillJsonPath, 'utf-8');
+      const definition: SkillDefinition = JSON.parse(skillJsonContent);
+
+      // Validate required fields
+      if (!definition.id || !definition.name || !definition.description || !definition.category) {
+        this.logger.warn('Skill definition missing required fields', {
+          dirName,
+          id: definition.id,
+        });
+        return null;
+      }
+
+      // Read instructions.md (optional - use empty string if missing)
+      let instructions = '';
+      if (existsSync(instructionsPath)) {
+        instructions = await fs.readFile(instructionsPath, 'utf-8');
+      }
+
+      return {
+        definition,
+        instructions,
+        dirName,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.warn('Failed to load skill from directory', {
+        dirName,
+        error: errorMessage,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Group loaded skills by their category field.
+   *
+   * Categories are title-cased for display (e.g., "management" becomes "Management").
+   * Skills within each category are maintained in their current sorted order.
+   *
+   * @param skills - Array of loaded skills to group
+   * @returns Map of category display name to array of skills in that category
+   */
+  private groupByCategory(skills: LoadedSkill[]): Map<string, LoadedSkill[]> {
+    const grouped = new Map<string, LoadedSkill[]>();
+
+    for (const skill of skills) {
+      const categoryKey = this.formatCategoryName(skill.definition.category);
+      const existing = grouped.get(categoryKey) ?? [];
+      existing.push(skill);
+      grouped.set(categoryKey, existing);
+    }
+
+    // Sort categories alphabetically
+    const sorted = new Map<string, LoadedSkill[]>(
+      Array.from(grouped.entries()).sort(([a], [b]) => a.localeCompare(b))
+    );
+
+    return sorted;
+  }
+
+  /**
+   * Format a raw category string into a display-friendly title.
+   *
+   * Capitalizes the first letter of each word and replaces hyphens/underscores
+   * with spaces (e.g., "task-management" becomes "Task Management").
+   *
+   * @param category - Raw category string from skill.json
+   * @returns Formatted category display name
+   */
+  private formatCategoryName(category: string): string {
+    return category
+      .split(/[-_\s]+/)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  }
+
+  /**
+   * Render the complete Markdown catalog document from grouped skills.
+   *
+   * Produces the full catalog including header, usage instructions,
+   * category sections, and individual skill entries with descriptions
+   * and parameter documentation extracted from instructions.md.
+   *
+   * @param groupedSkills - Map of category name to skills in that category
+   * @returns Complete Markdown document as a string
+   */
+  private renderCatalog(groupedSkills: Map<string, LoadedSkill[]>): string {
+    const timestamp = new Date().toISOString();
+    const lines: string[] = [];
+
+    // Header
+    lines.push('# Orchestrator Skills Catalog');
+    lines.push(`> Auto-generated on ${timestamp}. Execute skills via bash scripts.`);
+    lines.push('');
+
+    // How to Use section
+    lines.push('## How to Use');
+    lines.push('');
+    lines.push('All skills follow the pattern:');
+    lines.push('```bash');
+    lines.push(`bash ${ORCHESTRATOR_SKILLS_RELATIVE_PATH}/{skill-name}/execute.sh '{"param":"value"}'`);
+    lines.push('```');
+    lines.push('All scripts output JSON to stdout. Errors go to stderr.');
+    lines.push('');
+
+    // Category sections
+    for (const [categoryName, skills] of groupedSkills) {
+      lines.push(`## ${categoryName}`);
+      lines.push('');
+
+      for (const skill of skills) {
+        lines.push(...this.renderSkillEntry(skill));
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Render a single skill entry as Markdown lines.
+   *
+   * Includes the skill name, description, usage command, and any
+   * Parameters section extracted from the skill's instructions.md.
+   *
+   * @param skill - The loaded skill to render
+   * @returns Array of Markdown lines for this skill entry
+   */
+  private renderSkillEntry(skill: LoadedSkill): string[] {
+    const lines: string[] = [];
+
+    // Skill heading and description
+    lines.push(`### ${skill.definition.name}`);
+    lines.push(skill.definition.description);
+    lines.push('');
+
+    // Usage line
+    lines.push(
+      `**Usage:** \`bash ${ORCHESTRATOR_SKILLS_RELATIVE_PATH}/${skill.dirName}/execute.sh '{}'\``
+    );
+    lines.push('');
+
+    // Extract and include Parameters section from instructions.md if available
+    const parametersSection = this.extractParametersSection(skill.instructions);
+    if (parametersSection) {
+      lines.push(parametersSection);
+      lines.push('');
+    }
+
+    // Separator
+    lines.push('---');
+    lines.push('');
+
+    return lines;
+  }
+
+  /**
+   * Extract the Parameters section from an instructions.md file's content.
+   *
+   * Uses a line-based approach to find the "## Parameters" heading and capture
+   * all content until the next heading of the same or higher level (# or ##)
+   * or the end of the file. Returns null if no Parameters section is found.
+   *
+   * @param instructionsContent - Full content of the instructions.md file
+   * @returns The Parameters section content (without the heading), or null
+   */
+  private extractParametersSection(instructionsContent: string): string | null {
+    if (!instructionsContent) {
+      return null;
+    }
+
+    const lines = instructionsContent.split('\n');
+    let capturing = false;
+    const captured: string[] = [];
+
+    for (const line of lines) {
+      if (capturing) {
+        // Stop capturing when we hit another heading (# or ##)
+        if (HEADING_PATTERN.test(line)) {
+          break;
+        }
+        captured.push(line);
+      } else if (line.match(/^## Parameters\s*$/)) {
+        // Start capturing after the Parameters heading
+        capturing = true;
+      }
+    }
+
+    if (!capturing || captured.length === 0) {
+      return null;
+    }
+
+    const content = captured.join('\n').trim();
+    if (content.length === 0) {
+      return null;
+    }
+
+    return content;
+  }
+}
