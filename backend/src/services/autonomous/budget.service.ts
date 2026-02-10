@@ -232,10 +232,11 @@ export class BudgetService extends EventEmitter implements IBudgetService {
   private async loadConfig(): Promise<void> {
     try {
       // Try JSON config first
-      if (existsSync(this.configPath)) {
-        const content = await fs.readFile(this.configPath, 'utf-8');
-        const config = JSON.parse(content) as BudgetConfigFile;
-        this.applyConfig(config);
+      const jsonConfig = await safeReadJson<BudgetConfigFile | null>(
+        this.configPath, null, this.logger
+      );
+      if (jsonConfig) {
+        this.applyConfig(jsonConfig);
         return;
       }
 

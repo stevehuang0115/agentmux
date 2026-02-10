@@ -12,7 +12,8 @@ import { EventEmitter } from 'events';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { atomicWriteJson } from '../../utils/file-io.utils.js';
+import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
   ChatMessage,
   ChatConversation,
@@ -103,6 +104,7 @@ export interface ChatServiceOptions {
  */
 export class ChatService extends EventEmitter {
   private readonly chatDir: string;
+  private readonly logger: ComponentLogger;
   private conversations: Map<string, ChatConversation> = new Map();
   private messages: Map<string, ChatMessage[]> = new Map();
   private initialized = false;
@@ -118,6 +120,7 @@ export class ChatService extends EventEmitter {
     super();
     this.chatDir =
       options?.chatDir ?? path.join(process.env.HOME || '~', '.agentmux', 'chat');
+    this.logger = LoggerService.getInstance().createComponentLogger('ChatService');
   }
 
   // ===========================================================================
@@ -786,21 +789,19 @@ export class ChatService extends EventEmitter {
       const jsonFiles = files.filter((f) => f.endsWith('.json'));
 
       for (const file of jsonFiles) {
-        try {
-          const content = await fs.readFile(path.join(this.chatDir, file), 'utf-8');
-          const data = JSON.parse(content) as ChatStorageFormat;
+        const filePath = path.join(this.chatDir, file);
+        const data = await safeReadJson<ChatStorageFormat | null>(filePath, null);
 
-          if (data.conversation) {
-            this.conversations.set(data.conversation.id, data.conversation);
-            this.messages.set(data.conversation.id, data.messages ?? []);
-          }
-        } catch (error) {
-          console.warn(`Failed to load conversation from ${file}:`, error);
+        if (data?.conversation) {
+          this.conversations.set(data.conversation.id, data.conversation);
+          this.messages.set(data.conversation.id, data.messages ?? []);
         }
       }
     } catch (error) {
       // Directory might not exist yet, which is fine
-      console.warn('Failed to load conversations:', error);
+      this.logger.debug('Failed to load conversations', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

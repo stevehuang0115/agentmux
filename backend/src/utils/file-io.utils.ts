@@ -113,6 +113,10 @@ export async function withOperationLock<T>(lockKey: string, operation: () => Pro
  * Acquires a per-path file lock so concurrent callers targeting the
  * same path are serialized.
  *
+ * **Precondition:** The parent directory must already exist. This function
+ * does not create intermediate directories — use {@link ensureDir} first
+ * if the directory may not exist.
+ *
  * @param filePath - Destination file path
  * @param content - String content to write
  */
@@ -204,6 +208,12 @@ export async function safeReadJson<T>(filePath: string, defaultValue: T, logger?
  * This is the most common persistence pattern: load a JSON file,
  * apply a mutation, and write it back atomically — all while holding
  * an operation lock to prevent concurrent read-modify-write races.
+ *
+ * **Important:** If the mutator returns `undefined` (void), the mutated
+ * `data` object is written back. If it returns any other value — including
+ * falsy values like `null`, `0`, or `false` — that value is written instead.
+ * Beware of methods like `Array.push()` which return a number: an accidental
+ * `return records.push(item)` will write the array length to the file.
  *
  * @param filePath - Path to the JSON file
  * @param defaultValue - Value to use if the file is missing or corrupt

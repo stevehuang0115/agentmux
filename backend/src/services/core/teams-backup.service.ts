@@ -8,7 +8,6 @@
  * @module services/core/teams-backup.service
  */
 
-import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import type { Team } from '../../types/index.js';
