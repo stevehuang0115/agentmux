@@ -45,59 +45,57 @@ export async function ensureDir(dirPath: string): Promise<void> {
 // ──────────────────────────────────────────────────────────────────────
 
 /**
- * Serialize concurrent writes to the same file.
+ * Acquire and hold a lock from the given map for the duration of the operation.
  *
  * Uses a `while` loop (not `if`) so that when multiple callers await
  * the same lock promise, each one re-checks after waking — only the
  * first waiter proceeds, and subsequent waiters queue again.
+ */
+async function withLock<T>(
+  lockMap: Map<string, Promise<void>>,
+  lockKey: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  while (lockMap.has(lockKey)) {
+    await lockMap.get(lockKey);
+  }
+
+  let resolve: () => void;
+  const lockPromise = new Promise<void>((r) => { resolve = r; });
+  lockMap.set(lockKey, lockPromise);
+
+  try {
+    return await operation();
+  } finally {
+    resolve!();
+    lockMap.delete(lockKey);
+  }
+}
+
+/**
+ * Serialize concurrent writes to the same file.
  *
  * @param lockKey - Unique key for the lock (typically the file path)
  * @param operation - Async operation to run while holding the lock
  * @returns The result of the operation
  */
 export async function withFileLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
-  while (fileLocks.has(lockKey)) {
-    await fileLocks.get(lockKey);
-  }
-
-  let resolve: () => void;
-  const lockPromise = new Promise<void>((r) => { resolve = r; });
-  fileLocks.set(lockKey, lockPromise);
-
-  try {
-    return await operation();
-  } finally {
-    resolve!();
-    fileLocks.delete(lockKey);
-  }
+  return withLock(fileLocks, lockKey, operation);
 }
 
 /**
  * Serialize read-modify-write cycles on a logical resource.
  *
- * Identical to {@link withFileLock} but uses a separate lock map
- * so that callers can hold an operation lock across a read + write
- * without deadlocking on the inner file lock.
+ * Uses a separate lock map from {@link withFileLock} so that callers
+ * can hold an operation lock across a read + write without deadlocking
+ * on the inner file lock.
  *
  * @param lockKey - Unique key for the lock
  * @param operation - Async operation to run while holding the lock
  * @returns The result of the operation
  */
 export async function withOperationLock<T>(lockKey: string, operation: () => Promise<T>): Promise<T> {
-  while (operationLocks.has(lockKey)) {
-    await operationLocks.get(lockKey);
-  }
-
-  let resolve: () => void;
-  const lockPromise = new Promise<void>((r) => { resolve = r; });
-  operationLocks.set(lockKey, lockPromise);
-
-  try {
-    return await operation();
-  } finally {
-    resolve!();
-    operationLocks.delete(lockKey);
-  }
+  return withLock(operationLocks, lockKey, operation);
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -217,8 +215,9 @@ export async function modifyJsonFile<T, R = void>(
   return withOperationLock(filePath, async () => {
     const data = await safeReadJson(filePath, defaultValue, logger);
     const result = await mutator(data);
-    // If mutator returns a value, write it; otherwise assume in-place mutation
-    const toWrite = (result !== undefined && result !== null) ? result : data;
+    // If mutator returns undefined (void), write the mutated data in place;
+    // otherwise write the returned value (including null, 0, false, etc.)
+    const toWrite = result === undefined ? data : result;
     await atomicWriteJson(filePath, toWrite);
     return result;
   });

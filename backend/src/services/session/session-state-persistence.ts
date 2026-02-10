@@ -237,20 +237,28 @@ export class SessionStatePersistence {
 	}
 
 	/**
+	 * Build the current persisted state object from in-memory metadata.
+	 *
+	 * @returns PersistedState snapshot
+	 */
+	private buildState(): PersistedState {
+		return {
+			version: STATE_VERSION,
+			savedAt: new Date().toISOString(),
+			sessions: Array.from(this.sessionMetadata.values()),
+		};
+	}
+
+	/**
 	 * Auto-save current session metadata to disk.
 	 * Called after register/unregister/updateSessionId to keep the state file
 	 * in sync with in-memory metadata at all times. This ensures the state file
 	 * is always up-to-date even if the process is killed before graceful shutdown.
 	 */
 	private async autoSave(): Promise<void> {
-		const state: PersistedState = {
-			version: STATE_VERSION,
-			savedAt: new Date().toISOString(),
-			sessions: Array.from(this.sessionMetadata.values()),
-		};
 		try {
 			await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-			await atomicWriteJson(this.filePath, state);
+			await atomicWriteJson(this.filePath, this.buildState());
 		} catch (error) {
 			this.logger.warn('Failed to auto-save session state', {
 				error: error instanceof Error ? error.message : String(error),
@@ -268,28 +276,16 @@ export class SessionStatePersistence {
 	 * @returns Number of sessions saved
 	 */
 	async saveState(backend: ISessionBackend): Promise<number> {
-		// Use sessionMetadata as the source of truth instead of cross-referencing
-		// with backend.listSessions(). By shutdown time, PTY processes may already
-		// be killed, so backend.listSessions() would return empty.
-		const sessionsToSave = Array.from(this.sessionMetadata.values());
-
-		const state: PersistedState = {
-			version: STATE_VERSION,
-			savedAt: new Date().toISOString(),
-			sessions: sessionsToSave,
-		};
-
 		try {
-			// Ensure directory exists
-			await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-			await atomicWriteJson(this.filePath, state);
+			await this.autoSave();
+			const count = this.sessionMetadata.size;
 
 			this.logger.info('Saved session state', {
-				count: sessionsToSave.length,
-				sessions: sessionsToSave.map((s) => s.name),
+				count,
+				sessions: Array.from(this.sessionMetadata.keys()),
 			});
 
-			return sessionsToSave.length;
+			return count;
 		} catch (error) {
 			this.logger.error('Failed to save session state', {
 				error: error instanceof Error ? error.message : String(error),
