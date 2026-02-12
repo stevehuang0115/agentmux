@@ -26,10 +26,8 @@ export interface GeneralSettings {
   maxConcurrentAgents: number;
   /** Enable verbose logging */
   verboseLogging: boolean;
-  /** Claude Code startup command */
-  claudeCodeCommand: string;
-  /** Claude Code initialization script path */
-  claudeCodeInitScript: string;
+  /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
+  runtimeCommands: Record<AIRuntime, string>;
 }
 
 /**

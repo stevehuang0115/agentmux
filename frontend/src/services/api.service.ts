@@ -477,6 +477,18 @@ class ApiService {
       throw new Error(response.data.error || 'Failed to cancel message');
     }
   }
+
+  /**
+   * Clear all messages from the queue (pending + current processing).
+   *
+   * @throws Error if the request fails
+   */
+  async clearQueue(): Promise<void> {
+    const response = await axios.delete<ApiResponse<{ clearedCount: number; cancelledCurrent: boolean }>>(`${API_BASE}/messaging/queue`);
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Failed to clear queue');
+    }
+  }
 }
 
 /** Singleton instance of the API service */

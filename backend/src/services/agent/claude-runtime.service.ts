@@ -3,6 +3,7 @@ import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Claude Code specific runtime service implementation.
@@ -34,8 +35,11 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 		// Capture the output after sending '/'
 		const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
 
-		// Clear the '/' command again
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
+		// Exit the slash command palette without issuing another Ctrl+C so we
+		// don't send consecutive interrupts that can terminate the CLI.
+		await this.sessionHelper.sendEscape(sessionName);
+		await delay(200);
+		await this.sessionHelper.sendKey(sessionName, 'C-u');
 
 		const hasOutputChange = afterOutput.length - beforeOutput.length > 5;
 
@@ -61,6 +65,16 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 			'cwd:',
 			'bypass permissions on',
 			'✻ Welcome to Claude',
+		];
+	}
+
+	/**
+	 * Claude Code specific exit patterns for runtime exit detection
+	 */
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [
+			/Claude\s+(Code\s+)?exited/i,
+			/Session\s+ended/i,
 		];
 	}
 

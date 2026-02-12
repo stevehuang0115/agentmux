@@ -50,6 +50,30 @@
   line-height: var(--line-height-tight);
 }
 
+/* Clear All button in summary row */
+.queue-clear-all-btn {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.queue-clear-all-btn:hover {
+  color: var(--color-error);
+  border-color: var(--color-error);
+  background-color: var(--color-error-light);
+}
+
+.queue-clear-all-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Chevron toggle */
 .queue-toggle-btn {
   display: flex;

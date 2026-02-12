@@ -1421,6 +1421,69 @@ describe('parseNotifyContent', () => {
       expect(payload!.conversationId).toBe('conv-1');
     });
   });
+
+  describe('TUI box-drawing border stripping', () => {
+    it('should parse headers correctly when wrapped in TUI pipe borders', () => {
+      const raw = [
+        '| type: slack_reply |',
+        '| title: Slack Reply |',
+        '| conversationId: conv-abc |',
+        '| channelId: D0AC7NF5N7L |',
+        '| --- |',
+        '| Hello from the orchestrator |',
+      ].join('\n');
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.type).toBe('slack_reply');
+      expect(payload!.title).toBe('Slack Reply');
+      expect(payload!.conversationId).toBe('conv-abc');
+      expect(payload!.channelId).toBe('D0AC7NF5N7L');
+      expect(payload!.message).toBe('Hello from the orchestrator');
+    });
+
+    it('should strip Unicode box-drawing borders (│, ┃, ║)', () => {
+      const raw = [
+        '│ conversationId: conv-1 │',
+        '│ --- │',
+        '│ Message body │',
+      ].join('\n');
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Message body');
+    });
+
+    it('should remove pure decoration lines (box corners, horizontal rules)', () => {
+      const raw = [
+        '┌──────────────────────────────┐',
+        '│ conversationId: conv-1 │',
+        '│ --- │',
+        '│ Body text │',
+        '└──────────────────────────────┘',
+      ].join('\n');
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.message).toBe('Body text');
+    });
+
+    it('should preserve --- separator when TUI borders are present', () => {
+      const raw = '| type: test |\n| --- |\n| Body |';
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.type).toBe('test');
+      expect(payload!.message).toBe('Body');
+    });
+
+    it('should handle mixed clean and bordered content', () => {
+      const raw = 'conversationId: conv-1\n| channelId: C1 |\n---\nClean body';
+      const payload = parseNotifyContent(raw);
+      expect(payload).not.toBeNull();
+      expect(payload!.conversationId).toBe('conv-1');
+      expect(payload!.channelId).toBe('C1');
+      expect(payload!.message).toBe('Clean body');
+    });
+  });
 });
 
 // =============================================================================

@@ -1,19 +1,41 @@
+import * as os from 'os';
+import * as path from 'path';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
-import { TmuxCommandService } from './tmux-command.service.js';
-import { RUNTIME_TYPES } from '../../constants.js';
+import { SessionCommandHelper } from '../session/index.js';
+import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
 describe('GeminiRuntimeService', () => {
 	let service: GeminiRuntimeService;
-	let mockTmuxCommandService: jest.Mocked<TmuxCommandService>;
+	let mockSessionHelper: jest.Mocked<SessionCommandHelper>;
 
 	beforeEach(() => {
-		mockTmuxCommandService = {
-			capturePane: jest.fn(),
-			sendKey: jest.fn(),
-			sendEnter: jest.fn(),
+		jest.useFakeTimers();
+
+		mockSessionHelper = {
+			capturePane: jest.fn().mockReturnValue(''),
+			sendKey: jest.fn().mockResolvedValue(undefined),
+			sendEnter: jest.fn().mockResolvedValue(undefined),
+			sendCtrlC: jest.fn().mockResolvedValue(undefined),
+			sendMessage: jest.fn().mockResolvedValue(undefined),
+			sendEscape: jest.fn().mockResolvedValue(undefined),
+			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
+			sessionExists: jest.fn().mockReturnValue(true),
+			createSession: jest.fn().mockResolvedValue({ pid: 123, cwd: '/test' }),
+			killSession: jest.fn().mockResolvedValue(undefined),
+			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
+			writeRaw: jest.fn(),
+			getSession: jest.fn(),
+			getRawHistory: jest.fn(),
+			getTerminalBuffer: jest.fn(),
+			getSessionOrThrow: jest.fn(),
+			backend: {},
 		} as any;
 
-		service = new GeminiRuntimeService(mockTmuxCommandService, '/test/project');
+		service = new GeminiRuntimeService(mockSessionHelper, '/test/project');
+	});
+
+	afterEach(() => {
+		jest.useRealTimers();
 	});
 
 	describe('getRuntimeType', () => {
@@ -23,110 +45,193 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('detectRuntimeSpecific', () => {
-		it('should detect Gemini when help command shows Gemini indicators', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before output')
-				.mockResolvedValueOnce('after output with gemini CLI help');
+		it('should detect Gemini when output length increases significantly after / key', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before output')
+				.mockReturnValueOnce('before output with much more content added');
 
-			const result = await service['detectRuntimeSpecific']('test-session');
-
-			expect(result).toBe(true);
-			expect(mockTmuxCommandService.sendKey).toHaveBeenCalledWith('test-session', 'help');
-			expect(mockTmuxCommandService.sendEnter).toHaveBeenCalledWith('test-session');
-		});
-
-		it('should detect Gemini when Google AI indicator is present', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before')
-				.mockResolvedValueOnce('Google AI Studio CLI - Available commands');
-
-			const result = await service['detectRuntimeSpecific']('test-session');
+			const promise = service['detectRuntimeSpecific']('test-session');
+			await jest.advanceTimersByTimeAsync(10000);
+			const result = await promise;
 
 			expect(result).toBe(true);
+			// No clearCurrentCommandLine — Ctrl+C triggers /quit, Escape defocuses TUI
+			expect(mockSessionHelper.clearCurrentCommandLine).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', '/');
+			// Cleanup uses Backspace (safe in TUI)
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', 'Backspace');
 		});
 
-		it('should detect Gemini when model configuration is shown', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before')
-				.mockResolvedValueOnce('Current model: gemini-pro, temperature: 0.7');
+		it('should not detect Gemini when output length stays the same', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before output')
+				.mockReturnValueOnce('before output');
 
-			const result = await service['detectRuntimeSpecific']('test-session');
-
-			expect(result).toBe(true);
-		});
-
-		it('should not detect Gemini when no indicators present', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before output')
-				.mockResolvedValueOnce('before output');
-
-			const result = await service['detectRuntimeSpecific']('test-session');
+			const promise = service['detectRuntimeSpecific']('test-session');
+			await jest.advanceTimersByTimeAsync(10000);
+			const result = await promise;
 
 			expect(result).toBe(false);
 		});
 
-		it('should detect Gemini based on output length increase', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('short')
-				.mockResolvedValueOnce('much longer output indicating CLI response');
+		it('should not detect Gemini when output increase is small (<=5 chars)', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before')
+				.mockReturnValueOnce('before/');
 
-			const result = await service['detectRuntimeSpecific']('test-session');
+			const promise = service['detectRuntimeSpecific']('test-session');
+			await jest.advanceTimersByTimeAsync(10000);
+			const result = await promise;
 
-			expect(result).toBe(true);
+			expect(result).toBe(false);
+		});
+
+		it('should clean up with Backspace after detection (not clearCurrentCommandLine)', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before')
+				.mockReturnValueOnce('before with more content added');
+
+			const promise = service['detectRuntimeSpecific']('test-session');
+			await jest.advanceTimersByTimeAsync(10000);
+			await promise;
+
+			// No clearCurrentCommandLine — Ctrl+C triggers /quit, Escape defocuses TUI
+			expect(mockSessionHelper.clearCurrentCommandLine).not.toHaveBeenCalled();
+			// Backspace cleans up the '/' character safely in the TUI
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', 'Backspace');
 		});
 	});
 
 	describe('getRuntimeReadyPatterns', () => {
 		it('should return Gemini-specific ready patterns', () => {
 			const patterns = service['getRuntimeReadyPatterns']();
-			
+
 			expect(patterns).toContain('gemini>');
 			expect(patterns).toContain('Ready for input');
-			expect(patterns).toContain('Gemini CLI');
-			expect(patterns).toContain('Google AI');
+			expect(patterns).toContain('Type your message');
+			expect(patterns).toContain('shell mode');
+			expect(patterns).toContain('context left)');
 		});
 	});
 
 	describe('getRuntimeErrorPatterns', () => {
 		it('should return Gemini-specific error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
-			
+
 			expect(patterns).toContain('command not found: gemini');
 			expect(patterns).toContain('API key not found');
 			expect(patterns).toContain('Authentication failed');
+			expect(patterns).toContain('Invalid API key');
+			expect(patterns).toContain('Rate limit exceeded');
+		});
+
+		it('should include common error patterns', () => {
+			const patterns = service['getRuntimeErrorPatterns']();
+
+			expect(patterns).toContain('Permission denied');
+			expect(patterns).toContain('No such file or directory');
+		});
+	});
+
+	describe('postInitialize', () => {
+		it('should add ~/.agentmux to Gemini CLI directory allowlist', async () => {
+			const expectedPath = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+
+			// Mock capturePane to return different values (simulating output change)
+			// so addProjectToAllowlist succeeds on first attempt
+			let captureCallCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				captureCallCount++;
+				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Directory added';
+			});
+
+			const promise = service.postInitialize('test-session');
+			await jest.advanceTimersByTimeAsync(20000);
+			await promise;
+
+			// Should send /directory add command for ~/.agentmux
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
+				'test-session',
+				`/directory add ${expectedPath}`
+			);
+		});
+
+		it('should not throw when addProjectToAllowlist fails', async () => {
+			mockSessionHelper.sendMessage.mockRejectedValue(new Error('Connection failed'));
+
+			const promise = service.postInitialize('test-session');
+			await jest.advanceTimersByTimeAsync(60000);
+
+			// Should not throw — errors are handled gracefully
+			await expect(promise).resolves.not.toThrow();
 		});
 	});
 
 	describe('addProjectToAllowlist', () => {
-		beforeEach(() => {
-			mockTmuxCommandService.clearCurrentCommandLine = jest.fn();
-			mockTmuxCommandService.sendMessage = jest.fn();
-			mockTmuxCommandService.sendEnter = jest.fn();
-		});
-
-		it('should successfully add a project to Gemini CLI allowlist', async () => {
+		it('should successfully add a project when output changes on first attempt', async () => {
 			const sessionName = 'test-session';
 			const projectPath = '/path/to/project';
 
-			const result = await service.addProjectToAllowlist(sessionName, projectPath);
+			// Mock capturePane: first call (before) returns one value,
+			// second call (after) returns a different value (simulating confirmation)
+			let captureCallCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				captureCallCount++;
+				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Added directory';
+			});
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(10000);
+			const result = await promise;
 
 			expect(result.success).toBe(true);
 			expect(result.message).toBe(`Project path ${projectPath} added to Gemini CLI allowlist`);
-			
-			// Verify tmux commands were called
-			expect(mockTmuxCommandService.clearCurrentCommandLine).toHaveBeenCalledWith(sessionName);
-			expect(mockTmuxCommandService.sendMessage).toHaveBeenCalledWith(sessionName, `/directory add ${projectPath}`);
-			expect(mockTmuxCommandService.sendEnter).toHaveBeenCalledWith(sessionName);
+
+			// Should send Enter first (wake-up) then the command
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith(sessionName);
+			// No Escape — defocuses Ink TUI input permanently
+			expect(mockSessionHelper.sendEscape).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
+				sessionName,
+				`/directory add ${projectPath}`
+			);
 		});
 
-		it('should handle errors gracefully', async () => {
+		it('should retry when output does not change', async () => {
 			const sessionName = 'test-session';
 			const projectPath = '/path/to/project';
 
-			// Mock an error
-			mockTmuxCommandService.sendMessage.mockRejectedValue(new Error('Connection failed'));
+			// Mock capturePane: return same value for first 2 attempts (2 before + 2 after),
+			// then different value on 3rd attempt (success)
+			let captureCallCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				captureCallCount++;
+				// Calls 1-4 (attempts 1-2 before/after): same value → retry
+				// Calls 5 (attempt 3 before): 'before'
+				// Call 6 (attempt 3 after): different value → success
+				if (captureCallCount <= 4) return 'same output';
+				if (captureCallCount === 5) return 'before';
+				return 'before\n✓ Added directory';
+			});
 
-			const result = await service.addProjectToAllowlist(sessionName, projectPath);
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(30000);
+			const result = await promise;
+
+			expect(result.success).toBe(true);
+			// sendMessage called 3 times (3 attempts)
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(3);
+		});
+
+		it('should handle errors gracefully after all retries', async () => {
+			const sessionName = 'test-session';
+			const projectPath = '/path/to/project';
+
+			mockSessionHelper.sendMessage.mockRejectedValue(new Error('Connection failed'));
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await promise;
 
 			expect(result.success).toBe(false);
 			expect(result.message).toContain('Failed to add project path to allowlist');
@@ -134,43 +239,54 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('addMultipleProjectsToAllowlist', () => {
-		beforeEach(() => {
-			mockTmuxCommandService.clearCurrentCommandLine = jest.fn();
-			mockTmuxCommandService.sendMessage = jest.fn();
-			mockTmuxCommandService.sendEnter = jest.fn();
-		});
-
 		it('should successfully add multiple projects to allowlist', async () => {
 			const sessionName = 'test-session';
 			const projectPaths = ['/path/to/project1', '/path/to/project2'];
 
-			const result = await service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			// Mock capturePane to always show change (success on first attempt)
+			let captureCallCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				captureCallCount++;
+				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Added';
+			});
+
+			const promise = service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			await jest.advanceTimersByTimeAsync(30000);
+			const result = await promise;
 
 			expect(result.success).toBe(true);
 			expect(result.message).toBe('Added 2/2 projects to Gemini CLI allowlist');
 			expect(result.results).toHaveLength(2);
-			expect(result.results.every(r => r.success)).toBe(true);
-
-			// Verify tmux commands were called for each project
-			expect(mockTmuxCommandService.sendMessage).toHaveBeenCalledTimes(2);
-			expect(mockTmuxCommandService.sendMessage).toHaveBeenCalledWith(sessionName, '/directory add /path/to/project1');
-			expect(mockTmuxCommandService.sendMessage).toHaveBeenCalledWith(sessionName, '/directory add /path/to/project2');
+			expect(result.results.every((r) => r.success)).toBe(true);
 		});
 
 		it('should handle partial failures gracefully', async () => {
 			const sessionName = 'test-session';
 			const projectPaths = ['/path/to/project1', '/path/to/project2'];
 
-			// Mock success for first, error for second
-			mockTmuxCommandService.sendMessage
-				.mockResolvedValueOnce(undefined)
-				.mockRejectedValueOnce(new Error('Failed for project2'));
+			// First addProjectToAllowlist call succeeds (output changes),
+			// second call fails (sendMessage throws on later calls)
+			let captureCallCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				captureCallCount++;
+				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Added';
+			});
 
-			const result = await service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			let sendMessageCallCount = 0;
+			mockSessionHelper.sendMessage.mockImplementation(async () => {
+				sendMessageCallCount++;
+				// First call (project1 /directory add) succeeds
+				// Subsequent calls for project2 all fail (3 retries)
+				if (sendMessageCallCount > 1) {
+					throw new Error('Failed for project2');
+				}
+			});
 
-			expect(result.success).toBe(true); // Should be true since at least one succeeded
-			expect(result.message).toBe('Added 1/2 projects to Gemini CLI allowlist');
-			expect(result.results).toHaveLength(2);
+			const promise = service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await promise;
+
+			expect(result.success).toBe(true); // At least one succeeded
 			expect(result.results[0].success).toBe(true);
 			expect(result.results[1].success).toBe(false);
 		});
@@ -179,13 +295,66 @@ describe('GeminiRuntimeService', () => {
 			const sessionName = 'test-session';
 			const projectPaths = ['/path/to/project1'];
 
-			// Mock error for all
-			mockTmuxCommandService.sendMessage.mockRejectedValue(new Error('Connection failed'));
+			mockSessionHelper.sendMessage.mockRejectedValue(new Error('Connection failed'));
 
-			const result = await service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			const promise = service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await promise;
 
 			expect(result.success).toBe(false);
 			expect(result.message).toBe('Added 0/1 projects to Gemini CLI allowlist');
+		});
+	});
+
+	describe('getRuntimeExitPatterns', () => {
+		it('should return Gemini-specific exit patterns', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0].test('Agent powering down')).toBe(true);
+			expect(patterns[1].test('Interaction Summary')).toBe(true);
+		});
+
+		it('should not match unrelated text', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns.some(p => p.test('Type your message'))).toBe(false);
+		});
+	});
+
+	describe('getExitPatterns', () => {
+		it('should expose exit patterns via public accessor', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns).toHaveLength(2);
+		});
+	});
+
+	describe('checkGeminiInstallation', () => {
+		it('should report Gemini CLI as available', async () => {
+			const result = await service.checkGeminiInstallation();
+
+			expect(result.isInstalled).toBe(true);
+			expect(result.message).toBe('Gemini CLI is available');
+		});
+	});
+
+	describe('initializeGeminiInSession', () => {
+		it('should call executeRuntimeInitScript', async () => {
+			const spy = jest.spyOn(service, 'executeRuntimeInitScript').mockResolvedValue(undefined);
+
+			const result = await service.initializeGeminiInSession('test-session');
+
+			expect(result.success).toBe(true);
+			expect(spy).toHaveBeenCalledWith('test-session');
+		});
+
+		it('should handle initialization errors gracefully', async () => {
+			jest.spyOn(service, 'executeRuntimeInitScript').mockRejectedValue(
+				new Error('Init failed')
+			);
+
+			const result = await service.initializeGeminiInSession('test-session');
+
+			expect(result.success).toBe(false);
+			expect(result.message).toBe('Init failed');
 		});
 	});
 });

@@ -505,6 +505,70 @@ This is a mock task for testing purposes.
       }]
     };
   }
+
+  // Mock Slack Message Tool
+  async sendSlackMessage(params: any): Promise<any> {
+    // Input validation - match the real implementation
+    if (!params.channelId || (typeof params.channelId === 'string' && params.channelId.trim().length === 0)) {
+      return {
+        content: [{ type: 'text', text: '❌ channelId is required and cannot be empty' }],
+        isError: true
+      };
+    }
+
+    if (!params.text || (typeof params.text === 'string' && params.text.trim().length === 0)) {
+      return {
+        content: [{ type: 'text', text: '❌ text is required and cannot be empty' }],
+        isError: true
+      };
+    }
+
+    // Mock the backend API call
+    const apiBaseUrl = 'http://localhost:3000';
+    const body: Record<string, string> = {
+      channelId: params.channelId,
+      text: params.text,
+    };
+    if (params.threadTs) {
+      body.threadTs = params.threadTs;
+    }
+
+    const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/slack/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'AgentMux-MCP/1.0.0',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        return {
+          content: [{ type: 'text', text: `❌ Slack API error (${response.status}): ${(errorData as any).error || response.statusText}` }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { success: boolean; data?: { messageTs: string } };
+      const messageTs = data.data?.messageTs ?? 'unknown';
+
+      return {
+        content: [{
+          type: 'text',
+          text: `✅ Slack message sent\n\nChannel: ${params.channelId}${params.threadTs ? `\nThread: ${params.threadTs}` : ''}\nMessage TS: ${messageTs}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `❌ Failed to send Slack message: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+        isError: true
+      };
+    }
+  }
 }
 
 describe('AgentMuxMCP', () => {
@@ -1561,6 +1625,152 @@ describe('AgentMuxMCP', () => {
 
       expect(result.content[0].text).toMatch(/Message ID: msg-mock-\d+/);
       expect(result.isError).toBeUndefined();
+    });
+  });
+
+  // ============================================
+  // Slack Message Tests
+  // ============================================
+
+  describe('sendSlackMessage', () => {
+    it('should send message with required channelId and text', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { messageTs: '1707430000.001234' } }),
+      } as Response);
+
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123456789',
+        text: 'Hello from test!',
+      });
+
+      expect(result.content[0].text).toContain('✅ Slack message sent');
+      expect(result.content[0].text).toContain('Channel: C0123456789');
+      expect(result.content[0].text).toContain('Message TS: 1707430000.001234');
+      expect(result.isError).toBeUndefined();
+    });
+
+    it('should require channelId', async () => {
+      const result = await mcpServer.sendSlackMessage({
+        text: 'Hello',
+      });
+
+      expect(result.content[0].text).toBe('❌ channelId is required and cannot be empty');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should reject empty channelId', async () => {
+      const result = await mcpServer.sendSlackMessage({
+        channelId: '   ',
+        text: 'Hello',
+      });
+
+      expect(result.content[0].text).toBe('❌ channelId is required and cannot be empty');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should require text', async () => {
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+      });
+
+      expect(result.content[0].text).toBe('❌ text is required and cannot be empty');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should reject empty text', async () => {
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+        text: '  ',
+      });
+
+      expect(result.content[0].text).toBe('❌ text is required and cannot be empty');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should include threadTs when provided', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { messageTs: '1707430000.005678' } }),
+      } as Response);
+
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+        text: 'Thread reply',
+        threadTs: '1707430000.001234',
+      });
+
+      expect(result.content[0].text).toContain('✅ Slack message sent');
+      expect(result.content[0].text).toContain('Thread: 1707430000.001234');
+
+      // Verify fetch was called with threadTs in body
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/slack/send'),
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.stringContaining('threadTs'),
+        })
+      );
+    });
+
+    it('should not include threadTs when not provided', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { messageTs: '1707430000.009' } }),
+      } as Response);
+
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+        text: 'No thread',
+      });
+
+      expect(result.content[0].text).toContain('✅ Slack message sent');
+      expect(result.content[0].text).not.toContain('Thread:');
+    });
+
+    it('should handle API error responses', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        statusText: 'Service Unavailable',
+        json: async () => ({ success: false, error: 'Slack is not connected' }),
+      } as Response);
+
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+        text: 'Test',
+      });
+
+      expect(result.content[0].text).toContain('❌ Slack API error (503)');
+      expect(result.content[0].text).toContain('Slack is not connected');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should handle network errors', async () => {
+      const mockFetch = global.fetch as jest.MockedFunction<typeof fetch>;
+      mockFetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+
+      const result = await mcpServer.sendSlackMessage({
+        channelId: 'C0123',
+        text: 'Test',
+      });
+
+      expect(result.content[0].text).toContain('❌ Failed to send Slack message');
+      expect(result.content[0].text).toContain('ECONNREFUSED');
+      expect(result.isError).toBe(true);
+    });
+
+    it('should handle missing params object', async () => {
+      const result = await mcpServer.sendSlackMessage({});
+
+      expect(result.isError).toBe(true);
     });
   });
 });

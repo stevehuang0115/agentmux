@@ -189,12 +189,13 @@ export async function clearQueue(
       return;
     }
 
+    const cancelledCurrent = messageQueueService.forceCancelCurrent();
     const count = messageQueueService.clearPending();
 
     res.json({
       success: true,
-      message: `Cleared ${count} pending messages`,
-      data: { clearedCount: count },
+      message: `Cleared ${count} pending messages${cancelledCurrent ? ' and cancelled current processing message' : ''}`,
+      data: { clearedCount: count, cancelledCurrent },
     });
   } catch (error) {
     next(error);

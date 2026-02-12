@@ -12,6 +12,8 @@ import {
 } from './slack-orchestrator-bridge.js';
 import { resetSlackService } from './slack.service.js';
 import { resetChatService } from '../chat/chat.service.js';
+import type { SlackIncomingMessage } from '../../types/slack.types.js';
+import type { NotifyPayload } from '../../types/chat.types.js';
 
 // Mock the orchestrator status module
 jest.mock('../orchestrator/index.js', () => ({
@@ -224,6 +226,51 @@ describe('SlackOrchestratorBridge', () => {
       const result = bridge.formatForSlack(input);
       expect(result).toContain('*Title*');
       expect(result).toContain('Some text');
+    });
+  });
+
+  describe('notify helpers', () => {
+    it('should extract NOTIFY payloads and build fallback response', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const raw = `[NOTIFY]\nconversationId: conv-1\n---\nHello from NOTIFY\n[/NOTIFY]`;
+      const payloads = (bridge as unknown as {
+        extractNotifyPayloads: (text: string) => NotifyPayload[];
+      }).extractNotifyPayloads(raw);
+
+      const fallback = (bridge as unknown as {
+        buildFallbackResponse: (text: string, payloads: NotifyPayload[]) => string;
+      }).buildFallbackResponse(raw, payloads);
+
+      expect(fallback).toBe('Hello from NOTIFY');
+    });
+
+    it('should detect Slack-targeted NOTIFY payload for matching thread', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const raw = `[NOTIFY]\nchannelId: C123\nthreadTs: 1707.001\n---\nHandled in skill\n[/NOTIFY]`;
+      const payloads = (bridge as unknown as {
+        extractNotifyPayloads: (text: string) => NotifyPayload[];
+      }).extractNotifyPayloads(raw);
+
+      const message: SlackIncomingMessage = {
+        id: '123',
+        type: 'message',
+        text: 'hello',
+        userId: 'U123',
+        channelId: 'C123',
+        threadTs: '1707.001',
+        ts: '1707.001',
+        teamId: 'T1',
+        eventTs: '1707.001',
+      };
+
+      const match = (bridge as unknown as {
+        findSlackPayloadForMessage: (
+          msg: SlackIncomingMessage,
+          payloads: NotifyPayload[]
+        ) => NotifyPayload | undefined;
+      }).findSlackPayloadForMessage(message, payloads);
+
+      expect(match?.message).toBe('Handled in skill');
     });
   });
 

@@ -115,6 +115,85 @@ describe('SettingsService', () => {
     });
   });
 
+  describe('settings migration', () => {
+    it('should migrate legacy claudeCodeCommand to runtimeCommands', async () => {
+      const legacySettings = {
+        general: {
+          defaultRuntime: 'claude-code',
+          autoStartOrchestrator: true,
+          checkInIntervalMinutes: 5,
+          maxConcurrentAgents: 10,
+          verboseLogging: false,
+          claudeCodeCommand: '/custom/claude --dangerously-skip-permissions',
+          claudeCodeInitScript: 'config/runtime_scripts/initialize_claude.sh',
+        },
+      };
+
+      await fs.writeFile(
+        path.join(testDir, 'settings.json'),
+        JSON.stringify(legacySettings, null, 2)
+      );
+
+      service.clearCache();
+      const settings = await service.getSettings();
+
+      expect(settings.general.runtimeCommands['claude-code']).toBe('/custom/claude --dangerously-skip-permissions');
+      expect(settings.general.runtimeCommands['gemini-cli']).toBe('gemini --yolo');
+      expect(settings.general.runtimeCommands['codex-cli']).toBe('codex --full-auto');
+      expect((settings.general as any).claudeCodeCommand).toBeUndefined();
+      expect((settings.general as any).claudeCodeInitScript).toBeUndefined();
+    });
+
+    it('should not overwrite existing runtimeCommands during migration', async () => {
+      const settingsWithBoth = {
+        general: {
+          defaultRuntime: 'claude-code',
+          claudeCodeCommand: '/old/claude',
+          runtimeCommands: {
+            'claude-code': '/new/claude --dangerously-skip-permissions',
+            'gemini-cli': 'gemini --custom',
+            'codex-cli': 'codex --custom',
+          },
+        },
+      };
+
+      await fs.writeFile(
+        path.join(testDir, 'settings.json'),
+        JSON.stringify(settingsWithBoth, null, 2)
+      );
+
+      service.clearCache();
+      const settings = await service.getSettings();
+
+      // Should keep the runtimeCommands values, not overwrite with legacy
+      expect(settings.general.runtimeCommands['claude-code']).toBe('/new/claude --dangerously-skip-permissions');
+      expect(settings.general.runtimeCommands['gemini-cli']).toBe('gemini --custom');
+    });
+
+    it('should handle settings with no legacy fields', async () => {
+      const modernSettings = {
+        general: {
+          defaultRuntime: 'claude-code',
+          runtimeCommands: {
+            'claude-code': 'claude --dangerously-skip-permissions',
+            'gemini-cli': 'gemini --yolo',
+            'codex-cli': 'codex --full-auto',
+          },
+        },
+      };
+
+      await fs.writeFile(
+        path.join(testDir, 'settings.json'),
+        JSON.stringify(modernSettings, null, 2)
+      );
+
+      service.clearCache();
+      const settings = await service.getSettings();
+
+      expect(settings.general.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
+    });
+  });
+
   describe('updateSettings', () => {
     it('should update partial settings', async () => {
       const updated = await service.updateSettings({

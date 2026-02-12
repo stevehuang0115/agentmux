@@ -12,6 +12,6 @@ MESSAGE=$(echo "$INPUT" | jq -r '.message // empty')
 require_param "sessionName" "$SESSION_NAME"
 require_param "message" "$MESSAGE"
 
-BODY=$(jq -n --arg message "$MESSAGE" '{message: $message}')
+BODY=$(jq -n --arg data "$MESSAGE" '{data: $data}')
 
 api_call POST "/terminal/${SESSION_NAME}/write" "$BODY"

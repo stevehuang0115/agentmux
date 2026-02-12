@@ -1,6 +1,8 @@
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import * as settingsServiceModule from '../settings/settings.service.js';
+import { getDefaultSettings } from '../../types/settings.types.js';
 
 // Test implementation of abstract class
 class TestRuntimeService extends RuntimeAgentService {
@@ -22,6 +24,10 @@ class TestRuntimeService extends RuntimeAgentService {
 
 	protected getRuntimeErrorPatterns(): string[] {
 		return ['Error', 'Failed'];
+	}
+
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [/Test exited/i, /Session ended/i];
 	}
 }
 
@@ -353,6 +359,88 @@ echo "second command"
 		});
 	});
 
+	describe('settings-based init command', () => {
+		it('should use command from settings when available', async () => {
+			const mockSettings = getDefaultSettings();
+			mockSettings.general.runtimeCommands['claude-code'] = '/custom/claude --dangerously-skip-permissions';
+
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(mockSettings),
+			} as any);
+
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['/custom/claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should fallback to init script when settings command is empty', async () => {
+			const mockSettings = getDefaultSettings();
+			mockSettings.general.runtimeCommands['claude-code'] = '  ';
+
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(mockSettings),
+			} as any);
+
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should fallback to init script when settings service throws', async () => {
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockImplementation(() => {
+				throw new Error('Settings unavailable');
+			});
+
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+	});
+
+	describe('postInitialize', () => {
+		it('should be a no-op by default (does not throw)', async () => {
+			await expect(service.postInitialize('test-session')).resolves.not.toThrow();
+		});
+	});
+
 	describe('abstract method implementations', () => {
 		it('getRuntimeType should return correct runtime type', () => {
 			expect(service['getRuntimeType']()).toBe(RUNTIME_TYPES.CLAUDE_CODE);
@@ -366,6 +454,26 @@ echo "second command"
 		it('getRuntimeErrorPatterns should return array of error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
 			expect(patterns).toEqual(['Error', 'Failed']);
+		});
+
+		it('getRuntimeExitPatterns should return array of exit patterns', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0]).toBeInstanceOf(RegExp);
+		});
+	});
+
+	describe('getExitPatterns', () => {
+		it('should return exit patterns via public accessor', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0].test('Test exited')).toBe(true);
+			expect(patterns[1].test('Session ended')).toBe(true);
+		});
+
+		it('should not match unrelated text', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns.some(p => p.test('Hello world'))).toBe(false);
 		});
 	});
 });

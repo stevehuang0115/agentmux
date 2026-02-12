@@ -317,6 +317,37 @@ describe('PtySessionBackend', () => {
 		});
 	});
 
+	describe('getAllSessionPids', () => {
+		it('should return empty array when no sessions', () => {
+			const pids = backend!.getAllSessionPids();
+
+			expect(pids).toEqual([]);
+		});
+
+		it('should return PIDs for all active sessions', async () => {
+			const session1 = await backend!.createSession('session-1', createTestOptions());
+			const session2 = await backend!.createSession('session-2', createTestOptions());
+
+			const pids = backend!.getAllSessionPids();
+
+			expect(pids).toHaveLength(2);
+			expect(pids).toContain(session1.pid);
+			expect(pids).toContain(session2.pid);
+		});
+
+		it('should not include killed sessions', async () => {
+			const session1 = await backend!.createSession('session-1', createTestOptions());
+			await backend!.createSession('session-2', createTestOptions());
+
+			await backend!.killSession('session-1');
+
+			const pids = backend!.getAllSessionPids();
+
+			expect(pids).toHaveLength(1);
+			expect(pids).not.toContain(session1.pid);
+		});
+	});
+
 	describe('destroy', () => {
 		it('should kill all sessions', async () => {
 			await backend!.createSession('session-1', createTestOptions());
@@ -336,6 +367,44 @@ describe('PtySessionBackend', () => {
 			await backend!.destroy();
 			await backend!.destroy();
 			await backend!.destroy();
+
+			expect(backend!.getSessionCount()).toBe(0);
+		});
+	});
+
+	describe('forceDestroyAll', () => {
+		it('should do nothing when no sessions', async () => {
+			await expect(backend!.forceDestroyAll()).resolves.toBeUndefined();
+			expect(backend!.getSessionCount()).toBe(0);
+		});
+
+		it('should force-kill all sessions', async () => {
+			await backend!.createSession('session-1', createTestOptions());
+			await backend!.createSession('session-2', createTestOptions());
+			await backend!.createSession('session-3', createTestOptions());
+
+			expect(backend!.getSessionCount()).toBe(3);
+
+			await backend!.forceDestroyAll();
+
+			expect(backend!.getSessionCount()).toBe(0);
+		});
+
+		it('should clear terminal buffers', async () => {
+			await backend!.createSession('test-session', createTestOptions());
+
+			expect(backend!.getTerminalBufferInstance('test-session')).toBeDefined();
+
+			await backend!.forceDestroyAll();
+
+			expect(backend!.getTerminalBufferInstance('test-session')).toBeUndefined();
+		});
+
+		it('should be idempotent', async () => {
+			await backend!.createSession('test-session', createTestOptions());
+
+			await backend!.forceDestroyAll();
+			await backend!.forceDestroyAll();
 
 			expect(backend!.getSessionCount()).toBe(0);
 		});

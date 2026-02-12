@@ -57,6 +57,28 @@ describe('ClaudeRuntimeService', () => {
 		});
 	});
 
+	describe('getRuntimeExitPatterns', () => {
+		it('should return Claude-specific exit patterns', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0].test('Claude Code exited')).toBe(true);
+			expect(patterns[0].test('Claude exited')).toBe(true);
+			expect(patterns[1].test('Session ended')).toBe(true);
+		});
+
+		it('should not match unrelated text', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns.some(p => p.test('Welcome to Claude Code!'))).toBe(false);
+		});
+	});
+
+	describe('getExitPatterns', () => {
+		it('should expose exit patterns via public accessor', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns).toHaveLength(2);
+		});
+	});
+
 	describe('checkClaudeInstallation', () => {
 		it('should check Claude installation', async () => {
 			// This test uses real spawn — just verify the function returns a valid result

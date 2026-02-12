@@ -154,10 +154,18 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Handle user input - use ref to always get current session
+    // Handle user input - use ref to always get current session.
+    // Filter out terminal response sequences (DA1, DA2, DSR) that xterm.js
+    // generates in response to queries from the child process. These responses
+    // must NOT be sent to the PTY as they would appear as typed text in CLI
+    // input lines (e.g. Gemini CLI shows "[?1;2c" in its prompt).
+    const TERMINAL_RESPONSE_RE = /\x1b\[\??[\d;]*[cRn]|\x1b\[>[\d;]*c/g;
     term.onData((data) => {
       if (webSocketService.isConnected() && selectedSessionRef.current) {
-        webSocketService.sendInput(selectedSessionRef.current, data);
+        const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
+        if (filtered.length > 0) {
+          webSocketService.sendInput(selectedSessionRef.current, filtered);
+        }
       }
     });
 
@@ -533,6 +541,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     webSocketService.subscribeToSession(sessionName);
     currentSubscription.current = sessionName;
+
+    // Sync PTY dimensions with the frontend terminal size.
+    // The PTY starts at a default 80x24 which is too small for TUI-based runtimes
+    // like Gemini CLI that render within the PTY viewport. Without this, Gemini CLI
+    // only renders 24 rows of content even though the frontend terminal is larger.
+    if (fitAddonRef.current) {
+      const dimensions = fitAddonRef.current.proposeDimensions();
+      if (dimensions) {
+        webSocketService.resizeTerminal(sessionName, dimensions.cols, dimensions.rows);
+      }
+    }
 
     // Set timeout fallback to clear loading state if no response comes within 10 seconds
     sessionSwitchTimeout.current = setTimeout(() => {

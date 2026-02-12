@@ -22,6 +22,10 @@ interface AgentDetailModalProps {
   onClose: () => void;
   /** Optional project path for checking project-level MCP settings */
   projectPath?: string;
+  /** When true, allows editing agent configuration (runtime type) */
+  isEditable?: boolean;
+  /** Called when the user saves edits. Receives the member ID and partial updates. */
+  onSave?: (memberId: string, updates: Partial<TeamMember>) => void;
 }
 
 /**
@@ -41,11 +45,12 @@ interface SkillWithMcpStatus {
  * @param props - Component props
  * @returns AgentDetailModal component
  */
-export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onClose, projectPath }) => {
+export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onClose, projectPath, isEditable = false, onSave }) => {
   const [roleDetails, setRoleDetails] = useState<RoleWithPrompt | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
   const [skillsWithStatus, setSkillsWithStatus] = useState<SkillWithMcpStatus[]>([]);
   const [loadingMcpStatus, setLoadingMcpStatus] = useState(false);
+  const [editedRuntime, setEditedRuntime] = useState<string>(member.runtimeType || 'claude-code');
   const { skills: allSkills } = useSkills();
 
   useEffect(() => {
@@ -274,7 +279,7 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
             </div>
             <div>
               <h2 className="text-xl font-semibold text-text-primary-dark">{member.name}</h2>
-              <p className="text-sm text-text-secondary-dark">Agent Details</p>
+              <p className="text-sm text-text-secondary-dark">{isEditable ? 'Edit Agent' : 'Agent Details'}</p>
             </div>
           </div>
           <button
@@ -369,25 +374,59 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
             <div className="flex items-center gap-2 text-sm font-medium text-text-secondary-dark uppercase tracking-wide mb-3">
               Runtime
             </div>
-            <div className="bg-background-dark/50 rounded-lg px-4 py-2">
-              <span className="text-sm text-text-primary-dark">
-                {member.runtimeType === 'claude-code' ? 'Claude CLI' :
-                 member.runtimeType === 'gemini-cli' ? 'Gemini CLI' :
-                 member.runtimeType === 'codex-cli' ? 'Codex CLI' :
-                 member.runtimeType || 'Claude CLI'}
-              </span>
-            </div>
+            {isEditable ? (
+              <select
+                value={editedRuntime}
+                onChange={(e) => setEditedRuntime(e.target.value)}
+                className="w-full bg-background-dark border border-border-dark rounded-lg px-4 py-2 text-sm text-text-primary-dark focus:outline-none focus:border-primary"
+              >
+                <option value="claude-code">Claude CLI</option>
+                <option value="gemini-cli">Gemini CLI</option>
+                <option value="codex-cli">Codex CLI</option>
+              </select>
+            ) : (
+              <div className="bg-background-dark/50 rounded-lg px-4 py-2">
+                <span className="text-sm text-text-primary-dark">
+                  {member.runtimeType === 'claude-code' ? 'Claude CLI' :
+                   member.runtimeType === 'gemini-cli' ? 'Gemini CLI' :
+                   member.runtimeType === 'codex-cli' ? 'Codex CLI' :
+                   member.runtimeType || 'Claude CLI'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-border-dark bg-background-dark rounded-b-xl">
-          <button
-            onClick={onClose}
-            className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
-          >
-            Close
-          </button>
+          {isEditable ? (
+            <div className="flex gap-3">
+              <button
+                onClick={onClose}
+                className="flex-1 px-4 py-2 border border-border-dark text-text-secondary-dark rounded-lg hover:bg-surface-dark transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (onSave) {
+                    onSave(member.id, { runtimeType: editedRuntime as TeamMember['runtimeType'] });
+                  }
+                  onClose();
+                }}
+                className="flex-1 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onClose}
+              className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors font-medium"
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>

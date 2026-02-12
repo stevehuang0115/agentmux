@@ -274,8 +274,8 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 			return;
 		}
 
-		// Write data to session
-		session.write(dataStr);
+		// Write data to session (add carriage return for command execution)
+		session.write(dataStr + '\r');
 
 		logger.debug('Data written to session', {
 			sessionName,

@@ -34,8 +34,10 @@ import {
 } from './services/index.js';
 import {
 	getSessionBackend,
+	getSessionBackendSync,
 	getSessionStatePersistence,
 	destroySessionBackend,
+	PtySessionBackend,
 } from './services/session/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
@@ -701,7 +703,6 @@ export class AgentMuxServer {
 
 		// Add/update the agentmux MCP server entry
 		config.mcpServers['agentmux'] = {
-			type: 'url',
 			url: mcpUrl,
 		};
 
@@ -861,13 +862,14 @@ export class AgentMuxServer {
 		this.isShuttingDown = true;
 		this.logger.info('Shutting down AgentMux server...');
 
-		// Set a hard timeout to force exit if graceful shutdown takes too long
-		// Use shorter timeout in development for faster restarts
+		// Set a hard timeout to force exit if graceful shutdown takes too long.
+		// Use SIGKILL on self as the ultimate fallback — this is uncatchable and
+		// guarantees death even if native node-pty handles keep the event loop alive.
 		const isDev = process.env.NODE_ENV !== 'production';
-		const timeoutMs = isDev ? 3000 : 10000;
+		const timeoutMs = isDev ? 5000 : 10000;
 		const forceExitTimeout = setTimeout(() => {
-			this.logger.warn('Graceful shutdown timed out, forcing exit...');
-			process.exit(1);
+			this.logger.warn('Graceful shutdown timed out, sending SIGKILL to self...');
+			process.kill(process.pid, 'SIGKILL');
 		}, timeoutMs);
 
 		try {
@@ -877,16 +879,40 @@ export class AgentMuxServer {
 				this.healthMonitoringInterval = null;
 			}
 
-			// Save PTY session state before cleanup
-			this.logger.info('Saving PTY session state...');
+			// Save PTY session state and force-kill all child processes
+			this.logger.info('Saving PTY session state and force-killing child processes...');
 			try {
-				const sessionBackend = await getSessionBackend();
-				const persistence = getSessionStatePersistence();
-				const savedCount = await persistence.saveState(sessionBackend);
-				if (savedCount > 0) {
-					this.logger.info('Saved PTY sessions for later restoration', { count: savedCount });
+				const sessionBackend = getSessionBackendSync();
+				if (sessionBackend) {
+					// Save state for resume-on-restart
+					const persistence = getSessionStatePersistence();
+					const savedCount = await persistence.saveState(sessionBackend);
+					if (savedCount > 0) {
+						this.logger.info('Saved PTY sessions for later restoration', { count: savedCount });
+					}
+
+					// Collect PIDs before destroying for belt-and-suspenders cleanup
+					let collectedPids: number[] = [];
+					if (sessionBackend instanceof PtySessionBackend) {
+						collectedPids = sessionBackend.getAllSessionPids();
+						this.logger.info('Collected PTY PIDs for shutdown', { pids: collectedPids });
+
+						// Use forceDestroyAll for SIGTERM → SIGKILL escalation
+						await sessionBackend.forceDestroyAll();
+					} else {
+						await sessionBackend.destroy();
+					}
+
+					// Belt-and-suspenders: SIGKILL any remaining PIDs
+					for (const pid of collectedPids) {
+						try {
+							process.kill(pid, 'SIGKILL');
+						} catch {
+							// ESRCH = already dead, which is expected
+						}
+					}
 				}
-				// Destroy PTY session backend
+				// Clear the factory singleton
 				await destroySessionBackend();
 			} catch (error) {
 				this.logger.warn('Failed to save PTY session state', { error: error instanceof Error ? error.message : String(error) });

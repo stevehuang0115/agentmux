@@ -20,7 +20,10 @@ import {
   ORCHESTRATOR_SESSION_NAME,
   CHAT_CONSTANTS,
   EVENT_DELIVERY_CONSTANTS,
+  RUNTIME_TYPES,
+  type RuntimeType,
 } from '../../constants.js';
+import { StorageService } from '../core/storage.service.js';
 import type { ChatMessage } from '../../types/chat.types.js';
 
 /**
@@ -150,6 +153,17 @@ export class QueueProcessorService extends EventEmitter {
       return;
     }
 
+    // Don't process messages until orchestrator has finished initialization.
+    // During init, the runtime may be at a prompt but postInitialize (e.g. /dir add)
+    // is still running. Sending messages during init causes interleaved commands.
+    const orchestratorInfo = await StorageService.getInstance().getOrchestratorStatus();
+    const agentStatus = orchestratorInfo?.agentStatus;
+    if (!agentStatus || (agentStatus !== 'started' && agentStatus !== 'active')) {
+      // Schedule retry — orchestrator not ready yet
+      this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
+      return;
+    }
+
     const message = this.queueService.dequeue();
     if (!message) {
       return;
@@ -182,6 +196,14 @@ export class QueueProcessorService extends EventEmitter {
         EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
       );
 
+      // Check if message was force-cancelled while waiting for agent readiness
+      if (message.status === 'cancelled') {
+        this.logger.info('Message was cancelled during processing, skipping delivery', {
+          messageId: message.id,
+        });
+        return;
+      }
+
       if (!isReady) {
         this.logger.warn('Agent not ready, re-queuing message for retry', {
           messageId: message.id,
@@ -204,9 +226,16 @@ export class QueueProcessorService extends EventEmitter {
         ? message.content
         : `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
 
+      // Look up the orchestrator's runtime type for runtime-aware terminal clearing.
+      // Gemini CLI exits on Ctrl+C so we need Escape+Ctrl+U instead.
+      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
+      const runtimeType: RuntimeType =
+        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
         ORCHESTRATOR_SESSION_NAME,
-        deliveryContent
+        deliveryContent,
+        runtimeType
       );
 
       if (!deliveryResult.success) {

@@ -72,6 +72,7 @@ import {
   SetupProjectStructureToolParams,
   CreateTeamForProjectToolParams,
   SendChatResponseParams,
+  SendSlackMessageParams,
   SubscribeEventParams,
   UnsubscribeEventParams,
   SetGoalToolParams,
@@ -2735,6 +2736,88 @@ export class AgentMuxMCPServer {
   }
 
   /**
+   * Send a message to a Slack channel or thread via the backend API
+   *
+   * This tool allows orchestrators and agents to send messages directly to Slack,
+   * bypassing terminal output parsing to avoid PTY line-wrapping and ANSI artifacts.
+   *
+   * @param params - The send Slack message parameters
+   * @returns MCP tool result indicating success or failure
+   *
+   * @example
+   * ```typescript
+   * await server.sendSlackMessage({
+   *   channelId: 'C0123',
+   *   text: 'Task completed!',
+   *   threadTs: '1707430000.001234'
+   * });
+   * ```
+   */
+  async sendSlackMessage(params: SendSlackMessageParams): Promise<MCPToolResult> {
+    try {
+      if (!params.channelId || params.channelId.trim().length === 0) {
+        return {
+          content: [{ type: 'text', text: '❌ channelId is required and cannot be empty' }],
+          isError: true
+        };
+      }
+
+      if (!params.text || params.text.trim().length === 0) {
+        return {
+          content: [{ type: 'text', text: '❌ text is required and cannot be empty' }],
+          isError: true
+        };
+      }
+
+      logger.info(`[MCP:sendSlackMessage] Sending to channel ${params.channelId}`, {
+        channelId: params.channelId,
+        threadTs: params.threadTs ?? 'none',
+        textLength: params.text.length,
+      });
+
+      const body: Record<string, string> = {
+        channelId: params.channelId,
+        text: params.text,
+      };
+      if (params.threadTs) {
+        body.threadTs = params.threadTs;
+      }
+
+      const response = await fetch(`${this.apiBaseUrl}/api/slack/send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'AgentMux-MCP/1.0.0',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        return {
+          content: [{ type: 'text', text: `❌ Slack API error (${response.status}): ${(errorData as any).error || response.statusText}` }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { success: boolean; data?: { messageTs: string } };
+
+      return {
+        content: [{
+          type: 'text',
+          text: `✅ Slack message sent\n\nChannel: ${params.channelId}${params.threadTs ? `\nThread: ${params.threadTs}` : ''}\nMessage TS: ${data.data?.messageTs ?? 'unknown'}`
+        }]
+      };
+    } catch (error) {
+      logger.error('[MCP:sendSlackMessage] Failed:', error);
+      return {
+        content: [{ type: 'text', text: `❌ Failed to send Slack message: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+        isError: true
+      };
+    }
+  }
+
+  /**
    * Resolve conversation ID, creating a new conversation if needed
    *
    * @param providedId - Optional conversation ID provided by the caller
@@ -3313,6 +3396,11 @@ Please respond promptly with either acceptance or delegation.`;
                 // Chat Response Loop
                 case 'send_chat_response':
                   result = await this.sendChatResponse(toolArgs);
+                  break;
+
+                // Slack Messaging
+                case 'send_slack_message':
+                  result = await this.sendSlackMessage(toolArgs);
                   break;
 
                 // Orchestrator Tools - Role Management
@@ -4191,6 +4279,40 @@ user messages, creating a full conversational experience.`,
         }
       },
 
+      // Slack Messaging Tool
+      {
+        name: 'send_slack_message',
+        description: `Send a message directly to a Slack channel or thread via the backend API.
+
+This bypasses terminal output parsing, avoiding PTY line-wrapping and ANSI artifacts
+that can garble messages sent through [NOTIFY] markers.
+
+**When to use:**
+- Sending status updates to Slack channels
+- Replying in Slack threads
+- Proactive notifications (task completions, errors, alerts)
+
+**Note:** For chat UI messages, use send_chat_response instead.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            channelId: {
+              type: 'string',
+              description: 'Slack channel ID to send the message to (e.g. C0123456789)'
+            },
+            text: {
+              type: 'string',
+              description: 'Message text to send (supports Slack markdown formatting)'
+            },
+            threadTs: {
+              type: 'string',
+              description: 'Thread timestamp for replying in a thread (optional)'
+            }
+          },
+          required: ['channelId', 'text']
+        }
+      },
+
       // Event Bus Tools
       {
         name: 'subscribe_event',
@@ -4199,11 +4321,9 @@ user messages, creating a full conversational experience.`,
           type: 'object',
           properties: {
             eventType: {
-              oneOf: [
-                { type: 'string', enum: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'] },
-                { type: 'array', items: { type: 'string', enum: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'] } }
-              ],
-              description: 'Event type(s) to subscribe to'
+              type: 'string',
+              enum: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
+              description: 'Event type to subscribe to. Call multiple times to subscribe to multiple event types.'
             },
             filter: {
               type: 'object',

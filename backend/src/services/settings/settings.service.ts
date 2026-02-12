@@ -16,6 +16,7 @@ import {
   getDefaultSettings,
   validateSettings,
   mergeSettings,
+  AIRuntime,
 } from '../../types/settings.types.js';
 import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
@@ -103,6 +104,8 @@ export class SettingsService {
 
     const loaded = await safeReadJson<Partial<AgentMuxSettings> | null>(this.settingsFile, null);
     if (loaded) {
+      // Migrate legacy claudeCodeCommand/claudeCodeInitScript → runtimeCommands
+      this.migrateSettings(loaded);
       this.settingsCache = mergeSettings(getDefaultSettings(), loaded);
       return this.settingsCache;
     }
@@ -262,6 +265,35 @@ export class SettingsService {
   // ============================================================================
   // Private Methods
   // ============================================================================
+
+  /**
+   * Migrate legacy settings format to current format
+   *
+   * Converts old claudeCodeCommand/claudeCodeInitScript fields
+   * to the new runtimeCommands map.
+   *
+   * @param loaded - Partially loaded settings from disk
+   */
+  private migrateSettings(loaded: Partial<AgentMuxSettings>): void {
+    const general = loaded.general as Record<string, unknown> | undefined;
+    if (!general) return;
+
+    const hasLegacyCommand = typeof general['claudeCodeCommand'] === 'string';
+    const hasRuntimeCommands = general['runtimeCommands'] !== undefined;
+
+    if (hasLegacyCommand && !hasRuntimeCommands) {
+      const defaults = getDefaultSettings();
+      general['runtimeCommands'] = {
+        'claude-code': general['claudeCodeCommand'] as string,
+        'gemini-cli': defaults.general.runtimeCommands['gemini-cli'],
+        'codex-cli': defaults.general.runtimeCommands['codex-cli'],
+      } satisfies Record<AIRuntime, string>;
+    }
+
+    // Clean up legacy fields
+    delete general['claudeCodeCommand'];
+    delete general['claudeCodeInitScript'];
+  }
 
   /**
    * Save settings to disk

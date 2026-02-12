@@ -94,38 +94,74 @@ export class SessionAdapter {
 	}
 
 	/**
-	 * Send a message to a session
+	 * Send a message to a session.
+	 *
+	 * Sends the message text first, waits for the runtime to process the paste,
+	 * then sends Enter separately to avoid bracketed paste mode consuming Enter.
+	 *
+	 * For large messages (e.g. task assignment templates, 3000-5000 chars), the
+	 * delay between text and Enter is scaled based on message length to give
+	 * TUI runtimes (like Gemini CLI's Ink-based UI) enough time to process
+	 * the input before Enter is sent. Without this, Enter arrives while the
+	 * TUI is still rendering the pasted text and gets silently dropped.
+	 *
+	 * An Enter "wake-up" is sent before the message to ensure TUI input boxes
+	 * are focused (safe no-op on empty prompts for all runtimes).
+	 *
+	 * @param sessionName - The session to send the message to
+	 * @param message - The message text to send
 	 */
 	async sendMessage(sessionName: string, message: string): Promise<void> {
 		try {
+			const encodedName = encodeURIComponent(sessionName);
+			const writeUrl = `${this.apiBaseUrl}/api/sessions/${encodedName}/write`;
+
+			// Send Enter "wake-up" to ensure TUI input is focused.
+			// For Gemini CLI TUI (Ink v6), the input box can lose focus after
+			// idle periods or auto-update notifications. Enter on an empty prompt
+			// is a safe no-op for all runtimes.
+			const wakeUpResponse = await fetch(writeUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data: '\r' }),
+			});
+			if (!wakeUpResponse.ok) {
+				logger.warn(`[SessionAdapter] Wake-up Enter failed for ${sessionName}: ${wakeUpResponse.statusText}`);
+			}
+			await new Promise(resolve => setTimeout(resolve, 500));
+
 			// Write message text first
-			const response = await fetch(
-				`${this.apiBaseUrl}/api/sessions/${encodeURIComponent(sessionName)}/write`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ data: message }),
-				}
-			);
+			const response = await fetch(writeUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data: message }),
+			});
 			if (!response.ok) {
 				throw new Error(`Failed to send message: ${response.statusText}`);
 			}
 
-			// Wait for Claude Code to process the pasted text before sending Enter
-			await new Promise(resolve => setTimeout(resolve, 1000));
+			// Scale delay based on message size: large messages (e.g. 3000-5000 char
+			// task assignment templates) need more time for TUI runtimes to process
+			// the pasted text before Enter is sent.
+			// Base 1000ms + 1ms per 10 characters, capped at 5 seconds.
+			// Matches the backend SessionCommandHelper.sendMessage() formula.
+			const scaledDelay = Math.min(1000 + Math.ceil(message.length / 10), 5000);
+			await new Promise(resolve => setTimeout(resolve, scaledDelay));
 
 			// Send Enter key separately so it's not consumed by bracketed paste mode
-			const enterResponse = await fetch(
-				`${this.apiBaseUrl}/api/sessions/${encodeURIComponent(sessionName)}/write`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ data: '\r' }),
-				}
-			);
+			const enterResponse = await fetch(writeUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ data: '\r' }),
+			});
 			if (!enterResponse.ok) {
 				throw new Error(`Failed to send Enter key: ${enterResponse.statusText}`);
 			}
+
+			logger.info(`[SessionAdapter] Message sent to ${sessionName}`, {
+				messageLength: message.length,
+				pasteDelay: scaledDelay,
+			});
 		} catch (error) {
 			logger.error(`[SessionAdapter] Failed to send message to ${sessionName}:`, error);
 			throw error;

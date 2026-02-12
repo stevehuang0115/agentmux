@@ -202,6 +202,19 @@ export interface SendChatResponseParams {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Parameters for the send_slack_message tool
+ * Used by agents to send messages directly to Slack via the backend API
+ */
+export interface SendSlackMessageParams {
+  /** Slack channel ID to send the message to */
+  channelId: string;
+  /** The message text to send (supports Slack markdown) */
+  text: string;
+  /** Thread timestamp for threaded replies (optional) */
+  threadTs?: string;
+}
+
 export interface ShutdownAgentParams {
   sessionName: string;
 }

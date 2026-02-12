@@ -404,6 +404,7 @@ export class SlackService extends EventEmitter {
     userId: string
   ): SlackConversationContext {
     const key = `${channelId}:${threadTs}`;
+    const conversationId = `slack-${channelId}-${threadTs}`.replace(/[^A-Za-z0-9_-]/g, '-');
     let context = this.conversationContexts.get(key);
 
     if (!context) {
@@ -411,12 +412,14 @@ export class SlackService extends EventEmitter {
         threadTs,
         channelId,
         userId,
-        conversationId: `slack-${key}`,
+        conversationId,
         startedAt: new Date().toISOString(),
         lastActivityAt: new Date().toISOString(),
         messageCount: 0,
       };
       this.conversationContexts.set(key, context);
+    } else if (context.conversationId !== conversationId) {
+      context.conversationId = conversationId;
     }
 
     context.lastActivityAt = new Date().toISOString();

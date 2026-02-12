@@ -7,9 +7,9 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Save, RotateCcw, ExternalLink, Check, AlertCircle } from 'lucide-react';
+import { Save, RotateCcw, Check, AlertCircle } from 'lucide-react';
 import { useSettings } from '../../hooks/useSettings';
-import { AgentMuxSettings, AIRuntime, AI_RUNTIME_DISPLAY_NAMES } from '../../types/settings.types';
+import { AgentMuxSettings, AIRuntime, AI_RUNTIMES, AI_RUNTIME_DISPLAY_NAMES } from '../../types/settings.types';
 import { Button } from '../UI/Button';
 import { FormInput, FormLabel, FormSelect } from '../UI/Form';
 
@@ -52,6 +52,26 @@ export const GeneralTab: React.FC = () => {
       [section]: {
         ...localSettings[section],
         [field]: value,
+      },
+    });
+    setHasChanges(true);
+    setSaveStatus('idle');
+  };
+
+  /**
+   * Handle runtime command change for a specific runtime
+   */
+  const handleRuntimeCommandChange = (runtime: AIRuntime, value: string) => {
+    if (!localSettings) return;
+
+    setLocalSettings({
+      ...localSettings,
+      general: {
+        ...localSettings.general,
+        runtimeCommands: {
+          ...localSettings.general.runtimeCommands,
+          [runtime]: value,
+        },
       },
     });
     setHasChanges(true);
@@ -205,61 +225,27 @@ export const GeneralTab: React.FC = () => {
         </div>
       </section>
 
-      {/* Claude Code Configuration Section */}
+      {/* Runtime Commands Section */}
       <section className="bg-surface-dark border border-border-dark rounded-lg p-6">
-        <h2 className="text-lg font-semibold mb-2">Claude Code Configuration</h2>
+        <h2 className="text-lg font-semibold mb-2">Runtime Commands</h2>
         <p className="text-sm text-text-secondary-dark mb-4">
-          Configure how AgentMux initializes Claude Code agents.
+          Configure the CLI command used to start each runtime. Changes take effect on next agent start.
         </p>
 
         <div className="space-y-5">
-          <div>
-            <FormLabel htmlFor="claudeCodeCommand">Startup Command</FormLabel>
-            <FormInput
-              id="claudeCodeCommand"
-              type="text"
-              value={localSettings.general.claudeCodeCommand}
-              onChange={(e) => handleChange('general', 'claudeCodeCommand', e.target.value)}
-            />
-            <p className="text-xs text-text-secondary-dark mt-1">
-              The command used to start Claude Code agents
-            </p>
-          </div>
-
-          <div>
-            <FormLabel htmlFor="claudeCodeInitScript">Initialization Script</FormLabel>
-            <FormInput
-              id="claudeCodeInitScript"
-              type="text"
-              value={localSettings.general.claudeCodeInitScript}
-              onChange={(e) => handleChange('general', 'claudeCodeInitScript', e.target.value)}
-            />
-            <p className="text-xs text-text-secondary-dark mt-1">
-              Path to the initialization script (relative to AgentMux root)
-            </p>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-text-primary-dark">Detection Priority</label>
-            <ol className="list-decimal list-inside text-sm text-text-secondary-dark mt-2 space-y-1.5">
-              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">~/.claude/local/claude</code> - Local installation (preferred)</li>
-              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">claude</code> - System PATH via <code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">type</code> command</li>
-              <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">claude</code> - System PATH via <code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">command -v</code></li>
-            </ol>
-            <p className="text-xs text-text-secondary-dark mt-2">
-              Claude Code must be installed on your system. Visit{' '}
-              <a
-                href="https://docs.anthropic.com/en/docs/claude-code/getting-started"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline inline-flex items-center gap-1"
-              >
-                Claude Code documentation
-                <ExternalLink className="w-3 h-3" />
-              </a>
-              {' '}for installation instructions.
-            </p>
-          </div>
+          {AI_RUNTIMES.map((runtime) => (
+            <div key={runtime}>
+              <FormLabel htmlFor={`runtime-cmd-${runtime}`}>
+                {AI_RUNTIME_DISPLAY_NAMES[runtime]}
+              </FormLabel>
+              <FormInput
+                id={`runtime-cmd-${runtime}`}
+                type="text"
+                value={localSettings.general.runtimeCommands?.[runtime] ?? ''}
+                onChange={(e) => handleRuntimeCommandChange(runtime, e.target.value)}
+              />
+            </div>
+          ))}
         </div>
       </section>
 

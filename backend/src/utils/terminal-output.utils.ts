@@ -30,10 +30,10 @@ export function stripAnsiCodes(content: string): string {
 		.replace(/\x1b[^[\]].?/g, '')
 		// Clean orphaned CSI fragments from PTY buffer boundary splits.
 		// When ESC char lands in one chunk and the CSI params in the next,
-		// artifacts like "[1C" or "[22m" appear mid-word.
+		// artifacts like "[1C", "[22m", or "[38;2;249;226;175m" appear mid-word.
 		// Note: \d+ (one or more digits) required to avoid matching [C in [CHAT_RESPONSE]
 		.replace(/\[\d+C/g, ' ')
-		.replace(/\[\d+[A-BJKHfm]/g, '')
+		.replace(/\[\d+(?:;\d+)*[A-BJKHfm]/g, '')
 		// Replace carriage returns with newline (CR/LF normalization)
 		.replace(/\r\n/g, '\n')
 		.replace(/\r/g, '\n')

@@ -112,12 +112,15 @@ export interface ISession {
 	 * Kill the session and terminate the underlying process.
 	 * After calling kill(), the session should not be used anymore.
 	 *
+	 * @param signal - Optional signal to send (e.g. 'SIGTERM', 'SIGKILL'). Defaults to node-pty default (SIGHUP).
+	 *
 	 * @example
 	 * ```typescript
 	 * session.kill();
+	 * session.kill('SIGKILL');
 	 * ```
 	 */
-	kill(): void;
+	kill(signal?: string): void;
 }
 
 /**

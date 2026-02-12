@@ -21,6 +21,7 @@ import {
   ParsedSlackCommand,
   parseCommandIntent,
 } from '../../types/slack.types.js';
+import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
 import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
@@ -81,6 +82,15 @@ export class SlackOrchestratorBridge extends EventEmitter {
   private initialized = false;
   /** Track if we've already logged the missing scope warning */
   private loggedMissingScope = false;
+
+  /**
+   * Track channel+thread pairs where Slack delivery was already handled
+   * by the reply-slack skill (execute.sh). Used by sendSlackResponse to
+   * avoid sending a duplicate fallback message to the same thread.
+   */
+  private skillDeliveredThreads: Set<string> = new Set();
+  /** Maximum entries before evicting oldest skill delivery records */
+  private static readonly MAX_SKILL_DELIVERY_RECORDS = 50;
 
   /**
    * Create a new SlackOrchestratorBridge
@@ -491,32 +501,13 @@ Just type naturally to chat with the orchestrator!`;
     originalMessage: SlackIncomingMessage,
     response: string
   ): Promise<void> {
-    // Truncate if needed
-    let truncatedResponse = response;
-    if (response.length > this.config.maxResponseLength) {
-      truncatedResponse =
-        response.substring(0, this.config.maxResponseLength) +
-        '\n\n_...response truncated. Ask for more details if needed._';
-    }
-
-    // Format for Slack
-    const formattedResponse = this.formatForSlack(truncatedResponse);
-
-    await this.slackService.sendMessage({
-      channelId: originalMessage.channelId,
-      text: formattedResponse,
-      threadTs: originalMessage.threadTs || originalMessage.ts,
-    });
-
-    // Store outbound reply in thread file
-    if (this.threadStore) {
-      const threadTs = originalMessage.threadTs || originalMessage.ts;
-      try {
-        await this.threadStore.appendOrchestratorReply(originalMessage.channelId, threadTs, response);
-      } catch (err) {
-        console.warn('[SlackBridge] Failed to store thread reply:', err instanceof Error ? err.message : String(err));
-      }
-    }
+    // Slack delivery is handled exclusively by the reply-slack skill
+    // (which calls /api/slack/send directly). The sendSlackResponse fallback
+    // is no longer needed — the skill sends the clean response directly via
+    // the Slack API, avoiding PTY artifacts and timing issues.
+    // Just record the thread reply for context tracking.
+    console.log('[SlackBridge] Skipping sendSlackResponse — Slack delivery is handled by reply-slack skill');
+    await this.recordThreadReply(originalMessage, response);
   }
 
   /**
@@ -555,6 +546,143 @@ Just type naturally to chat with the orchestrator!`;
     formatted = formatted.replace(/```[\w]*\n([\s\S]*?)```/g, '```$1```');
 
     return formatted;
+  }
+
+  /**
+   * Extract [NOTIFY] payloads from orchestrator output.
+   */
+  private extractNotifyPayloads(text: string): NotifyPayload[] {
+    if (!text) return [];
+
+    const payloads: NotifyPayload[] = [];
+    const notifyPattern = /\[NOTIFY\]([\s\S]*?)\[\/NOTIFY\]/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = notifyPattern.exec(text)) !== null) {
+      const payload = parseNotifyContent(match[1]);
+      if (payload) {
+        payloads.push(payload);
+      }
+    }
+
+    return payloads;
+  }
+
+  /**
+   * Determine whether the response already triggered a Slack delivery via NOTIFY.
+   */
+  private findSlackPayloadForMessage(
+    message: SlackIncomingMessage,
+    payloads: NotifyPayload[]
+  ): NotifyPayload | undefined {
+    const targetChannel = message.channelId;
+    const targetThread = message.threadTs || message.ts;
+
+    return payloads.find((payload) => {
+      if (!payload.channelId || payload.channelId !== targetChannel) {
+        return false;
+      }
+
+      if (payload.threadTs && targetThread && payload.threadTs !== targetThread) {
+        return false;
+      }
+
+      return Boolean(payload.message && payload.message.trim());
+    });
+  }
+
+  /**
+   * Build a Slack-friendly fallback response when no NOTIFY payload targeted Slack.
+   */
+  private buildFallbackResponse(raw: string, payloads: NotifyPayload[]): string {
+    const chatMessages = payloads
+      .filter((payload) => payload.message && !payload.channelId)
+      .map((payload) => payload.message!.trim())
+      .filter(Boolean);
+
+    if (chatMessages.length > 0) {
+      return chatMessages.join('\n\n');
+    }
+
+    const cleaned = raw
+      .replace(/\[\/?NOTIFY\]/g, '')
+      .replace(/^conversationId:.*$/gm, '')
+      .replace(/^channelId:.*$/gm, '')
+      .replace(/^threadTs:.*$/gm, '')
+      .replace(/^type:.*$/gm, '')
+      .replace(/^title:.*$/gm, '')
+      .replace(/^urgency:.*$/gm, '')
+      .replace(/^---$/gm, '')
+      // Strip TUI box-drawing border characters from Gemini CLI output
+      .replace(/^[\s│┃║|]+|[\s│┃║|]+$/gm, '')
+      // Remove pure decoration lines (corners, horizontal rules)
+      .replace(/^[─━┄┅┈┉╌╍═┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬╭╮╰╯\-+\s]+$/gm, '')
+      // Strip orphaned multi-param ANSI CSI sequences (e.g. [38;2;249;226;175m)
+      .replace(/\[\d+(?:;\d+)*[A-BJKHfm]/g, '')
+      // Remove Gemini CLI TUI elements that leak into output
+      .replace(/^.*(?:Type\s+your\s+message|YOLO\s+mode|no\s+sandbox|context\s+left\)).*$/gmi, '')
+      .replace(/^.*(?:esc\s+to\s+cancel|Initiating\s+File\s+Inspection).*$/gmi, '')
+      .trim();
+
+    return cleaned;
+  }
+
+  /**
+   * Persist Slack reply content to the thread store when available.
+   */
+  private async recordThreadReply(
+    originalMessage: SlackIncomingMessage,
+    content: string
+  ): Promise<void> {
+    if (!this.threadStore) return;
+    const trimmed = content?.trim();
+    if (!trimmed) return;
+
+    const threadTs = originalMessage.threadTs || originalMessage.ts;
+    if (!threadTs) return;
+
+    try {
+      await this.threadStore.appendOrchestratorReply(originalMessage.channelId, threadTs, trimmed);
+    } catch (err) {
+      console.warn('[SlackBridge] Failed to store thread reply:', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Mark a channel+thread pair as already delivered to Slack by the reply-slack skill.
+   * Called by TerminalGateway.handleNotifyPayload when a slack_reply NOTIFY is processed.
+   *
+   * @param channelId - Slack channel ID
+   * @param threadTs - Thread timestamp (optional)
+   */
+  markDeliveredBySkill(channelId: string, threadTs?: string): void {
+    const key = `${channelId}:${threadTs || ''}`;
+    this.skillDeliveredThreads.add(key);
+
+    // Evict oldest entries if set is too large
+    if (this.skillDeliveredThreads.size > SlackOrchestratorBridge.MAX_SKILL_DELIVERY_RECORDS) {
+      const first = this.skillDeliveredThreads.values().next().value;
+      if (first !== undefined) {
+        this.skillDeliveredThreads.delete(first);
+      }
+    }
+  }
+
+  /**
+   * Check if a channel+thread pair was already delivered by the reply-slack skill.
+   *
+   * @param channelId - Slack channel ID
+   * @param threadTs - Thread timestamp (optional)
+   * @returns true if delivery was already handled by the skill
+   */
+  wasDeliveredBySkill(channelId: string, threadTs?: string): boolean {
+    const key = `${channelId}:${threadTs || ''}`;
+    if (this.skillDeliveredThreads.has(key)) {
+      // Remove after check to avoid permanent blocking of future replies to same thread
+      this.skillDeliveredThreads.delete(key);
+      return true;
+    }
+    return false;
   }
 
   /**

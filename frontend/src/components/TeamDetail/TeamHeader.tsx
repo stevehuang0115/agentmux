@@ -46,7 +46,7 @@ export const TeamHeader: React.FC<TeamHeaderProps> = ({
             {isStoppingTeam ? 'Stopping...' : isOrchestratorTeam ? 'Stop Orchestrator' : 'Stop Team'}
           </Button>
         )}
-        {isOrchestratorTeam && (
+        {isOrchestratorTeam && teamStatus === 'active' && (
           <Button variant="primary" onClick={onViewTerminal} icon={Terminal}>
             View Terminal
           </Button>

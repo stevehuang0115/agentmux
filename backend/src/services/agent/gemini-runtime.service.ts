@@ -1,6 +1,8 @@
+import * as os from 'os';
+import * as path from 'path';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -19,22 +21,23 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 * Gemini CLI specific detection using '/' command
 	 */
 	protected async detectRuntimeSpecific(sessionName: string): Promise<boolean> {
-		// Send a simple command to test if Gemini CLI is running
-
-		// First to clear the current command
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
+		// Send a simple command to test if Gemini CLI is running.
+		// Do NOT use clearCurrentCommandLine — it sends Ctrl+C which triggers
+		// /quit at an empty Gemini CLI prompt, and Ctrl+U which is ignored.
+		// Do NOT send Escape — it defocuses the Ink TUI input box permanently.
 
 		// Capture the output before checking
 		const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
-		// Send the '/' key to detect changes
+		// Send the '/' key to detect changes (triggers command palette)
 		await this.sessionHelper.sendKey(sessionName, '/');
 		await new Promise((resolve) => setTimeout(resolve, 2000));
 
 		// Capture the output after sending '/'
 		const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
 
-		// Clear the '/' command again
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
+		// Clear the '/' by sending Backspace (safe in TUI — just deletes the character)
+		await this.sessionHelper.sendKey(sessionName, 'Backspace');
+		await new Promise((resolve) => setTimeout(resolve, 500));
 
 		const hasOutputChange = afterOutput.length - beforeOutput.length > 5;
 
@@ -53,15 +56,22 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 */
 	protected getRuntimeReadyPatterns(): string[] {
 		return [
-			'Gemini CLI',
+			'Type your message',
+			'shell mode',
 			'gemini>',
 			'Ready for input',
 			'Model loaded',
-			'temperature:',
-			'google ai',
-			'GEMINI.md',
-			'Welcome to Gemini',
-			'Initialized successfully',
+			'context left)',
+		];
+	}
+
+	/**
+	 * Gemini CLI specific exit patterns for runtime exit detection
+	 */
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [
+			/Agent powering down/i,
+			/Interaction Summary/,
 		];
 	}
 
@@ -78,6 +88,35 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 			'Invalid API key',
 			'Rate limit exceeded',
 		];
+	}
+
+	/**
+	 * Post-initialization hook for Gemini CLI.
+	 * Adds ~/.agentmux to the directory allowlist so the agent can read
+	 * init prompt files and memory data stored outside the project directory.
+	 *
+	 * @param sessionName - PTY session name
+	 */
+	async postInitialize(sessionName: string): Promise<void> {
+		const agentmuxHome = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+		this.logger.info('Gemini CLI post-init: adding ~/.agentmux to directory allowlist', {
+			sessionName,
+			path: agentmuxHome,
+		});
+
+		// Wait for Gemini CLI's async auto-update check to complete before
+		// sending commands. The auto-update notification (e.g., "Automatic
+		// update failed") appears shortly after startup and can interfere
+		// with slash command processing if we send /directory add too early.
+		await new Promise((resolve) => setTimeout(resolve, 3000));
+
+		const result = await this.addProjectToAllowlist(sessionName, agentmuxHome);
+		if (!result.success) {
+			this.logger.warn('Failed to add ~/.agentmux to Gemini CLI allowlist (non-fatal)', {
+				sessionName,
+				error: result.message,
+			});
+		}
 	}
 
 	/**
@@ -135,47 +174,85 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		success: boolean;
 		message: string;
 	}> {
-		try {
-			this.logger.info('Adding project to Gemini CLI allowlist', {
-				sessionName,
-				projectPath,
-			});
+		const maxAttempts = 3;
 
-			// Clear any existing command
-			await this.sessionHelper.clearCurrentCommandLine(sessionName);
-			await new Promise((resolve) => setTimeout(resolve, 500));
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				this.logger.info('Adding project to Gemini CLI allowlist', {
+					sessionName,
+					projectPath,
+					attempt,
+				});
 
-			// Send the directory add command
-			const addCommand = `/directory add ${projectPath}`;
-			await this.sessionHelper.sendMessage(sessionName, addCommand);
-			// Note: sendMessage already includes Enter key
+				// Send Enter to dismiss any pending notification (e.g., "Automatic
+				// update failed") that may overlay the TUI input and swallow the
+				// slash command. Enter on an empty `> ` prompt is a safe no-op.
+				// Do NOT send Escape (defocuses TUI permanently) or Ctrl+C
+				// (triggers /quit on empty prompt).
+				await this.sessionHelper.sendEnter(sessionName);
+				await new Promise((resolve) => setTimeout(resolve, 1000));
 
-			// Wait for command to complete
-			await new Promise((resolve) => setTimeout(resolve, 2000));
+				// Capture output before sending to verify the command was processed
+				const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
 
-			this.logger.info('Project added to Gemini CLI allowlist', {
-				sessionName,
-				projectPath,
-			});
+				// Send the directory add command
+				const addCommand = `/directory add ${projectPath}`;
+				await this.sessionHelper.sendMessage(sessionName, addCommand);
 
-			return {
-				success: true,
-				message: `Project path ${projectPath} added to Gemini CLI allowlist`,
-			};
-		} catch (error) {
-			this.logger.error('Failed to add project to Gemini CLI allowlist', {
-				sessionName,
-				projectPath,
-				error: error instanceof Error ? error.message : String(error),
-			});
+				// Wait for command to complete
+				await new Promise((resolve) => setTimeout(resolve, 2000));
 
-			return {
-				success: false,
-				message: `Failed to add project path to allowlist: ${
-					error instanceof Error ? error.message : String(error)
-				}`,
-			};
+				// Verify: check if output changed (slash commands produce confirmation)
+				const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
+				const outputChanged = beforeOutput !== afterOutput;
+				const hasConfirmation = /added|directory|✓|success/i.test(afterOutput);
+
+				if (outputChanged || hasConfirmation) {
+					this.logger.info('Project added to Gemini CLI allowlist (verified)', {
+						sessionName,
+						projectPath,
+						attempt,
+						outputChanged,
+						hasConfirmation,
+					});
+					return {
+						success: true,
+						message: `Project path ${projectPath} added to Gemini CLI allowlist`,
+					};
+				}
+
+				this.logger.warn('Directory add command may not have been processed, retrying', {
+					sessionName,
+					projectPath,
+					attempt,
+					outputChanged,
+				});
+
+				// Wait before retry to let any notification/overlay clear
+				await new Promise((resolve) => setTimeout(resolve, 2000));
+			} catch (error) {
+				this.logger.error('Failed to add project to Gemini CLI allowlist', {
+					sessionName,
+					projectPath,
+					attempt,
+					error: error instanceof Error ? error.message : String(error),
+				});
+
+				if (attempt === maxAttempts) {
+					return {
+						success: false,
+						message: `Failed to add project path to allowlist: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					};
+				}
+			}
 		}
+
+		return {
+			success: false,
+			message: `Failed to add project path to allowlist after ${maxAttempts} attempts`,
+		};
 	}
 
 	/**

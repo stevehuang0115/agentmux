@@ -263,18 +263,76 @@ export class PtySession implements ISession {
 	 * After calling kill(), the session cannot be used anymore.
 	 * All listeners will be cleared and subsequent write/resize calls will throw.
 	 *
+	 * @param signal - Optional signal to send (e.g. 'SIGTERM', 'SIGKILL'). Defaults to node-pty default (SIGHUP).
+	 *
 	 * @example
 	 * ```typescript
 	 * session.kill();
+	 * session.kill('SIGKILL');
 	 * ```
 	 */
-	kill(): void {
+	kill(signal?: string): void {
 		if (this.killed) {
 			return; // Already killed, no-op
 		}
 
 		this.killed = true;
-		this.ptyProcess.kill();
+		this.ptyProcess.kill(signal);
+
+		// Clear all listeners to prevent memory leaks
+		this.dataListeners.clear();
+		this.exitListeners.clear();
+	}
+
+	/**
+	 * Forcefully kill the session with SIGTERM → SIGKILL escalation.
+	 *
+	 * Sends SIGTERM first, then after a delay escalates to SIGKILL on both
+	 * the process and its process group to ensure all child processes are terminated.
+	 * This is necessary because Claude Code and Gemini CLI may catch/ignore SIGHUP and SIGTERM.
+	 *
+	 * @returns Promise that resolves after the kill sequence completes
+	 *
+	 * @example
+	 * ```typescript
+	 * await session.forceKill();
+	 * ```
+	 */
+	async forceKill(): Promise<void> {
+		const pid = this.ptyProcess.pid;
+
+		this.logger.info('Force-killing session', { name: this.name, pid });
+
+		// Step 1: Send SIGTERM via node-pty
+		if (!this.killed) {
+			this.killed = true;
+			try {
+				this.ptyProcess.kill('SIGTERM');
+			} catch (err) {
+				this.logger.debug('Error sending SIGTERM via node-pty (process may already be dead)', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
+		// Step 2: Wait, then escalate to SIGKILL
+		await new Promise<void>((resolve) => setTimeout(resolve, PTY_CONSTANTS.FORCE_KILL_ESCALATION_DELAY));
+
+		// SIGKILL the process directly
+		try {
+			process.kill(pid, 'SIGKILL');
+			this.logger.debug('Sent SIGKILL to process', { pid });
+		} catch {
+			// ESRCH = process already gone, which is fine
+		}
+
+		// SIGKILL the entire process group (negative PID)
+		try {
+			process.kill(-pid, 'SIGKILL');
+			this.logger.debug('Sent SIGKILL to process group', { pgid: -pid });
+		} catch {
+			// ESRCH = process group already gone, which is fine
+		}
 
 		// Clear all listeners to prevent memory leaks
 		this.dataListeners.clear();

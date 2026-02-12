@@ -1,5 +1,6 @@
 import * as path from 'path';
-import { readFile } from 'fs/promises';
+import * as os from 'os';
+import { readFile, mkdir, writeFile } from 'fs/promises';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
 	SessionCommandHelper,
@@ -22,10 +23,12 @@ import {
 	EVENT_DELIVERY_CONSTANTS,
 	TERMINAL_PATTERNS,
 	CLAUDE_RESUME_CONSTANTS,
+	GEMINI_SHELL_MODE_CONSTANTS,
 } from '../../constants.js';
 import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
+import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -52,6 +55,9 @@ export class AgentRegistrationService {
 	// Prompt file caching to eliminate file I/O contention during concurrent session creation
 	private promptCache = new Map<string, string>();
 
+	// AbortControllers for pending registration prompts (keyed by session name)
+	private registrationAbortControllers = new Map<string, AbortController>();
+
 	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
 	// Keeping these as static getters for backwards compatibility within the class
 	private static get CLAUDE_PROMPT_INDICATORS() {
@@ -74,6 +80,26 @@ export class AgentRegistrationService {
 		this.logger = LoggerService.getInstance().createComponentLogger('AgentRegistrationService');
 		this.storageService = storageService;
 		this.projectRoot = projectRoot || this.findProjectRoot();
+
+		// Wire up the exit monitor to cancel pending registrations on runtime exit
+		RuntimeExitMonitorService.getInstance().setOnExitDetectedCallback(
+			(sessionName: string) => this.cancelPendingRegistration(sessionName)
+		);
+	}
+
+	/**
+	 * Cancel a pending registration prompt for a session.
+	 * Called by RuntimeExitMonitorService when a runtime exit is detected.
+	 *
+	 * @param sessionName - The session whose registration to cancel
+	 */
+	cancelPendingRegistration(sessionName: string): void {
+		const controller = this.registrationAbortControllers.get(sessionName);
+		if (controller) {
+			controller.abort();
+			this.registrationAbortControllers.delete(sessionName);
+			this.logger.info('Cancelled pending registration', { sessionName });
+		}
 	}
 
 	/**
@@ -344,8 +370,11 @@ export class AgentRegistrationService {
 		memberId?: string,
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<boolean> {
-		// First clear any existing stuff
-		await (await this.getSessionHelper()).sendCtrlC(sessionName);
+		// Clear any existing input. Claude already performs Ctrl+C cleanup during
+		// runtime detection, so avoid sending additional Ctrl+C sequences.
+		// Gemini CLI: Skip cleanup — Ctrl+C at an empty prompt triggers /quit.
+		// Escape defocuses the TUI. Ctrl+U is ignored by the TUI.
+		const helper = await this.getSessionHelper();
 
 		// First check if runtime is running before sending the prompt
 		// runtimeService2: Separate instance for pre-registration runtime detection
@@ -365,11 +394,12 @@ export class AgentRegistrationService {
 			runtimeType,
 		});
 
-		// Send Ctrl+C to cancel any pending slash command from detection
-		await (await this.getSessionHelper()).sendCtrlC(sessionName);
+		// Clear any pending slash command from detection. Claude detection already
+		// exits slash mode. Gemini CLI: skip — Ctrl+C at empty prompt exits CLI,
+		// Escape defocuses TUI, Ctrl+U is ignored. The prompt should be clean.
 
 		const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-		const promptDelivered = await this.sendPromptRobustly(sessionName, prompt);
+		const promptDelivered = await this.sendPromptRobustly(sessionName, prompt, runtimeType);
 
 		if (!promptDelivered) {
 			this.logger.warn('Failed to deliver registration prompt', { sessionName, role });
@@ -411,6 +441,36 @@ export class AgentRegistrationService {
 		); // 30s timeout
 		if (!isReady) {
 			throw new Error(`Failed to reinitialize ${runtimeType} within timeout`);
+		}
+
+		// Start runtime exit monitoring IMMEDIATELY after runtime is ready.
+		// Must be before postInitialize and sendRegistrationPromptAsync so exits
+		// during those phases are detected and the abort signal fires in time.
+		RuntimeExitMonitorService.getInstance().startMonitoring(
+			sessionName, runtimeType, role
+		);
+
+		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
+		try {
+			await runtimeService2.postInitialize(sessionName);
+			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
+			// arrived during postInitialize commands, so they don't leak into the prompt input
+			await delay(500);
+			// Clear any pending input after post-initialization.
+			// Claude Code: Ctrl+C + Ctrl+U (clearCurrentCommandLine) — standard cleanup.
+			// Gemini CLI: Skip cleanup entirely — the TUI just started with a clean
+			// prompt. Ctrl+C at an empty Gemini CLI prompt triggers /quit and exits
+			// the CLI. Escape defocuses the TUI. Ctrl+U is ignored. The delay(500)
+			// above is sufficient to drain stale escape sequences.
+			if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+				await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
+			}
+		} catch (postInitError) {
+			this.logger.warn('Post-initialization hook failed (non-fatal)', {
+				sessionName,
+				runtimeType,
+				error: postInitError instanceof Error ? postInitError.message : String(postInitError),
+			});
 		}
 
 		// For PTY sessions, once runtime is detected as ready, consider initialization successful
@@ -515,7 +575,9 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Send registration prompt asynchronously (non-blocking)
+	 * Send registration prompt asynchronously (non-blocking).
+	 * Uses an AbortController so the operation can be cancelled if the
+	 * runtime exits before registration completes.
 	 */
 	private async sendRegistrationPromptAsync(
 		sessionName: string,
@@ -523,15 +585,29 @@ export class AgentRegistrationService {
 		memberId?: string,
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<void> {
+		// Create AbortController for this registration
+		const controller = new AbortController();
+		this.registrationAbortControllers.set(sessionName, controller);
+
 		try {
+			if (controller.signal.aborted) return;
 			const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-			await this.sendPromptRobustly(sessionName, prompt);
+
+			if (controller.signal.aborted) return;
+			await this.sendPromptRobustly(sessionName, prompt, runtimeType, controller.signal);
+
 			this.logger.debug('Registration prompt sent asynchronously', { sessionName, role });
 		} catch (error) {
+			if (controller.signal.aborted) {
+				this.logger.info('Registration prompt cancelled (runtime exited)', { sessionName });
+				return;
+			}
 			this.logger.warn('Failed to send registration prompt asynchronously', {
 				sessionName,
 				error: error instanceof Error ? error.message : String(error),
 			});
+		} finally {
+			this.registrationAbortControllers.delete(sessionName);
 		}
 	}
 
@@ -581,6 +657,11 @@ export class AgentRegistrationService {
 				);
 			}
 
+			// Start runtime exit monitoring immediately after runtime is ready
+			RuntimeExitMonitorService.getInstance().startMonitoring(
+				sessionName, runtimeType, role
+			);
+
 			// Additional verification: Use runtime detection to confirm runtime is responding
 			// Wait a bit longer for runtime to fully load after showing welcome message
 			this.logger.debug(
@@ -623,6 +704,34 @@ export class AgentRegistrationService {
 					`Failed to initialize ${runtimeType} in recreated session within timeout`
 				);
 			}
+
+			// Start runtime exit monitoring immediately after runtime is ready
+			RuntimeExitMonitorService.getInstance().startMonitoring(
+				sessionName, runtimeType, role
+			);
+		}
+
+		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
+		try {
+			const postInitService = this.createRuntimeService(runtimeType);
+			await postInitService.postInitialize(sessionName);
+			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
+			// arrived during postInitialize commands, so they don't leak into the prompt input
+			await delay(500);
+			// Claude Code: Ctrl+C + Ctrl+U to clear any stale input.
+			// Gemini CLI (Ink TUI): Do NOT send any cleanup keystrokes.
+			// Escape defocuses the Ink TUI input permanently. Ctrl+C at empty
+			// prompt triggers /quit. Ctrl+U is ignored. The delay above is
+			// sufficient to drain stale escape sequences.
+			if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+				await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
+			}
+		} catch (postInitError) {
+			this.logger.warn('Post-initialization hook failed after recreation (non-fatal)', {
+				sessionName,
+				runtimeType,
+				error: postInitError instanceof Error ? postInitError.message : String(postInitError),
+			});
 		}
 
 		// For PTY sessions, once runtime is detected as ready, consider initialization successful
@@ -938,7 +1047,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 				// Step 3: Send system prompt with robust delivery mechanism
 				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-				const promptDelivered = await this.sendPromptRobustly(sessionName, prompt);
+				const promptDelivered = await this.sendPromptRobustly(sessionName, prompt, runtimeType);
 
 				if (!promptDelivered) {
 					this.logger.warn('Failed to deliver system prompt reliably', {
@@ -1444,6 +1553,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		try {
 			this.logger.info('Terminating agent session (unified approach)', { sessionName, role });
 
+			// Stop runtime exit monitoring before killing the session
+			RuntimeExitMonitorService.getInstance().stopMonitoring(sessionName);
+
 			// Get session helper once to avoid repeated async calls
 			const sessionHelper = await this.getSessionHelper();
 			const sessionExists = sessionHelper.sessionExists(sessionName);
@@ -1531,7 +1643,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 */
 	async sendMessageToAgent(
 		sessionName: string,
-		message: string
+		message: string,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<{
 		success: boolean;
 		message?: string;
@@ -1557,8 +1670,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 
 			// Use robust message delivery with proper waiting mechanism
-			// This handles Claude Code's input state better than just clearing the line
-			const delivered = await this.sendMessageWithRetry(sessionName, message);
+			const delivered = await this.sendMessageWithRetry(sessionName, message, 3, runtimeType);
 
 			if (!delivered) {
 				return {
@@ -1970,9 +2082,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	private async sendMessageWithRetry(
 		sessionName: string,
 		message: string,
-		maxAttempts: number = 3
+		maxAttempts: number = 3,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): Promise<boolean> {
 		const sessionHelper = await this.getSessionHelper();
+		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
@@ -1981,15 +2095,60 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					attempt,
 					maxAttempts,
 					messageLength: message.length,
+					runtimeType,
 				});
 
-				// Verify Claude is at prompt before sending
+				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
 				if (!this.isClaudeAtPrompt(output)) {
 					this.logger.debug('Not at prompt, waiting before retry', { sessionName, attempt });
 					await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 					continue;
 				}
+
+				// Gemini CLI shell mode guard: if the prompt shows `!` instead of `>`,
+				// input will be executed as a shell command. Send Escape to exit first.
+				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI && this.isGeminiInShellMode(output)) {
+					const escaped = await this.escapeGeminiShellMode(sessionName, sessionHelper);
+					if (!escaped) {
+						this.logger.warn('Could not exit Gemini shell mode, skipping attempt', {
+							sessionName,
+							attempt,
+						});
+						await delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
+						continue;
+					}
+				}
+
+				// Clear any stale text before sending.
+				// Claude Code: Ctrl+C to cancel any pending input.
+				// Gemini CLI (Ink TUI): Send Enter to "wake up" the input box.
+				// The TUI input can lose focus after idle periods, auto-update
+				// notifications, or dialog overlays. When defocused, writes are
+				// silently consumed by the Ink framework but NOT routed to the
+				// InputPrompt. Enter on an empty `> ` prompt is a safe no-op
+				// (just shows a new blank prompt line) and can dismiss overlays
+				// or re-engage input focus after minor TUI state glitches.
+				// Do NOT send Escape (defocuses permanently), Ctrl+C (triggers
+				// /quit on empty prompt), or Ctrl+U (ignored by TUI).
+				if (isClaudeCode) {
+					await sessionHelper.sendCtrlC(sessionName);
+					await delay(300);
+				} else {
+					await sessionHelper.sendEnter(sessionName);
+					await delay(500);
+				}
+
+				// For TUI runtimes, capture output BEFORE sending to detect changes.
+				// The TUI always shows the `> ` prompt (even during processing), so
+				// isClaudeAtPrompt can't detect delivery. Instead, compare output
+				// before and after to see if the agent started processing.
+				// Use a small pane capture (20 lines) to reduce noise from TUI
+				// border redraws that can cause length changes unrelated to delivery.
+				const beforeOutput = !isClaudeCode
+					? sessionHelper.capturePane(sessionName, 20)
+					: '';
+				const beforeLength = beforeOutput.length;
 
 				// Use SessionCommandHelper.sendMessage() — proven two-step write:
 				// 1. session.write(message)    — triggers bracketed paste
@@ -1998,21 +2157,103 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// 4. await delay(KEY_DELAY)    — waits for key processing
 				await sessionHelper.sendMessage(sessionName, message);
 
-				// Wait for Claude Code to start processing, then verify delivery
-				await delay(SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY);
+				// Wait for agent to start processing, then verify delivery.
+				// TUI runtimes need a longer delay (3s) for the TUI to redraw
+				// and show processing indicators after accepting input.
+				const processingDelay = isClaudeCode
+					? SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY
+					: 3000;
+				await delay(processingDelay);
 
-				const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-				if (!stuck) {
-					this.logger.debug('Message delivered successfully', { sessionName, attempt });
-					return true;
+				// === Delivery verification ===
+				// Claude Code: prompt disappears during processing, so check
+				// isMessageStuckAtPrompt (text still at prompt = stuck).
+				// TUI runtimes (Gemini CLI): the `> ` prompt is ALWAYS visible
+				// even during processing, making isClaudeAtPrompt unreliable.
+				// Instead, detect delivery via output changes (length increase
+				// or processing indicators), same approach as sendPromptRobustly.
+				if (isClaudeCode) {
+					const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
+					if (!stuck) {
+						this.logger.debug('Message delivered successfully', { sessionName, attempt });
+						return true;
+					}
+				} else {
+					// Use the same small pane capture as the "before" snapshot.
+					const afterOutput = sessionHelper.capturePane(sessionName, 20);
+					const lengthDiff = afterOutput.length - beforeLength;
+					const hasProcessingIndicators = TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(
+						afterOutput.slice(-500)
+					);
+					// Check broader processing keywords that Gemini CLI may show
+					const hasGeminiIndicators = /reading|thinking|processing|analyzing|registering|generating|searching/i.test(
+						afterOutput
+					);
+					// Check if output CONTENT changed (not just length). TUI redraws
+					// can cause length to decrease while the content actually changed
+					// because the agent accepted the input and started processing.
+					const contentChanged = beforeOutput !== afterOutput;
+					// Accept delivery if:
+					// 1. Output grew significantly (agent produced new output)
+					// 2. Output content changed AND length changed by any significant amount
+					//    (positive OR negative — TUI redraws cause shrinkage)
+					// 3. Processing indicators detected
+					const significantLengthChange = Math.abs(lengthDiff) > 10;
+					const delivered = (lengthDiff > 20)
+						|| (contentChanged && significantLengthChange)
+						|| hasProcessingIndicators
+						|| hasGeminiIndicators;
+
+					if (delivered) {
+						this.logger.debug('Message delivered successfully (TUI output changed)', {
+							sessionName,
+							attempt,
+							lengthDiff,
+							contentChanged,
+							hasProcessingIndicators,
+							hasGeminiIndicators,
+						});
+						return true;
+					}
+
+					this.logger.warn('TUI output did not change after send — message may not have been accepted', {
+						sessionName,
+						attempt,
+						lengthDiff,
+						contentChanged,
+						hasProcessingIndicators,
+						hasGeminiIndicators,
+					});
 				}
 
-				// Message stuck at prompt — clear line and retry
+				// Message stuck at prompt — clear line and retry.
 				this.logger.warn('Message stuck at prompt after send, clearing for retry', {
 					sessionName,
 					attempt,
 				});
-				await sessionHelper.clearCurrentCommandLine(sessionName);
+				if (isClaudeCode) {
+					await sessionHelper.clearCurrentCommandLine(sessionName);
+				} else {
+					// Gemini CLI retry cleanup: be careful with cleanup keystrokes.
+					// If output changed (contentChanged=true), text likely reached the
+					// input box but wasn't submitted — Ctrl+C safely clears it.
+					// If output did NOT change at all, the TUI input is likely defocused
+					// and the input box is EMPTY. Ctrl+C on an empty Gemini CLI prompt
+					// triggers /quit and exits the CLI entirely. In this case, only send
+					// Enter (safe no-op on empty prompt) to try to re-engage the input.
+					const noOutputChange = !isClaudeCode && beforeOutput === sessionHelper.capturePane(sessionName, 20);
+					if (noOutputChange) {
+						this.logger.warn('No output change detected — TUI input may be defocused, sending Enter to re-engage', {
+							sessionName,
+							attempt,
+						});
+						await sessionHelper.sendEnter(sessionName);
+						await delay(300);
+					} else {
+						await sessionHelper.sendCtrlC(sessionName);
+						await delay(200);
+					}
+				}
 				await delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
 				if (attempt < maxAttempts) {
@@ -2072,13 +2313,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Also use [CHAT: as a secondary token if message has a CHAT prefix
 			const chatToken = chatPrefixMatch ? '[CHAT:' : null;
 
-			// Check last 5 non-empty lines for either token
+			// Check last 20 non-empty lines for either token.
+			// Gemini CLI TUI has status bars at the bottom (branch, sandbox, model info)
+			// that push input content further up. 5 lines was insufficient.
 			const lines = output.split('\n').filter((line) => line.trim().length > 0);
-			const linesToCheck = lines.slice(-5);
+			const linesToCheck = lines.slice(-20);
 
 			const isStuck = linesToCheck.some((line) => {
-				if (searchToken && line.includes(searchToken)) return true;
-				if (chatToken && line.includes(chatToken)) return true;
+				// Strip TUI box-drawing borders before checking (Gemini CLI wraps content in │...│)
+				const stripped = line.replace(/^[│┃║|\s]+/, '').replace(/[│┃║|\s]+$/, '');
+				if (searchToken && (line.includes(searchToken) || stripped.includes(searchToken))) return true;
+				if (chatToken && (line.includes(chatToken) || stripped.includes(chatToken))) return true;
 				return false;
 			});
 
@@ -2113,25 +2358,29 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return true; // Assume at prompt if no output (safer for message delivery)
 		}
 
-		// Use the PROMPT_STREAM regex which precisely matches a prompt character
-		// on its own line (e.g., ❯ or >), not as part of a status bar like ⏵⏵.
-		// This checks the entire captured output, not just the last line, because
-		// status bars and notifications can appear below the prompt line.
-		if (TERMINAL_PATTERNS.PROMPT_STREAM.test(terminalOutput)) {
+		// Only analyze the tail of the buffer to avoid matching historical prompts
+		const tailSection = terminalOutput.slice(-2000);
+
+		// Check for prompt FIRST. Processing indicators like "thinking" or "analyzing"
+		// can appear in the agent's previous response text and persist in the terminal
+		// scroll buffer, causing false negatives if checked before the prompt.
+		if (TERMINAL_PATTERNS.PROMPT_STREAM.test(tailSection)) {
 			return true;
 		}
 
 		// Fallback: check last several lines for prompt indicators.
 		// The prompt may not be on the very last line due to status bars,
 		// notifications, or terminal wrapping below the prompt.
-		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
+		const lines = tailSection.split('\n').filter((line) => line.trim().length > 0);
 		const linesToCheck = lines.slice(-10);
 
-		return linesToCheck.some((line) => {
+		const hasPrompt = linesToCheck.some((line) => {
 			const trimmed = line.trim();
+			// Strip TUI box-drawing borders (│, ┃, etc.) that Gemini CLI wraps around prompts
+			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
 			// Exact match for single-char prompts (❯, >, ⏵, $)
 			if (AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
-				(indicator) => trimmed === indicator
+				(indicator) => trimmed === indicator || stripped === indicator
 			)) {
 				return true;
 			}
@@ -2139,8 +2388,106 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			if (trimmed.startsWith('❯❯ ')) {
 				return true;
 			}
+			// Gemini CLI TUI prompt: > or ! followed by space (may have placeholder text)
+			// Check both raw trimmed line and stripped (box-drawing removed) line
+			if (trimmed.startsWith('> ') || trimmed.startsWith('! ') ||
+				stripped.startsWith('> ') || stripped.startsWith('! ')) {
+				return true;
+			}
 			return false;
 		});
+
+		if (hasPrompt) {
+			return true;
+		}
+
+		// No prompt found — check if still processing. Only check the last few
+		// lines to avoid matching words like "thinking" in historical response text.
+		const recentLines = linesToCheck.slice(-5).join('\n');
+		if (TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(recentLines)) {
+			this.logger.debug('Processing indicators present near bottom of output');
+			return false;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Detect if Gemini CLI is currently in shell mode.
+	 *
+	 * In shell mode, Gemini CLI changes its prompt from `>` to `!`. Any input
+	 * sent in this mode is executed as a shell command instead of being passed
+	 * to the model. This method examines the last few lines of terminal output
+	 * for shell mode prompt indicators.
+	 *
+	 * @param terminalOutput - Captured terminal pane content
+	 * @returns true if the terminal shows a shell mode prompt
+	 */
+	private isGeminiInShellMode(terminalOutput: string): boolean {
+		if (!terminalOutput || typeof terminalOutput !== 'string') {
+			return false;
+		}
+
+		const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
+		const linesToCheck = lines.slice(-10);
+
+		return linesToCheck.some((line) => {
+			const trimmed = line.trim();
+			// Strip TUI box-drawing borders
+			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
+
+			// Shell mode prompt: `!` alone or `! ` with text (not `> ` which is normal mode)
+			// Check stripped line — after removing box-drawing, if it starts with `! ` or equals `!`
+			if (stripped === '!' || stripped.startsWith('! ')) {
+				return true;
+			}
+
+			// Also check pattern-based detection for bordered prompts
+			return GEMINI_SHELL_MODE_CONSTANTS.SHELL_MODE_PROMPT_PATTERNS.some(
+				(pattern) => pattern.test(trimmed)
+			);
+		});
+	}
+
+	/**
+	 * Escape from Gemini CLI shell mode by sending Escape key.
+	 *
+	 * Sends Escape and waits for the prompt to change from `!` back to `>`.
+	 * Retries up to MAX_ESCAPE_ATTEMPTS times.
+	 *
+	 * @param sessionName - The session running Gemini CLI
+	 * @param sessionHelper - SessionCommandHelper instance
+	 * @returns true if successfully escaped shell mode, false if still in shell mode
+	 */
+	private async escapeGeminiShellMode(
+		sessionName: string,
+		sessionHelper: SessionCommandHelper
+	): Promise<boolean> {
+		for (let attempt = 1; attempt <= GEMINI_SHELL_MODE_CONSTANTS.MAX_ESCAPE_ATTEMPTS; attempt++) {
+			this.logger.info('Gemini CLI in shell mode, sending Escape to exit', {
+				sessionName,
+				attempt,
+			});
+
+			await sessionHelper.sendEscape(sessionName);
+			await delay(GEMINI_SHELL_MODE_CONSTANTS.ESCAPE_DELAY_MS);
+
+			// Check if we're back to normal mode
+			const output = sessionHelper.capturePane(sessionName);
+			if (!this.isGeminiInShellMode(output)) {
+				this.logger.info('Successfully exited Gemini CLI shell mode', {
+					sessionName,
+					attempt,
+				});
+				return true;
+			}
+		}
+
+		this.logger.warn('Failed to exit Gemini CLI shell mode after max attempts', {
+			sessionName,
+			maxAttempts: GEMINI_SHELL_MODE_CONSTANTS.MAX_ESCAPE_ATTEMPTS,
+		});
+		return false;
 	}
 
 	/**
@@ -2260,88 +2607,157 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
-	 * Send system prompt with robust delivery mechanism to handle tmux race conditions
-	 * @param sessionName The tmux session name
-	 * @param prompt The system prompt to send
-	 * @returns true if prompt was delivered successfully, false otherwise
+	 * Write the prompt to a file and send a short instruction to the agent to read it.
+	 *
+	 * Instead of pasting large multi-line prompts directly into the terminal (which
+	 * causes bracketed paste issues, shell interpretation errors, and truncation),
+	 * we write the prompt to ~/.agentmux/prompts/{sessionName}-init.md and send a
+	 * single-line instruction telling the agent to read that file.
+	 *
+	 * @param sessionName The session name
+	 * @param prompt The full system prompt to deliver
+	 * @param runtimeType The agent runtime type
+	 * @param abortSignal Optional signal to cancel the operation (e.g. on runtime exit)
+	 * @returns true if the instruction was delivered successfully
 	 */
-	private async sendPromptRobustly(sessionName: string, prompt: string): Promise<boolean> {
-		const maxAttempts = 3;
-		// Get session helper once to avoid repeated async calls
+	private async sendPromptRobustly(
+		sessionName: string,
+		prompt: string,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
+		abortSignal?: AbortSignal
+	): Promise<boolean> {
+			const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
+			const maxAttempts = isClaudeCode ? 1 : 3;
 		const sessionHelper = await this.getSessionHelper();
 
+		// Step 1: Write prompt to a file.
+		// Claude Code: write to ~/.agentmux/prompts/ (always accessible).
+		// Gemini CLI / other TUI runtimes: write INSIDE the project directory
+		// so the file is within the workspace allowlist. Gemini CLI restricts
+		// file reads to workspace directories, and the /directory add command
+		// to add ~/.agentmux may fail (e.g., auto-update notification
+		// interferes during postInitialize).
+		const promptsDir = isClaudeCode
+			? path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, 'prompts')
+			: path.join(this.projectRoot, '.agentmux', 'prompts');
+		const promptFilePath = path.join(promptsDir, `${sessionName}-init.md`);
+
+		try {
+			await mkdir(promptsDir, { recursive: true });
+			await writeFile(promptFilePath, prompt, 'utf8');
+			this.logger.debug('Wrote init prompt to file', {
+				sessionName,
+				promptFilePath,
+				promptLength: prompt.length,
+			});
+		} catch (error) {
+			this.logger.error('Failed to write init prompt file', {
+				sessionName,
+				promptFilePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+
+		// Step 2: Send a short instruction to read the file
+		const instruction = `Read the file at ${promptFilePath} and follow all instructions in it.`;
+
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			// Check abort before each attempt
+			if (abortSignal?.aborted) {
+				this.logger.info('Prompt delivery aborted (runtime exited)', { sessionName, attempt });
+				return false;
+			}
+
 			try {
-				this.logger.debug('Attempting robust prompt delivery', {
+				this.logger.debug('Sending file-based prompt instruction', {
 					sessionName,
 					attempt,
-					promptLength: prompt.length,
+					runtimeType,
+					promptFilePath,
 				});
 
 				// Capture state before sending
 				const beforeOutput = sessionHelper.capturePane(sessionName, 10);
 				const beforeLength = beforeOutput.length;
 
-				// Clear the existing prompts if any
-				await sessionHelper.sendCtrlC(sessionName);
+				// Check abort before sending to terminal
+				if (abortSignal?.aborted) {
+					this.logger.info('Prompt delivery aborted before send (runtime exited)', { sessionName });
+					return false;
+				}
 
-				// Send the prompt with proper timing
-				await sessionHelper.sendMessage(sessionName, prompt);
+				// Clear any pending input before sending the instruction.
+				// Claude Code: Escape closes slash menus + Ctrl+U clears line.
+				// Gemini CLI (Ink TUI): Do NOT send any cleanup keystrokes.
+				// - Escape defocuses the Ink TUI input permanently (no recovery).
+				// - Ctrl+C at empty prompt triggers /quit and exits the CLI.
+				// - Ctrl+U is ignored by the TUI's custom key handling.
+				// - Shift+Tab toggles safety modes, not focus.
+				// The prompt should be clean at this point (just initialized or
+				// addProjectToAllowlist just ran without defocusing).
+				if (isClaudeCode) {
+					await sessionHelper.sendEscape(sessionName);
+					await delay(200);
+					await sessionHelper.sendKey(sessionName, 'C-u');
+					await delay(300);
+				}
 
-				// Claude Code with bracketed paste mode may need explicit Enter presses after paste.
-				// Scale wait time based on prompt size to ensure paste processing completes.
-				const enterDelay = Math.min(1000 + Math.ceil(prompt.length / 10), 5000);
-				await delay(enterDelay);
-				await sessionHelper.sendEnter(sessionName);
-				await delay(500);
-				await sessionHelper.sendEnter(sessionName);
+				// Check abort right before writing instruction to terminal
+				if (abortSignal?.aborted) {
+					this.logger.info('Prompt delivery aborted before instruction send (runtime exited)', { sessionName });
+					return false;
+				}
 
-				// Wait for Claude to start processing
+				// Send the short instruction
+				await sessionHelper.sendMessage(sessionName, instruction);
+
+				if (isClaudeCode) {
+					// Claude Code may need an extra Enter after bracketed paste
+					await delay(1000);
+					if (abortSignal?.aborted) return false;
+					await sessionHelper.sendEnter(sessionName);
+				}
+
+				// Wait for agent to start processing
 				await delay(3000);
 
-				// Verify prompt was delivered and processed
+				if (abortSignal?.aborted) return false;
+
+				// Verify delivery
 				const afterOutput = sessionHelper.capturePane(sessionName, 20);
 				const afterLength = afterOutput.length;
-
-				// Check for signs of Claude processing the prompt
 				const lengthIncrease = afterLength - beforeLength;
-				const hasPromptInOutput = afterOutput.includes(prompt.substring(0, 100)); // Check first 100 chars
-				const hasProcessingIndicators = /thinking|processing|analyzing|registering/i.test(
+				const hasProcessingIndicators = /thinking|processing|analyzing|registering|reading/i.test(
 					afterOutput
 				);
 
-				if (lengthIncrease > 50 || hasProcessingIndicators || !hasPromptInOutput) {
-					// Prompt appears to have been processed (content changed significantly)
-					this.logger.debug(
-						'Prompt delivery verified - Claude appears to be processing',
-						{
-							sessionName,
-							attempt,
-							lengthIncrease,
-							hasProcessingIndicators,
-						}
-					);
+				if (lengthIncrease > 20 || hasProcessingIndicators) {
+					this.logger.debug('Prompt instruction delivered successfully', {
+						sessionName,
+						attempt,
+						lengthIncrease,
+						hasProcessingIndicators,
+						runtimeType,
+					});
 					return true;
 				}
 
-				// If prompt is still visible and no processing detected, retry
-				this.logger.warn('Prompt delivery may have failed - retrying', {
+				this.logger.warn('Prompt instruction delivery may have failed - retrying', {
 					sessionName,
 					attempt,
 					lengthIncrease,
-					hasPromptInOutput,
-					beforeLength,
-					afterLength,
+					runtimeType,
 				});
 
-				// Add longer delay before retry
 				if (attempt < maxAttempts) {
 					await delay(1000);
 				}
 			} catch (error) {
-				this.logger.error('Error during robust prompt delivery', {
+				this.logger.error('Error during prompt instruction delivery', {
 					sessionName,
 					attempt,
+					runtimeType,
 					error: error instanceof Error ? error.message : String(error),
 				});
 
@@ -2351,9 +2767,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		this.logger.error('Failed to deliver prompt after all attempts', {
+		this.logger.error('Failed to deliver prompt instruction after all attempts', {
 			sessionName,
 			maxAttempts,
+			runtimeType,
 		});
 		return false;
 	}

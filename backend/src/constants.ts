@@ -66,6 +66,10 @@ export const PTY_CONSTANTS = {
 	DEFAULT_ROWS: 24,
 	MAX_RESIZE_COLS: 1000,
 	MAX_RESIZE_ROWS: 1000,
+	/** Delay before escalating from SIGTERM to SIGKILL in forceKill (ms) */
+	FORCE_KILL_ESCALATION_DELAY: 500,
+	/** Delay before escalating from SIGTERM to SIGKILL in forceDestroyAll (ms) */
+	FORCE_DESTROY_ESCALATION_DELAY: 1000,
 } as const;
 
 // Session command timing delays (in milliseconds)
@@ -204,18 +208,23 @@ export const TERMINAL_PATTERNS = {
 	PASTE_STUCK: /\[Pasted text #\d+ \+\d+ lines\]/,
 
 	/**
-	 * Claude Code prompt indicators (characters that appear at input prompts).
+	 * Agent prompt indicators (characters that appear at input prompts).
+	 * Includes Claude Code (❯, >, ⏵), bash ($), and Gemini CLI (!).
 	 */
-	PROMPT_CHARS: ['❯', '>', '⏵', '$'] as const,
+	PROMPT_CHARS: ['❯', '>', '⏵', '$', '!'] as const,
 
 	/**
-	 * Pattern for detecting Claude Code prompt in terminal stream.
+	 * Pattern for detecting agent prompt in terminal stream.
 	 * Matches either:
-	 * - A single prompt char (❯, >, ⏵) alone on a line (normal prompt)
-	 * - ❯❯ at start of a line followed by space (bypass permissions mode prompt)
-	 * Both indicate Claude Code is idle and ready for input.
+	 * - A single prompt char (❯, ⏵) alone on a line (Claude Code prompt)
+	 * - ❯❯ at start of a line followed by space (Claude bypass permissions mode)
+	 * - > or ! followed by a space (Gemini CLI TUI prompt, may have placeholder text)
+	 * - Box-drawing border (│, ┃) followed by > or ! (Gemini CLI TUI bordered prompt)
+	 * - $ alone on a line (bash prompt fallback)
+	 * - Gemini CLI textual prompts like “Type your message …” or “YOLO mode …”
+	 * Indicates the agent CLI is idle and ready for input.
 	 */
-	PROMPT_STREAM: /(?:^|\n)\s*(?:[>❯⏵]\s*(?:\n|$)|❯❯\s)/,
+	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯\s|[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
 
 	/**
 	 * Processing indicators including status text patterns.
@@ -327,6 +336,46 @@ export const CLAUDE_RESUME_CONSTANTS = {
 	SESSION_PICKER_DELAY_MS: 3000,
 	/** Timeout for Claude to resume and return to prompt (ms) */
 	RESUME_READY_TIMEOUT_MS: 30000,
+} as const;
+
+/**
+ * Constants for Gemini CLI shell mode detection and escape.
+ * Gemini CLI enters "shell mode" when it receives a `!` prefix or via `/shell`.
+ * In shell mode, input is executed as shell commands instead of being sent to the model.
+ * The prompt changes from `>` to `!` (or `$` in some versions).
+ */
+export const GEMINI_SHELL_MODE_CONSTANTS = {
+	/**
+	 * Patterns that indicate Gemini CLI is in shell mode.
+	 * Matches `!` prompt char (with optional box-drawing border) when NOT followed
+	 * by typical chat prompt indicators like "Type your message".
+	 */
+	SHELL_MODE_PROMPT_PATTERNS: [
+		/[│┃]\s*!\s*[│┃]/,      // Box-bordered shell prompt: │ ! │
+		/[│┃]\s*!\s+\S/,        // Box-bordered shell prompt with text: │ ! command │
+	] as const,
+	/** Delay after sending Escape to wait for mode switch (ms) */
+	ESCAPE_DELAY_MS: 500,
+	/** Maximum attempts to exit shell mode */
+	MAX_ESCAPE_ATTEMPTS: 3,
+} as const;
+
+/**
+ * Constants for runtime exit detection monitoring.
+ * Used by RuntimeExitMonitorService to detect when an agent CLI exits.
+ */
+export const RUNTIME_EXIT_CONSTANTS = {
+	/** Maximum rolling buffer size for terminal output (bytes) */
+	MAX_BUFFER_SIZE: 8192,
+	/** Debounce delay after exit pattern match before confirming (ms) */
+	CONFIRMATION_DELAY_MS: 500,
+	/**
+	 * Grace period after monitoring start to ignore false positives (ms).
+	 * Set to 0 because exit patterns (e.g. "Agent powering down",
+	 * "Interaction Summary") are specific enough to not appear during
+	 * normal runtime initialization output.
+	 */
+	STARTUP_GRACE_PERIOD_MS: 0,
 } as const;
 
 // Type helpers

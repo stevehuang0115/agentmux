@@ -27,6 +27,8 @@ jest.mock('../core/logger.service.js', () => ({
 
 jest.mock('fs/promises', () => ({
 	readFile: jest.fn(),
+	mkdir: jest.fn().mockResolvedValue(undefined),
+	writeFile: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('os', () => ({
@@ -226,10 +228,10 @@ describe('AgentRegistrationService', () => {
 				90000
 			);
 
-			// Give time for async operation to complete
-			await new Promise(resolve => setTimeout(resolve, 100));
+			// Give time for async operation to complete (file write + delays in sendPromptRobustly)
+			await new Promise(resolve => setTimeout(resolve, 1000));
 
-			// Should have called sendMessage with the registration prompt
+			// Should have called sendMessage with the instruction to read the prompt file
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
 		});
 	});
@@ -291,6 +293,8 @@ describe('AgentRegistrationService', () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}');
+			// Mock capturePane to show processing indicators so sendPromptRobustly succeeds
+			mockSessionHelper.capturePane.mockReturnValue('⠋ Thinking... registering agent');
 
 			// Mock successful registration check
 			mockStorageService.getTeams.mockResolvedValue([{
@@ -648,6 +652,8 @@ describe('AgentRegistrationService', () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+			// Mock capturePane to show processing indicators so sendPromptRobustly succeeds
+			mockSessionHelper.capturePane.mockReturnValue('⠋ Thinking... registering agent');
 
 			// Mock successful registration check
 			mockStorageService.getTeams.mockResolvedValue([{
@@ -1138,6 +1144,132 @@ describe('AgentRegistrationService', () => {
 			const flags = await resolveRuntimeFlags('generalist', 'claude-code');
 
 			expect(flags).toEqual(['--chrome']);
+		});
+	});
+
+	describe('isGeminiInShellMode (private method)', () => {
+		let isGeminiInShellMode: (output: string) => boolean;
+
+		beforeEach(() => {
+			isGeminiInShellMode = (service as any).isGeminiInShellMode.bind(service);
+		});
+
+		it('should return false for normal Gemini CLI prompt', () => {
+			expect(isGeminiInShellMode('│ > Type your message... │')).toBe(false);
+		});
+
+		it('should return false for empty/null input', () => {
+			expect(isGeminiInShellMode('')).toBe(false);
+			expect(isGeminiInShellMode(null as any)).toBe(false);
+			expect(isGeminiInShellMode(undefined as any)).toBe(false);
+		});
+
+		it('should detect shell mode from bordered ! prompt', () => {
+			expect(isGeminiInShellMode('│ ! │')).toBe(true);
+		});
+
+		it('should detect shell mode from bordered ! prompt with text', () => {
+			expect(isGeminiInShellMode('│ ! ls -la │')).toBe(true);
+		});
+
+		it('should detect shell mode from stripped ! prompt', () => {
+			expect(isGeminiInShellMode('! ')).toBe(true);
+		});
+
+		it('should detect shell mode from bare ! character', () => {
+			expect(isGeminiInShellMode('!')).toBe(true);
+		});
+
+		it('should detect shell mode on last line of multi-line output', () => {
+			const output = [
+				'Welcome to Gemini CLI',
+				'Model: gemini-2.5-pro',
+				'│ ! │',
+			].join('\n');
+			expect(isGeminiInShellMode(output)).toBe(true);
+		});
+
+		it('should not detect shell mode from normal > prompt', () => {
+			const output = [
+				'Welcome to Gemini CLI',
+				'│ > Type your message │',
+			].join('\n');
+			expect(isGeminiInShellMode(output)).toBe(false);
+		});
+	});
+
+	describe('escapeGeminiShellMode (private method)', () => {
+		let escapeGeminiShellMode: (sessionName: string, helper: any) => Promise<boolean>;
+
+		beforeEach(() => {
+			escapeGeminiShellMode = (service as any).escapeGeminiShellMode.bind(service);
+		});
+
+		it('should send Escape and return true when shell mode exits', async () => {
+			// First capturePane: still in shell mode (but isGeminiInShellMode will see normal prompt)
+			mockSessionHelper.capturePane.mockReturnValue('│ > Type your message │');
+
+			const result = await escapeGeminiShellMode('agentmux-orc', mockSessionHelper);
+
+			expect(result).toBe(true);
+			expect(mockSessionHelper.sendEscape).toHaveBeenCalledWith('agentmux-orc');
+		});
+
+		it('should retry and return false after max attempts if still in shell mode', async () => {
+			// capturePane always shows shell mode
+			mockSessionHelper.capturePane.mockReturnValue('│ ! │');
+
+			const result = await escapeGeminiShellMode('agentmux-orc', mockSessionHelper);
+
+			expect(result).toBe(false);
+			expect(mockSessionHelper.sendEscape).toHaveBeenCalledTimes(3); // MAX_ESCAPE_ATTEMPTS
+		});
+	});
+
+	describe('sendMessageToAgent with Gemini shell mode', () => {
+		beforeEach(() => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+		});
+
+		it('should detect and escape shell mode before sending message to Gemini CLI', async () => {
+			let callCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				callCount++;
+				// First call (prompt check in sendMessageWithRetry): shell mode
+				if (callCount === 1) return '│ ! │';
+				// Second call (after escape, isGeminiInShellMode check): normal mode
+				if (callCount === 2) return '│ > Type your message │';
+				// Third call (before-send snapshot for TUI delivery detection): normal prompt
+				if (callCount === 3) return '│ > │';
+				// Fourth call+ (after-send snapshot): processing (message delivered)
+				return '⠋ Thinking...';
+			});
+
+			const result = await service.sendMessageToAgent(
+				'agentmux-orc',
+				'Hello!',
+				RUNTIME_TYPES.GEMINI_CLI
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendEscape).toHaveBeenCalled();
+		});
+
+		it('should not attempt shell mode escape for Claude Code runtime', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ ')    // prompt check
+				.mockReturnValueOnce('⠋ ');   // stuck check (processing = not stuck)
+
+			const result = await service.sendMessageToAgent(
+				'agentmux-orc',
+				'Hello',
+				RUNTIME_TYPES.CLAUDE_CODE
+			);
+
+			expect(result.success).toBe(true);
+			// sendEscape should NOT have been called for shell mode escape
+			// (it might be called for other reasons like stuck message retry, but not before message send)
+			expect(mockSessionHelper.sendEscape).not.toHaveBeenCalled();
 		});
 	});
 });

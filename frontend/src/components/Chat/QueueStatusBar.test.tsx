@@ -244,7 +244,7 @@ describe('QueueStatusBar', () => {
       expect(screen.getByText('slack')).toBeInTheDocument();
     });
 
-    it('shows cancel button only for pending messages', async () => {
+    it('shows cancel button for both pending and processing messages', async () => {
       mockApiService.getPendingMessages.mockResolvedValue([
         createMockQueuedMessage({ id: 'msg-1', status: 'processing', content: 'Processing' }),
         createMockQueuedMessage({ id: 'msg-2', status: 'pending', content: 'Pending' }),
@@ -258,7 +258,7 @@ describe('QueueStatusBar', () => {
       fireEvent.click(screen.getByTestId('queue-status-summary'));
 
       const cancelButtons = screen.getAllByTestId('queue-cancel-btn');
-      expect(cancelButtons).toHaveLength(1);
+      expect(cancelButtons).toHaveLength(2);
     });
   });
 
@@ -396,9 +396,9 @@ describe('QueueStatusBar', () => {
         handler!(createMockQueuedMessage({ id: 'msg-1', status: 'processing' }));
       });
 
-      // Expand and check - processing item should not have cancel button
+      // Expand and check - processing item should have cancel button (clear all)
       fireEvent.click(screen.getByTestId('queue-status-summary'));
-      expect(screen.queryByTestId('queue-cancel-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('queue-cancel-btn')).toBeInTheDocument();
     });
 
     it('does not add duplicate message on enqueued event', async () => {

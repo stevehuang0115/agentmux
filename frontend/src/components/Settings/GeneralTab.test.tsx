@@ -18,6 +18,11 @@ describe('GeneralTab', () => {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
+      runtimeCommands: {
+        'claude-code': 'claude --dangerously-skip-permissions',
+        'gemini-cli': 'gemini --yolo',
+        'codex-cli': 'codex --full-auto',
+      },
     },
     chat: {
       showRawTerminalOutput: false,
@@ -86,6 +91,28 @@ describe('GeneralTab', () => {
       expect(screen.getByLabelText('Show Timestamps')).toBeInTheDocument();
     });
 
+    it('should render runtime commands section', () => {
+      render(<GeneralTab />);
+
+      expect(screen.getByText('Runtime Commands')).toBeInTheDocument();
+      expect(screen.getByLabelText('Claude Code')).toBeInTheDocument();
+      expect(screen.getByLabelText('Gemini CLI')).toBeInTheDocument();
+      expect(screen.getByLabelText('Codex CLI')).toBeInTheDocument();
+    });
+
+    it('should render runtime command values', () => {
+      render(<GeneralTab />);
+
+      const claudeInput = screen.getByLabelText('Claude Code') as HTMLInputElement;
+      expect(claudeInput.value).toBe('claude --dangerously-skip-permissions');
+
+      const geminiInput = screen.getByLabelText('Gemini CLI') as HTMLInputElement;
+      expect(geminiInput.value).toBe('gemini --yolo');
+
+      const codexInput = screen.getByLabelText('Codex CLI') as HTMLInputElement;
+      expect(codexInput.value).toBe('codex --full-auto');
+    });
+
     it('should render action buttons', () => {
       render(<GeneralTab />);
 
@@ -152,6 +179,15 @@ describe('GeneralTab', () => {
       fireEvent.change(select, { target: { value: 'gemini-cli' } });
 
       expect(select.value).toBe('gemini-cli');
+    });
+
+    it('should update local state on runtime command change', () => {
+      render(<GeneralTab />);
+
+      const geminiInput = screen.getByLabelText('Gemini CLI') as HTMLInputElement;
+      fireEvent.change(geminiInput, { target: { value: 'gemini --custom-flag' } });
+
+      expect(geminiInput.value).toBe('gemini --custom-flag');
     });
 
     it('should update local state on number input change', () => {

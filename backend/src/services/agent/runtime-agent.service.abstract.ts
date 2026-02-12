@@ -3,6 +3,8 @@ import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RuntimeType } from '../../constants.js';
+import { getSettingsService } from '../settings/settings.service.js';
+import type { AIRuntime } from '../../types/settings.types.js';
 
 /**
  * Runtime configuration interface
@@ -44,6 +46,17 @@ export abstract class RuntimeAgentService {
 	protected abstract detectRuntimeSpecific(sessionName: string): Promise<boolean>;
 	protected abstract getRuntimeReadyPatterns(): string[];
 	protected abstract getRuntimeErrorPatterns(): string[];
+	protected abstract getRuntimeExitPatterns(): RegExp[];
+
+	/**
+	 * Get patterns that indicate this runtime has exited.
+	 * Used by RuntimeExitMonitorService to detect when the CLI process exits.
+	 *
+	 * @returns Array of RegExp patterns that match runtime exit output
+	 */
+	getExitPatterns(): RegExp[] {
+		return this.getRuntimeExitPatterns();
+	}
 
 	/**
 	 * Template method for executing runtime initialization script.
@@ -55,13 +68,35 @@ export abstract class RuntimeAgentService {
 	 */
 	async executeRuntimeInitScript(sessionName: string, targetPath?: string, runtimeFlags?: string[]): Promise<void> {
 		try {
-			const config = this.getRuntimeConfig();
-			const commands = await this.loadInitScript(config.initScript);
+			// Try to get command from user settings first, fallback to init script
+			let commands: string[];
+			const runtimeType = this.getRuntimeType() as AIRuntime;
+			let source: string;
+
+			try {
+				const settingsService = getSettingsService();
+				const settings = await settingsService.getSettings();
+				const userCommand = settings.general.runtimeCommands?.[runtimeType];
+
+				if (userCommand && userCommand.trim()) {
+					commands = [userCommand.trim()];
+					source = 'settings';
+				} else {
+					const config = this.getRuntimeConfig();
+					commands = await this.loadInitScript(config.initScript);
+					source = config.initScript;
+				}
+			} catch {
+				// Settings service unavailable, fallback to init script
+				const config = this.getRuntimeConfig();
+				commands = await this.loadInitScript(config.initScript);
+				source = config.initScript;
+			}
 
 			this.logger.info('Executing runtime initialization script', {
 				sessionName,
 				runtimeType: this.getRuntimeType(),
-				script: config.initScript,
+				source,
 				commandCount: commands.length,
 				targetPath: targetPath || process.cwd(),
 			});
@@ -249,6 +284,20 @@ export abstract class RuntimeAgentService {
 			totalElapsed: Date.now() - startTime,
 		});
 		return false;
+	}
+
+	/**
+	 * Hook called after the runtime is ready but before prompts are sent.
+	 * Override in concrete classes for runtime-specific post-initialization steps
+	 * (e.g., Gemini CLI directory allowlist additions).
+	 *
+	 * Default implementation is a no-op.
+	 *
+	 * @param sessionName - PTY session name
+	 */
+	async postInitialize(sessionName: string): Promise<void> {
+		// No-op by default — override in concrete classes
+		this.logger.debug('postInitialize (no-op)', { sessionName, runtimeType: this.getRuntimeType() });
 	}
 
 	/**

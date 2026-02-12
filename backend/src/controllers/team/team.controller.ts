@@ -148,6 +148,29 @@ function buildOrchestratorTeam(
 }
 
 /**
+ * Resolve the display agent status based on stored state and live session presence.
+ *
+ * When a PTY session is alive but the agent hasn't registered yet, we keep
+ * the "started"/"starting" states instead of incorrectly elevating to "active".
+ * Conversely, if the session has disappeared we immediately report "inactive"
+ * regardless of the stored status to avoid stale UI.
+ */
+function resolveAgentStatus(
+  storedStatus: TeamMember['agentStatus'] | undefined,
+  sessionExists: boolean
+): TeamMember['agentStatus'] {
+  if (!sessionExists) {
+    return AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
+  }
+
+  if (!storedStatus || storedStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE) {
+    return AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED as TeamMember['agentStatus'];
+  }
+
+  return storedStatus;
+}
+
+/**
  * Core logic for starting a single team member
  * @param context - API context with services
  * @param team - The team containing the member
@@ -600,10 +623,10 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
     const backend = getSessionBackendSync();
     const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
-    // Use actual session existence as the source of truth for agentStatus
-    const actualOrchestratorStatus = orchestratorSessionExists
-      ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-      : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    const actualOrchestratorStatus = resolveAgentStatus(
+      orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
+      orchestratorSessionExists
+    );
 
     const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
 
@@ -612,11 +635,10 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       ...team,
       members: team.members.map(member => {
         const memberSessionExists = backend?.sessionExists(member.sessionName) || false;
+        const resolvedStatus = resolveAgentStatus(member.agentStatus, memberSessionExists);
         return {
           ...member,
-          agentStatus: memberSessionExists
-            ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-            : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+          agentStatus: resolvedStatus,
         };
       })
     }));
@@ -629,7 +651,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
         ...orchestratorStatus,
         agentStatus: actualOrchestratorStatus
       }
-    } as ApiResponse<Team[]>);
+  } as ApiResponse<Team[]>);
   } catch (error) {
     console.error('Error getting teams:', error);
     res.status(500).json({
@@ -649,10 +671,10 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       const backend = getSessionBackendSync();
       const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
-      // Use actual session existence as the source of truth for agentStatus
-      const actualOrchestratorStatus = orchestratorSessionExists
-        ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-        : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+      const actualOrchestratorStatus = resolveAgentStatus(
+        orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
+        orchestratorSessionExists
+      );
 
       const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
       res.json({ success: true, data: orchestratorTeam } as ApiResponse<Team>);
@@ -672,9 +694,9 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       for (const member of team.members) {
         if (member.sessionName) {
           const sessionExists = backend.sessionExists(member.sessionName);
-          // Update agentStatus based on actual session existence
-          if (!sessionExists && member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
-            (member as MutableTeamMember).agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+          const resolvedStatus = resolveAgentStatus(member.agentStatus, sessionExists);
+          (member as MutableTeamMember).agentStatus = resolvedStatus;
+          if (!sessionExists) {
             (member as MutableTeamMember).sessionName = '';
           }
         }

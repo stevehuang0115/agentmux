@@ -272,6 +272,37 @@ describe('MessageQueueService', () => {
     });
   });
 
+  describe('forceCancelCurrent', () => {
+    it('should cancel the currently processing message', () => {
+      queue.enqueue(validInput);
+      const msg = queue.dequeue()!;
+
+      expect(queue.isProcessing()).toBe(true);
+
+      const result = queue.forceCancelCurrent();
+
+      expect(result).toBe(true);
+      expect(queue.isProcessing()).toBe(false);
+      expect(queue.getHistory()[0].status).toBe('cancelled');
+      expect(queue.getHistory()[0].error).toBe('Force-cancelled by user');
+    });
+
+    it('should return false when nothing is processing', () => {
+      expect(queue.forceCancelCurrent()).toBe(false);
+    });
+
+    it('should emit cancelled event', () => {
+      const handler = jest.fn();
+      queue.on('cancelled', handler);
+      queue.enqueue(validInput);
+      queue.dequeue();
+
+      queue.forceCancelCurrent();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('clearPending', () => {
     it('should clear all pending messages', () => {
       queue.enqueue({ ...validInput, content: 'a' });
