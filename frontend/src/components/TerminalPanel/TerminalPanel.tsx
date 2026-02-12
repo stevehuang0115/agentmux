@@ -228,6 +228,25 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     };
   }, [isOpen, isAtBottom]);  // Only depend on isOpen - xterm init shouldn't depend on session loading
 
+  // Handle panel opening animation - resize/fit terminal after transition completes
+  useEffect(() => {
+    if (isOpen && xtermInitialized && fitAddonRef.current && xtermRef.current) {
+      // The panel has a 300ms transition (duration-300).
+      // We need to wait for it to finish before fitting, otherwise dimensions are wrong.
+      const timer = setTimeout(() => {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit();
+          const dimensions = fitAddonRef.current.proposeDimensions();
+          if (dimensions && selectedSessionRef.current) {
+            webSocketService.resizeTerminal(selectedSessionRef.current, dimensions.cols, dimensions.rows);
+          }
+        }
+      }, 350); // 350ms to be safe (slightly longer than transition)
+
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, xtermInitialized]);
+
   // Write terminal output to xterm
   const writeToXterm = useCallback((data: string) => {
     if (xtermRef.current) {

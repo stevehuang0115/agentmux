@@ -99,9 +99,10 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 */
 	async postInitialize(sessionName: string): Promise<void> {
 		const agentmuxHome = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
-		this.logger.info('Gemini CLI post-init: adding ~/.agentmux to directory allowlist', {
+		this.logger.info('Gemini CLI post-init: adding paths to directory allowlist', {
 			sessionName,
-			path: agentmuxHome,
+			agentmuxHome,
+			projectRoot: this.projectRoot,
 		});
 
 		// Wait for Gemini CLI's async auto-update check to complete before
@@ -110,11 +111,16 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// with slash command processing if we send /directory add too early.
 		await new Promise((resolve) => setTimeout(resolve, 3000));
 
-		const result = await this.addProjectToAllowlist(sessionName, agentmuxHome);
+		// Add both ~/.agentmux and the project root to the allowlist
+		// We use addMultipleProjectsToAllowlist for efficiency
+		const pathsToAdd = [agentmuxHome, this.projectRoot];
+
+		const result = await this.addMultipleProjectsToAllowlist(sessionName, pathsToAdd);
+
 		if (!result.success) {
-			this.logger.warn('Failed to add ~/.agentmux to Gemini CLI allowlist (non-fatal)', {
+			this.logger.warn('Failed to add paths to Gemini CLI allowlist (non-fatal)', {
 				sessionName,
-				error: result.message,
+				results: result.results,
 			});
 		}
 	}
@@ -196,7 +202,8 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
 
 				// Send the directory add command
-				const addCommand = `/directory add ${projectPath}`;
+				// Add a trailing space as sometimes Gemini CLI needs it to delimit the path properly
+				const addCommand = `/directory add ${projectPath} `;
 				await this.sessionHelper.sendMessage(sessionName, addCommand);
 
 				// Wait for command to complete
