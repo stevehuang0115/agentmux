@@ -7,6 +7,14 @@ import { getSettingsService } from '../settings/settings.service.js';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 import { getDefaultSettings } from '../../types/settings.types.js';
 
+jest.mock('fs', () => ({
+	...jest.requireActual('fs'),
+	promises: {
+		...jest.requireActual('fs').promises,
+		mkdir: jest.fn().mockResolvedValue(undefined),
+	},
+}));
+
 jest.mock('../../utils/file-io.utils.js', () => ({
 	safeReadJson: jest.fn().mockResolvedValue({}),
 	atomicWriteJson: jest.fn().mockResolvedValue(undefined),
@@ -59,7 +67,7 @@ describe('ClaudeRuntimeService', () => {
 	describe('getRuntimeReadyPatterns', () => {
 		it('should return Claude-specific ready patterns', () => {
 			const patterns = service['getRuntimeReadyPatterns']();
-			
+
 			expect(patterns).toContain('Welcome to Claude Code!');
 			expect(patterns).toContain('claude-code>');
 			expect(patterns).toContain('✻ Welcome to Claude');
@@ -69,7 +77,7 @@ describe('ClaudeRuntimeService', () => {
 	describe('getRuntimeErrorPatterns', () => {
 		it('should return Claude-specific error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
-			
+
 			expect(patterns).toContain('command not found: claude');
 			expect(patterns).toContain('Permission denied');
 		});
@@ -141,12 +149,14 @@ describe('ClaudeRuntimeService', () => {
 	describe('ensureClaudeMcpConfig', () => {
 		const mockSafeReadJson = safeReadJson as jest.MockedFunction<typeof safeReadJson>;
 		const mockAtomicWriteJson = atomicWriteJson as jest.MockedFunction<typeof atomicWriteJson>;
+		const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
 		const mockGetSettingsService = getSettingsService as jest.MockedFunction<typeof getSettingsService>;
 
 		beforeEach(() => {
 			jest.clearAllMocks();
 			mockSafeReadJson.mockResolvedValue({});
 			mockAtomicWriteJson.mockResolvedValue(undefined);
+			mockMkdir.mockResolvedValue(undefined);
 			mockGetSettingsService.mockReturnValue({
 				getSettings: jest.fn().mockResolvedValue(getDefaultSettings()),
 			} as any);
@@ -157,6 +167,10 @@ describe('ClaudeRuntimeService', () => {
 
 			await service.ensureClaudeMcpConfig('/test/project');
 
+			expect(mockMkdir).toHaveBeenCalledWith(
+				'/test/project',
+				{ recursive: true }
+			);
 			expect(mockAtomicWriteJson).toHaveBeenCalledWith(
 				path.join('/test/project', '.mcp.json'),
 				{

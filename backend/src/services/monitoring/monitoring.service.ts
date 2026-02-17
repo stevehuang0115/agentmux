@@ -65,7 +65,7 @@ export interface HealthCheckResult {
   status: 'healthy' | 'degraded' | 'unhealthy';
   responseTime: number;
   message?: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 export interface AlertCondition {
@@ -364,11 +364,11 @@ export class MonitoringService {
 
   private getMetricValue(metrics: SystemMetrics, metricPath: string): number | undefined {
     const paths = metricPath.split('.');
-    let value: any = metrics;
-    
+    let value: unknown = metrics;
+
     for (const path of paths) {
-      if (value && typeof value === 'object' && path in value) {
-        value = value[path];
+      if (value && typeof value === 'object' && value !== null && path in value) {
+        value = (value as Record<string, unknown>)[path];
       } else {
         return undefined;
       }

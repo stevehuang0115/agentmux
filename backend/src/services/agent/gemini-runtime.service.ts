@@ -1,11 +1,8 @@
-import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
-import { getSettingsService } from '../settings/settings.service.js';
-import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -145,79 +142,13 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 * Ensure Gemini CLI MCP server configuration exists in the project directory.
 	 *
 	 * Creates or merges `.gemini/settings.json` with required MCP servers.
-	 * When `enableBrowserAutomation` is true in settings, adds the playwright MCP server.
-	 * Preserves any existing user-configured MCP servers.
+	 * Delegates to the shared `ensureMcpConfig` in the base class.
 	 *
 	 * @param projectPath - Project directory where `.gemini/settings.json` will be created
 	 */
 	async ensureGeminiMcpConfig(projectPath: string): Promise<void> {
-		const geminiDir = path.join(projectPath, '.gemini');
-		const settingsPath = path.join(geminiDir, 'settings.json');
-
-		try {
-			// Check if browser automation is enabled
-			let enableBrowserAutomation = true;
-			try {
-				const settingsService = getSettingsService();
-				const settings = await settingsService.getSettings();
-				enableBrowserAutomation = settings.skills.enableBrowserAutomation;
-			} catch {
-				// Settings service unavailable — default to enabled
-				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
-			}
-
-			// Build required MCP servers
-			const requiredServers: Record<string, { command: string; args: string[] }> = {};
-
-			if (enableBrowserAutomation) {
-				requiredServers['playwright'] = {
-					command: 'npx',
-					args: ['@playwright/mcp@latest', '--headless'],
-				};
-			}
-
-			// If no servers to configure, skip
-			if (Object.keys(requiredServers).length === 0) {
-				this.logger.info('No MCP servers to configure for Gemini CLI (browser automation disabled)', {
-					projectPath,
-				});
-				return;
-			}
-
-			// Ensure .gemini directory exists
-			await fs.mkdir(geminiDir, { recursive: true });
-
-			// Read existing settings (preserves user config)
-			const existing = await safeReadJson<Record<string, unknown>>(settingsPath, {});
-			const existingMcpServers = (existing['mcpServers'] as Record<string, unknown>) || {};
-
-			// Merge: only add servers that don't already exist (don't overwrite user config)
-			let added = 0;
-			for (const [name, config] of Object.entries(requiredServers)) {
-				if (!existingMcpServers[name]) {
-					existingMcpServers[name] = config;
-					added++;
-				}
-			}
-
-			// Write back merged config
-			const merged = { ...existing, mcpServers: existingMcpServers };
-			await atomicWriteJson(settingsPath, merged);
-
-			this.logger.info('Gemini CLI MCP config ensured', {
-				projectPath,
-				settingsPath,
-				addedServers: added,
-				totalServers: Object.keys(existingMcpServers).length,
-				enableBrowserAutomation,
-			});
-		} catch (error) {
-			// Non-fatal: agent can still work without MCP servers
-			this.logger.warn('Failed to ensure Gemini CLI MCP config (non-fatal)', {
-				projectPath,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		const settingsPath = path.join(projectPath, '.gemini', 'settings.json');
+		await this.ensureMcpConfig(settingsPath, projectPath);
 	}
 
 	/**

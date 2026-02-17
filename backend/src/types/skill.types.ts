@@ -9,7 +9,9 @@
  */
 
 /**
- * Skill category for grouping and filtering skills
+ * Skill category for grouping and filtering skills.
+ * Includes both original categories and categories used by built-in skill.json files
+ * (management, monitoring, memory, system, task-management, quality).
  */
 export type SkillCategory =
   | 'development'
@@ -19,7 +21,13 @@ export type SkillCategory =
   | 'content-creation'
   | 'automation'
   | 'analysis'
-  | 'integration';
+  | 'integration'
+  | 'management'
+  | 'monitoring'
+  | 'memory'
+  | 'system'
+  | 'task-management'
+  | 'quality';
 
 /**
  * Skill type - defines the nature of the skill
@@ -492,6 +500,12 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
   'automation',
   'analysis',
   'integration',
+  'management',
+  'monitoring',
+  'memory',
+  'system',
+  'task-management',
+  'quality',
 ];
 
 /**
@@ -506,6 +520,12 @@ export const SKILL_CATEGORY_DISPLAY_NAMES: Record<SkillCategory, string> = {
   automation: 'Automation',
   analysis: 'Analysis',
   integration: 'Integration',
+  management: 'Management',
+  monitoring: 'Monitoring',
+  memory: 'Memory',
+  system: 'System',
+  'task-management': 'Task Management',
+  quality: 'Quality',
 };
 
 /**

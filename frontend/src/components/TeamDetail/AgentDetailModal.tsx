@@ -10,10 +10,8 @@ import React, { useState, useEffect } from 'react';
 import { X, User, Briefcase, Wrench, Check } from 'lucide-react';
 import { TeamMember } from '../../types';
 import { rolesService } from '../../services/roles.service';
-import { skillsService } from '../../services/skills.service';
 import { RoleWithPrompt, ROLE_CATEGORY_DISPLAY_NAMES } from '../../types/role.types';
 import { useSkills } from '../../hooks/useSkills';
-import type { Skill } from '../../types/skill.types';
 
 interface AgentDetailModalProps {
   /** The team member to display details for */
@@ -67,46 +65,31 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
   }, [member.role]);
 
   /**
-   * Fetch skill display info when role details are loaded
+   * Resolve skill display info from the already-loaded allSkills array
+   * instead of making individual API calls per skill (N+1 problem).
    */
   useEffect(() => {
-    const fetchSkillInfo = async () => {
-      if (!roleDetails && !member.skillOverrides?.length) return;
+    if (!roleDetails && !member.skillOverrides?.length) return;
 
-      const roleSkills = (roleDetails?.assignedSkills || [])
-        .filter(skillId => !member.excludedRoleSkills?.includes(skillId));
-      const allSkillIds = [
-        ...roleSkills,
-        ...(member.skillOverrides || [])
-      ];
+    const roleSkills = (roleDetails?.assignedSkills || [])
+      .filter(skillId => !member.excludedRoleSkills?.includes(skillId));
+    const allSkillIds = [
+      ...roleSkills,
+      ...(member.skillOverrides || [])
+    ];
 
-      if (allSkillIds.length === 0) return;
+    if (allSkillIds.length === 0) return;
 
-      const skillDetailsPromises = allSkillIds.map(async (skillId) => {
-        try {
-          const skill = await skillsService.getById(skillId);
-          const skillData = skill as Partial<Skill>;
-          return {
-            id: skillId,
-            name: skillData.name || skillId,
-          };
-        } catch {
-          const basicSkill = allSkills.find(s => s.id === skillId);
-          return {
-            id: skillId,
-            name: basicSkill?.name || skillId,
-          };
-        }
-      });
+    const skillDetails = allSkillIds.map((skillId) => {
+      const existing = allSkills.find(s => s.id === skillId);
+      return {
+        id: skillId,
+        name: existing?.name || skillId,
+      };
+    });
 
-      const skillDetails = await Promise.all(skillDetailsPromises);
-      setSkillDisplayInfos(skillDetails);
-    };
-
-    if (!loadingRole) {
-      fetchSkillInfo();
-    }
-  }, [roleDetails, member.skillOverrides, loadingRole, allSkills]);
+    setSkillDisplayInfos(skillDetails);
+  }, [roleDetails, member.skillOverrides, member.excludedRoleSkills, loadingRole, allSkills]);
 
   /**
    * Get skill info by ID

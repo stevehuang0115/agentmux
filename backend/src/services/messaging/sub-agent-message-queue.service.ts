@@ -35,7 +35,7 @@ export interface QueuedAgentMessage {
  * registers (status becomes 'active').
  */
 export class SubAgentMessageQueue {
-	private static instance: SubAgentMessageQueue;
+	private static instance: SubAgentMessageQueue | null = null;
 	private pendingMessages = new Map<string, QueuedAgentMessage[]>();
 	private logger: ComponentLogger;
 
@@ -59,7 +59,7 @@ export class SubAgentMessageQueue {
 	 * Reset the singleton instance (for testing only).
 	 */
 	static resetInstance(): void {
-		SubAgentMessageQueue.instance = undefined as unknown as SubAgentMessageQueue;
+		SubAgentMessageQueue.instance = null;
 	}
 
 	/**

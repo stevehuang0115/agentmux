@@ -47,6 +47,8 @@ import {
 	ORCHESTRATOR_ROLE,
 	ORCHESTRATOR_WINDOW_NAME,
 	MESSAGE_QUEUE_CONSTANTS,
+	RUNTIME_TYPES,
+	type RuntimeType,
 } from './constants.js';
 import { getSettingsService } from './services/settings/index.js';
 import { MemoryService } from './services/memory/memory.service.js';
@@ -365,13 +367,6 @@ export class AgentMuxServer {
 			}
 		);
 
-		// 404 handler
-		this.app.use((req, res) => {
-			res.status(404).json({
-				success: false,
-				error: 'Endpoint not found',
-			});
-		});
 	}
 
 	private configureWebSocket(): void {
@@ -622,11 +617,11 @@ export class AgentMuxServer {
 			this.logger.info('Auto-start orchestrator is enabled, starting orchestrator...');
 
 			// Determine runtime type from orchestrator status
-			let runtimeType = 'claude-code';
+			let runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE;
 			try {
 				const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 				if (orchestratorStatus?.runtimeType) {
-					runtimeType = orchestratorStatus.runtimeType;
+					runtimeType = orchestratorStatus.runtimeType as RuntimeType;
 				}
 			} catch {
 				// Use default runtime type
@@ -638,7 +633,7 @@ export class AgentMuxServer {
 				role: ORCHESTRATOR_ROLE,
 				projectPath: process.cwd(),
 				windowName: ORCHESTRATOR_WINDOW_NAME,
-				runtimeType: runtimeType as any,
+				runtimeType,
 			});
 
 			if (!result.success) {
@@ -708,10 +703,10 @@ export class AgentMuxServer {
 	}
 
 	private async checkPortAvailability(): Promise<void> {
-		return new Promise(async (resolve, reject) => {
-			const { createServer } = await import('net');
-			const testServer = createServer();
+		const { createServer } = await import('net');
+		const testServer = createServer();
 
+		return new Promise<void>((resolve, reject) => {
 			testServer.listen(this.config.webPort, () => {
 				testServer.close(() => {
 					this.logger.info('Port is available', { port: this.config.webPort });
@@ -719,7 +714,7 @@ export class AgentMuxServer {
 				});
 			});
 
-			testServer.on('error', (error: any) => {
+			testServer.on('error', (error: NodeJS.ErrnoException) => {
 				if (error.code === 'EADDRINUSE') {
 					reject(new Error(`Port ${this.config.webPort} is already in use`));
 				} else {

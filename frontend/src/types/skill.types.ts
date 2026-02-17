@@ -7,7 +7,9 @@
  */
 
 /**
- * Skill category for grouping and filtering
+ * Skill category for grouping and filtering.
+ * Includes both original categories and categories used by built-in skill.json files
+ * (management, monitoring, memory, system, task-management, quality).
  */
 export type SkillCategory =
   | 'development'
@@ -17,7 +19,13 @@ export type SkillCategory =
   | 'content-creation'
   | 'automation'
   | 'analysis'
-  | 'integration';
+  | 'integration'
+  | 'management'
+  | 'monitoring'
+  | 'memory'
+  | 'system'
+  | 'task-management'
+  | 'quality';
 
 /**
  * Skill type - defines the nature of the skill
@@ -223,6 +231,12 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
   'automation',
   'analysis',
   'integration',
+  'management',
+  'monitoring',
+  'memory',
+  'system',
+  'task-management',
+  'quality',
 ];
 
 /**
@@ -286,8 +300,40 @@ export function getSkillCategoryLabel(category: SkillCategory): string {
     automation: 'Automation',
     analysis: 'Analysis',
     integration: 'Integration',
+    management: 'Management',
+    monitoring: 'Monitoring',
+    memory: 'Memory',
+    system: 'System',
+    'task-management': 'Task Management',
+    quality: 'Quality',
   };
   return labels[category] || category;
+}
+
+/**
+ * Get emoji icon for skill category
+ *
+ * @param category - Skill category
+ * @returns Emoji icon string
+ */
+export function getSkillCategoryIcon(category: SkillCategory): string {
+  const icons: Record<SkillCategory, string> = {
+    development: '\u{1F4BB}',
+    design: '\u{1F3A8}',
+    communication: '\u{1F4AC}',
+    research: '\u{1F50D}',
+    'content-creation': '\u270D\uFE0F',
+    automation: '\u2699\uFE0F',
+    analysis: '\u{1F4CA}',
+    integration: '\u{1F517}',
+    management: '\u{1F4CB}',
+    monitoring: '\u{1F4E1}',
+    memory: '\u{1F9E0}',
+    system: '\u{1F5A5}\uFE0F',
+    'task-management': '\u2611\uFE0F',
+    quality: '\u2705',
+  };
+  return icons[category] || '\u{1F4E6}';
 }
 
 /**

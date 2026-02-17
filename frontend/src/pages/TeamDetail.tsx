@@ -6,7 +6,6 @@ import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus, AgentDetailModal } from '../components/TeamDetail';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
-import { safeParseJSON } from '../utils/api';
 import { webSocketService } from '../services/websocket.service';
 
 export const TeamDetail: React.FC = () => {

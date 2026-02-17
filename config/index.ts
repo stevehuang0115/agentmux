@@ -26,11 +26,16 @@ import {
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS,
+  MEMORY_CONSTANTS,
+  CONTINUATION_CONSTANTS,
+  EVENT_DEBOUNCE_MS,
 
   // Type helpers
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
+  type AgentId,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -44,11 +49,16 @@ export {
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS,
+  MEMORY_CONSTANTS,
+  CONTINUATION_CONSTANTS,
+  EVENT_DEBOUNCE_MS,
 
   // Type helpers
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
+  type AgentId,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -69,4 +79,7 @@ export const CROSS_DOMAIN_CONSTANTS = {
   MESSAGES: MESSAGE_CONSTANTS,
   ENV: ENV_CONSTANTS,
   BACKEND: BACKEND_CONSTANTS,
+  AGENT_IDENTITY: AGENT_IDENTITY_CONSTANTS,
+  MEMORY: MEMORY_CONSTANTS,
+  CONTINUATION: CONTINUATION_CONSTANTS,
 } as const;
