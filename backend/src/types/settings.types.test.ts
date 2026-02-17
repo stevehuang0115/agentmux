@@ -53,6 +53,7 @@ describe('Settings Types', () => {
         checkInIntervalMinutes: 5,
         maxConcurrentAgents: 10,
         verboseLogging: false,
+        autoResumeOnRestart: true,
         runtimeCommands: {
           'claude-code': 'claude --dangerously-skip-permissions',
           'gemini-cli': 'gemini --yolo',
@@ -65,6 +66,7 @@ describe('Settings Types', () => {
       expect(settings.checkInIntervalMinutes).toBe(5);
       expect(settings.maxConcurrentAgents).toBe(10);
       expect(settings.verboseLogging).toBe(false);
+      expect(settings.autoResumeOnRestart).toBe(true);
       expect(settings.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
     });
 
@@ -75,6 +77,7 @@ describe('Settings Types', () => {
         checkInIntervalMinutes: 10,
         maxConcurrentAgents: 5,
         verboseLogging: true,
+        autoResumeOnRestart: false,
         runtimeCommands: {
           'claude-code': '/custom/path/to/claude --dangerously-skip-permissions',
           'gemini-cli': '/custom/gemini --custom-flag',
@@ -131,6 +134,7 @@ describe('Settings Types', () => {
           checkInIntervalMinutes: 5,
           maxConcurrentAgents: 10,
           verboseLogging: false,
+          autoResumeOnRestart: true,
           runtimeCommands: {
             'claude-code': 'claude --dangerously-skip-permissions',
             'gemini-cli': 'gemini --yolo',
@@ -242,6 +246,7 @@ describe('Settings Types', () => {
       expect(defaults.general.checkInIntervalMinutes).toBe(5);
       expect(defaults.general.maxConcurrentAgents).toBe(10);
       expect(defaults.general.verboseLogging).toBe(false);
+      expect(defaults.general.autoResumeOnRestart).toBe(true);
     });
 
     it('should have runtime commands defaults for all runtimes', () => {
@@ -307,6 +312,16 @@ describe('Settings Types', () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors.some(e => e.includes('runtime'))).toBe(true);
+    });
+
+    it('should detect non-boolean autoResumeOnRestart', () => {
+      const settings = getDefaultSettings();
+      (settings.general as any).autoResumeOnRestart = 'yes';
+
+      const result = validateSettings(settings);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('autoResumeOnRestart'))).toBe(true);
     });
 
     it('should detect negative checkInIntervalMinutes', () => {

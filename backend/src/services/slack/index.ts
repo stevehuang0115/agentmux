@@ -29,3 +29,9 @@ export {
   type AgentThreadMapping,
   type ThreadInfo,
 } from './slack-thread-store.service.js';
+export {
+  SlackImageService,
+  getSlackImageService,
+  setSlackImageService,
+  resetSlackImageService,
+} from './slack-image.service.js';

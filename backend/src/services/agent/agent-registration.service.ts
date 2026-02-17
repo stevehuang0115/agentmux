@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
-import { readFile, mkdir, writeFile } from 'fs/promises';
+import { readFile, readdir, stat, mkdir, writeFile } from 'fs/promises';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
 	SessionCommandHelper,
@@ -22,13 +22,14 @@ import {
 	SESSION_COMMAND_DELAYS,
 	EVENT_DELIVERY_CONSTANTS,
 	TERMINAL_PATTERNS,
-	CLAUDE_RESUME_CONSTANTS,
 	GEMINI_SHELL_MODE_CONSTANTS,
 } from '../../constants.js';
 import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
+import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
+import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -58,6 +59,21 @@ export class AgentRegistrationService {
 	// AbortControllers for pending registration prompts (keyed by session name)
 	private registrationAbortControllers = new Map<string, AbortController>();
 
+	// Background stuck-message detector timer
+	private stuckMessageDetectorTimer: ReturnType<typeof setInterval> | null = null;
+
+	// Track TUI sessions for the stuck-message detector (sessionName → runtimeType)
+	private tuiSessionRegistry = new Map<string, RuntimeType>();
+
+	// Track recently-sent messages for background stuck-detection (all runtimes).
+	// Key: sessionName, Value: array of tracked message entries
+	private sentMessageTracker = new Map<string, Array<{
+		snippet: string;
+		sentAt: number;
+		recovered: boolean;
+	}>>();
+
+
 	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
 	// Keeping these as static getters for backwards compatibility within the class
 	private static get CLAUDE_PROMPT_INDICATORS() {
@@ -83,7 +99,11 @@ export class AgentRegistrationService {
 
 		// Wire up the exit monitor to cancel pending registrations on runtime exit
 		RuntimeExitMonitorService.getInstance().setOnExitDetectedCallback(
-			(sessionName: string) => this.cancelPendingRegistration(sessionName)
+			(sessionName: string) => {
+				this.cancelPendingRegistration(sessionName);
+				this.unregisterTuiSession(sessionName);
+				SubAgentMessageQueue.getInstance().clear(sessionName);
+			}
 		);
 	}
 
@@ -425,11 +445,37 @@ export class AgentRegistrationService {
 		// Clear Commandline
 		await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
 
+		// Inject --resume flag if this was a previously running Claude Code session
+		const effectiveFlags = runtimeFlags ? [...runtimeFlags] : [];
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const settings = await getSettingsService().getSettings();
+				if (settings.general.autoResumeOnRestart) {
+					const persistence = getSessionStatePersistence();
+					if (persistence.isRestoredSession(sessionName)) {
+						const storedSessionId = persistence.getSessionId(sessionName);
+						if (storedSessionId) {
+							effectiveFlags.push('--resume', storedSessionId);
+							this.logger.info('Injecting --resume flag for session restore', {
+								sessionName, sessionId: storedSessionId,
+							});
+						}
+					}
+				} else {
+					this.logger.info('Auto-resume disabled by settings, skipping session resume', { sessionName });
+				}
+			} catch (resumeError) {
+				this.logger.debug('Could not resolve resume flag (non-fatal)', {
+					sessionName, error: resumeError instanceof Error ? resumeError.message : String(resumeError),
+				});
+			}
+		}
+
 		// Reinitialize runtime using the appropriate initialization script (always fresh start)
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
 		const runtimeService2 = this.createRuntimeService(runtimeType);
-		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
+		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags);
 
 		// Wait for runtime to be ready (simplified detection)
 		// Use shorter check interval in test environment, and reasonable interval in production
@@ -452,7 +498,7 @@ export class AgentRegistrationService {
 
 		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
 		try {
-			await runtimeService2.postInitialize(sessionName);
+			await runtimeService2.postInitialize(sessionName, projectPath);
 			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
 			// arrived during postInitialize commands, so they don't leak into the prompt input
 			await delay(500);
@@ -481,19 +527,12 @@ export class AgentRegistrationService {
 			runtimeType,
 		});
 
-		// Resume via /resume command if this was a previously running Claude Code session
+		// Background: detect and store session ID for resume-on-restart
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
-			try {
-				const persistence = getSessionStatePersistence();
-				if (persistence.isRestoredSession(sessionName)) {
-					await this.resumeClaudeCodeSession(sessionName);
-				}
-			} catch (resumeError) {
-				this.logger.warn('Resume attempt failed (non-fatal, continuing with fresh session)', {
-					sessionName,
-					error: resumeError instanceof Error ? resumeError.message : String(resumeError),
-				});
-			}
+			const detectPath = projectPath || process.cwd();
+			setTimeout(() => {
+				this.detectAndStoreSessionId(sessionName, detectPath).catch(() => {});
+			}, 10000);
 		}
 
 		// Send the registration prompt in background (don't block on it)
@@ -523,54 +562,56 @@ export class AgentRegistrationService {
 	}
 
 	/**
-	 * Resume a Claude Code session via the /resume slash command.
+	 * Detect and store the Claude Code session ID by scanning the filesystem.
+	 * Claude Code stores conversations as <UUID>.jsonl files in
+	 * ~/.claude/projects/<path-slug>/ where path-slug is the absolute
+	 * project path with / replaced by -.
 	 *
-	 * Sends /resume to the running Claude Code instance, waits for the session
-	 * picker to appear, then presses Enter to select the most recent session.
-	 * This is non-fatal — if it fails, the agent continues with a fresh session.
+	 * Runs in background after agent init to capture the session ID
+	 * for resume-on-restart support.
 	 *
 	 * @param sessionName - PTY session name
-	 * @returns true if resume succeeded, false otherwise
+	 * @param projectPath - Absolute path to the agent's project directory
 	 */
-	private async resumeClaudeCodeSession(sessionName: string): Promise<boolean> {
-		this.logger.info('Attempting Claude Code session resume via /resume command', { sessionName });
-
+	private async detectAndStoreSessionId(sessionName: string, projectPath: string): Promise<void> {
 		try {
-			const helper = await this.getSessionHelper();
+			const slug = projectPath.replace(/\//g, '-');
+			const claudeProjectDir = path.join(os.homedir(), '.claude', 'projects', slug);
 
-			// Send /resume slash command
-			await helper.sendMessage(sessionName, '/resume');
+			const files = await readdir(claudeProjectDir);
+			const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
 
-			// Wait for the session picker to appear
-			await delay(CLAUDE_RESUME_CONSTANTS.SESSION_PICKER_DELAY_MS);
+			if (jsonlFiles.length === 0) return;
 
-			// Press Enter to select the first (most recent) session
-			await helper.sendKey(sessionName, 'Enter');
-
-			// Brief settle time
-			await delay(1000);
-
-			// Wait for Claude to resume and return to prompt
-			const runtimeService = this.createRuntimeService(RUNTIME_TYPES.CLAUDE_CODE);
-			const isReady = await runtimeService.waitForRuntimeReady(
-				sessionName,
-				CLAUDE_RESUME_CONSTANTS.RESUME_READY_TIMEOUT_MS,
-				2000
-			);
-
-			if (isReady) {
-				this.logger.info('Claude Code session resumed successfully via /resume', { sessionName });
-				return true;
+			// Find most recent .jsonl by mtime
+			let latestFile = '';
+			let latestMtime = 0;
+			for (const file of jsonlFiles) {
+				const fileStat = await stat(path.join(claudeProjectDir, file));
+				if (fileStat.mtimeMs > latestMtime) {
+					latestMtime = fileStat.mtimeMs;
+					latestFile = file;
+				}
 			}
 
-			this.logger.warn('Claude Code /resume did not return to ready state within timeout', { sessionName });
-			return false;
+			if (!latestFile) return;
+
+			// Extract UUID from filename (remove .jsonl extension)
+			const sessionId = latestFile.replace('.jsonl', '');
+
+			const persistence = getSessionStatePersistence();
+			persistence.updateSessionId(sessionName, sessionId);
+
+			this.logger.info('Detected and stored Claude session ID from filesystem', {
+				sessionName,
+				sessionId,
+				claudeProjectDir,
+			});
 		} catch (error) {
-			this.logger.warn('Claude Code /resume failed (non-fatal)', {
+			this.logger.debug('Could not detect Claude session ID from filesystem (non-fatal)', {
 				sessionName,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return false;
 		}
 	}
 
@@ -630,6 +671,32 @@ export class AgentRegistrationService {
 		// Wait for cleanup
 		await delay(1000);
 
+		// Inject --resume flag if this was a previously running Claude Code session
+		const effectiveFlags = runtimeFlags ? [...runtimeFlags] : [];
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const settings = await getSettingsService().getSettings();
+				if (settings.general.autoResumeOnRestart) {
+					const persistence = getSessionStatePersistence();
+					if (persistence.isRestoredSession(sessionName)) {
+						const storedSessionId = persistence.getSessionId(sessionName);
+						if (storedSessionId) {
+							effectiveFlags.push('--resume', storedSessionId);
+							this.logger.info('Injecting --resume flag for session restore (full recreation)', {
+								sessionName, sessionId: storedSessionId,
+							});
+						}
+					}
+				} else {
+					this.logger.info('Auto-resume disabled by settings, skipping session resume after recreation', { sessionName });
+				}
+			} catch (resumeError) {
+				this.logger.debug('Could not resolve resume flag (non-fatal)', {
+					sessionName, error: resumeError instanceof Error ? resumeError.message : String(resumeError),
+				});
+			}
+		}
+
 		// Recreate session based on role
 		if (role === ORCHESTRATOR_ROLE) {
 			await this.createOrchestratorSession({
@@ -639,7 +706,7 @@ export class AgentRegistrationService {
 
 			// Initialize runtime for orchestrator using script (always fresh start)
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), runtimeFlags);
+			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), effectiveFlags);
 
 			// Wait for runtime to be ready
 			const checkInterval = this.getCheckInterval();
@@ -693,7 +760,7 @@ export class AgentRegistrationService {
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, projectPath, runtimeFlags);
+			await runtimeService.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags);
 
 			// Wait for runtime to be ready (simplified detection)
 			const checkInterval = this.getCheckInterval();
@@ -714,7 +781,7 @@ export class AgentRegistrationService {
 		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
 		try {
 			const postInitService = this.createRuntimeService(runtimeType);
-			await postInitService.postInitialize(sessionName);
+			await postInitService.postInitialize(sessionName, projectPath);
 			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
 			// arrived during postInitialize commands, so they don't leak into the prompt input
 			await delay(500);
@@ -741,19 +808,12 @@ export class AgentRegistrationService {
 			runtimeType,
 		});
 
-		// Resume via /resume command if this was a previously running Claude Code session
+		// Background: detect and store session ID for resume-on-restart
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
-			try {
-				const persistence = getSessionStatePersistence();
-				if (persistence.isRestoredSession(sessionName)) {
-					await this.resumeClaudeCodeSession(sessionName);
-				}
-			} catch (resumeError) {
-				this.logger.warn('Resume attempt failed (non-fatal, continuing with fresh session)', {
-					sessionName,
-					error: resumeError instanceof Error ? resumeError.message : String(resumeError),
-				});
-			}
+			const detectPath = projectPath || process.cwd();
+			setTimeout(() => {
+				this.detectAndStoreSessionId(sessionName, detectPath).catch(() => {});
+			}, 10000);
 		}
 
 		// Send the registration prompt in background (don't block on it)
@@ -810,8 +870,10 @@ export class AgentRegistrationService {
 			// Get cached template and apply variable replacements
 			let prompt = this.promptCache.get(cacheKey)!;
 
-			// Replace session ID and member ID placeholders
+			// Replace all template placeholders
 			prompt = prompt.replace(/\{\{SESSION_ID\}\}/g, sessionName);
+			prompt = prompt.replace(/\{\{SESSION_NAME\}\}/g, sessionName);
+			prompt = prompt.replace(/\{\{ROLE\}\}/g, role);
 			if (memberId) {
 				prompt = prompt.replace(/\{\{MEMBER_ID\}\}/g, memberId);
 			} else {
@@ -837,6 +899,13 @@ export class AgentRegistrationService {
 			} catch {
 				// Non-critical - use default project path
 			}
+
+			// Replace project path placeholder (must happen after project path lookup above)
+			prompt = prompt.replace(/\{\{PROJECT_PATH\}\}/g, projectPath);
+
+			// Replace agent skills path placeholder
+			const agentSkillsPath = path.join(this.projectRoot, 'config', 'skills', 'agent');
+			prompt = prompt.replace(/\{\{AGENT_SKILLS_PATH\}\}/g, agentSkillsPath);
 
 			// Generate and inject startup briefing from session memory
 			try {
@@ -873,24 +942,22 @@ export class AgentRegistrationService {
 				stack: error instanceof Error ? error.stack : undefined,
 			});
 
-			const memberIdParam = memberId ? `, "teamMemberId": "${memberId}"` : '';
+			const memberIdJson = memberId ? `,"teamMemberId":"${memberId}"` : '';
+			const skillsPath = path.join(this.projectRoot, 'config', 'skills', 'agent');
 
 			return `Hey! I need your help with some tasks on this project.
 
 ## Quick context about this setup
 
-This project uses AgentMux for team coordination. The \`register_agent_status\` tool is an MCP tool that's already configured in your MCP server settings (check your .mcp.json if you want to verify). The AgentMux backend is running locally as part of this development environment.
+This project uses AgentMux for team coordination. You have bash skills available at \`${skillsPath}/\` that communicate with the AgentMux backend running locally. Read the skills catalog at \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
 
 ## First thing - please check in
 
-Please call the \`register_agent_status\` MCP tool to let the team dashboard know you're available. All it does is update a local status flag so the web UI shows you as online - nothing more.
-
-\`\`\`json
-{
-  "role": "${role}",
-  "sessionName": "${sessionName}"${memberIdParam}
-}
+Please run the register-self skill to let the team dashboard know you're available:
+\`\`\`bash
+bash ${skillsPath}/register-self/execute.sh '{"role":"${role}","sessionName":"${sessionName}"${memberIdJson}}'
 \`\`\`
+All it does is update a local status flag so the web UI shows you as online - nothing more.
 
 After checking in, just say "Ready for tasks" and wait for me to send you work.`;
 		}
@@ -1067,7 +1134,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					sessionName,
 				});
 
-				// Step 5: Wait for MCP tool call to update teams.json (agentStatus: activating -> active)
+				// Step 5: Wait for registration API call to update teams.json (agentStatus: activating -> active)
 				const registrationTimeout = Math.min(timeout, 25000); // Max 25s per attempt
 				const registered = await this.waitForRegistrationFast(
 					sessionName,
@@ -1716,7 +1783,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 */
 	async waitForAgentReady(
 		sessionName: string,
-		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+		runtimeType?: RuntimeType
 	): Promise<boolean> {
 		const sessionHelper = await this.getSessionHelper();
 
@@ -1728,7 +1796,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		// Quick check - already at prompt?
 		const currentOutput = sessionHelper.capturePane(sessionName);
-		if (this.isClaudeAtPrompt(currentOutput)) {
+		if (this.isClaudeAtPrompt(currentOutput, runtimeType)) {
 			this.logger.debug('Agent already at prompt', { sessionName });
 			return true;
 		}
@@ -1739,6 +1807,16 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		if (!session) {
 			return false;
 		}
+
+		// Use runtime-specific pattern for stream detection to avoid false positives
+		// (e.g. Gemini's `> ` pattern matching markdown blockquotes in Claude Code output)
+		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
+		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
+		const streamPattern = isClaudeCode
+			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
+			: isGemini
+				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
+				: TERMINAL_PATTERNS.PROMPT_STREAM;
 
 		return new Promise<boolean>((resolve) => {
 			let resolved = false;
@@ -1763,7 +1841,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			const pollId = setInterval(() => {
 				if (resolved) return;
 				const output = sessionHelper.capturePane(sessionName);
-				if (this.isClaudeAtPrompt(output)) {
+				if (this.isClaudeAtPrompt(output, runtimeType)) {
 					this.logger.debug('Agent at prompt (detected via polling)', { sessionName });
 					cleanup();
 					resolve(true);
@@ -1773,10 +1851,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Also subscribe to terminal data for faster detection
 			const unsubscribe = session.onData((data) => {
 				if (resolved) return;
-				if (TERMINAL_PATTERNS.PROMPT_STREAM.test(data)) {
+				if (streamPattern.test(data)) {
 					// Double-check with capturePane to avoid false positives from partial data
 					const output = sessionHelper.capturePane(sessionName);
-					if (this.isClaudeAtPrompt(output)) {
+					if (this.isClaudeAtPrompt(output, runtimeType)) {
 						this.logger.debug('Agent at prompt (detected via stream)', { sessionName });
 						cleanup();
 						resolve(true);
@@ -2088,6 +2166,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		const sessionHelper = await this.getSessionHelper();
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
 
+		// Register TUI sessions for TUI prompt-line scanning (Part 1 of scanner).
+		// The scanner itself is started lazily by trackSentMessage() which
+		// runs after every message send, covering all runtimes.
+		if (!isClaudeCode) {
+			this.tuiSessionRegistry.set(sessionName, runtimeType);
+		}
+
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
 				this.logger.debug('Attempting message delivery', {
@@ -2100,7 +2185,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
-				if (!this.isClaudeAtPrompt(output)) {
+				if (!this.isClaudeAtPrompt(output, runtimeType)) {
 					this.logger.debug('Not at prompt, waiting before retry', { sessionName, attempt });
 					await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
 					continue;
@@ -2121,33 +2206,80 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				}
 
 				// Clear any stale text before sending.
-				// Claude Code: Ctrl+C to cancel any pending input.
-				// Gemini CLI (Ink TUI): Send Enter to "wake up" the input box.
+				// Claude Code: Ctrl+C to cancel any pending input — but ONLY on
+				// retry attempts. On the first attempt, waitForAgentReady already
+				// confirmed the agent is idle at the prompt, so Ctrl+C is
+				// unnecessary and can disrupt Claude Code's input handler if the
+				// 300ms settling delay isn't enough.
+				// Gemini CLI (Ink TUI): escalating recovery to refocus input box.
 				// The TUI input can lose focus after idle periods, auto-update
 				// notifications, or dialog overlays. When defocused, writes are
 				// silently consumed by the Ink framework but NOT routed to the
-				// InputPrompt. Enter on an empty `> ` prompt is a safe no-op
-				// (just shows a new blank prompt line) and can dismiss overlays
-				// or re-engage input focus after minor TUI state glitches.
+				// InputPrompt.
 				// Do NOT send Escape (defocuses permanently), Ctrl+C (triggers
 				// /quit on empty prompt), or Ctrl+U (ignored by TUI).
+				//
+				// Recovery strategies (escalating per attempt):
+				// 1. Tab + Enter: Tab triggers Ink's focusNext() which cycles
+				//    focus through focusable components. If InputPrompt is the
+				//    only/next focusable element, it gets refocused. Enter then
+				//    dismisses any overlay or acts as safe no-op on empty prompt.
+				// 2-3. PTY resize + Tab + Enter: Resize sends SIGWINCH to the
+				//    child process, forcing Ink to re-render the entire TUI.
+				//    This may restore the internal focus state. Then Tab + Enter
+				//    for focus cycling and overlay dismissal.
 				if (isClaudeCode) {
-					await sessionHelper.sendCtrlC(sessionName);
-					await delay(300);
+					if (attempt > 1) {
+						await sessionHelper.sendCtrlC(sessionName);
+						await delay(300);
+					}
 				} else {
+					// On retry attempts (2+), force a PTY resize to trigger SIGWINCH.
+					// This makes Ink re-render the TUI, potentially restoring focus state.
+					if (attempt > 1) {
+						try {
+							const session = sessionHelper.getSession(sessionName);
+							if (session) {
+								// Resize slightly then back to trigger SIGWINCH
+								session.resize(81, 25);
+								await delay(200);
+								session.resize(80, 24);
+								await delay(500);
+								this.logger.debug('PTY resize sent to trigger TUI re-render', {
+									sessionName,
+									attempt,
+								});
+							}
+						} catch (resizeErr) {
+							this.logger.debug('PTY resize failed (non-fatal)', {
+								sessionName,
+								error: resizeErr instanceof Error ? resizeErr.message : String(resizeErr),
+							});
+						}
+					}
+
+					// Send Tab to cycle Ink focus. In Ink v6, Tab triggers
+					// focusNext() in FocusContext, which moves focus to the next
+					// focusable component (InputPrompt). This works even when the
+					// input is defocused because the Tab handler runs at the Ink
+					// framework level, not the component level.
+					await sessionHelper.sendKey(sessionName, 'Tab');
+					await delay(300);
+
+					// Then Enter to dismiss any notification overlay and ensure
+					// the input is engaged. Enter on an empty `> ` prompt is a
+					// safe no-op (just shows a new blank prompt line).
 					await sessionHelper.sendEnter(sessionName);
 					await delay(500);
 				}
 
-				// For TUI runtimes, capture output BEFORE sending to detect changes.
-				// The TUI always shows the `> ` prompt (even during processing), so
-				// isClaudeAtPrompt can't detect delivery. Instead, compare output
-				// before and after to see if the agent started processing.
+				// Capture output BEFORE sending to detect changes for ALL runtimes.
+				// Claude Code: progressive output-change detection prevents false-positive
+				// Ctrl+C by giving Claude up to 6.5s to start rendering output.
+				// TUI runtimes: same output-change detection as before.
 				// Use a small pane capture (20 lines) to reduce noise from TUI
 				// border redraws that can cause length changes unrelated to delivery.
-				const beforeOutput = !isClaudeCode
-					? sessionHelper.capturePane(sessionName, 20)
-					: '';
+				const beforeOutput = sessionHelper.capturePane(sessionName, 20);
 				const beforeLength = beforeOutput.length;
 
 				// Use SessionCommandHelper.sendMessage() — proven two-step write:
@@ -2156,6 +2288,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// 3. session.write('\r')       — sends Enter separately
 				// 4. await delay(KEY_DELAY)    — waits for key processing
 				await sessionHelper.sendMessage(sessionName, message);
+
+				// Register for background stuck-detection safety net (all runtimes).
+				// If progressive verification below misses an Enter drop, the
+				// background scanner will catch it within 30s.
+				this.trackSentMessage(sessionName, message);
 
 				// Wait for agent to start processing, then verify delivery.
 				// TUI runtimes need a longer delay (3s) for the TUI to redraw
@@ -2168,62 +2305,252 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// === Delivery verification ===
 				// Claude Code: prompt disappears during processing, so check
 				// isMessageStuckAtPrompt (text still at prompt = stuck).
-				// TUI runtimes (Gemini CLI): the `> ` prompt is ALWAYS visible
-				// even during processing, making isClaudeAtPrompt unreliable.
-				// Instead, detect delivery via output changes (length increase
-				// or processing indicators), same approach as sendPromptRobustly.
+				// TUI runtimes (Gemini CLI): use TWO-PHASE verification:
+				//   Phase 1: Direct check — is the message text sitting ON the
+				//            `> ` prompt line? If yes, Enter was dropped. Try
+				//            pressing Enter to recover before falling through to retry.
+				//   Phase 2: Output-change detection — compare before/after captures
+				//            to see if the agent started processing.
 				if (isClaudeCode) {
-					const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-					if (!stuck) {
-						this.logger.debug('Message delivered successfully', { sessionName, attempt });
+					// Progressive verification for Claude Code.
+					// Claude Code routinely takes 3-8s to start rendering with large
+					// context. The old 2.5s window caused false-positive Ctrl+C that
+					// cancelled valid in-progress prompts. Now we progressively check
+					// at [1s, 2s, 3s] intervals (total ~6.5s including processing delay).
+					//
+					// Progressive verification: check at [1s, 2s, 3s] intervals whether
+					// the agent accepted the message and started processing it.
+					//
+					// Uses runtime-agnostic detection — no hardcoded prompt characters.
+					// This stays correct when the agent runtime upgrades its prompt.
+					//
+					// Three signals checked per interval:
+					// 1. Processing indicators (⠋ ⏺ spinners) — definitive success
+					// 2. isClaudeAtPrompt() — if still true, agent is idle, wait more
+					// 3. Message text in bottom lines — if found, Enter was dropped
+					//    (message pasted at prompt but not submitted)
+					// If prompt gone AND message text NOT at bottom → success
+					let claudeDelivered = false;
+					for (const intervalMs of SESSION_COMMAND_DELAYS.CLAUDE_VERIFICATION_INTERVALS) {
+						const currentOutput = sessionHelper.capturePane(sessionName);
+
+						// 1. Processing indicators (spinners, working marker) are
+						//    definitive proof the agent accepted and is working.
+						//    Only check spinner/⏺ chars — NOT text words like
+						//    "thinking" which appear in historical response text.
+						if (TERMINAL_PATTERNS.PROCESSING.test(currentOutput)) {
+							this.logger.debug('Processing indicators detected — message accepted', {
+								sessionName,
+								attempt,
+							});
+							claudeDelivered = true;
+							break;
+						}
+
+						// 2. Is the agent still at its standard idle prompt?
+						//    Reuse isClaudeAtPrompt() — the single source of truth
+						//    for prompt detection. This avoids hardcoding prompt
+						//    characters and stays correct when the runtime upgrades.
+						if (this.isClaudeAtPrompt(currentOutput, runtimeType)) {
+							// Prompt is visible. Before just waiting, check if our
+							// message text is also at the bottom — this means the
+							// text was pasted but Enter was dropped. Press Enter.
+							// Normalize whitespace: enhanced messages contain literal \n from
+							// addContinuationInstructions(). join(' ') replaces line breaks with
+							// spaces, but the snippet still has \n chars, so includes() fails.
+							const promptMsgSnippet = (message.length > 20
+								? message.substring(0, 80)
+								: message).replace(/\s+/g, ' ').trim();
+							const promptBottomLines = currentOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+							if (promptBottomLines.includes(promptMsgSnippet)) {
+								this.logger.warn('At prompt with message text at bottom — pressing Enter', {
+									sessionName,
+									attempt,
+									intervalMs,
+								});
+								await sessionHelper.sendEnter(sessionName);
+								await delay(500);
+								await sessionHelper.sendEnter(sessionName); // backup
+
+								await delay(SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY);
+
+								// Verify recovery
+								const postEnterOutput = sessionHelper.capturePane(sessionName);
+								if (TERMINAL_PATTERNS.PROCESSING.test(postEnterOutput) ||
+									!this.isClaudeAtPrompt(postEnterOutput, runtimeType)) {
+									this.logger.info('Enter recovery from prompt successful', {
+										sessionName,
+										attempt,
+									});
+									claudeDelivered = true;
+									break;
+								}
+							}
+
+							this.logger.debug('Agent still at prompt, waiting before re-check', {
+								sessionName,
+								attempt,
+								intervalMs,
+							});
+							await delay(intervalMs);
+							continue;
+						}
+
+						// 3. Prompt not in its standard idle form. Before declaring
+						//    success, check if our message text is stuck at the
+						//    bottom of the terminal. When Enter is dropped, the
+						//    pasted text appears on the prompt line — the terminal
+						//    shows the prompt char followed by our message text.
+						//    This check is runtime-agnostic: it works regardless
+						//    of what prompt character the runtime uses.
+						// Normalize whitespace in snippet (see Step 2 comment above).
+						const msgSnippet = (message.length > 20
+							? message.substring(0, 80)
+							: message).replace(/\s+/g, ' ').trim();
+						const bottomLines = currentOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+						if (bottomLines.includes(msgSnippet)) {
+							// Message text is at the bottom of the terminal but the
+							// prompt is no longer in its idle form — Enter was dropped.
+							// Instead of waiting and doing a full Ctrl+C + resend retry,
+							// press Enter immediately to submit the already-pasted text.
+							this.logger.warn('Message text stuck at bottom — pressing Enter to recover', {
+								sessionName,
+								attempt,
+								intervalMs,
+							});
+							await sessionHelper.sendEnter(sessionName);
+							await delay(500);
+							await sessionHelper.sendEnter(sessionName); // backup Enter
+
+							// Give the agent a moment to start processing after Enter
+							await delay(SESSION_COMMAND_DELAYS.MESSAGE_PROCESSING_DELAY);
+
+							// Verify recovery: check if processing started
+							const recoveryOutput = sessionHelper.capturePane(sessionName);
+							if (TERMINAL_PATTERNS.PROCESSING.test(recoveryOutput)) {
+								this.logger.info('Enter recovery successful — processing started', {
+									sessionName,
+									attempt,
+								});
+								claudeDelivered = true;
+								break;
+							}
+
+							// Check if prompt reappeared (Enter submitted but processed instantly)
+							// or if output changed from the stuck state
+							const recoveryBottom = recoveryOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+							if (!recoveryBottom.includes(msgSnippet)) {
+								this.logger.info('Enter recovery successful — stuck text cleared', {
+									sessionName,
+									attempt,
+								});
+								claudeDelivered = true;
+								break;
+							}
+
+							// Still stuck after Enter recovery — continue to next interval
+							this.logger.debug('Still stuck after Enter recovery, continuing verification', {
+								sessionName,
+								attempt,
+							});
+							await delay(intervalMs);
+							continue;
+						}
+
+						// Prompt gone AND no stuck text → agent started processing
+						this.logger.debug('Prompt gone, no stuck text — message delivered', {
+							sessionName,
+							attempt,
+						});
+						claudeDelivered = true;
+						break;
+					}
+					if (claudeDelivered) {
 						return true;
 					}
 				} else {
-					// Use the same small pane capture as the "before" snapshot.
-					const afterOutput = sessionHelper.capturePane(sessionName, 20);
-					const lengthDiff = afterOutput.length - beforeLength;
-					const hasProcessingIndicators = TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(
-						afterOutput.slice(-500)
-					);
-					// Check broader processing keywords that Gemini CLI may show
-					const hasGeminiIndicators = /reading|thinking|processing|analyzing|registering|generating|searching/i.test(
-						afterOutput
-					);
-					// Check if output CONTENT changed (not just length). TUI redraws
-					// can cause length to decrease while the content actually changed
-					// because the agent accepted the input and started processing.
-					const contentChanged = beforeOutput !== afterOutput;
-					// Accept delivery if:
-					// 1. Output grew significantly (agent produced new output)
-					// 2. Output content changed AND length changed by any significant amount
-					//    (positive OR negative — TUI redraws cause shrinkage)
-					// 3. Processing indicators detected
-					const significantLengthChange = Math.abs(lengthDiff) > 10;
-					const delivered = (lengthDiff > 20)
-						|| (contentChanged && significantLengthChange)
-						|| hasProcessingIndicators
-						|| hasGeminiIndicators;
+					// --- Phase 1: Direct stuck-at-prompt detection ---
+					// Check if our message text is literally sitting on the `> ` prompt
+					// line. This is the definitive signal that Enter was not pressed or
+					// was silently consumed by the TUI. Unlike output-change detection,
+					// this has no false positives from TUI redraws or historical text.
+					const stuckAtPrompt = this.isTextStuckAtTuiPrompt(sessionName, message);
+					if (stuckAtPrompt) {
+						// Attempt immediate recovery: press Enter to submit the text
+						const recovered = await this.recoverStuckTuiMessage(sessionName, message);
+						if (recovered) {
+							this.logger.info('Message recovered via Enter re-press', {
+								sessionName,
+								attempt,
+							});
+							return true;
+						}
+						// Still stuck after recovery — fall through to retry with cleanup
+						this.logger.warn('Message still stuck after Enter recovery, will retry', {
+							sessionName,
+							attempt,
+						});
+						// Skip the output-change check — we know it's stuck
+					} else {
+						// --- Phase 2: Output-change detection ---
+						// Text is NOT on the prompt line. Either it was delivered (Enter
+						// worked) or it was never written (TUI was defocused and the Ink
+						// framework consumed the text silently). Compare output snapshots.
+						const afterOutput = sessionHelper.capturePane(sessionName, 20);
+						const lengthDiff = afterOutput.length - beforeLength;
+						const contentChanged = beforeOutput !== afterOutput;
 
-					if (delivered) {
-						this.logger.debug('Message delivered successfully (TUI output changed)', {
+						// CRITICAL: Only check for processing indicators in NEW content
+						// (the diff between before and after). Checking the full afterOutput
+						// causes false positives because words like "generating", "searching"
+						// commonly appear in the agent's previous response text visible in
+						// the 20-line capture.
+						let newContent = '';
+						if (contentChanged && afterOutput.length > beforeOutput.length) {
+							newContent = afterOutput.slice(beforeLength);
+						} else if (contentChanged) {
+							const beforeLines = new Set(beforeOutput.split('\n'));
+							newContent = afterOutput
+								.split('\n')
+								.filter((line) => !beforeLines.has(line))
+								.join('\n');
+						}
+
+						const hasProcessingIndicators = TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(
+							newContent || afterOutput.slice(-500)
+						);
+						const hasGeminiIndicators = newContent.length > 0
+							&& /reading|thinking|processing|analyzing|generating|searching/i.test(newContent);
+
+						const significantLengthChange = Math.abs(lengthDiff) > 10;
+						const delivered = (lengthDiff > 20)
+							|| (contentChanged && significantLengthChange)
+							|| hasProcessingIndicators
+							|| hasGeminiIndicators;
+
+						if (delivered) {
+							this.logger.debug('Message delivered successfully (TUI output changed)', {
+								sessionName,
+								attempt,
+								lengthDiff,
+								contentChanged,
+								hasProcessingIndicators,
+								hasGeminiIndicators,
+								newContentLength: newContent.length,
+							});
+							return true;
+						}
+
+						this.logger.warn('TUI output did not change after send — message may not have been accepted', {
 							sessionName,
 							attempt,
 							lengthDiff,
 							contentChanged,
 							hasProcessingIndicators,
 							hasGeminiIndicators,
+							newContentLength: newContent.length,
 						});
-						return true;
 					}
-
-					this.logger.warn('TUI output did not change after send — message may not have been accepted', {
-						sessionName,
-						attempt,
-						lengthDiff,
-						contentChanged,
-						hasProcessingIndicators,
-						hasGeminiIndicators,
-					});
 				}
 
 				// Message stuck at prompt — clear line and retry.
@@ -2239,14 +2566,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// input box but wasn't submitted — Ctrl+C safely clears it.
 					// If output did NOT change at all, the TUI input is likely defocused
 					// and the input box is EMPTY. Ctrl+C on an empty Gemini CLI prompt
-					// triggers /quit and exits the CLI entirely. In this case, only send
-					// Enter (safe no-op on empty prompt) to try to re-engage the input.
+					// triggers /quit and exits the CLI entirely.
 					const noOutputChange = !isClaudeCode && beforeOutput === sessionHelper.capturePane(sessionName, 20);
 					if (noOutputChange) {
-						this.logger.warn('No output change detected — TUI input may be defocused, sending Enter to re-engage', {
+						this.logger.warn('No output change detected — TUI input likely defocused, using Tab to cycle Ink focus', {
 							sessionName,
 							attempt,
 						});
+						// Tab triggers focusNext() in Ink's FocusContext, which should
+						// cycle focus back to the InputPrompt component even when it's
+						// defocused. This is more reliable than Enter (which is silently
+						// consumed when no component is focused).
+						await sessionHelper.sendKey(sessionName, 'Tab');
+						await delay(300);
 						await sessionHelper.sendEnter(sessionName);
 						await delay(300);
 					} else {
@@ -2345,13 +2677,319 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
+	 * Check if message text is stuck at the TUI prompt line (Enter was not pressed).
+	 *
+	 * Unlike `isMessageStuckAtPrompt` which checks the last 20 lines for the message
+	 * text ANYWHERE, this method specifically checks whether the message text appears
+	 * ON the prompt line itself (the line starting with `> ` or `│ > `).
+	 *
+	 * After Enter is successfully pressed, the text moves from the prompt line to the
+	 * chat history area. So if the text is still on the prompt line, Enter was dropped.
+	 *
+	 * This avoids the false positive problem where `isMessageStuckAtPrompt` matches
+	 * the message text in the TUI's chat history (which echoes submitted messages).
+	 *
+	 * @param sessionName - The session to check
+	 * @param message - The original message that was sent
+	 * @returns true if the message text is visible on the TUI prompt line (stuck)
+	 */
+	private isTextStuckAtTuiPrompt(sessionName: string, message: string): boolean {
+		try {
+			const sessionHelper = this._sessionHelper;
+			if (!sessionHelper) return false;
+
+			const output = sessionHelper.capturePane(sessionName);
+			if (!output || output.trim().length === 0) return false;
+
+			// Extract search token: first 30 chars of the message content
+			// (after stripping any [CHAT:uuid] prefix)
+			const chatPrefixMatch = message.match(/^\[CHAT:[^\]]+\]\s*/);
+			const contentAfterPrefix = chatPrefixMatch
+				? message.slice(chatPrefixMatch[0].length)
+				: message;
+			const searchToken = contentAfterPrefix.slice(0, 30).trim();
+
+			if (!searchToken) return false;
+
+			// Find lines that look like a TUI prompt with text after it.
+			// Gemini CLI TUI wraps content in box-drawing borders: │ > text │
+			// Or without borders: > text
+			// The prompt line is the line with `> ` followed by actual content.
+			const lines = output.split('\n');
+			const promptLineRegex = /^[│┃║|\s]*>\s+(.+)/;
+
+			for (let i = lines.length - 1; i >= Math.max(0, lines.length - 25); i--) {
+				const line = lines[i];
+				const match = line.match(promptLineRegex);
+				if (match) {
+					const promptContent = match[1].replace(/[│┃║|\s]+$/, '').trim();
+					// Check if the prompt line content contains our message text
+					if (promptContent.length > 5 && promptContent.includes(searchToken)) {
+						this.logger.warn('Text stuck at TUI prompt — Enter was not pressed', {
+							sessionName,
+							searchToken: searchToken.slice(0, 20),
+							promptContent: promptContent.slice(0, 60),
+						});
+						return true;
+					}
+				}
+			}
+
+			return false;
+		} catch (error) {
+			this.logger.debug('Error in isTextStuckAtTuiPrompt', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+	}
+
+	/**
+	 * Attempt to recover from text stuck at TUI prompt by pressing Enter.
+	 * Checks if text is stuck, sends Enter, waits, then verifies.
+	 *
+	 * @param sessionName - The session to recover
+	 * @param message - The original message
+	 * @returns true if recovery succeeded (text is no longer at prompt)
+	 */
+	private async recoverStuckTuiMessage(sessionName: string, message: string): Promise<boolean> {
+		const sessionHelper = await this.getSessionHelper();
+
+		// Press Enter to submit the stuck text
+		this.logger.info('Pressing Enter to recover stuck TUI message', { sessionName });
+		await sessionHelper.sendEnter(sessionName);
+		await delay(500);
+
+		// Double-tap: send a backup Enter in case the first was consumed
+		await sessionHelper.sendEnter(sessionName);
+		await delay(2000);
+
+		// Verify text is no longer at prompt
+		const stillStuck = this.isTextStuckAtTuiPrompt(sessionName, message);
+		if (!stillStuck) {
+			this.logger.info('TUI message recovery succeeded — Enter accepted', { sessionName });
+			return true;
+		}
+
+		this.logger.warn('TUI message still stuck after Enter recovery', { sessionName });
+		return false;
+	}
+
+	/**
+	 * Start a background scanner that periodically checks all registered TUI
+	 * sessions for text stuck at the prompt (Enter not pressed).
+	 *
+	 * This is a safety net that catches messages missed by the per-send
+	 * verification in `sendMessageWithRetry`. It scans every 30 seconds.
+	 *
+	 * When stuck text is detected, the scanner presses Enter to recover.
+	 * If text has been sitting at the prompt for multiple consecutive scans,
+	 * it escalates to Tab + Enter (TUI focus recovery).
+	 */
+	startStuckMessageDetector(): void {
+		if (this.stuckMessageDetectorTimer) {
+			this.logger.debug('Stuck message detector already running');
+			return;
+		}
+
+		const SCAN_INTERVAL_MS = 30000; // 30 seconds
+		this.logger.info('Starting background stuck-message detector', {
+			intervalMs: SCAN_INTERVAL_MS,
+		});
+
+		this.stuckMessageDetectorTimer = setInterval(async () => {
+			try {
+				await this.scanForStuckMessages();
+			} catch (error) {
+				this.logger.debug('Stuck message scan error (non-fatal)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}, SCAN_INTERVAL_MS);
+	}
+
+	/**
+	 * Stop the background stuck-message detector.
+	 */
+	stopStuckMessageDetector(): void {
+		if (this.stuckMessageDetectorTimer) {
+			clearInterval(this.stuckMessageDetectorTimer);
+			this.stuckMessageDetectorTimer = null;
+			this.logger.info('Stopped background stuck-message detector');
+		}
+	}
+
+	/**
+	 * Scan all sessions for stuck messages. Two complementary strategies:
+	 *
+	 * 1. TUI prompt-line scanning (existing): checks registered TUI sessions
+	 *    for text sitting on the `> ` prompt line.
+	 * 2. Tracked-message scanning (new, all runtimes): checks if any recently
+	 *    sent message text is still visible at the bottom of the terminal
+	 *    after 15+ seconds — runtime-agnostic Enter-drop detection.
+	 */
+	private async scanForStuckMessages(): Promise<void> {
+		const sessionHelper = this._sessionHelper;
+		if (!sessionHelper) return;
+
+		// --- Part 1: Existing TUI prompt-line scanning (unchanged) ---
+		for (const [sessionName] of this.tuiSessionRegistry) {
+			try {
+				// Skip sessions that no longer exist
+				if (!sessionHelper.sessionExists(sessionName)) {
+					this.tuiSessionRegistry.delete(sessionName);
+					continue;
+				}
+
+				const output = sessionHelper.capturePane(sessionName);
+				if (!output || output.trim().length === 0) continue;
+
+				// Look for any text sitting on the prompt line
+				const lines = output.split('\n');
+				const promptLineRegex = /^[│┃║|\s]*>\s+(.+)/;
+
+				for (let i = lines.length - 1; i >= Math.max(0, lines.length - 25); i--) {
+					const match = lines[i].match(promptLineRegex);
+					if (match) {
+						const promptContent = match[1].replace(/[│┃║|\s]+$/, '').trim();
+						// Only act on substantial text (> 10 chars) to avoid false positives
+						// from TUI rendering artifacts or short status text
+						if (promptContent.length > 10) {
+							// Skip known Gemini CLI idle placeholder text that sits at
+							// the `> ` prompt when no user input is present. These are
+							// NOT stuck messages — they are TUI decoration.
+							const isPlaceholder =
+								/^Type your message/i.test(promptContent) ||
+								/^@[\w/.]+/.test(promptContent);  // e.g., "@path/to/file"
+							if (isPlaceholder) {
+								break;
+							}
+
+							this.logger.warn('Background scan: text stuck at TUI prompt, pressing Enter', {
+								sessionName,
+								promptContent: promptContent.slice(0, 80),
+							});
+
+							// Press Enter to submit the stuck text
+							await sessionHelper.sendEnter(sessionName);
+							await delay(500);
+							// Backup Enter
+							await sessionHelper.sendEnter(sessionName);
+						}
+						break; // Only check the first prompt line found from the bottom
+					}
+				}
+			} catch (error) {
+				this.logger.debug('Error scanning session for stuck messages', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		// --- Part 2: Tracked-message scanning (all runtimes) ---
+		const now = Date.now();
+		const MIN_AGE_MS = 15000; // Only check messages older than 15s
+
+		for (const [sessionName, entries] of this.sentMessageTracker) {
+			if (!sessionHelper.sessionExists(sessionName)) {
+				this.sentMessageTracker.delete(sessionName);
+				continue;
+			}
+
+			try {
+				const output = sessionHelper.capturePane(sessionName);
+				if (!output || output.trim().length === 0) continue;
+				const bottomText = output.split('\n').slice(-15).join(' ').replace(/\s+/g, ' ');
+
+				for (const entry of entries) {
+					if (entry.recovered) continue;
+					if (now - entry.sentAt < MIN_AGE_MS) continue;
+
+					if (bottomText.includes(entry.snippet)) {
+						this.logger.warn('Background scan: tracked message stuck, pressing Enter', {
+							sessionName,
+							snippet: entry.snippet.slice(0, 50),
+							ageMs: now - entry.sentAt,
+						});
+
+						await sessionHelper.sendEnter(sessionName);
+						await delay(500);
+						await sessionHelper.sendEnter(sessionName); // backup
+						entry.recovered = true;
+						break; // One recovery per session per scan cycle
+					}
+				}
+			} catch (error) {
+				this.logger.debug('Error scanning tracked messages for session', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		// Clean up old tracked-message entries
+		for (const [sessionName, entries] of this.sentMessageTracker) {
+			const fresh = entries.filter(e => now - e.sentAt < 5 * 60 * 1000);
+			if (fresh.length === 0) {
+				this.sentMessageTracker.delete(sessionName);
+			} else {
+				this.sentMessageTracker.set(sessionName, fresh);
+			}
+		}
+	}
+
+	/**
+	 * Unregister a TUI session from the stuck-message detector.
+	 * Call this when a session is destroyed or agent is stopped.
+	 *
+	 * @param sessionName - The session to unregister
+	 */
+	unregisterTuiSession(sessionName: string): void {
+		this.tuiSessionRegistry.delete(sessionName);
+		this.sentMessageTracker.delete(sessionName);
+	}
+
+	/**
+	 * Register a message that was sent to a session for background
+	 * stuck-detection. The scanner will periodically check if the
+	 * message text is still visible at the bottom of the terminal.
+	 *
+	 * @param sessionName - The session the message was sent to
+	 * @param message - The full message text
+	 */
+	trackSentMessage(sessionName: string, message: string): void {
+		// Extract a search snippet: skip [CHAT:uuid] prefix, take first 80 chars
+		const prefixMatch = message.match(/^\[CHAT:[^\]]+\]\s*/);
+		const contentStart = prefixMatch ? prefixMatch[0].length : 0;
+		// Normalize whitespace: messages may contain \n from enhanced templates.
+		// Terminal bottom text is join(' '), so \n in snippet would never match.
+		const snippet = message.slice(contentStart, contentStart + 80).replace(/\s+/g, ' ').trim();
+		if (snippet.length < 10) return; // Too short to reliably match
+
+		const entries = this.sentMessageTracker.get(sessionName) || [];
+		entries.push({ snippet, sentAt: Date.now(), recovered: false });
+
+		// Keep only last 5 minutes of entries
+		const cutoff = Date.now() - 5 * 60 * 1000;
+		this.sentMessageTracker.set(
+			sessionName,
+			entries.filter(e => e.sentAt > cutoff)
+		);
+
+		// Ensure the background scanner is running
+		this.startStuckMessageDetector();
+	}
+
+	/**
 	 * Check if Claude Code appears to be at an input prompt.
 	 * Looks for common prompt indicators in terminal output.
 	 *
 	 * @param terminalOutput - The terminal output to check
 	 * @returns true if Claude Code appears to be at a prompt
 	 */
-	private isClaudeAtPrompt(terminalOutput: string): boolean {
+	private isClaudeAtPrompt(terminalOutput: string, runtimeType?: RuntimeType): boolean {
 		// Handle null/undefined/empty input gracefully
 		if (!terminalOutput || typeof terminalOutput !== 'string') {
 			this.logger.debug('Terminal output is empty or invalid, assuming at prompt');
@@ -2361,10 +2999,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		// Only analyze the tail of the buffer to avoid matching historical prompts
 		const tailSection = terminalOutput.slice(-2000);
 
+		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
+		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
+
+		// Use runtime-specific regex when runtime is known, combined pattern otherwise
+		const streamPattern = isClaudeCode
+			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
+			: isGemini
+				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
+				: TERMINAL_PATTERNS.PROMPT_STREAM;
+
 		// Check for prompt FIRST. Processing indicators like "thinking" or "analyzing"
 		// can appear in the agent's previous response text and persist in the terminal
 		// scroll buffer, causing false negatives if checked before the prompt.
-		if (TERMINAL_PATTERNS.PROMPT_STREAM.test(tailSection)) {
+		if (streamPattern.test(tailSection)) {
 			return true;
 		}
 
@@ -2378,22 +3026,28 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			const trimmed = line.trim();
 			// Strip TUI box-drawing borders (│, ┃, etc.) that Gemini CLI wraps around prompts
 			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
-			// Exact match for single-char prompts (❯, >, ⏵, $)
-			if (AgentRegistrationService.CLAUDE_PROMPT_INDICATORS.some(
-				(indicator) => trimmed === indicator || stripped === indicator
-			)) {
-				return true;
+
+			// Claude Code prompts: ❯, ⏵, $ alone on a line
+			if (!isGemini) {
+				if (['❯', '⏵', '$'].some(ch => trimmed === ch || stripped === ch)) {
+					return true;
+				}
+				// ❯❯ = bypass permissions prompt (idle).
+				// Matches "❯❯", "❯❯ ", and "❯❯ bypass permissions on (shift+tab to cycle)".
+				// This line disappears during processing and reappears when idle.
+				if (trimmed.startsWith('❯❯')) {
+					return true;
+				}
 			}
-			// Bypass permissions mode: line starts with ❯❯ followed by space
-			if (trimmed.startsWith('❯❯ ')) {
-				return true;
+
+			// Gemini CLI prompts: > or ! followed by space
+			if (!isClaudeCode) {
+				if (trimmed.startsWith('> ') || trimmed.startsWith('! ') ||
+					stripped.startsWith('> ') || stripped.startsWith('! ')) {
+					return true;
+				}
 			}
-			// Gemini CLI TUI prompt: > or ! followed by space (may have placeholder text)
-			// Check both raw trimmed line and stripped (box-drawing removed) line
-			if (trimmed.startsWith('> ') || trimmed.startsWith('! ') ||
-				stripped.startsWith('> ') || stripped.startsWith('! ')) {
-				return true;
-			}
+
 			return false;
 		});
 
@@ -2732,12 +3386,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					afterOutput
 				);
 
-				if (lengthIncrease > 20 || hasProcessingIndicators) {
+				// For Claude Code, also check if the prompt disappeared (meaning
+				// Claude accepted the input and is processing). Claude's UI often
+				// collapses/redraws, making the output shorter — a negative
+				// lengthIncrease does NOT mean delivery failed.
+				const promptGone = isClaudeCode
+					&& !this.isClaudeAtPrompt(sessionHelper.capturePane(sessionName), RUNTIME_TYPES.CLAUDE_CODE);
+
+				if (lengthIncrease > 20 || hasProcessingIndicators || promptGone) {
 					this.logger.debug('Prompt instruction delivered successfully', {
 						sessionName,
 						attempt,
 						lengthIncrease,
 						hasProcessingIndicators,
+						promptGone,
 						runtimeType,
 					});
 					return true;

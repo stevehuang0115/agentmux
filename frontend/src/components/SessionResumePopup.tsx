@@ -7,12 +7,13 @@
  * @module components/SessionResumePopup
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Play, Monitor } from 'lucide-react';
 import { Popup } from './UI/Popup';
 import { Button } from './UI/Button';
 import { Badge } from './UI/Badge';
 import { apiService } from '../services/api.service';
+import { settingsService } from '../services/settings.service';
 import type { PreviousSession } from '../types';
 
 /**
@@ -24,19 +25,52 @@ export const SessionResumePopup: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const autoResumeTriggered = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     const checkPreviousSessions = async () => {
       try {
-        const result = await apiService.getPreviousSessions();
+        const [result, settings] = await Promise.all([
+          apiService.getPreviousSessions(),
+          settingsService.getSettings().catch(() => null),
+        ]);
         // Filter out orchestrator — it auto-starts on its own
         const nonOrchestrator = result.sessions.filter(s => s.role !== 'orchestrator');
-        if (!cancelled && nonOrchestrator.length > 0) {
-          setSessions(nonOrchestrator);
-          setIsOpen(true);
+        if (cancelled || nonOrchestrator.length === 0) return;
+
+        setSessions(nonOrchestrator);
+
+        // If auto-resume is enabled, start teams automatically without
+        // showing the dialog. The setting defaults to true when missing.
+        const autoResume = settings?.general?.autoResumeOnRestart ?? true;
+        if (autoResume && !autoResumeTriggered.current) {
+          autoResumeTriggered.current = true;
+          // Extract unique team IDs and start them
+          const teamIds = new Set<string>();
+          for (const s of nonOrchestrator) {
+            if (s.teamId && s.role !== 'orchestrator') {
+              teamIds.add(s.teamId);
+            }
+          }
+          for (const teamId of teamIds) {
+            try {
+              await apiService.startTeam(teamId);
+            } catch {
+              // Best-effort — failed teams can be started manually
+            }
+          }
+          try {
+            await apiService.dismissPreviousSessions();
+          } catch {
+            // Best-effort dismiss
+          }
+          return;
         }
+
+        // Auto-resume disabled — show the dialog for manual action
+        setIsOpen(true);
       } catch {
         // No previous sessions or API not ready yet - silently ignore
       }

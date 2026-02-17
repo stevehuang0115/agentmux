@@ -670,7 +670,6 @@ export const TeamDetail: React.FC = () => {
             setShowAgentDetailModal(false);
             setSelectedAgent(null);
           }}
-          projectPath={projectPath || undefined}
           isEditable={!selectedAgent.agentStatus || selectedAgent.agentStatus === 'inactive'}
           onSave={handleUpdateMember}
         />

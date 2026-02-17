@@ -12,6 +12,8 @@ import {
   SlackBlock,
   SlackNotification,
   ParsedSlackCommand,
+  SlackFile,
+  SlackImageInfo,
   NOTIFICATION_URGENCIES,
   COMMAND_PATTERNS,
   isUserAllowed,
@@ -191,6 +193,77 @@ describe('Slack Types', () => {
 
       expect(message.type).toBe('message');
       expect(message.text).toBe('Hello world');
+    });
+
+    it('should allow creating a SlackIncomingMessage with image fields', () => {
+      const message: SlackIncomingMessage = {
+        id: 'msg-456',
+        type: 'message',
+        text: 'Check this',
+        userId: 'U12345',
+        channelId: 'C12345',
+        ts: '1234567890.123456',
+        teamId: 'T12345',
+        eventTs: '1234567890.123456',
+        hasImages: true,
+        files: [{
+          id: 'F001',
+          name: 'screenshot.png',
+          mimetype: 'image/png',
+          filetype: 'png',
+          size: 2048,
+          url_private: 'https://files.slack.com/F001',
+          url_private_download: 'https://files.slack.com/F001/download',
+          permalink: 'https://slack.com/files/F001',
+          original_w: 1920,
+          original_h: 1080,
+        }],
+        images: [{
+          id: 'F001',
+          name: 'screenshot.png',
+          mimetype: 'image/png',
+          localPath: '/tmp/slack-images/F001-screenshot.png',
+          width: 1920,
+          height: 1080,
+          permalink: 'https://slack.com/files/F001',
+        }],
+      };
+
+      expect(message.hasImages).toBe(true);
+      expect(message.files).toHaveLength(1);
+      expect(message.images).toHaveLength(1);
+      expect(message.images![0].localPath).toContain('F001');
+    });
+
+    it('should allow creating a valid SlackFile', () => {
+      const file: SlackFile = {
+        id: 'F0123',
+        name: 'image.png',
+        mimetype: 'image/png',
+        filetype: 'png',
+        size: 1024,
+        url_private: 'https://files.slack.com/F0123',
+        url_private_download: 'https://files.slack.com/F0123/download',
+        permalink: 'https://slack.com/files/F0123',
+      };
+
+      expect(file.id).toBe('F0123');
+      expect(file.mimetype).toBe('image/png');
+    });
+
+    it('should allow creating a valid SlackImageInfo', () => {
+      const imageInfo: SlackImageInfo = {
+        id: 'F0123',
+        name: 'image.png',
+        mimetype: 'image/png',
+        localPath: '/tmp/slack-images/F0123-image.png',
+        width: 800,
+        height: 600,
+        permalink: 'https://slack.com/files/F0123',
+      };
+
+      expect(imageInfo.localPath).toContain('F0123');
+      expect(imageInfo.width).toBe(800);
     });
 
     it('should allow creating a valid SlackOutgoingMessage', () => {

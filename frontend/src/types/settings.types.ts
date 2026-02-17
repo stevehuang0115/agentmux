@@ -26,6 +26,8 @@ export interface GeneralSettings {
   maxConcurrentAgents: number;
   /** Enable verbose logging */
   verboseLogging: boolean;
+  /** Whether to auto-resume agent sessions on restart */
+  autoResumeOnRestart: boolean;
   /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
   runtimeCommands: Record<AIRuntime, string>;
 }

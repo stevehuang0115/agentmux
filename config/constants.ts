@@ -157,55 +157,6 @@ export const AGENT_IDENTITY_CONSTANTS = {
 	}
 } as const;
 
-// ========================= MCP SERVER CONSTANTS =========================
-
-/**
- * Model Context Protocol server configuration
- */
-export const MCP_CONSTANTS = {
-	/**
-	 * Network ports and endpoints
-	 */
-	PORTS: {
-		/** Default MCP server port */
-		DEFAULT: 8789,
-		/** Health check endpoint path */
-		HEALTH_CHECK: '/health',
-	},
-
-	/**
-	 * Timeout configurations for MCP operations
-	 */
-	TIMEOUTS: {
-		/** Response timeout for MCP calls (30 seconds) */
-		RESPONSE: 30000,
-		/** Connection timeout (10 seconds) */
-		CONNECTION: 10000,
-	},
-
-	/**
-	 * MCP tool names and identifiers
-	 */
-	TOOLS: {
-		/** Send message to another team member */
-		SEND_MESSAGE: 'send_message',
-		/** Broadcast message to all team members */
-		BROADCAST: 'broadcast',
-		/** Get current team status */
-		GET_TEAM_STATUS: 'get_team_status',
-		/** Get agent logs for monitoring */
-		GET_AGENT_LOGS: 'get_agent_logs',
-		/** Get agent status information */
-		GET_AGENT_STATUS: 'get_agent_status',
-		/** Register agent as active */
-		REGISTER_AGENT_STATUS: 'register_agent_status',
-		/** Accept a task */
-		ACCEPT_TASK: 'accept_task',
-		/** Complete a task */
-		COMPLETE_TASK: 'complete_task',
-	},
-} as const;
-
 // ========================= WEB SERVER CONSTANTS =========================
 
 /**
@@ -808,7 +759,6 @@ export type AgentStatus =
 export type WorkingStatus =
 	(typeof AGENTMUX_CONSTANTS.WORKING_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.WORKING_STATUSES];
 export type AgentRole = (typeof AGENTMUX_CONSTANTS.ROLES)[keyof typeof AGENTMUX_CONSTANTS.ROLES];
-export type MCPTool = (typeof MCP_CONSTANTS.TOOLS)[keyof typeof MCP_CONSTANTS.TOOLS];
 export type MessageType = (typeof MESSAGE_CONSTANTS.TYPES)[keyof typeof MESSAGE_CONSTANTS.TYPES];
 export type OrchestratorCommand =
 	(typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS)[keyof typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS];

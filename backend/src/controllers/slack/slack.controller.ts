@@ -8,9 +8,12 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { getSlackService } from '../../services/slack/slack.service.js';
 import { getSlackOrchestratorBridge } from '../../services/slack/slack-orchestrator-bridge.js';
 import { SlackConfig, SlackNotification, SlackNotificationType } from '../../types/slack.types.js';
+import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
 
 const router = Router();
 
@@ -153,7 +156,18 @@ router.post('/send', async (req: Request, res: Response, next: NextFunction) => 
       success: true,
       data: { messageTs },
     });
-  } catch (error) {
+  } catch (error: unknown) {
+    // Handle Slack API errors (channel_not_found, not_in_channel, etc.) as 422
+    // instead of letting them propagate as 500 internal errors
+    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
+      const slackError = (error as any).data?.error || 'unknown_slack_error';
+      res.status(422).json({
+        success: false,
+        error: `Slack API error: ${slackError}`,
+        slackError,
+      });
+      return;
+    }
     next(error);
   }
 });
@@ -197,6 +211,110 @@ router.post('/notify', async (req: Request, res: Response, next: NextFunction) =
       message: 'Notification sent',
     });
   } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/slack/upload-image
+ *
+ * Upload a local image file to a Slack channel.
+ * Accepts a JSON body with a filePath (not multipart) since the backend
+ * and agents share the same filesystem.
+ *
+ * @body channelId - Slack channel to upload to (required)
+ * @body filePath - Absolute path to the image file on disk (required)
+ * @body filename - Override filename (optional)
+ * @body title - Title for the uploaded file (optional)
+ * @body initialComment - Comment to include with the upload (optional)
+ * @body threadTs - Thread timestamp to upload in a thread (optional)
+ * @returns Object with fileId on success
+ */
+router.post('/upload-image', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { channelId, filePath, filename, title, initialComment, threadTs } = req.body;
+
+    if (!channelId || !filePath) {
+      res.status(400).json({
+        success: false,
+        error: 'channelId and filePath are required',
+      });
+      return;
+    }
+
+    // Validate file exists
+    try {
+      await fs.access(filePath);
+    } catch {
+      res.status(404).json({
+        success: false,
+        error: `File not found: ${filePath}`,
+      });
+      return;
+    }
+
+    // Validate file size
+    const stat = await fs.stat(filePath);
+    if (stat.size > SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE) {
+      const maxMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
+      res.status(413).json({
+        success: false,
+        error: `File too large (max ${maxMB} MB)`,
+      });
+      return;
+    }
+
+    // Validate MIME type by extension
+    const ext = path.extname(filePath).toLowerCase();
+    const extToMime: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+    };
+    const mime = extToMime[ext];
+    if (!mime || !SLACK_IMAGE_CONSTANTS.SUPPORTED_MIMES.includes(mime as typeof SLACK_IMAGE_CONSTANTS.SUPPORTED_MIMES[number])) {
+      res.status(415).json({
+        success: false,
+        error: `Unsupported image type: ${ext}`,
+      });
+      return;
+    }
+
+    const slackService = getSlackService();
+    if (!slackService.isConnected()) {
+      res.status(503).json({
+        success: false,
+        error: 'Slack is not connected',
+      });
+      return;
+    }
+
+    const result = await slackService.uploadImage({
+      channelId,
+      filePath,
+      filename,
+      title,
+      initialComment,
+      threadTs,
+    });
+
+    res.json({
+      success: true,
+      data: { fileId: result.fileId },
+    });
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
+      const slackError = (error as any).data?.error || 'unknown_slack_error';
+      res.status(422).json({
+        success: false,
+        error: `Slack API error: ${slackError}`,
+        slackError,
+      });
+      return;
+    }
     next(error);
   }
 });

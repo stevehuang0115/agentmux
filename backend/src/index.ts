@@ -41,7 +41,6 @@ import {
 } from './services/session/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
-import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
 import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gateway.js';
 import { initializeChatGateway } from './websocket/chat.gateway.js';
 import { StartupConfig } from './types/index.js';
@@ -60,6 +59,7 @@ import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/ind
 import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
 import { EventBusService } from './services/event-bus/index.js';
 import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
+import { SlackImageService, setSlackImageService } from './services/slack/slack-image.service.js';
 import { NotifyReconciliationService } from './services/slack/notify-reconciliation.service.js';
 import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
 import { setTeamControllerEventBusService } from './controllers/team/team.controller.js';
@@ -68,6 +68,7 @@ import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.j
 import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
+import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 
 // Use the early-defined __dirname for consistency
 const __dirname = __dirname_early;
@@ -133,6 +134,7 @@ export class AgentMuxServer {
 	private queueProcessorService!: QueueProcessorService;
 	private eventBusService!: EventBusService;
 	private notifyReconciliationService!: NotifyReconciliationService;
+	private systemResourceAlertService!: SystemResourceAlertService;
 
 	// Shutdown state
 	private isShuttingDown = false;
@@ -155,7 +157,6 @@ export class AgentMuxServer {
 
 		this.config = {
 			webPort: config?.webPort || parseIntWithFallback(process.env.WEB_PORT, 8787, 'WEB_PORT'),
-			mcpPort: config?.mcpPort || parseIntWithFallback(process.env.AGENTMUX_MCP_PORT, 8789, 'AGENTMUX_MCP_PORT'),
 			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||
@@ -210,6 +211,16 @@ export class AgentMuxServer {
 			this.schedulerService,
 			this.messageSchedulerService
 		);
+
+		// Wire up reliable delivery: both schedulers use AgentRegistrationService
+		// for retry + progressive verification + background stuck-detection
+		this.messageSchedulerService.setAgentRegistrationService(
+			this.apiController.agentRegistrationService
+		);
+		this.schedulerService.setAgentRegistrationService(
+			this.apiController.agentRegistrationService
+		);
+
 		this.terminalGateway = new TerminalGateway(this.io);
 
 		// Set terminal gateway singleton for chat integration
@@ -240,6 +251,9 @@ export class AgentMuxServer {
 		setChatMessageQueueService(this.messageQueueService);
 		setMessagingControllerQueueService(this.messageQueueService);
 
+		// Initialize system resource alert service for proactive monitoring
+		this.systemResourceAlertService = new SystemResourceAlertService();
+
 		// Initialize event bus service for agent lifecycle pub/sub
 		this.eventBusService = new EventBusService();
 		this.eventBusService.setMessageQueueService(this.messageQueueService);
@@ -251,6 +265,10 @@ export class AgentMuxServer {
 		const slackThreadStore = new SlackThreadStoreService(this.config.agentmuxHome);
 		setSlackThreadStore(slackThreadStore);
 		this.eventBusService.setSlackThreadStore(slackThreadStore);
+
+		// Initialize Slack image service for downloading images from Slack messages
+		const slackImageService = new SlackImageService(this.config.agentmuxHome);
+		setSlackImageService(slackImageService);
 
 		// Broadcast queue events via Socket.IO
 		this.messageQueueService.on('enqueued', (msg) => {
@@ -307,9 +325,6 @@ export class AgentMuxServer {
 	private configureRoutes(): void {
 		// API routes
 		this.app.use('/api', createApiRoutes(this.apiController));
-
-		// MCP routes - JSON-RPC endpoint for Claude Code integration
-		this.app.use('/mcp', createMCPRoutes());
 
 		// Health check
 		this.app.get('/health', (req, res) => {
@@ -474,19 +489,20 @@ export class AgentMuxServer {
 			this.teamsJsonWatcherService.start();
 			this.logger.info('Teams.json file watcher started for real-time updates');
 
-			// Initialize MCP server (integrated into backend)
-			this.logger.info('Initializing MCP server...');
-			await initializeMCPServer();
-			this.logger.info('MCP server integrated at /mcp endpoint');
-
 			// Generate orchestrator skills catalog
 			try {
 				const skillCatalogProjectRoot = path.resolve(__dirname, '../..');
 				const catalogService = SkillCatalogService.getInstance(skillCatalogProjectRoot);
 				const catalogResult = await catalogService.generateCatalog();
-				this.logger.info('Skills catalog generated', {
+				this.logger.info('Orchestrator skills catalog generated', {
 					catalogPath: catalogResult.catalogPath,
 					skillCount: catalogResult.skillCount,
+				});
+
+				const agentCatalogResult = await catalogService.generateAgentCatalog();
+				this.logger.info('Agent skills catalog generated', {
+					catalogPath: agentCatalogResult.catalogPath,
+					skillCount: agentCatalogResult.skillCount,
 				});
 			} catch (error) {
 				this.logger.warn('Failed to generate skills catalog (non-critical)', {
@@ -514,12 +530,27 @@ export class AgentMuxServer {
 			this.logger.info('Starting message queue processor...');
 			this.queueProcessorService.start();
 
+			// Start Slack image cleanup (download temp files)
+			try {
+				const { getSlackImageService: getImgService } = await import('./services/slack/slack-image.service.js');
+				const imgService = getImgService();
+				await imgService.cleanupOnStartup();
+				imgService.startCleanup();
+			} catch (err) {
+				this.logger.warn('Failed to initialize Slack image service', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+
 			// Initialize Slack if configured
 			await this.initializeSlackIfConfigured();
 
 			// Start NOTIFY reconciliation service (retries failed Slack deliveries)
 			this.notifyReconciliationService = new NotifyReconciliationService();
 			this.notifyReconciliationService.start();
+
+			// Start system resource alert monitoring (proactive disk/memory/CPU alerts)
+			this.systemResourceAlertService.startMonitoring();
 
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
@@ -679,37 +710,6 @@ export class AgentMuxServer {
 		}
 	}
 
-	/**
-	 * Ensure .mcp.json exists at the project root with the AgentMux MCP server configured.
-	 * Preserves any existing MCP server entries the user may have added.
-	 */
-	private async ensureMcpConfig(): Promise<void> {
-		const mcpConfigPath = path.join(process.cwd(), '.mcp.json');
-		const mcpUrl = `http://localhost:${this.config.webPort}/mcp`;
-
-		let config: { mcpServers?: Record<string, unknown> } = {};
-
-		// Read existing .mcp.json if it exists (preserve other servers)
-		try {
-			const existing = await fs.readFile(mcpConfigPath, 'utf-8');
-			config = JSON.parse(existing);
-		} catch {
-			// File doesn't exist or invalid JSON — start fresh
-		}
-
-		if (!config.mcpServers) {
-			config.mcpServers = {};
-		}
-
-		// Add/update the agentmux MCP server entry
-		config.mcpServers['agentmux'] = {
-			url: mcpUrl,
-		};
-
-		await fs.writeFile(mcpConfigPath, JSON.stringify(config, null, 2) + '\n');
-		this.logger.info('Generated .mcp.json for Claude Code agents', { mcpConfigPath, mcpUrl });
-	}
-
 	private async checkPortAvailability(): Promise<void> {
 		return new Promise(async (resolve, reject) => {
 			const { createServer } = await import('net');
@@ -742,20 +742,8 @@ export class AgentMuxServer {
 					port: this.config.webPort,
 					durationMs: duration,
 					dashboardUrl: `http://localhost:${this.config.webPort}`,
-					mcpUrl: `http://localhost:${this.config.webPort}/mcp`,
 					websocketUrl: `ws://localhost:${this.config.webPort}`,
 					home: this.config.agentmuxHome
-				});
-				this.logger.info('To configure Claude Code, run:', {
-					command: `claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`
-				});
-
-				// Generate .mcp.json at project root so Claude Code agents
-				// automatically discover the AgentMux MCP server
-				this.ensureMcpConfig().catch((err) => {
-					this.logger.warn('Failed to generate .mcp.json (non-critical)', {
-						error: err instanceof Error ? err.message : String(err),
-					});
 				});
 
 				resolve();
@@ -928,6 +916,11 @@ export class AgentMuxServer {
 				});
 			}
 
+			// Stop system resource alert monitoring
+			if (this.systemResourceAlertService) {
+				this.systemResourceAlertService.stopMonitoring();
+			}
+
 			// Stop NOTIFY reconciliation service
 			if (this.notifyReconciliationService) {
 				this.notifyReconciliationService.stop();
@@ -955,13 +948,17 @@ export class AgentMuxServer {
 			// Clean up tmux service resources
 			this.tmuxService.destroy();
 
+			// Stop Slack image cleanup timer
+			try {
+				const { getSlackImageService: getImgSvc } = await import('./services/slack/slack-image.service.js');
+				getImgSvc().stopCleanup();
+			} catch {
+				// Ignore if not initialized
+			}
+
 			// Shutdown Slack integration
 			this.logger.info('Shutting down Slack integration...');
 			await shutdownSlack();
-
-			// Destroy MCP server
-			this.logger.info('Stopping MCP server...');
-			destroyMCPServer();
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();

@@ -21,9 +21,28 @@ jest.mock('../orchestrator/index.js', () => ({
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
+// Mock the slack image service
+jest.mock('./slack-image.service.js', () => ({
+  getSlackImageService: jest.fn().mockReturnValue({
+    downloadImage: jest.fn().mockResolvedValue({
+      id: 'F001',
+      name: 'test.png',
+      mimetype: 'image/png',
+      localPath: '/tmp/slack-images/F001-test.png',
+      width: 800,
+      height: 600,
+      permalink: 'https://slack.com/files/F001',
+    }),
+  }),
+  SlackImageService: jest.fn(),
+  setSlackImageService: jest.fn(),
+  resetSlackImageService: jest.fn(),
+}));
+
 import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
 import { getChatService } from '../chat/chat.service.js';
 import { ChatMessage } from '../../types/chat.types.js';
+import { getSlackImageService } from './slack-image.service.js';
 
 describe('SlackOrchestratorBridge', () => {
   beforeEach(() => {
@@ -271,6 +290,90 @@ describe('SlackOrchestratorBridge', () => {
       }).findSlackPayloadForMessage(message, payloads);
 
       expect(match?.message).toBe('Handled in skill');
+    });
+  });
+
+  describe('image handling', () => {
+    it('should enrich text with image file references', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Check this', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        images: [{
+          id: 'F001', name: 'shot.png', mimetype: 'image/png',
+          localPath: '/tmp/F001-shot.png', width: 1920, height: 1080,
+          permalink: 'https://slack.com/files/F001',
+        }],
+      };
+
+      const enriched = enrichTextWithImages(message);
+      expect(enriched).toContain('Check this');
+      expect(enriched).toContain('[Slack Image: /tmp/F001-shot.png (1920x1080), image/png]');
+    });
+
+    it('should return original text when no images', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'No images here', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+      };
+
+      expect(enrichTextWithImages(message)).toBe('No images here');
+    });
+
+    it('should download images via SlackImageService', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'here', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{
+          id: 'F001', name: 'test.png', mimetype: 'image/png',
+          filetype: 'png', size: 1024,
+          url_private: 'https://files.slack.com/F001',
+          url_private_download: 'https://files.slack.com/F001/download',
+          permalink: 'https://slack.com/files/F001',
+        }],
+      };
+
+      await downloadMessageImages(message);
+
+      expect(message.images).toBeDefined();
+      expect(message.images).toHaveLength(1);
+      expect(message.images![0].localPath).toBe('/tmp/slack-images/F001-test.png');
+
+      const mockImgService = getSlackImageService();
+      expect(mockImgService.downloadImage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'F001' }),
+        'xoxb-test'
+      );
+    });
+
+    it('should skip image download when no bot token', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue(null);
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'a.png', mimetype: 'image/png', filetype: 'png',
+          size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+      expect(message.images).toBeUndefined();
     });
   });
 

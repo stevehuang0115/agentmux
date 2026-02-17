@@ -1,23 +1,21 @@
 import { MessageSchedulerService } from './message-scheduler.service';
 import { TmuxService } from '../agent/tmux.service.js';
+import { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { ScheduledMessage, MessageDeliveryLog } from '../../types/index';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
-import { getSessionBackendSync } from '../session/index.js';
 
 // Mock dependencies
 jest.mock('../agent/tmux.service.js');
+jest.mock('../agent/agent-registration.service.js');
 jest.mock('../core/storage.service.js');
 jest.mock('../../models/ScheduledMessage');
 jest.mock('../core/logger.service.js', () => ({
 	LoggerService: {
 		getInstance: jest.fn(),
 	},
-}));
-jest.mock('../session/index.js', () => ({
-	getSessionBackendSync: jest.fn(),
 }));
 // SessionCommandHelper uses delay internally - mock it so tests don't hang
 jest.mock('../../utils/async.utils.js', () => ({
@@ -28,8 +26,7 @@ describe('MessageSchedulerService', () => {
 	let service: MessageSchedulerService;
 	let mockTmuxService: jest.Mocked<TmuxService>;
 	let mockStorageService: jest.Mocked<StorageService>;
-	let mockSession: { write: jest.Mock };
-	let mockBackend: { sessionExists: jest.Mock; getSession: jest.Mock; captureOutput: jest.Mock };
+	let mockAgentRegistrationService: { sendMessageToAgent: jest.Mock };
 	let mockLoggerInfo: jest.Mock;
 	let mockLoggerError: jest.Mock;
 	let mockLoggerWarn: jest.Mock;
@@ -88,21 +85,18 @@ describe('MessageSchedulerService', () => {
 			saveScheduledMessage: jest.fn(),
 			saveDeliveryLog: jest.fn(),
 			getProjects: jest.fn(),
+			findMemberBySessionName: jest.fn().mockResolvedValue(null),
 		} as any;
 
-		// Set up mock session backend (PTY)
-		// captureOutput returns terminal output with prompt (❯) so isClaudeAtPrompt returns true
-		mockSession = { write: jest.fn() };
-		mockBackend = {
-			sessionExists: jest.fn().mockReturnValue(true),
-			getSession: jest.fn().mockReturnValue(mockSession),
-			captureOutput: jest.fn().mockReturnValue('\n❯\n'),
+		// Mock AgentRegistrationService for reliable delivery
+		mockAgentRegistrationService = {
+			sendMessageToAgent: jest.fn().mockResolvedValue({ success: true, message: 'Delivered' }),
 		};
-		(getSessionBackendSync as jest.Mock).mockReturnValue(mockBackend);
 
 		(MessageDeliveryLogModel.create as jest.Mock).mockReturnValue(mockDeliveryLog);
 
 		service = new MessageSchedulerService(mockTmuxService, mockStorageService);
+		service.setAgentRegistrationService(mockAgentRegistrationService as any);
 	});
 
 	afterEach(() => {
@@ -113,6 +107,16 @@ describe('MessageSchedulerService', () => {
 	describe('constructor', () => {
 		it('should initialize with required services', () => {
 			expect(service).toBeInstanceOf(MessageSchedulerService);
+		});
+	});
+
+	describe('setAgentRegistrationService', () => {
+		it('should accept and store the agent registration service', () => {
+			const freshService = new MessageSchedulerService(mockTmuxService, mockStorageService);
+			freshService.setAgentRegistrationService(mockAgentRegistrationService as any);
+
+			// Verify it's wired by exercising executeMessage (internal field)
+			expect((freshService as any).agentRegistrationService).toBe(mockAgentRegistrationService);
 		});
 	});
 
@@ -191,7 +195,7 @@ describe('MessageSchedulerService', () => {
 			expect(cancelMessageSpy).toHaveBeenCalledWith('test-message-1');
 		});
 
-		it('should execute message after delay', async () => {
+		it('should execute message after delay via sendMessageToAgent', async () => {
 			mockStorageService.saveDeliveryLog.mockResolvedValue(undefined);
 			mockStorageService.saveScheduledMessage.mockResolvedValue(undefined);
 			mockStorageService.getProjects.mockResolvedValue([{ id: 'test-project', name: 'Test' }] as any);
@@ -204,10 +208,12 @@ describe('MessageSchedulerService', () => {
 			// Wait for async operations (queue delay uses raw setTimeout)
 			await jest.runAllTimersAsync();
 
-			// Verify two-step write: message text then \r
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('SCHEDULED CHECK-IN'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
+			// Verify sendMessageToAgent was called with enhanced message
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-team',
+				expect.stringContaining('Hello World'),
+				expect.any(String), // runtimeType
+			);
 			expect(mockStorageService.saveDeliveryLog).toHaveBeenCalled();
 			expect(mockStorageService.saveScheduledMessage).toHaveBeenCalled();
 		});
@@ -313,80 +319,81 @@ describe('MessageSchedulerService', () => {
 
 	describe('executeMessage', () => {
 		beforeEach(() => {
-			mockBackend.sessionExists.mockReturnValue(true);
-			mockBackend.getSession.mockReturnValue(mockSession);
 			mockStorageService.saveDeliveryLog.mockResolvedValue(undefined);
 			mockStorageService.saveScheduledMessage.mockResolvedValue(undefined);
 		});
 
-		it('should execute message for orchestrator team', async () => {
+		it('should execute message for orchestrator team via sendMessageToAgent', async () => {
 			const orchestratorMessage = { ...mockScheduledMessage, targetTeam: 'orchestrator', targetProject: undefined };
 
 			await (service as any).executeMessage(orchestratorMessage);
 
-			expect(mockBackend.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-			expect(mockBackend.getSession).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('SCHEDULED CHECK-IN'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+				expect.stringContaining('Hello World'),
+				expect.any(String),
+			);
 		});
 
-		it('should execute message for regular team', async () => {
+		it('should execute message for regular team via sendMessageToAgent', async () => {
 			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
 
 			await (service as any).executeMessage(messageWithoutProject);
 
-			expect(mockBackend.sessionExists).toHaveBeenCalledWith('test-team');
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('SCHEDULED CHECK-IN'));
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('IMMEDIATELY CONTINUE'));
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('resume that exact work now'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-team',
+				expect.stringContaining('Hello World'),
+				expect.any(String),
+			);
+			// Verify enhanced message includes continuation instructions
+			const callArgs = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0];
+			expect(callArgs[1]).toContain('SCHEDULED CHECK-IN');
+			expect(callArgs[1]).toContain('IMMEDIATELY CONTINUE');
 		});
 
-		it('should handle session not existing', async () => {
-			mockBackend.sessionExists.mockReturnValue(false);
+		it('should handle delivery failure from sendMessageToAgent', async () => {
+			mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+				success: false,
+				error: 'Failed to deliver message after multiple attempts',
+			});
 			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
 
 			await (service as any).executeMessage(messageWithoutProject);
 
-			expect(mockSession.write).not.toHaveBeenCalled();
 			expect(MessageDeliveryLogModel.create).toHaveBeenCalledWith(
 				expect.objectContaining({
 					success: false,
-					error: 'Target session "test-team" does not exist',
+					error: 'Failed to deliver message after multiple attempts',
 				}),
 			);
 		});
 
-		it('should handle session backend not initialized', async () => {
-			(getSessionBackendSync as jest.Mock).mockReturnValue(null);
+		it('should resolve runtime type from storage service', async () => {
+			mockStorageService.findMemberBySessionName.mockResolvedValue({
+				team: { id: 'team-1' } as any,
+				member: { sessionName: 'test-team', runtimeType: 'gemini-cli' } as any,
+			});
 			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
 
 			await (service as any).executeMessage(messageWithoutProject);
 
-			expect(mockSession.write).not.toHaveBeenCalled();
-			expect(MessageDeliveryLogModel.create).toHaveBeenCalledWith(
-				expect.objectContaining({
-					success: false,
-					error: 'Session backend not initialized',
-				}),
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-team',
+				expect.any(String),
+				'gemini-cli',
 			);
 		});
 
-		it('should handle getSession returning null', async () => {
-			mockBackend.getSession.mockReturnValue(null);
+		it('should default to claude-code when member not found', async () => {
+			mockStorageService.findMemberBySessionName.mockResolvedValue(null);
 			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
 
 			await (service as any).executeMessage(messageWithoutProject);
 
-			expect(mockSession.write).not.toHaveBeenCalled();
-			// Error comes from SessionCommandHelper.getSessionOrThrow
-			expect(MessageDeliveryLogModel.create).toHaveBeenCalledWith(
-				expect.objectContaining({
-					success: false,
-					error: expect.stringContaining('does not exist'),
-				}),
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-team',
+				expect.any(String),
+				RUNTIME_TYPES.CLAUDE_CODE,
 			);
 		});
 
@@ -484,48 +491,6 @@ describe('MessageSchedulerService', () => {
 				success: true,
 			});
 		});
-
-		it('should use SessionCommandHelper two-step write pattern', async () => {
-			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
-
-			await (service as any).executeMessage(messageWithoutProject);
-
-			// SessionCommandHelper.sendMessage writes message text then \r separately
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
-			// Verify write was called exactly twice (message + Enter)
-			expect(mockSession.write).toHaveBeenCalledTimes(2);
-		});
-
-		it('should skip message when agent is busy (not at prompt)', async () => {
-			// Return terminal output without a prompt character
-			mockBackend.captureOutput.mockReturnValue('⏺ Working on task...\nAnalyzing code...');
-			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
-
-			await (service as any).executeMessage(messageWithoutProject);
-
-			// Should not write anything - agent is busy
-			expect(mockSession.write).not.toHaveBeenCalled();
-			// Should not create a delivery log (early return, not an error)
-			expect(MessageDeliveryLogModel.create).not.toHaveBeenCalled();
-			// Should log that it skipped
-			expect(mockLoggerInfo).toHaveBeenCalledWith(
-				'Skipping scheduled message - agent is busy',
-				expect.objectContaining({ name: 'Test Message' }),
-			);
-		});
-
-		it('should send message when prompt is detected in terminal output', async () => {
-			// Return terminal output with prompt character
-			mockBackend.captureOutput.mockReturnValue('some output\n❯\n');
-			const messageWithoutProject = { ...mockScheduledMessage, targetProject: undefined };
-
-			await (service as any).executeMessage(messageWithoutProject);
-
-			// Should proceed with sending
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
-		});
 	});
 
 	describe('getDelayInMilliseconds', () => {
@@ -613,8 +578,6 @@ describe('MessageSchedulerService', () => {
 		};
 
 		beforeEach(() => {
-			mockBackend.sessionExists.mockReturnValue(true);
-			mockBackend.getSession.mockReturnValue(mockSession);
 			mockStorageService.saveDeliveryLog.mockResolvedValue(undefined);
 			mockStorageService.saveScheduledMessage.mockResolvedValue(undefined);
 			(MessageDeliveryLogModel.create as jest.Mock).mockReturnValue(mockDeliveryLog);
@@ -757,8 +720,6 @@ describe('MessageSchedulerService', () => {
 
 	describe('executeMessage with project validation', () => {
 		beforeEach(() => {
-			mockBackend.sessionExists.mockReturnValue(true);
-			mockBackend.getSession.mockReturnValue(mockSession);
 			mockStorageService.saveScheduledMessage.mockResolvedValue(undefined);
 			mockStorageService.saveDeliveryLog.mockResolvedValue(undefined);
 		});
@@ -778,8 +739,11 @@ describe('MessageSchedulerService', () => {
 			await (service as any).executeMessage(mockScheduledMessage);
 
 			expect(mockStorageService.getProjects).toHaveBeenCalled();
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-team',
+				expect.stringContaining('Hello World'),
+				expect.any(String),
+			);
 			expect(mockStorageService.saveScheduledMessage).toHaveBeenCalledWith(
 				expect.objectContaining({
 					isActive: false, // Should be deactivated since it's non-recurring
@@ -793,7 +757,7 @@ describe('MessageSchedulerService', () => {
 			await (service as any).executeMessage(mockScheduledMessage);
 
 			expect(mockStorageService.getProjects).toHaveBeenCalled();
-			expect(mockSession.write).not.toHaveBeenCalled();
+			expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
 			expect(mockStorageService.saveScheduledMessage).toHaveBeenCalledWith(
 				expect.objectContaining({
 					isActive: false,
@@ -820,8 +784,7 @@ describe('MessageSchedulerService', () => {
 			await (service as any).executeMessage(messageWithoutProject);
 
 			expect(mockStorageService.getProjects).not.toHaveBeenCalled();
-			expect(mockSession.write).toHaveBeenCalledWith(expect.stringContaining('Hello World'));
-			expect(mockSession.write).toHaveBeenCalledWith('\r');
+			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
 		});
 	});
 

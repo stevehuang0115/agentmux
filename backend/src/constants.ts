@@ -88,6 +88,9 @@ export const SESSION_COMMAND_DELAYS = {
 	MESSAGE_RETRY_DELAY: 1000,
 	/** Additional delay for Claude Code to start processing after message sent */
 	MESSAGE_PROCESSING_DELAY: 500,
+	/** Progressive re-check intervals for Claude Code delivery verification (ms).
+	 *  Total window: 500ms (processing delay) + 1000 + 2000 + 3000 = 6.5s */
+	CLAUDE_VERIFICATION_INTERVALS: [1000, 2000, 3000] as const,
 } as const;
 
 // Terminal controller constants
@@ -214,17 +217,28 @@ export const TERMINAL_PATTERNS = {
 	PROMPT_CHARS: ['❯', '>', '⏵', '$', '!'] as const,
 
 	/**
-	 * Pattern for detecting agent prompt in terminal stream.
-	 * Matches either:
-	 * - A single prompt char (❯, ⏵) alone on a line (Claude Code prompt)
-	 * - ❯❯ at start of a line followed by space (Claude bypass permissions mode)
-	 * - > or ! followed by a space (Gemini CLI TUI prompt, may have placeholder text)
-	 * - Box-drawing border (│, ┃) followed by > or ! (Gemini CLI TUI bordered prompt)
-	 * - $ alone on a line (bash prompt fallback)
-	 * - Gemini CLI textual prompts like “Type your message …” or “YOLO mode …”
-	 * Indicates the agent CLI is idle and ready for input.
+	 * Claude Code idle prompt detection.
+	 * Matches:
+	 * - ❯ or ⏵ or $ alone on a line (standard Claude Code prompt)
+	 * - ❯❯ followed by space or end-of-line (bypass permissions prompt,
+	 *   e.g. "❯❯ bypass permissions on (shift+tab to cycle)")
 	 */
-	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯\s|[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
+	CLAUDE_CODE_PROMPT: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$))/,
+
+	/**
+	 * Gemini CLI idle prompt detection.
+	 * Matches:
+	 * - > or ! followed by a space (TUI prompt, may have placeholder text)
+	 * - Box-drawing border (│, ┃) followed by > or ! (TUI bordered prompt)
+	 * - "Type your message …" or "YOLO mode …" textual prompts
+	 */
+	GEMINI_CLI_PROMPT: /(?:^|\n)\s*(?:[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
+
+	/**
+	 * Combined prompt pattern for any runtime (union of Claude Code + Gemini CLI).
+	 * Use runtime-specific patterns when you need to distinguish between runtimes.
+	 */
+	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$)|[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
 
 	/**
 	 * Processing indicators including status text patterns.
@@ -255,6 +269,8 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	MAX_HISTORY_SIZE: 50,
 	/** Delay between processing consecutive messages (ms) */
 	INTER_MESSAGE_DELAY: 500,
+	/** Maximum number of requeue retries before permanently failing a message */
+	MAX_REQUEUE_RETRIES: 5,
 	/** Queue persistence file name (stored under agentmux home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -376,6 +392,61 @@ export const RUNTIME_EXIT_CONSTANTS = {
 	 * normal runtime initialization output.
 	 */
 	STARTUP_GRACE_PERIOD_MS: 0,
+} as const;
+
+/**
+ * Constants for sub-agent message queue.
+ * Used by SubAgentMessageQueue to buffer messages for agents that haven't
+ * completed initialization (status !== 'active') yet.
+ */
+export const SUB_AGENT_QUEUE_CONSTANTS = {
+	/** Maximum messages per agent before dropping oldest */
+	MAX_QUEUE_SIZE: 50,
+	/** Delay between flushed messages on registration (ms) */
+	FLUSH_INTER_MESSAGE_DELAY: 2000,
+} as const;
+
+/**
+ * Constants for proactive system resource monitoring and alerting.
+ * Used by SystemResourceAlertService to poll metrics, check thresholds,
+ * and send user-facing notifications before resources are exhausted.
+ */
+export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
+	/** Polling interval for resource checks (ms) */
+	POLL_INTERVAL: 60000, // 1 minute
+	/** Cooldown between repeated alerts for the same metric (ms) */
+	ALERT_COOLDOWN: 600000, // 10 minutes
+	/** Thresholds for triggering alerts */
+	THRESHOLDS: {
+		DISK_WARNING: 85,     // 85% used
+		DISK_CRITICAL: 95,    // 95% used
+		MEMORY_WARNING: 85,   // 85% used
+		MEMORY_CRITICAL: 95,  // 95% used
+		CPU_WARNING: 80,      // load avg 80% of cores
+		CPU_CRITICAL: 95,     // load avg 95% of cores
+	},
+} as const;
+
+/**
+ * Constants for Slack image download and temporary storage.
+ * Used by SlackImageService to validate, download, and manage
+ * images sent by users in Slack messages.
+ */
+export const SLACK_IMAGE_CONSTANTS = {
+	/** Temp directory for downloaded images (relative to ~/.agentmux/) */
+	TEMP_DIR: 'tmp/slack-images',
+	/** Maximum allowed file size for image downloads (20 MB) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/** Supported image MIME types for download */
+	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'] as const,
+	/** Interval for cleaning up expired temp files (1 hour) */
+	CLEANUP_INTERVAL: 60 * 60 * 1000,
+	/** Maximum age for temp files before cleanup (24 hours) */
+	FILE_TTL: 24 * 60 * 60 * 1000,
+	/** Maximum concurrent image downloads per message */
+	MAX_CONCURRENT_DOWNLOADS: 3,
+	/** Warning threshold for temp directory total size (500 MB) */
+	MAX_TEMP_DIR_SIZE: 500 * 1024 * 1024,
 } as const;
 
 // Type helpers

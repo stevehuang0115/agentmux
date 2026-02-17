@@ -18,6 +18,6 @@ require_param "task" "$TASK"
 TASK_MESSAGE="[TASK] Priority: ${PRIORITY}\n\n${TASK}"
 [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
 
-BODY=$(jq -n --arg data "$TASK_MESSAGE" '{data: $data}')
+BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message}')
 
-api_call POST "/terminal/${TO}/write" "$BODY"
+api_call POST "/terminal/${TO}/deliver" "$BODY"

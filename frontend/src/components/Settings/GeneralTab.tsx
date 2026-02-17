@@ -175,6 +175,24 @@ export const GeneralTab: React.FC = () => {
             />
           </div>
 
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="autoResume" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Auto-Resume Sessions on Restart
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Automatically resume agent sessions when they restart
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="autoResume"
+              checked={localSettings.general.autoResumeOnRestart}
+              onChange={(e) => handleChange('general', 'autoResumeOnRestart', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+
           <div>
             <FormLabel htmlFor="checkInInterval">Check-in Interval (minutes)</FormLabel>
             <FormInput

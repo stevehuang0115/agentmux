@@ -153,7 +153,7 @@ describe('PromptBuilderService', () => {
 			const result = await service.buildSystemPrompt(mockConfig);
 
 			expect(result).toContain('developer tasks');
-			expect(result).toContain('register_agent_status');
+			expect(result).toContain('register-self');
 			expect(result).toContain('Session: test-session');
 		});
 
@@ -198,9 +198,9 @@ describe('PromptBuilderService', () => {
 
 			// Fallback prompt contains registration instructions
 			expect(result).toContain('IMMEDIATELY');
-			expect(result).toContain('register_agent_status');
-			expect(result).toContain('"role": "dev"');
-			expect(result).toContain('"sessionName": "test-session"');
+			expect(result).toContain('register-self');
+			expect(result).toContain('"role":"dev"');
+			expect(result).toContain('"sessionName":"test-session"');
 			expect(result).toContain('member-123');
 		});
 
@@ -209,9 +209,9 @@ describe('PromptBuilderService', () => {
 
 			const result = await service.loadRegistrationPrompt('orchestrator', 'test-session');
 
-			expect(result).toContain('"role": "orchestrator"');
-			expect(result).toContain('"sessionName": "test-session"');
-			expect(result).not.toContain('memberId');
+			expect(result).toContain('"role":"orchestrator"');
+			expect(result).toContain('"sessionName":"test-session"');
+			expect(result).not.toContain('teamMemberId');
 		});
 	});
 
@@ -693,12 +693,12 @@ describe('PromptBuilderService', () => {
 			expect(result).toContain('Git Workflow');
 		});
 
-		it('should include get_sops in communication tools', async () => {
+		it('should include get-sops in communication tools', async () => {
 			mockGenerateSOPContext.mockResolvedValue('## SOPs');
 
 			const result = await service.buildSystemPromptWithMemory(mockConfig);
 
-			expect(result).toContain('get_sops');
+			expect(result).toContain('get-sops');
 		});
 	});
 });

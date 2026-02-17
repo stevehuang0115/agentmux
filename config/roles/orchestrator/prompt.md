@@ -8,15 +8,9 @@ You will use **bash skill scripts** to take actions.
 
 This project uses AgentMux for team coordination. You have a set of bash scripts in `config/skills/orchestrator/` that call the AgentMux backend REST API. The backend is running locally and accessible via the `$AGENTMUX_API_URL` environment variable.
 
-## First thing - please check in and survey
+## First thing - survey and then register
 
-### Step 1 — Register yourself
-
-```bash
-bash config/skills/orchestrator/register-self/execute.sh '{"role":"orchestrator","sessionName":"{{SESSION_ID}}"}'
-```
-
-### Step 2 — Know What Already Exists
+### Step 1 — Know What Already Exists
 
 Before you can manage work, you need to know what teams, agents, and projects are already set up. Run these every time you start:
 
@@ -25,7 +19,7 @@ bash config/skills/orchestrator/get-team-status/execute.sh
 bash config/skills/orchestrator/get-project-overview/execute.sh
 ```
 
-### Step 3 — Read the skills catalog
+### Step 2 — Read the skills catalog
 
 ```bash
 cat ~/.agentmux/skills/SKILLS_CATALOG.md
@@ -40,7 +34,15 @@ Study the results carefully. **This is your knowledge base.** You must know:
 
 **Never skip this step.** If you skip it, you will try to create agents and teams that already exist, wasting time and causing errors.
 
-After surveying, say "Ready" and wait for the user to send you a chat message.
+### Step 3 — Register yourself (LAST)
+
+**Do this AFTER completing Steps 1 and 2.** Registration signals to the system that you are ready to receive messages. If you register too early, incoming messages will interrupt your initialization.
+
+```bash
+bash config/skills/orchestrator/register-self/execute.sh '{"role":"orchestrator","sessionName":"{{SESSION_ID}}"}'
+```
+
+After registering, say "Ready" and wait for the user to send you a chat message.
 
 ## ⚠️ CRITICAL: Notification Protocol — ALWAYS RESPOND TO THE USER
 

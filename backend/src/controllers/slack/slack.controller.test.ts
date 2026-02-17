@@ -212,6 +212,78 @@ describe('Slack Controller', () => {
     });
   });
 
+  describe('POST /api/slack/upload-image', () => {
+    it('should require channelId', async () => {
+      const response = await request(app).post('/api/slack/upload-image').send({
+        filePath: '/tmp/test.png',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('channelId and filePath are required');
+    });
+
+    it('should require filePath', async () => {
+      const response = await request(app).post('/api/slack/upload-image').send({
+        channelId: 'C123',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('channelId and filePath are required');
+    });
+
+    it('should return 404 when file does not exist', async () => {
+      const response = await request(app).post('/api/slack/upload-image').send({
+        channelId: 'C123',
+        filePath: '/tmp/nonexistent-image-file.png',
+      });
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toContain('File not found');
+    });
+
+    it('should reject unsupported file extensions', async () => {
+      // Create a temp file with unsupported extension
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.txt');
+      await fs.writeFile(tmpFile, 'not an image');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-image').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(415);
+        expect(response.body.error).toContain('Unsupported image type');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+
+    it('should return 503 when Slack is not connected', async () => {
+      // Create a temp PNG file
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.png');
+      await fs.writeFile(tmpFile, 'fake png data');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-image').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(503);
+        expect(response.body.error).toBe('Slack is not connected');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+  });
+
   describe('GET /api/slack/config', () => {
     it('should return false for all flags when env not set', async () => {
       const response = await request(app).get('/api/slack/config');

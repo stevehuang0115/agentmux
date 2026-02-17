@@ -20,6 +20,14 @@ jest.mock('fs/promises');
 jest.mock('fs');
 jest.mock('path');
 
+const mockUpdateSessionId = jest.fn();
+jest.mock('../../services/session/index.js', () => ({
+  getSessionBackendSync: jest.fn(),
+  getSessionStatePersistence: jest.fn(() => ({
+    updateSessionId: mockUpdateSessionId,
+  })),
+}));
+
 describe('Teams Handlers', () => {
   let mockApiContext: ApiContext;
   let mockRequest: Partial<Request>;
@@ -1294,6 +1302,91 @@ describe('Teams Handlers', () => {
       );
 
       expect(mockEventBusService.subscribe).not.toHaveBeenCalled();
+    });
+
+    it('should persist claudeSessionId when provided in registration', async () => {
+      const mockTeam: Team = {
+        id: 'team-123',
+        name: 'Test Team',
+        members: [
+          {
+            id: 'member-1',
+            name: 'Alice',
+            sessionName: 'agentmux_alice',
+            role: 'developer',
+            runtimeType: 'claude-code',
+            systemPrompt: 'Test prompt',
+            agentStatus: 'activating',
+            workingStatus: 'idle',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      mockRequest.body = {
+        sessionName: 'agentmux_alice',
+        role: 'developer',
+        status: 'active',
+        registeredAt: new Date().toISOString(),
+        memberId: 'member-1',
+        claudeSessionId: 'abc-123-session-uuid'
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([mockTeam]);
+      mockStorageService.saveTeam.mockResolvedValue(undefined);
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockUpdateSessionId).toHaveBeenCalledWith('agentmux_alice', 'abc-123-session-uuid');
+    });
+
+    it('should not call updateSessionId when claudeSessionId is not provided', async () => {
+      const mockTeam: Team = {
+        id: 'team-123',
+        name: 'Test Team',
+        members: [
+          {
+            id: 'member-1',
+            name: 'Alice',
+            sessionName: 'agentmux_alice',
+            role: 'developer',
+            runtimeType: 'claude-code',
+            systemPrompt: 'Test prompt',
+            agentStatus: 'activating',
+            workingStatus: 'idle',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      mockRequest.body = {
+        sessionName: 'agentmux_alice',
+        role: 'developer',
+        status: 'active',
+        registeredAt: new Date().toISOString(),
+        memberId: 'member-1'
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([mockTeam]);
+      mockStorageService.saveTeam.mockResolvedValue(undefined);
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockUpdateSessionId).not.toHaveBeenCalled();
     });
   });
 

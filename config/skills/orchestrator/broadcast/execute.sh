@@ -25,7 +25,7 @@ for NAME in $NAMES; do
   [ "$NAME" = "agentmux-orc" ] && continue
 
   BODY=$(jq -n --arg message "$MESSAGE" '{message: $message}')
-  if api_call POST "/terminal/${NAME}/write" "$BODY" >/dev/null 2>&1; then
+  if api_call POST "/terminal/${NAME}/deliver" "$BODY" >/dev/null 2>&1; then
     SENT=$((SENT + 1))
   else
     FAILED=$((FAILED + 1))

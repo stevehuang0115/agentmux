@@ -21,11 +21,10 @@ export type SkillCategory =
 
 /**
  * Skill type - defines the nature of the skill
- * - mcp: MCP-related skills that require MCP installation or runtime flags
  * - claude-skill: Specialized domain knowledge with optional bash scripts
  * - web-page: Page-specific skills with domain knowledge and actions
  */
-export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
+export type SkillType = 'claude-skill' | 'web-page';
 
 /**
  * Type of skill execution
@@ -33,7 +32,6 @@ export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
 export type SkillExecutionType =
   | 'script'
   | 'browser'
-  | 'mcp-tool'
   | 'composite'
   | 'prompt-only';
 
@@ -62,14 +60,6 @@ export interface SkillBrowserConfig {
 }
 
 /**
- * MCP tool invocation configuration
- */
-export interface SkillMcpToolConfig {
-  toolName: string;
-  defaultParams?: Record<string, unknown>;
-}
-
-/**
  * Composite skill configuration
  */
 export interface SkillCompositeConfig {
@@ -84,7 +74,6 @@ export interface SkillExecutionConfig {
   type: SkillExecutionType;
   script?: SkillScriptConfig;
   browser?: SkillBrowserConfig;
-  mcpTool?: SkillMcpToolConfig;
   composite?: SkillCompositeConfig;
 }
 
@@ -105,8 +94,6 @@ export interface SkillRuntimeConfig {
   runtime?: string;
   /** Additional flags to pass to the runtime (e.g., ['--chrome']) */
   flags?: string[];
-  /** MCP servers required for this skill */
-  requiredMcpServers?: string[];
 }
 
 /**
@@ -241,7 +228,7 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
 /**
  * Valid skill types list
  */
-export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
+export const SKILL_TYPES: SkillType[] = ['claude-skill', 'web-page'];
 
 /**
  * Valid execution types list
@@ -249,7 +236,6 @@ export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
 export const EXECUTION_TYPES: SkillExecutionType[] = [
   'script',
   'browser',
-  'mcp-tool',
   'composite',
   'prompt-only',
 ];
@@ -312,7 +298,6 @@ export function getSkillCategoryLabel(category: SkillCategory): string {
  */
 export function getSkillTypeLabel(skillType: SkillType): string {
   const labels: Record<SkillType, string> = {
-    mcp: 'MCP Integration',
     'claude-skill': 'Claude Skill',
     'web-page': 'Web Page',
   };
@@ -329,7 +314,6 @@ export function getExecutionTypeLabel(type: SkillExecutionType): string {
   const labels: Record<SkillExecutionType, string> = {
     script: 'Script',
     browser: 'Browser Automation',
-    'mcp-tool': 'MCP Tool',
     composite: 'Composite',
     'prompt-only': 'Prompt Only',
   };

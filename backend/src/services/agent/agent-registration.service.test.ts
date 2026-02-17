@@ -27,12 +27,22 @@ jest.mock('../core/logger.service.js', () => ({
 
 jest.mock('fs/promises', () => ({
 	readFile: jest.fn(),
+	readdir: jest.fn().mockResolvedValue([]),
+	stat: jest.fn().mockResolvedValue({ mtimeMs: 0 }),
 	mkdir: jest.fn().mockResolvedValue(undefined),
 	writeFile: jest.fn().mockResolvedValue(undefined),
 }));
 
 jest.mock('os', () => ({
 	homedir: jest.fn().mockReturnValue('/home/test'),
+}));
+
+jest.mock('../settings/settings.service.js', () => ({
+	getSettingsService: jest.fn().mockReturnValue({
+		getSettings: jest.fn().mockResolvedValue({
+			general: { autoResumeOnRestart: true },
+		}),
+	}),
 }));
 
 // Mock session module
@@ -396,9 +406,13 @@ describe('AgentRegistrationService', () => {
 
 		it('should send message and verify processing started (prompt gone)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// capturePane shows clean prompt (isClaudeAtPrompt passes)
-			// then message not stuck (isMessageStuckAtPrompt returns false)
-			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
+			// Call 1: pre-send isClaudeAtPrompt — prompt visible
+			// Call 2: beforeOutput capture (20 lines)
+			// Call 3: 1st interval — processing indicator ⏺ found → success
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ \n')                // pre-send: at prompt
+				.mockReturnValueOnce('❯ \n')                // beforeOutput capture
+				.mockReturnValueOnce('⏺ Processing...\n');  // 1st interval: ⏺ found → success
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
 
@@ -408,16 +422,65 @@ describe('AgentRegistrationService', () => {
 
 		it('should detect processing indicators as success', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
-			// Configure session to emit spinner character after Enter
-			const mockSession = createMockSession([
-				{ output: '❯ ', delayMs: 50 },
-				{ output: '⠋ thinking...', delayMs: 700 }, // After Enter (500ms)
-			]);
-			mockSessionHelper.getSession.mockReturnValue(mockSession);
+			// Call 1: pre-send — at prompt
+			// Call 2: beforeOutput capture
+			// Call 3: 1st interval — ⠋ spinner found → success (even though ❯ is still visible)
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ \n')                      // pre-send: at prompt
+				.mockReturnValueOnce('❯ \n')                      // beforeOutput capture
+				.mockReturnValueOnce('❯ \n⠋ loading context\n');  // 1st interval: ⠋ matches PROCESSING → success
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(true);
+		});
+
+		it('should succeed via progressive check when prompt disappears on later interval', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// Simulates Claude Code taking 2+ seconds to start rendering.
+			// Each interval uses 1 capturePane call (checked for processing,
+			// then isClaudeAtPrompt, then message-text-stuck).
+			// Call 1: pre-send: at prompt
+			// Call 2: beforeOutput
+			// Call 3: 1st interval — prompt still there, no indicators → wait 1s
+			// Call 4: 2nd interval — prompt still there → wait 2s
+			// Call 5: 3rd interval — processing indicator ⏺ found → success
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ \n')               // pre-send: at prompt
+				.mockReturnValueOnce('❯ \n')               // beforeOutput
+				.mockReturnValueOnce('❯ \n')               // 1st interval: still at prompt
+				.mockReturnValueOnce('❯ \n')               // 2nd interval: still at prompt
+				.mockReturnValueOnce('⏺ Processing...\n'); // 3rd interval: processing → success
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(true);
+		}, 15000);
+
+		it('should NOT declare success from raw output-change alone (pasted text false positive)', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			// Simulates Enter key dropped: message text appears at prompt.
+			// isClaudeAtPrompt returns false (❯ Hello world ≠ idle prompt),
+			// but the message-text-stuck check catches it — "Hello world"
+			// found at bottom of terminal → Enter was dropped, not success.
+			let capturePaneCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				capturePaneCount++;
+				// Call 1 (pre-send): clean prompt → message will be sent
+				if (capturePaneCount === 1) return '❯ \n';
+				// Call 2 (beforeOutput): clean prompt (baseline)
+				if (capturePaneCount === 2) return '❯ \n';
+				// All subsequent calls (progressive checks): pasted text at prompt.
+				// No processing indicators, isClaudeAtPrompt returns false, but
+				// message text "Hello world" found at bottom → stuck, not success.
+				return '❯ Hello world\n';
+			});
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello world');
+
+			// Should FAIL — message stuck at prompt, not processing
+			expect(result.success).toBe(false);
+			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
 		});
 
 		it('should fail gracefully when agent is not at prompt', async () => {
@@ -529,7 +592,7 @@ describe('AgentRegistrationService', () => {
 
 	describe('loadRegistrationPrompt (private method)', () => {
 		it('should load prompt from file and replace placeholders', async () => {
-			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}}';
+			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}} using {{AGENT_SKILLS_PATH}}/register-self/execute.sh';
 			mockReadFile.mockResolvedValue(promptTemplate);
 
 			// Access private method via reflection
@@ -538,6 +601,8 @@ describe('AgentRegistrationService', () => {
 
 			expect(result).toContain('test-session');
 			expect(result).toContain('member-123');
+			expect(result).not.toContain('{{AGENT_SKILLS_PATH}}');
+			expect(result).toContain('config/skills/agent/register-self/execute.sh');
 		});
 
 		it('should remove member ID parameter when not provided', async () => {
@@ -557,9 +622,9 @@ describe('AgentRegistrationService', () => {
 			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
 			const result = await loadRegistrationPrompt('dev', 'test-session');
 
-			expect(result).toContain('register_agent_status');
-			expect(result).toContain('"role": "dev"');
-			expect(result).toContain('"sessionName": "test-session"');
+			expect(result).toContain('register-self');
+			expect(result).toContain('"role":"dev"');
+			expect(result).toContain('"sessionName":"test-session"');
 		});
 	});
 
@@ -706,9 +771,40 @@ describe('AgentRegistrationService', () => {
 		});
 	});
 
-	describe('resumeClaudeCodeSession via /resume command', () => {
-		it('should send /resume and Enter for restored Claude Code sessions', async () => {
-			// Mark session as restored by updating the mock persistence to return true for isRestoredSession
+	describe('session resume via --resume CLI flag', () => {
+		it('should inject --resume flag for restored Claude Code sessions with stored session ID', async () => {
+			// Mark session as restored with a stored session ID
+			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
+				registerSession: jest.fn(),
+				unregisterSession: jest.fn(),
+				isSessionRegistered: jest.fn().mockReturnValue(false),
+				isRestoredSession: jest.fn().mockReturnValue(true),
+				getSessionId: jest.fn().mockReturnValue('abc-123-session-uuid'),
+				updateSessionId: jest.fn(),
+			});
+
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'orchestrator',
+				'/test/path',
+				90000,
+				undefined, // memberId
+				RUNTIME_TYPES.CLAUDE_CODE
+			);
+
+			// executeRuntimeInitScript should have been called with --resume flag
+			const initCalls = mockRuntimeService.executeRuntimeInitScript.mock.calls;
+			expect(initCalls.length).toBeGreaterThanOrEqual(1);
+			const flags = initCalls[0][2]; // third argument is runtimeFlags
+			expect(flags).toContain('--resume');
+			expect(flags).toContain('abc-123-session-uuid');
+		});
+
+		it('should not inject --resume flag when no stored session ID exists', async () => {
+			// Session is restored but no session ID stored
 			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
 				registerSession: jest.fn(),
 				unregisterSession: jest.fn(),
@@ -730,12 +826,14 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.CLAUDE_CODE
 			);
 
-			// Should have sent /resume command and Enter key
-			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', '/resume');
-			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', 'Enter');
+			// executeRuntimeInitScript should NOT have --resume flag
+			const initCalls = mockRuntimeService.executeRuntimeInitScript.mock.calls;
+			expect(initCalls.length).toBeGreaterThanOrEqual(1);
+			const flags = initCalls[0][2];
+			expect(flags).not.toContain('--resume');
 		});
 
-		it('should not send /resume for non-restored sessions', async () => {
+		it('should not inject --resume flag for non-restored sessions', async () => {
 			// Session is NOT restored (default mock)
 			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
@@ -749,19 +847,20 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.CLAUDE_CODE
 			);
 
-			// sendMessage should only be called for registration prompt, not /resume
-			const sendMessageCalls = mockSessionHelper.sendMessage.mock.calls;
-			const resumeCalls = sendMessageCalls.filter((call: any[]) => call[1] === '/resume');
-			expect(resumeCalls).toHaveLength(0);
+			// executeRuntimeInitScript should NOT have --resume flag
+			const initCalls = mockRuntimeService.executeRuntimeInitScript.mock.calls;
+			expect(initCalls.length).toBeGreaterThanOrEqual(1);
+			const flags = initCalls[0][2];
+			expect(flags).not.toContain('--resume');
 		});
 
-		it('should not send /resume for non-Claude runtimes', async () => {
+		it('should not inject --resume flag for non-Claude runtimes', async () => {
 			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
 				registerSession: jest.fn(),
 				unregisterSession: jest.fn(),
 				isSessionRegistered: jest.fn().mockReturnValue(false),
 				isRestoredSession: jest.fn().mockReturnValue(true),
-				getSessionId: jest.fn().mockReturnValue(undefined),
+				getSessionId: jest.fn().mockReturnValue('abc-123-session-uuid'),
 				updateSessionId: jest.fn(),
 			});
 
@@ -777,26 +876,30 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.GEMINI_CLI
 			);
 
-			// sendMessage should NOT include /resume for Gemini
-			const sendMessageCalls = mockSessionHelper.sendMessage.mock.calls;
-			const resumeCalls = sendMessageCalls.filter((call: any[]) => call[1] === '/resume');
-			expect(resumeCalls).toHaveLength(0);
+			// executeRuntimeInitScript should NOT have --resume flag for Gemini
+			const initCalls = mockRuntimeService.executeRuntimeInitScript.mock.calls;
+			expect(initCalls.length).toBeGreaterThanOrEqual(1);
+			const flags = initCalls[0][2];
+			expect(flags).not.toContain('--resume');
 		});
 
-		it('should continue gracefully if resume fails', async () => {
+		it('should succeed even if settings service throws', async () => {
+			// Force getSettingsService to throw
+			const { getSettingsService } = require('../settings/settings.service.js');
+			getSettingsService.mockReturnValueOnce({
+				getSettings: jest.fn().mockRejectedValue(new Error('Settings unavailable')),
+			});
+
 			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
 				registerSession: jest.fn(),
 				unregisterSession: jest.fn(),
 				isSessionRegistered: jest.fn().mockReturnValue(false),
 				isRestoredSession: jest.fn().mockReturnValue(true),
-				getSessionId: jest.fn().mockReturnValue(undefined),
+				getSessionId: jest.fn().mockReturnValue('abc-123'),
 				updateSessionId: jest.fn(),
 			});
 
-			// First waitForRuntimeReady call succeeds (init), second fails (resume ready check)
-			mockRuntimeService.waitForRuntimeReady
-				.mockResolvedValueOnce(true)  // tryCleanupAndReinit ready check
-				.mockResolvedValueOnce(false); // resume ready check fails
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register with {{SESSION_ID}}');
 
 			const result = await service.initializeAgentWithRegistration(
@@ -808,7 +911,7 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.CLAUDE_CODE
 			);
 
-			// Should still succeed overall — resume failure is non-fatal
+			// Should still succeed — resume flag resolution failure is non-fatal
 			expect(result.success).toBe(true);
 		});
 	});
@@ -908,19 +1011,9 @@ describe('AgentRegistrationService', () => {
 		it('should detect stuck message and return false on timeout', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// First capturePane call: clean prompt (isClaudeAtPrompt passes)
-			// Second capturePane call: message stuck at prompt (isMessageStuckAtPrompt detects stuck)
-			// Repeat for each retry attempt
-			let capturePaneCount = 0;
-			mockSessionHelper.capturePane.mockImplementation(() => {
-				capturePaneCount++;
-				// Odd calls = isClaudeAtPrompt check (clean prompt)
-				// Even calls = isMessageStuckAtPrompt check (stuck message)
-				if (capturePaneCount % 2 === 1) {
-					return '❯ \n';
-				}
-				return '❯ [CHAT:abc] Hello orchestrator';
-			});
+			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 capturePane calls.
+			// All return prompt → stuck after 3 intervals exhausted on every attempt.
+			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
 			const result = await service.sendMessageToAgent(
 				'test-session',
@@ -934,53 +1027,49 @@ describe('AgentRegistrationService', () => {
 		it('should succeed when Enter accepted after retry', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Session emits prompt, then processing indicator after 2nd Enter attempt
-			const mockSession = createMockSession([
-				{ output: '❯ ', delayMs: 50 },
-				{ output: '⠋ Thinking...', delayMs: 1800 }, // After 2nd Enter attempt
-			]);
-			mockSessionHelper.getSession.mockReturnValue(mockSession);
+			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 calls.
+			// Attempt 1: calls 1-5 → all prompt → stuck, cleanup
+			// Attempt 2: calls 6 (pre-send) + 7 (beforeOutput) → prompt,
+			//   call 8 (1st interval) → processing indicator → success
+			let capturePaneCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				capturePaneCount++;
+				if (capturePaneCount <= 7) return '❯ \n';
+				return '⏺ Processing...\n';
+			});
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(true);
-		}, 15000);
+		}, 30000);
 
-		it('should accept when text disappears on timeout (no false negative)', async () => {
+		it('should accept when prompt gone on first progressive check (no false negative)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Session emits prompt, Enter sent, but no processing indicators detected
-			const mockSession = createMockSession([
-				{ output: '❯ ', delayMs: 50 },
-			]);
-			mockSessionHelper.getSession.mockReturnValue(mockSession);
-
-			// capturePane shows clean prompt (message was accepted, text is gone)
-			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
+			// Call 1: pre-send — at prompt
+			// Call 2: beforeOutput capture
+			// Call 3: 1st interval — ⏺ found → success
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('❯ \n')                // pre-send: at prompt
+				.mockReturnValueOnce('❯ \n')                // beforeOutput capture
+				.mockReturnValueOnce('⏺ Processing...\n');  // 1st interval: processing → success
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
-			// Should succeed because the message text is not stuck at the prompt
 			expect(result.success).toBe(true);
 		}, 40000);
 
 		it('should clear leftover input on retry when at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Track capturePane calls:
-			// Attempt 1: isClaudeAtPrompt → clean prompt, isMessageStuckAtPrompt → stuck
-			// Attempt 2: isClaudeAtPrompt → clean prompt, isMessageStuckAtPrompt → clean (success)
+			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 calls.
+			// Attempt 1: calls 1-5 → all prompt → stuck, cleanup + clearCurrentCommandLine
+			// Attempt 2: calls 6-7 → prompt, call 8 → processing → success
 			let capturePaneCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				capturePaneCount++;
-				// Call 1 (attempt 1, isClaudeAtPrompt): clean prompt
-				if (capturePaneCount === 1) return '❯ \n';
-				// Call 2 (attempt 1, isMessageStuckAtPrompt): stuck message
-				if (capturePaneCount === 2) return '❯ Hello stuck message';
-				// Call 3 (attempt 2, isClaudeAtPrompt): clean prompt
-				if (capturePaneCount === 3) return '❯ \n';
-				// Call 4+ (attempt 2, isMessageStuckAtPrompt): clean prompt (message gone)
-				return '❯ \n';
+				if (capturePaneCount <= 7) return '❯ \n';
+				return '⏺ Processing...\n';
 			});
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello stuck message');
@@ -989,28 +1078,21 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
 			// Second attempt succeeds
 			expect(result.success).toBe(true);
-		});
+		}, 30000);
 
 		it('should run retry cleanup on every failed attempt, not just first', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// All attempts: at prompt but message always stuck after send
-			// isClaudeAtPrompt (odd calls) → clean prompt
-			// isMessageStuckAtPrompt (even calls) → stuck message
-			let capturePaneCount = 0;
-			mockSessionHelper.capturePane.mockImplementation(() => {
-				capturePaneCount++;
-				if (capturePaneCount % 2 === 1) {
-					return '❯ \n';
-				}
-				return '❯ Hello stuck';
-			});
+			// Claude Code: 3 capturePane calls per attempt (pre-send, post-send, re-check)
+			// All attempts always show prompt → stuck on every attempt
+			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
 			expect(result.success).toBe(false);
 			// clearCurrentCommandLine should be called on every failed attempt
-			// With 3 attempts all stuck, expect 3 cleanup calls
+			// With 3 attempts all stuck, expect at least 2 cleanup calls
+			// (first attempt skips Ctrl+C but cleanup still runs after stuck detection)
 			expect(mockSessionHelper.clearCurrentCommandLine.mock.calls.length).toBeGreaterThanOrEqual(2);
 		});
 	});
@@ -1235,14 +1317,16 @@ describe('AgentRegistrationService', () => {
 			let callCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				callCount++;
-				// First call (prompt check in sendMessageWithRetry): shell mode
+				// Call 1 (prompt check in sendMessageWithRetry): shell mode detected
 				if (callCount === 1) return '│ ! │';
-				// Second call (after escape, isGeminiInShellMode check): normal mode
+				// Call 2 (escapeGeminiShellMode verification): normal mode now
 				if (callCount === 2) return '│ > Type your message │';
-				// Third call (before-send snapshot for TUI delivery detection): normal prompt
+				// Call 3 (before-send snapshot for TUI output-change detection)
 				if (callCount === 3) return '│ > │';
-				// Fourth call+ (after-send snapshot): processing (message delivered)
-				return '⠋ Thinking...';
+				// Call 4 (isTextStuckAtTuiPrompt check): no message stuck at prompt
+				if (callCount === 4) return '│ > │\n⠋ Thinking...';
+				// Call 5+ (afterOutput TUI Phase 2 check): processing output changed
+				return '⠋ Thinking about your request...\nReading files...';
 			});
 
 			const result = await service.sendMessageToAgent(
@@ -1257,8 +1341,9 @@ describe('AgentRegistrationService', () => {
 
 		it('should not attempt shell mode escape for Claude Code runtime', async () => {
 			mockSessionHelper.capturePane
-				.mockReturnValueOnce('❯ ')    // prompt check
-				.mockReturnValueOnce('⠋ ');   // stuck check (processing = not stuck)
+				.mockReturnValueOnce('❯ ')              // pre-send: prompt check
+				.mockReturnValueOnce('❯ ')              // beforeOutput capture
+				.mockReturnValueOnce('⏺ Processing');   // 1st interval: ⏺ found → success
 
 			const result = await service.sendMessageToAgent(
 				'agentmux-orc',
@@ -1270,6 +1355,224 @@ describe('AgentRegistrationService', () => {
 			// sendEscape should NOT have been called for shell mode escape
 			// (it might be called for other reasons like stuck message retry, but not before message send)
 			expect(mockSessionHelper.sendEscape).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('trackSentMessage', () => {
+		it('should track a message with extracted snippet', () => {
+			service.trackSentMessage('test-session', 'Hello, this is a test message for tracking');
+
+			const tracker = (service as any).sentMessageTracker;
+			expect(tracker.has('test-session')).toBe(true);
+			const entries = tracker.get('test-session');
+			expect(entries).toHaveLength(1);
+			expect(entries[0].snippet).toBe('Hello, this is a test message for tracking');
+			expect(entries[0].recovered).toBe(false);
+		});
+
+		it('should strip [CHAT:uuid] prefix when extracting snippet', () => {
+			service.trackSentMessage('test-session', '[CHAT:abc-123] Hello, this is a chat message for tracking');
+
+			const tracker = (service as any).sentMessageTracker;
+			const entries = tracker.get('test-session');
+			expect(entries[0].snippet).toBe('Hello, this is a chat message for tracking');
+		});
+
+		it('should normalize newlines in snippet for terminal comparison', () => {
+			// Enhanced scheduler messages contain \n from addContinuationInstructions().
+			// The snippet must have newlines collapsed to spaces so includes() works
+			// when comparing against join(' ')-ed terminal output.
+			const enhancedMessage = '🔄 [SCHEDULED CHECK-IN - Please continue previous work after this]\n\nCheck on Emily: task progress';
+			service.trackSentMessage('test-session', enhancedMessage);
+
+			const tracker = (service as any).sentMessageTracker;
+			const entries = tracker.get('test-session');
+			// Newlines should be collapsed to single spaces
+			expect(entries[0].snippet).not.toContain('\n');
+			expect(entries[0].snippet).toContain('this] Check on Emi');
+		});
+
+		it('should skip messages with snippet shorter than 10 chars', () => {
+			service.trackSentMessage('test-session', 'Hi');
+
+			const tracker = (service as any).sentMessageTracker;
+			expect(tracker.has('test-session')).toBe(false);
+		});
+
+		it('should limit snippet to 80 chars', () => {
+			const longMessage = 'A'.repeat(200);
+			service.trackSentMessage('test-session', longMessage);
+
+			const tracker = (service as any).sentMessageTracker;
+			const entries = tracker.get('test-session');
+			expect(entries[0].snippet.length).toBe(80);
+		});
+
+		it('should clean up entries older than 5 minutes', () => {
+			const tracker = (service as any).sentMessageTracker;
+			// Manually add an old entry
+			tracker.set('test-session', [{
+				snippet: 'old message that should be cleaned up',
+				sentAt: Date.now() - 6 * 60 * 1000, // 6 minutes ago
+				recovered: false,
+			}]);
+
+			// Track a new message — should clean up the old one
+			service.trackSentMessage('test-session', 'New message for tracking purposes');
+
+			const entries = tracker.get('test-session');
+			expect(entries).toHaveLength(1);
+			expect(entries[0].snippet).toBe('New message for tracking purposes');
+		});
+
+		it('should start the stuck message detector', () => {
+			service.trackSentMessage('test-session', 'Hello, this is a message for tracking');
+
+			const timer = (service as any).stuckMessageDetectorTimer;
+			expect(timer).not.toBeNull();
+
+			// Clean up the timer
+			service.stopStuckMessageDetector();
+		});
+	});
+
+	describe('scanForStuckMessages (tracked-message scanning)', () => {
+		beforeEach(() => {
+			// Ensure session helper is available for scanning
+			(service as any)._sessionHelper = mockSessionHelper;
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+		});
+
+		it('should detect tracked message stuck at bottom of terminal and press Enter', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			const snippet = 'This scheduled check-in message is stuck';
+			tracker.set('test-session', [{
+				snippet,
+				sentAt: Date.now() - 20000, // 20s ago (> 15s threshold)
+				recovered: false,
+			}]);
+
+			// Terminal shows the message at the bottom (stuck)
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some previous output\n' +
+				'More output\n' +
+				`❯ ${snippet}\n`
+			);
+
+			// Trigger the scan
+			await (service as any).scanForStuckMessages();
+
+			// Should have pressed Enter twice (primary + backup)
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(2);
+
+			// Entry should be marked as recovered
+			const entries = tracker.get('test-session');
+			expect(entries[0].recovered).toBe(true);
+		});
+
+		it('should detect stuck message when terminal has multi-line pasted text with empty lines', async () => {
+			// This tests the exact scenario: enhanced scheduler message contains \n\n,
+			// which creates empty lines in the terminal. The scanner must still detect
+			// the normalized snippet in the space-joined bottom text.
+			const tracker = (service as any).sentMessageTracker;
+			// Snippet is already normalized (trackSentMessage does this)
+			const snippet = '🔄 [SCHEDULED CHECK-IN - Please continue previous work after this] Check on Emily';
+			tracker.set('test-session', [{
+				snippet,
+				sentAt: Date.now() - 20000,
+				recovered: false,
+			}]);
+
+			// Terminal shows multi-line pasted text with empty lines between sections
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Previous response output\n' +
+				'❯ 🔄 [SCHEDULED CHECK-IN - Please continue previous work after this]\n' +
+				'\n' + // empty line from \n\n in original message
+				'Check on Emily: 查看排期圈未回复评论任务进度\n' +
+				'\n' +
+				'⚡ IMPORTANT: After responding to this check-in...\n' +
+				'❯❯ bypass permissions on (shift+tab to cycle)\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			// Should detect and press Enter
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(2);
+
+			const entries = tracker.get('test-session');
+			expect(entries[0].recovered).toBe(true);
+		});
+
+		it('should NOT act on messages younger than 15 seconds', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			tracker.set('test-session', [{
+				snippet: 'This message was just sent recently',
+				sentAt: Date.now() - 5000, // 5s ago (< 15s threshold)
+				recovered: false,
+			}]);
+
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some output\n' +
+				'❯ This message was just sent recently\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+		});
+
+		it('should NOT act on already-recovered messages', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			tracker.set('test-session', [{
+				snippet: 'Previously recovered stuck message text',
+				sentAt: Date.now() - 30000,
+				recovered: true, // Already recovered
+			}]);
+
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some output\n' +
+				'❯ Previously recovered stuck message text\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+		});
+
+		it('should NOT act when message text is not at bottom of terminal', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			tracker.set('test-session', [{
+				snippet: 'This message was successfully delivered',
+				sentAt: Date.now() - 20000,
+				recovered: false,
+			}]);
+
+			// Terminal shows different content (message was accepted and processed)
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Agent is working...\n' +
+				'⠋ Thinking about the task\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+		});
+
+		it('should clean up entries for sessions that no longer exist', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			tracker.set('dead-session', [{
+				snippet: 'Message to dead session for testing',
+				sentAt: Date.now() - 20000,
+				recovered: false,
+			}]);
+
+			mockSessionHelper.sessionExists.mockImplementation((name: string) => name !== 'dead-session');
+
+			await (service as any).scanForStuckMessages();
+
+			expect(tracker.has('dead-session')).toBe(false);
 		});
 	});
 });

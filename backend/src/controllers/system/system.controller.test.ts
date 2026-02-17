@@ -42,6 +42,17 @@ jest.mock('../../services/index.js', () => ({
   }
 }));
 
+const mockSaveState = jest.fn<() => Promise<number>>().mockResolvedValue(3);
+const mockGetSessionBackendSync = jest.fn<() => object | null>().mockReturnValue({});
+const mockGetSessionStatePersistence = jest.fn().mockReturnValue({
+  saveState: mockSaveState,
+});
+
+jest.mock('../../services/session/index.js', () => ({
+  getSessionBackendSync: (...args: any[]) => mockGetSessionBackendSync(...args),
+  getSessionStatePersistence: (...args: any[]) => mockGetSessionStatePersistence(...args),
+}));
+
 describe('System Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
@@ -680,6 +691,7 @@ describe('System Handlers', () => {
       expect(typeof systemHandlers.healthCheck).toBe('function');
       expect(typeof systemHandlers.getClaudeStatus).toBe('function');
       expect(typeof systemHandlers.getLocalIpAddress).toBe('function');
+      expect(typeof systemHandlers.restartServer).toBe('function');
     });
 
     it('should handle async operations properly', async () => {
@@ -697,6 +709,89 @@ describe('System Handlers', () => {
       expect(mockResponse.json).toHaveBeenCalled();
 
       process.uptime = originalUptime;
+    });
+  });
+
+  describe('restartServer', () => {
+    let originalExit: typeof process.exit;
+
+    beforeEach(() => {
+      originalExit = process.exit;
+      process.exit = jest.fn() as any;
+      jest.useFakeTimers();
+      mockSaveState.mockResolvedValue(3);
+      mockGetSessionBackendSync.mockReturnValue({});
+    });
+
+    afterEach(() => {
+      process.exit = originalExit;
+      jest.useRealTimers();
+    });
+
+    it('should save session state and respond with success', async () => {
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockGetSessionBackendSync).toHaveBeenCalled();
+      expect(mockSaveState).toHaveBeenCalled();
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: {
+          message: 'Server is restarting...',
+          savedSessions: 3,
+          timestamp: expect.any(String),
+        },
+      });
+    });
+
+    it('should call process.exit after delay', async () => {
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(process.exit).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1000);
+      expect(process.exit).toHaveBeenCalledWith(0);
+    });
+
+    it('should handle missing session backend gracefully', async () => {
+      mockGetSessionBackendSync.mockReturnValue(null);
+
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          savedSessions: 0,
+        }),
+      });
+    });
+
+    it('should handle save state errors gracefully', async () => {
+      mockSaveState.mockRejectedValue(new Error('Save failed'));
+
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          message: 'Server is restarting...',
+          savedSessions: 0,
+        }),
+      });
     });
   });
 

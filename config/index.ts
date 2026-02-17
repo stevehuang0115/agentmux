@@ -6,7 +6,7 @@
  * Usage examples:
  * ```typescript
  * // Cross-domain constants
- * import { AGENTMUX_CONSTANTS, MCP_CONSTANTS } from '../config';
+ * import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../config';
  * 
  * // Backend-specific constants  
  * import { BACKEND_CONSTANTS } from '../config';
@@ -21,7 +21,6 @@
 import {
   // Core system constants
   AGENTMUX_CONSTANTS,
-  MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
@@ -32,7 +31,6 @@ import {
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
-  type MCPTool,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -41,7 +39,6 @@ import {
 export {
   // Core system constants
   AGENTMUX_CONSTANTS,
-  MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
@@ -52,7 +49,6 @@ export {
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
-  type MCPTool,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -68,7 +64,6 @@ export {
  */
 export const CROSS_DOMAIN_CONSTANTS = {
   AGENTMUX: AGENTMUX_CONSTANTS,
-  MCP: MCP_CONSTANTS,
   WEB: WEB_CONSTANTS,
   TIMING: TIMING_CONSTANTS,
   MESSAGES: MESSAGE_CONSTANTS,

@@ -1,8 +1,11 @@
+import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { getSettingsService } from '../settings/settings.service.js';
+import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -92,18 +95,27 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 
 	/**
 	 * Post-initialization hook for Gemini CLI.
-	 * Adds ~/.agentmux to the directory allowlist so the agent can read
-	 * init prompt files and memory data stored outside the project directory.
+	 * Adds ~/.agentmux to the directory allowlist and ensures MCP server
+	 * configuration (e.g., playwright) is present in the project directory.
 	 *
 	 * @param sessionName - PTY session name
+	 * @param targetProjectPath - Optional target project path for MCP config.
+	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+		const effectiveProjectPath = targetProjectPath || this.projectRoot;
 		const agentmuxHome = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
 		this.logger.info('Gemini CLI post-init: adding paths to directory allowlist', {
 			sessionName,
 			agentmuxHome,
 			projectRoot: this.projectRoot,
+			targetProjectPath: effectiveProjectPath,
 		});
+
+		// Ensure MCP servers (e.g., playwright) are configured before the agent starts.
+		// This is done before the allowlist step because it's a filesystem operation
+		// that doesn't depend on the CLI being ready for interactive commands.
+		await this.ensureGeminiMcpConfig(effectiveProjectPath);
 
 		// Wait for Gemini CLI's async auto-update check to complete before
 		// sending commands. The auto-update notification (e.g., "Automatic
@@ -111,9 +123,13 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// with slash command processing if we send /directory add too early.
 		await new Promise((resolve) => setTimeout(resolve, 3000));
 
-		// Add both ~/.agentmux and the project root to the allowlist
-		// We use addMultipleProjectsToAllowlist for efficiency
+		// Add ~/.agentmux, the AgentMux project root, and the target project to the allowlist.
+		// The target project path may differ from projectRoot when the agent works on a
+		// separate project (e.g., business_os vs agentmux).
 		const pathsToAdd = [agentmuxHome, this.projectRoot];
+		if (effectiveProjectPath !== this.projectRoot) {
+			pathsToAdd.push(effectiveProjectPath);
+		}
 
 		const result = await this.addMultipleProjectsToAllowlist(sessionName, pathsToAdd);
 
@@ -121,6 +137,85 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 			this.logger.warn('Failed to add paths to Gemini CLI allowlist (non-fatal)', {
 				sessionName,
 				results: result.results,
+			});
+		}
+	}
+
+	/**
+	 * Ensure Gemini CLI MCP server configuration exists in the project directory.
+	 *
+	 * Creates or merges `.gemini/settings.json` with required MCP servers.
+	 * When `enableBrowserAutomation` is true in settings, adds the playwright MCP server.
+	 * Preserves any existing user-configured MCP servers.
+	 *
+	 * @param projectPath - Project directory where `.gemini/settings.json` will be created
+	 */
+	async ensureGeminiMcpConfig(projectPath: string): Promise<void> {
+		const geminiDir = path.join(projectPath, '.gemini');
+		const settingsPath = path.join(geminiDir, 'settings.json');
+
+		try {
+			// Check if browser automation is enabled
+			let enableBrowserAutomation = true;
+			try {
+				const settingsService = getSettingsService();
+				const settings = await settingsService.getSettings();
+				enableBrowserAutomation = settings.skills.enableBrowserAutomation;
+			} catch {
+				// Settings service unavailable — default to enabled
+				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
+			}
+
+			// Build required MCP servers
+			const requiredServers: Record<string, { command: string; args: string[] }> = {};
+
+			if (enableBrowserAutomation) {
+				requiredServers['playwright'] = {
+					command: 'npx',
+					args: ['@playwright/mcp@latest', '--headless'],
+				};
+			}
+
+			// If no servers to configure, skip
+			if (Object.keys(requiredServers).length === 0) {
+				this.logger.info('No MCP servers to configure for Gemini CLI (browser automation disabled)', {
+					projectPath,
+				});
+				return;
+			}
+
+			// Ensure .gemini directory exists
+			await fs.mkdir(geminiDir, { recursive: true });
+
+			// Read existing settings (preserves user config)
+			const existing = await safeReadJson<Record<string, unknown>>(settingsPath, {});
+			const existingMcpServers = (existing['mcpServers'] as Record<string, unknown>) || {};
+
+			// Merge: only add servers that don't already exist (don't overwrite user config)
+			let added = 0;
+			for (const [name, config] of Object.entries(requiredServers)) {
+				if (!existingMcpServers[name]) {
+					existingMcpServers[name] = config;
+					added++;
+				}
+			}
+
+			// Write back merged config
+			const merged = { ...existing, mcpServers: existingMcpServers };
+			await atomicWriteJson(settingsPath, merged);
+
+			this.logger.info('Gemini CLI MCP config ensured', {
+				projectPath,
+				settingsPath,
+				addedServers: added,
+				totalServers: Object.keys(existingMcpServers).length,
+				enableBrowserAutomation,
+			});
+		} catch (error) {
+			// Non-fatal: agent can still work without MCP servers
+			this.logger.warn('Failed to ensure Gemini CLI MCP config (non-fatal)', {
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	}
@@ -198,8 +293,12 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				await this.sessionHelper.sendEnter(sessionName);
 				await new Promise((resolve) => setTimeout(resolve, 1000));
 
-				// Capture output before sending to verify the command was processed
-				const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
+				// Capture output before sending to verify the command was processed.
+				// Use 100 lines (not 20) because Gemini CLI TUI has a fixed layout:
+				// messages area at top, input box + status at bottom (~15-20 lines).
+				// The "/directory add" success message appears in the upper messages
+				// area via addItem(), so 20 lines only captures the unchanging bottom.
+				const beforeOutput = this.sessionHelper.capturePane(sessionName, 100);
 
 				// Send the directory add command
 				// Add a trailing space as sometimes Gemini CLI needs it to delimit the path properly
@@ -210,7 +309,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				await new Promise((resolve) => setTimeout(resolve, 2000));
 
 				// Verify: check if output changed (slash commands produce confirmation)
-				const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
+				const afterOutput = this.sessionHelper.capturePane(sessionName, 100);
 				const outputChanged = beforeOutput !== afterOutput;
 				const hasConfirmation = /added|directory|✓|success/i.test(afterOutput);
 

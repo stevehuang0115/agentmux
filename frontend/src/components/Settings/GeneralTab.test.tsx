@@ -18,6 +18,7 @@ describe('GeneralTab', () => {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
+      autoResumeOnRestart: true,
       runtimeCommands: {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
@@ -76,6 +77,7 @@ describe('GeneralTab', () => {
 
       expect(screen.getByLabelText('Default AI Runtime')).toBeInTheDocument();
       expect(screen.getByLabelText('Auto-Start Orchestrator')).toBeInTheDocument();
+      expect(screen.getByLabelText('Auto-Resume Sessions on Restart')).toBeInTheDocument();
       expect(screen.getByLabelText('Check-in Interval (minutes)')).toBeInTheDocument();
       expect(screen.getByLabelText('Max Concurrent Agents')).toBeInTheDocument();
       expect(screen.getByLabelText('Verbose Logging')).toBeInTheDocument();
@@ -168,6 +170,17 @@ describe('GeneralTab', () => {
       fireEvent.click(checkbox);
 
       expect(checkbox).toBeChecked();
+    });
+
+    it('should update auto-resume checkbox', () => {
+      render(<GeneralTab />);
+
+      const checkbox = screen.getByLabelText('Auto-Resume Sessions on Restart');
+      expect(checkbox).toBeChecked();
+
+      fireEvent.click(checkbox);
+
+      expect(checkbox).not.toBeChecked();
     });
 
     it('should update local state on select change', () => {

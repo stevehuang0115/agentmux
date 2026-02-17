@@ -245,6 +245,7 @@ export class MessageQueueService extends EventEmitter {
     }
     message.status = 'pending';
     message.processingStartedAt = undefined;
+    message.retryCount = (message.retryCount || 0) + 1;
     this.queue.unshift(message);
     this.currentMessage = null;
     this.emitStatusUpdate();

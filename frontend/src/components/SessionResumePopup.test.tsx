@@ -12,6 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { SessionResumePopup } from './SessionResumePopup';
 import { apiService } from '../services/api.service';
+import { settingsService } from '../services/settings.service';
 
 vi.mock('../services/api.service', () => ({
   apiService: {
@@ -21,9 +22,28 @@ vi.mock('../services/api.service', () => ({
   },
 }));
 
+vi.mock('../services/settings.service', () => ({
+  settingsService: {
+    getSettings: vi.fn(),
+  },
+}));
+
+/**
+ * Helper to mock settings with autoResumeOnRestart value.
+ * When false, the dialog is shown for manual action.
+ * When true, teams are auto-resumed without showing the dialog.
+ */
+const mockSettingsWithAutoResume = (autoResume: boolean) => {
+  vi.mocked(settingsService.getSettings).mockResolvedValue({
+    general: { autoResumeOnRestart: autoResume },
+  } as ReturnType<typeof settingsService.getSettings> extends Promise<infer T> ? T : never);
+};
+
 describe('SessionResumePopup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: auto-resume disabled so existing tests show the dialog
+    mockSettingsWithAutoResume(false);
   });
 
   it('should not render when no previous sessions exist', async () => {
@@ -258,5 +278,69 @@ describe('SessionResumePopup', () => {
     expect(apiService.startTeam).toHaveBeenCalledWith('team-1');
     // Should NOT have been called with orc-team
     expect(apiService.startTeam).not.toHaveBeenCalledWith('orc-team');
+  });
+
+  // ============ Auto-Resume Tests ============
+
+  it('should auto-resume teams without showing dialog when autoResumeOnRestart is true', async () => {
+    mockSettingsWithAutoResume(true);
+    vi.mocked(apiService.getPreviousSessions).mockResolvedValue({
+      sessions: [
+        { name: 'agent-1', role: 'dev', teamId: 'team-1', runtimeType: 'claude-code', hasResumeId: true },
+        { name: 'agent-2', role: 'qa', teamId: 'team-2', runtimeType: 'claude-code', hasResumeId: true },
+      ],
+    });
+    vi.mocked(apiService.startTeam).mockResolvedValue(undefined);
+    vi.mocked(apiService.dismissPreviousSessions).mockResolvedValue(undefined);
+
+    render(<SessionResumePopup />);
+
+    // Should NOT show the dialog
+    await waitFor(() => {
+      expect(apiService.startTeam).toHaveBeenCalledTimes(2);
+    });
+
+    expect(apiService.startTeam).toHaveBeenCalledWith('team-1');
+    expect(apiService.startTeam).toHaveBeenCalledWith('team-2');
+    expect(apiService.dismissPreviousSessions).toHaveBeenCalled();
+    expect(screen.queryByText('Previous Sessions Detected')).not.toBeInTheDocument();
+  });
+
+  it('should show dialog when autoResumeOnRestart is false', async () => {
+    mockSettingsWithAutoResume(false);
+    vi.mocked(apiService.getPreviousSessions).mockResolvedValue({
+      sessions: [
+        { name: 'agent-1', role: 'dev', teamId: 'team-1', runtimeType: 'claude-code', hasResumeId: true },
+      ],
+    });
+
+    render(<SessionResumePopup />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Previous Sessions Detected')).toBeInTheDocument();
+    });
+
+    // Should NOT auto-start teams
+    expect(apiService.startTeam).not.toHaveBeenCalled();
+  });
+
+  it('should default to auto-resume when settings fetch fails', async () => {
+    vi.mocked(settingsService.getSettings).mockRejectedValue(new Error('Settings unavailable'));
+    vi.mocked(apiService.getPreviousSessions).mockResolvedValue({
+      sessions: [
+        { name: 'agent-1', role: 'dev', teamId: 'team-1', runtimeType: 'claude-code', hasResumeId: true },
+      ],
+    });
+    vi.mocked(apiService.startTeam).mockResolvedValue(undefined);
+    vi.mocked(apiService.dismissPreviousSessions).mockResolvedValue(undefined);
+
+    render(<SessionResumePopup />);
+
+    // Should auto-resume (default is true when settings unavailable)
+    await waitFor(() => {
+      expect(apiService.startTeam).toHaveBeenCalledWith('team-1');
+    });
+
+    expect(screen.queryByText('Previous Sessions Detected')).not.toBeInTheDocument();
   });
 });

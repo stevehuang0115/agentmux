@@ -20,6 +20,7 @@ import {
   getDailyLog,
   recordSuccess,
   recordFailure,
+  getMyContext,
 } from './memory.controller.js';
 
 /**
@@ -37,6 +38,7 @@ import {
  * - GET  /daily-log       - Get today's daily log
  * - POST /record-success  - Record a successful pattern or approach
  * - POST /record-failure  - Record a failed approach or pitfall
+ * - POST /my-context      - Get combined agent context (memories, goals, focus, logs, learnings)
  *
  * @returns Express router configured with memory routes
  */
@@ -54,6 +56,7 @@ export function createMemoryRouter(): Router {
   router.get('/daily-log', getDailyLog);
   router.post('/record-success', recordSuccess);
   router.post('/record-failure', recordFailure);
+  router.post('/my-context', getMyContext);
 
   return router;
 }

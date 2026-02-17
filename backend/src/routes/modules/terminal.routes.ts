@@ -8,6 +8,7 @@
  */
 
 import { Router } from 'express';
+import { ApiController } from '../../controllers/api.controller.js';
 import * as terminalHandlers from '../../controllers/monitoring/terminal.controller.js';
 
 /**
@@ -19,13 +20,15 @@ import * as terminalHandlers from '../../controllers/monitoring/terminal.control
  * - GET /terminal/:sessionName/output - Get session output (alias for capture)
  * - GET /terminal/:sessionName/capture - Capture terminal output (legacy)
  * - POST /terminal/:sessionName/write - Write data to session
+ * - POST /terminal/:sessionName/deliver - Reliable message delivery with retry (requires ApiController)
  * - POST /terminal/:sessionName/input - Send input to session (legacy)
  * - POST /terminal/:sessionName/key - Send key to session
  * - DELETE /terminal/:sessionName - Kill session
  *
  * @param router - Express router to register routes on
+ * @param apiController - Optional ApiController for endpoints that need AgentRegistrationService
  */
-export function registerTerminalRoutes(router: Router): void {
+export function registerTerminalRoutes(router: Router, apiController?: ApiController): void {
 	// List all sessions
 	router.get('/terminal/sessions', terminalHandlers.listTerminalSessions);
 
@@ -40,6 +43,13 @@ export function registerTerminalRoutes(router: Router): void {
 
 	// Write data to session (new PTY-based endpoint)
 	router.post('/terminal/:sessionName/write', terminalHandlers.writeToSession);
+
+	// Reliable message delivery with retry and verification (requires ApiController)
+	if (apiController) {
+		router.post('/terminal/:sessionName/deliver', (req, res) =>
+			terminalHandlers.deliverMessage.call(apiController, req, res)
+		);
+	}
 
 	// Send input to session (legacy endpoint)
 	router.post('/terminal/:sessionName/input', terminalHandlers.sendTerminalInput);

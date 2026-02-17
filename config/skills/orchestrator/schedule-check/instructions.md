@@ -14,6 +14,7 @@ bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":5,"message
 |-----------|----------|-------------|
 | `minutes` | Yes | Delay in minutes before the check fires |
 | `message` | Yes | Reminder message text |
+| `target` | No | Target session name (defaults to self) |
 
 ## Output
 

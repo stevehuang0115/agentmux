@@ -64,6 +64,21 @@ interface SlackWebClient {
       };
     }>;
   };
+  files: {
+    uploadV2: (args: UploadFileArgs) => Promise<{ files?: Array<{ id: string }> }>;
+  };
+}
+
+/**
+ * Arguments for files.uploadV2 API call
+ */
+interface UploadFileArgs {
+  channel_id: string;
+  file: Buffer | NodeJS.ReadableStream;
+  filename: string;
+  title?: string;
+  initial_comment?: string;
+  thread_ts?: string;
 }
 
 interface PostMessageArgs {
@@ -97,6 +112,19 @@ interface MessageEventArgs {
     channel: string;
     thread_ts?: string;
     team?: string;
+    files?: Array<{
+      id: string;
+      name: string;
+      mimetype: string;
+      filetype: string;
+      size: number;
+      url_private: string;
+      url_private_download: string;
+      thumb_360?: string;
+      original_w?: number;
+      original_h?: number;
+      permalink: string;
+    }>;
   };
   say: (text: string) => Promise<void>;
 }
@@ -185,8 +213,8 @@ export class SlackService extends EventEmitter {
 
     // Handle direct messages
     this.app.message(async ({ message }) => {
-      // Type guard for message with text
-      if (!message.text) return;
+      // Allow messages with text or images (or both)
+      if (!message.text && (!message.files || message.files.length === 0)) return;
       if (!message.user) return;
 
       // Check user permissions
@@ -195,16 +223,21 @@ export class SlackService extends EventEmitter {
         return;
       }
 
+      // Extract image files from the event payload
+      const imageFiles = (message.files || []).filter(f => f.mimetype?.startsWith('image/'));
+
       const incomingMessage: SlackIncomingMessage = {
         id: message.ts || '',
         type: 'message',
-        text: message.text,
+        text: message.text || '',
         userId: message.user,
         channelId: message.channel,
         threadTs: message.thread_ts,
         ts: message.ts || '',
         teamId: message.team || '',
         eventTs: message.ts || '',
+        files: imageFiles.length > 0 ? imageFiles : undefined,
+        hasImages: imageFiles.length > 0,
       };
 
       this.status.messagesReceived++;
@@ -443,6 +476,62 @@ export class SlackService extends EventEmitter {
    */
   isConnected(): boolean {
     return this.status.connected;
+  }
+
+  /**
+   * Get the bot token used to initialize the Slack client.
+   * Required for downloading private files from Slack.
+   *
+   * @returns The bot token string, or null if not initialized
+   */
+  getBotToken(): string | null {
+    return this.config?.botToken || null;
+  }
+
+  /**
+   * Upload an image file to a Slack channel.
+   *
+   * Reads the file from the local filesystem and uploads it
+   * using the Slack files.uploadV2 API.
+   *
+   * @param options - Upload configuration
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized or upload fails
+   */
+  async uploadImage(options: {
+    channelId: string;
+    filePath: string;
+    filename?: string;
+    title?: string;
+    initialComment?: string;
+    threadTs?: string;
+  }): Promise<{ fileId?: string }> {
+    if (!this.client) {
+      throw new Error('Slack client not initialized');
+    }
+
+    const { createReadStream } = await import('fs');
+    const { basename } = await import('path');
+
+    const fileStream = createReadStream(options.filePath);
+    const filename = options.filename || basename(options.filePath);
+
+    try {
+      const result = await this.client.files.uploadV2({
+        channel_id: options.channelId,
+        file: fileStream,
+        filename,
+        title: options.title,
+        initial_comment: options.initialComment,
+        thread_ts: options.threadTs,
+      });
+
+      this.status.messagesSent++;
+      return { fileId: result.files?.[0]?.id };
+    } catch (error) {
+      console.error('[SlackService] Upload image error:', error);
+      throw error;
+    }
   }
 
   /**

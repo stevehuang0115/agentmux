@@ -108,6 +108,9 @@ export interface QueuedMessage {
 
   /** Response content from the orchestrator */
   response?: string;
+
+  /** Number of times this message has been re-queued due to agent-not-ready */
+  retryCount?: number;
 }
 
 /**
@@ -197,6 +200,9 @@ export interface PersistedMessage {
 
   /** Response content from the orchestrator */
   response?: string;
+
+  /** Number of times this message has been re-queued due to agent-not-ready */
+  retryCount?: number;
 }
 
 /**
@@ -257,6 +263,9 @@ export function toPersistedMessage(msg: QueuedMessage): PersistedMessage {
   }
   if (msg.response !== undefined) {
     persisted.response = msg.response;
+  }
+  if (msg.retryCount !== undefined && msg.retryCount > 0) {
+    persisted.retryCount = msg.retryCount;
   }
 
   if (msg.sourceMetadata) {

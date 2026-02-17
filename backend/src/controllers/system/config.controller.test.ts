@@ -55,7 +55,6 @@ describe('Config Handlers', () => {
       const mockConfigContent = {
         version: '1.0.0',
         apiPort: 3000,
-        mcpPort: 3001,
         features: {
           gitIntegration: true,
           autoCommit: false

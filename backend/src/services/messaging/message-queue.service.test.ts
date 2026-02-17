@@ -473,6 +473,25 @@ describe('MessageQueueService', () => {
       const newStatus = queue.getStatus();
       expect(newStatus.isProcessing).toBe(false);
     });
+
+    it('should increment retryCount on each requeue', () => {
+      queue.enqueue(validInput);
+      const dequeued = queue.dequeue()!;
+
+      expect(dequeued.retryCount).toBeUndefined();
+
+      queue.requeue(dequeued);
+      const reDequeued1 = queue.dequeue()!;
+      expect(reDequeued1.retryCount).toBe(1);
+
+      queue.requeue(reDequeued1);
+      const reDequeued2 = queue.dequeue()!;
+      expect(reDequeued2.retryCount).toBe(2);
+
+      queue.requeue(reDequeued2);
+      const reDequeued3 = queue.dequeue()!;
+      expect(reDequeued3.retryCount).toBe(3);
+    });
   });
 
   // ===========================================================================

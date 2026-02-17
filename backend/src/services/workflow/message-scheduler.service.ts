@@ -1,17 +1,17 @@
 import { EventEmitter } from 'events';
 import { ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
 import { TmuxService } from '../agent/tmux.service.js';
+import { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
-import { AGENTMUX_CONSTANTS, TERMINAL_PATTERNS } from '../../constants.js';
-import { getSessionBackendSync } from '../session/index.js';
-import { SessionCommandHelper } from '../session/session-command-helper.js';
+import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, RuntimeType } from '../../constants.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
   private _legacyTmuxService: TmuxService; // DORMANT: kept for backward compatibility
   private storageService: StorageService;
+  private agentRegistrationService: AgentRegistrationService | null = null;
   private logger = LoggerService.getInstance().createComponentLogger('MessageSchedulerService');
   private messageQueue: Array<{ message: ScheduledMessage; resolve: () => void; reject: (error: Error) => void }> = [];
   private isProcessingQueue = false;
@@ -20,6 +20,16 @@ export class MessageSchedulerService extends EventEmitter {
     super();
     this._legacyTmuxService = tmuxService; // DORMANT: kept for backward compatibility
     this.storageService = storageService;
+  }
+
+  /**
+   * Set the AgentRegistrationService for reliable message delivery.
+   * Called after both services are constructed to avoid circular dependencies.
+   *
+   * @param service - The AgentRegistrationService instance
+   */
+  setAgentRegistrationService(service: AgentRegistrationService): void {
+    this.agentRegistrationService = service;
   }
 
   /**
@@ -115,7 +125,30 @@ export class MessageSchedulerService extends EventEmitter {
   }
 
   /**
-   * Execute a scheduled message
+   * Resolve the runtime type for a target session by looking up the team member.
+   * Falls back to claude-code if the member is not found.
+   *
+   * @param sessionName - The session name to look up
+   * @returns The runtime type for the session
+   */
+  private async resolveRuntimeType(sessionName: string): Promise<RuntimeType> {
+    try {
+      const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
+      if (memberInfo?.member?.runtimeType) {
+        return memberInfo.member.runtimeType as RuntimeType;
+      }
+    } catch (err) {
+      this.logger.debug('Could not resolve runtime type, using default', {
+        sessionName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return RUNTIME_TYPES.CLAUDE_CODE;
+  }
+
+  /**
+   * Execute a scheduled message using reliable delivery via AgentRegistrationService.
+   * Falls back to fire-and-forget if AgentRegistrationService is not available.
    */
   private async executeMessage(message: ScheduledMessage): Promise<void> {
     let success = false;
@@ -138,39 +171,39 @@ export class MessageSchedulerService extends EventEmitter {
         ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
         : message.targetTeam;
 
-      // Use PTY session backend via SessionCommandHelper (proven two-step write pattern)
-      const backend = getSessionBackendSync();
-      if (!backend) {
-        throw new Error('Session backend not initialized');
-      }
-
-      const commandHelper = new SessionCommandHelper(backend);
-
-      if (!commandHelper.sessionExists(sessionName)) {
-        throw new Error(`Target session "${sessionName}" does not exist`);
-      }
-
-      // Check if Claude is at a prompt before sending - skip if busy
-      const terminalOutput = commandHelper.capturePane(sessionName);
-      if (!this.isClaudeAtPrompt(terminalOutput)) {
-        this.logger.info('Skipping scheduled message - agent is busy', {
-          name: message.name,
-          targetTeam: message.targetTeam,
-        });
-        // Don't count as failure - just skip this cycle; recurring messages will try again
-        return;
-      }
-
       // Enhance message with continuation instructions to handle interruptions gracefully
       enhancedMessage = this.addContinuationInstructions(message.message);
 
-      // Use SessionCommandHelper.sendMessage() which handles bracketed paste mode correctly:
-      // 1. Writes message text (triggers bracketed paste)
-      // 2. Waits scaled delay for paste processing
-      // 3. Sends Enter (\r) separately so it's not swallowed by paste mode
-      await commandHelper.sendMessage(sessionName, enhancedMessage);
-
-      success = true;
+      if (this.agentRegistrationService) {
+        // Reliable delivery path: uses retry + progressive verification + background scanner
+        const runtimeType = await this.resolveRuntimeType(sessionName);
+        const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
+          sessionName,
+          enhancedMessage,
+          runtimeType
+        );
+        success = deliveryResult.success;
+        if (!success) {
+          throw new Error(deliveryResult.error || 'Delivery failed after retries');
+        }
+      } else {
+        // Fallback: should not happen in normal operation, but keeps backward compatibility
+        this.logger.warn('AgentRegistrationService not available, using fallback delivery', {
+          name: message.name,
+        });
+        const { getSessionBackendSync } = await import('../session/index.js');
+        const { SessionCommandHelper } = await import('../session/session-command-helper.js');
+        const backend = getSessionBackendSync();
+        if (!backend) {
+          throw new Error('Session backend not initialized');
+        }
+        const commandHelper = new SessionCommandHelper(backend);
+        if (!commandHelper.sessionExists(sessionName)) {
+          throw new Error(`Target session "${sessionName}" does not exist`);
+        }
+        await commandHelper.sendMessage(sessionName, enhancedMessage);
+        success = true;
+      }
 
       this.logger.info('Executed scheduled message', {
         name: message.name,
@@ -340,41 +373,6 @@ export class MessageSchedulerService extends EventEmitter {
       this.logger.error('Error validating project existence', { error: error instanceof Error ? error.message : String(error) });
       return false; // Assume project doesn't exist if we can't verify
     }
-  }
-
-  /**
-   * Check if Claude Code appears to be at an input prompt.
-   * Uses TERMINAL_PATTERNS.PROMPT_STREAM to detect prompt characters on their own line,
-   * with fallback to checking last 10 lines for exact prompt char matches.
-   *
-   * @param terminalOutput - The captured terminal output to check
-   * @returns true if Claude Code appears to be at a prompt
-   */
-  private isClaudeAtPrompt(terminalOutput: string): boolean {
-    if (!terminalOutput || typeof terminalOutput !== 'string') {
-      return true; // Assume at prompt if no output (safer for delivery)
-    }
-
-    // Primary: regex matches a prompt character alone on a line
-    if (TERMINAL_PATTERNS.PROMPT_STREAM.test(terminalOutput)) {
-      return true;
-    }
-
-    // Fallback: check last 10 non-empty lines for prompt indicators
-    const lines = terminalOutput.split('\n').filter((line) => line.trim().length > 0);
-    const linesToCheck = lines.slice(-10);
-    return linesToCheck.some((line) => {
-      const trimmed = line.trim();
-      // Exact match for single-char prompts (❯, >, ⏵, $)
-      if (TERMINAL_PATTERNS.PROMPT_CHARS.some((indicator) => trimmed === indicator)) {
-        return true;
-      }
-      // Bypass permissions mode: line starts with ❯❯ followed by space
-      if (trimmed.startsWith('❯❯ ')) {
-        return true;
-      }
-      return false;
-    });
   }
 
   /**

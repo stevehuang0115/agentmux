@@ -16,6 +16,7 @@ jest.mock('../../constants.js', () => ({
     DEFAULT_MESSAGE_TIMEOUT: 5000,
     MAX_HISTORY_SIZE: 50,
     INTER_MESSAGE_DELAY: 10,
+    MAX_REQUEUE_RETRIES: 3,
     PERSISTENCE_FILE: 'message-queue.json',
     PERSISTENCE_DIR: 'queue',
     SOCKET_EVENTS: {
@@ -74,13 +75,19 @@ jest.mock('../../websocket/terminal.gateway.js', () => ({
   }),
 }));
 
-// Mock StorageService for orchestrator runtime type lookup
+// Mock StorageService for orchestrator status and runtime type lookup.
+// Must include agentStatus: 'active' to pass the init guard in processNext().
+// Use a module-level variable so tests can override the return value.
+let mockOrchestratorStatus: any = {
+  agentStatus: 'active',
+  runtimeType: 'claude-code',
+};
 jest.mock('../core/storage.service.js', () => ({
   StorageService: {
     getInstance: () => ({
-      getOrchestratorStatus: jest.fn().mockResolvedValue({
-        runtimeType: 'claude-code',
-      }),
+      getOrchestratorStatus: jest.fn().mockImplementation(() =>
+        Promise.resolve(mockOrchestratorStatus)
+      ),
     }),
   },
 }));
@@ -101,6 +108,12 @@ describe('QueueProcessorService', () => {
     mockAgentRegistrationService = {
       sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
       waitForAgentReady: jest.fn().mockResolvedValue(true),
+    };
+
+    // Reset orchestrator status to default (active) for each test
+    mockOrchestratorStatus = {
+      agentStatus: 'active',
+      runtimeType: 'claude-code',
     };
 
     processor = new QueueProcessorService(
@@ -563,6 +576,175 @@ describe('QueueProcessorService', () => {
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'agentmux-orc',
         '[CHAT:conv-1] Retry me',
+        'claude-code'
+      );
+    });
+
+    it('should defer message delivery when orchestrator is not active', async () => {
+      mockOrchestratorStatus = { agentStatus: 'started', runtimeType: 'claude-code' };
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'During init',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Process triggers but init guard should block
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Should NOT have attempted delivery
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+      expect(mockAgentRegistrationService.waitForAgentReady).not.toHaveBeenCalled();
+      // Message should still be pending in the queue
+      expect(queueService.hasPending()).toBe(true);
+    });
+
+    it('should deliver deferred message after orchestrator becomes active', async () => {
+      // Start with orchestrator not active
+      mockOrchestratorStatus = { agentStatus: 'started', runtimeType: 'claude-code' };
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Queued during init',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // First poll: deferred
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+
+      // Now orchestrator becomes active
+      mockOrchestratorStatus = { agentStatus: 'active', runtimeType: 'claude-code' };
+
+      // Advance past AGENT_READY_POLL_INTERVAL (500ms in mock)
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+
+      // Should now have attempted delivery
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'agentmux-orc',
+        '[CHAT:conv-1] Queued during init',
+        'claude-code'
+      );
+    });
+
+    it('should pass runtimeType to waitForAgentReady', async () => {
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // waitForAgentReady should receive the runtimeType
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'agentmux-orc',
+        5000,
+        'claude-code'
+      );
+    });
+
+    it('should permanently fail message after exceeding max requeue retries', async () => {
+      // Agent never becomes ready
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
+
+      const routeErrorSpy = jest.spyOn(responseRouter, 'routeError');
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Will fail eventually',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Simulate retry loop: MAX_REQUEUE_RETRIES is 3 in mock constants
+      // Each cycle: processNext (immediate) -> waitForAgentReady -> requeue -> scheduleProcessNext(500ms)
+      for (let i = 0; i < 3; i++) {
+        jest.advanceTimersByTime(600);
+        await flushPromises();
+        await flushPromises();
+        await flushPromises();
+      }
+
+      // After 3 requeues, the next attempt should see retryCount >= 3 and fail permanently
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Message should be permanently failed
+      expect(routeErrorSpy).toHaveBeenCalled();
+      const errorArg = routeErrorSpy.mock.calls[0][1];
+      expect(errorArg).toContain('not available after');
+      expect(errorArg).toContain('retries');
+
+      // Queue should be empty (not still re-queuing)
+      expect(queueService.hasPending()).toBe(false);
+      expect(queueService.getStatus().totalFailed).toBe(1);
+
+      // System message should have been sent to the conversation
+      expect((mockChatService as any).addSystemMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Message delivery failed')
+      );
+    });
+
+    it('should increment retryCount on each requeue', async () => {
+      // Agent not ready for first 2 attempts, then ready
+      mockAgentRegistrationService.waitForAgentReady
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Retry test',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // First attempt: retryCount 0 -> requeue sets to 1
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Check that message was re-queued with retryCount = 1
+      const pending1 = queueService.getStatus();
+      expect(pending1.pendingCount).toBe(1);
+
+      // Second attempt: retryCount 1 -> requeue sets to 2
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Third attempt: retryCount 2, agent is ready -> delivers
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'agentmux-orc',
+        '[CHAT:conv-1] Retry test',
         'claude-code'
       );
     });

@@ -17,7 +17,10 @@ vi.mock('react-router-dom', () => ({
 
 // Mock xterm.js
 const mockXtermInstance = {
-  write: vi.fn(),
+  write: vi.fn((_data: string, callback?: () => void) => {
+    // Invoke callback to simulate real xterm.js behavior (fires after data processed)
+    if (callback) callback();
+  }),
   clear: vi.fn(),
   dispose: vi.fn(),
   open: vi.fn(),
@@ -25,6 +28,13 @@ const mockXtermInstance = {
   onData: vi.fn(),
   scrollToBottom: vi.fn(),
   focus: vi.fn(),
+  buffer: {
+    active: {
+      viewportY: 0,
+      length: 24,
+    },
+  },
+  rows: 24,
 };
 
 vi.mock('xterm', () => ({

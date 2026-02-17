@@ -18,9 +18,11 @@ import {
   SlackIncomingMessage,
   SlackNotification,
   SlackConversationContext,
+  SlackImageInfo,
   ParsedSlackCommand,
   parseCommandIntent,
 } from '../../types/slack.types.js';
+import { getSlackImageService } from './slack-image.service.js';
 import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
@@ -167,9 +169,14 @@ export class SlackOrchestratorBridge extends EventEmitter {
    * @param message - Incoming Slack message
    */
   private async handleSlackMessage(message: SlackIncomingMessage): Promise<void> {
-    console.log(`[SlackBridge] Received message: ${message.text.substring(0, 50)}...`);
+    console.log(`[SlackBridge] Received message: ${(message.text || '').substring(0, 50)}${message.hasImages ? ` [+${message.files?.length || 0} image(s)]` : ''}...`);
 
     try {
+      // Download images if present
+      if (message.hasImages && message.files) {
+        await this.downloadMessageImages(message);
+      }
+
       // Get or create conversation context
       const context = this.slackService.getConversationContext(
         message.threadTs || message.ts,
@@ -177,16 +184,28 @@ export class SlackOrchestratorBridge extends EventEmitter {
         message.userId
       );
 
-      // Store inbound message in thread file
+      // Build enriched text with image references for the agent
+      const enrichedText = this.enrichTextWithImages(message);
+
+      // Store inbound message in thread file (with image metadata)
       if (this.threadStore) {
         const threadTs = message.threadTs || message.ts;
         try {
           const userName = message.user?.realName || message.user?.name || message.userId;
-          await this.threadStore.appendUserMessage(message.channelId, threadTs, userName, message.text);
+          await this.threadStore.appendUserMessage(
+            message.channelId,
+            threadTs,
+            userName,
+            enrichedText,
+            message.images
+          );
         } catch (err) {
           console.warn('[SlackBridge] Failed to store thread message:', err instanceof Error ? err.message : String(err));
         }
       }
+
+      // Override message text with enriched version for downstream processing
+      message.text = enrichedText;
 
       // Parse command intent
       const command = this.parseCommand(message.text);
@@ -448,6 +467,56 @@ Just type naturally to chat with the orchestrator!`;
       console.error('[SlackBridge] Error sending to orchestrator:', error);
       throw error;
     }
+  }
+
+  /**
+   * Download all image files from a Slack message using SlackImageService.
+   * Populates `message.images` with successfully downloaded image info.
+   *
+   * @param message - Incoming message with files to download
+   */
+  private async downloadMessageImages(message: SlackIncomingMessage): Promise<void> {
+    const botToken = this.slackService.getBotToken();
+    if (!botToken) {
+      console.warn('[SlackBridge] Cannot download images: no bot token available');
+      return;
+    }
+
+    const slackImageService = getSlackImageService();
+    const downloadedImages: SlackImageInfo[] = [];
+
+    for (const file of message.files!) {
+      try {
+        const imageInfo = await slackImageService.downloadImage(file, botToken);
+        downloadedImages.push(imageInfo);
+      } catch (err) {
+        console.warn(`[SlackBridge] Failed to download image ${file.name}:`, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    if (downloadedImages.length > 0) {
+      message.images = downloadedImages;
+    }
+  }
+
+  /**
+   * Enrich message text with image file path references so agents
+   * can read them via their file-reading tools (Claude Code Read, Gemini @file).
+   *
+   * @param message - Message with optional downloaded images
+   * @returns Enriched text with image references appended
+   */
+  private enrichTextWithImages(message: SlackIncomingMessage): string {
+    let text = message.text || '';
+
+    if (message.images && message.images.length > 0) {
+      for (const img of message.images) {
+        const dims = img.width && img.height ? ` (${img.width}x${img.height})` : '';
+        text += `\n[Slack Image: ${img.localPath}${dims}, ${img.mimetype}]`;
+      }
+    }
+
+    return text;
   }
 
   /**

@@ -105,6 +105,46 @@ describe('SlackThreadStoreService', () => {
       expect(content).toContain('First message');
     });
 
+    it('should append image metadata when images are provided', async () => {
+      await store.appendUserMessage('C123', '1707.001', 'Steve', 'Check this screenshot', [
+        {
+          id: 'F001',
+          name: 'screenshot.png',
+          mimetype: 'image/png',
+          localPath: '/tmp/slack-images/F001-screenshot.png',
+          width: 1920,
+          height: 1080,
+          permalink: 'https://slack.com/files/F001',
+        },
+      ]);
+
+      const filePath = store.getThreadFilePath('C123', '1707.001');
+      const content = await fs.readFile(filePath, 'utf-8');
+
+      expect(content).toContain('**Steve**');
+      expect(content).toContain('Check this screenshot');
+      expect(content).toContain('![screenshot.png](slack://F001)');
+      expect(content).toContain('_(1920x1080, image/png)_');
+      expect(content).toContain('Local: /tmp/slack-images/F001-screenshot.png');
+    });
+
+    it('should handle images without dimensions', async () => {
+      await store.appendUserMessage('C123', '1707.001', 'Steve', 'An image', [
+        {
+          id: 'F002',
+          name: 'photo.jpg',
+          mimetype: 'image/jpeg',
+          localPath: '/tmp/slack-images/F002-photo.jpg',
+          permalink: 'https://slack.com/files/F002',
+        },
+      ]);
+
+      const filePath = store.getThreadFilePath('C123', '1707.001');
+      const content = await fs.readFile(filePath, 'utf-8');
+
+      expect(content).toContain('_(image/jpeg)_');
+    });
+
     it('should append multiple messages', async () => {
       await store.appendUserMessage('C123', '1707.001', 'Steve', 'Message 1');
       await store.appendUserMessage('C123', '1707.001', 'Alice', 'Message 2');

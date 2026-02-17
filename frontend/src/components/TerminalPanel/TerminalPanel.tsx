@@ -169,16 +169,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       }
     });
 
-    // Smart scroll: detect when user scrolls to enable/disable auto-scroll
-    // When user scrolls up, disable auto-scroll; when they scroll back to bottom, re-enable
+    // Smart scroll: re-enable auto-scroll when viewport reaches the bottom.
+    // IMPORTANT: This handler ONLY re-enables auto-scroll. It must NOT disable it
+    // (set isUserScrolledUp=true) because xterm's internal scroll events fire during
+    // data writes when the viewport is momentarily not at the bottom. That would
+    // falsely disable auto-scroll. Only the wheel handler (user interaction) disables it.
     const viewportElement = container.querySelector('.xterm-viewport');
     const handleScroll = () => {
       if (isAtBottom()) {
-        // User scrolled back to bottom, re-enable auto-scroll
         isUserScrolledUp.current = false;
-      } else {
-        // User scrolled up, disable auto-scroll
-        isUserScrolledUp.current = true;
       }
     };
 
@@ -247,20 +246,24 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     }
   }, [isOpen, xtermInitialized]);
 
-  // Write terminal output to xterm
+  // Write terminal output to xterm, scrolling to bottom after data is processed
   const writeToXterm = useCallback((data: string) => {
     if (xtermRef.current) {
-      xtermRef.current.write(data);
+      xtermRef.current.write(data, () => {
+        scrollToBottomIfEnabled();
+      });
     }
-  }, []);
+  }, [scrollToBottomIfEnabled]);
 
-  // Clear xterm and write new content
+  // Clear xterm and write new content, scrolling to bottom after data is processed
   const replaceXtermContent = useCallback((data: string) => {
     if (xtermRef.current) {
       xtermRef.current.clear();
-      xtermRef.current.write(data);
+      xtermRef.current.write(data, () => {
+        scrollToBottomIfEnabled();
+      });
     }
-  }, []);
+  }, [scrollToBottomIfEnabled]);
 
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
@@ -271,6 +274,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     if (data && dataSessionName === selectedSessionRef.current) {
       // Write incremental data to xterm.js (don't replace - append for streaming)
+      // Auto-scroll is handled inside writeToXterm via xterm's write callback
       writeToXterm(dataContent || '');
 
       // Clear loading state when we receive terminal output
@@ -278,11 +282,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
       // Clear session switch timeout since we got content
       clearSessionTimeouts();
-
-      // Smart auto-scroll: only scroll to bottom if user hasn't scrolled up
-      scrollToBottomIfEnabled();
     }
-  }, [clearSessionTimeouts, writeToXterm, scrollToBottomIfEnabled]);
+  }, [clearSessionTimeouts, writeToXterm]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     // Check both direct sessionName and nested structure

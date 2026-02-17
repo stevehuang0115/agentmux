@@ -9,10 +9,15 @@ INPUT="${1:-}"
 
 MINUTES=$(echo "$INPUT" | jq -r '.minutes // empty')
 MESSAGE=$(echo "$INPUT" | jq -r '.message // empty')
+TARGET=$(echo "$INPUT" | jq -r '.target // empty')
 require_param "minutes" "$MINUTES"
 require_param "message" "$MESSAGE"
 
-BODY=$(jq -n --arg minutes "$MINUTES" --arg message "$MESSAGE" \
-  '{delayMinutes: ($minutes | tonumber), message: $message}')
+# Default target to the caller's own session (orchestrator sends reminders to itself)
+TARGET_SESSION="${TARGET:-${TMUX_SESSION_NAME:-agentmux-orc}}"
+
+# API expects: targetSession, minutes, message
+BODY=$(jq -n --arg target "$TARGET_SESSION" --arg minutes "$MINUTES" --arg message "$MESSAGE" \
+  '{targetSession: $target, minutes: ($minutes | tonumber), message: $message}')
 
 api_call POST "/schedule" "$BODY"

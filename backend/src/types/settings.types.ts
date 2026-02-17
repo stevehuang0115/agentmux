@@ -40,6 +40,9 @@ export interface GeneralSettings {
   /** Enable verbose logging */
   verboseLogging: boolean;
 
+  /** Whether to auto-resume agent sessions on restart */
+  autoResumeOnRestart: boolean;
+
   /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
   runtimeCommands: Record<AIRuntime, string>;
 }
@@ -174,6 +177,7 @@ export function getDefaultSettings(): AgentMuxSettings {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
+      autoResumeOnRestart: true,
       runtimeCommands: {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
@@ -220,6 +224,10 @@ export function validateSettings(settings: AgentMuxSettings): SettingsValidation
 
   if (typeof settings.general.autoStartOrchestrator !== 'boolean') {
     errors.push('autoStartOrchestrator must be a boolean');
+  }
+
+  if (typeof settings.general.autoResumeOnRestart !== 'boolean') {
+    errors.push('autoResumeOnRestart must be a boolean');
   }
 
   if (settings.general.checkInIntervalMinutes < SETTINGS_CONSTRAINTS.MIN_CHECK_IN_INTERVAL) {

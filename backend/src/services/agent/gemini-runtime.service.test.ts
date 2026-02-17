@@ -1,8 +1,33 @@
 import * as os from 'os';
 import * as path from 'path';
+import { promises as fs } from 'fs';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { getSettingsService } from '../settings/settings.service.js';
+import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
+import { getDefaultSettings } from '../../types/settings.types.js';
+
+jest.mock('fs', () => ({
+	...jest.requireActual('fs'),
+	promises: {
+		...jest.requireActual('fs').promises,
+		mkdir: jest.fn().mockResolvedValue(undefined),
+	},
+}));
+
+jest.mock('../../utils/file-io.utils.js', () => ({
+	safeReadJson: jest.fn().mockResolvedValue({}),
+	atomicWriteJson: jest.fn().mockResolvedValue(undefined),
+}));
+
+jest.mock('../settings/settings.service.js', () => ({
+	getSettingsService: jest.fn().mockReturnValue({
+		getSettings: jest.fn().mockResolvedValue({
+			...require('../../types/settings.types.js').getDefaultSettings(),
+		}),
+	}),
+}));
 
 describe('GeminiRuntimeService', () => {
 	let service: GeminiRuntimeService;
@@ -149,10 +174,10 @@ describe('GeminiRuntimeService', () => {
 			await jest.advanceTimersByTimeAsync(20000);
 			await promise;
 
-			// Should send /directory add command for ~/.agentmux
+			// Should send /directory add command for ~/.agentmux (trailing space for path delimiter)
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
 				'test-session',
-				`/directory add ${expectedPath}`
+				`/directory add ${expectedPath} `
 			);
 		});
 
@@ -193,7 +218,7 @@ describe('GeminiRuntimeService', () => {
 			expect(mockSessionHelper.sendEscape).not.toHaveBeenCalled();
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
 				sessionName,
-				`/directory add ${projectPath}`
+				`/directory add ${projectPath} `
 			);
 		});
 
@@ -355,6 +380,129 @@ describe('GeminiRuntimeService', () => {
 
 			expect(result.success).toBe(false);
 			expect(result.message).toBe('Init failed');
+		});
+	});
+
+	describe('ensureGeminiMcpConfig', () => {
+		const mockSafeReadJson = safeReadJson as jest.MockedFunction<typeof safeReadJson>;
+		const mockAtomicWriteJson = atomicWriteJson as jest.MockedFunction<typeof atomicWriteJson>;
+		const mockMkdir = fs.mkdir as jest.MockedFunction<typeof fs.mkdir>;
+		const mockGetSettingsService = getSettingsService as jest.MockedFunction<typeof getSettingsService>;
+
+		beforeEach(() => {
+			jest.clearAllMocks();
+			mockSafeReadJson.mockResolvedValue({});
+			mockAtomicWriteJson.mockResolvedValue(undefined);
+			mockMkdir.mockResolvedValue(undefined);
+			mockGetSettingsService.mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(getDefaultSettings()),
+			} as any);
+		});
+
+		it('should create .gemini/settings.json with playwright when it does not exist', async () => {
+			mockSafeReadJson.mockResolvedValue({});
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			expect(mockMkdir).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini'),
+				{ recursive: true }
+			);
+			expect(mockAtomicWriteJson).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini', 'settings.json'),
+				{
+					mcpServers: {
+						playwright: {
+							command: 'npx',
+							args: ['@playwright/mcp@latest', '--headless'],
+						},
+					},
+				}
+			);
+		});
+
+		it('should preserve existing user MCP servers', async () => {
+			mockSafeReadJson.mockResolvedValue({
+				mcpServers: {
+					'my-custom-server': { command: 'node', args: ['server.js'] },
+				},
+				otherSetting: 'preserved',
+			});
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			expect(mockAtomicWriteJson).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini', 'settings.json'),
+				{
+					mcpServers: {
+						'my-custom-server': { command: 'node', args: ['server.js'] },
+						playwright: {
+							command: 'npx',
+							args: ['@playwright/mcp@latest', '--headless'],
+						},
+					},
+					otherSetting: 'preserved',
+				}
+			);
+		});
+
+		it('should not overwrite existing playwright config', async () => {
+			const userPlaywright = { command: 'playwright', args: ['--custom'] };
+			mockSafeReadJson.mockResolvedValue({
+				mcpServers: {
+					playwright: userPlaywright,
+				},
+			});
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			expect(mockAtomicWriteJson).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini', 'settings.json'),
+				{
+					mcpServers: {
+						playwright: userPlaywright,
+					},
+				}
+			);
+		});
+
+		it('should skip playwright when enableBrowserAutomation is false', async () => {
+			const disabledSettings = getDefaultSettings();
+			disabledSettings.skills.enableBrowserAutomation = false;
+			mockGetSettingsService.mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(disabledSettings),
+			} as any);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			// Should not write anything since no servers are needed
+			expect(mockAtomicWriteJson).not.toHaveBeenCalled();
+			expect(mockMkdir).not.toHaveBeenCalled();
+		});
+
+		it('should default to enabled when settings service is unavailable', async () => {
+			mockGetSettingsService.mockReturnValue({
+				getSettings: jest.fn().mockRejectedValue(new Error('Settings unavailable')),
+			} as any);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			// Should still add playwright (default to enabled)
+			expect(mockAtomicWriteJson).toHaveBeenCalledWith(
+				expect.any(String),
+				expect.objectContaining({
+					mcpServers: expect.objectContaining({
+						playwright: expect.any(Object),
+					}),
+				})
+			);
+		});
+
+		it('should not throw when filesystem operations fail', async () => {
+			mockMkdir.mockRejectedValue(new Error('Permission denied'));
+
+			// Should not throw — errors are handled gracefully
+			await expect(service.ensureGeminiMcpConfig('/test/project')).resolves.not.toThrow();
 		});
 	});
 });

@@ -154,12 +154,14 @@ export class QueueProcessorService extends EventEmitter {
     }
 
     // Don't process messages until orchestrator has finished initialization.
-    // During init, the runtime may be at a prompt but postInitialize (e.g. /dir add)
-    // is still running. Sending messages during init causes interleaved commands.
+    // 'started' means runtime is running but init prompt is still being processed.
+    // Only deliver when 'active' (agent registered via register-self skill).
     const orchestratorInfo = await StorageService.getInstance().getOrchestratorStatus();
     const agentStatus = orchestratorInfo?.agentStatus;
-    if (!agentStatus || (agentStatus !== 'started' && agentStatus !== 'active')) {
-      // Schedule retry — orchestrator not ready yet
+    if (agentStatus !== 'active') {
+      this.logger.debug('Orchestrator not active yet, deferring message delivery', {
+        agentStatus: agentStatus || 'unknown',
+      });
       this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
       return;
     }
@@ -188,12 +190,21 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
+      // Look up the orchestrator's runtime type early so it can be used for
+      // runtime-aware prompt detection in waitForAgentReady. Without this,
+      // the generic PROMPT_STREAM regex can false-positive on markdown `> `
+      // lines in Claude Code output, causing premature delivery attempts.
+      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
+      const runtimeType: RuntimeType =
+        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+
       // Wait for orchestrator to be at prompt before attempting delivery.
       // After processing a previous message the orchestrator may still be busy
       // (managing agents, running commands) before returning to the input prompt.
       const isReady = await this.agentRegistrationService.waitForAgentReady(
         ORCHESTRATOR_SESSION_NAME,
-        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+        runtimeType
       );
 
       // Check if message was force-cancelled while waiting for agent readiness
@@ -205,9 +216,43 @@ export class QueueProcessorService extends EventEmitter {
       }
 
       if (!isReady) {
+        const currentRetries = message.retryCount || 0;
+        const maxRetries = MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES;
+
+        if (currentRetries >= maxRetries) {
+          // Exceeded max retries — permanently fail the message
+          const errorMsg = `Orchestrator not available after ${currentRetries} retries (~${Math.round(currentRetries * EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT / 60000)} minutes). The orchestrator may be busy or unresponsive.`;
+          this.logger.error('Message exceeded max requeue retries, marking as failed', {
+            messageId: message.id,
+            retryCount: currentRetries,
+            maxRetries,
+          });
+
+          this.queueService.markFailed(message.id, errorMsg);
+          this.responseRouter.routeError(message, errorMsg);
+
+          // Notify user in conversation
+          if (message.source !== 'system_event') {
+            try {
+              const chatService = getChatService();
+              await chatService.addSystemMessage(
+                message.conversationId,
+                `Message delivery failed: ${errorMsg} Please try again later.`
+              );
+            } catch (sysErr) {
+              this.logger.warn('Failed to send max-retry failure system message', {
+                error: sysErr instanceof Error ? sysErr.message : String(sysErr),
+              });
+            }
+          }
+          return;
+        }
+
         this.logger.warn('Agent not ready, re-queuing message for retry', {
           messageId: message.id,
           timeoutMs: EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+          retryCount: currentRetries + 1,
+          maxRetries,
         });
 
         // Re-enqueue the message so it gets retried instead of permanently failing
@@ -225,12 +270,6 @@ export class QueueProcessorService extends EventEmitter {
       const deliveryContent = isSystemEvent
         ? message.content
         : `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
-
-      // Look up the orchestrator's runtime type for runtime-aware terminal clearing.
-      // Gemini CLI exits on Ctrl+C so we need Escape+Ctrl+U instead.
-      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
-      const runtimeType: RuntimeType =
-        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
         ORCHESTRATOR_SESSION_NAME,
@@ -295,7 +334,8 @@ export class QueueProcessorService extends EventEmitter {
       // emitting its chat response.
       await this.agentRegistrationService.waitForAgentReady(
         ORCHESTRATOR_SESSION_NAME,
-        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+        runtimeType
       );
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

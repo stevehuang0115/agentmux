@@ -29,6 +29,9 @@ const VALID_REMEMBER_SCOPES: ReadonlySet<string> = new Set(['agent', 'project'])
 /** Valid scopes for the recall endpoint */
 const VALID_RECALL_SCOPES: ReadonlySet<string> = new Set(['agent', 'project', 'both']);
 
+/** Default character limit for learning accumulation tail reads */
+const LEARNING_TAIL_CHARS = 3000;
+
 /**
  * POST /api/memory/remember
  *
@@ -466,6 +469,82 @@ export async function recordFailure(req: Request, res: Response, next: NextFunct
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to record failure', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/my-context
+ *
+ * Retrieve combined context for an agent, including relevant memories,
+ * project goals, current focus, today's daily log, and recent learnings.
+ * This provides a single-call context briefing for agent startup or task transitions.
+ *
+ * @param req - Express request with body: { agentId, agentRole, projectPath }
+ * @param res - Express response returning { success, data: { memories, goals, focus, dailyLog, learnings } }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/memory/my-context
+ * {
+ *   "agentId": "dev-001",
+ *   "agentRole": "developer",
+ *   "projectPath": "/path/to/project"
+ * }
+ * ```
+ */
+export async function getMyContext(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { agentId, agentRole, projectPath } = req.body;
+
+    if (!agentId || !agentRole || !projectPath) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: agentId, agentRole, projectPath',
+      });
+      return;
+    }
+
+    // Gather context from all memory subsystems in parallel
+    const memoryService = MemoryService.getInstance();
+    const goalService = GoalTrackingService.getInstance();
+    const dailyLogService = DailyLogService.getInstance();
+    const learningService = LearningAccumulationService.getInstance();
+
+    const [memories, goals, focus, dailyLog, successes, failures] = await Promise.all([
+      memoryService.recall({
+        agentId,
+        context: `${agentRole} agent context for current work`,
+        scope: 'both',
+        projectPath,
+      }),
+      goalService.getGoals(projectPath),
+      goalService.getCurrentFocus(projectPath),
+      dailyLogService.getTodaysLog(projectPath),
+      learningService.getSuccesses(projectPath, LEARNING_TAIL_CHARS),
+      learningService.getFailures(projectPath, LEARNING_TAIL_CHARS),
+    ]);
+
+    logger.debug('Agent context retrieved via REST', { agentId, agentRole, projectPath });
+
+    res.json({
+      success: true,
+      data: {
+        memories,
+        goals,
+        focus,
+        dailyLog,
+        learnings: {
+          successes,
+          failures,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get agent context', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     next(error);
   }
 }

@@ -10,7 +10,6 @@ export class MockAgentMuxServer {
   constructor(config?: any) {
     this.config = {
       webPort: config?.webPort || 3000,
-      mcpPort: config?.mcpPort || 3001,
       agentmuxHome: config?.agentmuxHome || '~/.agentmux',
       ...config
     };

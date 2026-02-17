@@ -220,6 +220,22 @@ describe('SlackService', () => {
     });
   });
 
+  describe('getBotToken', () => {
+    it('should return null when not initialized', () => {
+      const service = new SlackService();
+      expect(service.getBotToken()).toBeNull();
+    });
+  });
+
+  describe('uploadImage', () => {
+    it('should throw when client is not initialized', async () => {
+      const service = new SlackService();
+      await expect(
+        service.uploadImage({ channelId: 'C123', filePath: '/tmp/test.png' })
+      ).rejects.toThrow('Slack client not initialized');
+    });
+  });
+
   describe('initialize without @slack/bolt installed', () => {
     it('should throw error when @slack/bolt is not available', async () => {
       const service = getSlackService();

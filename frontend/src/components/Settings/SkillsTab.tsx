@@ -16,7 +16,6 @@ import {
   Info,
   AlertCircle,
   ExternalLink,
-  Plug,
   Brain,
   Globe,
   Plus,
@@ -82,7 +81,6 @@ const CATEGORY_COLORS: Record<SkillCategory, string> = {
  * Skill type badge color mapping
  */
 const SKILL_TYPE_COLORS: Record<SkillType, string> = {
-  'mcp': 'bg-emerald-500/15 text-emerald-400',
   'claude-skill': 'bg-purple-500/15 text-purple-400',
   'web-page': 'bg-blue-500/15 text-blue-400',
 };
@@ -318,8 +316,6 @@ interface SkillCardProps {
  */
 const getSkillTypeIcon = (skillType: SkillType): React.ReactNode => {
   switch (skillType) {
-    case 'mcp':
-      return <Plug className="w-3.5 h-3.5" />;
     case 'claude-skill':
       return <Brain className="w-3.5 h-3.5" />;
     case 'web-page':

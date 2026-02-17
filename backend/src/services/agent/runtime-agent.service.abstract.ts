@@ -294,8 +294,10 @@ export abstract class RuntimeAgentService {
 	 * Default implementation is a no-op.
 	 *
 	 * @param sessionName - PTY session name
+	 * @param targetProjectPath - Optional target project path for the agent (where MCP configs should be written).
+	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
 		// No-op by default — override in concrete classes
 		this.logger.debug('postInitialize (no-op)', { sessionName, runtimeType: this.getRuntimeType() });
 	}

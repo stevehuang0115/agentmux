@@ -7,10 +7,10 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, User, Briefcase, Wrench, Check, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, User, Briefcase, Wrench, Check } from 'lucide-react';
 import { TeamMember } from '../../types';
 import { rolesService } from '../../services/roles.service';
-import { skillsService, type McpServerStatus } from '../../services/skills.service';
+import { skillsService } from '../../services/skills.service';
 import { RoleWithPrompt, ROLE_CATEGORY_DISPLAY_NAMES } from '../../types/role.types';
 import { useSkills } from '../../hooks/useSkills';
 import type { Skill } from '../../types/skill.types';
@@ -20,8 +20,6 @@ interface AgentDetailModalProps {
   member: TeamMember;
   /** Called when the modal should close */
   onClose: () => void;
-  /** Optional project path for checking project-level MCP settings */
-  projectPath?: string;
   /** When true, allows editing agent configuration (runtime type) */
   isEditable?: boolean;
   /** Called when the user saves edits. Receives the member ID and partial updates. */
@@ -29,14 +27,11 @@ interface AgentDetailModalProps {
 }
 
 /**
- * Skill with MCP status information
+ * Skill with basic display information
  */
-interface SkillWithMcpStatus {
+interface SkillDisplayInfo {
   id: string;
   name: string;
-  skillType?: string;
-  requiredMcpServers?: string[];
-  mcpStatus?: McpServerStatus[];
 }
 
 /**
@@ -45,11 +40,10 @@ interface SkillWithMcpStatus {
  * @param props - Component props
  * @returns AgentDetailModal component
  */
-export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onClose, projectPath, isEditable = false, onSave }) => {
+export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onClose, isEditable = false, onSave }) => {
   const [roleDetails, setRoleDetails] = useState<RoleWithPrompt | null>(null);
   const [loadingRole, setLoadingRole] = useState(true);
-  const [skillsWithStatus, setSkillsWithStatus] = useState<SkillWithMcpStatus[]>([]);
-  const [loadingMcpStatus, setLoadingMcpStatus] = useState(false);
+  const [skillDisplayInfos, setSkillDisplayInfos] = useState<SkillDisplayInfo[]>([]);
   const [editedRuntime, setEditedRuntime] = useState<string>(member.runtimeType || 'claude-code');
   const { skills: allSkills } = useSkills();
 
@@ -73,13 +67,12 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
   }, [member.role]);
 
   /**
-   * Fetch MCP status for all skills when role details are loaded
+   * Fetch skill display info when role details are loaded
    */
   useEffect(() => {
-    const fetchMcpStatus = async () => {
+    const fetchSkillInfo = async () => {
       if (!roleDetails && !member.skillOverrides?.length) return;
 
-      // Filter out excluded role skills
       const roleSkills = (roleDetails?.assignedSkills || [])
         .filter(skillId => !member.excludedRoleSkills?.includes(skillId));
       const allSkillIds = [
@@ -89,76 +82,37 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
 
       if (allSkillIds.length === 0) return;
 
-      setLoadingMcpStatus(true);
-      try {
-        // Fetch full skill details to get MCP requirements
-        const skillDetailsPromises = allSkillIds.map(async (skillId) => {
-          try {
-            const skill = await skillsService.getById(skillId);
-            // Use type assertion with partial matching since API may return partial data
-            const skillData = skill as Partial<Skill>;
-            return {
-              id: skillId,
-              name: skillData.name || skillId,
-              skillType: skillData.skillType,
-              requiredMcpServers: skillData.runtime?.requiredMcpServers || []
-            };
-          } catch {
-            // Skill not found, use basic info
-            const basicSkill = allSkills.find(s => s.id === skillId);
-            return {
-              id: skillId,
-              name: basicSkill?.name || skillId,
-              skillType: basicSkill?.skillType,
-              requiredMcpServers: []
-            };
-          }
-        });
-
-        const skillDetails = await Promise.all(skillDetailsPromises);
-
-        // Collect all required MCP packages
-        const requiredPackages = skillDetails
-          .flatMap(s => s.requiredMcpServers || [])
-          .filter((pkg, idx, arr) => arr.indexOf(pkg) === idx); // unique
-
-        // Check MCP status if there are required packages
-        // Pass projectPath to also check project-level MCP settings
-        let mcpStatuses: McpServerStatus[] = [];
-        if (requiredPackages.length > 0) {
-          const statusResponse = await skillsService.checkMcpStatus(requiredPackages, projectPath);
-          mcpStatuses = statusResponse.statuses;
+      const skillDetailsPromises = allSkillIds.map(async (skillId) => {
+        try {
+          const skill = await skillsService.getById(skillId);
+          const skillData = skill as Partial<Skill>;
+          return {
+            id: skillId,
+            name: skillData.name || skillId,
+          };
+        } catch {
+          const basicSkill = allSkills.find(s => s.id === skillId);
+          return {
+            id: skillId,
+            name: basicSkill?.name || skillId,
+          };
         }
+      });
 
-        // Combine skill details with MCP status
-        const skillsWithMcp: SkillWithMcpStatus[] = skillDetails.map(skill => ({
-          ...skill,
-          mcpStatus: skill.requiredMcpServers?.map(pkg =>
-            mcpStatuses.find(s => s.packageName === pkg) || {
-              packageName: pkg,
-              isInstalled: false
-            }
-          )
-        }));
-
-        setSkillsWithStatus(skillsWithMcp);
-      } catch (error) {
-        console.error('Failed to fetch MCP status:', error);
-      } finally {
-        setLoadingMcpStatus(false);
-      }
+      const skillDetails = await Promise.all(skillDetailsPromises);
+      setSkillDisplayInfos(skillDetails);
     };
 
     if (!loadingRole) {
-      fetchMcpStatus();
+      fetchSkillInfo();
     }
-  }, [roleDetails, member.skillOverrides, loadingRole, allSkills, projectPath]);
+  }, [roleDetails, member.skillOverrides, loadingRole, allSkills]);
 
   /**
    * Get skill info by ID
    */
-  const getSkillInfo = (skillId: string): SkillWithMcpStatus | undefined => {
-    return skillsWithStatus.find(s => s.id === skillId);
+  const getSkillInfo = (skillId: string): SkillDisplayInfo | undefined => {
+    return skillDisplayInfos.find(s => s.id === skillId);
   };
 
   /**
@@ -172,14 +126,6 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
   };
 
   /**
-   * Check if skill has all required MCP servers installed
-   */
-  const isSkillReady = (skill: SkillWithMcpStatus): boolean => {
-    if (!skill.mcpStatus || skill.mcpStatus.length === 0) return true;
-    return skill.mcpStatus.every(status => status.isInstalled);
-  };
-
-  /**
    * Handle overlay click to close
    */
   const handleOverlayClick = (e: React.MouseEvent) => {
@@ -189,13 +135,11 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
   };
 
   /**
-   * Render a skill badge with MCP status
+   * Render a skill badge
    */
   const renderSkillBadge = (skillId: string, variant: 'role' | 'additional') => {
     const skillInfo = getSkillInfo(skillId);
     const name = skillInfo?.name || skillId;
-    const isMcp = skillInfo?.skillType === 'mcp';
-    const ready = skillInfo ? isSkillReady(skillInfo) : true;
 
     const baseClasses = 'inline-flex items-center gap-1.5 px-2.5 py-1 text-sm rounded-md';
     const variantClasses = variant === 'role'
@@ -203,53 +147,11 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
       : 'bg-emerald-500/10 text-emerald-400';
 
     return (
-      <div key={skillId} className="relative group">
+      <div key={skillId}>
         <span className={`${baseClasses} ${variantClasses}`}>
           <Check className="w-3 h-3" />
           {name}
-          {isMcp && (
-            ready ? (
-              <span title="MCP server installed">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              </span>
-            ) : (
-              <span title="MCP server not installed">
-                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-              </span>
-            )
-          )}
         </span>
-        {/* Tooltip for MCP status */}
-        {isMcp && skillInfo?.mcpStatus && skillInfo.mcpStatus.length > 0 && (
-          <div className="absolute bottom-full left-0 mb-2 hidden group-hover:block z-10">
-            <div className="bg-surface-dark border border-border-dark rounded-lg p-2 shadow-lg text-xs whitespace-nowrap">
-              <div className="font-medium mb-1">MCP Requirements:</div>
-              {skillInfo.mcpStatus.map((status, idx) => (
-                <div key={idx} className="flex items-center gap-1.5">
-                  {status.isInstalled ? (
-                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  ) : (
-                    <AlertCircle className="w-3 h-3 text-amber-400" />
-                  )}
-                  <span className={status.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-                    {status.packageName}
-                  </span>
-                  {status.isInstalled && (
-                    <span className="text-text-secondary-dark">
-                      {status.configuredName && `(as "${status.configuredName}")`}
-                      {status.source && ` [${status.source}]`}
-                    </span>
-                  )}
-                </div>
-              ))}
-              {!skillInfo.mcpStatus.every(s => s.isInstalled) && (
-                <div className="mt-1 pt-1 border-t border-border-dark text-text-secondary-dark">
-                  Run: claude mcp add {skillInfo.mcpStatus.find(s => !s.isInstalled)?.packageName}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -323,9 +225,6 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
             <div className="flex items-center gap-2 text-sm font-medium text-text-secondary-dark uppercase tracking-wide mb-3">
               <Wrench className="w-4 h-4" />
               Skills
-              {loadingMcpStatus && (
-                <span className="text-xs text-text-secondary-dark font-normal">(checking MCP status...)</span>
-              )}
             </div>
             {loadingRole ? (
               <div className="animate-pulse flex flex-wrap gap-2">

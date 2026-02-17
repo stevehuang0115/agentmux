@@ -609,7 +609,7 @@ export class TerminalGateway {
 				continue;
 			}
 
-			this.logger.info('Detected NOTIFY marker in orchestrator output', {
+			this.logger.debug('Detected NOTIFY marker in orchestrator output', {
 				contentLength: payload.message.length,
 			});
 
@@ -1056,6 +1056,24 @@ export class TerminalGateway {
 			payload: memberData,
 			timestamp: new Date().toISOString(),
 		} as WebSocketMessage);
+	}
+
+	/**
+	 * Broadcast a system resource alert to all connected clients.
+	 *
+	 * @param alertData - Alert details including key, message, severity, and timestamp
+	 */
+	broadcastSystemResourceAlert(alertData: {
+		alertKey: string;
+		message: string;
+		severity: string;
+		timestamp: string;
+	}): void {
+		this.io.emit('system_resource_alert', {
+			type: 'system_resource_alert',
+			payload: alertData,
+			timestamp: alertData.timestamp,
+		});
 	}
 
 	/**

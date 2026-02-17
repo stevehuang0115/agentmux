@@ -60,13 +60,18 @@ interface PromptParts {
  */
 export class PromptBuilderService {
 	private logger: ComponentLogger;
+	private readonly projectRoot: string;
 	private readonly rolesDirectory: string;
+	/** Absolute path to agent skill scripts (used in prompts so agents can find them from any working directory) */
+	private readonly agentSkillsPath: string;
 	private memoryService: MemoryService | null = null;
 	private sopService: SOPService | null = null;
 
 	constructor(projectRoot: string = process.cwd()) {
 		this.logger = LoggerService.getInstance().createComponentLogger('PromptBuilderService');
+		this.projectRoot = projectRoot;
 		this.rolesDirectory = path.join(projectRoot, 'config', 'roles');
+		this.agentSkillsPath = path.join(projectRoot, 'config', 'skills', 'agent');
 	}
 
 	/**
@@ -164,10 +169,12 @@ Start all teams on Phase 1 simultaneously.`.trim();
 
 			// Replace template variables
 			promptContent = this.replaceTemplateVariables(promptContent, {
+				SESSION_NAME: config.name || 'unknown',
 				SESSION_ID: config.name || 'unknown',
 				ROLE: config.role,
 				PROJECT_PATH: config.projectPath || 'Not specified',
 				MEMBER_ID: config.memberId || '',
+				AGENT_SKILLS_PATH: this.agentSkillsPath,
 			});
 
 			this.logger.info('Loaded role-specific system prompt', {
@@ -401,16 +408,16 @@ ${fullContext}
 		sections.push('\n---\n');
 		sections.push(`## Communication
 
-Use MCP tools for all team communication:
-- \`send_message\` to communicate with other agents
-- \`report_progress\` to update on task status
-- \`remember\` to store important learnings (always pass your \`teamMemberId\` and \`projectPath\`)
-- \`recall\` to retrieve relevant knowledge (always pass your \`teamMemberId\` and \`projectPath\`)
-- \`record_learning\` to record learnings (always pass your \`teamMemberId\` and \`projectPath\`)
-- \`get_sops\` to request relevant SOPs for your current situation
+Use bash skills at \`${this.agentSkillsPath}/\` for all team communication. Read \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference.
+- \`send-message\` to communicate with other agents
+- \`report-progress\` to update on task status
+- \`remember\` to store important learnings (always pass your \`agentId\` and \`projectPath\`)
+- \`recall\` to retrieve relevant knowledge (always pass your \`agentId\` and \`projectPath\`)
+- \`record-learning\` to record learnings (always pass your \`agentId\` and \`projectPath\`)
+- \`get-sops\` to request relevant SOPs for your current situation
 
-**IMPORTANT for memory tools:** When calling \`remember\`, \`recall\`, or \`record_learning\`, you MUST pass:
-- \`teamMemberId\`: Your **Session Name** from the Identity section above
+**IMPORTANT for memory tools:** When calling \`remember\`, \`recall\`, or \`record-learning\`, you MUST pass:
+- \`agentId\`: Your **Session Name** from the Identity section above
 - \`projectPath\`: Your **Project Path** from the Identity section above
 This ensures your knowledge is stored under your identity and in the correct project.
 
@@ -473,7 +480,7 @@ This ensures your knowledge is stored under your identity and in the correct pro
 		sections.push('2. Follow the SOPs above for guidance');
 		sections.push('3. Continue working on the task');
 		sections.push('4. Run quality checks before marking complete');
-		sections.push('5. Call `complete_task` when ALL gates pass');
+		sections.push(`5. Run \`bash ${this.agentSkillsPath}/complete-task/execute.sh\` when ALL gates pass`);
 
 		return sections.join('\n').trim();
 	}
@@ -495,8 +502,10 @@ This ensures your knowledge is stored under your identity and in the correct pro
 
 			// Replace template variables
 			const variables: Record<string, string> = {
+				SESSION_NAME: sessionName,
 				SESSION_ID: sessionName,
 				ROLE: role,
+				AGENT_SKILLS_PATH: this.agentSkillsPath,
 			};
 
 			if (memberId) {
@@ -525,8 +534,7 @@ This ensures your knowledge is stored under your identity and in the correct pro
 				error: error instanceof Error ? error.message : String(error),
 			});
 
-			const memberIdMcpParam = memberId ? `, "teamMemberId": "${memberId}"` : '';
-			const memberIdApiParam = memberId ? `, "memberId": "${memberId}"` : '';
+			const memberIdParam = memberId ? `,"teamMemberId":"${memberId}"` : '';
 
 			return `# AgentMux Agent Registration
 
@@ -534,33 +542,18 @@ You are running in the **AgentMux multi-agent orchestration environment**.
 
 ## Registration Required
 
-**IMMEDIATELY** register yourself with the AgentMux system.
+**IMMEDIATELY** register yourself with the AgentMux system using the register-self bash skill:
 
-### Primary Method: MCP Tool (Preferred)
-
-Call the \`register_agent_status\` MCP tool with these parameters:
-\`\`\`json
-{
-  "role": "${role}",
-  "sessionName": "${sessionName}"${memberIdMcpParam}
-}
-\`\`\`
-
-### Fallback Method: Direct API Call
-
-If the MCP tool is unavailable or fails, use curl to call the registration API directly:
 \`\`\`bash
-curl -X POST "http://localhost:8787/api/teams/members/register" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "role": "${role}",
-    "sessionName": "${sessionName}"${memberIdApiParam},
-    "status": "active",
-    "registeredAt": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'"
-  }'
+bash ${this.agentSkillsPath}/register-self/execute.sh '{"role":"${role}","sessionName":"${sessionName}"${memberIdParam}}'
 \`\`\`
 
-**IMPORTANT:** You MUST complete registration before proceeding. Try the MCP method first; only use the API fallback if MCP fails.
+After registering, read the agent skills catalog for a full reference of available skills:
+\`\`\`bash
+cat ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md
+\`\`\`
+
+**IMPORTANT:** You MUST complete registration before proceeding.
 
 ## Instructions
 
@@ -584,15 +577,15 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 ## Quick context about this setup
 
-This project uses AgentMux for team coordination. The \`register_agent_status\` tool is an MCP tool that's already configured in your MCP server settings (check your .mcp.json if you want to verify). The AgentMux backend is running locally as part of this development environment.
+This project uses AgentMux for team coordination. You have bash skills available at \`${this.agentSkillsPath}/\` that communicate with the AgentMux backend running locally. Read the skills catalog at \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
 
 ## First thing - please check in
 
-Please call the \`register_agent_status\` MCP tool to let the team dashboard know you're available. All it does is update a local status flag so the web UI shows you as online - nothing more.
-
-\`\`\`json
-{ "role": "${config.role}" }
+Please run the register-self skill to let the team dashboard know you're available:
+\`\`\`bash
+bash ${this.agentSkillsPath}/register-self/execute.sh '{"role":"${config.role}","sessionName":"${config.name}"}'
 \`\`\`
+All it does is update a local status flag so the web UI shows you as online - nothing more.
 
 After checking in, just say "Ready for tasks" and wait for me to send you work.
 

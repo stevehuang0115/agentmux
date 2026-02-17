@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as process from 'process';
+import { statfs } from 'fs/promises';
 import { ConfigService } from '../core/config.service.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
@@ -237,11 +238,7 @@ export class MonitoringService {
         percentage: (usedMem / totalMem) * 100,
         heap: process.memoryUsage()
       },
-      disk: {
-        usage: 0, // Would need additional library for cross-platform disk usage
-        free: 0,
-        total: 0
-      },
+      disk: await this.collectDiskMetrics(),
       network: {
         connections: 0, // Would need additional monitoring
         bytesReceived: 0,
@@ -260,6 +257,28 @@ export class MonitoringService {
     const totalUsage = cpuUsage.user + cpuUsage.system;
     const totalTime = 1000000; // 1 second in microseconds
     return (totalUsage / totalTime) * 100;
+  }
+
+  /**
+   * Collect disk usage metrics using Node.js fs.statfs().
+   * Falls back to zeroed values if the call fails (e.g. unsupported OS).
+   *
+   * @returns Disk usage info with usage percentage, free bytes, and total bytes
+   */
+  private async collectDiskMetrics(): Promise<{ usage: number; free: number; total: number }> {
+    try {
+      const stats = await statfs('/');
+      const total = stats.blocks * stats.bsize;
+      const free = stats.bfree * stats.bsize;
+      const used = total - free;
+      return {
+        usage: total > 0 ? (used / total) * 100 : 0,
+        free,
+        total,
+      };
+    } catch {
+      return { usage: 0, free: 0, total: 0 };
+    }
   }
 
   private collectPerformanceMetrics(): PerformanceMetrics {
@@ -466,14 +485,26 @@ export class MonitoringService {
 
   private async checkDiskHealth(): Promise<HealthCheckResult> {
     const start = Date.now();
-    
-    // Basic disk health check (would need fs-extra or similar for detailed disk info)
+    const disk = await this.collectDiskMetrics();
+    const usagePercent = disk.usage;
+
+    let status: HealthCheckResult['status'] = 'healthy';
+    if (disk.total > 0) {
+      if (usagePercent > 95) {
+        status = 'unhealthy';
+      } else if (usagePercent > 85) {
+        status = 'degraded';
+      }
+    }
+
     return {
       service: 'disk',
-      status: 'healthy',
+      status,
       responseTime: Date.now() - start,
       details: {
-        message: 'Disk health monitoring requires additional implementation'
+        usagePercent: Math.round(usagePercent * 100) / 100,
+        freeGB: Math.round((disk.free / (1024 * 1024 * 1024)) * 100) / 100,
+        totalGB: Math.round((disk.total / (1024 * 1024 * 1024)) * 100) / 100,
       }
     };
   }

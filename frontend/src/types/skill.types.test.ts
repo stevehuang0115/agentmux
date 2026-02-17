@@ -46,13 +46,12 @@ describe('Skill Types', () => {
     it('should contain all expected execution types', () => {
       expect(EXECUTION_TYPES).toContain('script');
       expect(EXECUTION_TYPES).toContain('browser');
-      expect(EXECUTION_TYPES).toContain('mcp-tool');
       expect(EXECUTION_TYPES).toContain('composite');
       expect(EXECUTION_TYPES).toContain('prompt-only');
     });
 
-    it('should have exactly 5 execution types', () => {
-      expect(EXECUTION_TYPES).toHaveLength(5);
+    it('should have exactly 4 execution types', () => {
+      expect(EXECUTION_TYPES).toHaveLength(4);
     });
   });
 
@@ -90,7 +89,6 @@ describe('Skill Types', () => {
     it('should return true for valid execution types', () => {
       expect(isValidExecutionType('script')).toBe(true);
       expect(isValidExecutionType('browser')).toBe(true);
-      expect(isValidExecutionType('mcp-tool')).toBe(true);
       expect(isValidExecutionType('composite')).toBe(true);
       expect(isValidExecutionType('prompt-only')).toBe(true);
     });
@@ -153,7 +151,6 @@ describe('Skill Types', () => {
     it('should return correct labels for all execution types', () => {
       expect(getExecutionTypeLabel('script')).toBe('Script');
       expect(getExecutionTypeLabel('browser')).toBe('Browser Automation');
-      expect(getExecutionTypeLabel('mcp-tool')).toBe('MCP Tool');
       expect(getExecutionTypeLabel('composite')).toBe('Composite');
       expect(getExecutionTypeLabel('prompt-only')).toBe('Prompt Only');
     });
@@ -171,6 +168,7 @@ describe('Skill Types', () => {
         name: 'Code Review',
         description: 'Performs automated code review',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'prompts/code-review.md',
         execution: {
           type: 'script',
@@ -204,6 +202,7 @@ describe('Skill Types', () => {
         name: 'Code Review',
         description: 'Performs automated code review',
         category: 'development',
+        skillType: 'claude-skill',
         executionType: 'script',
         triggerCount: 2,
         roleCount: 2,

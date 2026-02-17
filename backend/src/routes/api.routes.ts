@@ -17,6 +17,7 @@ import { createTeamsBackupRouter } from '../controllers/teams-backup/teams-backu
 import { createEventBusRouter } from '../controllers/event-bus/event-bus.routes.js';
 import { createSlackThreadRouter } from '../controllers/slack/slack-thread.routes.js';
 import { createMemoryRouter } from '../controllers/memory/memory.routes.js';
+import { createQualityGateRouter } from './modules/quality-gate.routes.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -68,12 +69,15 @@ export function createApiRoutes(apiController: ApiController): Router {
   // Memory routes for agent/project knowledge storage and retrieval
   router.use('/memory', createMemoryRouter());
 
+  // Quality gate routes for running quality checks before task completion
+  router.use('/quality-gates', createQualityGateRouter());
+
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here
   registerTaskManagementRoutes(router, apiController);
   registerSystemRoutes(router, apiController);
   registerSchedulerRoutes(router, apiController);
-  registerTerminalRoutes(router);
+  registerTerminalRoutes(router, apiController);
   registerAssignmentsRoutes(router, apiController);
   registerErrorRoutes(router, apiController);
   registerScheduledMessageRoutes(router, apiController);

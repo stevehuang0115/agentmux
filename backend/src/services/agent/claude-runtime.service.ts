@@ -1,9 +1,12 @@
+import { promises as fs } from 'fs';
+import * as path from 'path';
 import { spawn } from 'child_process';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { delay } from '../../utils/async.utils.js';
+import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 
 /**
  * Claude Code specific runtime service implementation.
@@ -223,5 +226,99 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	 */
 	async executeClaudeInitScript(sessionName: string, targetPath?: string): Promise<void> {
 		return await this.executeRuntimeInitScript(sessionName, targetPath);
+	}
+
+	/**
+	 * Post-initialization hook for Claude Code.
+	 * Ensures MCP server configuration (e.g., playwright) is present in the project directory.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param targetProjectPath - Optional target project path for MCP config.
+	 *                            Falls back to this.projectRoot if not provided.
+	 */
+	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+		const effectiveProjectPath = targetProjectPath || this.projectRoot;
+		this.logger.info('Claude Code post-init: ensuring MCP config', {
+			sessionName,
+			projectRoot: this.projectRoot,
+			targetProjectPath: effectiveProjectPath,
+		});
+
+		await this.ensureClaudeMcpConfig(effectiveProjectPath);
+	}
+
+	/**
+	 * Ensure Claude Code MCP server configuration exists in the project directory.
+	 *
+	 * Creates or merges `.mcp.json` with required MCP servers.
+	 * When `enableBrowserAutomation` is true in settings, adds the playwright MCP server.
+	 * Preserves any existing user-configured MCP servers.
+	 *
+	 * @param projectPath - Project directory where `.mcp.json` will be created
+	 */
+	async ensureClaudeMcpConfig(projectPath: string): Promise<void> {
+		const mcpConfigPath = path.join(projectPath, '.mcp.json');
+
+		try {
+			// Check if browser automation is enabled
+			let enableBrowserAutomation = true;
+			try {
+				const settingsService = getSettingsService();
+				const settings = await settingsService.getSettings();
+				enableBrowserAutomation = settings.skills.enableBrowserAutomation;
+			} catch {
+				// Settings service unavailable — default to enabled
+				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
+			}
+
+			// Build required MCP servers
+			const requiredServers: Record<string, { command: string; args: string[] }> = {};
+
+			if (enableBrowserAutomation) {
+				requiredServers['playwright'] = {
+					command: 'npx',
+					args: ['@playwright/mcp@latest', '--headless'],
+				};
+			}
+
+			// If no servers to configure, skip
+			if (Object.keys(requiredServers).length === 0) {
+				this.logger.info('No MCP servers to configure for Claude Code (browser automation disabled)', {
+					projectPath,
+				});
+				return;
+			}
+
+			// Read existing config (preserves user config)
+			const existing = await safeReadJson<Record<string, unknown>>(mcpConfigPath, {});
+			const existingMcpServers = (existing['mcpServers'] as Record<string, unknown>) || {};
+
+			// Merge: only add servers that don't already exist (don't overwrite user config)
+			let added = 0;
+			for (const [name, config] of Object.entries(requiredServers)) {
+				if (!existingMcpServers[name]) {
+					existingMcpServers[name] = config;
+					added++;
+				}
+			}
+
+			// Write back merged config
+			const merged = { ...existing, mcpServers: existingMcpServers };
+			await atomicWriteJson(mcpConfigPath, merged);
+
+			this.logger.info('Claude Code MCP config ensured', {
+				projectPath,
+				mcpConfigPath,
+				addedServers: added,
+				totalServers: Object.keys(existingMcpServers).length,
+				enableBrowserAutomation,
+			});
+		} catch (error) {
+			// Non-fatal: agent can still work without MCP servers
+			this.logger.warn('Failed to ensure Claude Code MCP config (non-fatal)', {
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 }

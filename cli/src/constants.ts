@@ -7,7 +7,6 @@
  * For shared constants, use:
  * - AGENTMUX_CONSTANTS: Core system identifiers and paths
  * - WEB_CONSTANTS: Web server ports and endpoints
- * - MCP_CONSTANTS: MCP server configuration
  * - TIMING_CONSTANTS: Timeouts and intervals
  * - MESSAGE_CONSTANTS: Message handling configuration
  * - ENV_CONSTANTS: Environment variable names
@@ -18,7 +17,6 @@
 export {
   AGENTMUX_CONSTANTS,
   WEB_CONSTANTS,
-  MCP_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
@@ -29,7 +27,6 @@ export {
 import {
   AGENTMUX_CONSTANTS,
   WEB_CONSTANTS,
-  MCP_CONSTANTS,
   BACKEND_CONSTANTS,
   ENV_CONSTANTS,
   TIMING_CONSTANTS,
@@ -103,7 +100,6 @@ export const COMMUNICATION_LOG_FILE = BACKEND_CONSTANTS.FILES.COMMUNICATION_LOG_
 
 // Port constants
 export const DEFAULT_WEB_PORT = WEB_CONSTANTS.PORTS.BACKEND;
-export const DEFAULT_MCP_PORT = MCP_CONSTANTS.PORTS.DEFAULT;
 
 // Role constants
 export const AGENT_ROLES = AGENTMUX_CONSTANTS.ROLES;

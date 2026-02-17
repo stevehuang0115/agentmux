@@ -1,0 +1,20 @@
+{
+  "id": "orc-restart-agentmux",
+  "name": "Restart AgentMux",
+  "description": "Gracefully restart the AgentMux backend server. Sessions are saved and auto-resumed on restart.",
+  "category": "management",
+  "skillType": "claude-skill",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "script",
+    "script": {
+      "file": "execute.sh",
+      "interpreter": "bash",
+      "timeoutMs": 30000
+    }
+  },
+  "assignableRoles": ["orchestrator"],
+  "triggers": ["restart agentmux", "restart backend", "restart server", "reboot server"],
+  "tags": ["system", "management", "restart", "server"],
+  "version": "1.0.0"
+}

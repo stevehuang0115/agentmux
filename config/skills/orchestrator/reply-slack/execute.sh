@@ -13,11 +13,15 @@ Usage:
   # Flag-based invocation with multi-line text from stdin
   cat message.txt | bash execute.sh --channel C0123
 
+  # Upload an image with optional comment
+  bash execute.sh --channel C0123 --image /path/to/screenshot.png --text "Here's the result"
+
 Options:
   --channel | -c   Slack channel ID (required unless JSON provided)
   --text    | -t   Message text (optional when piping stdin)
   --text-file     Read message text from the specified file path
   --thread  | -r   Slack thread timestamp for replies
+  --image   | -i   Path to image file to upload (uses /api/slack/upload-image)
   --json    | -j   Raw JSON payload (same as legacy usage)
   --help    | -h   Show this help
 EOF_USAGE
@@ -27,6 +31,7 @@ INPUT_JSON=""
 CHANNEL_ID=""
 TEXT=""
 THREAD_TS=""
+IMAGE_PATH=""
 
 # Detect legacy JSON argument as the first parameter
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -52,6 +57,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --thread|-r)
       THREAD_TS="$2"
+      shift 2
+      ;;
+    --image|-i)
+      IMAGE_PATH="$2"
       shift 2
       ;;
     --conversation|-C)
@@ -100,19 +109,35 @@ fi
 
 require_param "channelId" "$CHANNEL_ID"
 
-if [ -z "$TEXT" ]; then
+# When uploading an image, text is optional (serves as initial_comment)
+if [ -z "$IMAGE_PATH" ] && [ -z "$TEXT" ]; then
   error_exit "Slack message text is required. Pass --text, --text-file, pipe stdin, or include it in the JSON payload."
 fi
 
-if [ -n "$THREAD_TS" ]; then
-  BODY=$(jq -n --arg channelId "$CHANNEL_ID" --arg text "$TEXT" --arg threadTs "$THREAD_TS" \
-    '{channelId: $channelId, text: $text, threadTs: $threadTs}')
-else
-  BODY=$(jq -n --arg channelId "$CHANNEL_ID" --arg text "$TEXT" \
-    '{channelId: $channelId, text: $text}')
-fi
+if [ -n "$IMAGE_PATH" ]; then
+  # Image upload mode — use /api/slack/upload-image
+  BODY=$(jq -n \
+    --arg channelId "$CHANNEL_ID" \
+    --arg filePath "$IMAGE_PATH" \
+    --arg initialComment "${TEXT:-}" \
+    --arg threadTs "${THREAD_TS:-}" \
+    '{channelId: $channelId, filePath: $filePath} +
+     (if $initialComment != "" then {initialComment: $initialComment} else {} end) +
+     (if $threadTs != "" then {threadTs: $threadTs} else {} end)')
 
-api_call POST "/slack/send" "$BODY"
+  api_call POST "/slack/upload-image" "$BODY"
+else
+  # Text-only mode — use /api/slack/send
+  if [ -n "$THREAD_TS" ]; then
+    BODY=$(jq -n --arg channelId "$CHANNEL_ID" --arg text "$TEXT" --arg threadTs "$THREAD_TS" \
+      '{channelId: $channelId, text: $text, threadTs: $threadTs}')
+  else
+    BODY=$(jq -n --arg channelId "$CHANNEL_ID" --arg text "$TEXT" \
+      '{channelId: $channelId, text: $text}')
+  fi
+
+  api_call POST "/slack/send" "$BODY"
+fi
 
 # Emit a [NOTIFY] block so the chat service/logs capture this reply and
 # unblock any pending Slack queue items. conversationId is optional –
@@ -129,6 +154,13 @@ api_call POST "/slack/send" "$BODY"
     echo "threadTs: $THREAD_TS"
   fi
   echo "---"
-  printf '%s\n' "$TEXT"
+  if [ -n "$IMAGE_PATH" ]; then
+    printf 'Image uploaded: %s\n' "$IMAGE_PATH"
+    if [ -n "$TEXT" ]; then
+      printf '%s\n' "$TEXT"
+    fi
+  else
+    printf '%s\n' "$TEXT"
+  fi
   echo "[/NOTIFY]"
 } >&2
