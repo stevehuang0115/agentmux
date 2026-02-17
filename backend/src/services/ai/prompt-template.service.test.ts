@@ -1,4 +1,4 @@
-import { PromptTemplateService, TaskAssignmentData, AutoAssignmentData } from './prompt-template.service';
+import { PromptTemplateService, TaskAssignmentData } from './prompt-template.service';
 import { readFile } from 'fs/promises';
 import path from 'path';
 
@@ -18,12 +18,6 @@ describe('PromptTemplateService', () => {
     taskMilestone: 'sprint-1'
   };
 
-  const mockAutoAssignmentData: AutoAssignmentData = {
-    projectName: 'Test Project',
-    projectPath: '/test/project',
-    currentTimestamp: '2023-01-01T12:00:00Z'
-  };
-
   beforeEach(() => {
     jest.clearAllMocks();
     (path.join as jest.Mock).mockImplementation((...parts) => parts.join('/'));
@@ -39,7 +33,7 @@ describe('PromptTemplateService', () => {
     it('should use custom templates path if provided', () => {
       const customPath = '/custom/templates';
       const customService = new PromptTemplateService(customPath);
-      
+
       expect(customService).toBeDefined();
     });
   });
@@ -138,7 +132,7 @@ More content after
       expect(result).toContain('📋 TASK ASSIGNMENT - Test Task');
       expect(result).toContain('**Task File:** `/test/project/.agentmux/tasks/sprint-1/open/task-001.md`');
       expect(result).toContain('**Priority:** high');
-      expect(result).toContain('accept_task({ taskPath: \'/test/project/.agentmux/tasks/sprint-1/open/task-001.md\', memberId: \'[your_member_id]\' })');
+      expect(result).toContain('accept_task({ absoluteTaskPath: \'/test/project/.agentmux/tasks/sprint-1/open/task-001.md\', memberId: \'[your_member_id]\' })');
     });
 
     it('should use default milestone in fallback template', async () => {
@@ -172,162 +166,6 @@ Content after
       const result = await service.getTeamMemberTaskAssignmentPrompt(mockTaskData);
 
       expect(result).toContain('📋 TASK ASSIGNMENT');
-    });
-  });
-
-  // Removed processTemplate tests as it's a private method - not accessible for testing
-  // Template processing is tested through public methods
-  /*
-  describe.skip('processTemplate (private method)', () => {
-    // Private method tests removed
-
-    it('should replace single placeholder', () => {
-      const template = 'Hello {name}!';
-      const data = { name: 'World' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Hello World!');
-    });
-
-    it('should replace multiple placeholders', () => {
-      const template = '{greeting} {name}, welcome to {place}!';
-      const data = { 
-        greeting: 'Hello',
-        name: 'Alice', 
-        place: 'Wonderland'
-      };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Hello Alice, welcome to Wonderland!');
-    });
-
-    it('should replace multiple occurrences of same placeholder', () => {
-      const template = '{name} says hello to {name}';
-      const data = { name: 'Bob' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Bob says hello to Bob');
-    });
-
-    it('should handle missing placeholders by replacing with empty string', () => {
-      const template = 'Hello {name}, your age is {age}';
-      const data = { name: 'Charlie' }; // age is missing
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Hello Charlie, your age is ');
-    });
-
-    it('should handle empty template', () => {
-      const template = '';
-      const data = { name: 'Test' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('');
-    });
-
-    it('should handle empty data', () => {
-      const template = 'Hello {name}!';
-      const data = {};
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Hello !');
-    });
-
-    it('should handle template with no placeholders', () => {
-      const template = 'Static text with no placeholders';
-      const data = { name: 'Test' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Static text with no placeholders');
-    });
-
-    it('should handle special characters in data values', () => {
-      const template = 'Message: {message}';
-      const data = { message: 'Special chars: $100, 50% off, @user, #hashtag!' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Message: Special chars: $100, 50% off, @user, #hashtag!');
-    });
-
-    it('should handle null and undefined values', () => {
-      const template = 'Value1: {val1}, Value2: {val2}';
-      const data = { val1: null, val2: undefined };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Value1: , Value2: ');
-    });
-
-    it('should handle nested braces correctly', () => {
-      const template = 'Config: { "setting": "{value}" }';
-      const data = { value: 'test' };
-
-      const result = templateMethod(template, data);
-
-      expect(result).toBe('Config: { "setting": "test" }');
-    });
-  });
-  */
-
-  describe('getAutoAssignmentPrompt', () => {
-    const mockAutoAssignmentTemplate = `
-# Auto-Assignment Orchestrator Prompt Template
-
-📋 **AUTO PROJECT ASSIGNMENT CHECK**
-
-**Project:** {projectName}
-**Path:** {projectPath}
-**Check Time:** {currentTimestamp}
-
-## INSTRUCTIONS
-
-You are performing an automated 15-minute check for project **{projectName}**. 
-Your task is to check team progress and assign available tasks to idle team members.
-    `;
-
-    beforeEach(() => {
-      (readFile as jest.Mock).mockResolvedValue(mockAutoAssignmentTemplate);
-    });
-
-    it('should load and process auto-assignment template', async () => {
-      const result = await service.getAutoAssignmentPrompt(mockAutoAssignmentData);
-
-      expect(readFile).toHaveBeenCalledWith('/app/config/orchestrator_tasks/prompts/auto-assignment-orchestrator-prompt-template.md', 'utf-8');
-      expect(result).toContain('**Project:** Test Project');
-      expect(result).toContain('**Path:** /test/project');
-      expect(result).toContain('**Check Time:** 2023-01-01T12:00:00Z');
-      expect(result).toContain('project **Test Project**');
-    });
-
-    it('should replace all placeholders in auto-assignment template', async () => {
-      const result = await service.getAutoAssignmentPrompt(mockAutoAssignmentData);
-
-      expect(result).not.toContain('{projectName}');
-      expect(result).not.toContain('{projectPath}');
-      expect(result).not.toContain('{currentTimestamp}');
-    });
-
-    it('should handle custom templates path', async () => {
-      const customService = new PromptTemplateService('/custom/templates');
-      
-      await customService.getAutoAssignmentPrompt(mockAutoAssignmentData);
-
-      expect(readFile).toHaveBeenCalledWith('/custom/templates/auto-assignment-orchestrator-prompt-template.md', 'utf-8');
-    });
-
-    it('should handle template loading errors', async () => {
-      (readFile as jest.Mock).mockRejectedValue(new Error('File not found'));
-
-      await expect(service.getAutoAssignmentPrompt(mockAutoAssignmentData))
-        .rejects.toThrow('File not found');
     });
   });
 });

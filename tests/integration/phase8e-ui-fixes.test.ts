@@ -482,7 +482,7 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
       }
 
       // Verify workflow completed all expected operations
-      expect(ticketResponse.body.success).toBe(true);
+      expect(ticketsResponse.body.success).toBe(true);
       expect(Array.isArray(tickets)).toBe(true);
     });
   });

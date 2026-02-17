@@ -11,22 +11,28 @@ import type { ApiController } from '../api.controller.js';
 jest.mock('fs');
 jest.mock('fs/promises');
 jest.mock('path');
+jest.mock('../../utils/prompt-resolver.js', () => ({
+  resolveStepConfig: jest.fn<any>(),
+}));
+jest.mock('../../services/agent/agent-heartbeat.service.js', () => ({
+  updateAgentHeartbeat: jest.fn<any>().mockResolvedValue(undefined),
+}));
 
 describe('Task Management Handlers', () => {
-  let mockApiController: Partial<ApiController>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
 
   // Mock ApiController dependencies
   const mockStorageService = {
-    getProjects: jest.fn(),
-    getTeams: jest.fn(),
+    getProjects: jest.fn<any>(),
+    getTeams: jest.fn<any>(),
   };
 
   const mockTaskTrackingService = {
-    assignTask: jest.fn(),
-    getAllInProgressTasks: jest.fn(),
-    removeTask: jest.fn(),
+    assignTask: jest.fn<any>(),
+    getAllInProgressTasks: jest.fn<any>(),
+    removeTask: jest.fn<any>(),
+    recoverAbandonedTasks: jest.fn<any>(),
   };
 
   const fullMockApiController = {
@@ -37,160 +43,19 @@ describe('Task Management Handlers', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Mock ApiController methods
-    mockApiController = {
-      assignTask: jest.fn(),
-      completeTask: jest.fn(),
-      blockTask: jest.fn(),
-      takeNextTask: jest.fn(),
-      syncTaskStatus: jest.fn(),
-      getTeamProgress: jest.fn(),
-      createTasksFromConfig: jest.fn(),
-    } as any;
-
     mockRequest = {
-      body: { taskId: 'task-123', memberId: 'member-456' },
+      body: { taskPath: '/test/open/task.md', sessionName: 'session-123' },
       params: { id: 'test-id' }
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
   afterEach(() => {
     jest.resetAllMocks();
-  });
-
-  describe('assignTask', () => {
-    it('should delegate to ApiController assignTask method', async () => {
-      await taskManagementHandlers.assignTask.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.assignTask).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('completeTask', () => {
-    it('should delegate to ApiController completeTask method', async () => {
-      await taskManagementHandlers.completeTask.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.completeTask).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('blockTask', () => {
-    it('should delegate to ApiController blockTask method', async () => {
-      await taskManagementHandlers.blockTask.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.blockTask).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('takeNextTask', () => {
-    it('should delegate to ApiController takeNextTask method', async () => {
-      await taskManagementHandlers.takeNextTask.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.takeNextTask).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('syncTaskStatus', () => {
-    it('should delegate to ApiController syncTaskStatus method', async () => {
-      await taskManagementHandlers.syncTaskStatus.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.syncTaskStatus).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('getTeamProgress', () => {
-    it('should delegate to ApiController getTeamProgress method', async () => {
-      await taskManagementHandlers.getTeamProgress.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.getTeamProgress).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('createTasksFromConfig', () => {
-    it('should delegate to ApiController createTasksFromConfig method', async () => {
-      await taskManagementHandlers.createTasksFromConfig.call(
-        mockApiController as ApiController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockApiController.createTasksFromConfig).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
-  });
-
-  describe('Error handling', () => {
-    it('should propagate errors from delegated methods', async () => {
-      const testError = new Error('Delegation error');
-      (mockApiController.assignTask as jest.Mock).mockRejectedValue(testError);
-
-      await expect(
-        taskManagementHandlers.assignTask.call(
-          mockApiController as ApiController,
-          mockRequest as Request,
-          mockResponse as Response
-        )
-      ).rejects.toThrow('Delegation error');
-    });
-
-    it('should handle missing methods gracefully', async () => {
-      const incompleteController = {} as ApiController;
-
-      // This should not throw, but may return undefined or similar
-      const result = await taskManagementHandlers.assignTask.call(
-        incompleteController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(result).toBeUndefined();
-    });
-  });
-
-  describe('Context preservation', () => {
-    it('should preserve context when delegating calls', async () => {
-      const contextAwareController = {
-        assignTask: jest.fn().mockImplementation(function(this: any) {
-          return this;
-        })
-      } as any;
-
-      const result = await taskManagementHandlers.assignTask.call(
-        contextAwareController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(contextAwareController.assignTask).toHaveBeenCalled();
-    });
   });
 
   describe('All handlers availability', () => {
@@ -203,37 +68,21 @@ describe('Task Management Handlers', () => {
       expect(typeof taskManagementHandlers.getTeamProgress).toBe('function');
       expect(typeof taskManagementHandlers.createTasksFromConfig).toBe('function');
     });
-
-    it('should handle async operations properly', async () => {
-      const asyncController = {
-        assignTask: jest.fn().mockResolvedValue({ success: true })
-      } as any;
-
-      const result = await taskManagementHandlers.assignTask.call(
-        asyncController,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(result).toEqual({ success: true });
-      expect(asyncController.assignTask).toHaveBeenCalledWith(mockRequest, mockResponse);
-    });
   });
 
-  // COMPREHENSIVE LOGIC TESTS FOR ACTUAL FUNCTIONS
+  // Tests for the actual assignTask function logic
   describe('assignTask Function Logic', () => {
     let mockReq: Partial<Request>;
-    let mockRes: Partial<Response>;
-    let jsonSpy: jest.Mock;
-    let statusSpy: jest.Mock;
+    let mockRes: any;
+    let jsonSpy: jest.Mock<any>;
+    let statusSpy: jest.Mock<any>;
 
     const validTaskPath = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
-    const validMemberId = 'member123';
-    const validSessionId = 'session456';
+    const validSessionName = 'session-123';
 
     beforeEach(() => {
-      jsonSpy = jest.fn();
-      statusSpy = jest.fn().mockReturnValue({ json: jsonSpy });
+      jsonSpy = jest.fn<any>();
+      statusSpy = jest.fn<any>().mockReturnValue({ json: jsonSpy });
 
       mockRes = {
         status: statusSpy,
@@ -243,8 +92,7 @@ describe('Task Management Handlers', () => {
       mockReq = {
         body: {
           taskPath: validTaskPath,
-          memberId: validMemberId,
-          sessionId: validSessionId,
+          sessionName: validSessionName,
         },
       };
 
@@ -277,56 +125,60 @@ describe('Task Management Handlers', () => {
         });
       });
 
-      it('should return 400 when memberId is missing', async () => {
-        mockReq.body!.memberId = undefined;
+      it('should return 400 when sessionName is missing', async () => {
+        mockReq.body!.sessionName = undefined;
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
         expect(statusSpy).toHaveBeenCalledWith(400);
         expect(jsonSpy).toHaveBeenCalledWith({
           success: false,
-          error: 'memberId is required',
+          error: 'sessionName is required',
         });
       });
 
-      it('should return 400 when memberId is empty string', async () => {
-        mockReq.body!.memberId = '';
+      it('should return 400 when sessionName is empty string', async () => {
+        mockReq.body!.sessionName = '';
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
         expect(statusSpy).toHaveBeenCalledWith(400);
         expect(jsonSpy).toHaveBeenCalledWith({
           success: false,
-          error: 'memberId is required',
+          error: 'sessionName is required',
         });
       });
     });
 
     describe('File validation', () => {
-      it('should return 404 when task file does not exist', async () => {
-        (existsSync as jest.Mock).mockReturnValue(false);
+      it('should return 200 with success=false when task file does not exist', async () => {
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
-        expect(statusSpy).toHaveBeenCalledWith(404);
-        expect(jsonSpy).toHaveBeenCalledWith({
-          success: false,
-          error: 'Task file not found',
-        });
+        expect(statusSpy).toHaveBeenCalledWith(200);
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: false,
+            error: 'Task file does not exist at the specified path',
+          })
+        );
       });
 
-      it('should return 400 when task is not in open folder', async () => {
+      it('should return 200 with success=false when task is not in open folder', async () => {
         const invalidPath = '/Users/test/project/.agentmux/tasks/m0_initial_tasks/in_progress/task.md';
         mockReq.body!.taskPath = invalidPath;
-        (existsSync as jest.Mock).mockReturnValue(true);
+        (existsSync as jest.Mock<any>).mockReturnValue(true);
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
-        expect(statusSpy).toHaveBeenCalledWith(400);
-        expect(jsonSpy).toHaveBeenCalledWith({
-          success: false,
-          error: 'Task must be in open/ folder to be assigned',
-        });
+        expect(statusSpy).toHaveBeenCalledWith(200);
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: false,
+            error: 'Task is not in the correct folder for assignment',
+          })
+        );
       });
     });
 
@@ -334,8 +186,8 @@ describe('Task Management Handlers', () => {
       it('should return 400 with current broken regex for gas-vibe-coder path', async () => {
         const taskPathWithDashes = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
         mockReq.body!.taskPath = taskPathWithDashes;
-        (existsSync as jest.Mock).mockReturnValue(true);
-        (readFile as jest.Mock).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
+        (existsSync as jest.Mock<any>).mockReturnValue(true);
+        (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
@@ -349,7 +201,14 @@ describe('Task Management Handlers', () => {
       it('should return 400 when cannot determine project from task path - no .agentmux', async () => {
         const invalidPath = '/Users/test/project/tasks/open/task.md';
         mockReq.body!.taskPath = invalidPath;
-        (existsSync as jest.Mock).mockReturnValue(true);
+        (existsSync as jest.Mock<any>).mockReturnValue(true);
+
+        await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        // Without /open/ in path it fails at the open folder check
+        // Let's use a path that has /open/ but no .agentmux
+        mockReq.body!.taskPath = '/Users/test/project/open/task.md';
+        (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
@@ -363,12 +222,12 @@ describe('Task Management Handlers', () => {
 
     describe('Project and team validation', () => {
       beforeEach(() => {
-        (existsSync as jest.Mock).mockReturnValue(true);
-        (readFile as jest.Mock).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
+        (existsSync as jest.Mock<any>).mockReturnValue(true);
+        (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
 
         // Mock the path matching to pass (we'll test the fix separately)
-        jest.spyOn(String.prototype, 'match').mockImplementation(function(this: string, regexp: RegExp) {
-          if (regexp.toString() === '/\/([^\/]+)\.agentmux/') {
+        jest.spyOn(String.prototype, 'match').mockImplementation(function(this: string, regexp: string | RegExp) {
+          if (regexp.toString() === '/\\/([^\\/]+)\\.agentmux/') {
             // Simulate fixed regex behavior
             if (this.includes('/.agentmux/')) {
               const match = this.match(/\/([^\/]+)\/\.agentmux/);
@@ -376,8 +235,8 @@ describe('Task Management Handlers', () => {
             }
             return null;
           }
-          return String.prototype.match.call(this, regexp);
-        });
+          return String.prototype.match.call(this, regexp as RegExp);
+        } as any);
       });
 
       afterEach(() => {
@@ -396,14 +255,14 @@ describe('Task Management Handlers', () => {
         });
       });
 
-      it('should return 404 when team is not found for member', async () => {
+      it('should return 404 when team member is not found for sessionName', async () => {
         mockStorageService.getProjects.mockResolvedValue([{
           id: 'project1',
           path: '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder',
         }]);
         mockStorageService.getTeams.mockResolvedValue([{
           id: 'team1',
-          members: [{ id: 'other-member', name: 'Other Member' }],
+          members: [{ id: 'other-member', name: 'Other Member', sessionName: 'other-session' }],
         }]);
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
@@ -411,7 +270,7 @@ describe('Task Management Handlers', () => {
         expect(statusSpy).toHaveBeenCalledWith(404);
         expect(jsonSpy).toHaveBeenCalledWith({
           success: false,
-          error: 'Team not found for member',
+          error: 'Team member not found for sessionName',
         });
       });
     });

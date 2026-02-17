@@ -1,4 +1,4 @@
-import { ConfigService } from '../../backend/src/services/config.service';
+import { ConfigService } from './config.service.js';
 
 // Mock fs modules
 jest.mock('fs/promises');
@@ -181,7 +181,7 @@ describe('ConfigService', () => {
 
 	describe('Boolean Environment Variables', () => {
 		test('should parse boolean environment variables correctly', () => {
-			process.env.AGENTMUX_MCP_ENABLED = 'false';
+			process.env.MCP_ENABLED = 'false';
 			process.env.BACKUP_ENABLED = 'true';
 			process.env.RATE_LIMIT_ENABLED = 'false';
 

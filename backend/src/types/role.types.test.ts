@@ -35,13 +35,14 @@ describe('Role Types', () => {
         'design',
         'sales',
         'support',
+        'automation',
       ];
 
       expect(ROLE_CATEGORIES).toEqual(expectedCategories);
     });
 
-    it('should have exactly 6 categories', () => {
-      expect(ROLE_CATEGORIES).toHaveLength(6);
+    it('should have exactly 7 categories', () => {
+      expect(ROLE_CATEGORIES).toHaveLength(7);
     });
   });
 
@@ -57,6 +58,7 @@ describe('Role Types', () => {
         assignedSkills: [],
         isDefault: false,
         isBuiltin: false,
+        isHidden: false,
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
       };
@@ -77,6 +79,7 @@ describe('Role Types', () => {
         assignedSkills: ['skill-1', 'skill-2', 'skill-3'],
         isDefault: true,
         isBuiltin: true,
+        isHidden: false,
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-06-01T12:00:00Z',
       };
@@ -154,6 +157,7 @@ describe('Role Types', () => {
         assignedSkills: [],
         isDefault: false,
         isBuiltin: false,
+        isHidden: false,
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z',
         systemPromptContent: 'You are a skilled software developer.',
@@ -174,6 +178,7 @@ describe('Role Types', () => {
         skillCount: 5,
         isDefault: false,
         isBuiltin: true,
+        isHidden: false,
       };
 
       expect(summary.skillCount).toBe(5);
@@ -233,6 +238,7 @@ describe('Role Types', () => {
       expect(isValidRoleCategory('design')).toBe(true);
       expect(isValidRoleCategory('sales')).toBe(true);
       expect(isValidRoleCategory('support')).toBe(true);
+      expect(isValidRoleCategory('automation')).toBe(true);
     });
 
     it('should return false for invalid categories', () => {
@@ -337,6 +343,7 @@ describe('Role Types', () => {
       assignedSkills: ['skill-1', 'skill-2'],
       isDefault: false,
       isBuiltin: true,
+      isHidden: false,
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     };
@@ -526,6 +533,7 @@ describe('Role Types', () => {
       assignedSkills: ['code-review', 'testing'],
       isDefault: false,
       isBuiltin: true,
+      isHidden: false,
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     };
@@ -596,6 +604,7 @@ describe('Role Types', () => {
       assignedSkills: ['skill-1', 'skill-2'],
       isDefault: false,
       isBuiltin: true,
+      isHidden: false,
       createdAt: '2024-01-01T00:00:00Z',
       updatedAt: '2024-01-01T00:00:00Z',
     };

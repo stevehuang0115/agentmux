@@ -1,5 +1,4 @@
 import { spawn, ChildProcess } from 'child_process';
-import { fileURLToPath } from 'url';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SessionInfo } from '../../types/index.js';
@@ -51,26 +50,20 @@ export class TmuxCommandService {
 	}
 
 	/**
-	 * Find the project root by looking for package.json
+	 * Find the project root by looking for package.json.
+	 * Walks up from process.cwd() to locate the nearest package.json.
 	 */
 	private findProjectRoot(): string {
-		// Get current file directory
-		const currentDir = path.dirname(fileURLToPath(import.meta.url));
-
-		// Walk up directories to find package.json
-		let dir = currentDir;
+		let dir = process.cwd();
 		while (dir !== path.dirname(dir)) {
 			try {
 				const packagePath = path.join(dir, 'package.json');
-				// Synchronously check if package.json exists
 				require('fs').accessSync(packagePath);
 				return dir;
 			} catch {
 				dir = path.dirname(dir);
 			}
 		}
-
-		// Fallback to current working directory
 		return process.cwd();
 	}
 

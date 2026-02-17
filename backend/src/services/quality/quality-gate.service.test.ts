@@ -4,32 +4,31 @@
  * @module services/quality/quality-gate.service.test
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { exec } from 'child_process';
 import * as fs from 'fs/promises';
 import { QualityGateService } from './quality-gate.service.js';
 import { QualityGate, GateConfig } from '../../types/quality-gate.types.js';
 
 // Mock child_process
-vi.mock('child_process', () => ({
-  exec: vi.fn(),
+jest.mock('child_process', () => ({
+  exec: jest.fn(),
 }));
 
 // Mock fs/promises
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(),
-  access: vi.fn(),
+jest.mock('fs/promises', () => ({
+  readFile: jest.fn(),
+  access: jest.fn(),
 }));
 
 // Mock logger
-vi.mock('../core/logger.service.js', () => ({
+jest.mock('../core/logger.service.js', () => ({
   LoggerService: {
     getInstance: () => ({
       createComponentLogger: () => ({
-        debug: vi.fn(),
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
+        debug: jest.fn(),
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
       }),
     }),
   },
@@ -37,14 +36,14 @@ vi.mock('../core/logger.service.js', () => ({
 
 describe('QualityGateService', () => {
   let service: QualityGateService;
-  const mockExec = exec as unknown as ReturnType<typeof vi.fn>;
-  const mockReadFile = fs.readFile as unknown as ReturnType<typeof vi.fn>;
-  const mockAccess = fs.access as unknown as ReturnType<typeof vi.fn>;
+  const mockExec = exec as unknown as jest.Mock;
+  const mockReadFile = fs.readFile as unknown as jest.Mock;
+  const mockAccess = fs.access as unknown as jest.Mock;
 
   beforeEach(() => {
     QualityGateService.clearInstance();
     service = QualityGateService.getInstance();
-    vi.clearAllMocks();
+    jest.clearAllMocks();
 
     // Default mock for git branch
     mockExec.mockImplementation((cmd: string, _options: unknown, callback?: Function) => {

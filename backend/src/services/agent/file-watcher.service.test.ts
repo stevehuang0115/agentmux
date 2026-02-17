@@ -1,16 +1,16 @@
 import { FileWatcherService, FileChangeEvent, WatcherStats } from './file-watcher.service';
-import { LoggerService } from './logger.service';
-import { ConfigService } from './config.service';
-import { StorageService } from './storage.service';
+import { LoggerService } from '../core/logger.service';
+import { ConfigService } from '../core/config.service';
+import { StorageService } from '../core/storage.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
 // Mock dependencies
 jest.mock('fs');
 jest.mock('path');
-jest.mock('./logger.service');
-jest.mock('./config.service');
-jest.mock('./storage.service');
+jest.mock('../core/logger.service');
+jest.mock('../core/config.service');
+jest.mock('../core/storage.service');
 
 describe('FileWatcherService', () => {
   let service: FileWatcherService;
@@ -22,7 +22,7 @@ describe('FileWatcherService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    
+
     // Setup mock logger
     mockLogger = {
       info: jest.fn(),
@@ -30,28 +30,28 @@ describe('FileWatcherService', () => {
       error: jest.fn(),
       debug: jest.fn()
     } as any;
-    
+
     (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLogger);
-    
+
     // Setup mock config
     mockConfig = {} as jest.Mocked<ConfigService>;
     (ConfigService.getInstance as jest.Mock).mockReturnValue(mockConfig);
-    
-    // Setup mock storage
+
+    // Setup mock storage - source uses StorageService.getInstance()
     mockStorage = {
       getProjects: jest.fn()
     } as any;
-    (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorage);
-    
+    (StorageService.getInstance as jest.Mock).mockReturnValue(mockStorage);
+
     // Setup mock FSWatcher
     mockWatcher = {
       close: jest.fn(),
       on: jest.fn()
     } as any;
-    
+
     (fs.watch as jest.Mock).mockReturnValue(mockWatcher);
     (fs.existsSync as jest.Mock).mockReturnValue(true);
-    
+
     service = new FileWatcherService();
   });
 
@@ -64,7 +64,7 @@ describe('FileWatcherService', () => {
     it('should initialize with required dependencies', () => {
       expect(LoggerService.getInstance).toHaveBeenCalled();
       expect(ConfigService.getInstance).toHaveBeenCalled();
-      expect(StorageService).toHaveBeenCalled();
+      expect(StorageService.getInstance).toHaveBeenCalled();
     });
   });
 
@@ -77,12 +77,12 @@ describe('FileWatcherService', () => {
     it('should watch project agentmux directory and subdirectories', async () => {
       const projectId = 'test-project';
       const projectPath = '/test/project';
-      
+
       await service.watchProject(projectId, projectPath);
-      
+
       // Should check if .agentmux directory exists
       expect(fs.existsSync).toHaveBeenCalledWith('/resolved/test/project/.agentmux');
-      
+
       // Should create watchers for main directory and subdirectories
       expect(fs.watch).toHaveBeenCalledTimes(5); // main + 4 subdirs
       expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux', { recursive: true }, expect.any(Function));
@@ -90,24 +90,24 @@ describe('FileWatcherService', () => {
       expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/tasks', { recursive: true }, expect.any(Function));
       expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/memory', { recursive: true }, expect.any(Function));
       expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/prompts', { recursive: true }, expect.any(Function));
-      
+
       expect(service.isWatching(projectId)).toBe(true);
     });
 
     it('should warn and return early if agentmux directory does not exist', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(false);
-      
+
       await service.watchProject('test-project', '/test/project');
-      
+
       expect(mockLogger.warn).toHaveBeenCalledWith('AgentMux directory does not exist: /resolved/test/project/.agentmux');
       expect(fs.watch).not.toHaveBeenCalled();
     });
 
     it('should stop existing watcher before creating new one', async () => {
       const stopWatchingSpy = jest.spyOn(service, 'stopWatchingProject').mockResolvedValue();
-      
+
       await service.watchProject('test-project', '/test/project');
-      
+
       expect(stopWatchingSpy).toHaveBeenCalledWith('test-project');
     });
 
@@ -115,7 +115,7 @@ describe('FileWatcherService', () => {
       (fs.existsSync as jest.Mock).mockImplementation(() => {
         throw new Error('File system error');
       });
-      
+
       await expect(service.watchProject('test-project', '/test/project')).rejects.toThrow('File system error');
       expect(mockLogger.error).toHaveBeenCalledWith(
         'Failed to start watching project test-project:',
@@ -133,14 +133,14 @@ describe('FileWatcherService', () => {
 
     it('should close all watchers for the project', async () => {
       await service.stopWatchingProject('test-project');
-      
+
       expect(mockWatcher.close).toHaveBeenCalledTimes(5); // main + 4 subdirs
       expect(service.isWatching('test-project')).toBe(false);
     });
 
     it('should log when stopping watchers', async () => {
       await service.stopWatchingProject('test-project');
-      
+
       expect(mockLogger.info).toHaveBeenCalledWith('Stopped file watching for project test-project');
     });
   });
@@ -152,40 +152,40 @@ describe('FileWatcherService', () => {
       (path.resolve as jest.Mock).mockImplementation((p) => `/resolved${p}`);
       (path.join as jest.Mock).mockImplementation((...parts) => parts.join('/'));
       (path.relative as jest.Mock).mockImplementation((from, to) => to.replace(from, ''));
-      
+
       await service.watchProject('test-project', '/test/project');
-      
+
       // Get the callback function passed to fs.watch
       eventCallback = (fs.watch as jest.Mock).mock.calls[0][2];
     });
 
     it('should ignore files without filename', () => {
       const handleFileChangeSpy = jest.spyOn(service as any, 'handleFileChange');
-      
+
       eventCallback('change'); // No filename
-      
+
       expect(handleFileChangeSpy).not.toHaveBeenCalled();
     });
 
     it('should filter out ignored files', () => {
       const shouldIgnoreFileSpy = jest.spyOn(service as any, 'shouldIgnoreFile').mockReturnValue(true);
       const handleFileChangeSpy = jest.spyOn(service as any, 'handleFileChange');
-      
+
       eventCallback('change', '.hidden-file');
-      
+
       expect(shouldIgnoreFileSpy).toHaveBeenCalledWith('.hidden-file', expect.any(String));
       expect(handleFileChangeSpy).not.toHaveBeenCalled();
     });
 
     it('should debounce file change events', () => {
-      const processFileChangeSpy = jest.spyOn(service as any, 'processFileChange').mockResolvedValue();
-      
+      const processFileChangeSpy = jest.spyOn(service as any, 'processFileChange').mockResolvedValue(undefined);
+
       eventCallback('change', 'test-file.txt');
       eventCallback('change', 'test-file.txt'); // Second event should be debounced
-      
+
       // Fast forward past debounce time
       jest.advanceTimersByTime(600);
-      
+
       expect(processFileChangeSpy).toHaveBeenCalledTimes(1);
     });
   });
@@ -198,7 +198,7 @@ describe('FileWatcherService', () => {
     it('should create file change event for created file', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(true);
       const emitSpy = jest.spyOn(service, 'emit');
-      
+
       await (service as any).processFileChange(
         'rename',
         '/project/.agentmux/specs/test-spec.md',
@@ -206,7 +206,7 @@ describe('FileWatcherService', () => {
         'test-project',
         'specs'
       );
-      
+
       expect(emitSpy).toHaveBeenCalledWith('fileChange', expect.objectContaining({
         type: 'created',
         filepath: '/project/.agentmux/specs/test-spec.md',
@@ -219,7 +219,7 @@ describe('FileWatcherService', () => {
     it('should create file change event for deleted file', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(false);
       const emitSpy = jest.spyOn(service, 'emit');
-      
+
       await (service as any).processFileChange(
         'rename',
         '/project/.agentmux/specs/test-spec.md',
@@ -227,7 +227,7 @@ describe('FileWatcherService', () => {
         'test-project',
         'specs'
       );
-      
+
       expect(emitSpy).toHaveBeenCalledWith('fileChange', expect.objectContaining({
         type: 'deleted'
       }));
@@ -236,7 +236,7 @@ describe('FileWatcherService', () => {
     it('should create file change event for modified file', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(true);
       const emitSpy = jest.spyOn(service, 'emit');
-      
+
       await (service as any).processFileChange(
         'change',
         '/project/.agentmux/specs/test-spec.md',
@@ -244,7 +244,7 @@ describe('FileWatcherService', () => {
         'test-project',
         'specs'
       );
-      
+
       expect(emitSpy).toHaveBeenCalledWith('fileChange', expect.objectContaining({
         type: 'modified'
       }));
@@ -253,7 +253,7 @@ describe('FileWatcherService', () => {
     it('should trigger specific actions based on file category', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(true);
       const emitSpy = jest.spyOn(service, 'emit');
-      
+
       await (service as any).processFileChange(
         'change',
         '/project/.agentmux/specs/test-spec.md',
@@ -261,7 +261,7 @@ describe('FileWatcherService', () => {
         'test-project',
         'specs'
       );
-      
+
       expect(emitSpy).toHaveBeenCalledWith('contextRefresh', { projectId: 'test-project', reason: 'specs_changed' });
       expect(emitSpy).toHaveBeenCalledWith('projectChanged', {
         projectId: 'test-project',
@@ -272,20 +272,19 @@ describe('FileWatcherService', () => {
   });
 
   describe('triggerFileSpecificActions', () => {
-    const mockEvent: FileChangeEvent = {
-      type: 'modified',
-      filepath: '/test/file.md',
-      relativePath: 'file.md',
-      timestamp: new Date(),
-      projectId: 'test-project',
-      category: 'tasks'
-    };
-
     it('should trigger tasks changed event for tasks category', async () => {
       const emitSpy = jest.spyOn(service, 'emit');
-      
-      await (service as any).triggerFileSpecificActions(mockEvent);
-      
+      const event: FileChangeEvent = {
+        type: 'modified',
+        filepath: '/test/file.md',
+        relativePath: 'file.md',
+        timestamp: new Date(),
+        projectId: 'test-project',
+        category: 'tasks'
+      };
+
+      await (service as any).triggerFileSpecificActions(event);
+
       expect(emitSpy).toHaveBeenCalledWith('tasksChanged', {
         projectId: 'test-project',
         filepath: '/test/file.md'
@@ -293,11 +292,18 @@ describe('FileWatcherService', () => {
     });
 
     it('should trigger memory updated event for memory category', async () => {
-      mockEvent.category = 'memory';
       const emitSpy = jest.spyOn(service, 'emit');
-      
-      await (service as any).triggerFileSpecificActions(mockEvent);
-      
+      const event: FileChangeEvent = {
+        type: 'modified',
+        filepath: '/test/file.md',
+        relativePath: 'file.md',
+        timestamp: new Date(),
+        projectId: 'test-project',
+        category: 'memory'
+      };
+
+      await (service as any).triggerFileSpecificActions(event);
+
       expect(emitSpy).toHaveBeenCalledWith('memoryUpdated', {
         projectId: 'test-project',
         filepath: '/test/file.md'
@@ -305,11 +311,18 @@ describe('FileWatcherService', () => {
     });
 
     it('should trigger prompts changed event for prompts category', async () => {
-      mockEvent.category = 'prompts';
       const emitSpy = jest.spyOn(service, 'emit');
-      
-      await (service as any).triggerFileSpecificActions(mockEvent);
-      
+      const event: FileChangeEvent = {
+        type: 'modified',
+        filepath: '/test/file.md',
+        relativePath: 'file.md',
+        timestamp: new Date(),
+        projectId: 'test-project',
+        category: 'prompts'
+      };
+
+      await (service as any).triggerFileSpecificActions(event);
+
       expect(emitSpy).toHaveBeenCalledWith('promptsChanged', {
         projectId: 'test-project',
         filepath: '/test/file.md'
@@ -318,9 +331,17 @@ describe('FileWatcherService', () => {
 
     it('should always emit project changed event', async () => {
       const emitSpy = jest.spyOn(service, 'emit');
-      
-      await (service as any).triggerFileSpecificActions(mockEvent);
-      
+      const event: FileChangeEvent = {
+        type: 'modified',
+        filepath: '/test/file.md',
+        relativePath: 'file.md',
+        timestamp: new Date(),
+        projectId: 'test-project',
+        category: 'tasks'
+      };
+
+      await (service as any).triggerFileSpecificActions(event);
+
       expect(emitSpy).toHaveBeenCalledWith('projectChanged', {
         projectId: 'test-project',
         category: 'tasks',
@@ -332,9 +353,17 @@ describe('FileWatcherService', () => {
       const emitSpy = jest.spyOn(service, 'emit').mockImplementation(() => {
         throw new Error('Emit error');
       });
-      
-      await (service as any).triggerFileSpecificActions(mockEvent);
-      
+      const event: FileChangeEvent = {
+        type: 'modified',
+        filepath: '/test/file.md',
+        relativePath: 'file.md',
+        timestamp: new Date(),
+        projectId: 'test-project',
+        category: 'tasks'
+      };
+
+      await (service as any).triggerFileSpecificActions(event);
+
       expect(mockLogger.error).toHaveBeenCalledWith('Error triggering file-specific actions:', {
         error: 'Emit error'
       });
@@ -376,7 +405,9 @@ describe('FileWatcherService', () => {
   describe('getStats', () => {
     beforeEach(() => {
       // Mock updateStats method to populate event counts
-      jest.spyOn(service as any, 'updateStats').mockImplementation((projectId: string, event: FileChangeEvent) => {
+      jest.spyOn(service as any, 'updateStats').mockImplementation((...args: any[]) => {
+        const projectId = args[0] as string;
+        const event = args[1] as FileChangeEvent;
         const today = new Date().toDateString();
         const key = `${projectId}:${today}`;
         (service as any).eventCounts.set(key, 1);
@@ -390,7 +421,7 @@ describe('FileWatcherService', () => {
       (service as any).watchers.set('watcher2', mockWatcher);
       (service as any).projectWatchers.set('project1', new Set());
       (service as any).projectWatchers.set('project2', new Set());
-      
+
       // Simulate events
       const mockEvent: FileChangeEvent = {
         type: 'created',
@@ -401,9 +432,9 @@ describe('FileWatcherService', () => {
         category: 'specs'
       };
       (service as any).updateStats('project1', mockEvent);
-      
+
       const stats = service.getStats();
-      
+
       expect(stats).toEqual({
         totalWatched: 2,
         activeProjects: 2,
@@ -414,7 +445,7 @@ describe('FileWatcherService', () => {
 
     it('should return null for lastEvent if no events', () => {
       const stats = service.getStats();
-      
+
       expect(stats.lastEvent).toBeNull();
     });
   });
@@ -423,12 +454,12 @@ describe('FileWatcherService', () => {
     it('should return array of watched project IDs', async () => {
       (path.resolve as jest.Mock).mockImplementation((p) => `/resolved${p}`);
       (path.join as jest.Mock).mockImplementation((...parts) => parts.join('/'));
-      
+
       await service.watchProject('project1', '/test1');
       await service.watchProject('project2', '/test2');
-      
+
       const projects = service.getWatchedProjects();
-      
+
       expect(projects).toEqual(['project1', 'project2']);
     });
   });
@@ -442,13 +473,13 @@ describe('FileWatcherService', () => {
 
     beforeEach(() => {
       mockStorage.getProjects.mockResolvedValue(mockProjects as any);
-      (fs.existsSync as jest.Mock).mockImplementation((path) => path !== '/nonexistent');
+      (fs.existsSync as jest.Mock).mockImplementation((p: string) => p !== '/nonexistent');
       jest.spyOn(service, 'watchProject').mockResolvedValue();
     });
 
     it('should watch all active projects with existing paths', async () => {
       await service.watchAllProjects();
-      
+
       expect(service.watchProject).toHaveBeenCalledWith('project1', '/project1');
       expect(service.watchProject).not.toHaveBeenCalledWith('project2', '/project2'); // inactive
       expect(service.watchProject).not.toHaveBeenCalledWith('project3', '/nonexistent'); // path doesn't exist
@@ -456,9 +487,9 @@ describe('FileWatcherService', () => {
 
     it('should handle errors gracefully', async () => {
       mockStorage.getProjects.mockRejectedValue(new Error('Storage error'));
-      
+
       await service.watchAllProjects();
-      
+
       expect(mockLogger.error).toHaveBeenCalledWith('Failed to watch all projects:', {
         error: 'Storage error'
       });
@@ -476,9 +507,9 @@ describe('FileWatcherService', () => {
       // Simulate some debounce timers
       const mockTimer = setTimeout(() => {}, 1000) as any;
       (service as any).debounceTimers.set('test', mockTimer);
-      
+
       await service.cleanup();
-      
+
       expect(mockWatcher.close).toHaveBeenCalledTimes(5); // All watchers closed
       expect(mockLogger.info).toHaveBeenCalledWith('Cleaning up file watchers...');
       expect(mockLogger.info).toHaveBeenCalledWith('File watcher cleanup complete');
@@ -488,9 +519,9 @@ describe('FileWatcherService', () => {
       mockWatcher.close.mockImplementation(() => {
         throw new Error('Close error');
       });
-      
+
       await service.cleanup();
-      
+
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.stringContaining('Error closing watcher'),
         expect.objectContaining({ error: 'Close error' })

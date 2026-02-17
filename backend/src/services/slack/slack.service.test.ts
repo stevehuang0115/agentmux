@@ -108,7 +108,7 @@ describe('SlackService', () => {
       expect(context.channelId).toBe('C123');
       expect(context.userId).toBe('U456');
       expect(context.messageCount).toBe(1);
-      expect(context.conversationId).toBe('slack-C123:thread-1');
+      expect(context.conversationId).toBe('slack-C123-thread-1');
     });
 
     it('should return existing context and increment count', () => {
@@ -236,11 +236,11 @@ describe('SlackService', () => {
     });
   });
 
-  describe('initialize without @slack/bolt installed', () => {
-    it('should throw error when @slack/bolt is not available', async () => {
+  describe('initialize with invalid credentials', () => {
+    it('should throw error when credentials are invalid', async () => {
       const service = getSlackService();
 
-      // Since @slack/bolt is not installed, initialize should throw
+      // @slack/bolt is installed but the test token is invalid, so initialize should reject
       await expect(service.initialize(mockConfig)).rejects.toThrow();
     });
   });

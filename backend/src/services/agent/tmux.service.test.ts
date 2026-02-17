@@ -1,8 +1,9 @@
 import { TmuxService } from './tmux.service.js';
 import { TmuxCommandService } from './tmux-command.service.js';
-import { ClaudeAgentService } from './claude-agent.service.js';
+import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { AgentRegistrationService } from './agent-registration.service.js';
 import { PromptBuilderService } from '../ai/prompt-builder.service.js';
+import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 
 // Mock all dependencies
@@ -20,9 +21,16 @@ jest.mock('../core/logger.service.js', () => ({
 }));
 
 jest.mock('./tmux-command.service.js');
-jest.mock('./claude-agent.service.js');
+jest.mock('./runtime-service.factory.js');
 jest.mock('./agent-registration.service.js');
 jest.mock('../ai/prompt-builder.service.js');
+jest.mock('../core/storage.service.js', () => ({
+	StorageService: {
+		getInstance: jest.fn().mockReturnValue({
+			getOrchestratorStatus: jest.fn().mockResolvedValue(null),
+		}),
+	},
+}));
 
 jest.mock('fs', () => ({
 	accessSync: jest.fn(),
@@ -35,9 +43,9 @@ jest.mock('child_process', () => ({
 describe('TmuxService', () => {
 	let service: TmuxService;
 	let mockTmuxCommand: jest.Mocked<TmuxCommandService>;
-	let mockClaudeAgent: jest.Mocked<ClaudeAgentService>;
 	let mockAgentRegistration: jest.Mocked<AgentRegistrationService>;
 	let mockPromptBuilder: jest.Mocked<PromptBuilderService>;
+	let mockRuntimeService: any;
 
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -57,12 +65,11 @@ describe('TmuxService', () => {
 			clearCurrentCommandLine: jest.fn(),
 		} as any;
 
-		mockClaudeAgent = {
+		mockRuntimeService = {
 			checkClaudeInstallation: jest.fn(),
 			initializeClaudeInSession: jest.fn(),
-			executeClaudeInitScript: jest.fn(),
-			cleanupDetectionCache: jest.fn(),
-		} as any;
+			executeRuntimeInitScript: jest.fn().mockResolvedValue(undefined),
+		};
 
 		mockAgentRegistration = {
 			initializeAgentWithRegistration: jest.fn(),
@@ -73,10 +80,10 @@ describe('TmuxService', () => {
 		} as any;
 
 		// Mock constructors
-		(TmuxCommandService as jest.Mock).mockImplementation(() => mockTmuxCommand);
-		(ClaudeAgentService as jest.Mock).mockImplementation(() => mockClaudeAgent);
-		(AgentRegistrationService as jest.Mock).mockImplementation(() => mockAgentRegistration);
-		(PromptBuilderService as jest.Mock).mockImplementation(() => mockPromptBuilder);
+		(TmuxCommandService as unknown as jest.Mock).mockImplementation(() => mockTmuxCommand);
+		(RuntimeServiceFactory.create as jest.Mock) = jest.fn().mockReturnValue(mockRuntimeService);
+		(AgentRegistrationService as unknown as jest.Mock).mockImplementation(() => mockAgentRegistration);
+		(PromptBuilderService as unknown as jest.Mock).mockImplementation(() => mockPromptBuilder);
 
 		// Mock fs.accessSync for project root detection
 		require('fs').accessSync.mockImplementation(() => true);
@@ -93,7 +100,6 @@ describe('TmuxService', () => {
 	describe('constructor', () => {
 		it('should initialize all specialized services', () => {
 			expect(TmuxCommandService).toHaveBeenCalledTimes(1);
-			expect(ClaudeAgentService).toHaveBeenCalledTimes(1);
 			expect(AgentRegistrationService).toHaveBeenCalledTimes(1);
 			expect(PromptBuilderService).toHaveBeenCalledTimes(1);
 			expect(LoggerService.getInstance).toHaveBeenCalled();
@@ -169,7 +175,9 @@ describe('TmuxService', () => {
 				'orchestrator',
 				'orchestrator',
 				expect.any(String),
-				60000
+				60000,
+				undefined,
+				'claude-code'
 			);
 		});
 	});
@@ -212,8 +220,8 @@ describe('TmuxService', () => {
 	});
 
 	describe('checkClaudeInstallation', () => {
-		it('should delegate to Claude agent service', async () => {
-			mockClaudeAgent.checkClaudeInstallation.mockResolvedValue({
+		it('should delegate to runtime service factory', async () => {
+			mockRuntimeService.checkClaudeInstallation.mockResolvedValue({
 				installed: true,
 				version: '1.0.0',
 				message: 'Claude installed',
@@ -223,14 +231,15 @@ describe('TmuxService', () => {
 
 			expect(result.installed).toBe(true);
 			expect(result.version).toBe('1.0.0');
-			expect(mockClaudeAgent.checkClaudeInstallation).toHaveBeenCalled();
+			expect(RuntimeServiceFactory.create).toHaveBeenCalledWith('claude-code', mockTmuxCommand, expect.any(String));
 		});
 	});
 
 	describe('createTeamMemberSession', () => {
 		const mockConfig = {
 			name: 'test-dev',
-			role: 'developer',
+			role: 'developer' as const,
+			systemPrompt: 'You are a developer agent.',
 			projectPath: '/test/project',
 			memberId: 'dev-123',
 		};
@@ -255,8 +264,9 @@ describe('TmuxService', () => {
 				'test-dev',
 				'developer',
 				'/test/project',
-				90000,
-				'dev-123'
+				75000,
+				'dev-123',
+				'claude-code'
 			);
 		});
 
@@ -278,64 +288,35 @@ describe('TmuxService', () => {
 	});
 
 	describe('sendMessage', () => {
-		it('should use direct send-keys for attached sessions', async () => {
-			mockTmuxCommand.executeTmuxCommand
-				.mockResolvedValueOnce('attached')
-				.mockResolvedValueOnce('');
+		it('should send message using robust script approach', async () => {
 			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
+			mockTmuxCommand.sendMessage.mockResolvedValue();
 
 			const eventSpy = jest.fn();
 			service.on('message_sent', eventSpy);
 
 			await service.sendMessage('test-session', 'Hello Claude');
 
-			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
-				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
-			]);
-			// Updated to match new implementation with literal mode and separate Enter
-			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
-				'send-keys', '-t', 'test-session', '-l', '--', 'Hello Claude'
-			]);
+			expect(mockTmuxCommand.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
+			expect(mockTmuxCommand.sendMessage).toHaveBeenCalledWith('test-session', 'Hello Claude');
 			expect(eventSpy).toHaveBeenCalledWith({
 				sessionName: 'test-session',
 				message: 'Hello Claude',
-				method: 'direct'
+				method: 'robust_script'
 			});
 		});
 
-		it('should use shadow client for detached sessions', async () => {
-			mockTmuxCommand.executeTmuxCommand.mockResolvedValueOnce('detached');
+		it('should throw error when sendMessage fails', async () => {
 			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sendEnter.mockResolvedValue();
+			mockTmuxCommand.sendMessage.mockRejectedValue(new Error('Send failed'));
 
-			const eventSpy = jest.fn();
-			service.on('message_sent', eventSpy);
-
-			await service.sendMessage('test-session', 'Hello Claude');
-
-			expect(mockTmuxCommand.executeTmuxCommand).toHaveBeenCalledWith([
-				'display-message', '-p', '-t', 'test-session', '#{?session_attached,attached,detached}'
-			]);
-			expect(mockTmuxCommand.sendMessage).toHaveBeenCalledWith('test-session', 'Hello Claude');
-			expect(mockTmuxCommand.sendEnter).toHaveBeenCalledWith('test-session');
-			expect(eventSpy).toHaveBeenCalledWith({
-				sessionName: 'test-session',
-				message: 'Hello Claude',
-				method: 'shadow_client'
-			});
+			await expect(service.sendMessage('test-session', 'Hello Claude')).rejects.toThrow('Send failed');
 		});
 
-		it('should default to detached when attachment status check fails', async () => {
-			mockTmuxCommand.executeTmuxCommand.mockRejectedValueOnce(new Error('Session not found'));
-			mockTmuxCommand.clearCurrentCommandLine.mockResolvedValue();
-			mockTmuxCommand.sendMessage.mockResolvedValue();
-			mockTmuxCommand.sendEnter.mockResolvedValue();
+		it('should throw error when clearCurrentCommandLine fails', async () => {
+			mockTmuxCommand.clearCurrentCommandLine.mockRejectedValue(new Error('Clear failed'));
 
-			await service.sendMessage('test-session', 'Hello Claude');
-
-			expect(mockTmuxCommand.sendMessage).toHaveBeenCalledWith('test-session', 'Hello Claude');
-			expect(mockTmuxCommand.sendEnter).toHaveBeenCalledWith('test-session');
+			await expect(service.sendMessage('test-session', 'Hello Claude')).rejects.toThrow('Clear failed');
 		});
 	});
 

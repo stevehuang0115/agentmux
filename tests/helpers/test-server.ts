@@ -1,7 +1,3 @@
-// Test helper to work around ES module issues
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-
 // For tests, we'll use a mock server instead of importing the real one
 export class MockAgentMuxServer {
   private config: any;

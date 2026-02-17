@@ -474,7 +474,8 @@ export class ResourceMonitor extends EventEmitter {
 export type { ResourceThresholds, ResourceMetrics };
 
 // If this script is run directly, start monitoring
-if (import.meta.url === `file://${process.argv[1]}`) {
+const _isMainModule = process.argv[1]?.endsWith('resource-monitor.ts') || process.argv[1]?.endsWith('resource-monitor.js');
+if (_isMainModule) {
 	const monitor = new ResourceMonitor();
 
 	monitor.on('warning', (data) => {

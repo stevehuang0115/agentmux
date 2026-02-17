@@ -40,6 +40,7 @@ describe('SkillService', () => {
       name: overrides.name || `${id} Skill`,
       description: overrides.description || `Description for ${id}`,
       category: overrides.category || 'development',
+      skillType: overrides.skillType || 'claude-skill',
       promptFile: 'instructions.md',
       triggers: overrides.triggers || ['trigger1', 'trigger2'],
       tags: overrides.tags || ['tag1', 'tag2'],

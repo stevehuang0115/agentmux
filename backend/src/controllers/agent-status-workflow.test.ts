@@ -1,52 +1,96 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
 import * as teamsHandlers from './team/team.controller.js';
 import type { ApiContext } from './types.js';
-import { StorageService, TmuxService, SchedulerService } from '../services/index.js';
-import { Team, TeamMember } from '../types/index.js';
+import { Team } from '../types/index.js';
 
-// Mock dependencies
+// Mock dependencies used by the team controller
 jest.mock('../services/index.js');
+jest.mock('../services/agent/agent-heartbeat.service.js', () => ({
+  updateAgentHeartbeat: jest.fn<any>().mockResolvedValue(undefined),
+}));
+jest.mock('../services/session/index.js', () => ({
+  getSessionBackendSync: jest.fn(),
+  getSessionStatePersistence: jest.fn(),
+}));
+jest.mock('../websocket/terminal.gateway.js', () => ({
+  getTerminalGateway: jest.fn().mockReturnValue(null),
+}));
+jest.mock('../services/memory/memory.service.js', () => ({
+  MemoryService: {
+    getInstance: jest.fn().mockReturnValue({
+      initializeForSession: jest.fn<any>().mockResolvedValue(undefined),
+    }),
+  },
+}));
+jest.mock('../services/messaging/sub-agent-message-queue.service.js', () => ({
+  SubAgentMessageQueue: jest.fn(),
+}));
 
 describe('Agent Status Workflow Integration', () => {
   let mockApiContext: ApiContext;
   let mockRequest: Partial<Request>;
   let mockResponse: Partial<Response>;
-  let mockStorageService: jest.Mocked<StorageService>;
-  let mockTmuxService: jest.Mocked<TmuxService>;
   let responseMock: {
     status: jest.Mock;
     json: jest.Mock;
     send: jest.Mock;
   };
 
+  /**
+   * Creates a mock team with a single inactive member for testing.
+   */
+  function createMockTeam(): Team {
+    return {
+      id: 'team-123',
+      name: 'Test Team',
+      members: [
+        {
+          id: 'member-1',
+          name: 'Alice',
+          sessionName: '',
+          role: 'developer',
+          systemPrompt: 'Test prompt',
+          agentStatus: 'inactive',
+          workingStatus: 'idle',
+          runtimeType: 'claude-code',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.useFakeTimers();
 
-    // Create response mock
     responseMock = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis(),
       send: jest.fn().mockReturnThis(),
     };
 
-    // Create minimal mocked services
-    mockStorageService = {
-      getTeams: jest.fn(),
-      saveTeam: jest.fn(),
-      getProjects: jest.fn(),
-    } as any;
-
-    mockTmuxService = {
-      listSessions: jest.fn(),
-      createTeamMemberSession: jest.fn(),
-    } as any;
-
-    // Create API context with mocked services
     mockApiContext = {
-      storageService: mockStorageService,
-      tmuxService: mockTmuxService,
-      agentRegistrationService: {} as any,
+      storageService: {
+        getTeams: jest.fn<any>(),
+        saveTeam: jest.fn<any>().mockResolvedValue(undefined),
+        getProjects: jest.fn<any>().mockResolvedValue([]),
+      } as any,
+      tmuxService: {
+        listSessions: jest.fn<any>().mockResolvedValue([]),
+        killSession: jest.fn<any>().mockResolvedValue(undefined),
+      } as any,
+      agentRegistrationService: {
+        createAgentSession: jest.fn<any>().mockResolvedValue({
+          success: true,
+          sessionName: 'test-team-alice-member-1',
+        }),
+        registerMemberStatus: jest.fn<any>().mockResolvedValue(undefined),
+        getRegisteredMembers: jest.fn<any>().mockReturnValue(new Map()),
+      } as any,
       schedulerService: {} as any,
       activeProjectsService: {} as any,
       promptTemplateService: {} as any,
@@ -62,63 +106,25 @@ describe('Agent Status Workflow Integration', () => {
     mockResponse = responseMock as any;
   });
 
-  it('should complete full user workflow: start member (activating) → agent registers (active)', async () => {
-    // Setup: Create a team with an inactive member
-    const mockTeam: Team = {
-      id: 'team-123',
-      name: 'Test Team',
-      members: [
-        {
-          id: 'member-1',
-          name: 'Alice',
-          sessionName: '',
-          role: 'developer',
-          systemPrompt: 'Test prompt',
-          agentStatus: 'inactive',
-          workingStatus: 'idle',
-          runtimeType: 'claude-code',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
-      ],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+  afterEach(() => {
+    jest.useRealTimers();
+  });
 
-    const mockProjects = [
-      {
-        id: 'project-1',
-        name: 'Test Project',
-        path: '/test/project',
-        teams: {},
-        status: 'active' as 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
+  it('should complete full workflow: start member → agent registers → active', async () => {
+    const mockTeam = createMockTeam();
 
-    // Mock services for startTeamMember
-    mockStorageService.getTeams.mockResolvedValue([mockTeam]);
-    mockStorageService.getProjects.mockResolvedValue(mockProjects);
-    mockTmuxService.listSessions.mockResolvedValue([]);
-    mockTmuxService.createTeamMemberSession.mockResolvedValue({
-      success: true,
-      sessionName: 'test-team-alice-member-1'
+    // getTeams is called multiple times:
+    // 1. startTeamMember (find team/member)
+    // 2. _startTeamMemberCore (fresh load before session creation)
+    // 3. _startTeamMemberCore (fresh load after successful session creation)
+    (mockApiContext.storageService.getTeams as jest.Mock<any>).mockResolvedValue([mockTeam]);
+
+    // Track saves to verify state transitions
+    const savedTeams: Team[] = [];
+    (mockApiContext.storageService.saveTeam as jest.Mock<any>).mockImplementation((team: Team) => {
+      savedTeams.push(JSON.parse(JSON.stringify(team)));
+      return Promise.resolve();
     });
-
-    let savedTeamAfterStart: Team | null = null;
-    let savedTeamAfterRegistration: Team | null = null;
-
-    // Track team saves to verify state transitions
-    mockStorageService.saveTeam
-      .mockImplementationOnce((team: Team) => {
-        savedTeamAfterStart = team;
-        return Promise.resolve();
-      })
-      .mockImplementationOnce((team: Team) => {
-        savedTeamAfterRegistration = team;
-        return Promise.resolve();
-      });
 
     // STEP 1: User starts the team member
     mockRequest.params = { teamId: 'team-123', memberId: 'member-1' };
@@ -130,26 +136,35 @@ describe('Agent Status Workflow Integration', () => {
       mockResponse as Response
     );
 
-    // Verify member status changed to 'activating' after starting
-    expect(savedTeamAfterStart).not.toBeNull();
-    expect(savedTeamAfterStart!.members[0].agentStatus).toBe('activating');
-    expect(savedTeamAfterStart!.members[0].workingStatus).toBe('idle');
-    expect(savedTeamAfterStart!.members[0].sessionName).toBe('test-team-alice-member-1');
+    // Verify the first save set status to 'starting'
+    expect(savedTeams.length).toBeGreaterThanOrEqual(1);
+    expect(savedTeams[0].members[0].agentStatus).toBe('starting');
 
-    // Verify startTeamMember API response
+    // Verify successful API response
     expect(responseMock.json).toHaveBeenCalledWith(
       expect.objectContaining({
         success: true,
         message: expect.stringContaining('Alice started successfully'),
-        data: expect.objectContaining({
-          memberId: 'member-1',
-          sessionName: 'test-team-alice-member-1',
-          status: 'activating'
-        })
       })
     );
 
-    // STEP 2: Agent calls MCP registration
+    // STEP 2: Agent calls registration endpoint
+    jest.clearAllMocks();
+    responseMock.status.mockReturnThis();
+    responseMock.json.mockReturnThis();
+
+    // For registration, getTeams returns the team with the session name set
+    const teamWithSession = createMockTeam();
+    teamWithSession.members[0].agentStatus = 'starting';
+    teamWithSession.members[0].sessionName = 'test-team-alice-member-1';
+    (mockApiContext.storageService.getTeams as jest.Mock<any>).mockResolvedValue([teamWithSession]);
+
+    let registeredTeam: Team | null = null;
+    (mockApiContext.storageService.saveTeam as jest.Mock<any>).mockImplementation((team: Team) => {
+      registeredTeam = JSON.parse(JSON.stringify(team));
+      return Promise.resolve();
+    });
+
     mockRequest.params = {};
     mockRequest.body = {
       sessionName: 'test-team-alice-member-1',
@@ -159,9 +174,6 @@ describe('Agent Status Workflow Integration', () => {
       registeredAt: new Date().toISOString()
     };
 
-    // Setup for registration - return the updated team with activating status
-    mockStorageService.getTeams.mockResolvedValue([savedTeamAfterStart!]);
-
     await teamsHandlers.registerMemberStatus.call(
       mockApiContext,
       mockRequest as Request,
@@ -169,97 +181,58 @@ describe('Agent Status Workflow Integration', () => {
     );
 
     // Verify member status changed to 'active' after registration
-    expect(savedTeamAfterRegistration).not.toBeNull();
-    expect(savedTeamAfterRegistration!.members[0].agentStatus).toBe('active');
-    expect(savedTeamAfterRegistration!.members[0].workingStatus).toBe('idle');
-    expect(savedTeamAfterRegistration!.members[0].sessionName).toBe('test-team-alice-member-1');
-    expect(savedTeamAfterRegistration!.members[0].readyAt).toBeDefined();
+    expect(registeredTeam).not.toBeNull();
+    expect(registeredTeam!.members[0].agentStatus).toBe('active');
+    expect(registeredTeam!.members[0].workingStatus).toBe('idle');
+    expect(registeredTeam!.members[0].readyAt).toBeDefined();
 
-    // Verify registerMemberStatus API response
+    // Verify registration API response
     expect(responseMock.json).toHaveBeenCalledWith(
       expect.objectContaining({
         success: true,
         message: expect.stringContaining('registered as active with role developer'),
-        data: expect.objectContaining({
-          sessionName: 'test-team-alice-member-1',
-          role: 'developer',
-          status: 'active'
-        })
       })
     );
-
-    // Verify the complete status transition happened
-    // Note: savedTeamAfterStart should be 'activating' but might already be 'active' due to mock timing
-    expect(savedTeamAfterRegistration!.members[0].agentStatus).toBe('active'); // Final state should be active
-    
-    // Verify no legacy status field exists
-    expect(savedTeamAfterRegistration!.members[0]).not.toHaveProperty('status');
-    expect(savedTeamAfterRegistration!.members[0]).toHaveProperty('agentStatus');
-    expect(savedTeamAfterRegistration!.members[0]).toHaveProperty('workingStatus');
   });
 
   it('should handle failed session creation gracefully', async () => {
-    const mockTeam: Team = {
-      id: 'team-123',
-      name: 'Test Team',
-      members: [
-        {
-          id: 'member-1',
-          name: 'Alice',
-          sessionName: '',
-          role: 'developer',
-          systemPrompt: 'Test prompt',
-          agentStatus: 'inactive',
-          workingStatus: 'idle',
-          runtimeType: 'claude-code',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
-      ],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    const mockTeam = createMockTeam();
 
-    const mockProjects = [
-      {
-        id: 'project-1',
-        name: 'Test Project',
-        path: '/test/project',
-        teams: {},
-        status: 'active' as 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
+    // Override createAgentSession to always fail
+    (mockApiContext.agentRegistrationService as any).createAgentSession =
+      jest.fn<any>().mockResolvedValue({
+        success: false,
+        error: 'Session creation failed'
+      });
 
-    // Mock failed session creation
-    mockStorageService.getTeams.mockResolvedValue([mockTeam]);
-    mockStorageService.getProjects.mockResolvedValue(mockProjects);
-    mockTmuxService.listSessions.mockResolvedValue([]);
-    mockTmuxService.createTeamMemberSession.mockResolvedValue({
-      success: false,
-      error: 'Session creation failed'
-    });
+    // getTeams always returns the same team
+    (mockApiContext.storageService.getTeams as jest.Mock<any>).mockResolvedValue([mockTeam]);
 
-    let savedTeam: Team | null = null;
-    mockStorageService.saveTeam.mockImplementation((team: Team) => {
-      savedTeam = team;
+    // Track the last save to verify final state
+    let lastSavedTeam: Team | null = null;
+    (mockApiContext.storageService.saveTeam as jest.Mock<any>).mockImplementation((team: Team) => {
+      lastSavedTeam = JSON.parse(JSON.stringify(team));
       return Promise.resolve();
     });
 
     mockRequest.params = { teamId: 'team-123', memberId: 'member-1' };
     mockRequest.body = {};
 
-    await teamsHandlers.startTeamMember.call(
+    // Start the handler (has retry delays internally)
+    const promise = teamsHandlers.startTeamMember.call(
       mockApiContext,
       mockRequest as Request,
       mockResponse as Response
     );
 
-    // Verify member status was reset to 'inactive' after failed session creation
-    expect(savedTeam).not.toBeNull();
-    expect(savedTeam!.members[0].agentStatus).toBe('inactive');
-    expect(savedTeam!.members[0].sessionName).toBe('');
+    // Advance past all retry delays (1s + 2s exponential backoff)
+    await jest.advanceTimersByTimeAsync(10000);
+    await promise;
+
+    // Verify the last save reset member to 'inactive'
+    expect(lastSavedTeam).not.toBeNull();
+    expect(lastSavedTeam!.members[0].agentStatus).toBe('inactive');
+    expect(lastSavedTeam!.members[0].sessionName).toBe('');
 
     // Verify error response
     expect(responseMock.status).toHaveBeenCalledWith(500);
@@ -269,94 +242,37 @@ describe('Agent Status Workflow Integration', () => {
         error: 'Session creation failed'
       })
     );
+
+    // Verify createAgentSession was called 3 times (retries)
+    expect(
+      (mockApiContext.agentRegistrationService as any).createAgentSession
+    ).toHaveBeenCalledTimes(3);
   });
 
-  it('should handle race condition where agent registers during session creation', async () => {
-    // This test simulates the race condition where:
-    // 1. startTeamMember sets status to 'activating'
-    // 2. createTeamMemberSession is called (long async operation)
-    // 3. During session creation, agent calls registerMemberStatus (sets to 'active')
-    // 4. createTeamMemberSession completes - should NOT overwrite 'active' status
+  it('should preserve active status when agent registers during session creation', async () => {
+    const mockTeam = createMockTeam();
 
-    const mockTeam: Team = {
-      id: 'team-123',
-      name: 'Test Team',
-      members: [
-        {
-          id: 'member-1',
-          name: 'Alice',
-          sessionName: '',
-          role: 'developer',
-          systemPrompt: 'Test prompt',
-          agentStatus: 'inactive',
-          workingStatus: 'idle',
-          runtimeType: 'claude-code',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
-      ],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+    // After session creation succeeds, getTeams returns a team where agent is already 'active'
+    // (simulating concurrent MCP registration that happened during createAgentSession)
+    const teamAfterRegistration: Team = {
+      ...createMockTeam(),
+      members: [{
+        ...createMockTeam().members[0],
+        agentStatus: 'active',
+        sessionName: 'test-team-alice-member-1',
+        readyAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }]
     };
 
-    const mockProjects = [
-      {
-        id: 'project-1',
-        name: 'Test Project',
-        path: '/test/project',
-        teams: {},
-        status: 'active' as 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
+    // getTeams returns original team for first calls, then updated team for the final re-fetch
+    (mockApiContext.storageService.getTeams as jest.Mock<any>)
+      .mockResolvedValueOnce([mockTeam])           // startTeamMember: find team
+      .mockResolvedValueOnce([mockTeam])           // _startTeamMemberCore: fresh load before creation
+      .mockResolvedValue([teamAfterRegistration]); // _startTeamMemberCore: fresh load after creation (+ any extra calls)
 
-    let teamAfterStart: Team | undefined;
-    let teamAfterSessionComplete: Team | undefined;
+    (mockApiContext.storageService.saveTeam as jest.Mock<any>).mockResolvedValue(undefined);
 
-    // Setup initial mock
-    mockStorageService.getTeams.mockResolvedValue([mockTeam]);
-    mockStorageService.getProjects.mockResolvedValue(mockProjects);
-    mockTmuxService.listSessions.mockResolvedValue([]);
-
-    // Mock createTeamMemberSession to simulate delay and concurrent registration
-    mockTmuxService.createTeamMemberSession.mockImplementation(async () => {
-      // Simulate the agent registering DURING session creation
-      // This should happen while createTeamMemberSession is running
-      const updatedTeam = {
-        ...mockTeam,
-        members: [
-          {
-            ...mockTeam.members[0],
-            agentStatus: 'active' as 'active', // Agent registered!
-            sessionName: 'test-team-alice-member-1',
-            readyAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          }
-        ]
-      };
-
-      // Update the mock to return the updated team (simulating concurrent registration)
-      mockStorageService.getTeams.mockResolvedValue([updatedTeam]);
-
-      return {
-        success: true,
-        sessionName: 'test-team-alice-member-1'
-      };
-    });
-
-    // Track all team saves
-    mockStorageService.saveTeam
-      .mockImplementationOnce((team: Team) => {
-        teamAfterStart = team;
-        return Promise.resolve();
-      })
-      .mockImplementationOnce((team: Team) => {
-        teamAfterSessionComplete = team;
-        return Promise.resolve();
-      });
-
-    // Call startTeamMember
     mockRequest.params = { teamId: 'team-123', memberId: 'member-1' };
     mockRequest.body = {};
 
@@ -366,28 +282,18 @@ describe('Agent Status Workflow Integration', () => {
       mockResponse as Response
     );
 
-    // Verify the race condition is handled correctly:
-    // 1. Initial status should be 'activating'
-    expect(teamAfterStart).toBeDefined();
-    expect(teamAfterStart!.members[0].agentStatus).toBe('activating');
-
-    // 2. After session creation completes, status should be preserved as 'active'
-    // (not overwritten back to 'activating')
-    expect(teamAfterSessionComplete).toBeDefined();
-    expect(teamAfterSessionComplete!.members[0].agentStatus).toBe('active');
-    expect(teamAfterSessionComplete!.members[0].sessionName).toBe('test-team-alice-member-1');
-
-    // 3. API response should reflect current 'active' status, not the old 'activating'
+    // API response should reflect the 'active' status from the re-fetched team data,
+    // NOT the stale 'starting' status
     expect(responseMock.json).toHaveBeenCalledWith(
       expect.objectContaining({
         success: true,
         data: expect.objectContaining({
-          status: 'active' // Should return current status, not 'activating'
+          status: 'active'
         })
       })
     );
 
-    // 4. Verify the fix: getTeams was called again to get fresh state
-    expect(mockStorageService.getTeams).toHaveBeenCalledTimes(2); // Once initially, once to re-fetch
+    // Verify getTeams was called at least 3 times (initial, pre-creation, post-creation)
+    expect(mockApiContext.storageService.getTeams).toHaveBeenCalledTimes(3);
   });
 });

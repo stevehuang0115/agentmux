@@ -25,17 +25,18 @@ describe('ActiveProjectsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
+
     // Mock path.join to return consistent path
     (path.join as jest.Mock).mockReturnValue(mockActiveProjectsPath);
     (os.homedir as jest.Mock).mockReturnValue('/mock/home');
-    
+
     mockStorageService = new StorageService() as jest.Mocked<StorageService>;
     mockMessageSchedulerService = {
       deleteScheduledMessage: jest.fn(),
+      cancelMessage: jest.fn(),
       scheduleMessage: jest.fn()
     };
-    
+
     service = new ActiveProjectsService(mockStorageService);
   });
 
@@ -283,8 +284,8 @@ describe('ActiveProjectsService', () => {
 
     it('should cancel scheduled messages when messageSchedulerService provided', async () => {
       // Reset the mock and ensure proper setup
-      mockMessageSchedulerService.deleteScheduledMessage.mockClear();
-      
+      mockMessageSchedulerService.cancelMessage.mockClear();
+
       // Explicitly ensure the mock data has the schedule IDs
       jest.spyOn(service, 'loadActiveProjectsData').mockResolvedValue({
         activeProjects: [{
@@ -297,11 +298,12 @@ describe('ActiveProjectsService', () => {
         lastUpdated: '2023-01-01T00:00:00.000Z',
         version: '1.0.0'
       });
-      
+
       await service.stopProject('test-project', mockMessageSchedulerService);
 
-      expect(mockMessageSchedulerService.deleteScheduledMessage).toHaveBeenCalledWith('checkin-id');
-      expect(mockMessageSchedulerService.deleteScheduledMessage).toHaveBeenCalledWith('commit-id');
+      // Source code calls cancelMessage, not deleteScheduledMessage
+      expect(mockMessageSchedulerService.cancelMessage).toHaveBeenCalledWith('checkin-id');
+      expect(mockMessageSchedulerService.cancelMessage).toHaveBeenCalledWith('commit-id');
     });
 
     it('should continue if cancelling scheduled messages fails', async () => {
@@ -317,8 +319,10 @@ describe('ActiveProjectsService', () => {
         lastUpdated: '2023-01-01T00:00:00.000Z',
         version: '1.0.0'
       });
-      
-      mockMessageSchedulerService.deleteScheduledMessage.mockRejectedValue(new Error('Delete error'));
+
+      mockMessageSchedulerService.cancelMessage.mockImplementation(() => {
+        throw new Error('Cancel error');
+      });
       const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
 
       await service.stopProject('test-project', mockMessageSchedulerService);

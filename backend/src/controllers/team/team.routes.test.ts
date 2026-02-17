@@ -63,29 +63,29 @@ describe('Team Routes', () => {
   });
 
   it('should have POST route for creating teams', () => {
-    const postRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.post
+    const postRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.post
     );
     expect(postRoutes.length).toBeGreaterThan(0);
   });
 
   it('should have GET routes for retrieving teams', () => {
-    const getRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.get
+    const getRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.get
     );
     expect(getRoutes.length).toBeGreaterThan(0);
   });
 
   it('should have DELETE route for team deletion', () => {
-    const deleteRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.delete
+    const deleteRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.delete
     );
     expect(deleteRoutes.length).toBeGreaterThan(0);
   });
 
   it('should have PUT route for updating team members', () => {
-    const putRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.put
+    const putRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.put
     );
     expect(putRoutes.length).toBeGreaterThan(0);
   });

@@ -4,14 +4,9 @@
 // This ensures env vars are available when services initialize
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-// Get __dirname equivalent for ESM
-const __filename_early = fileURLToPath(import.meta.url);
-const __dirname_early = path.dirname(__filename_early);
-
-// Load .env from project root (two directories up from backend/src/index.ts)
-dotenv.config({ path: path.resolve(__dirname_early, '../../.env') });
+// Load .env from project root
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 import express from 'express';
 import { createServer } from 'http';
@@ -21,6 +16,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import os from 'os';
 import { promises as fs } from 'fs';
+import { fileURLToPath } from 'url';
 
 import {
 	StorageService,
@@ -70,8 +66,9 @@ import { setMessageQueueService as setMessagingControllerQueueService } from './
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 
-// Use the early-defined __dirname for consistency
-const __dirname = __dirname_early;
+// ESM __dirname equivalent using import.meta.url
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Safely parses an integer from a string with validation and fallback.
@@ -998,7 +995,10 @@ export class AgentMuxServer {
 }
 
 // Start server if this file is run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMainModule = process.argv[1] && (
+	process.argv[1].endsWith('/index.ts') || process.argv[1].endsWith('/index.js')
+);
+if (isMainModule) {
 	const server = new AgentMuxServer();
 	const logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
 	server.start().catch((error) => {

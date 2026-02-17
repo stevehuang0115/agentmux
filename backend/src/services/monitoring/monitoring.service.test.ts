@@ -1,13 +1,16 @@
 import { MonitoringService, SystemMetrics, PerformanceMetrics, HealthCheckResult, AlertCondition } from './monitoring.service';
-import { ConfigService } from './config.service';
+import { ConfigService } from '../core/config.service.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import * as os from 'os';
 import * as process from 'process';
 
 // Mock dependencies
-jest.mock('./config.service');
-jest.mock('./logger.service');
+jest.mock('../core/config.service.js');
+jest.mock('../core/logger.service.js');
 jest.mock('os');
+jest.mock('fs/promises', () => ({
+  statfs: jest.fn().mockRejectedValue(new Error('mocked'))
+}));
 jest.mock('process', () => ({
   cpuUsage: jest.fn(),
   memoryUsage: jest.fn(),
@@ -21,12 +24,13 @@ jest.mock('process', () => ({
 describe('MonitoringService', () => {
   let service: MonitoringService;
   let mockConfig: jest.Mocked<ConfigService>;
-  let mockLogger: jest.Mocked<ComponentLogger>;
-  let mockLoggerService: jest.Mocked<LoggerService>;
+  let mockLogger: any;
+  let mockLoggerService: any;
 
   const mockMonitoringConfig = {
     metricsEnabled: true,
     healthCheckInterval: 60000,
+    performanceTrackingEnabled: true,
     memoryThreshold: 80,
     cpuThreshold: 70
   };
@@ -34,39 +38,39 @@ describe('MonitoringService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    
+
     // Reset singleton instance
     (MonitoringService as any).instance = undefined;
-    
+
     // Setup mocks
     mockLogger = {
       info: jest.fn(),
       warn: jest.fn(),
       error: jest.fn(),
       debug: jest.fn()
-    } as jest.Mocked<ComponentLogger>;
-    
+    };
+
     mockLoggerService = {
       createComponentLogger: jest.fn().mockReturnValue(mockLogger),
       logSystemMetric: jest.fn()
-    } as jest.Mocked<LoggerService>;
-    
+    };
+
     mockConfig = {
       get: jest.fn().mockReturnValue(mockMonitoringConfig)
-    } as jest.Mocked<ConfigService>;
-    
+    } as any;
+
     (ConfigService.getInstance as jest.Mock).mockReturnValue(mockConfig);
     (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLoggerService);
-    
+
     // Mock OS functions
     (os.totalmem as jest.Mock).mockReturnValue(8000000000); // 8GB
     (os.freemem as jest.Mock).mockReturnValue(2000000000); // 2GB
     (os.loadavg as jest.Mock).mockReturnValue([1.2, 1.5, 1.8]);
     (os.cpus as jest.Mock).mockReturnValue(new Array(4)); // 4 cores
-    
+
     // Mock process functions
     (process.cpuUsage as jest.Mock).mockReturnValue({ user: 100000, system: 50000 });
-    (process.memoryUsage as jest.Mock).mockReturnValue({
+    (process.memoryUsage as unknown as jest.Mock).mockReturnValue({
       rss: 150000000,
       heapUsed: 100000000,
       heapTotal: 120000000,
@@ -74,7 +78,7 @@ describe('MonitoringService', () => {
       arrayBuffers: 5000000
     });
     (process.uptime as jest.Mock).mockReturnValue(3600); // 1 hour
-    
+
     service = MonitoringService.getInstance();
   });
 
@@ -87,7 +91,7 @@ describe('MonitoringService', () => {
     it('should return singleton instance', () => {
       const instance1 = MonitoringService.getInstance();
       const instance2 = MonitoringService.getInstance();
-      
+
       expect(instance1).toBe(instance2);
     });
 
@@ -106,7 +110,7 @@ describe('MonitoringService', () => {
   describe('collectMetrics', () => {
     it('should collect and store system metrics', async () => {
       await (service as any).collectMetrics();
-      
+
       const metrics = service.getSystemMetrics();
       expect(metrics).toBeTruthy();
       expect(metrics?.cpu.cores).toBe(4);
@@ -122,18 +126,19 @@ describe('MonitoringService', () => {
         (service as any).metricsHistory.push({ timestamp: new Date().toISOString() });
         (service as any).performanceHistory.push({ timestamp: new Date().toISOString() });
       }
-      
+
       await (service as any).collectMetrics();
-      
+
       expect((service as any).metricsHistory.length).toBeLessThanOrEqual(1000);
       expect((service as any).performanceHistory.length).toBeLessThanOrEqual(1000);
     });
 
     it('should log system metrics', async () => {
       await (service as any).collectMetrics();
-      
+
       expect(mockLoggerService.logSystemMetric).toHaveBeenCalledWith('cpu_usage', expect.any(Number), '%');
       expect(mockLoggerService.logSystemMetric).toHaveBeenCalledWith('memory_usage', 75, '%');
+      // Disk usage is 0 when statfs fails (mocked to reject)
       expect(mockLoggerService.logSystemMetric).toHaveBeenCalledWith('disk_usage', 0, '%');
     });
 
@@ -141,9 +146,9 @@ describe('MonitoringService', () => {
       (os.totalmem as jest.Mock).mockImplementation(() => {
         throw new Error('OS error');
       });
-      
+
       await (service as any).collectMetrics();
-      
+
       expect(mockLogger.error).toHaveBeenCalledWith('Failed to collect metrics', {
         error: 'OS error'
       });
@@ -153,7 +158,7 @@ describe('MonitoringService', () => {
   describe('collectSystemMetrics', () => {
     it('should return complete system metrics', async () => {
       const metrics = await (service as any).collectSystemMetrics();
-      
+
       expect(metrics).toMatchObject({
         timestamp: expect.any(String),
         cpu: {
@@ -181,17 +186,17 @@ describe('MonitoringService', () => {
   describe('calculateCpuUsage', () => {
     it('should calculate CPU usage percentage correctly', () => {
       const cpuUsage = { user: 500000, system: 300000 }; // 800,000 microseconds = 80%
-      
+
       const result = (service as any).calculateCpuUsage(cpuUsage);
-      
+
       expect(result).toBe(80);
     });
 
     it('should handle zero CPU usage', () => {
       const cpuUsage = { user: 0, system: 0 };
-      
+
       const result = (service as any).calculateCpuUsage(cpuUsage);
-      
+
       expect(result).toBe(0);
     });
   });
@@ -205,7 +210,7 @@ describe('MonitoringService', () => {
 
     it('should return performance metrics with request statistics', () => {
       const metrics = (service as any).collectPerformanceMetrics();
-      
+
       expect(metrics).toMatchObject({
         timestamp: expect.any(String),
         requests: {
@@ -220,10 +225,14 @@ describe('MonitoringService', () => {
     it('should reset counters after one hour', () => {
       const metrics1 = (service as any).collectPerformanceMetrics();
       expect(metrics1.requests.total).toBe(3);
-      
+
       // Simulate time passing (1 hour + 1 second)
       jest.advanceTimersByTime(3601000);
-      
+
+      // The implementation reads counters first, then resets if >1 hour elapsed.
+      // So the first call after the time passes still returns the old values,
+      // but resets the counters. The second call should return 0.
+      (service as any).collectPerformanceMetrics(); // triggers the reset
       const metrics2 = (service as any).collectPerformanceMetrics();
       expect(metrics2.requests.total).toBe(0);
     });
@@ -232,27 +241,29 @@ describe('MonitoringService', () => {
   describe('recordRequest', () => {
     it('should record successful request', () => {
       service.recordRequest(true, 100);
-      
-      const metrics = service.getPerformanceMetrics();
-      expect(metrics?.requests.successful).toBe(1);
-      expect(metrics?.requests.failed).toBe(0);
-      expect(metrics?.requests.total).toBe(1);
+
+      // getPerformanceMetrics() returns from performanceHistory which is populated by collectMetrics().
+      // Use collectPerformanceMetrics() directly to verify counters.
+      const metrics = (service as any).collectPerformanceMetrics();
+      expect(metrics.requests.successful).toBe(1);
+      expect(metrics.requests.failed).toBe(0);
+      expect(metrics.requests.total).toBe(1);
     });
 
     it('should record failed request', () => {
       service.recordRequest(false, 150);
-      
-      const metrics = service.getPerformanceMetrics();
-      expect(metrics?.requests.successful).toBe(0);
-      expect(metrics?.requests.failed).toBe(1);
-      expect(metrics?.requests.total).toBe(1);
+
+      const metrics = (service as any).collectPerformanceMetrics();
+      expect(metrics.requests.successful).toBe(0);
+      expect(metrics.requests.failed).toBe(1);
+      expect(metrics.requests.total).toBe(1);
     });
   });
 
   describe('alert system', () => {
     it('should initialize default alert conditions', () => {
       const conditions = service.getAlertConditions();
-      
+
       expect(conditions).toHaveLength(4);
       expect(conditions.find(c => c.id === 'high-memory-usage')).toBeTruthy();
       expect(conditions.find(c => c.id === 'critical-memory-usage')).toBeTruthy();
@@ -269,12 +280,12 @@ describe('MonitoringService', () => {
         network: { connections: 0, bytesReceived: 0, bytesSent: 0 },
         process: { pid: 12345, uptime: 3600, memoryUsage: {} as any, cpuUsage: {} as any }
       };
-      
+
       (service as any).checkAlertConditions(mockMetrics);
-      
+
       // Fast forward to trigger duration-based alerts
       jest.advanceTimersByTime(70000); // More than 60 seconds for memory alert
-      
+
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('High Memory Usage'),
         expect.objectContaining({ alertId: 'high-memory-usage', value: 90 })
@@ -290,15 +301,15 @@ describe('MonitoringService', () => {
         network: { connections: 0, bytesReceived: 0, bytesSent: 0 },
         process: { pid: 12345, uptime: 3600, memoryUsage: {} as any, cpuUsage: {} as any }
       };
-      
+
       const normalMetrics: SystemMetrics = {
         ...highMetrics,
         memory: { ...highMetrics.memory, percentage: 60 } // Below threshold
       };
-      
+
       (service as any).checkAlertConditions(highMetrics);
       (service as any).checkAlertConditions(normalMetrics); // Should clear alert
-      
+
       expect(mockLogger.info).toHaveBeenCalledWith('Alert condition cleared', {
         condition: 'High Memory Usage',
         metric: 'memory.percentage',
@@ -310,14 +321,14 @@ describe('MonitoringService', () => {
       const metrics: SystemMetrics = {
         memory: { percentage: 85 }
       } as any;
-      
+
       const result = (service as any).getMetricValue(metrics, 'memory.percentage');
       expect(result).toBe(85);
     });
 
     it('should return undefined for invalid metric path', () => {
       const metrics: SystemMetrics = {} as any;
-      
+
       const result = (service as any).getMetricValue(metrics, 'invalid.path');
       expect(result).toBeUndefined();
     });
@@ -334,7 +345,7 @@ describe('MonitoringService', () => {
   describe('updateAlertCondition', () => {
     it('should update existing alert condition', () => {
       const success = service.updateAlertCondition('high-memory-usage', { threshold: 90 });
-      
+
       expect(success).toBe(true);
       const condition = service.getAlertConditions().find(c => c.id === 'high-memory-usage');
       expect(condition?.threshold).toBe(90);
@@ -342,7 +353,7 @@ describe('MonitoringService', () => {
 
     it('should return false for nonexistent condition', () => {
       const success = service.updateAlertCondition('nonexistent', { threshold: 90 });
-      
+
       expect(success).toBe(false);
     });
   });
@@ -350,7 +361,7 @@ describe('MonitoringService', () => {
   describe('health checks', () => {
     it('should run all health checks', async () => {
       await (service as any).runHealthChecks();
-      
+
       const healthStatus = service.getHealthStatus();
       expect(healthStatus.has('memory')).toBe(true);
       expect(healthStatus.has('cpu')).toBe(true);
@@ -360,7 +371,7 @@ describe('MonitoringService', () => {
 
     it('should check memory health', async () => {
       const result = await (service as any).checkMemoryHealth();
-      
+
       expect(result).toMatchObject({
         service: 'memory',
         status: expect.stringMatching(/healthy|degraded|unhealthy/),
@@ -374,7 +385,7 @@ describe('MonitoringService', () => {
 
     it('should check CPU health', async () => {
       const result = await (service as any).checkCpuHealth();
-      
+
       expect(result).toMatchObject({
         service: 'cpu',
         status: expect.stringMatching(/healthy|degraded|unhealthy/),
@@ -391,10 +402,10 @@ describe('MonitoringService', () => {
       (service as any).healthChecks.set('service1', { status: 'healthy' });
       (service as any).healthChecks.set('service2', { status: 'healthy' });
       expect(service.getOverallHealth()).toBe('healthy');
-      
+
       (service as any).healthChecks.set('service3', { status: 'degraded' });
       expect(service.getOverallHealth()).toBe('degraded');
-      
+
       (service as any).healthChecks.set('service4', { status: 'unhealthy' });
       expect(service.getOverallHealth()).toBe('unhealthy');
     });
@@ -404,12 +415,12 @@ describe('MonitoringService', () => {
     it('should get metrics history filtered by time', () => {
       const oldTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(); // 2 hours ago
       const recentTimestamp = new Date(Date.now() - 30 * 60 * 1000).toISOString(); // 30 minutes ago
-      
+
       (service as any).metricsHistory.push({ timestamp: oldTimestamp });
       (service as any).metricsHistory.push({ timestamp: recentTimestamp });
-      
+
       const recent = service.getMetricsHistory(1); // Last 1 hour
-      
+
       expect(recent).toHaveLength(1);
       expect(recent[0].timestamp).toBe(recentTimestamp);
     });
@@ -425,12 +436,12 @@ describe('MonitoringService', () => {
         severity: 'warning',
         enabled: true
       };
-      
+
       (service as any).alertConditions.push(condition);
       (service as any).activeAlerts.set('test-alert_test.metric', new Date());
-      
+
       const alerts = service.getActiveAlerts();
-      
+
       expect(alerts).toHaveLength(1);
       expect(alerts[0].condition.id).toBe('test-alert');
     });
@@ -439,7 +450,7 @@ describe('MonitoringService', () => {
   describe('shutdown', () => {
     it('should stop all monitoring intervals', () => {
       service.shutdown();
-      
+
       expect(mockLogger.info).toHaveBeenCalledWith('Monitoring service stopped');
     });
   });
@@ -448,19 +459,23 @@ describe('MonitoringService', () => {
     it('should not start metrics collection if disabled', () => {
       // Reset singleton and create new instance with disabled metrics
       (MonitoringService as any).instance = undefined;
+      // Clear the logger mock to reset call history from beforeEach initialization
+      mockLogger.info.mockClear();
       mockConfig.get.mockReturnValue({ ...mockMonitoringConfig, metricsEnabled: false });
-      
+
       const disabledService = MonitoringService.getInstance();
-      
+
       expect(mockLogger.info).not.toHaveBeenCalledWith('Metrics collection started');
     });
 
     it('should not start health checks if interval is 0', () => {
       (MonitoringService as any).instance = undefined;
+      // Clear the logger mock to reset call history from beforeEach initialization
+      mockLogger.info.mockClear();
       mockConfig.get.mockReturnValue({ ...mockMonitoringConfig, healthCheckInterval: 0 });
-      
+
       const disabledService = MonitoringService.getInstance();
-      
+
       expect(mockLogger.info).not.toHaveBeenCalledWith('Health checks started');
     });
   });

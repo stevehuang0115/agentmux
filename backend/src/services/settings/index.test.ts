@@ -93,7 +93,7 @@ describe('Settings Services Index', () => {
 
     it('should export SettingsFileError class', () => {
       expect(SettingsFileError).toBeDefined();
-      const error = new SettingsFileError('read', 'path/to/file');
+      const error = new SettingsFileError('Failed to read settings file');
       expect(error).toBeInstanceOf(Error);
       expect(error.name).toBe('SettingsFileError');
     });

@@ -212,8 +212,8 @@ describe('AgentMux Cross-Domain Constants', () => {
   describe('WEB_CONSTANTS', () => {
     describe('PORTS', () => {
       test('should have valid port numbers', () => {
-        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(8788);
-        expect(WEB_CONSTANTS.PORTS.FRONTEND).toBe(3002);
+        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(8787);
+        expect(WEB_CONSTANTS.PORTS.FRONTEND).toBe(8788);
       });
 
       test('ports should be in valid range', () => {

@@ -85,6 +85,7 @@ describe('SkillExecutorService', () => {
           name: 'Prompt Skill',
           description: 'Just instructions',
           category: 'development',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Test Prompt\n\nDo this thing.',
           assignableRoles: [],
@@ -110,6 +111,7 @@ describe('SkillExecutorService', () => {
           name: 'Simple Prompt',
           description: 'Basic skill',
           category: 'development',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: 'Simple instructions',
           assignableRoles: [],
@@ -141,6 +143,7 @@ describe('SkillExecutorService', () => {
           name: 'Script Skill',
           description: 'Runs a script',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Script Skill',
           execution: {
@@ -176,6 +179,7 @@ describe('SkillExecutorService', () => {
           name: 'Env Skill',
           description: 'Uses env vars',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Env Skill',
           execution: {
@@ -211,6 +215,7 @@ describe('SkillExecutorService', () => {
           name: 'Custom Env Skill',
           description: 'Uses custom env vars',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Custom Env',
           execution: {
@@ -252,6 +257,7 @@ describe('SkillExecutorService', () => {
           name: 'Env File Skill',
           description: 'Loads env from file',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Env File',
           execution: {
@@ -290,6 +296,7 @@ describe('SkillExecutorService', () => {
           name: 'Fail Skill',
           description: 'Will fail',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Fail',
           execution: {
@@ -321,6 +328,7 @@ describe('SkillExecutorService', () => {
           name: 'No Script Config',
           description: 'Missing config',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# No Config',
           execution: {
@@ -349,6 +357,7 @@ describe('SkillExecutorService', () => {
           name: 'Missing File',
           description: 'File does not exist',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Missing File',
           execution: {
@@ -391,6 +400,7 @@ describe('SkillExecutorService', () => {
           name: 'Blocked Script',
           description: 'Should be blocked',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Blocked',
           execution: {
@@ -424,6 +434,7 @@ describe('SkillExecutorService', () => {
           name: 'Browser Skill',
           description: 'Uses browser',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Browser',
           execution: {
@@ -459,6 +470,7 @@ describe('SkillExecutorService', () => {
           name: 'Browser Context',
           description: 'With context',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Browser Context',
           execution: {
@@ -490,6 +502,7 @@ describe('SkillExecutorService', () => {
           name: 'No Browser Config',
           description: 'Missing config',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# No Config',
           execution: {
@@ -530,6 +543,7 @@ describe('SkillExecutorService', () => {
           name: 'Blocked Browser',
           description: 'Should be blocked',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Blocked',
           execution: {
@@ -563,6 +577,7 @@ describe('SkillExecutorService', () => {
           name: 'MCP Skill',
           description: 'Calls MCP tool',
           category: 'integration',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# MCP',
           execution: {
@@ -596,6 +611,7 @@ describe('SkillExecutorService', () => {
           name: 'No MCP Config',
           description: 'Missing config',
           category: 'integration',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# No Config',
           execution: {
@@ -626,6 +642,7 @@ describe('SkillExecutorService', () => {
           name: 'No Composite Config',
           description: 'Missing config',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# No Config',
           execution: {
@@ -654,6 +671,7 @@ describe('SkillExecutorService', () => {
           name: 'Empty Composite',
           description: 'Empty sequence',
           category: 'automation',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Empty',
           execution: {
@@ -686,6 +704,7 @@ describe('SkillExecutorService', () => {
           name: 'Disabled',
           description: 'Is disabled',
           category: 'development',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Disabled',
           assignableRoles: [],
@@ -712,6 +731,7 @@ describe('SkillExecutorService', () => {
           name: 'Unknown Type',
           description: 'Unknown execution',
           category: 'development',
+          skillType: 'claude-skill',
           promptFile: path.join(testDir, 'instructions.md'),
           promptContent: '# Unknown',
           execution: {
@@ -758,6 +778,7 @@ describe('SkillExecutorService', () => {
         name: 'Disabled',
         description: 'Disabled skill',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: path.join(testDir, 'instructions.md'),
         promptContent: '# Disabled',
         assignableRoles: [],
@@ -787,6 +808,7 @@ describe('SkillExecutorService', () => {
         name: 'Prompt',
         description: 'Prompt skill',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: path.join(testDir, 'instructions.md'),
         promptContent: '# Test Prompt',
         assignableRoles: [],

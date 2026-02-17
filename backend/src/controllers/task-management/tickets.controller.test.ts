@@ -21,7 +21,7 @@ jest.mock('../../services/index.js', () => ({
 describe('Tickets Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockStorageService: any;
   let mockTicketService: any;
 
@@ -32,7 +32,7 @@ describe('Tickets Handlers', () => {
     mockTicketService = new TicketEditorService();
 
     mockStorageService = {
-      getProjects: jest.fn()
+      getProjects: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -46,8 +46,8 @@ describe('Tickets Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -548,7 +548,7 @@ describe('Tickets Handlers', () => {
     it('should preserve context when handling tickets', async () => {
       const contextAwareController = {
         storageService: {
-          getProjects: jest.fn().mockResolvedValue([{ id: 'project-1', path: '/test/path' }])
+          getProjects: jest.fn<any>().mockResolvedValue([{ id: 'project-1', path: '/test/path' }])
         }
       } as any;
 

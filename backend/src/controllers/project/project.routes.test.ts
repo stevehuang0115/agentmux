@@ -63,22 +63,22 @@ describe('Project Routes', () => {
   });
 
   it('should have POST route for creating projects', () => {
-    const postRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.post
+    const postRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.post
     );
     expect(postRoutes.length).toBeGreaterThan(0);
   });
 
   it('should have GET routes for retrieving projects', () => {
-    const getRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.get
+    const getRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.get
     );
     expect(getRoutes.length).toBeGreaterThan(0);
   });
 
   it('should have DELETE route for project deletion', () => {
-    const deleteRoutes = router.stack.filter(layer => 
-      layer.route && layer.route.methods.delete
+    const deleteRoutes = router.stack.filter(layer =>
+      layer.route && (layer.route as any).methods.delete
     );
     expect(deleteRoutes.length).toBeGreaterThan(0);
   });

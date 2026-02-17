@@ -28,22 +28,22 @@ describe('System Routes', () => {
   });
 
   it('should have GET route for health check', () => {
-    const healthRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/health' && layer.route.methods.get
+    const healthRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/health' && (layer.route as any).methods.get
     );
     expect(healthRoute).toBeDefined();
   });
 
   it('should have GET route for metrics', () => {
-    const metricsRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/metrics' && layer.route.methods.get
+    const metricsRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/metrics' && (layer.route as any).methods.get
     );
     expect(metricsRoute).toBeDefined();
   });
 
   it('should have GET route for configuration', () => {
-    const configRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/configuration' && layer.route.methods.get
+    const configRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/configuration' && (layer.route as any).methods.get
     );
     expect(configRoute).toBeDefined();
   });

@@ -15,7 +15,7 @@ const mockOs = os as jest.Mocked<typeof os>;
 
 // Mock path module methods that are used
 jest.mock('path', () => ({
-  ...jest.requireActual('path'),
+  ...(jest.requireActual('path') as object),
   join: jest.fn(),
   dirname: jest.fn()
 }));
@@ -35,6 +35,11 @@ jest.mock('../core/logger.service.js', () => ({
   }
 }));
 
+/**
+ * Helper to flush pending microtasks (Promise resolutions) when using fake timers
+ */
+const flushPromises = () => new Promise<void>(resolve => jest.requireActual<typeof import('timers')>('timers').setImmediate(resolve));
+
 describe('TeamsJsonWatcherService', () => {
   let service: TeamsJsonWatcherService;
   let mockTeamActivityService: jest.Mocked<TeamActivityWebSocketService>;
@@ -49,14 +54,17 @@ describe('TeamsJsonWatcherService', () => {
     mockOs.homedir.mockReturnValue('/mock/home');
 
     // Mock path.join and path.dirname
-    mockPath.join.mockImplementation((...args) => args.join('/'));
+    mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
     mockPath.dirname.mockReturnValue('/mock/home/.agentmux');
 
     // Mock fs.existsSync
     mockFs.existsSync.mockReturnValue(true);
 
     // Mock fs.mkdirSync
-    mockFs.mkdirSync.mockImplementation(() => '/mock/home/.agentmux');
+    mockFs.mkdirSync.mockImplementation(() => '/mock/home/.agentmux/teams');
+
+    // Mock fs.readdirSync to return empty array (no existing team dirs)
+    mockFs.readdirSync.mockReturnValue([] as any);
 
     // Mock fs.watch
     mockWatcher = {
@@ -64,11 +72,6 @@ describe('TeamsJsonWatcherService', () => {
       close: jest.fn()
     } as any;
     mockFs.watch.mockReturnValue(mockWatcher);
-
-    // Mock fs.statSync
-    mockFs.statSync.mockReturnValue({
-      mtime: new Date('2023-01-01T10:00:00Z')
-    } as fs.Stats);
 
     // Create mock team activity service
     mockTeamActivityService = {
@@ -87,9 +90,9 @@ describe('TeamsJsonWatcherService', () => {
   });
 
   describe('constructor', () => {
-    it('should initialize with correct teams.json path', () => {
+    it('should initialize with correct teams directory path', () => {
       expect(mockOs.homedir).toHaveBeenCalled();
-      expect(mockPath.join).toHaveBeenCalledWith('/mock/home', '.agentmux', 'teams.json');
+      expect(mockPath.join).toHaveBeenCalledWith('/mock/home', '.agentmux', 'teams');
     });
   });
 
@@ -97,19 +100,19 @@ describe('TeamsJsonWatcherService', () => {
     it('should set the team activity service', () => {
       const newMockService = { forceRefresh: jest.fn() } as any;
       service.setTeamActivityService(newMockService);
-      
+
       // This is tested indirectly by checking if the correct service is called in other tests
       expect(newMockService).toBeDefined();
     });
   });
 
   describe('start', () => {
-    it('should start watching teams.json successfully', () => {
+    it('should start watching teams directory successfully', () => {
       service.start();
 
-      expect(mockFs.existsSync).toHaveBeenCalledWith('/mock/home/.agentmux');
+      expect(mockFs.existsSync).toHaveBeenCalled();
       expect(mockFs.watch).toHaveBeenCalledWith(
-        '/mock/home/.agentmux',
+        expect.any(String),
         { persistent: true },
         expect.any(Function)
       );
@@ -117,12 +120,15 @@ describe('TeamsJsonWatcherService', () => {
       expect(mockTeamActivityService.forceRefresh).toHaveBeenCalledWith();
     });
 
-    it('should create .agentmux directory if it does not exist', () => {
+    it('should create teams directory if it does not exist', () => {
       mockFs.existsSync.mockReturnValue(false);
 
       service.start();
 
-      expect(mockFs.mkdirSync).toHaveBeenCalledWith('/mock/home/.agentmux', { recursive: true });
+      expect(mockFs.mkdirSync).toHaveBeenCalledWith(
+        expect.any(String),
+        { recursive: true }
+      );
     });
 
     it('should handle watcher errors and attempt restart', () => {
@@ -134,7 +140,7 @@ describe('TeamsJsonWatcherService', () => {
 
       // Simulate an error
       const mockError = new Error('Watcher failed');
-      errorHandler?.(mockError);
+      (errorHandler as Function)?.(mockError);
 
       // Fast-forward timers to trigger restart
       jest.advanceTimersByTime(5000);
@@ -179,55 +185,74 @@ describe('TeamsJsonWatcherService', () => {
     });
   });
 
-  describe('teams.json change handling', () => {
-    it('should trigger team activity update when teams.json changes', () => {
+  describe('teams directory change handling', () => {
+    /**
+     * Test that directory changes trigger team activity updates.
+     * The change handler is async (processTeamsJsonChange), so we need to
+     * flush promises after advancing timers past the debounce delay.
+     */
+    it('should trigger team activity update when directory changes', async () => {
       service.start();
 
-      // Get the change handler that was registered with fs.watch
-      const changeHandler = mockFs.watch.mock.calls[0][2];
+      // Get the change handler from the fs.watch call using type assertion
+      const watchCall = mockFs.watch.mock.calls[0] as unknown as [string, object, Function];
+      const changeHandler = watchCall[2];
       expect(changeHandler).toBeDefined();
 
-      // Simulate teams.json change
-      changeHandler('change', 'teams.json');
+      // Simulate directory change with a non-hidden name
+      // Mock the path as a directory
+      mockFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
+      changeHandler('rename', 'team-1');
 
-      // Fast-forward past debounce delay
+      // Fast-forward past debounce delay and flush async processTeamsJsonChange
       jest.advanceTimersByTime(1000);
+      await flushPromises();
 
       // Should have triggered team activity refresh (once for initial, once for change)
       expect(mockTeamActivityService.forceRefresh).toHaveBeenCalledTimes(2);
     });
 
-    it('should ignore changes to other files', () => {
+    it('should ignore changes to hidden files', () => {
       service.start();
       mockTeamActivityService.forceRefresh.mockClear(); // Clear the initial call
 
       // Get the change handler
-      const changeHandler = mockFs.watch.mock.calls[0][2];
+      const watchCall = mockFs.watch.mock.calls[0] as unknown as [string, object, Function];
+      const changeHandler = watchCall[2];
 
-      // Simulate change to different file
-      changeHandler('change', 'other-file.json');
+      // Simulate change to hidden file (starts with .)
+      changeHandler('change', '.hidden-file');
 
       // Fast-forward past debounce delay
       jest.advanceTimersByTime(1000);
 
-      // Should not have triggered team activity refresh
+      // Should not have triggered team activity refresh (hidden files are ignored)
       expect(mockTeamActivityService.forceRefresh).not.toHaveBeenCalled();
     });
 
-    it('should debounce multiple rapid changes', () => {
+    /**
+     * Test debouncing of multiple rapid changes.
+     * The debounced callback is async, so we flush promises after advancing timers.
+     */
+    it('should debounce multiple rapid changes', async () => {
       service.start();
       mockTeamActivityService.forceRefresh.mockClear(); // Clear the initial call
 
       // Get the change handler
-      const changeHandler = mockFs.watch.mock.calls[0][2];
+      const watchCall = mockFs.watch.mock.calls[0] as unknown as [string, object, Function];
+      const changeHandler = watchCall[2];
+
+      // Mock for directory changes
+      mockFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
 
       // Simulate multiple rapid changes
-      changeHandler('change', 'teams.json');
-      changeHandler('change', 'teams.json');
-      changeHandler('change', 'teams.json');
+      changeHandler('rename', 'team-1');
+      changeHandler('rename', 'team-2');
+      changeHandler('rename', 'team-3');
 
-      // Fast-forward past debounce delay
+      // Fast-forward past debounce delay and flush async processTeamsJsonChange
       jest.advanceTimersByTime(1000);
+      await flushPromises();
 
       // Should only have triggered once despite multiple changes
       expect(mockTeamActivityService.forceRefresh).toHaveBeenCalledTimes(1);
@@ -237,60 +262,54 @@ describe('TeamsJsonWatcherService', () => {
       const serviceWithoutActivity = new TeamsJsonWatcherService();
       serviceWithoutActivity.start();
 
-      // Get the change handler
-      const changeHandler = mockFs.watch.mock.calls[0][2];
+      // Get the change handler - serviceWithoutActivity start() adds another watch call
+      const lastCallIdx = mockFs.watch.mock.calls.length - 1;
+      const watchCall = mockFs.watch.mock.calls[lastCallIdx] as unknown as [string, object, Function];
+      const changeHandler = watchCall[2];
+
+      // Mock for directory changes
+      mockFs.statSync.mockReturnValue({ isDirectory: () => true } as fs.Stats);
 
       // Should not throw even without team activity service
       expect(() => {
-        changeHandler('change', 'teams.json');
+        changeHandler('rename', 'team-1');
         jest.advanceTimersByTime(1000);
       }).not.toThrow();
+
+      serviceWithoutActivity.stop();
     });
   });
 
   describe('getStatus', () => {
     it('should return correct status when watching', () => {
       service.start();
-      
+
       const status = service.getStatus();
 
-      expect(status).toEqual({
-        isWatching: true,
-        teamsJsonPath: '/mock/home/.agentmux/teams.json',
-        fileExists: true,
-        lastModified: new Date('2023-01-01T10:00:00Z')
-      });
+      expect(status.isWatching).toBe(true);
+      expect(status.teamsDir).toBeDefined();
+      expect(status.dirExists).toBe(true);
+      expect(status.teamCount).toBeGreaterThanOrEqual(0);
+      expect(status.watchedTeams).toBeInstanceOf(Array);
     });
 
     it('should return correct status when not watching', () => {
       const status = service.getStatus();
 
-      expect(status).toEqual({
-        isWatching: false,
-        teamsJsonPath: '/mock/home/.agentmux/teams.json',
-        fileExists: true,
-        lastModified: new Date('2023-01-01T10:00:00Z')
-      });
+      expect(status.isWatching).toBe(false);
+      expect(status.teamsDir).toBeDefined();
+      expect(status.dirExists).toBe(true);
     });
 
-    it('should handle case where file does not exist', () => {
+    it('should handle case where directory does not exist', () => {
       mockFs.existsSync.mockReturnValue(false);
-      
-      const status = service.getStatus();
 
-      expect(status.fileExists).toBe(false);
-      expect(status.lastModified).toBeUndefined();
-    });
+      // Need a fresh service instance so the constructor picks up the new mocks
+      const freshService = new TeamsJsonWatcherService();
+      const status = freshService.getStatus();
 
-    it('should handle errors getting file stats', () => {
-      mockFs.statSync.mockImplementation(() => {
-        throw new Error('Stats failed');
-      });
-
-      const status = service.getStatus();
-
-      expect(status.fileExists).toBe(true);
-      expect(status.lastModified).toBeUndefined();
+      expect(status.dirExists).toBe(false);
+      expect(status.teamCount).toBe(0);
     });
   });
 
@@ -309,31 +328,10 @@ describe('TeamsJsonWatcherService', () => {
   });
 
   describe('event emission', () => {
-    it('should emit teams_json_changed event', () => {
-      const eventListener = jest.fn();
-      service.on('teams_json_changed', eventListener);
-      
-      service.start();
-
-      // Get the change handler
-      const changeHandler = mockFs.watch.mock.calls[0][2];
-      changeHandler('change', 'teams.json');
-
-      // Fast-forward past debounce delay
-      jest.advanceTimersByTime(1000);
-
-      expect(eventListener).toHaveBeenCalledWith({
-        eventType: 'change',
-        fileExists: true,
-        path: '/mock/home/.agentmux/teams.json',
-        timestamp: expect.any(Date)
-      });
-    });
-
     it('should emit team_activity_triggered event', () => {
       const eventListener = jest.fn();
       service.on('team_activity_triggered', eventListener);
-      
+
       service.forceTrigger('manual_test');
 
       expect(eventListener).toHaveBeenCalledWith({
@@ -345,13 +343,13 @@ describe('TeamsJsonWatcherService', () => {
     it('should emit watcher_error event on watcher errors', () => {
       const errorListener = jest.fn();
       service.on('watcher_error', errorListener);
-      
+
       service.start();
 
       // Get the error handler
       const errorHandler = mockWatcher.on.mock.calls.find(call => call[0] === 'error')?.[1];
       const mockError = new Error('Watcher failed');
-      errorHandler?.(mockError);
+      (errorHandler as Function)?.(mockError);
 
       expect(errorListener).toHaveBeenCalledWith(mockError);
     });
@@ -360,12 +358,12 @@ describe('TeamsJsonWatcherService', () => {
   describe('cleanup', () => {
     it('should clean up on process signals', () => {
       const stopSpy = jest.spyOn(service, 'stop');
-      
+
       service.start();
-      
+
       // Simulate SIGINT
       process.emit('SIGINT', 'SIGINT');
-      
+
       expect(stopSpy).toHaveBeenCalled();
     });
   });

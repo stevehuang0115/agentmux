@@ -2,11 +2,6 @@ import request from 'supertest';
 import express from 'express';
 import { Server } from 'http';
 import { createServer } from 'http';
-import * as path from 'path';
-import { promises as fs } from 'fs';
-import { TmuxService } from '../../backend/src/services/tmux.service';
-import { StorageService } from '../../backend/src/services/storage.service';
-import { ApiController } from '../../backend/src/controllers/api.controller';
 
 // Mock tmux service
 const mockTmuxService = {
@@ -29,7 +24,6 @@ const mockStorageService = {
 
 // Mock file system
 jest.mock('fs/promises');
-const mockFs = fs as jest.Mocked<typeof fs>;
 
 function createTestApp() {
   const app = express();

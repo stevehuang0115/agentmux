@@ -6,18 +6,18 @@ import type { ApiContext } from '../types.js';
 describe('Scheduler Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockSchedulerService: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     mockSchedulerService = {
-      scheduleCheck: jest.fn(),
-      scheduleRecurringCheck: jest.fn(),
-      getChecksForSession: jest.fn(),
-      listScheduledChecks: jest.fn(),
-      cancelCheck: jest.fn()
+      scheduleCheck: jest.fn<any>(),
+      scheduleRecurringCheck: jest.fn<any>(),
+      getChecksForSession: jest.fn<any>(),
+      listScheduledChecks: jest.fn<any>(),
+      cancelCheck: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -26,9 +26,9 @@ describe('Scheduler Handlers', () => {
 
     mockRequest = {
       params: { id: 'check-123' },
-      body: { 
-        targetSession: 'session-1', 
-        minutes: 30, 
+      body: {
+        targetSession: 'session-1',
+        minutes: 30,
         message: 'Check-in reminder',
         isRecurring: false,
         intervalMinutes: 60
@@ -37,8 +37,8 @@ describe('Scheduler Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -234,7 +234,7 @@ describe('Scheduler Handlers', () => {
     });
 
     it('should return all scheduled checks when no session query provided', async () => {
-      const mockAllChecks = [
+      const mockAllChecks: any[] = [
         { id: 'check-1', sessionName: 'session-1', message: 'Check 1' },
         { id: 'check-2', sessionName: 'session-2', message: 'Check 2' },
         { id: 'check-3', sessionName: 'session-1', message: 'Check 3' }
@@ -294,7 +294,7 @@ describe('Scheduler Handlers', () => {
     });
 
     it('should handle empty session parameter', async () => {
-      const mockAllChecks = [];
+      const mockAllChecks: any[] = [];
       mockSchedulerService.listScheduledChecks.mockReturnValue(mockAllChecks);
       mockRequest.query = { sessionName: '' };
 
@@ -398,7 +398,7 @@ describe('Scheduler Handlers', () => {
     });
 
     it('should handle null scheduler service', async () => {
-      mockApiContext.schedulerService = null;
+      mockApiContext.schedulerService = null as any;
 
       await schedulerHandlers.scheduleCheck.call(
         mockApiContext as ApiContext,
@@ -418,7 +418,7 @@ describe('Scheduler Handlers', () => {
     it('should preserve context when handling scheduler operations', async () => {
       const contextAwareController = {
         schedulerService: {
-          scheduleCheck: jest.fn().mockReturnValue('check-context-123')
+          scheduleCheck: jest.fn<any>().mockReturnValue('check-context-123')
         }
       } as any;
 
