@@ -26,7 +26,7 @@ import { getSlackImageService } from './slack-image.service.js';
 import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS } from '../../constants.js';
 
 /**
  * Bridge configuration
@@ -472,6 +472,7 @@ Just type naturally to chat with the orchestrator!`;
   /**
    * Download all image files from a Slack message using SlackImageService.
    * Populates `message.images` with successfully downloaded image info.
+   * Downloads are batched with a concurrency limit of MAX_CONCURRENT_DOWNLOADS.
    *
    * @param message - Incoming message with files to download
    */
@@ -483,14 +484,24 @@ Just type naturally to chat with the orchestrator!`;
     }
 
     const slackImageService = getSlackImageService();
+    const files = message.files!;
     const downloadedImages: SlackImageInfo[] = [];
+    const maxConcurrent = SLACK_IMAGE_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
 
-    for (const file of message.files!) {
-      try {
-        const imageInfo = await slackImageService.downloadImage(file, botToken);
-        downloadedImages.push(imageInfo);
-      } catch (err) {
-        console.warn(`[SlackBridge] Failed to download image ${file.name}:`, err instanceof Error ? err.message : String(err));
+    for (let i = 0; i < files.length; i += maxConcurrent) {
+      const batch = files.slice(i, i + maxConcurrent);
+      const results = await Promise.allSettled(
+        batch.map((file) => slackImageService.downloadImage(file, botToken)),
+      );
+
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result.status === 'fulfilled') {
+          downloadedImages.push(result.value);
+        } else {
+          const fileName = batch[j].name;
+          console.warn(`[SlackBridge] Failed to download image ${fileName}:`, result.reason instanceof Error ? result.reason.message : String(result.reason));
+        }
       }
     }
 

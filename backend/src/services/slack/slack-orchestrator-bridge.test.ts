@@ -358,6 +358,69 @@ describe('SlackOrchestratorBridge', () => {
       );
     });
 
+    it('should batch downloads with MAX_CONCURRENT_DOWNLOADS limit', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      // Create 5 files to test batching (max concurrent = 3, so 2 batches: [3, 2])
+      const files = Array.from({ length: 5 }, (_, i) => ({
+        id: `F00${i}`, name: `img${i}.png`, mimetype: 'image/png',
+        filetype: 'png', size: 1024,
+        url_private: `https://files.slack.com/F00${i}`,
+        url_private_download: `https://files.slack.com/F00${i}/download`,
+        permalink: `https://slack.com/files/F00${i}`,
+      }));
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'batch test', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files,
+      };
+
+      await downloadMessageImages(message);
+
+      expect(message.images).toBeDefined();
+      expect(message.images).toHaveLength(5);
+
+      const mockImgService = getSlackImageService();
+      expect(mockImgService.downloadImage).toHaveBeenCalledTimes(5);
+    });
+
+    it('should continue downloading remaining batches when one file fails', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      const mockImgService = getSlackImageService();
+      (mockImgService.downloadImage as jest.Mock)
+        .mockRejectedValueOnce(new Error('Download failed'))
+        .mockResolvedValueOnce({ id: 'F001', name: 'b.png', mimetype: 'image/png', localPath: '/tmp/slack-images/F001-b.png', permalink: 'x' })
+        .mockResolvedValueOnce({ id: 'F002', name: 'c.png', mimetype: 'image/png', localPath: '/tmp/slack-images/F002-c.png', permalink: 'x' });
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [
+          { id: 'F000', name: 'a.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+          { id: 'F001', name: 'b.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+          { id: 'F002', name: 'c.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+        ],
+      };
+
+      await downloadMessageImages(message);
+
+      // First file failed, but the other 2 in the batch should succeed
+      expect(message.images).toHaveLength(2);
+      expect(mockImgService.downloadImage).toHaveBeenCalledTimes(3);
+    });
+
     it('should skip image download when no bot token', async () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
