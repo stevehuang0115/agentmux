@@ -1,11 +1,11 @@
-# Restart AgentMux
+# Restart Crewly
 
-Gracefully restart the AgentMux backend server. All PTY sessions are saved before shutdown and will be auto-resumed on restart (if the auto-resume setting is enabled).
+Gracefully restart the Crewly backend server. All PTY sessions are saved before shutdown and will be auto-resumed on restart (if the auto-resume setting is enabled).
 
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/restart-agentmux/execute.sh
+bash config/skills/orchestrator/restart-crewly/execute.sh
 ```
 
 ## Parameters

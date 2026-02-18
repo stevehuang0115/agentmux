@@ -21,9 +21,9 @@ Usage: tmux_robosend.sh [--shadow] [-L label | -S socket_path] <target> [--] <li
 
 <target> can be:
   %<pane_id>                 e.g., %5
-  <session>                  e.g., agentmux-orc
-  <session>:<window>         e.g., agentmux-orc:main
-  <session>:<window>.<idx>   e.g., agentmux-orc:main.0
+  <session>                  e.g., crewly-orc
+  <session>:<window>         e.g., crewly-orc:main
+  <session>:<window>.<idx>   e.g., crewly-orc:main.0
 
 --shadow  Create a hidden (read-only) tmux client if none attached to the target session.
           This helps interactive apps (e.g., gemini-cli) that ignore send-keys without focus.

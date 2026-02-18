@@ -36,7 +36,7 @@ describe('Orchestrator State Types', () => {
   describe('Constants', () => {
     describe('STATE_PATHS', () => {
       it('should have correct STATE_DIR', () => {
-        expect(STATE_PATHS.STATE_DIR).toBe('.agentmux/state');
+        expect(STATE_PATHS.STATE_DIR).toBe('.crewly/state');
       });
 
       it('should have correct CURRENT_STATE', () => {

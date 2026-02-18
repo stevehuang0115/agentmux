@@ -170,7 +170,7 @@ export class BudgetService extends EventEmitter implements IBudgetService {
   private constructor() {
     super();
     this.logger = LoggerService.getInstance().createComponentLogger('BudgetService');
-    const home = this.getAgentMuxHome();
+    const home = this.getCrewlyHome();
     this.usagePath = path.join(home, BUDGET_CONSTANTS.PATHS.USAGE_DIR);
     this.configPath = path.join(home, BUDGET_CONSTANTS.PATHS.BUDGETS_FILE);
   }
@@ -195,12 +195,12 @@ export class BudgetService extends EventEmitter implements IBudgetService {
   }
 
   /**
-   * Get the AgentMux home directory
+   * Get the Crewly home directory
    *
    * @returns Home directory path
    */
-  private getAgentMuxHome(): string {
-    return process.env.AGENTMUX_HOME || path.join(process.env.HOME || '', '.agentmux');
+  private getCrewlyHome(): string {
+    return process.env.CREWLY_HOME || path.join(process.env.HOME || '', '.crewly');
   }
 
   /**

@@ -22,7 +22,7 @@ export class TaskFolderService {
    * Creates m0_defining_project milestone with status folders
    */
   async createM0DefininingProjectMilestone(projectPath: string): Promise<string> {
-    const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+    const tasksPath = path.join(projectPath, '.crewly', 'tasks');
     const m0Path = path.join(tasksPath, 'm0_defining_project');
     
     // Create main tasks directory and m0 milestone
@@ -38,7 +38,7 @@ export class TaskFolderService {
    * Ensures all existing milestone folders have status subfolders
    */
   async ensureStatusFoldersForProject(projectPath: string): Promise<void> {
-    const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+    const tasksPath = path.join(projectPath, '.crewly', 'tasks');
     
     if (!fsSync.existsSync(tasksPath)) {
       return;

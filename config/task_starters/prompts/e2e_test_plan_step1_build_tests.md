@@ -12,14 +12,14 @@ E2E TEST PLAN GENERATION - STEP 1
 
 **Repository Conventions (must honor):**
 
--   **Specs live in:** `{PROJECT_PATH}/.agentmux/specs/`
--   **Tasks live in:** `{PROJECT_PATH}/.agentmux/tasks/`
+-   **Specs live in:** `{PROJECT_PATH}/.crewly/specs/`
+-   **Tasks live in:** `{PROJECT_PATH}/.crewly/tasks/`
 -   **This task’s outputs must be saved under:** `{PROJECT_PATH}/e2e_tests/`
 
 **Artifacts to Inspect (request immediately if not provided):**
 
-1. `{PROJECT_PATH}/.agentmux/specs/project.md` (authoritative tech/platform constraints)
-2. All specs under `{PROJECT_PATH}/.agentmux/specs/` (including any user-journey docs)
+1. `{PROJECT_PATH}/.crewly/specs/project.md` (authoritative tech/platform constraints)
+2. All specs under `{PROJECT_PATH}/.crewly/specs/` (including any user-journey docs)
 3. A **directory tree** (depth 3–4) for `{PROJECT_PATH}`
 4. Key files if present: `package.json`, lockfiles, `requirements.txt`/`pyproject.toml`, `pom.xml`/`build.gradle`, `pubspec.yaml`, `android/app/build.gradle`, `ios/Podfile`, `electron-builder.yml`, `Dockerfile`, CI configs (`.github/workflows/*`, `gitlab-ci.yml`, etc.), framework configs (`next.config.js`, `angular.json`, `capacitor.config.*`, etc.)
 

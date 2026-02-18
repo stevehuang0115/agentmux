@@ -81,7 +81,7 @@ class SOPService implements ISOPService {
   private readonly indexPath: string;
 
   private constructor() {
-    this.basePath = path.join(getAgentMuxHome(), 'sops');
+    this.basePath = path.join(getCrewlyHome(), 'sops');
     this.systemPath = path.join(this.basePath, 'system');
     this.customPath = path.join(this.basePath, 'custom');
     this.indexPath = path.join(this.basePath, 'index.json');

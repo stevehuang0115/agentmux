@@ -28,7 +28,7 @@ interface TabConfig {
 }
 
 /**
- * Settings page with tabbed navigation for managing AgentMux configuration
+ * Settings page with tabbed navigation for managing Crewly configuration
  *
  * @returns Settings page component
  */
@@ -66,7 +66,7 @@ export const Settings: React.FC = () => {
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
         <p className="text-sm text-text-secondary-dark mt-1">
-          Configure AgentMux behavior and manage roles and skills
+          Configure Crewly behavior and manage roles and skills
         </p>
       </div>
 

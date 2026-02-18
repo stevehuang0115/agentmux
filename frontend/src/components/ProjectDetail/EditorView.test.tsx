@@ -46,14 +46,14 @@ describe('EditorView', () => {
       ],
     },
     {
-      name: '.agentmux',
-      path: '.agentmux',
+      name: '.crewly',
+      path: '.crewly',
       type: 'folder',
       icon: '📁',
       children: [
         {
           name: 'initial_goal.md',
-          path: '.agentmux/initial_goal.md',
+          path: '.crewly/initial_goal.md',
           type: 'file',
           icon: '📝',
         },
@@ -170,7 +170,7 @@ describe('EditorView', () => {
 
       await waitFor(() => {
         expect(screen.getByText('src')).toBeInTheDocument();
-        expect(screen.getByText('.agentmux')).toBeInTheDocument();
+        expect(screen.getByText('.crewly')).toBeInTheDocument();
       });
     });
 
@@ -205,7 +205,7 @@ describe('EditorView', () => {
       });
     });
 
-    it('auto-expands .agentmux folder', async () => {
+    it('auto-expands .crewly folder', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -220,7 +220,7 @@ describe('EditorView', () => {
 
       render(<EditorView {...defaultProps} />);
 
-      // .agentmux should be auto-expanded and show its child file
+      // .crewly should be auto-expanded and show its child file
       await waitFor(() => {
         expect(screen.getByText('initial_goal.md')).toBeInTheDocument();
       });
@@ -249,13 +249,13 @@ describe('EditorView', () => {
       const goalFile = screen.getByText('initial_goal.md').closest('.file-item');
       fireEvent.click(goalFile!);
 
-      expect(onFileSelect).toHaveBeenCalledWith('.agentmux/initial_goal.md');
+      expect(onFileSelect).toHaveBeenCalledWith('.crewly/initial_goal.md');
     });
   });
 
   describe('File Content Loading', () => {
     it('loads and displays file content when file is selected', async () => {
-      const selectedFile = '.agentmux/initial_goal.md';
+      const selectedFile = '.crewly/initial_goal.md';
       const fileContent = '# Project Goal\n\nThis is the main goal.';
 
       // Mock the files API call
@@ -296,7 +296,7 @@ describe('EditorView', () => {
     });
 
     it('displays loading state while loading file content', async () => {
-      const selectedFile = '.agentmux/initial_goal.md';
+      const selectedFile = '.crewly/initial_goal.md';
 
       // Mock the files API call
       mockFetch.mockResolvedValueOnce({
@@ -329,7 +329,7 @@ describe('EditorView', () => {
     });
 
     it('displays error state when file loading fails', async () => {
-      const selectedFile = '.agentmux/initial_goal.md';
+      const selectedFile = '.crewly/initial_goal.md';
 
       // Mock the files API call
       mockFetch.mockResolvedValueOnce({
@@ -387,7 +387,7 @@ describe('EditorView', () => {
       fireEvent.click(goalFile!);
 
       // Verify file selection callback
-      expect(onFileSelect).toHaveBeenCalledWith('.agentmux/initial_goal.md');
+      expect(onFileSelect).toHaveBeenCalledWith('.crewly/initial_goal.md');
     });
 
     it('provides code viewer structure for Monaco integration', async () => {

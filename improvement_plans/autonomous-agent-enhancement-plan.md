@@ -1,30 +1,30 @@
-# AgentMux Autonomous Agent Enhancement Plan (Revised)
+# Crewly Autonomous Agent Enhancement Plan (Revised)
 
 ## Incorporating Ideas from Moltbot & Ralph Loop
 
 **Document Version:** 2.0
 **Date:** January 29, 2026
-**Goal:** Transform AgentMux into a fully autonomous one-man company platform
+**Goal:** Transform Crewly into a fully autonomous one-man company platform
 
 ---
 
 ## Executive Summary
 
-This revised plan incorporates learnings from Moltbot and Ralph Loop while leveraging AgentMux's **existing infrastructure**:
+This revised plan incorporates learnings from Moltbot and Ralph Loop while leveraging Crewly's **existing infrastructure**:
 
-- **AgentMux already has**: PTY session management, activity monitoring, heartbeat tracking, ticket system, scheduled check-ins, context loading, prompt building, and memory logs
+- **Crewly already has**: PTY session management, activity monitoring, heartbeat tracking, ticket system, scheduled check-ins, context loading, prompt building, and memory logs
 - **What we need to add**: Structured persistent memory (agent + project scoped), automatic "continue work" mechanism, quality gates, learnings accumulation
 
-**Key Insight:** AgentMux doesn't need Claude Code's stop hook because it directly controls PTY sessions and can detect when agents stop via `onExit()` callbacks and activity monitoring.
+**Key Insight:** Crewly doesn't need Claude Code's stop hook because it directly controls PTY sessions and can detect when agents stop via `onExit()` callbacks and activity monitoring.
 
 ---
 
-## Part 1: Current AgentMux Capabilities
+## Part 1: Current Crewly Capabilities
 
 ### What Already Exists
 
 ```
-AgentMux Infrastructure:
+Crewly Infrastructure:
 ├── PTY Session Management
 │   ├── PtySession class with onData() and onExit() listeners
 │   ├── PtyTerminalBuffer with xterm.js output parsing
@@ -43,14 +43,14 @@ AgentMux Infrastructure:
 │   └── Assignment, delegation, blocking, completion
 │
 ├── Memory & Context
-│   ├── project/.agentmux/memory/ logs (progress, communication, delegations)
+│   ├── project/.crewly/memory/ logs (progress, communication, delegations)
 │   ├── ContextLoaderService - loads specs, tickets, git, dependencies
 │   ├── PromptBuilderService - role + project context assembly
 │   └── Scheduled check-ins via SchedulerService
 │
 └── Storage Structure
-    ├── ~/.agentmux/ - global (teams, projects, runtime)
-    └── project/.agentmux/ - project-specific (specs, tasks, memory, prompts)
+    ├── ~/.crewly/ - global (teams, projects, runtime)
+    └── project/.crewly/ - project-specific (specs, tasks, memory, prompts)
 ```
 
 ### Current Gaps
@@ -70,12 +70,12 @@ AgentMux Infrastructure:
 
 ### 2.1 Two-Level Memory System
 
-Since AgentMux is **project-based**, memory needs to exist at two levels:
+Since Crewly is **project-based**, memory needs to exist at two levels:
 
 ```
 Memory Architecture:
 │
-├── Agent-Level Memory (~/.agentmux/agents/{agentId}/)
+├── Agent-Level Memory (~/.crewly/agents/{agentId}/)
 │   ├── role-knowledge.json     # Role-specific learnings
 │   │   └── "Always run npm install before npm test"
 │   ├── preferences.json        # Working style preferences
@@ -84,7 +84,7 @@ Memory Architecture:
 │   │   └── my-debugging-steps.md
 │   └── performance.json        # Success rates, common errors
 │
-└── Project-Level Memory (project/.agentmux/knowledge/)
+└── Project-Level Memory (project/.crewly/knowledge/)
     ├── patterns.json           # Project code patterns
     │   └── "API calls use apiService.fetch()"
     ├── decisions.json          # Architecture decisions
@@ -98,7 +98,7 @@ Memory Architecture:
 
 ### 2.2 Continuation Detection & Response
 
-AgentMux can detect agent completion/idle through existing infrastructure:
+Crewly can detect agent completion/idle through existing infrastructure:
 
 ```
 Detection Points (Already Exist):
@@ -156,7 +156,7 @@ async function handleAgentIdle(sessionName: string): Promise<void> {
 Add quality gates to the existing ticket workflow:
 
 ```yaml
-# Enhanced ticket format: project/.agentmux/tasks/milestone/in_progress/task.md
+# Enhanced ticket format: project/.crewly/tasks/milestone/in_progress/task.md
 ---
 id: implement-user-auth
 title: Implement user authentication
@@ -198,7 +198,7 @@ All gates pass?
 ### 2.4 Storage Schema (Revised)
 
 ```
-~/.agentmux/
+~/.crewly/
 ├── teams.json                     # (existing)
 ├── projects.json                  # (existing)
 ├── runtime.json                   # (existing)
@@ -213,7 +213,7 @@ All gates pass?
     ├── developer/
     └── qa/
 
-project/.agentmux/
+project/.crewly/
 ├── specs/                         # (existing)
 ├── tasks/                         # (existing - enhanced)
 ├── memory/                        # (existing)
@@ -521,7 +521,7 @@ async function completeTask(params: CompleteTaskParams): Promise<MCPToolResult> 
 #### 3.3 Project Gate Configuration
 
 ```yaml
-# project/.agentmux/config/quality-gates.yaml
+# project/.crewly/config/quality-gates.yaml
 
 gates:
   - name: typecheck
@@ -597,7 +597,7 @@ interface SOPService {
 #### 4.2 Default SOPs
 
 ```
-~/.agentmux/sops/
+~/.crewly/sops/
 ├── developer/
 │   ├── coding-standards.md
 │   ├── testing-requirements.md
@@ -621,7 +621,7 @@ interface SOPService {
 **Example SOP:**
 
 ```markdown
-<!-- ~/.agentmux/sops/developer/git-workflow.md -->
+<!-- ~/.crewly/sops/developer/git-workflow.md -->
 ---
 id: dev-git-workflow
 role: developer
@@ -800,12 +800,12 @@ interface EnhancedSchedulerService extends SchedulerService {
 
 | Original | Revised |
 |----------|---------|
-| Stop hook integration | Use AgentMux's PTY control |
+| Stop hook integration | Use Crewly's PTY control |
 | Ralph PRD system | Enhance existing ticket system |
 | Multi-channel P0 | Multi-channel P2 |
 | Generic memory | Agent + Project scoped memory |
 | Self-writing extensions P0 | Self-writing extensions P2 |
-| External daemon mode | AgentMux already is daemon-like |
+| External daemon mode | Crewly already is daemon-like |
 
 ---
 
@@ -838,7 +838,7 @@ NEW FILES:
 │   └── continue-work.md
 ├── config/quality-gates/
 │   └── default-gates.yaml
-└── ~/.agentmux/sops/
+└── ~/.crewly/sops/
     ├── developer/
     ├── pm/
     └── qa/
@@ -857,9 +857,9 @@ NEW FILES:
 - Iteration tracking per task
 - Quality gates before completion
 - Learnings accumulation
-- Fresh context per iteration (AgentMux already does this)
+- Fresh context per iteration (Crewly already does this)
 
-**AgentMux Native Approaches:**
+**Crewly Native Approaches:**
 - PTY `onExit()` for completion detection (not stop hooks)
 - Activity monitoring for idle detection
 - Existing ticket system enhanced (not Ralph PRD)

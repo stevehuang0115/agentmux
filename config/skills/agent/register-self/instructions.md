@@ -1,6 +1,6 @@
 # Register Self
 
-Register this agent as active with the AgentMux backend. This must be the first skill you run on startup.
+Register this agent as active with the Crewly backend. This must be the first skill you run on startup.
 
 ## Parameters
 

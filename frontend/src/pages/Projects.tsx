@@ -169,7 +169,7 @@ export const Projects: React.FC = () => {
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Projects</h2>
-          <p className="text-sm text-text-secondary-dark mt-1">Manage and monitor your AgentMux projects</p>
+          <p className="text-sm text-text-secondary-dark mt-1">Manage and monitor your Crewly projects</p>
         </div>
 
         <button
@@ -249,7 +249,7 @@ export const Projects: React.FC = () => {
             <p className="text-sm text-text-secondary-dark mb-6">
               {searchTerm || filterStatus !== 'all'
                 ? 'Try adjusting your search or filter criteria'
-                : 'Create your first project to get started with AgentMux'
+                : 'Create your first project to get started with Crewly'
               }
             </p>
             {!searchTerm && filterStatus === 'all' && (

@@ -12,7 +12,7 @@ import { AgentMemoryService, IAgentMemoryService } from './agent-memory.service.
 import { ProjectMemoryService, IProjectMemoryService, SearchResults } from './project-memory.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { safeReadJson } from '../../utils/file-io.utils.js';
-import { AGENTMUX_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
 import type {
   RoleKnowledgeEntry,
   RoleKnowledgeCategory,
@@ -623,7 +623,7 @@ export class MemoryService implements IMemoryService {
 
     const indexPath = path.join(
       projectPath,
-      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
       MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
     );
 

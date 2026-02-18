@@ -5,7 +5,7 @@ Retrieve relevant knowledge from your persistent memory.
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/recall/execute.sh '{"context":"deployment process","scope":"both","teamMemberId":"agentmux-orc"}'
+bash config/skills/orchestrator/recall/execute.sh '{"context":"deployment process","scope":"both","teamMemberId":"crewly-orc"}'
 ```
 
 ## Parameters

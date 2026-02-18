@@ -2,7 +2,7 @@
  * Daily Log Service
  *
  * Manages daily markdown log files for tracking agent activities within a project.
- * Each day produces a single log file at `{projectPath}/.agentmux/logs/daily/YYYY-MM-DD.md`
+ * Each day produces a single log file at `{projectPath}/.crewly/logs/daily/YYYY-MM-DD.md`
  * containing timestamped entries grouped by agent role and ID.
  *
  * Log entries are append-only and provide a human-readable audit trail of what
@@ -16,7 +16,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import { ensureDir } from '../../utils/file-io.utils.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -115,7 +115,7 @@ export class DailyLogService {
   /**
    * Returns the absolute path to a daily log file
    *
-   * Constructs the path using the project's `.agentmux` directory and the
+   * Constructs the path using the project's `.crewly` directory and the
    * configured daily log subdirectory from MEMORY_CONSTANTS.
    *
    * @param projectPath - Absolute path to the project root
@@ -125,17 +125,17 @@ export class DailyLogService {
    * @example
    * ```typescript
    * const logPath = dailyLog.getLogPath('/home/user/my-project');
-   * // '/home/user/my-project/.agentmux/logs/daily/2026-02-09.md'
+   * // '/home/user/my-project/.crewly/logs/daily/2026-02-09.md'
    *
    * const pastLogPath = dailyLog.getLogPath('/home/user/my-project', '2026-02-07');
-   * // '/home/user/my-project/.agentmux/logs/daily/2026-02-07.md'
+   * // '/home/user/my-project/.crewly/logs/daily/2026-02-07.md'
    * ```
    */
   public getLogPath(projectPath: string, date?: string): string {
     const dateStr = date ?? this.formatDate(new Date());
     return path.join(
       projectPath,
-      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
       MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR,
       `${dateStr}.md`,
     );
@@ -165,7 +165,7 @@ export class DailyLogService {
    *   'developer',
    *   'Started login page implementation'
    * );
-   * // Appends to .agentmux/logs/daily/2026-02-09.md:
+   * // Appends to .crewly/logs/daily/2026-02-09.md:
    * // ## [developer / agent-dev-1] 14:05
    * // - Started login page implementation
    * ```

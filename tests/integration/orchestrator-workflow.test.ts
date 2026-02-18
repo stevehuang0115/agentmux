@@ -25,8 +25,8 @@ const mockScheduler = {
 const mockProjects = [
   {
     id: 'proj-001',
-    name: 'AgentMux Core',
-    path: '/tmp/agentmux-core',
+    name: 'Crewly Core',
+    path: '/tmp/crewly-core',
     teams: { development: ['team-dev'], qa: ['team-qa'] },
     status: 'active',
     createdAt: '2024-01-01T00:00:00Z',
@@ -52,7 +52,7 @@ const mockTeams = [
       {
         id: 'dev-1',
         name: 'Alice Developer',
-        sessionName: 'agentmux_dev_alice',
+        sessionName: 'crewly_dev_alice',
         role: 'developer',
         systemPrompt: 'Senior full-stack developer',
         status: 'working'
@@ -60,7 +60,7 @@ const mockTeams = [
       {
         id: 'dev-2',
         name: 'Bob Backend',
-        sessionName: 'agentmux_dev_bob', 
+        sessionName: 'crewly_dev_bob', 
         role: 'backend',
         systemPrompt: 'Backend API specialist',
         status: 'working'
@@ -79,7 +79,7 @@ const mockTeams = [
       {
         id: 'qa-1',
         name: 'Charlie QA',
-        sessionName: 'agentmux_qa_charlie',
+        sessionName: 'crewly_qa_charlie',
         role: 'qa',
         systemPrompt: 'Senior QA engineer',
         status: 'idle'
@@ -223,14 +223,14 @@ function createTestApp() {
         const teams = getTeams();
         const projects = getProjects();
         
-        output = `📊 AgentMux Statistics:\n`;
+        output = `📊 Crewly Statistics:\n`;
         output += `Projects: ${projects.length} total (${projects.filter(p => p.status === 'active').length} active)\n`;
         output += `Teams: ${teams.length} total (${teams.filter(t => t.status === 'working').length} working)\n`;
         output += `Scheduled Tasks: ${stats.activeTasks} active, ${stats.completedTasks} completed\n`;
         output += `Total Team Members: ${teams.reduce((acc, t) => acc + t.members.length, 0)}`;
         
       } else if (command === 'help') {
-        output = `🤖 AgentMux Orchestrator Commands:
+        output = `🤖 Crewly Orchestrator Commands:
 
 Core Commands:
 • get_team_status - Show detailed status of all teams
@@ -306,7 +306,7 @@ Example Usage:
     console.log(`Orchestrator client connected: ${socket.id}`);
     
     socket.emit('orchestrator_connected', {
-      message: 'Connected to AgentMux Orchestrator',
+      message: 'Connected to Crewly Orchestrator',
       timestamp: new Date().toISOString(),
       capabilities: ['command_execution', 'team_monitoring', 'task_scheduling']
     });
@@ -389,7 +389,7 @@ describe('Orchestrator Workflow Integration Tests', () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.output).toContain('Active Projects');
-      expect(response.body.output).toContain('AgentMux Core');
+      expect(response.body.output).toContain('Crewly Core');
       expect(response.body.output).toContain('Frontend Redesign');
       expect(response.body.output).toContain('teams assigned');
       expect(response.body.output).toContain('Path:');
@@ -402,7 +402,7 @@ describe('Orchestrator Workflow Integration Tests', () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.output).toContain('AgentMux Statistics');
+      expect(response.body.output).toContain('Crewly Statistics');
       expect(response.body.output).toContain('Projects:');
       expect(response.body.output).toContain('Teams:');
       expect(response.body.output).toContain('Scheduled Tasks:');
@@ -589,7 +589,7 @@ describe('Orchestrator Workflow Integration Tests', () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.output).toContain('AgentMux Orchestrator Commands');
+      expect(response.body.output).toContain('Crewly Orchestrator Commands');
       expect(response.body.output).toContain('Core Commands');
       expect(response.body.output).toContain('Communication');
       expect(response.body.output).toContain('Scheduling');

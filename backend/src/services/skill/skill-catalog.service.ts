@@ -3,7 +3,7 @@
  *
  * Scans skill directories (orchestrator and agent), reads skill.json and
  * instructions.md from each, and generates formatted catalog Markdown files
- * at ~/.agentmux/skills/.
+ * at ~/.crewly/skills/.
  *
  * Generates two catalogs:
  * - SKILLS_CATALOG.md for orchestrator skills
@@ -21,7 +21,7 @@ import * as path from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import * as os from 'os';
 import { LoggerService } from '../core/logger.service.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 // =============================================================================
 // Constants
@@ -33,7 +33,7 @@ const CATALOG_FILENAME = 'SKILLS_CATALOG.md';
 /** Name of the generated agent catalog file */
 const AGENT_CATALOG_FILENAME = 'AGENT_SKILLS_CATALOG.md';
 
-/** Subdirectory under ~/.agentmux where the catalog is written */
+/** Subdirectory under ~/.crewly where the catalog is written */
 const CATALOG_SUBDIR = 'skills';
 
 /** Relative path from project root to orchestrator skills */
@@ -131,9 +131,9 @@ export interface CatalogGenerationResult {
  *
  * Scans config/skills/orchestrator/ for subdirectories (skipping _common),
  * reads skill.json and instructions.md from each, groups skills by category,
- * and writes a formatted SKILLS_CATALOG.md to ~/.agentmux/skills/.
+ * and writes a formatted SKILLS_CATALOG.md to ~/.crewly/skills/.
  *
- * Uses a singleton pattern consistent with other AgentMux services.
+ * Uses a singleton pattern consistent with other Crewly services.
  *
  * @example
  * ```typescript
@@ -157,7 +157,7 @@ export class SkillCatalogService {
   constructor(projectRoot?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('SkillCatalogService');
     this.projectRoot = projectRoot || process.cwd();
-    this.catalogDir = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, CATALOG_SUBDIR);
+    this.catalogDir = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, CATALOG_SUBDIR);
   }
 
   /**
@@ -190,12 +190,12 @@ export class SkillCatalogService {
    * the formatted Markdown file.
    *
    * This method performs the following steps:
-   * 1. Ensures the output directory (~/.agentmux/skills/) exists
+   * 1. Ensures the output directory (~/.crewly/skills/) exists
    * 2. Scans config/skills/orchestrator/ for skill subdirectories
    * 3. Reads skill.json and instructions.md from each valid directory
    * 4. Groups loaded skills by their category field
    * 5. Renders a Markdown catalog document
-   * 6. Writes the catalog to ~/.agentmux/skills/SKILLS_CATALOG.md
+   * 6. Writes the catalog to ~/.crewly/skills/SKILLS_CATALOG.md
    *
    * @returns A result object with success status, path, and counts
    *
@@ -280,7 +280,7 @@ export class SkillCatalogService {
    * and writing a formatted Markdown file.
    *
    * This method mirrors generateCatalog() but targets config/skills/agent/
-   * and writes to ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md.
+   * and writes to ~/.crewly/skills/AGENT_SKILLS_CATALOG.md.
    *
    * @returns A result object with success status, path, and counts
    *
@@ -306,7 +306,7 @@ export class SkillCatalogService {
       const skills = await this.scanSkillDirectoriesAt(AGENT_SKILLS_RELATIVE_PATH);
 
       // Use absolute path for agent skills because agents run in their target
-      // project directory (e.g. ~/projects/business_os), NOT the AgentMux root.
+      // project directory (e.g. ~/projects/business_os), NOT the Crewly root.
       // Relative paths like config/skills/agent/ won't resolve from there.
       const absoluteSkillsPath = path.join(this.projectRoot, AGENT_SKILLS_RELATIVE_PATH);
 
@@ -365,7 +365,7 @@ export class SkillCatalogService {
   /**
    * Get the absolute path where the orchestrator catalog file will be written.
    *
-   * @returns Absolute path to ~/.agentmux/skills/SKILLS_CATALOG.md
+   * @returns Absolute path to ~/.crewly/skills/SKILLS_CATALOG.md
    */
   public getCatalogPath(): string {
     return path.join(this.catalogDir, CATALOG_FILENAME);
@@ -374,7 +374,7 @@ export class SkillCatalogService {
   /**
    * Get the absolute path where the agent catalog file will be written.
    *
-   * @returns Absolute path to ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md
+   * @returns Absolute path to ~/.crewly/skills/AGENT_SKILLS_CATALOG.md
    */
   public getAgentCatalogPath(): string {
     return path.join(this.catalogDir, AGENT_CATALOG_FILENAME);

@@ -295,7 +295,7 @@ export async function browseDirectories(
 }
 
 /**
- * Gracefully restart the AgentMux backend server.
+ * Gracefully restart the Crewly backend server.
  *
  * Saves PTY session state, responds to the caller, then exits with code 0.
  * The external process manager (nodemon, systemd, ECS, ProcessRecovery) is
@@ -336,7 +336,7 @@ export async function restartServer(
     // - Development (tsx watch): touch a source file to trigger file-watcher restart
     // - Production (pm2/Docker/ECS): process.exit(0) and supervisor restarts
     setTimeout(async () => {
-      console.log('Restarting AgentMux server...');
+      console.log('Restarting Crewly server...');
 
       // Try tsx watch restart: touch the entry file to trigger file-watcher
       const entryFile = path.resolve(process.cwd(), 'backend/src/index.ts');

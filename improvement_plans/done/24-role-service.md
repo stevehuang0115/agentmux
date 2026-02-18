@@ -37,7 +37,7 @@ import {
  *
  * Handles:
  * - Loading built-in roles from config/roles/
- * - Managing user-created roles in ~/.agentmux/roles/
+ * - Managing user-created roles in ~/.crewly/roles/
  * - CRUD operations for roles
  * - Role-to-skill assignment management
  */
@@ -54,7 +54,7 @@ export class RoleService {
     this.builtinRolesDir = options?.builtinRolesDir ??
       path.join(process.cwd(), 'config', 'roles');
     this.userRolesDir = options?.userRolesDir ??
-      path.join(process.env.HOME || '~', '.agentmux', 'roles');
+      path.join(process.env.HOME || '~', '.crewly', 'roles');
   }
 
   /**
@@ -493,7 +493,7 @@ config/roles/                    # Built-in roles (read-only)
 ├── support.json
 └── support-prompt.md
 
-~/.agentmux/roles/               # User-created roles
+~/.crewly/roles/               # User-created roles
 ├── custom-role-1.json
 ├── custom-role-1-prompt.md
 └── ...
@@ -603,7 +603,7 @@ You are an experienced product manager focused on understanding user needs and t
 - [ ] RoleService class is fully implemented with all methods
 - [ ] All CRUD operations work correctly
 - [ ] Built-in roles are loaded from config/roles/
-- [ ] User roles are saved to ~/.agentmux/roles/
+- [ ] User roles are saved to ~/.crewly/roles/
 - [ ] Built-in roles cannot be modified or deleted
 - [ ] Skill assignment works correctly
 - [ ] Default role management works

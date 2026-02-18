@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a bridge service that connects Slack messages to the AgentMux orchestrator. This service routes incoming Slack commands to the orchestrator, formats responses for Slack, and sends proactive notifications about project/team status.
+Create a bridge service that connects Slack messages to the Crewly orchestrator. This service routes incoming Slack commands to the orchestrator, formats responses for Slack, and sends proactive notifications about project/team status.
 
 ## Priority
 
@@ -22,7 +22,7 @@ Create a bridge service that connects Slack messages to the AgentMux orchestrato
 /**
  * Slack-Orchestrator Bridge
  *
- * Routes messages between Slack and the AgentMux orchestrator,
+ * Routes messages between Slack and the Crewly orchestrator,
  * enabling mobile control of AI teams.
  *
  * @module services/slack/bridge
@@ -43,7 +43,7 @@ import {
   SlackBlock,
 } from '../../types/slack.types.js';
 import { ChatMessage } from '../../types/chat.types.js';
-import { AGENTMUX_CONSTANTS } from '../../../config/index.js';
+import { CREWLY_CONSTANTS } from '../../../config/index.js';
 
 /**
  * Bridge configuration
@@ -60,7 +60,7 @@ export interface SlackBridgeConfig {
 }
 
 const DEFAULT_CONFIG: SlackBridgeConfig = {
-  orchestratorSession: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+  orchestratorSession: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
   showTypingIndicator: true,
   maxResponseLength: 3000,
   enableNotifications: true,
@@ -176,7 +176,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
    * Get help message
    */
   private getHelpMessage(): string {
-    return `*AgentMux Commands:*
+    return `*Crewly Commands:*
 
 :clipboard: *Status*
 • \`status\` - Get overall status

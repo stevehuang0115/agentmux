@@ -281,7 +281,7 @@ export class SelfImprovementService {
     const backups: FileBackupRecord[] = [];
     const backupDir = path.join(
       this.projectRoot,
-      '.agentmux',
+      '.crewly',
       'self-improvement',
       'backups',
       `backup-${Date.now()}`
@@ -480,7 +480,7 @@ Add/update in MCP server:
 ```typescript
 {
   name: 'self_improve',
-  description: 'Plan and execute improvements to the AgentMux codebase. Use plan first, then execute.',
+  description: 'Plan and execute improvements to the Crewly codebase. Use plan first, then execute.',
   inputSchema: {
     type: 'object',
     properties: {

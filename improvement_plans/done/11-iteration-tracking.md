@@ -28,7 +28,7 @@ The continuation system needs to track:
 Update the ticket YAML format:
 
 ```yaml
-# project/.agentmux/tasks/milestone/in_progress/task.md
+# project/.crewly/tasks/milestone/in_progress/task.md
 ---
 id: implement-feature-x
 title: Implement Feature X

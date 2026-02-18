@@ -15,7 +15,7 @@ import {
   getSettingsService,
   resetSettingsService,
 } from './settings.service.js';
-import { getDefaultSettings, AgentMuxSettings } from '../../types/settings.types.js';
+import { getDefaultSettings, CrewlySettings } from '../../types/settings.types.js';
 
 describe('SettingsService', () => {
   let service: SettingsService;
@@ -429,7 +429,7 @@ describe('SettingsService', () => {
       await service.exportSettings(exportPath);
 
       const content = await fs.readFile(exportPath, 'utf-8');
-      const exported = JSON.parse(content) as AgentMuxSettings;
+      const exported = JSON.parse(content) as CrewlySettings;
 
       expect(exported.general).toBeDefined();
       expect(exported.chat).toBeDefined();

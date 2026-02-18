@@ -6,7 +6,7 @@ import { join, basename, dirname, resolve, relative } from 'path';
 import { existsSync } from 'fs';
 import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 /**
  * Assigns a task to a team member by moving it from open/ to in_progress/ folder
@@ -20,7 +20,7 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 
 		// Update agent heartbeat (proof of life)
 		try {
-			await updateAgentHeartbeat(sessionName, undefined, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			await updateAgentHeartbeat(sessionName, undefined, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		} catch (error) {
 			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
 			// Continue execution - heartbeat failures shouldn't break task assignment
@@ -66,12 +66,12 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 		const taskInfo = parseTaskInfo(taskContent, basename(taskPath));
 		
 		// Extract project and team information from task path
-		const pathMatch = taskPath.match(/\/([^/]+)\/\.agentmux/);
+		const pathMatch = taskPath.match(/\/([^/]+)\/\.crewly/);
 		if (!pathMatch) {
 			res.status(400).json({ success: false, error: 'Cannot determine project from task path' });
 			return;
 		}
-		const projectPath = taskPath.substring(0, taskPath.indexOf('.agentmux') + 9);
+		const projectPath = taskPath.substring(0, taskPath.indexOf('.crewly') + 9);
 		
 		// Find project by path
 		const projects = await this.storageService.getProjects();
@@ -154,7 +154,7 @@ export async function completeTask(
 
 		// Update agent heartbeat (proof of life)
 		try {
-			await updateAgentHeartbeat(sessionName, undefined, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			await updateAgentHeartbeat(sessionName, undefined, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		} catch (error) {
 			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
 			// Continue execution - heartbeat failures shouldn't break task completion
@@ -387,8 +387,8 @@ export async function takeNextTask(
 
 		// Construct path to open tasks
 		const openTasksPath = taskGroup
-			? join(projectPath, '.agentmux', 'tasks', taskGroup, 'open')
-			: join(projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks', 'open');
+			? join(projectPath, '.crewly', 'tasks', taskGroup, 'open')
+			: join(projectPath, '.crewly', 'tasks', 'm0_build_spec_tasks', 'open');
 
 		if (!existsSync(openTasksPath)) {
 			res.status(404).json({
@@ -457,8 +457,8 @@ export async function syncTaskStatus(
 
 		// Construct base tasks path
 		const basePath = taskGroup
-			? join(projectPath, '.agentmux', 'tasks', taskGroup)
-			: join(projectPath, '.agentmux', 'tasks', 'm0_build_spec_tasks');
+			? join(projectPath, '.crewly', 'tasks', taskGroup)
+			: join(projectPath, '.crewly', 'tasks', 'm0_build_spec_tasks');
 
 		if (!existsSync(basePath)) {
 			res.status(404).json({
@@ -530,7 +530,7 @@ export async function getTeamProgress(
 			return;
 		}
 
-		const tasksBasePath = join(projectPath, '.agentmux', 'tasks');
+		const tasksBasePath = join(projectPath, '.crewly', 'tasks');
 
 		if (!existsSync(tasksBasePath)) {
 			res.status(404).json({
@@ -793,7 +793,7 @@ export async function createTasksFromConfig(
 		}
 
 		// Read initial goal and user journey from saved .md files
-		const specsPath = join(projectPath, '.agentmux', 'specs');
+		const specsPath = join(projectPath, '.crewly', 'specs');
 		const goalFilePath = join(specsPath, 'initial_goal.md');
 		const journeyFilePath = join(specsPath, 'initial_user_journey.md');
 
@@ -855,7 +855,7 @@ export async function createTasksFromConfig(
 
 		// Create tasks directory for initial tasksß
 		const taskDirName = 'm0_initial_tasks';
-		const tasksDir = join(projectPath, '.agentmux', 'tasks', taskDirName, 'open');
+		const tasksDir = join(projectPath, '.crewly', 'tasks', taskDirName, 'open');
 
 		try {
 			await ensureDirectoryExists(tasksDir);
@@ -1070,12 +1070,12 @@ export async function readTask(this: ApiController, req: Request, res: Response)
 
 		// Security validation: ensure path is within allowed directories
 		const resolvedPath = resolve(taskPath);
-		const allowedPattern = /\.agentmux[\/\\]tasks[\/\\]/;
+		const allowedPattern = /\.crewly[\/\\]tasks[\/\\]/;
 
 		if (!allowedPattern.test(resolvedPath)) {
 			res.status(403).json({
 				success: false,
-				error: 'Access denied: path must be within .agentmux/tasks/ directory'
+				error: 'Access denied: path must be within .crewly/tasks/ directory'
 			});
 			return;
 		}

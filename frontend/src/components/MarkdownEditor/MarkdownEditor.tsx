@@ -24,7 +24,7 @@ export const MarkdownEditor: React.FC<MarkdownEditorProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Common .agentmux spec file templates
+  // Common .crewly spec file templates
   const templates = {
     'project-spec.md': `# Project Specification
 
@@ -108,7 +108,7 @@ You are a QA Tester AI agent responsible for:
     
     try {
       const response = await fetch(
-        `/api/projects/files?projectPath=${encodeURIComponent(projectPath)}&type=agentmux-md`
+        `/api/projects/files?projectPath=${encodeURIComponent(projectPath)}&type=crewly-md`
       );
       
       if (response.ok) {
@@ -155,7 +155,7 @@ You are a QA Tester AI agent responsible for:
     const fileName = templateName;
     setActiveFile({
       name: fileName,
-      path: `.agentmux/${fileName}`,
+      path: `.crewly/${fileName}`,
       content: templates[templateName],
       modified: true
     });
@@ -290,7 +290,7 @@ You are a QA Tester AI agent responsible for:
                     ))}
                   </ul>
                 ) : (
-                  <p className="no-files">No .agentmux markdown files found</p>
+                  <p className="no-files">No .crewly markdown files found</p>
                 )}
               </div>
 

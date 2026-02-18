@@ -360,7 +360,7 @@ describe('Security Utilities', () => {
 		it('should accept valid session names', () => {
 			expect(validateSessionName('my-session').isValid).toBe(true);
 			expect(validateSessionName('session_123').isValid).toBe(true);
-			expect(validateSessionName('AgentMux-Orc').isValid).toBe(true);
+			expect(validateSessionName('Crewly-Orc').isValid).toBe(true);
 			expect(validateSessionName('test').isValid).toBe(true);
 		});
 

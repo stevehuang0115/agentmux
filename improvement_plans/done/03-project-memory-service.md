@@ -12,7 +12,7 @@ blocks: [05-memory-prompt-integration, 06-memory-mcp-tools]
 # Task: Implement MemoryService for Project-Level Memory
 
 ## Objective
-Create the service that manages project-level persistent memory stored in `project/.agentmux/knowledge/`.
+Create the service that manages project-level persistent memory stored in `project/.crewly/knowledge/`.
 
 ## Background
 Project-level memory stores patterns, decisions, gotchas, and relationships specific to each project. This enables any agent working on the project to benefit from previous discoveries.
@@ -66,7 +66,7 @@ class ProjectMemoryService implements IProjectMemoryService {
   private readonly KNOWLEDGE_DIR = 'knowledge';
 
   private getKnowledgePath(projectPath: string): string {
-    return path.join(projectPath, '.agentmux', this.KNOWLEDGE_DIR);
+    return path.join(projectPath, '.crewly', this.KNOWLEDGE_DIR);
   }
 
   async initializeProject(projectPath: string): Promise<void> {
@@ -314,7 +314,7 @@ backend/src/services/memory/
 
 ## Notes
 
-- Initialize knowledge directory when project is added to AgentMux
+- Initialize knowledge directory when project is added to Crewly
 - Coordinate with `ContextLoaderService` to include knowledge in context
 - Consider adding validation for relationship cycles
 - Learnings.md should be human-readable for debugging

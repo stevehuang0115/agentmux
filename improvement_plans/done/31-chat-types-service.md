@@ -369,7 +369,7 @@ import { EventEmitter } from 'events';
  * Service for managing chat conversations and messages
  *
  * Handles:
- * - Message persistence to ~/.agentmux/chat/
+ * - Message persistence to ~/.crewly/chat/
  * - Conversation management
  * - Message formatting (raw terminal → clean chat)
  * - WebSocket event emission for real-time updates
@@ -390,7 +390,7 @@ export class ChatService extends EventEmitter {
   constructor(options?: { chatDir?: string }) {
     super();
     this.chatDir = options?.chatDir ??
-      path.join(process.env.HOME || '~', '.agentmux', 'chat');
+      path.join(process.env.HOME || '~', '.crewly', 'chat');
   }
 
   /**
@@ -1119,7 +1119,7 @@ export function extractResponseFromOutput(rawOutput: string): string {
 - [ ] All chat type definitions complete with JSDoc
 - [ ] ChatService handles message sending and receiving
 - [ ] Response extraction from terminal output works
-- [ ] Messages persist to ~/.agentmux/chat/
+- [ ] Messages persist to ~/.crewly/chat/
 - [ ] Conversation management (create, archive, delete)
 - [ ] WebSocket event emission for real-time updates
 - [ ] Message filtering and pagination work

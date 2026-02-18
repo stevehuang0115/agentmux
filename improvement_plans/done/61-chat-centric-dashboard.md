@@ -28,7 +28,7 @@ The current Dashboard shows projects and teams in a grid layout. The original pl
 **Planned Layout:**
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  AgentMux                              [Settings] [Terminal]│
+│  Crewly                              [Settings] [Terminal]│
 ├─────────────┬───────────────────────────────────────────────┤
 │  Sidebar    │  Chat with Orchestrator                       │
 │  ─────────  │  ─────────────────────────                   │
@@ -80,7 +80,7 @@ export const Dashboard: React.FC = () => {
       {/* Sidebar */}
       <aside className={`dashboard-sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
-          <h1 className="app-title">AgentMux</h1>
+          <h1 className="app-title">Crewly</h1>
           <button
             className="sidebar-toggle"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}

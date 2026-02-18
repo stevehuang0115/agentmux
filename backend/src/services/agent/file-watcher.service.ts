@@ -43,16 +43,16 @@ export class FileWatcherService extends EventEmitter {
   }
 
   /**
-   * Start watching a project's .agentmux directory
+   * Start watching a project's .crewly directory
    */
   async watchProject(projectId: string, projectPath: string): Promise<void> {
     try {
       const resolvedProjectPath = path.resolve(projectPath);
-      const agentmuxPath = path.join(resolvedProjectPath, '.agentmux');
+      const crewlyPath = path.join(resolvedProjectPath, '.crewly');
       
       // Check if directory exists
-      if (!fs.existsSync(agentmuxPath)) {
-        this.logger.warn(`AgentMux directory does not exist: ${agentmuxPath}`);
+      if (!fs.existsSync(crewlyPath)) {
+        this.logger.warn(`Crewly directory does not exist: ${crewlyPath}`);
         return;
       }
 
@@ -62,15 +62,15 @@ export class FileWatcherService extends EventEmitter {
       const watcherId = `project_${projectId}`;
       const projectWatchPaths = new Set<string>();
 
-      // Watch main .agentmux directory
-      const mainWatcher = this.createWatcher(agentmuxPath, projectId, 'main');
+      // Watch main .crewly directory
+      const mainWatcher = this.createWatcher(crewlyPath, projectId, 'main');
       this.watchers.set(`${watcherId}_main`, mainWatcher);
-      projectWatchPaths.add(agentmuxPath);
+      projectWatchPaths.add(crewlyPath);
 
       // Watch subdirectories
       const subdirs = ['specs', 'tasks', 'memory', 'prompts'];
       for (const subdir of subdirs) {
-        const subdirPath = path.join(agentmuxPath, subdir);
+        const subdirPath = path.join(crewlyPath, subdir);
         if (fs.existsSync(subdirPath)) {
           const subWatcher = this.createWatcher(subdirPath, projectId, subdir as any);
           this.watchers.set(`${watcherId}_${subdir}`, subWatcher);

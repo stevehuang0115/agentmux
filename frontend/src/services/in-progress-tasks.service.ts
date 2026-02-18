@@ -1,5 +1,5 @@
 /**
- * Service for managing in-progress tasks data from ~/.agentmux/in_progress_tasks.json
+ * Service for managing in-progress tasks data from ~/.crewly/in_progress_tasks.json
  */
 
 import { TeamMember } from '../types';

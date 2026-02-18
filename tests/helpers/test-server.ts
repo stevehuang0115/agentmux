@@ -1,12 +1,12 @@
 // For tests, we'll use a mock server instead of importing the real one
-export class MockAgentMuxServer {
+export class MockCrewlyServer {
   private config: any;
   private mockHttpServer: any;
   
   constructor(config?: any) {
     this.config = {
       webPort: config?.webPort || 3000,
-      agentmuxHome: config?.agentmuxHome || '~/.agentmux',
+      crewlyHome: config?.crewlyHome || '~/.crewly',
       ...config
     };
     
@@ -32,4 +32,4 @@ export class MockAgentMuxServer {
   }
 }
 
-export default MockAgentMuxServer;
+export default MockCrewlyServer;

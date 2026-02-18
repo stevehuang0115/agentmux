@@ -45,7 +45,7 @@ jest.mock('../core/logger.service.js', () => {
 });
 
 import { LearningAccumulationService } from './learning-accumulation.service.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 
 describe('LearningAccumulationService', () => {
   let service: LearningAccumulationService;
@@ -56,8 +56,8 @@ describe('LearningAccumulationService', () => {
 
   beforeEach(async () => {
     const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2)}`;
-    testProjectDir = path.join(actualOs.tmpdir(), `agentmux-learn-project-${uniqueId}`);
-    testGlobalHome = path.join(actualOs.tmpdir(), `agentmux-learn-global-${uniqueId}`);
+    testProjectDir = path.join(actualOs.tmpdir(), `crewly-learn-project-${uniqueId}`);
+    testGlobalHome = path.join(actualOs.tmpdir(), `crewly-learn-global-${uniqueId}`);
     await fs.mkdir(testProjectDir, { recursive: true });
     await fs.mkdir(testGlobalHome, { recursive: true });
 
@@ -104,7 +104,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE,
       );
@@ -118,7 +118,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE,
       );
@@ -133,7 +133,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE,
       );
@@ -150,7 +150,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE,
       );
@@ -165,7 +165,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE,
       );
@@ -184,7 +184,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_FAILED_FILE,
       );
@@ -198,7 +198,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_FAILED_FILE,
       );
@@ -213,7 +213,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.WHAT_FAILED_FILE,
       );
@@ -233,7 +233,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testGlobalHome,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.GLOBAL_LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.CROSS_PROJECT_INSIGHTS,
       );
@@ -253,7 +253,7 @@ describe('LearningAccumulationService', () => {
 
       const filePath = path.join(
         testGlobalHome,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.GLOBAL_LEARNING_DIR,
         MEMORY_CONSTANTS.PATHS.CROSS_PROJECT_INSIGHTS,
       );

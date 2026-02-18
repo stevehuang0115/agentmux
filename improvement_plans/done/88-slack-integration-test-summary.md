@@ -1,7 +1,7 @@
 # Task 88: Slack Integration Test Summary - 2026-02-01
 
 ## Test Overview
-Comprehensive testing of Slack integration for AgentMux AI Employee Hub.
+Comprehensive testing of Slack integration for Crewly AI Employee Hub.
 
 ## Test Results
 

@@ -22,7 +22,7 @@ import {
   ORCHESTRATOR_ROLE,
   RUNTIME_TYPES
 } from '../../constants.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
@@ -133,11 +133,11 @@ function buildOrchestratorTeam(
       {
         id: 'orchestrator-member',
         name: 'Agentmux Orchestrator',
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
-        systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
+        systemPrompt: 'You are the Crewly Orchestrator responsible for coordinating teams and managing project workflows.',
         agentStatus: actualAgentStatus as TeamMember['agentStatus'],
-        workingStatus: (orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE) as TeamMember['workingStatus'],
+        workingStatus: (orchestratorStatus?.workingStatus || CREWLY_CONSTANTS.WORKING_STATUSES.IDLE) as TeamMember['workingStatus'],
         runtimeType: (orchestratorStatus?.runtimeType || 'claude-code') as TeamMember['runtimeType'],
         createdAt: orchestratorStatus?.createdAt || now,
         updatedAt: orchestratorStatus?.updatedAt || now
@@ -162,11 +162,11 @@ function resolveAgentStatus(
   sessionExists: boolean
 ): TeamMember['agentStatus'] {
   if (!sessionExists) {
-    return AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
+    return CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
   }
 
-  if (!storedStatus || storedStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE) {
-    return AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED as TeamMember['agentStatus'];
+  if (!storedStatus || storedStatus === CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE) {
+    return CREWLY_CONSTANTS.AGENT_STATUSES.STARTED as TeamMember['agentStatus'];
   }
 
   return storedStatus;
@@ -193,7 +193,7 @@ async function _startTeamMemberCore(
       const hasActiveSession = sessions.some(s => s.sessionName === member.sessionName);
       if (hasActiveSession) {
         // Handle synchronization issue: session exists but status might be inactive
-        if (member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE) {
+        if (member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE) {
           try {
             // Try to check if the agent in the session is responsive
             const captureResult = await Promise.race([
@@ -212,7 +212,7 @@ async function _startTeamMemberCore(
 
               if (currentTeam && currentMember) {
                 // Update status to active to sync with session state
-                currentMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+                currentMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
                 currentMember.workingStatus = currentMember.workingStatus || 'working';
                 currentMember.updatedAt = new Date().toISOString();
 
@@ -262,7 +262,7 @@ async function _startTeamMemberCore(
 
     // Only prevent processing if member has BOTH active status AND an existing session
     // This allows newly 'activating' members (set by API endpoints) to proceed with session creation
-    if (member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE && member.sessionName) {
+    if (member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE && member.sessionName) {
       // Double-check that the session actually exists
       const sessions = await context.tmuxService.listSessions();
       const hasActiveSession = sessions.some(s => s.sessionName === member.sessionName);
@@ -307,7 +307,7 @@ async function _startTeamMemberCore(
     // Set sessionName in team member BEFORE creating session to avoid race condition
     // Use fresh team data to preserve any concurrent agentStatus updates
     currentMember.sessionName = sessionName;
-    currentMember.workingStatus = currentMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+    currentMember.workingStatus = currentMember.workingStatus || CREWLY_CONSTANTS.WORKING_STATUSES.IDLE;
     currentMember.updatedAt = new Date().toISOString();
 
     await context.storageService.saveTeam(currentTeam);
@@ -395,7 +395,7 @@ async function _startTeamMemberCore(
 
       if (failureTeam && failureMember) {
         // Reset to inactive if session creation failed
-        failureMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+        failureMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
         failureMember.sessionName = '';
         failureMember.updatedAt = new Date().toISOString();
         await context.storageService.saveTeam(failureTeam);
@@ -419,7 +419,7 @@ async function _startTeamMemberCore(
 
     if (errorTeam && errorMember) {
       // Reset to inactive if session creation failed
-      errorMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+      errorMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
       errorMember.sessionName = '';
       errorMember.updatedAt = new Date().toISOString();
       await context.storageService.saveTeam(errorTeam);
@@ -474,8 +474,8 @@ async function _stopTeamMemberCore(
     const oldSessionName = member.sessionName;
     const mutableMember = member as MutableTeamMember;
     mutableMember.sessionName = '';
-    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
-    mutableMember.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+    mutableMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    mutableMember.workingStatus = CREWLY_CONSTANTS.WORKING_STATUSES.IDLE;
     mutableMember.updatedAt = new Date().toISOString();
     await context.storageService.saveTeam(team);
 
@@ -484,7 +484,7 @@ async function _stopTeamMemberCore(
       memberName: member.name,
       memberId: member.id,
       sessionName: oldSessionName,
-      status: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+      status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
     };
   } catch (error) {
     console.error('Error stopping team member:', error);
@@ -569,8 +569,8 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
         role: member.role,
         avatar: member.avatar,
         systemPrompt: member.systemPrompt,
-        agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-        workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
         runtimeType: member.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
         skillOverrides: member.skillOverrides || [],
         excludedRoleSkills: member.excludedRoleSkills || [],
@@ -623,7 +623,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
 
     // Check actual PTY session existence for accurate status
     const backend = getSessionBackendSync();
-    const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
+    const orchestratorSessionExists = backend?.sessionExists(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
     const actualOrchestratorStatus = resolveAgentStatus(
       orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
@@ -671,7 +671,7 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
 
       // Check actual PTY session existence for accurate status
       const backend = getSessionBackendSync();
-      const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
+      const orchestratorSessionExists = backend?.sessionExists(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
       const actualOrchestratorStatus = resolveAgentStatus(
         orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
@@ -758,7 +758,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
     // PHASE 2: Immediately set ALL members to 'starting' for instant UI feedback
     for (const member of team.members) {
       const mutableMember = member as MutableTeamMember;
-      mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING;
+      mutableMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.STARTING;
       mutableMember.updatedAt = new Date().toISOString();
     }
     await this.storageService.saveTeam(team);
@@ -911,7 +911,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
     if (!team) { res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse); return; }
 
     try {
-      const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+      const orchestratorSession = CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
       const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
       if (sessionExists) {
         const sessionNames = team.members?.map(m => m.sessionName).filter(Boolean) || [];
@@ -975,8 +975,8 @@ export async function addTeamMember(this: ApiContext, req: Request, res: Respons
       role: role,
       avatar: avatar,
       systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
-      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+      agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+      workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
       runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -1051,7 +1051,7 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
 
     // PHASE 3: Immediately set target member to 'starting' for instant UI feedback
     const mutableMember = member as MutableTeamMember;
-    mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING;
+    mutableMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.STARTING;
     mutableMember.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
@@ -1075,7 +1075,7 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
           data: {
             memberId: result.memberId,
             sessionName: result.sessionName,
-            status: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+            status: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
           }
         } as ApiResponse);
       } else {
@@ -1138,7 +1138,7 @@ export async function stopTeamMember(this: ApiContext, req: Request, res: Respon
         success: true,
         data: {
           memberId: result.memberId,
-          status: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+          status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
         },
         message: `Team member ${result.memberName} stopped successfully`
       } as ApiResponse);
@@ -1190,7 +1190,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
 
     // Update agent heartbeat (proof of life)
     try {
-      await updateAgentHeartbeat(sessionName, memberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+      await updateAgentHeartbeat(sessionName, memberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
     } catch {
       // Continue execution - heartbeat failures shouldn't break registration
     }
@@ -1201,17 +1201,17 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     }
 
     // Handle orchestrator registration separately
-    if (role === 'orchestrator' && sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+    if (role === 'orchestrator' && sessionName === CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
       try {
-        await this.storageService.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+        await this.storageService.updateOrchestratorStatus(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 
         // Broadcast orchestrator status change via WebSocket for real-time UI updates
         const terminalGateway = getTerminalGateway();
         if (terminalGateway) {
           terminalGateway.broadcastOrchestratorStatus({
             sessionName,
-            agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
-            workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+            agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+            workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
           });
         }
 
@@ -1258,8 +1258,8 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     if (freshTeam) {
       const freshMember = freshTeam.members.find(m => m.id === targetMemberId) as MutableTeamMember | undefined;
       if (freshMember) {
-        freshMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
-        freshMember.workingStatus = freshMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+        freshMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
+        freshMember.workingStatus = freshMember.workingStatus || CREWLY_CONSTANTS.WORKING_STATUSES.IDLE;
         freshMember.readyAt = registeredAt || new Date().toISOString();
         if (memberId && freshMember.id === memberId && !freshMember.sessionName) {
           freshMember.sessionName = sessionName;
@@ -1281,7 +1281,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
       }
     }
 
-    res.json({ success: true, message: `Agent ${sessionName} registered as active with role ${role}`, data: { sessionName, role, status: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, registeredAt: registeredAt || new Date().toISOString() } } as ApiResponse);
+    res.json({ success: true, message: `Agent ${sessionName} registered as active with role ${role}`, data: { sessionName, role, status: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, registeredAt: registeredAt || new Date().toISOString() } } as ApiResponse);
 
     // Flush any queued messages for this sub-agent (fire-and-forget after response)
     const subAgentQueue = SubAgentMessageQueue.getInstance();
@@ -1385,7 +1385,7 @@ export async function refreshMemberContext(this: ApiContext, req: Request, res: 
 export async function getTeamActivityStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const now = new Date().toISOString();
-    const orchestratorRunning = await this.tmuxService.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+    const orchestratorRunning = await this.tmuxService.sessionExists(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
     const teams = await this.storageService.getTeams();
     const memberStatuses: MemberActivityStatus[] = [];
     const teamsToUpdate: Team[] = [];
@@ -1415,7 +1415,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
 
         for (const member of team.members) {
           const mutableMember = member as MutableTeamMember;
-          if (member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE && member.sessionName) {
+          if (member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE && member.sessionName) {
             try {
               // Add timeout to prevent hanging
               const sessionExists = await Promise.race([
@@ -1426,8 +1426,8 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               ]);
 
               if (!sessionExists) {
-                mutableMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
-                mutableMember.workingStatus = AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+                mutableMember.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
+                mutableMember.workingStatus = CREWLY_CONSTANTS.WORKING_STATUSES.IDLE;
                 mutableMember.lastActivityCheck = now;
                 // Clear terminal output to prevent memory leak
                 delete mutableMember.lastTerminalOutput;
@@ -1441,8 +1441,8 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                   memberName: member.name,
                   role: member.role,
                   sessionName: member.sessionName,
-                  agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-                  workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+                  agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+                  workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
                   lastActivityCheck: now,
                   activityDetected: false,
                   currentTask
@@ -1465,7 +1465,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
 
               const previousOutput = mutableMember.lastTerminalOutput || '';
               const activityDetected = trimmedOutput !== previousOutput && trimmedOutput.trim() !== '';
-              const newWorkingStatus = activityDetected ? 'in_progress' : AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+              const newWorkingStatus = activityDetected ? 'in_progress' : CREWLY_CONSTANTS.WORKING_STATUSES.IDLE;
 
               if (member.workingStatus !== newWorkingStatus) {
                 mutableMember.workingStatus = newWorkingStatus;
@@ -1505,7 +1505,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
                 role: member.role,
                 sessionName: member.sessionName,
                 agentStatus: member.agentStatus,
-                workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+                workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
                 lastActivityCheck: now,
                 activityDetected: false,
                 error: error instanceof Error ? error.message : String(error),
@@ -1521,8 +1521,8 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               memberName: member.name,
               role: member.role,
               sessionName: member.sessionName || '',
-              agentStatus: member.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-              workingStatus: member.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+              agentStatus: member.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+              workingStatus: member.workingStatus || CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
               lastActivityCheck: mutableMember.lastActivityCheck || now,
               activityDetected: false,
               currentTask
@@ -1552,12 +1552,12 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
     res.json({
       success: true,
       data: {
-        orchestrator: { running: orchestratorRunning, sessionName: orchestratorRunning ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME : null },
+        orchestrator: { running: orchestratorRunning, sessionName: orchestratorRunning ? CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME : null },
         teams,
         members: memberStatuses,
         checkedAt: now,
         totalMembers: memberStatuses.length,
-        totalActiveMembers: memberStatuses.filter(m => m.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE).length
+        totalActiveMembers: memberStatuses.filter(m => m.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE).length
       }
     } as ApiResponse);
 
@@ -1600,11 +1600,11 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
       const updatedMember: TeamMember = {
         id: 'orchestrator-member',
         name: 'Agentmux Orchestrator',
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
-        systemPrompt: 'You are the AgentMux Orchestrator responsible for coordinating teams and managing project workflows.',
-        agentStatus: orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-        workingStatus: orchestratorStatus?.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+        systemPrompt: 'You are the Crewly Orchestrator responsible for coordinating teams and managing project workflows.',
+        agentStatus: orchestratorStatus?.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        workingStatus: orchestratorStatus?.workingStatus || CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
         runtimeType: runtimeType,
         createdAt: orchestratorStatus?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -1703,7 +1703,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
 
       // Return the virtual orchestrator team structure
       const orchestratorTeam = buildOrchestratorTeam(
-        orchestratorStatus?.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        orchestratorStatus?.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
         orchestratorStatus,
         { currentProject: updates.currentProject }
       );
@@ -1766,8 +1766,8 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
             name: memberUpdate.name,
             role: memberUpdate.role,
             systemPrompt: memberUpdate.systemPrompt,
-            agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-            workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+            agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+            workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
             runtimeType: memberUpdate.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
             avatar: memberUpdate.avatar,
             skillOverrides: memberUpdate.skillOverrides || [],

@@ -62,8 +62,8 @@ class FactoryService {
 
   /**
    * Builds factory state by merging data from multiple sources:
-   * 1. AgentMux teams (managed agents - Claude, Gemini, Codex, etc.)
-   * 2. Claude Code processes (standalone processes outside AgentMux)
+   * 1. Crewly teams (managed agents - Claude, Gemini, Codex, etc.)
+   * 2. Claude Code processes (standalone processes outside Crewly)
    *
    * @returns Promise resolving to merged factory state
    */
@@ -72,7 +72,7 @@ class FactoryService {
     const projectSet = new Set<string>();
     const seenIds = new Set<string>();
 
-    // 1. Fetch AgentMux managed teams
+    // 1. Fetch Crewly managed teams
     try {
       const teamsResponse = await axios.get<ApiResponse<any[]>>(`${API_BASE}/teams`);
       const teams = teamsResponse.data.data || [];

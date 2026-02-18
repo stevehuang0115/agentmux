@@ -1,6 +1,6 @@
 # Send Chat Response
 
-Send a chat response that appears in the AgentMux chat UI. Use this to communicate results, status updates, or answers directly to the user.
+Send a chat response that appears in the Crewly chat UI. Use this to communicate results, status updates, or answers directly to the user.
 
 ## Parameters
 

@@ -217,12 +217,12 @@ Ensure `ContextLoaderService` doesn't duplicate memory loading:
 class ContextLoaderService {
   async loadProjectContext(projectPath: string): Promise<string> {
     // Load these (existing):
-    // - Specs from .agentmux/specs/
-    // - Tickets from .agentmux/tasks/
+    // - Specs from .crewly/specs/
+    // - Tickets from .crewly/tasks/
     // - Git history
     // - Dependencies
 
-    // DO NOT load from .agentmux/knowledge/ - that's handled by MemoryService
+    // DO NOT load from .crewly/knowledge/ - that's handled by MemoryService
 
     return contextString;
   }

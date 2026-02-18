@@ -2,7 +2,7 @@
 
 ## Overview
 
-Define TypeScript types for persisting orchestrator state across restarts. This enables the orchestrator to resume work after AgentMux restarts, maintaining conversation context and task progress.
+Define TypeScript types for persisting orchestrator state across restarts. This enables the orchestrator to resume work after Crewly restarts, maintaining conversation context and task progress.
 
 ## Priority
 
@@ -283,7 +283,7 @@ export interface ValidationCheck {
  * Orchestrator metadata
  */
 export interface OrchestratorMetadata {
-  /** AgentMux version */
+  /** Crewly version */
   version: string;
   /** Hostname for identification */
   hostname: string;
@@ -342,7 +342,7 @@ export interface ResumeInstructions {
  * State file paths configuration
  */
 export const STATE_PATHS = {
-  STATE_DIR: '.agentmux/state',
+  STATE_DIR: '.crewly/state',
   CURRENT_STATE: 'orchestrator-state.json',
   BACKUP_DIR: 'backups',
   SELF_IMPROVEMENT_DIR: 'self-improvement',
@@ -381,7 +381,7 @@ import {
 describe('Orchestrator State Types', () => {
   describe('Constants', () => {
     it('should have correct STATE_PATHS', () => {
-      expect(STATE_PATHS.STATE_DIR).toBe('.agentmux/state');
+      expect(STATE_PATHS.STATE_DIR).toBe('.crewly/state');
       expect(STATE_PATHS.CURRENT_STATE).toBe('orchestrator-state.json');
       expect(STATE_PATHS.BACKUP_DIR).toBe('backups');
     });

@@ -478,7 +478,7 @@ describe('ProjectDetail Page', () => {
       expect(assignButton.tagName).toBe('BUTTON');
 
       const deleteButton = screen.getByText('Delete');
-      expect(deleteButton).toHaveAttribute('title', 'Delete project from AgentMux (files will be kept)');
+      expect(deleteButton).toHaveAttribute('title', 'Delete project from Crewly (files will be kept)');
     });
 
     it('should have proper heading hierarchy', async () => {

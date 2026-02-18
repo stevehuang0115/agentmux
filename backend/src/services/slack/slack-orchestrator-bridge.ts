@@ -1,7 +1,7 @@
 /**
  * Slack-Orchestrator Bridge
  *
- * Routes messages between Slack and the AgentMux orchestrator,
+ * Routes messages between Slack and the Crewly orchestrator,
  * enabling mobile control of AI teams.
  *
  * @module services/slack/bridge
@@ -63,7 +63,7 @@ let bridgeInstance: SlackOrchestratorBridge | null = null;
 /**
  * SlackOrchestratorBridge class
  *
- * Routes messages between Slack and the AgentMux orchestrator.
+ * Routes messages between Slack and the Crewly orchestrator.
  * Handles command parsing, response formatting, and proactive notifications.
  *
  * @example
@@ -309,7 +309,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
    * @returns Formatted help message for Slack
    */
   getHelpMessage(): string {
-    return `*AgentMux Commands:*
+    return `*Crewly Commands:*
 
 :clipboard: *Status*
 • \`status\` - Get overall status

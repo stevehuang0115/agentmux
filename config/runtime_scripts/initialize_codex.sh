@@ -1,5 +1,5 @@
 #!/bin/bash
-# AgentMux Claude Initialization Script
+# Crewly Claude Initialization Script
 # Safely initialize Claude Code environment if available
 
 # First try to source shell configuration to load aliases

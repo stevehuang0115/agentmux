@@ -1,11 +1,11 @@
 {
-  "name": "agentmux",
+  "name": "crewly",
   "version": "1.0.0",
   "type": "module",
-  "description": "AgentMux orchestrates multiple Claude Code instances via tmux sessions",
+  "description": "Crewly orchestrates multiple Claude Code instances via tmux sessions",
   "main": "dist/cli/index.js",
   "bin": {
-    "agentmux": "./dist/cli/index.js"
+    "crewly": "./dist/cli/index.js"
   },
   "scripts": {
     "build": "npm run build:backend && npm run build:frontend && npm run build:cli",
@@ -24,8 +24,8 @@
     "reload:pm2": "pm2 reload ecosystem.config.js",
     "logs:pm2": "pm2 logs",
     "monit:pm2": "pm2 monit",
-    "docker:build": "docker build -t agentmux .",
-    "docker:run": "docker run -p 8788:8788 agentmux",
+    "docker:build": "docker build -t crewly .",
+    "docker:run": "docker run -p 8788:8788 crewly",
     "docker:compose:up": "docker-compose up -d",
     "docker:compose:down": "docker-compose down",
     "docker:compose:logs": "docker-compose logs -f",

@@ -10,8 +10,8 @@
 			"verification": {
 				"type": "files_exist",
 				"paths": [
-					"{PROJECT_PATH}/.agentmux/specs",
-					"{PROJECT_PATH}/.agentmux/specs/project.md"
+					"{PROJECT_PATH}/.crewly/specs",
+					"{PROJECT_PATH}/.crewly/specs/project.md"
 				]
 			},
 			"prompt_file": "config/task_starters/prompts/build_spec_step1_project_requirements.md"
@@ -24,7 +24,7 @@
 			"conditional": "only_if_project_md_exists",
 			"verification": {
 				"type": "directory_contains_files",
-				"path": "{PROJECT_PATH}/.agentmux/specs",
+				"path": "{PROJECT_PATH}/.crewly/specs",
 				"min_files": 2,
 				"file_pattern": "*_design.md"
 			},
@@ -38,7 +38,7 @@
 			"conditional": "only_if_design_docs_exist",
 			"verification": {
 				"type": "files_exist",
-				"paths": ["{PROJECT_PATH}/.agentmux/specs/integration_tests.md"]
+				"paths": ["{PROJECT_PATH}/.crewly/specs/integration_tests.md"]
 			},
 			"prompt_file": "config/task_starters/prompts/build_spec_step3_integration_testing.md"
 		}

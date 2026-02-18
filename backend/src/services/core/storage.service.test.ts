@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { StorageService } from './storage.service.js';
 import { Team, Project } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 // Mock filesystem
 jest.mock('fs', () => ({
@@ -29,7 +29,7 @@ const mockFsPromises = require('fs/promises');
 
 describe('StorageService', () => {
   let storageService: StorageService;
-  const testHome = '/tmp/agentmux-test';
+  const testHome = '/tmp/crewly-test';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -131,7 +131,7 @@ describe('StorageService', () => {
 
       mockFsPromises.readFile.mockResolvedValue(JSON.stringify([]));
       mockFsPromises.writeFile.mockResolvedValue(undefined);
-      mockFs.existsSync.mockReturnValue(false); // .agentmux dir doesn't exist
+      mockFs.existsSync.mockReturnValue(false); // .crewly dir doesn't exist
       mockFs.mkdirSync.mockReturnValue(undefined);
 
       const project = await storageService.addProject(projectPath);

@@ -266,7 +266,7 @@ export class GitIntegrationService {
       // Perform the commit
       await this.commitChanges(projectPath, {
         autoGenerate: config.autoMessage,
-        co_authors: ['AgentMux <noreply@agentmux.com>']
+        co_authors: ['Crewly <noreply@crewly.com>']
       });
 
       this.logger.info('Scheduled commit completed', { projectPath: projectPath });

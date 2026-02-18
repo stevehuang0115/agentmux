@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Ralph Wiggum Stop Hook for AgentMux
+# Ralph Wiggum Stop Hook for Crewly
 # Blocks normal exit and continues iteration if completion promise not found
 #
 # Exit codes:

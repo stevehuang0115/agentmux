@@ -21,8 +21,8 @@ describe('MemoryService', () => {
   beforeEach(async () => {
     // Create unique temp directories for each test
     const uniqueId = `${Date.now()}-${Math.random().toString(36).substring(2)}`;
-    testDir = path.join(os.tmpdir(), `agentmux-unified-test-${uniqueId}`);
-    testProjectPath = path.join(os.tmpdir(), `agentmux-project-test-${uniqueId}`);
+    testDir = path.join(os.tmpdir(), `crewly-unified-test-${uniqueId}`);
+    testProjectPath = path.join(os.tmpdir(), `crewly-project-test-${uniqueId}`);
 
     await fs.mkdir(testDir, { recursive: true });
     await fs.mkdir(testProjectPath, { recursive: true });

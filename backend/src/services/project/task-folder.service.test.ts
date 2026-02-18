@@ -51,9 +51,9 @@ describe('TaskFolderService', () => {
       
       const result = await service.createM0DefininingProjectMilestone('/project');
       
-      expect(fs.mkdir).toHaveBeenCalledWith('/project/.agentmux/tasks/m0_defining_project', { recursive: true });
-      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.agentmux/tasks/m0_defining_project');
-      expect(result).toBe('/project/.agentmux/tasks/m0_defining_project');
+      expect(fs.mkdir).toHaveBeenCalledWith('/project/.crewly/tasks/m0_defining_project', { recursive: true });
+      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.crewly/tasks/m0_defining_project');
+      expect(result).toBe('/project/.crewly/tasks/m0_defining_project');
     });
   });
 
@@ -79,9 +79,9 @@ describe('TaskFolderService', () => {
       
       await service.ensureStatusFoldersForProject('/project');
       
-      expect(fs.readdir).toHaveBeenCalledWith('/project/.agentmux/tasks');
-      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.agentmux/tasks/m1_design');
-      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.agentmux/tasks/m2_implementation');
+      expect(fs.readdir).toHaveBeenCalledWith('/project/.crewly/tasks');
+      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.crewly/tasks/m1_design');
+      expect(createStatusFoldersSpy).toHaveBeenCalledWith('/project/.crewly/tasks/m2_implementation');
       expect(createStatusFoldersSpy).toHaveBeenCalledTimes(2);
     });
 

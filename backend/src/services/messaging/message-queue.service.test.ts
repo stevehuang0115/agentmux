@@ -541,7 +541,7 @@ describe('MessageQueueService', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
 
-    it('should not persist when constructed without agentmuxHome', async () => {
+    it('should not persist when constructed without crewlyHome', async () => {
       const memoryQueue = new MessageQueueService();
       memoryQueue.enqueue(validInput);
 
@@ -845,13 +845,13 @@ describe('MessageQueueService', () => {
       expect(state.queue).toHaveLength(1);
     });
 
-    it('should be a no-op for loadPersistedState without agentmuxHome', async () => {
+    it('should be a no-op for loadPersistedState without crewlyHome', async () => {
       const memoryQueue = new MessageQueueService();
       await memoryQueue.loadPersistedState();
       expect(memoryQueue.pendingCount).toBe(0);
     });
 
-    it('should be a no-op for flushPersist without agentmuxHome', async () => {
+    it('should be a no-op for flushPersist without crewlyHome', async () => {
       const memoryQueue = new MessageQueueService();
       await memoryQueue.flushPersist(); // Should not throw
     });

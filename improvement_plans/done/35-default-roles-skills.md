@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create the default built-in roles and skills that ship with AgentMux. These provide a foundation for users to start immediately and serve as examples for creating custom roles and skills.
+Create the default built-in roles and skills that ship with Crewly. These provide a foundation for users to start immediately and serve as examples for creating custom roles and skills.
 
 ## Priority
 

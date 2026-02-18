@@ -44,7 +44,7 @@ import { Link } from 'react-router-dom';
 
 // In the header section
 <header className="app-header">
-  <h1>AgentMux</h1>
+  <h1>Crewly</h1>
   <nav className="header-nav">
     <Link to="/settings" className="settings-link">
       ⚙️ Settings

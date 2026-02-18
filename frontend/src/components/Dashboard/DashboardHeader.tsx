@@ -12,7 +12,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center py-4">
           <div className="flex items-center">
-            <h1 className="text-2xl font-bold text-gray-900">AgentMux</h1>
+            <h1 className="text-2xl font-bold text-gray-900">Crewly</h1>
             <div className={clsx(
               'ml-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
               connected ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'

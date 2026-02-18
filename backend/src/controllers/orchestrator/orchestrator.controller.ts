@@ -7,7 +7,7 @@ import {
 	AGENT_INITIALIZATION_TIMEOUT,
 	ORCHESTRATOR_ROLE,
 } from '../../constants.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 import {
 	getOrchestratorStatus as getOrchestratorStatusFromService,
 	getOrchestratorOfflineMessage,
@@ -62,16 +62,16 @@ export async function executeOrchestratorCommand(
 			const teams = await this.storageService.getTeams();
 			const teamStatuses = teams.map((team) => {
 				const hasActiveMembers = team.members.some(
-					(m) => m.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+					(m) => m.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
 				);
 				const hasActivatingMembers = team.members.some(
-					(m) => m.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING
+					(m) => m.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING
 				);
 				const computedStatus = hasActiveMembers
-					? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+					? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
 					: hasActivatingMembers
-					? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING
-					: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+					? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING
+					: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
 				return {
 					name: team.name,
 					status: computedStatus,

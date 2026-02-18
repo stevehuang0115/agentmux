@@ -5,15 +5,15 @@
 
 ## Goal
 
-Verify that AgentMux persists session state to disk when agents are running, and that agents can resume their work after a full system restart.
+Verify that Crewly persists session state to disk when agents are running, and that agents can resume their work after a full system restart.
 
 ---
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
-- Access to the filesystem at `~/.agentmux/`
+- Access to the filesystem at `~/.crewly/`
 
 ---
 
@@ -51,7 +51,7 @@ Verify that AgentMux persists session state to disk when agents are running, and
 4. Send the message: `Tell the business_os developer to create a hello world Express server in the project`
 5. Wait for a response from the orchestrator.
 6. Wait 5 seconds for state to settle.
-7. **Restart AgentMux** — stop the server (Ctrl+C in terminal) and start it again (`npm start`).
+7. **Restart Crewly** — stop the server (Ctrl+C in terminal) and start it again (`npm start`).
 8. Once the server is back, open the browser to `http://localhost:8787`.
 9. Navigate to the orchestrator team page (`/teams/orchestrator`) and click **Start Orchestrator** if it's not already active.
 10. Wait for orchestrator to reach **Active** status.
@@ -73,10 +73,10 @@ Verify that AgentMux persists session state to disk when agents are running, and
 ### Steps
 
 1. Complete **Test 1** so that `business_os` team is running.
-2. **Restart AgentMux** — stop the server and start it again. This triggers a state save on shutdown.
-3. Open the session state file at `~/.agentmux/session-state.json` in a text editor or terminal:
+2. **Restart Crewly** — stop the server and start it again. This triggers a state save on shutdown.
+3. Open the session state file at `~/.crewly/session-state.json` in a text editor or terminal:
    ```bash
-   cat ~/.agentmux/session-state.json
+   cat ~/.crewly/session-state.json
    ```
 4. Inspect the JSON contents.
 

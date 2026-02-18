@@ -15,7 +15,7 @@ blocks: []
 Review and improve the existing SchedulerService to ensure it works correctly with the PTY session backend.
 
 ## Background
-AgentMux migrated from tmux to PTY. The SchedulerService sends scheduled messages to agents, and we need to verify it works correctly with PTY sessions.
+Crewly migrated from tmux to PTY. The SchedulerService sends scheduled messages to agents, and we need to verify it works correctly with PTY sessions.
 
 ## Current State Analysis
 

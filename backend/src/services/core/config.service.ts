@@ -103,7 +103,7 @@ export class ConfigService {
 			process.env.CONFIG_PATH,
 			path.join(process.cwd(), 'config.json'),
 			path.join(process.cwd(), 'config', 'app.json'),
-			path.join(process.cwd(), '.agentmux', 'config.json'),
+			path.join(process.cwd(), '.crewly', 'config.json'),
 		].filter(Boolean) as string[];
 
 		for (const configPath of possiblePaths) {
@@ -127,7 +127,7 @@ export class ConfigService {
 			},
 
 			mcp: {
-				port: parseInt(process.env.AGENTMUX_MCP_PORT || '3001', 10),
+				port: parseInt(process.env.CREWLY_MCP_PORT || '3001', 10),
 				enabled: process.env.MCP_ENABLED !== 'false',
 				maxConnections: parseInt(process.env.MCP_MAX_CONNECTIONS || '100', 10),
 				timeoutMs: parseInt(process.env.MCP_TIMEOUT || '30000', 10),

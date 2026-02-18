@@ -5,8 +5,8 @@
  * All chat and Slack messages are enqueued here, processed one-at-a-time,
  * and responses are routed back to the correct source.
  *
- * When an agentmuxHome path is provided, the queue state is persisted to
- * `~/.agentmux/queue/message-queue.json` after every mutation so that
+ * When an crewlyHome path is provided, the queue state is persisted to
+ * `~/.crewly/queue/message-queue.json` after every mutation so that
  * pending messages survive backend restarts.
  *
  * @module services/messaging/message-queue
@@ -37,7 +37,7 @@ import {
  * the orchestrator. It provides enqueue/dequeue operations, status
  * tracking, and EventEmitter-based notifications for queue state changes.
  *
- * When constructed with an agentmuxHome path, the queue is persisted to
+ * When constructed with an crewlyHome path, the queue is persisted to
  * disk after every state change and restored on startup via loadPersistedState().
  *
  * @example
@@ -46,7 +46,7 @@ import {
  * const queue = new MessageQueueService();
  *
  * // With persistence
- * const queue = new MessageQueueService('~/.agentmux');
+ * const queue = new MessageQueueService('~/.crewly');
  * await queue.loadPersistedState();
  * ```
  */
@@ -84,14 +84,14 @@ export class MessageQueueService extends EventEmitter {
   /**
    * Create a new MessageQueueService.
    *
-   * @param agentmuxHome - Path to the agentmux home directory (e.g. ~/.agentmux).
+   * @param crewlyHome - Path to the crewly home directory (e.g. ~/.crewly).
    *   When provided, enables disk persistence. When omitted, the queue is in-memory only.
    */
-  constructor(agentmuxHome?: string) {
+  constructor(crewlyHome?: string) {
     super();
 
-    if (agentmuxHome) {
-      this.persistDir = path.join(agentmuxHome, MESSAGE_QUEUE_CONSTANTS.PERSISTENCE_DIR);
+    if (crewlyHome) {
+      this.persistDir = path.join(crewlyHome, MESSAGE_QUEUE_CONSTANTS.PERSISTENCE_DIR);
       this.persistPath = path.join(this.persistDir, MESSAGE_QUEUE_CONSTANTS.PERSISTENCE_FILE);
 
       if (!existsSync(this.persistDir)) {

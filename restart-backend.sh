@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# AgentMux Backend Auto-Restart Script
+# Crewly Backend Auto-Restart Script
 # This script will automatically restart the backend when it gets killed
 
 cd "$(dirname "$0")"
 export WEB_PORT=${WEB_PORT:-3000}
 
-echo "🔄 Starting AgentMux Backend Auto-Restart Monitor"
+echo "🔄 Starting Crewly Backend Auto-Restart Monitor"
 echo "📊 Port: $WEB_PORT"
 echo "📂 Directory: $(pwd)"
 
 while true; do
-    echo "🚀 Starting AgentMux backend ($(date))..."
+    echo "🚀 Starting Crewly backend ($(date))..."
 
     # Start the backend process
     node dist/backend/backend/src/index.js

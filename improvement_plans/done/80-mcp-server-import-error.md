@@ -9,7 +9,7 @@ The MCP server fails to start due to a module import error. The `MemoryService` 
 
 ## Error Message
 ```
-/Users/yellowsunhy/Desktop/projects/agentmux/mcp-server/src/server.ts:13
+/Users/yellowsunhy/Desktop/projects/crewly/mcp-server/src/server.ts:13
 import { MemoryService } from '../../backend/src/services/memory/memory.service.js';
          ^
 

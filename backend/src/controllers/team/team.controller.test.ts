@@ -7,7 +7,7 @@ import { StorageService, TmuxService, SchedulerService, MessageSchedulerService 
 import { ActiveProjectsService } from '../../services/index.js';
 import { PromptTemplateService } from '../../services/index.js';
 import { Team, TeamMember } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../../services/index.js');
@@ -590,7 +590,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -602,7 +602,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-2',
             name: 'Bob',
-            sessionName: 'agentmux_bob',
+            sessionName: 'crewly_bob',
             role: 'tester',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -674,7 +674,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -689,7 +689,7 @@ describe('Teams Handlers', () => {
       };
 
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active',
         registeredAt: new Date().toISOString(),
@@ -721,9 +721,9 @@ describe('Teams Handlers', () => {
 
       expect(responseMock.json).toHaveBeenCalledWith({
         success: true,
-        message: 'Agent agentmux_alice registered as active with role developer',
+        message: 'Agent crewly_alice registered as active with role developer',
         data: expect.objectContaining({
-          sessionName: 'agentmux_alice',
+          sessionName: 'crewly_alice',
           role: 'developer',
           status: 'active'
         })
@@ -732,7 +732,7 @@ describe('Teams Handlers', () => {
 
     it('should handle orchestrator registration correctly', async () => {
       mockRequest.body = {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
         status: 'active',
         registeredAt: new Date().toISOString()
@@ -749,8 +749,8 @@ describe('Teams Handlers', () => {
       expect(mockStorageService.updateOrchestratorStatus).toHaveBeenCalledWith('active');
       expect(responseMock.json).toHaveBeenCalledWith({
         success: true,
-        message: `Orchestrator ${AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME} registered as active`,
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+        message: `Orchestrator ${CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME} registered as active`,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
       });
     });
 
@@ -762,7 +762,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -854,7 +854,7 @@ describe('Teams Handlers', () => {
 
     it('should handle storage service errors', async () => {
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active'
       };
@@ -995,7 +995,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -1018,9 +1018,9 @@ describe('Teams Handlers', () => {
         path: '/test/project',
         name: 'Test Project',
       }]);
-      mockTmuxService.createTeamMemberSession.mockResolvedValue({ success: true, sessionName: 'agentmux_alice' });
+      mockTmuxService.createTeamMemberSession.mockResolvedValue({ success: true, sessionName: 'crewly_alice' });
       mockApiContext.agentRegistrationService = {
-        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: 'agentmux_alice' })
+        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: 'crewly_alice' })
       } as any;
 
       let savedTeam: Team;
@@ -1036,12 +1036,12 @@ describe('Teams Handlers', () => {
       );
 
       // Verify member is now 'starting' (the immediate phase before activating)
-      expect(savedTeam!.members[0].agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING);
+      expect(savedTeam!.members[0].agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.STARTING);
 
       // Step 3: Agent registers (should set to active)
       jest.clearAllMocks();
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active',
         memberId: 'member-1'
@@ -1072,7 +1072,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -1094,9 +1094,9 @@ describe('Teams Handlers', () => {
         path: '/test/project',
         name: 'Test Project',
       }]);
-      mockTmuxService.createTeamMemberSession.mockResolvedValue({ success: true, sessionName: 'agentmux_alice' });
+      mockTmuxService.createTeamMemberSession.mockResolvedValue({ success: true, sessionName: 'crewly_alice' });
       mockApiContext.agentRegistrationService = {
-        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: 'agentmux_alice' })
+        createAgentSession: jest.fn<any>().mockResolvedValue({ success: true, sessionName: 'crewly_alice' })
       } as any;
 
       let savedTeam: Team;
@@ -1141,7 +1141,7 @@ describe('Teams Handlers', () => {
 
     it('should auto-subscribe orchestrator to agent events on registration', async () => {
       mockRequest.body = {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
         status: 'active',
         registeredAt: new Date().toISOString(),
@@ -1156,12 +1156,12 @@ describe('Teams Handlers', () => {
       );
 
       expect(mockEventBusService.listSubscriptions).toHaveBeenCalledWith(
-        AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+        CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
       );
       expect(mockEventBusService.subscribe).toHaveBeenCalledWith({
         eventType: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
         filter: {},
-        subscriberSession: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        subscriberSession: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         oneShot: false,
         ttlMinutes: 1440,
       });
@@ -1174,7 +1174,7 @@ describe('Teams Handlers', () => {
       ]);
 
       mockRequest.body = {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
         status: 'active',
       };
@@ -1197,7 +1197,7 @@ describe('Teams Handlers', () => {
       setTeamControllerEventBusService(null as any);
 
       mockRequest.body = {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
         status: 'active',
       };
@@ -1225,7 +1225,7 @@ describe('Teams Handlers', () => {
         members: [{
           id: 'member-1',
           name: 'Alice',
-          sessionName: 'agentmux_alice',
+          sessionName: 'crewly_alice',
           role: 'developer',
           systemPrompt: 'Test',
           agentStatus: 'activating',
@@ -1239,7 +1239,7 @@ describe('Teams Handlers', () => {
       };
 
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active',
         memberId: 'member-1',
@@ -1265,7 +1265,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -1280,7 +1280,7 @@ describe('Teams Handlers', () => {
       };
 
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active',
         registeredAt: new Date().toISOString(),
@@ -1297,7 +1297,7 @@ describe('Teams Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockUpdateSessionId).toHaveBeenCalledWith('agentmux_alice', 'abc-123-session-uuid');
+      expect(mockUpdateSessionId).toHaveBeenCalledWith('crewly_alice', 'abc-123-session-uuid');
     });
 
     it('should not call updateSessionId when claudeSessionId is not provided', async () => {
@@ -1308,7 +1308,7 @@ describe('Teams Handlers', () => {
           {
             id: 'member-1',
             name: 'Alice',
-            sessionName: 'agentmux_alice',
+            sessionName: 'crewly_alice',
             role: 'developer',
             runtimeType: 'claude-code',
             systemPrompt: 'Test prompt',
@@ -1323,7 +1323,7 @@ describe('Teams Handlers', () => {
       };
 
       mockRequest.body = {
-        sessionName: 'agentmux_alice',
+        sessionName: 'crewly_alice',
         role: 'developer',
         status: 'active',
         registeredAt: new Date().toISOString(),
@@ -1498,7 +1498,7 @@ describe('Teams Handlers', () => {
       );
 
       // Verify member status was reset to inactive
-      expect(savedTeam!.members[0].agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+      expect(savedTeam!.members[0].agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
       expect(savedTeam!.members[0].sessionName).toBe('');
     });
 

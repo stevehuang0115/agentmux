@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { Request, Response } from 'express';
 import * as scheduledMessagesHandlers from './scheduled-messages.controller.js';
 import type { ApiContext } from '../types.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 jest.mock('../../models/index.js', () => ({
   ScheduledMessageModel: {
@@ -515,7 +515,7 @@ describe('Scheduled Messages Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Hello orchestrator');
+      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Hello orchestrator');
     });
 
     it('should handle tmux service errors during message sending', async () => {

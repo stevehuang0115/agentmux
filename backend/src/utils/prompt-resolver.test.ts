@@ -35,7 +35,7 @@ This is a test prompt for {PROJECT_NAME}.
 			};
 
 			const projectVars = {
-				PROJECT_NAME: 'AgentMux',
+				PROJECT_NAME: 'Crewly',
 				FEATURE_NAME: 'TaskManager'
 			};
 
@@ -46,7 +46,7 @@ This is a test prompt for {PROJECT_NAME}.
 				'utf-8'
 			);
 			expect(result).toHaveLength(1);
-			expect(result[0]).toContain('AgentMux');
+			expect(result[0]).toContain('Crewly');
 			expect(result[0]).toContain('TaskManager');
 		});
 
@@ -127,16 +127,16 @@ Variables:
 			};
 
 			const projectVars = {
-				PROJECT_NAME: 'AgentMux',
+				PROJECT_NAME: 'Crewly',
 				COMPONENT_TYPE: 'Service',
 				AUTHOR: 'AI Assistant'
 			};
 
 			const result = await resolveStepPrompts(step, projectVars);
 
-			expect(result[0]).toContain('# AgentMux Specification');
-			expect(result[0]).toContain('Build a Service for AgentMux');
-			expect(result[0]).toContain('- Project: AgentMux');
+			expect(result[0]).toContain('# Crewly Specification');
+			expect(result[0]).toContain('Build a Service for Crewly');
+			expect(result[0]).toContain('- Project: Crewly');
 			expect(result[0]).toContain('- Component: Service');
 			expect(result[0]).toContain('- Author: AI Assistant');
 		});

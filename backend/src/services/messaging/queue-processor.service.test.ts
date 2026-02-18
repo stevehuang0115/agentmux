@@ -28,7 +28,7 @@ jest.mock('../../constants.js', () => ({
       STATUS_UPDATE: 'queue:status_update',
     },
   },
-  ORCHESTRATOR_SESSION_NAME: 'agentmux-orc',
+  ORCHESTRATOR_SESSION_NAME: 'crewly-orc',
   CHAT_CONSTANTS: {
     MESSAGE_PREFIX: 'CHAT',
   },
@@ -176,7 +176,7 @@ describe('QueueProcessorService', () => {
       await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         '[CHAT:conv-1] Hello',
         'claude-code'
       );
@@ -517,7 +517,7 @@ describe('QueueProcessorService', () => {
       // Second message should still be delivered despite idle wait returning false
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         '[CHAT:conv-2] Second',
         'claude-code'
       );
@@ -574,7 +574,7 @@ describe('QueueProcessorService', () => {
 
       // Second attempt should succeed
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         '[CHAT:conv-1] Retry me',
         'claude-code'
       );
@@ -632,7 +632,7 @@ describe('QueueProcessorService', () => {
 
       // Should now have attempted delivery
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         '[CHAT:conv-1] Queued during init',
         'claude-code'
       );
@@ -653,7 +653,7 @@ describe('QueueProcessorService', () => {
 
       // waitForAgentReady should receive the runtimeType
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         5000,
         'claude-code'
       );
@@ -743,7 +743,7 @@ describe('QueueProcessorService', () => {
       await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         '[CHAT:conv-1] Retry test',
         'claude-code'
       );

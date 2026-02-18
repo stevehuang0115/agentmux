@@ -67,7 +67,7 @@ describe('TerminalContext', () => {
       renderWithProvider();
 
       expect(screen.getByTestId('terminal-open')).toHaveTextContent('false');
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
     });
 
     it('opens terminal when openTerminal is called', async () => {
@@ -98,7 +98,7 @@ describe('TerminalContext', () => {
       const user = userEvent.setup();
       renderWithProvider();
 
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
 
       await user.click(screen.getByTestId('set-session'));
 
@@ -110,7 +110,7 @@ describe('TerminalContext', () => {
       renderWithProvider();
 
       expect(screen.getByTestId('terminal-open')).toHaveTextContent('false');
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
 
       await user.click(screen.getByTestId('open-with-session'));
 
@@ -123,7 +123,7 @@ describe('TerminalContext', () => {
       renderWithProvider();
 
       expect(screen.getByTestId('terminal-open')).toHaveTextContent('false');
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
 
       await user.click(screen.getByTestId('open-with-session'));
 
@@ -137,7 +137,7 @@ describe('TerminalContext', () => {
 
       // Initial state
       expect(screen.getByTestId('terminal-open')).toHaveTextContent('false');
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
 
       // Open terminal
       await user.click(screen.getByTestId('open-terminal'));
@@ -184,7 +184,7 @@ describe('TerminalContext', () => {
         </TerminalProvider>
       );
 
-      expect(screen.getByTestId('selected-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('selected-session')).toHaveTextContent('crewly-orc');
 
       await user.click(screen.getByTestId('set-empty-session'));
 
@@ -231,8 +231,8 @@ describe('TerminalContext', () => {
       // Both consumers should see the same initial state
       expect(screen.getByTestId('consumer1-open')).toHaveTextContent('false');
       expect(screen.getByTestId('consumer2-open')).toHaveTextContent('false');
-      expect(screen.getByTestId('consumer1-session')).toHaveTextContent('agentmux-orc');
-      expect(screen.getByTestId('consumer2-session')).toHaveTextContent('agentmux-orc');
+      expect(screen.getByTestId('consumer1-session')).toHaveTextContent('crewly-orc');
+      expect(screen.getByTestId('consumer2-session')).toHaveTextContent('crewly-orc');
 
       // Action from consumer1 should be visible to consumer2
       await user.click(screen.getByTestId('open1'));

@@ -1,6 +1,6 @@
-# Claude Code Development Guidelines for AgentMux
+# Claude Code Development Guidelines for Crewly
 
-This document outlines the technical preferences and workflow standards for maintaining the AgentMux codebase. All Claude Code instances working on this project should follow these guidelines.
+This document outlines the technical preferences and workflow standards for maintaining the Crewly codebase. All Claude Code instances working on this project should follow these guidelines.
 
 ## 🏗️ Project Structure
 
@@ -8,7 +8,7 @@ This document outlines the technical preferences and workflow standards for main
 - **Backend** (`/backend/src/`) - Express.js server with TypeScript
 - **Frontend** (`/frontend/src/`) - React.js with TypeScript  
 - **MCP Server** (`/mcp-server/src/`) - TypeScript MCP server for agent communication
-- **CLI** (`/cli/src/`) - Command-line interface for AgentMux operations
+- **CLI** (`/cli/src/`) - Command-line interface for Crewly operations
 
 ### Build System
 - All TypeScript code compiles to `/dist/` directory
@@ -86,14 +86,14 @@ __tests__/api.service.test.ts
 #### Centralized Constants Structure
 ```typescript
 // /config/constants.ts - Cross-domain shared constants
-export const AGENTMUX_CONSTANTS = {
+export const CREWLY_CONSTANTS = {
   SESSIONS: {
-    ORCHESTRATOR_NAME: 'agentmux-orc',
+    ORCHESTRATOR_NAME: 'crewly-orc',
     DEFAULT_TIMEOUT: 120000,
     REGISTRATION_CHECK_INTERVAL: 5000,
   },
   PATHS: {
-    AGENTMUX_HOME: '.agentmux',
+    CREWLY_HOME: '.crewly',
     TEAMS_FILE: 'teams.json',
     PROJECTS_FILE: 'projects.json',
     CONFIG_DIR: 'config',
@@ -125,7 +125,7 @@ export const MCP_CONSTANTS = {
 #### Import Patterns
 ```typescript
 // ✅ Import cross-domain constants
-import { AGENTMUX_CONSTANTS, MCP_CONSTANTS } from '../config';
+import { CREWLY_CONSTANTS, MCP_CONSTANTS } from '../config';
 
 // ✅ Import specific backend constants  
 import { ORCHESTRATOR_SESSION_NAME, DEFAULT_WEB_PORT } from '../config';
@@ -140,7 +140,7 @@ import { BACKEND_CONSTANTS, CROSS_DOMAIN_CONSTANTS } from '../config';
 import { ORCHESTRATOR_SESSION_NAME } from '../config/backend-constants.js'; // Avoid
 
 // ❌ Don't use hardcoded values
-const sessionName = 'agentmux-orc'; // Use ORCHESTRATOR_SESSION_NAME instead
+const sessionName = 'crewly-orc'; // Use ORCHESTRATOR_SESSION_NAME instead
 ```
 
 #### Constants Best Practices
@@ -156,9 +156,9 @@ const sessionName = 'agentmux-orc'; // Use ORCHESTRATOR_SESSION_NAME instead
 #### Prohibited Hardcoded Values
 - **Port numbers** (3000, 3001, 8080, etc.)
 - **Timeout values** (30000, 120000, etc.)
-- **File paths** ('.agentmux', 'config/prompts', etc.)
+- **File paths** ('.crewly', 'config/prompts', etc.)
 - **Status strings** ('active', 'inactive', 'pending', etc.)
-- **Session names** ('agentmux-orc', default session patterns)
+- **Session names** ('crewly-orc', default session patterns)
 - **API endpoints** ('/health', '/api/teams', etc.)
 - **Magic numbers** (retry counts, buffer sizes, etc.)
 - **Default configurations** (check intervals, batch sizes, etc.)
@@ -266,7 +266,7 @@ npm test
 #### 3. Functionality Verification
 ```bash
 # Test CLI functionality
-npx agentmux start --no-browser
+npx crewly start --no-browser
 
 # Verify MCP server integration
 curl http://localhost:3001/health
@@ -432,7 +432,7 @@ Use this checklist for every development task:
 
 ### Functionality
 - [ ] Feature works as expected in development
-- [ ] CLI commands function properly (`npx agentmux start`)
+- [ ] CLI commands function properly (`npx crewly start`)
 - [ ] MCP server responds correctly (health check)
 - [ ] Backend API endpoints accessible
 
@@ -489,7 +489,7 @@ Work is considered **complete** only when:
 4. **No undocumented public functions or methods allowed**
 
 ### Specification Compliance Policy  
-**CRITICAL:** When working on AgentMux:
+**CRITICAL:** When working on Crewly:
 1. **Read specifications first** - Review `/specs/` directory before any implementation
 2. **Update specifications during development** - Modify or create spec files when making architectural changes
 3. **Verify implementation matches specs** - Ensure code aligns with documented system design
@@ -503,4 +503,4 @@ Work is considered **complete** only when:
 - **Incomplete JSDoc** → Documentation review failure
 - **Outdated specifications** → Architecture review failure, must update specs with changes
 
-These policies ensure code quality, maintainability, team consistency, and architectural alignment across the entire AgentMux project.
+These policies ensure code quality, maintainability, team consistency, and architectural alignment across the entire Crewly project.

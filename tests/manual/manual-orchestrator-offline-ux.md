@@ -11,7 +11,7 @@ Verify that the Chat page gracefully handles the orchestrator being offline — 
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
 
 ---

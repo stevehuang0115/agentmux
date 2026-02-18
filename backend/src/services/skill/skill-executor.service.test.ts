@@ -171,7 +171,7 @@ describe('SkillExecutorService', () => {
 
       it('should inject environment variables', async () => {
         const scriptPath = path.join(testDir, 'env-test.sh');
-        await fs.writeFile(scriptPath, '#!/bin/bash\necho $AGENTMUX_AGENT_ID');
+        await fs.writeFile(scriptPath, '#!/bin/bash\necho $CREWLY_AGENT_ID');
         await fs.chmod(scriptPath, 0o755);
 
         const skill: SkillWithPrompt = {

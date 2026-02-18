@@ -17,7 +17,7 @@ Before assigning any new tasks, you must first audit all work currently in progr
 
 1.  **Identify In-Progress Tasks**:
 
-    -   Read the `~/.agentmux/in_progress_tasks.json` file to identify all tasks currently marked as in-progress for this project.
+    -   Read the `~/.crewly/in_progress_tasks.json` file to identify all tasks currently marked as in-progress for this project.
 
 2.  **Send Status Enforcement Requests**:
 
@@ -65,7 +65,7 @@ After auditing active work, proceed with assigning new tasks from the current mi
 
 ### Step 2.1: Identify and Focus on the Current Milestone
 
--   **PRIORITY**: Scan the `{projectPath}/.agentmux/tasks/` directory.
+-   **PRIORITY**: Scan the `{projectPath}/.crewly/tasks/` directory.
 -   **The "Current Milestone"** is the lowest-numbered folder (e.g., `00_*`, `01_*`, etc.) that contains any tasks in its `open/` subdirectory.
 -   All new assignments will focus on this milestone.
 

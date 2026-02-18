@@ -30,7 +30,7 @@ This is a critical step to ensure accountability and prevent task stagnation. Yo
 
 1.  **Identify All In-Progress Tasks**:
 
-    -   Read the `~/.agentmux/in_progress_tasks.json` file.
+    -   Read the `~/.crewly/in_progress_tasks.json` file.
     -   Filter the list to get all tasks associated with the current `{projectId}`.
 
 2.  **Send Status Enforcement Requests**:
@@ -86,7 +86,7 @@ After completing the progress audit, proceed with automated task assignment to m
 
 ### Step 2.2: Identify the Current Milestone
 
--   Scan the `{projectPath}/.agentmux/tasks/` directory to locate all milestone folders (e.g., `00_planning`, `01_setup`, etc.).
+-   Scan the `{projectPath}/.crewly/tasks/` directory to locate all milestone folders (e.g., `00_planning`, `01_setup`, etc.).
 -   **The "Current Milestone"** is the lowest-numbered folder that still contains tasks in its `open/` subdirectory.
 -   Your primary search for tasks will be within this milestone.
 
@@ -94,7 +94,7 @@ After completing the progress audit, proceed with automated task assignment to m
 
 For **each idle team member** identified in Step 2.1, follow this sequence:
 
-1.  **Search the Current Milestone**: Look for a task in `{projectPath}/.agentmux/tasks/{current_milestone}/open/` that matches the idle member's role. If found, assign it and move to the next idle member.
+1.  **Search the Current Milestone**: Look for a task in `{projectPath}/.crewly/tasks/{current_milestone}/open/` that matches the idle member's role. If found, assign it and move to the next idle member.
 2.  **The Efficiency Exception**: If, and only if, **no suitable tasks** were found in the Current Milestone for that specific member, you may look ahead to the `open/` folder of the **single next milestone**. If a matching task exists, assign it.
 3.  **No Assignment**: If no suitable task is found in either the current or next milestone, the member remains idle.
 

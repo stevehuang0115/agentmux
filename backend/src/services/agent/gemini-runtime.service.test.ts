@@ -3,7 +3,7 @@ import * as path from 'path';
 import { promises as fs } from 'fs';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 import { getDefaultSettings } from '../../types/settings.types.js';
@@ -159,8 +159,8 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('postInitialize', () => {
-		it('should add ~/.agentmux to Gemini CLI directory allowlist', async () => {
-			const expectedPath = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+		it('should add ~/.crewly to Gemini CLI directory allowlist', async () => {
+			const expectedPath = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
 
 			// Mock capturePane to return different values (simulating output change)
 			// so addProjectToAllowlist succeeds on first attempt
@@ -174,7 +174,7 @@ describe('GeminiRuntimeService', () => {
 			await jest.advanceTimersByTimeAsync(20000);
 			await promise;
 
-			// Should send /directory add command for ~/.agentmux (trailing space for path delimiter)
+			// Should send /directory add command for ~/.crewly (trailing space for path delimiter)
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
 				'test-session',
 				`/directory add ${expectedPath} `

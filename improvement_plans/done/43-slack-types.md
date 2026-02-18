@@ -2,7 +2,7 @@
 
 ## Overview
 
-Define TypeScript types for Slack integration, including message structures, event types, and bot configuration. These types form the foundation for bidirectional communication between Slack and the AgentMux orchestrator.
+Define TypeScript types for Slack integration, including message structures, event types, and bot configuration. These types form the foundation for bidirectional communication between Slack and the Crewly orchestrator.
 
 ## Priority
 
@@ -21,7 +21,7 @@ Define TypeScript types for Slack integration, including message structures, eve
  * Slack Integration Types
  *
  * Types for Slack bot integration enabling mobile communication
- * with the AgentMux orchestrator.
+ * with the Crewly orchestrator.
  *
  * @module types/slack
  */

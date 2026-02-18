@@ -1,4 +1,4 @@
-# Browser Testing Summary - AgentMux Application
+# Browser Testing Summary - Crewly Application
 
 ## Test Date: 2026-02-01
 ## Test Scope: Full application testing via Chrome browser

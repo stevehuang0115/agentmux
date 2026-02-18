@@ -188,9 +188,9 @@ export class FactoryService {
 	}
 
 	/**
-	 * Get combined factory state from both AgentMux teams and Claude processes.
+	 * Get combined factory state from both Crewly teams and Claude processes.
 	 * This merges data from:
-	 * 1. AgentMux teams (managed agents)
+	 * 1. Crewly teams (managed agents)
 	 * 2. Standalone Claude Code processes
 	 *
 	 * @returns Promise resolving to combined factory state
@@ -200,7 +200,7 @@ export class FactoryService {
 		const projectSet = new Set<string>();
 		const seenIds = new Set<string>();
 
-		// 1. Fetch AgentMux managed teams
+		// 1. Fetch Crewly managed teams
 		try {
 			const backendPort = process.env.WEB_PORT || WEB_CONSTANTS.PORTS.BACKEND;
 			const teamsResponse = await axios.get<{ success: boolean; data: Array<{

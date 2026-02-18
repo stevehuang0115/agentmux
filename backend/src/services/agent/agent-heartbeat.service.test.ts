@@ -12,7 +12,7 @@ import {
 	type BatchedStatusUpdate
 } from './agent-heartbeat.service.js';
 import {
-	AGENTMUX_CONSTANTS,
+	CREWLY_CONSTANTS,
 	AGENT_IDENTITY_CONSTANTS,
 	TIMING_CONSTANTS
 } from '../../constants.js';
@@ -37,7 +37,7 @@ describe('AgentHeartbeatService', () => {
 
 	beforeEach(async () => {
 		// Create a temporary directory for testing
-		testDir = path.join(os.tmpdir(), `agentmux-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+		testDir = path.join(os.tmpdir(), `crewly-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
 		await fs.mkdir(testDir, { recursive: true });
 
 		// Clear singleton instance
@@ -89,7 +89,7 @@ describe('AgentHeartbeatService', () => {
 			expect(heartbeat).not.toBeNull();
 			expect(heartbeat!.agentId).toBe(AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID);
 			expect(heartbeat!.sessionName).toBe(sessionName);
-			expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 			expect(heartbeat!.teamMemberId).toBeUndefined();
 		});
 
@@ -107,7 +107,7 @@ describe('AgentHeartbeatService', () => {
 			expect(heartbeat!.agentId).toBe(teamMemberId);
 			expect(heartbeat!.sessionName).toBe(sessionName);
 			expect(heartbeat!.teamMemberId).toBe(teamMemberId);
-			expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		});
 
 		test('should update team member heartbeat without teamMemberId', async () => {
@@ -122,7 +122,7 @@ describe('AgentHeartbeatService', () => {
 			expect(heartbeat).not.toBeNull();
 			expect(heartbeat!.agentId).toBe(sessionName);
 			expect(heartbeat!.sessionName).toBe(sessionName);
-			expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		});
 
 		test('should handle different agent statuses', async () => {
@@ -130,18 +130,18 @@ describe('AgentHeartbeatService', () => {
 			const teamMemberId = 'member_456';
 
 			// Test activating status
-			await service.updateAgentHeartbeat(sessionName, teamMemberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING);
+			await service.updateAgentHeartbeat(sessionName, teamMemberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING);
 			await service.flushPendingUpdates();
 
 			let heartbeat = await service.getAgentHeartbeat(teamMemberId);
-			expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING);
+			expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING);
 
 			// Test active status
-			await service.updateAgentHeartbeat(sessionName, teamMemberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			await service.updateAgentHeartbeat(sessionName, teamMemberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 			await service.flushPendingUpdates();
 
 			heartbeat = await service.getAgentHeartbeat(teamMemberId);
-			expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		});
 
 		test('should not throw on errors', async () => {
@@ -235,11 +235,11 @@ describe('AgentHeartbeatService', () => {
 
 			// Make orchestrator stale
 			statusData.orchestrator.lastActiveTime = oldTime;
-			statusData.orchestrator.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+			statusData.orchestrator.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
 			// Make team member stale
 			statusData.teamMembers['member_1'].lastActiveTime = oldTime;
-			statusData.teamMembers['member_1'].agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+			statusData.teamMembers['member_1'].agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
 			// Save the modified data
 			const statusFile = path.join(testDir, 'teamAgentStatus.json');
@@ -251,7 +251,7 @@ describe('AgentHeartbeatService', () => {
 		});
 
 		test('should not detect inactive agents as stale', async () => {
-			await service.updateAgentHeartbeat('dev-session', 'member_1', AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+			await service.updateAgentHeartbeat('dev-session', 'member_1', CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
 			await service.flushPendingUpdates();
 
 			// Manually set old timestamp but keep inactive status
@@ -274,7 +274,7 @@ describe('AgentStatusBatcher', () => {
 	let testDir: string;
 
 	beforeEach(async () => {
-		testDir = path.join(os.tmpdir(), `agentmux-batcher-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+		testDir = path.join(os.tmpdir(), `crewly-batcher-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
 		await fs.mkdir(testDir, { recursive: true });
 
 		AgentHeartbeatService.clearInstance();
@@ -292,21 +292,21 @@ describe('AgentStatusBatcher', () => {
 
 	describe('Batching Logic', () => {
 		test('should batch multiple updates', () => {
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
-			batcher.addUpdate('agent2', 'session2', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member2');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
+			batcher.addUpdate('agent2', 'session2', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member2');
 
 			expect(batcher.getBatchSize()).toBe(2);
 		});
 
 		test('should replace existing updates for same agent', () => {
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING, 'member1');
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING, 'member1');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
 
 			expect(batcher.getBatchSize()).toBe(1);
 		});
 
 		test('should clear batch after flush', async () => {
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
 			expect(batcher.getBatchSize()).toBe(1);
 
 			await batcher.flushImmediately();
@@ -314,8 +314,8 @@ describe('AgentStatusBatcher', () => {
 		});
 
 		test('should clear pending updates', () => {
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
-			batcher.addUpdate('agent2', 'session2', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member2');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
+			batcher.addUpdate('agent2', 'session2', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member2');
 
 			expect(batcher.getBatchSize()).toBe(2);
 			batcher.clear();
@@ -331,7 +331,7 @@ describe('AgentStatusBatcher', () => {
 
 			// Add 50 updates (the max batch size)
 			for (let i = 0; i < 50; i++) {
-				batcher.addUpdate(`agent${i}`, `session${i}`, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, `member${i}`);
+				batcher.addUpdate(`agent${i}`, `session${i}`, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, `member${i}`);
 			}
 
 			// Should trigger immediate flush
@@ -347,7 +347,7 @@ describe('AgentStatusBatcher', () => {
 			const processBatchedUpdatesSpy = jest.spyOn(heartbeatService, 'processBatchedUpdates');
 			processBatchedUpdatesSpy.mockResolvedValue();
 
-			batcher.addUpdate('agent1', 'session1', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
+			batcher.addUpdate('agent1', 'session1', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, 'member1');
 			expect(batcher.getBatchSize()).toBe(1);
 
 			// Fast-forward time to trigger timeout
@@ -369,7 +369,7 @@ describe('updateAgentHeartbeat convenience function', () => {
 	let testDir: string;
 
 	beforeEach(async () => {
-		testDir = path.join(os.tmpdir(), `agentmux-convenience-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+		testDir = path.join(os.tmpdir(), `crewly-convenience-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
 		await fs.mkdir(testDir, { recursive: true });
 		AgentHeartbeatService.clearInstance();
 	});
@@ -406,12 +406,12 @@ describe('updateAgentHeartbeat convenience function', () => {
 		expect(orchHeartbeat!.agentId).toBe(AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID);
 
 		// Test with custom status
-		await updateAgentHeartbeat('custom-session', 'member_789', AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING);
+		await updateAgentHeartbeat('custom-session', 'member_789', CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING);
 		await service.flushPendingUpdates();
 
 		const customHeartbeat = await service.getAgentHeartbeat('member_789');
 		expect(customHeartbeat).not.toBeNull();
-		expect(customHeartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING);
+		expect(customHeartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING);
 	});
 });
 
@@ -420,7 +420,7 @@ describe('Error Handling', () => {
 	let testDir: string;
 
 	beforeEach(async () => {
-		testDir = path.join(os.tmpdir(), `agentmux-error-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+		testDir = path.join(os.tmpdir(), `crewly-error-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
 		await fs.mkdir(testDir, { recursive: true });
 		AgentHeartbeatService.clearInstance();
 		service = AgentHeartbeatService.getInstance(testDir);
@@ -468,7 +468,7 @@ describe('Performance and Concurrency', () => {
 	let testDir: string;
 
 	beforeEach(async () => {
-		testDir = path.join(os.tmpdir(), `agentmux-perf-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+		testDir = path.join(os.tmpdir(), `crewly-perf-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
 		await fs.mkdir(testDir, { recursive: true });
 		AgentHeartbeatService.clearInstance();
 		service = AgentHeartbeatService.getInstance(testDir);
@@ -502,9 +502,9 @@ describe('Performance and Concurrency', () => {
 
 		// Multiple concurrent updates to same agent
 		const promises = [
-			service.updateAgentHeartbeat(sessionName, teamMemberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING),
-			service.updateAgentHeartbeat(sessionName, teamMemberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE),
-			service.updateAgentHeartbeat(sessionName, teamMemberId, AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE),
+			service.updateAgentHeartbeat(sessionName, teamMemberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING),
+			service.updateAgentHeartbeat(sessionName, teamMemberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE),
+			service.updateAgentHeartbeat(sessionName, teamMemberId, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE),
 		];
 
 		await Promise.all(promises);
@@ -512,6 +512,6 @@ describe('Performance and Concurrency', () => {
 
 		const heartbeat = await service.getAgentHeartbeat(teamMemberId);
 		expect(heartbeat).not.toBeNull();
-		expect(heartbeat!.agentStatus).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+		expect(heartbeat!.agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 	});
 });

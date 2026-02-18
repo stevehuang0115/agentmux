@@ -220,7 +220,7 @@ export async function executeSkill(
  * Refresh skills from disk
  *
  * Tells the backend to reload all skills from the filesystem,
- * picking up any new skills added to config/skills/ or ~/.agentmux/skills/
+ * picking up any new skills added to config/skills/ or ~/.crewly/skills/
  *
  * @returns Promise resolving when refresh is complete
  */

@@ -1,6 +1,6 @@
 /**
  * Factory-specific TypeScript type definitions for the 3D factory visualization.
- * These types support the React Three Fiber migration of the AgentMux factory.
+ * These types support the React Three Fiber migration of the Crewly factory.
  */
 
 import * as THREE from 'three';

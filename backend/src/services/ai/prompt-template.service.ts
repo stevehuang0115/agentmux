@@ -84,13 +84,13 @@ export class PromptTemplateService {
     // Fallback if extraction fails
     return `📋 TASK ASSIGNMENT - ${data.taskTitle}
 
-**Task File:** \`${data.projectPath}/.agentmux/tasks/${data.taskMilestone || 'general'}/open/${data.taskId}.md\`
+**Task File:** \`${data.projectPath}/.crewly/tasks/${data.taskMilestone || 'general'}/open/${data.taskId}.md\`
 **Priority:** ${data.taskPriority || 'medium'}
 
 Please:
 1. Read the complete task file above for full specifications
 2. Call accept_task to move it to in_progress:
-   accept_task({ absoluteTaskPath: '${data.projectPath}/.agentmux/tasks/${data.taskMilestone || 'general'}/open/${data.taskId}.md', memberId: '[your_member_id]' })
+   accept_task({ absoluteTaskPath: '${data.projectPath}/.crewly/tasks/${data.taskMilestone || 'general'}/open/${data.taskId}.md', memberId: '[your_member_id]' })
 3. Follow exact deliverables and file locations specified in the task file
 
 CRITICAL: Read the actual task file, not this summary!`;

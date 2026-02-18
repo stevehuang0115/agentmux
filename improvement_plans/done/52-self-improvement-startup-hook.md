@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a startup hook that runs when AgentMux starts, checking for pending self-improvements and handling validation/rollback. This is the critical piece that makes self-improvement work with hot-reload.
+Create a startup hook that runs when Crewly starts, checking for pending self-improvements and handling validation/rollback. This is the critical piece that makes self-improvement work with hot-reload.
 
 ## Priority
 
@@ -215,7 +215,7 @@ export class ImprovementStartupService {
 
     await this.notifySlack(
       marker,
-      ':hourglass: AgentMux restarted after self-improvement. Running validation...',
+      ':hourglass: Crewly restarted after self-improvement. Running validation...',
       'normal'
     );
 

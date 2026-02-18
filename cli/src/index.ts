@@ -11,26 +11,26 @@ import { DEFAULT_WEB_PORT } from './constants.js';
 const program = new Command();
 
 program
-  .name('agentmux')
-  .description('AgentMux - Orchestrate multiple Claude Code instances via tmux')
+  .name('crewly')
+  .description('Crewly - Orchestrate multiple Claude Code instances via tmux')
   .version('1.0.0');
 
 program
   .command('start')
-  .description('Start AgentMux backend and open dashboard')
+  .description('Start Crewly backend and open dashboard')
   .option('-p, --port <port>', 'Web server port', DEFAULT_WEB_PORT.toString())
   .option('--no-browser', 'Don\'t open browser automatically')
   .action(startCommand);
 
 program
   .command('stop')
-  .description('Stop all AgentMux services and sessions')
+  .description('Stop all Crewly services and sessions')
   .option('--force', 'Force kill all processes')
   .action(stopCommand);
 
 program
   .command('status')
-  .description('Show status of running AgentMux services')
+  .description('Show status of running Crewly services')
   .option('--verbose', 'Show detailed information')
   .action(statusCommand);
 

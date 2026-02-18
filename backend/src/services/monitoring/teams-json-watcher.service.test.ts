@@ -55,13 +55,13 @@ describe('TeamsJsonWatcherService', () => {
 
     // Mock path.join and path.dirname
     mockPath.join.mockImplementation((...args: string[]) => args.join('/'));
-    mockPath.dirname.mockReturnValue('/mock/home/.agentmux');
+    mockPath.dirname.mockReturnValue('/mock/home/.crewly');
 
     // Mock fs.existsSync
     mockFs.existsSync.mockReturnValue(true);
 
     // Mock fs.mkdirSync
-    mockFs.mkdirSync.mockImplementation(() => '/mock/home/.agentmux/teams');
+    mockFs.mkdirSync.mockImplementation(() => '/mock/home/.crewly/teams');
 
     // Mock fs.readdirSync to return empty array (no existing team dirs)
     mockFs.readdirSync.mockReturnValue([] as any);
@@ -92,7 +92,7 @@ describe('TeamsJsonWatcherService', () => {
   describe('constructor', () => {
     it('should initialize with correct teams directory path', () => {
       expect(mockOs.homedir).toHaveBeenCalled();
-      expect(mockPath.join).toHaveBeenCalledWith('/mock/home', '.agentmux', 'teams');
+      expect(mockPath.join).toHaveBeenCalledWith('/mock/home', '.crewly', 'teams');
     });
   });
 

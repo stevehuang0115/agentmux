@@ -3,7 +3,7 @@
  *
  * Creates a modern, minimalist 2-story wall structure with large glass panels
  * for maximum natural light - inspired by Apple store architecture.
- * Includes a neon "AgentMux" logo on the building.
+ * Includes a neon "Crewly" logo on the building.
  */
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
@@ -369,14 +369,14 @@ const NeonLetter: React.FC<{
 };
 
 /**
- * AgentMux Neon Sign
+ * Crewly Neon Sign
  */
 const NeonSign: React.FC<{
   position: [number, number, number];
   rotation?: [number, number, number];
   scale?: number;
 }> = ({ position, rotation = [0, 0, 0], scale = 1 }) => {
-  const letters = 'AGENTMUX';
+  const letters = 'CREWLY';
   const letterSpacing = 1.0;
   const startX = -(letters.length - 1) * letterSpacing / 2;
 
@@ -816,7 +816,7 @@ export const Walls: React.FC = () => {
       <WallTV />
 
       {/* ===== NEON SIGN ===== */}
-      {/* AgentMux logo - rooftop sign above building */}
+      {/* Crewly logo - rooftop sign above building */}
       <NeonSign
         position={[0, totalHeight + 2, WALLS.RIGHT_Z + 0.5]}
         rotation={[0, 0, 0]}

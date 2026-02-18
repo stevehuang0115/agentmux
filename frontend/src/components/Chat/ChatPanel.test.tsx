@@ -230,7 +230,7 @@ describe('ChatPanel', () => {
 
       render(<ChatPanel />, { wrapper: TestWrapper });
       expect(screen.getByTestId('empty-chat')).toBeInTheDocument();
-      expect(screen.getByText('Welcome to AgentMux')).toBeInTheDocument();
+      expect(screen.getByText('Welcome to Crewly')).toBeInTheDocument();
     });
 
     it('shows suggestions for what to ask', () => {

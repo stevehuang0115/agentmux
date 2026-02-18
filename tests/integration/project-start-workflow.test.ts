@@ -53,7 +53,7 @@ function createTestApp() {
             {
               id: 'member-1',
               name: 'Alice Developer',
-              sessionName: 'agentmux_developer_alice',
+              sessionName: 'crewly_developer_alice',
               role: 'developer',
               systemPrompt: 'You are a senior developer',
               status: 'idle'
@@ -61,7 +61,7 @@ function createTestApp() {
             {
               id: 'member-2', 
               name: 'Bob PM',
-              sessionName: 'agentmux_pm_bob',
+              sessionName: 'crewly_pm_bob',
               role: 'pm',
               systemPrompt: 'You are a project manager',
               status: 'idle'
@@ -180,8 +180,8 @@ describe('Project Start Workflow Integration Tests', () => {
       // Verify all members were started successfully
       const results = response.body.data.startupResults;
       expect(results.every((r: any) => r.success)).toBe(true);
-      expect(results.some((r: any) => r.sessionName === 'agentmux_developer_alice')).toBe(true);
-      expect(results.some((r: any) => r.sessionName === 'agentmux_pm_bob')).toBe(true);
+      expect(results.some((r: any) => r.sessionName === 'crewly_developer_alice')).toBe(true);
+      expect(results.some((r: any) => r.sessionName === 'crewly_pm_bob')).toBe(true);
     });
 
     test('should require teamIds array', async () => {
@@ -251,14 +251,14 @@ describe('Project Start Workflow Integration Tests', () => {
       expect(mockTmuxService.sendMessage).toHaveBeenCalledTimes(2);
       expect(mockTmuxService.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'agentmux_developer_alice',
+          name: 'crewly_developer_alice',
           role: 'developer',
           projectPath: '/tmp/test-project'
         })
       );
       expect(mockTmuxService.createSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'agentmux_pm_bob', 
+          name: 'crewly_pm_bob', 
           role: 'pm',
           projectPath: '/tmp/test-project'
         })
@@ -281,13 +281,13 @@ describe('Project Start Workflow Integration Tests', () => {
         {
           teamId: 'team-1',
           memberId: 'member-1',
-          sessionName: 'agentmux_developer_alice',
+          sessionName: 'crewly_developer_alice',
           success: true
         },
         {
           teamId: 'team-1',
           memberId: 'member-2', 
-          sessionName: 'agentmux_pm_bob',
+          sessionName: 'crewly_pm_bob',
           success: true
         }
       ]);
@@ -298,7 +298,7 @@ describe('Project Start Workflow Integration Tests', () => {
     test('should handle tmux session creation failures gracefully', async () => {
       // Mock one session creation to fail
       mockTmuxService.createSession.mockRejectedValueOnce(new Error('tmux failed'));
-      mockTmuxService.createSession.mockResolvedValueOnce('agentmux_pm_bob');
+      mockTmuxService.createSession.mockResolvedValueOnce('crewly_pm_bob');
 
       const projectId = 'test-project-1';
       const teamIds = ['team-1'];

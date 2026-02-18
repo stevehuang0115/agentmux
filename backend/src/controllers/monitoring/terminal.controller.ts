@@ -11,7 +11,7 @@ import { Request, Response } from 'express';
 import { ApiResponse } from '../../types/index.js';
 import { getSessionBackendSync, getSessionBackend } from '../../services/session/index.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
-import { TERMINAL_CONTROLLER_CONSTANTS, ORCHESTRATOR_SESSION_NAME, AGENTMUX_CONSTANTS, RuntimeType } from '../../constants.js';
+import { TERMINAL_CONTROLLER_CONSTANTS, ORCHESTRATOR_SESSION_NAME, CREWLY_CONSTANTS, RuntimeType } from '../../constants.js';
 import {
 	validateTerminalInput,
 	sanitizeTerminalInput,
@@ -291,7 +291,7 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 			if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
 				try {
 					const memberResult = await StorageService.getInstance().findMemberBySessionName(sessionName);
-					if (memberResult && memberResult.member.agentStatus !== AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+					if (memberResult && memberResult.member.agentStatus !== CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
 						SubAgentMessageQueue.getInstance().enqueue(sessionName, dataStr);
 						logger.info('Message queued until agent is ready', {
 							sessionName,

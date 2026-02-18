@@ -114,7 +114,7 @@ const mockOrchestratorTeam = {
       id: 'orc-1',
       name: 'Orchestrator',
       role: 'Orchestrator',
-      sessionName: 'agentmux-orc',
+      sessionName: 'crewly-orc',
       agentStatus: 'active'
     }
   ],
@@ -599,7 +599,7 @@ describe('TeamDetail Page', () => {
             ok: true,
             json: () => Promise.resolve({
               success: true,
-              data: [{ sessionName: 'agentmux-orc' }]
+              data: [{ sessionName: 'crewly-orc' }]
             })
           });
         }
@@ -646,7 +646,7 @@ describe('TeamDetail Page', () => {
 
       fireEvent.click(screen.getByText('View Terminal'));
 
-      expect(mockOpenTerminalWithSession).toHaveBeenCalledWith('agentmux-orc');
+      expect(mockOpenTerminalWithSession).toHaveBeenCalledWith('crewly-orc');
     });
   });
 

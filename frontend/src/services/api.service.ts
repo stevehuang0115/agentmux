@@ -1,5 +1,5 @@
 /**
- * API Service - Centralized API client for AgentMux backend.
+ * API Service - Centralized API client for Crewly backend.
  *
  * Provides methods for interacting with projects, teams, tickets, and tasks.
  * Includes caching and request deduplication for frequently accessed data.

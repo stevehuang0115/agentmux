@@ -95,7 +95,7 @@ interface SOPExample {
 ### 2. Storage Structure
 
 ```
-~/.agentmux/sops/
+~/.crewly/sops/
 ├── index.json                    # SOP index for fast lookup
 ├── system/                       # Built-in SOPs (read-only)
 │   ├── developer/
@@ -222,7 +222,7 @@ WIP
 ### 4. SOP Index Schema
 
 ```typescript
-// ~/.agentmux/sops/index.json
+// ~/.crewly/sops/index.json
 
 interface SOPIndex {
   version: string;

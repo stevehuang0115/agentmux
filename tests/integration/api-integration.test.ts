@@ -121,7 +121,7 @@ function createTestApp() {
     }
 
     const teamId = 'team-' + Date.now();
-    const sessionName = `agentmux_${role}_${teamId.slice(-8)}`;
+    const sessionName = `crewly_${role}_${teamId.slice(-8)}`;
 
     const team = {
       id: teamId,
@@ -150,7 +150,7 @@ function createTestApp() {
       {
         id: 'test-team-1',
         name: 'Test Team 1',
-        sessionName: 'agentmux_developer_12345678',
+        sessionName: 'crewly_developer_12345678',
         role: 'developer',
         systemPrompt: 'Test prompt',
         status: 'working',
@@ -340,7 +340,7 @@ describe('API Integration Tests', () => {
       expect(response.body.data).toHaveProperty('id');
       expect(response.body.data.name).toBe(teamData.name);
       expect(response.body.data.role).toBe(teamData.role);
-      expect(response.body.data.sessionName).toMatch(/^agentmux_developer_/);
+      expect(response.body.data.sessionName).toMatch(/^crewly_developer_/);
       expect(response.body.data.status).toBe('working');
     });
 
@@ -362,7 +362,7 @@ describe('API Integration Tests', () => {
 
         expect(response.body.success).toBe(true);
         expect(response.body.data.role).toBe(role);
-        expect(response.body.data.sessionName).toMatch(new RegExp(`^agentmux_${role}_`));
+        expect(response.body.data.sessionName).toMatch(new RegExp(`^crewly_${role}_`));
       }
     });
 

@@ -60,7 +60,7 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
 					</div>
 					{(!isCollapsed || isMobileOpen) && (
 						<span className="ml-3 text-lg font-bold text-text-primary-dark">
-							AgentMux
+							Crewly
 						</span>
 					)}
 				</div>

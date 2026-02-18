@@ -33,7 +33,7 @@ describe('Navigation', () => {
   it('shows logo text when expanded', () => {
     renderWithProviders(<Navigation />);
 
-    expect(screen.getByText('AgentMux')).toBeInTheDocument();
+    expect(screen.getByText('Crewly')).toBeInTheDocument();
   });
 
   it('shows collapse toggle button in footer', () => {

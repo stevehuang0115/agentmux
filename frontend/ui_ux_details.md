@@ -1,6 +1,6 @@
-# AgentMux Frontend UI/UX Description
+# Crewly Frontend UI/UX Description
 
-This document provides a detailed description of the user interface (UI), user experience (UX), and overall user journey of the AgentMux application.
+This document provides a detailed description of the user interface (UI), user experience (UX), and overall user journey of the Crewly application.
 
 ## 1. Overall Application Layout
 

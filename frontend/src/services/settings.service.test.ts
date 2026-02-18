@@ -7,13 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
 import { settingsService } from './settings.service';
-import { AgentMuxSettings } from '../types/settings.types';
+import { CrewlySettings } from '../types/settings.types';
 
 vi.mock('axios');
 const mockedAxios = vi.mocked(axios);
 
 describe('SettingsService', () => {
-  const mockSettings: AgentMuxSettings = {
+  const mockSettings: CrewlySettings = {
     general: {
       defaultRuntime: 'claude-code',
       autoStartOrchestrator: false,

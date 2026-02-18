@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add the `self_improve` MCP tool to enable the orchestrator to safely modify the AgentMux codebase.
+Add the `self_improve` MCP tool to enable the orchestrator to safely modify the Crewly codebase.
 
 ## Problem
 
@@ -25,7 +25,7 @@ The SelfImprovementService is implemented but there's no MCP tool for the orches
 /**
  * Self-Improve MCP Tool
  *
- * Enables the orchestrator to safely modify the AgentMux codebase.
+ * Enables the orchestrator to safely modify the Crewly codebase.
  *
  * @module tools/self-improve
  */
@@ -55,7 +55,7 @@ type SelfImproveInput = z.infer<typeof SelfImproveInputSchema>;
  */
 export const selfImproveTool: McpTool = {
   name: 'self_improve',
-  description: `Safely modify the AgentMux codebase with automatic backup and rollback.
+  description: `Safely modify the Crewly codebase with automatic backup and rollback.
 
 Actions:
 - plan: Create an improvement plan describing changes to make

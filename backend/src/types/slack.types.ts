@@ -2,7 +2,7 @@
  * Slack Integration Types
  *
  * Types for Slack bot integration enabling mobile communication
- * with the AgentMux orchestrator.
+ * with the Crewly orchestrator.
  *
  * @module types/slack
  */

@@ -1,12 +1,12 @@
 /**
- * AgentMux Constants - Centralized Export
+ * Crewly Constants - Centralized Export
  * 
- * This file provides a single import point for all AgentMux constants across domains.
+ * This file provides a single import point for all Crewly constants across domains.
  * 
  * Usage examples:
  * ```typescript
  * // Cross-domain constants
- * import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../config';
+ * import { CREWLY_CONSTANTS, WEB_CONSTANTS } from '../config';
  * 
  * // Backend-specific constants  
  * import { BACKEND_CONSTANTS } from '../config';
@@ -20,7 +20,7 @@
 
 import {
   // Core system constants
-  AGENTMUX_CONSTANTS,
+  CREWLY_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
@@ -43,7 +43,7 @@ import {
 
 export {
   // Core system constants
-  AGENTMUX_CONSTANTS,
+  CREWLY_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
@@ -73,7 +73,7 @@ export {
  * All cross-domain constants grouped for easy access
  */
 export const CROSS_DOMAIN_CONSTANTS = {
-  AGENTMUX: AGENTMUX_CONSTANTS,
+  CREWLY: CREWLY_CONSTANTS,
   WEB: WEB_CONSTANTS,
   TIMING: TIMING_CONSTANTS,
   MESSAGES: MESSAGE_CONSTANTS,

@@ -5,7 +5,7 @@
 
 // Import from config directory for cross-domain constants
 import {
-  AGENTMUX_CONSTANTS as CONFIG_AGENTMUX_CONSTANTS,
+  CREWLY_CONSTANTS as CONFIG_CREWLY_CONSTANTS,
   AGENT_IDENTITY_CONSTANTS as CONFIG_AGENT_IDENTITY_CONSTANTS,
   TIMING_CONSTANTS as CONFIG_TIMING_CONSTANTS,
   MEMORY_CONSTANTS as CONFIG_MEMORY_CONSTANTS,
@@ -19,15 +19,15 @@ export const MEMORY_CONSTANTS = CONFIG_MEMORY_CONSTANTS;
 export const CONTINUATION_CONSTANTS = CONFIG_CONTINUATION_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
-export const ORCHESTRATOR_SESSION_NAME = 'agentmux-orc';
+export const ORCHESTRATOR_SESSION_NAME = 'crewly-orc';
 export const ORCHESTRATOR_ROLE = 'orchestrator';
-export const ORCHESTRATOR_WINDOW_NAME = 'AgentMux Orchestrator';
+export const ORCHESTRATOR_WINDOW_NAME = 'Crewly Orchestrator';
 export const AGENT_INITIALIZATION_TIMEOUT = 90000;
 export const CLAUDE_INITIALIZATION_TIMEOUT = 45000;
 
 // Merge cross-domain constants with backend-specific extensions
-export const AGENTMUX_CONSTANTS = {
-	...CONFIG_AGENTMUX_CONSTANTS,
+export const CREWLY_CONSTANTS = {
+	...CONFIG_CREWLY_CONSTANTS,
 	// Backend-specific extensions
 	INIT_SCRIPTS: {
 		CLAUDE: 'initialize_claude.sh',
@@ -38,9 +38,9 @@ export const AGENTMUX_CONSTANTS = {
 export const ENV_CONSTANTS = {
 	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
-	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
-	/** Base URL for the AgentMux backend API (used by orchestrator bash skills) */
-	AGENTMUX_API_URL: 'AGENTMUX_API_URL',
+	CREWLY_ROLE: 'CREWLY_ROLE',
+	/** Base URL for the Crewly backend API (used by orchestrator bash skills) */
+	CREWLY_API_URL: 'CREWLY_API_URL',
 } as const;
 
 // Agent-specific timeout values (in milliseconds)
@@ -271,7 +271,7 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	INTER_MESSAGE_DELAY: 500,
 	/** Maximum number of requeue retries before permanently failing a message */
 	MAX_REQUEUE_RETRIES: 5,
-	/** Queue persistence file name (stored under agentmux home) */
+	/** Queue persistence file name (stored under crewly home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
 	PERSISTENCE_DIR: 'queue',
@@ -317,7 +317,7 @@ export const EVENT_BUS_CONSTANTS = {
  * and agent-thread associations.
  */
 export const SLACK_THREAD_CONSTANTS = {
-	/** Directory name under agentmux home for thread files */
+	/** Directory name under crewly home for thread files */
 	STORAGE_DIR: 'slack-threads',
 	/** JSON file mapping agents to their originating threads */
 	AGENT_INDEX_FILE: 'agent-index.json',
@@ -433,7 +433,7 @@ export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
  * images sent by users in Slack messages.
  */
 export const SLACK_IMAGE_CONSTANTS = {
-	/** Temp directory for downloaded images (relative to ~/.agentmux/) */
+	/** Temp directory for downloaded images (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-images',
 	/** Maximum allowed file size for image downloads (20 MB) */
 	MAX_FILE_SIZE: 20 * 1024 * 1024,
@@ -455,8 +455,8 @@ export const SLACK_IMAGE_CONSTANTS = {
 
 // Type helpers
 export type AgentStatus =
-	(typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];
+	(typeof CREWLY_CONSTANTS.AGENT_STATUSES)[keyof typeof CREWLY_CONSTANTS.AGENT_STATUSES];
 export type WorkingStatus =
-	(typeof AGENTMUX_CONSTANTS.WORKING_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.WORKING_STATUSES];
+	(typeof CREWLY_CONSTANTS.WORKING_STATUSES)[keyof typeof CREWLY_CONSTANTS.WORKING_STATUSES];
 export type RuntimeType = (typeof RUNTIME_TYPES)[keyof typeof RUNTIME_TYPES];
 export type AgentId = string; // Agent identifier type for heartbeat service

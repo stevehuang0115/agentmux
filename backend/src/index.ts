@@ -42,7 +42,7 @@ import { initializeChatGateway } from './websocket/chat.gateway.js';
 import { StartupConfig } from './types/index.js';
 import { LoggerService } from './services/core/logger.service.js';
 import {
-	AGENTMUX_CONSTANTS,
+	CREWLY_CONSTANTS,
 	ORCHESTRATOR_SESSION_NAME,
 	ORCHESTRATOR_ROLE,
 	ORCHESTRATOR_WINDOW_NAME,
@@ -112,12 +112,12 @@ function parseIntWithFallback(value: string | undefined, defaultValue: number, e
 	return parsed;
 }
 
-export class AgentMuxServer {
+export class CrewlyServer {
 	private app: express.Application;
 	private httpServer: ReturnType<typeof createServer>;
 	private io: SocketIOServer;
 	private config: StartupConfig;
-	private logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
+	private logger = LoggerService.getInstance().createComponentLogger('CrewlyServer');
 
 	private storageService!: StorageService;
 	private tmuxService!: TmuxService;
@@ -152,11 +152,11 @@ export class AgentMuxServer {
 		};
 
 		const defaultAgentmuxHome =
-			config?.agentmuxHome || process.env.AGENTMUX_HOME || '~/.agentmux';
+			config?.crewlyHome || process.env.CREWLY_HOME || '~/.crewly';
 
 		this.config = {
 			webPort: config?.webPort || parseIntWithFallback(process.env.WEB_PORT, 8787, 'WEB_PORT'),
-			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
+			crewlyHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||
 				parseIntWithFallback(process.env.DEFAULT_CHECK_INTERVAL, 30, 'DEFAULT_CHECK_INTERVAL'),
@@ -189,7 +189,7 @@ export class AgentMuxServer {
 	}
 
 	private initializeServices(): void {
-		this.storageService = StorageService.getInstance(this.config.agentmuxHome);
+		this.storageService = StorageService.getInstance(this.config.crewlyHome);
 		this.tmuxService = new TmuxService();
 		this.schedulerService = new SchedulerService(this.storageService);
 		this.messageSchedulerService = new MessageSchedulerService(
@@ -228,7 +228,7 @@ export class AgentMuxServer {
 		// Initialize ChatGateway for chat message forwarding
 		// This sets up the event listeners that forward chat messages to WebSocket clients
 		initializeChatGateway(this.io).catch((error) => {
-			console.error('[AgentMuxServer] Failed to initialize ChatGateway:', error);
+			console.error('[CrewlyServer] Failed to initialize ChatGateway:', error);
 		});
 
 		// Connect WebSocket service to terminal gateway for broadcasting
@@ -238,7 +238,7 @@ export class AgentMuxServer {
 		this.teamsJsonWatcherService.setTeamActivityService(this.teamActivityWebSocketService);
 
 		// Initialize message queue services (with disk persistence)
-		this.messageQueueService = new MessageQueueService(this.config.agentmuxHome);
+		this.messageQueueService = new MessageQueueService(this.config.crewlyHome);
 		const responseRouter = new ResponseRouterService();
 		this.queueProcessorService = new QueueProcessorService(
 			this.messageQueueService,
@@ -261,12 +261,12 @@ export class AgentMuxServer {
 		setTeamControllerEventBusService(this.eventBusService);
 
 		// Initialize Slack thread store for persistent thread conversations
-		const slackThreadStore = new SlackThreadStoreService(this.config.agentmuxHome);
+		const slackThreadStore = new SlackThreadStoreService(this.config.crewlyHome);
 		setSlackThreadStore(slackThreadStore);
 		this.eventBusService.setSlackThreadStore(slackThreadStore);
 
 		// Initialize Slack image service for downloading images from Slack messages
-		const slackImageService = new SlackImageService(this.config.agentmuxHome);
+		const slackImageService = new SlackImageService(this.config.crewlyHome);
 		setSlackImageService(slackImageService);
 
 		// Broadcast queue events via Socket.IO
@@ -337,7 +337,7 @@ export class AgentMuxServer {
 
 		// Static files for frontend (after API routes)
 		// __dirname is backend/src/ in dev mode (tsx) or backend/dist/ in compiled mode
-		// We need to go up 2 levels to reach the project root (agentmux/)
+		// We need to go up 2 levels to reach the project root (crewly/)
 		const projectRoot = path.resolve(__dirname, '../..');
 		const frontendPath = path.join(projectRoot, 'frontend/dist');
 		this.app.use(express.static(frontendPath));
@@ -395,7 +395,7 @@ export class AgentMuxServer {
 
 	async start(): Promise<void> {
 		try {
-			this.logger.info('Starting AgentMux server...');
+			this.logger.info('Starting Crewly server...');
 			this.logger.info('Server startup info', {
 				pid: process.pid,
 				memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
@@ -421,7 +421,7 @@ export class AgentMuxServer {
 			// but a fresh app start has no running agent. Without this reset, the UI
 			// would show "Active" for a bare shell that has no Claude running inside it.
 			try {
-				await this.storageService.updateOrchestratorStatus(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+				await this.storageService.updateOrchestratorStatus(CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
 				this.logger.info('Reset orchestrator status to inactive on startup');
 			} catch (resetErr) {
 				this.logger.warn('Failed to reset orchestrator status on startup', {
@@ -730,12 +730,12 @@ export class AgentMuxServer {
 
 			this.httpServer.listen(this.config.webPort, () => {
 				const duration = Date.now() - startTime;
-				this.logger.info('AgentMux server started', {
+				this.logger.info('Crewly server started', {
 					port: this.config.webPort,
 					durationMs: duration,
 					dashboardUrl: `http://localhost:${this.config.webPort}`,
 					websocketUrl: `ws://localhost:${this.config.webPort}`,
-					home: this.config.agentmuxHome
+					home: this.config.crewlyHome
 				});
 
 				resolve();
@@ -840,7 +840,7 @@ export class AgentMuxServer {
 			return;
 		}
 		this.isShuttingDown = true;
-		this.logger.info('Shutting down AgentMux server...');
+		this.logger.info('Shutting down Crewly server...');
 
 		// Set a hard timeout to force exit if graceful shutdown takes too long.
 		// Use SIGKILL on self as the ultimate fallback — this is uncatchable and
@@ -955,7 +955,7 @@ export class AgentMuxServer {
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();
 			for (const session of sessions) {
-				if (session.sessionName.startsWith('agentmux_')) {
+				if (session.sessionName.startsWith('crewly_')) {
 					await this.tmuxService.killSession(session.sessionName);
 				}
 			}
@@ -994,12 +994,12 @@ const isMainModule = process.argv[1] && (
 	process.argv[1].endsWith('/index.ts') || process.argv[1].endsWith('/index.js')
 );
 if (isMainModule) {
-	const server = new AgentMuxServer();
-	const logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
+	const server = new CrewlyServer();
+	const logger = LoggerService.getInstance().createComponentLogger('CrewlyServer');
 	server.start().catch((error) => {
-		logger.error('Failed to start AgentMux server', { error: error instanceof Error ? error.message : String(error) });
+		logger.error('Failed to start Crewly server', { error: error instanceof Error ? error.message : String(error) });
 		process.exit(1);
 	});
 }
 
-export default AgentMuxServer;
+export default CrewlyServer;

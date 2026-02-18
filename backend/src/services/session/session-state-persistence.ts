@@ -19,7 +19,7 @@ import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 const STATE_VERSION = 1;
 
 /** Default state file location */
-const DEFAULT_STATE_FILE = path.join(homedir(), '.agentmux', 'session-state.json');
+const DEFAULT_STATE_FILE = path.join(homedir(), '.crewly', 'session-state.json');
 
 /**
  * Metadata about a persisted session.

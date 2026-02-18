@@ -51,14 +51,14 @@ describe('SlackImageService', () => {
   });
 
   describe('constructor', () => {
-    it('should use default agentmux home when not specified', () => {
+    it('should use default crewly home when not specified', () => {
       const defaultService = new SlackImageService();
       expect(defaultService.getTempDir()).toBe(
-        path.join(os.homedir(), '.agentmux', SLACK_IMAGE_CONSTANTS.TEMP_DIR)
+        path.join(os.homedir(), '.crewly', SLACK_IMAGE_CONSTANTS.TEMP_DIR)
       );
     });
 
-    it('should use custom agentmux home when specified', () => {
+    it('should use custom crewly home when specified', () => {
       expect(service.getTempDir()).toBe(
         path.join(tempDir, SLACK_IMAGE_CONSTANTS.TEMP_DIR)
       );

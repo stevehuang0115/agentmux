@@ -30,11 +30,11 @@ export interface ContextLoadOptions {
 
 export class ContextLoaderService {
   private projectPath: string;
-  private agentmuxPath: string;
+  private crewlyPath: string;
 
   constructor(projectPath: string) {
     this.projectPath = path.resolve(projectPath);
-    this.agentmuxPath = path.join(this.projectPath, '.agentmux');
+    this.crewlyPath = path.join(this.projectPath, '.crewly');
   }
 
   async loadProjectContext(options: ContextLoadOptions = {}): Promise<ProjectContext> {
@@ -79,7 +79,7 @@ export class ContextLoaderService {
     let specifications = '';
 
     for (const specFile of specFiles) {
-      const specPath = path.join(this.agentmuxPath, specFile);
+      const specPath = path.join(this.crewlyPath, specFile);
       if (existsSync(specPath)) {
         try {
           const content = await fs.readFile(specPath, 'utf-8');
@@ -198,7 +198,7 @@ export class ContextLoaderService {
   }
 
   private async loadTickets(): Promise<string[]> {
-    const ticketsPath = path.join(this.agentmuxPath, 'tasks');
+    const ticketsPath = path.join(this.crewlyPath, 'tasks');
     
     if (!existsSync(ticketsPath)) {
       return [];
@@ -338,7 +338,7 @@ export class ContextLoaderService {
       const contextPrompt = await this.generateContextPrompt(teamMember);
 
       // Save context to a file that can be referenced by the agent
-      const contextPath = path.join(this.agentmuxPath, 'context', `${teamMember.id}-context.md`);
+      const contextPath = path.join(this.crewlyPath, 'context', `${teamMember.id}-context.md`);
       const contextDir = path.dirname(contextPath);
 
       if (!existsSync(contextDir)) {
@@ -376,7 +376,7 @@ export class ContextLoaderService {
   }
 
   async refreshContext(teamMember: TeamMember): Promise<string> {
-    const contextPath = path.join(this.agentmuxPath, 'context', `${teamMember.id}-context.md`);
+    const contextPath = path.join(this.crewlyPath, 'context', `${teamMember.id}-context.md`);
     
     if (existsSync(contextPath)) {
       // Update existing context

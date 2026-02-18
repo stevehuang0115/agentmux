@@ -25,7 +25,7 @@ When running `npm run dev`:
 Use a persistent marker file that survives process restarts:
 
 ```
-~/.agentmux/self-improvement/pending.json
+~/.crewly/self-improvement/pending.json
 ```
 
 ## Files to Create
@@ -150,7 +150,7 @@ export interface ImprovementMarker {
 /**
  * Marker file paths
  */
-const MARKER_DIR = path.join(os.homedir(), '.agentmux', 'self-improvement');
+const MARKER_DIR = path.join(os.homedir(), '.crewly', 'self-improvement');
 const MARKER_FILE = 'pending.json';
 const HISTORY_DIR = 'history';
 const MAX_HISTORY = 20;
@@ -629,7 +629,7 @@ export {
 
 ## Acceptance Criteria
 
-- [ ] Marker file created at `~/.agentmux/self-improvement/pending.json`
+- [ ] Marker file created at `~/.crewly/self-improvement/pending.json`
 - [ ] Phase transitions tracked correctly
 - [ ] Restart count incremented on each restart
 - [ ] Validation results accumulated

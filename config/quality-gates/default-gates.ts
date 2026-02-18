@@ -3,7 +3,7 @@
  *
  * Standard quality gates for TypeScript projects.
  * Projects can override these by creating their own
- * .agentmux/config/quality-gates.yaml file.
+ * .crewly/config/quality-gates.yaml file.
  *
  * @module config/quality-gates/default-gates
  */

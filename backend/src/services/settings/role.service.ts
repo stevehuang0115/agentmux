@@ -82,7 +82,7 @@ export class DuplicateRoleNameError extends Error {
  *
  * Handles:
  * - Loading built-in roles from config/roles/
- * - Managing user-created roles in ~/.agentmux/roles/
+ * - Managing user-created roles in ~/.crewly/roles/
  * - CRUD operations for roles
  * - Role-to-skill assignment management
  *
@@ -125,7 +125,7 @@ export class RoleService {
     this.builtinRolesDir = options?.builtinRolesDir ??
       path.join(process.cwd(), 'config', 'roles');
     this.userRolesDir = options?.userRolesDir ??
-      path.join(process.env.HOME || '~', '.agentmux', 'roles');
+      path.join(process.env.HOME || '~', '.crewly', 'roles');
   }
 
   /**
@@ -233,7 +233,7 @@ export class RoleService {
     }
 
     // Built-in roles use subdirectory structure: config/roles/{role}/prompt.md
-    // User roles use flat structure: ~/.agentmux/roles/{promptFile}
+    // User roles use flat structure: ~/.crewly/roles/{promptFile}
     if (role.isBuiltin) {
       return path.join(this.builtinRolesDir, role.name, role.systemPromptFile);
     }
@@ -313,7 +313,7 @@ export class RoleService {
   /**
    * Update an existing role
    *
-   * For builtin roles: Creates an override in ~/.agentmux/roles/ (original stays intact)
+   * For builtin roles: Creates an override in ~/.crewly/roles/ (original stays intact)
    * For user roles: Updates the role directly
    *
    * @param id - The role ID
@@ -704,7 +704,7 @@ export class RoleService {
 
   /**
    * Save a role override to user directory
-   * Uses subdirectory structure: ~/.agentmux/roles/{role-name}/role.json + prompt.md
+   * Uses subdirectory structure: ~/.crewly/roles/{role-name}/role.json + prompt.md
    *
    * @param role - The role to save
    * @param promptContent - The prompt content
@@ -731,7 +731,7 @@ export class RoleService {
   /**
    * Load prompt content from a file
    * For built-in roles, checks for user override first, then falls back to builtin
-   * For user roles, loads from ~/.agentmux/roles/
+   * For user roles, loads from ~/.crewly/roles/
    *
    * @param promptFile - The prompt file name (e.g., "prompt.md")
    * @param isBuiltin - Whether this is a built-in role

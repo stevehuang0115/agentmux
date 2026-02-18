@@ -53,8 +53,8 @@ export class TicketEditorService {
 
   constructor(projectPath?: string) {
     this.ticketsDir = projectPath 
-      ? path.join(path.resolve(projectPath), '.agentmux', 'tasks')
-      : path.join(process.cwd(), '.agentmux', 'tasks');
+      ? path.join(path.resolve(projectPath), '.crewly', 'tasks')
+      : path.join(process.cwd(), '.crewly', 'tasks');
   }
 
   async ensureTicketsDirectory(): Promise<void> {

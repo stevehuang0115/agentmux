@@ -21,8 +21,8 @@ describe('SafeRestartService', () => {
     resetStatePersistenceService();
     resetSlackOrchestratorBridge();
     process.env = { ...originalEnv };
-    delete process.env.AGENTMUX_RESTARTED;
-    delete process.env.AGENTMUX_RESTART_REASON;
+    delete process.env.CREWLY_RESTARTED;
+    delete process.env.CREWLY_RESTART_REASON;
   });
 
   afterEach(() => {
@@ -183,15 +183,15 @@ describe('SafeRestartService', () => {
       expect(service.isRestart()).toBe(false);
     });
 
-    it('should return true when AGENTMUX_RESTARTED is set', () => {
-      process.env.AGENTMUX_RESTARTED = 'true';
+    it('should return true when CREWLY_RESTARTED is set', () => {
+      process.env.CREWLY_RESTARTED = 'true';
 
       const service = new SafeRestartService();
       expect(service.isRestart()).toBe(true);
     });
 
     it('should return false for other values', () => {
-      process.env.AGENTMUX_RESTARTED = 'false';
+      process.env.CREWLY_RESTARTED = 'false';
 
       const service = new SafeRestartService();
       expect(service.isRestart()).toBe(false);
@@ -204,8 +204,8 @@ describe('SafeRestartService', () => {
       expect(service.getRestartReason()).toBeUndefined();
     });
 
-    it('should return reason when AGENTMUX_RESTART_REASON is set', () => {
-      process.env.AGENTMUX_RESTART_REASON = 'test-reason';
+    it('should return reason when CREWLY_RESTART_REASON is set', () => {
+      process.env.CREWLY_RESTART_REASON = 'test-reason';
 
       const service = new SafeRestartService();
       expect(service.getRestartReason()).toBe('test-reason');

@@ -52,8 +52,8 @@ export const OrchestratorStatusBanner: React.FC = () => {
           </span>
           <span className={messageColor}>
             {isActivating
-              ? 'The AgentMux orchestrator is starting up. This may take a few moments...'
-              : 'The AgentMux orchestrator is not running. Check the application logs for issues.'
+              ? 'The Crewly orchestrator is starting up. This may take a few moments...'
+              : 'The Crewly orchestrator is not running. Check the application logs for issues.'
             }
           </span>
         </div>

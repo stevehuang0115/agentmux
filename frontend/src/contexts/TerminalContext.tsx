@@ -25,7 +25,7 @@ interface TerminalProviderProps {
 
 export const TerminalProvider: React.FC<TerminalProviderProps> = ({ children }) => {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
-  const [selectedSession, setSelectedSession] = useState<string>('agentmux-orc');
+  const [selectedSession, setSelectedSession] = useState<string>('crewly-orc');
 
   const openTerminal = () => setIsTerminalOpen(true);
   const closeTerminal = () => setIsTerminalOpen(false);

@@ -68,7 +68,7 @@ describe('Chat Page', () => {
       );
 
       expect(
-        screen.getByText(/Communicate with the AgentMux orchestrator/)
+        screen.getByText(/Communicate with the Crewly orchestrator/)
       ).toBeInTheDocument();
     });
 

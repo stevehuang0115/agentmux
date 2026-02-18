@@ -19,12 +19,12 @@ USER JOURNEY:
 Create the specifications directory:
 
 ```bash
-mkdir -p {PROJECT_PATH}/.agentmux/specs
+mkdir -p {PROJECT_PATH}/.crewly/specs
 ```
 
 ### Step 2: Create project.md
 
-Create a comprehensive Product Requirements Document at: `{PROJECT_PATH}/.agentmux/specs/project.md`
+Create a comprehensive Product Requirements Document at: `{PROJECT_PATH}/.crewly/specs/project.md`
 
 **Required `project.md` structure and quality bar (business/user–first):**
 

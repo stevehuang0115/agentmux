@@ -74,7 +74,7 @@ If multiple changes have been layered, manually restore:
 // Expected Dashboard sections
 <Dashboard>
   {/* Header with title */}
-  <header>AgentMux Dashboard</header>
+  <header>Crewly Dashboard</header>
 
   {/* Projects Overview */}
   <section>

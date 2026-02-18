@@ -1,7 +1,7 @@
 {
   "id": "orc-create-project",
   "name": "Create Project",
-  "description": "Create a new project in AgentMux with a path, name, and description.",
+  "description": "Create a new project in Crewly with a path, name, and description.",
   "category": "management",
   "skillType": "claude-skill",
   "promptFile": "instructions.md",

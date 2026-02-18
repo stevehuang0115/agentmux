@@ -167,7 +167,7 @@ export class QualityGateService implements IQualityGateService {
    * @returns Gate configuration
    */
   public async loadConfig(projectPath: string): Promise<GateConfig> {
-    const configPath = path.join(projectPath, '.agentmux', 'config', 'quality-gates.yaml');
+    const configPath = path.join(projectPath, '.crewly', 'config', 'quality-gates.yaml');
 
     try {
       const content = await fs.readFile(configPath, 'utf-8');
@@ -424,7 +424,7 @@ export class QualityGateService implements IQualityGateService {
    * @returns True if custom config exists
    */
   public async hasProjectConfig(projectPath: string): Promise<boolean> {
-    const configPath = path.join(projectPath, '.agentmux', 'config', 'quality-gates.yaml');
+    const configPath = path.join(projectPath, '.crewly', 'config', 'quality-gates.yaml');
     try {
       await fs.access(configPath);
       return true;

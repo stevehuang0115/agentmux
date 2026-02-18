@@ -29,7 +29,7 @@ Review the project.md file and determine which technical components require desi
 **Hard Constraints**
 
 -   ❌ No subdirectories under `specs/`
--   ✅ Place **all** files directly in `{PROJECT_PATH}/.agentmux/specs/`
+-   ✅ Place **all** files directly in `{PROJECT_PATH}/.crewly/specs/`
 -   ✅ All filenames end with `_design.md`
 -   ✅ Each doc must be **specific, justified, and testable** (no generic filler)
 
@@ -49,7 +49,7 @@ Review the project.md file and determine which technical components require desi
    Each block must start with an HTML comment containing the **absolute path**, e.g.:
 
     ```markdown
-    <!-- {PROJECT_PATH}/.agentmux/specs/order_domain_backend_design.md -->
+    <!-- {PROJECT_PATH}/.crewly/specs/order_domain_backend_design.md -->
     ```
 
 ## Required Content for _each_ `*_design.md`
@@ -142,6 +142,6 @@ Tailor deeply to the PRD. Include at least **one diagram** (Mermaid). Prefer spe
 -   Include **Mermaid** diagrams (C4/sequence/ER) where appropriate.
 -   Keep vendor choices justified by the **Research & Stack Selection** analysis.
 -   Output only: **1 JSON manifest block**, followed by **N markdown blocks** (one per file). **No extra commentary.**
--   All files go directly in `{PROJECT_PATH}/.agentmux/specs/`.
+-   All files go directly in `{PROJECT_PATH}/.crewly/specs/`.
 
 **Create the appropriate technical design documents now based on your analysis of the project requirements.**

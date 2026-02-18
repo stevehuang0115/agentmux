@@ -13,7 +13,7 @@ import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { StorageService } from '../core/storage.service.js';
 import {
-	AGENTMUX_CONSTANTS,
+	CREWLY_CONSTANTS,
 	ENV_CONSTANTS,
 	AGENT_TIMEOUTS,
 	ORCHESTRATOR_ROLE,
@@ -256,7 +256,7 @@ export class AgentRegistrationService {
 	 */
 	private async updateAgentStatusSafe(
 		sessionName: string,
-		status: (typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES],
+		status: (typeof CREWLY_CONSTANTS.AGENT_STATUSES)[keyof typeof CREWLY_CONSTANTS.AGENT_STATUSES],
 		context?: { role?: string }
 	): Promise<boolean> {
 		try {
@@ -548,7 +548,7 @@ export class AgentRegistrationService {
 		try {
 			await this.storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
+				CREWLY_CONSTANTS.AGENT_STATUSES.STARTED
 			);
 			this.logger.info('Agent status updated to started (runtime running, awaiting registration)', { sessionName, role });
 		} catch (statusError) {
@@ -829,7 +829,7 @@ export class AgentRegistrationService {
 		try {
 			await this.storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
+				CREWLY_CONSTANTS.AGENT_STATUSES.STARTED
 			);
 			this.logger.info('Agent status updated to started after recreation (awaiting registration)', { sessionName, role });
 		} catch (statusError) {
@@ -949,7 +949,7 @@ export class AgentRegistrationService {
 
 ## Quick context about this setup
 
-This project uses AgentMux for team coordination. You have bash skills available at \`${skillsPath}/\` that communicate with the AgentMux backend running locally. Read the skills catalog at \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
+This project uses Crewly for team coordination. You have bash skills available at \`${skillsPath}/\` that communicate with the Crewly backend running locally. Read the skills catalog at \`~/.crewly/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
 
 ## First thing - please check in
 
@@ -1004,7 +1004,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			if (role === ORCHESTRATOR_ROLE) {
 				// For orchestrator, check agentStatus is active
 				const orchestratorStatus = await this.storageService.getOrchestratorStatus();
-				return orchestratorStatus?.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+				return orchestratorStatus?.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 			}
 
 			// For team members, check teams data
@@ -1015,7 +1015,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				if (team.members) {
 					for (const member of team.members) {
 						if (member.sessionName === sessionName && member.role === role) {
-							return member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+							return member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 						}
 					}
 				}
@@ -1544,12 +1544,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			);
 			await sessionHelper.setEnvironmentVariable(
 				sessionName,
-				ENV_CONSTANTS.AGENTMUX_ROLE,
+				ENV_CONSTANTS.CREWLY_ROLE,
 				role
 			);
 			await sessionHelper.setEnvironmentVariable(
 				sessionName,
-				ENV_CONSTANTS.AGENTMUX_API_URL,
+				ENV_CONSTANTS.CREWLY_API_URL,
 				`http://localhost:${WEB_CONSTANTS.PORTS.BACKEND}`
 			);
 
@@ -1650,7 +1650,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Update agent status to inactive (works for both orchestrator and team members)
 			await this.storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 			this.logger.info('Agent status updated to inactive', { sessionName, role });
 
@@ -1698,7 +1698,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 * @example
 	 * ```typescript
 	 * const result = await agentRegistrationService.sendMessageToAgent(
-	 *   'agentmux-orc',
+	 *   'crewly-orc',
 	 *   '[CHAT:123] Hello, orchestrator!'
 	 * );
 	 * if (result.success) {
@@ -3216,7 +3216,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				sessionName: string;
 				role?: string;
 				running: boolean;
-				status: (typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];
+				status: (typeof CREWLY_CONSTANTS.AGENT_STATUSES)[keyof typeof CREWLY_CONSTANTS.AGENT_STATUSES];
 			};
 			timestamp: string;
 		};
@@ -3239,8 +3239,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						role,
 						running: agentRunning,
 						status: agentRunning
-							? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-							: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+							? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
+							: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					},
 					timestamp: new Date().toISOString(),
 				},
@@ -3265,7 +3265,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 *
 	 * Instead of pasting large multi-line prompts directly into the terminal (which
 	 * causes bracketed paste issues, shell interpretation errors, and truncation),
-	 * we write the prompt to ~/.agentmux/prompts/{sessionName}-init.md and send a
+	 * we write the prompt to ~/.crewly/prompts/{sessionName}-init.md and send a
 	 * single-line instruction telling the agent to read that file.
 	 *
 	 * @param sessionName The session name
@@ -3285,15 +3285,15 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		const sessionHelper = await this.getSessionHelper();
 
 		// Step 1: Write prompt to a file.
-		// Claude Code: write to ~/.agentmux/prompts/ (always accessible).
+		// Claude Code: write to ~/.crewly/prompts/ (always accessible).
 		// Gemini CLI / other TUI runtimes: write INSIDE the project directory
 		// so the file is within the workspace allowlist. Gemini CLI restricts
 		// file reads to workspace directories, and the /directory add command
-		// to add ~/.agentmux may fail (e.g., auto-update notification
+		// to add ~/.crewly may fail (e.g., auto-update notification
 		// interferes during postInitialize).
 		const promptsDir = isClaudeCode
-			? path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, 'prompts')
-			: path.join(this.projectRoot, '.agentmux', 'prompts');
+			? path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, 'prompts')
+			: path.join(this.projectRoot, '.crewly', 'prompts');
 		const promptFilePath = path.join(promptsDir, `${sessionName}-init.md`);
 
 		try {

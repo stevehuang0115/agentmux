@@ -9,7 +9,7 @@ The Settings page uses a different visual style compared to the rest of the appl
 - Tab styling doesn't match the application's overall theme
 - Card components have different styling (light yellow warning boxes, white forms)
 
-The Settings page should match the dark-themed, consistent UI used throughout the rest of AgentMux.
+The Settings page should match the dark-themed, consistent UI used throughout the rest of Crewly.
 
 ## Current Issues
 

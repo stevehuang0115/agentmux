@@ -22,7 +22,7 @@
 		"step2": "Create detailed test implementation plan with user journey mapping and technical architecture"
 	},
 	"expectedDeliverables": {
-		"prerequisites": ["User journey must exist in .agentmux/specs/initial_user_journey.md"],
+		"prerequisites": ["User journey must exist in .crewly/specs/initial_user_journey.md"],
 		"step1": [
 			"Project type identification document",
 			"E2E testing technology recommendation with justification",

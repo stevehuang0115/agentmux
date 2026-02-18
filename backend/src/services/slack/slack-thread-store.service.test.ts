@@ -167,7 +167,7 @@ describe('SlackThreadStoreService', () => {
       const filePath = store.getThreadFilePath('C123', '1707.001');
       const content = await fs.readFile(filePath, 'utf-8');
 
-      expect(content).toContain('**AgentMux**');
+      expect(content).toContain('**Crewly**');
       expect(content).toContain('I will handle that.');
     });
 

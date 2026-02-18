@@ -130,9 +130,9 @@ More content after
       const result = await service.getTeamMemberTaskAssignmentPrompt(mockTaskData);
 
       expect(result).toContain('📋 TASK ASSIGNMENT - Test Task');
-      expect(result).toContain('**Task File:** `/test/project/.agentmux/tasks/sprint-1/open/task-001.md`');
+      expect(result).toContain('**Task File:** `/test/project/.crewly/tasks/sprint-1/open/task-001.md`');
       expect(result).toContain('**Priority:** high');
-      expect(result).toContain('accept_task({ absoluteTaskPath: \'/test/project/.agentmux/tasks/sprint-1/open/task-001.md\', memberId: \'[your_member_id]\' })');
+      expect(result).toContain('accept_task({ absoluteTaskPath: \'/test/project/.crewly/tasks/sprint-1/open/task-001.md\', memberId: \'[your_member_id]\' })');
     });
 
     it('should use default milestone in fallback template', async () => {

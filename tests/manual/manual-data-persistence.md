@@ -11,7 +11,7 @@ Verify that projects and teams persist after a browser page refresh, ensuring th
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
 
 ---

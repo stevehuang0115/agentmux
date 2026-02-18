@@ -17,7 +17,7 @@ describe('ConfigService', () => {
 
 		// Clear environment variables
 		delete process.env.PORT;
-		delete process.env.AGENTMUX_MCP_PORT;
+		delete process.env.CREWLY_MCP_PORT;
 		delete process.env.NODE_ENV;
 
 		jest.clearAllMocks();
@@ -54,7 +54,7 @@ describe('ConfigService', () => {
 
 		test('should use environment variables for configuration', () => {
 			process.env.PORT = '4000';
-			process.env.AGENTMUX_MCP_PORT = '4001';
+			process.env.CREWLY_MCP_PORT = '4001';
 			process.env.NODE_ENV = 'production';
 
 			mockExistsSync.mockReturnValue(false);
@@ -105,7 +105,7 @@ describe('ConfigService', () => {
 
 		test('should detect port conflicts', () => {
 			process.env.PORT = '3000';
-			process.env.AGENTMUX_MCP_PORT = '3000'; // Same as server port
+			process.env.CREWLY_MCP_PORT = '3000'; // Same as server port
 			mockExistsSync.mockReturnValue(false);
 
 			const config = ConfigService.getInstance();

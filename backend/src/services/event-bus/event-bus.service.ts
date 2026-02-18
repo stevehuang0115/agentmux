@@ -36,7 +36,7 @@ import { isValidCreateSubscriptionInput } from '../../types/event-bus.types.js';
  * eventBus.subscribe({
  *   eventType: 'agent:idle',
  *   filter: { sessionName: 'agent-joe' },
- *   subscriberSession: 'agentmux-orc',
+ *   subscriberSession: 'crewly-orc',
  *   oneShot: true,
  * });
  *

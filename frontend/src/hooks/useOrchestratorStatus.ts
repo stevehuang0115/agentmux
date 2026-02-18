@@ -185,7 +185,7 @@ export function useOrchestratorStatus(): UseOrchestratorStatusResult {
           : 'Orchestrator is not running. Please start the orchestrator from the Dashboard.',
         offlineMessage: isActive
           ? null
-          : 'The orchestrator is currently offline. Please start it from the AgentMux dashboard.',
+          : 'The orchestrator is currently offline. Please start it from the Crewly dashboard.',
       });
       setIsLoading(false);
       setError(null);

@@ -39,7 +39,7 @@ jest.mock('../../services/session/index.js', () => ({
 }));
 
 import type { ApiContext } from '../types.js';
-import { AGENTMUX_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
+import { CREWLY_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 describe('Orchestrator Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
@@ -922,7 +922,7 @@ describe('Orchestrator Handlers', () => {
       const mockSetupRegistration = {
         createAgentSession: jest.fn<any>().mockResolvedValue({
           success: true,
-          sessionName: 'agentmux-orc',
+          sessionName: 'crewly-orc',
           message: 'Orchestrator created',
         }),
       };
@@ -943,7 +943,7 @@ describe('Orchestrator Handlers', () => {
       // Verify initializeForSession was called with orchestrator params
       const memoryInstance = (MemoryService.getInstance as jest.Mock).mock.results[0]?.value as any;
       expect(memoryInstance.initializeForSession).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         'orchestrator',
         process.cwd()
       );
@@ -963,7 +963,7 @@ describe('Orchestrator Handlers', () => {
       const mockFailRegistration = {
         createAgentSession: jest.fn<any>().mockResolvedValue({
           success: true,
-          sessionName: 'agentmux-orc',
+          sessionName: 'crewly-orc',
           message: 'Orchestrator created',
         }),
       };

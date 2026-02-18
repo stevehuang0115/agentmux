@@ -1,7 +1,7 @@
 {
   "id": "agent-send-chat-response",
   "name": "Send Chat Response",
-  "description": "Send a chat response visible in the AgentMux chat UI.",
+  "description": "Send a chat response visible in the Crewly chat UI.",
   "category": "communication",
   "skillType": "claude-skill",
   "promptFile": "instructions.md",

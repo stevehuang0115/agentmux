@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -92,7 +92,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 
 	/**
 	 * Post-initialization hook for Gemini CLI.
-	 * Adds ~/.agentmux to the directory allowlist and ensures MCP server
+	 * Adds ~/.crewly to the directory allowlist and ensures MCP server
 	 * configuration (e.g., playwright) is present in the project directory.
 	 *
 	 * @param sessionName - PTY session name
@@ -101,10 +101,10 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 */
 	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
 		const effectiveProjectPath = targetProjectPath || this.projectRoot;
-		const agentmuxHome = path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+		const crewlyHome = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
 		this.logger.info('Gemini CLI post-init: adding paths to directory allowlist', {
 			sessionName,
-			agentmuxHome,
+			crewlyHome,
 			projectRoot: this.projectRoot,
 			targetProjectPath: effectiveProjectPath,
 		});
@@ -120,10 +120,10 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// with slash command processing if we send /directory add too early.
 		await new Promise((resolve) => setTimeout(resolve, 3000));
 
-		// Add ~/.agentmux, the AgentMux project root, and the target project to the allowlist.
+		// Add ~/.crewly, the Crewly project root, and the target project to the allowlist.
 		// The target project path may differ from projectRoot when the agent works on a
-		// separate project (e.g., business_os vs agentmux).
-		const pathsToAdd = [agentmuxHome, this.projectRoot];
+		// separate project (e.g., business_os vs crewly).
+		const pathsToAdd = [crewlyHome, this.projectRoot];
 		if (effectiveProjectPath !== this.projectRoot) {
 			pathsToAdd.push(effectiveProjectPath);
 		}

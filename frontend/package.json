@@ -1,5 +1,5 @@
 {
-  "name": "@agentmux/frontend",
+  "name": "@crewly/frontend",
   "version": "1.0.0",
   "private": true,
   "type": "module",

@@ -7,7 +7,7 @@ import { readFile, writeFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('node-pty', () => ({ spawn: jest.fn() }));
@@ -206,7 +206,7 @@ describe('ActivityMonitorService', () => {
 
     const mockWorkingStatusData: TeamWorkingStatusFile = {
       orchestrator: {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         workingStatus: 'idle',
         lastActivityCheck: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z'
@@ -249,8 +249,8 @@ describe('ActivityMonitorService', () => {
 
       await (service as any).performActivityCheck();
 
-      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockSessionBackend.captureOutput).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 5);
+      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(mockSessionBackend.captureOutput).toHaveBeenCalledWith(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 5);
     });
 
     it('should check team member sessions for working status', async () => {
@@ -351,7 +351,7 @@ describe('ActivityMonitorService', () => {
 
       const result = await (service as any).loadTeamWorkingStatusFile();
 
-      expect(result.orchestrator.sessionName).toBe(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(result.orchestrator.sessionName).toBe(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
       expect(result.orchestrator.workingStatus).toBe('idle');
       expect(result.teamMembers).toEqual({});
       expect(result.metadata.version).toBe('1.0.0');
@@ -360,7 +360,7 @@ describe('ActivityMonitorService', () => {
     it('should load existing teamWorkingStatus.json file', async () => {
       const mockData = {
         orchestrator: {
-          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
           workingStatus: 'in_progress',
           lastActivityCheck: '2023-01-01T00:00:00.000Z',
           updatedAt: '2023-01-01T00:00:00.000Z'
@@ -399,7 +399,7 @@ describe('ActivityMonitorService', () => {
     it('should return current team working status data', async () => {
       const mockData = {
         orchestrator: {
-          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
           workingStatus: 'idle',
           lastActivityCheck: '2023-01-01T00:00:00.000Z',
           updatedAt: '2023-01-01T00:00:00.000Z'
@@ -423,7 +423,7 @@ describe('ActivityMonitorService', () => {
     beforeEach(() => {
       const mockData = {
         orchestrator: {
-          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
           workingStatus: 'in_progress',
           lastActivityCheck: '2023-01-01T00:00:00.000Z',
           updatedAt: '2023-01-01T00:00:00.000Z'
@@ -447,7 +447,7 @@ describe('ActivityMonitorService', () => {
     });
 
     it('should return orchestrator working status', async () => {
-      const result = await service.getWorkingStatusForSession(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      const result = await service.getWorkingStatusForSession(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
       expect(result).toBe('in_progress');
     });
 

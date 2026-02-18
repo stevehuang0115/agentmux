@@ -15,7 +15,7 @@ Based on the project requirements (project.md), user journey, and technical desi
 
 ### Create integration_tests.md
 
-Create the file at: `{PROJECT_PATH}/.agentmux/specs/integration_tests.md`
+Create the file at: `{PROJECT_PATH}/.crewly/specs/integration_tests.md`
 
 ## Authoring Rules
 
@@ -32,7 +32,7 @@ Create the file at: `{PROJECT_PATH}/.agentmux/specs/integration_tests.md`
 Tailor all content to the PRD and design docs—no generic filler. Include concrete commands.
 
 ```markdown
-<!-- {PROJECT_PATH}/.agentmux/specs/integration_tests.md -->
+<!-- {PROJECT_PATH}/.crewly/specs/integration_tests.md -->
 
 # {PROJECT_NAME} - Integration, E2E & Unit Testing Plan
 

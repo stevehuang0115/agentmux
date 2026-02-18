@@ -1,8 +1,8 @@
 /**
- * SteveHuangNPC - Steve Huang NPC character (builder/architect of AgentMux).
+ * SteveHuangNPC - Steve Huang NPC character (builder/architect of Crewly).
  *
  * Uses the GenericNPC shared component with Steve-specific personality weights,
- * animations, and thoughts. As the builder and architect of AgentMux, Steve
+ * animations, and thoughts. As the builder and architect of Crewly, Steve
  * loves golf, outdoor activities, and checking on agents' progress.
  */
 
@@ -29,7 +29,7 @@ const STEVE_HUANG_ANIMATIONS = {
 } as const;
 
 /**
- * SteveHuangNPC - Steve Huang (builder/architect of AgentMux) character
+ * SteveHuangNPC - Steve Huang (builder/architect of Crewly) character
  * that spawns near the golf green and wanders with an outdoor-focused personality.
  */
 export const SteveHuangNPC: React.FC = () => {

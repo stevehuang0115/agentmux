@@ -1,5 +1,5 @@
 #!/bin/bash
-# Register an agent with the AgentMux backend
+# Register an agent with the Crewly backend
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../_common/lib.sh"

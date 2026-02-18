@@ -138,7 +138,7 @@ export class LoggerService {
     try {
       const logDir = logConfig.logDir;
       const date = new Date().toISOString().split('T')[0];
-      const filename = `agentmux-${date}.log`;
+      const filename = `crewly-${date}.log`;
       const logPath = path.join(logDir, filename);
 
       const formattedEntry = this.formatLogEntry(entry) + '\n';
@@ -158,7 +158,7 @@ export class LoggerService {
     try {
       const files = await fs.readdir(logDir);
       const logFiles = files
-        .filter(file => file.startsWith('agentmux-') && file.endsWith('.log'))
+        .filter(file => file.startsWith('crewly-') && file.endsWith('.log'))
         .sort()
         .reverse();
 
@@ -327,7 +327,7 @@ export class LoggerService {
     try {
       const logDir = logConfig.logDir;
       const today = new Date().toISOString().split('T')[0];
-      const logPath = path.join(logDir, `agentmux-${today}.log`);
+      const logPath = path.join(logDir, `crewly-${today}.log`);
 
       if (!existsSync(logPath)) {
         return [];

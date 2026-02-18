@@ -103,7 +103,7 @@ function createTestApp() {
             id: 'member-1',
             name: 'Test Developer',
             role: 'developer',
-            sessionName: 'agentmux_developer_123',
+            sessionName: 'crewly_developer_123',
             status: 'idle',
             systemPrompt: 'Test prompt',
             createdAt: new Date().toISOString(),
@@ -150,7 +150,7 @@ function createTestApp() {
             id: 'member-1',
             name: 'Test Developer',
             role: 'developer',
-            sessionName: 'agentmux_developer_123',
+            sessionName: 'crewly_developer_123',
             status: 'idle',
             systemPrompt: 'Test prompt',
             createdAt: new Date().toISOString(),
@@ -184,14 +184,14 @@ function createTestApp() {
         modified: new Date().toISOString()
       },
       {
-        name: '.agentmux',
-        path: '.agentmux',
+        name: '.crewly',
+        path: '.crewly',
         type: 'folder',
         icon: '📁',
         children: [
           {
             name: 'project.yaml',
-            path: '.agentmux/project.yaml',
+            path: '.crewly/project.yaml',
             type: 'file',
             icon: '⚙️',
             size: 567,
@@ -346,7 +346,7 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.data.files).toHaveLength(2);
       expect(response.body.data.files[0].name).toBe('README.md');
-      expect(response.body.data.files[1].name).toBe('.agentmux');
+      expect(response.body.data.files[1].name).toBe('.crewly');
       expect(response.body.data.totalFiles).toBe(2);
     });
 
@@ -367,10 +367,10 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
         .get('/api/projects/test-project-1/files')
         .expect(200);
 
-      const agentmuxFolder = response.body.data.files[1];
-      expect(agentmuxFolder.type).toBe('folder');
-      expect(agentmuxFolder.children).toHaveLength(1);
-      expect(agentmuxFolder.children[0].name).toBe('project.yaml');
+      const crewlyFolder = response.body.data.files[1];
+      expect(crewlyFolder.type).toBe('folder');
+      expect(crewlyFolder.children).toHaveLength(1);
+      expect(crewlyFolder.children[0].name).toBe('project.yaml');
     });
   });
 

@@ -4,7 +4,7 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('fs/promises');
@@ -16,7 +16,7 @@ jest.mock('os');
 
 describe('TaskTrackingService', () => {
   let service: TaskTrackingService;
-  const mockTaskTrackingPath = '/mock/home/.agentmux/in_progress_tasks.json';
+  const mockTaskTrackingPath = '/mock/home/.crewly/in_progress_tasks.json';
 
   const mockTaskData: TaskTrackingData = {
     tasks: [],
@@ -54,7 +54,7 @@ describe('TaskTrackingService', () => {
 
   describe('constructor', () => {
     it('should initialize with correct task tracking path', () => {
-      expect(path.join).toHaveBeenCalledWith('/mock/home', '.agentmux', 'in_progress_tasks.json');
+      expect(path.join).toHaveBeenCalledWith('/mock/home', '.crewly', 'in_progress_tasks.json');
     });
   });
 
@@ -265,7 +265,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Queued Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'orchestrator',
-        assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        assignedSessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         assignedAt: '2023-01-01T12:00:00.000Z',
         status: 'pending_assignment',
         priority: 'high'
@@ -298,7 +298,7 @@ describe('TaskTrackingService', () => {
         taskName: 'Queued Task',
         targetRole: 'developer',
         assignedTeamMemberId: 'orchestrator',
-        assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        assignedSessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         assignedAt: '2023-01-01T12:00:00.000Z',
         status: 'pending_assignment',
         priority: 'high'
@@ -452,7 +452,7 @@ describe('TaskTrackingService', () => {
         return !filePath.includes('nonexistent');
       });
       (fs.readdir as jest.Mock).mockImplementation((dirPath) => {
-        if (dirPath === '/project/.agentmux/tasks') {
+        if (dirPath === '/project/.crewly/tasks') {
           return Promise.resolve(['m1_setup', 'm2_development', 'not_milestone', 'm3_testing']);
         }
         if (dirPath.includes('/open')) {
@@ -465,7 +465,7 @@ describe('TaskTrackingService', () => {
 
       expect(result).toHaveLength(6); // 2 tasks x 3 milestones
       expect(result[0]).toMatchObject({
-        filePath: '/project/.agentmux/tasks/m1_setup/open/01_task_one_developer.md',
+        filePath: '/project/.crewly/tasks/m1_setup/open/01_task_one_developer.md',
         fileName: '01_task_one_developer.md',
         taskName: 'Task One',
         targetRole: 'developer',
@@ -477,7 +477,7 @@ describe('TaskTrackingService', () => {
     it('should extract task name and role from filename correctly', async () => {
       (fsSync.existsSync as jest.Mock).mockReturnValue(true);
       (fs.readdir as jest.Mock).mockImplementation((dirPath) => {
-        if (dirPath === '/project/.agentmux/tasks') {
+        if (dirPath === '/project/.crewly/tasks') {
           return Promise.resolve(['m1_milestone']);
         }
         if (dirPath.includes('/open')) {
@@ -501,7 +501,7 @@ describe('TaskTrackingService', () => {
       // before .md, e.g. 'task.md'
       (fsSync.existsSync as jest.Mock).mockReturnValue(true);
       (fs.readdir as jest.Mock).mockImplementation((dirPath) => {
-        if (dirPath === '/project/.agentmux/tasks') {
+        if (dirPath === '/project/.crewly/tasks') {
           return Promise.resolve(['m1_milestone']);
         }
         if (dirPath.includes('/open')) {
@@ -518,7 +518,7 @@ describe('TaskTrackingService', () => {
     it('should skip non-milestone folders', async () => {
       (fsSync.existsSync as jest.Mock).mockReturnValue(true);
       (fs.readdir as jest.Mock).mockImplementation((dirPath) => {
-        if (dirPath === '/project/.agentmux/tasks') {
+        if (dirPath === '/project/.crewly/tasks') {
           return Promise.resolve(['regular_folder', 'not_milestone_format', 'm1_valid_milestone']);
         }
         if (dirPath.includes('m1_valid_milestone/open')) {
@@ -535,7 +535,7 @@ describe('TaskTrackingService', () => {
     it('should skip non-markdown files', async () => {
       (fsSync.existsSync as jest.Mock).mockReturnValue(true);
       (fs.readdir as jest.Mock).mockImplementation((dirPath) => {
-        if (dirPath === '/project/.agentmux/tasks') {
+        if (dirPath === '/project/.crewly/tasks') {
           return Promise.resolve(['m1_milestone']);
         }
         if (dirPath.includes('/open')) {

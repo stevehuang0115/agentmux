@@ -116,7 +116,7 @@ describe('PromptBuilderService', () => {
 
 			const result = service.buildOrchestratorPrompt(projectData);
 
-			expect(result).toContain('See project documentation in .agentmux/specs/');
+			expect(result).toContain('See project documentation in .crewly/specs/');
 		});
 	});
 

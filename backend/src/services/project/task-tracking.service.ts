@@ -5,14 +5,14 @@ import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
 import { InProgressTask, TaskTrackingData, TaskFileInfo } from '../../types/task-tracking.types.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 export class TaskTrackingService extends EventEmitter {
   private readonly taskTrackingPath: string;
 
   constructor() {
     super();
-    this.taskTrackingPath = path.join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
+    this.taskTrackingPath = path.join(os.homedir(), '.crewly', 'in_progress_tasks.json');
   }
 
   async loadTaskData(): Promise<TaskTrackingData> {
@@ -130,7 +130,7 @@ export class TaskTrackingService extends EventEmitter {
       taskName: taskInfo.taskName,
       targetRole: taskInfo.targetRole,
       assignedTeamMemberId: 'orchestrator', // Queued for orchestrator assignment
-      assignedSessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      assignedSessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
       assignedAt: taskInfo.createdAt,
       status: 'pending_assignment', // New status for tasks awaiting assignment
       priority: taskInfo.priority
@@ -159,7 +159,7 @@ export class TaskTrackingService extends EventEmitter {
 
   // Utility method to scan project tasks and sync with file system
   async syncTasksWithFileSystem(projectPath: string, projectId: string): Promise<void> {
-    const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+    const tasksPath = path.join(projectPath, '.crewly', 'tasks');
     
     if (!fsSync.existsSync(tasksPath)) {
       return;
@@ -194,7 +194,7 @@ export class TaskTrackingService extends EventEmitter {
 
   // Get available open tasks for a project
   async getOpenTasks(projectPath: string): Promise<TaskFileInfo[]> {
-    const tasksPath = path.join(projectPath, '.agentmux', 'tasks');
+    const tasksPath = path.join(projectPath, '.crewly', 'tasks');
     const openTasks: TaskFileInfo[] = [];
     
     if (!fsSync.existsSync(tasksPath)) {

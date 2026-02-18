@@ -10,7 +10,7 @@ import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { SHELL_PROMPT_PATTERNS } from '../continuation/patterns/idle-patterns.js';
 import {
-	AGENTMUX_CONSTANTS,
+	CREWLY_CONSTANTS,
 	ORCHESTRATOR_SESSION_NAME,
 	RUNTIME_EXIT_CONSTANTS,
 	type RuntimeType,
@@ -292,7 +292,7 @@ export class RuntimeExitMonitorService {
 			const storageService = StorageService.getInstance();
 			await storageService.updateAgentStatus(
 				sessionName,
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 			this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
 		} catch (error) {
@@ -319,7 +319,7 @@ export class RuntimeExitMonitorService {
 			if (terminalGateway) {
 				const statusPayload = {
 					sessionName,
-					status: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				};
 

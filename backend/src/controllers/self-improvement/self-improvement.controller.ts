@@ -2,7 +2,7 @@
  * Self-Improvement Controller
  *
  * REST API endpoints for self-improvement operations.
- * Enables the orchestrator to safely modify the AgentMux codebase.
+ * Enables the orchestrator to safely modify the Crewly codebase.
  *
  * @module controllers/self-improvement
  */

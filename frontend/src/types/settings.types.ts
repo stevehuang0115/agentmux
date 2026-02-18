@@ -1,7 +1,7 @@
 /**
  * Frontend Settings Types
  *
- * Type definitions for AgentMux application settings.
+ * Type definitions for Crewly application settings.
  * These types mirror the backend settings types.
  *
  * @module types/settings.types
@@ -65,7 +65,7 @@ export interface SkillsSettings {
 /**
  * Complete settings object
  */
-export interface AgentMuxSettings {
+export interface CrewlySettings {
   general: GeneralSettings;
   chat: ChatSettings;
   skills: SkillsSettings;

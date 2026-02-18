@@ -69,7 +69,7 @@ export class MessageValidationError extends Error {
  * Configuration options for the ChatService
  */
 export interface ChatServiceOptions {
-  /** Directory to store chat data (default: ~/.agentmux/chat) */
+  /** Directory to store chat data (default: ~/.crewly/chat) */
   chatDir?: string;
 }
 
@@ -81,7 +81,7 @@ export interface ChatServiceOptions {
  * Service for managing chat conversations and messages
  *
  * Handles:
- * - Message persistence to ~/.agentmux/chat/
+ * - Message persistence to ~/.crewly/chat/
  * - Conversation management
  * - Message formatting (raw terminal → clean chat)
  * - WebSocket event emission for real-time updates
@@ -119,7 +119,7 @@ export class ChatService extends EventEmitter {
   constructor(options?: ChatServiceOptions) {
     super();
     this.chatDir =
-      options?.chatDir ?? path.join(process.env.HOME || '~', '.agentmux', 'chat');
+      options?.chatDir ?? path.join(process.env.HOME || '~', '.crewly', 'chat');
     this.logger = LoggerService.getInstance().createComponentLogger('ChatService');
   }
 

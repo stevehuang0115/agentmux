@@ -49,13 +49,13 @@ describe('InProgressTasksController', () => {
         tasks: [
           {
             id: 'task-1',
-            taskPath: '/project/.agentmux/tasks/m1/in_progress/01_setup.md',
+            taskPath: '/project/.crewly/tasks/m1/in_progress/01_setup.md',
             taskName: '01_setup',
             assignedSessionName: 'dev-1',
             assignedMemberId: 'member-123',
             assignedAt: '2025-01-15T10:00:00Z',
             status: 'in_progress',
-            originalPath: '/project/.agentmux/tasks/m1/open/01_setup.md'
+            originalPath: '/project/.crewly/tasks/m1/open/01_setup.md'
           }
         ],
         lastUpdated: '2025-01-15T12:00:00Z',
@@ -71,8 +71,8 @@ describe('InProgressTasksController', () => {
         mockRes as Response
       );
 
-      expect(mockExistsSync).toHaveBeenCalledWith('/mock/home/.agentmux/in_progress_tasks.json');
-      expect(mockReadFile).toHaveBeenCalledWith('/mock/home/.agentmux/in_progress_tasks.json', 'utf-8');
+      expect(mockExistsSync).toHaveBeenCalledWith('/mock/home/.crewly/in_progress_tasks.json');
+      expect(mockReadFile).toHaveBeenCalledWith('/mock/home/.crewly/in_progress_tasks.json', 'utf-8');
       expect(jsonSpy).toHaveBeenCalledWith({
         success: true,
         ...mockTasksData
@@ -88,7 +88,7 @@ describe('InProgressTasksController', () => {
         mockRes as Response
       );
 
-      expect(mockExistsSync).toHaveBeenCalledWith('/mock/home/.agentmux/in_progress_tasks.json');
+      expect(mockExistsSync).toHaveBeenCalledWith('/mock/home/.crewly/in_progress_tasks.json');
       expect(mockReadFile).not.toHaveBeenCalled();
       expect(jsonSpy).toHaveBeenCalledWith({
         success: true,

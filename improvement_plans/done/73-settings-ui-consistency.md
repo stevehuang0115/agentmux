@@ -43,7 +43,7 @@ export const Settings: React.FC = () => {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-text-primary-dark">Settings</h1>
         <p className="text-sm text-text-secondary-dark mt-1">
-          Configure AgentMux behavior and manage roles and skills
+          Configure Crewly behavior and manage roles and skills
         </p>
       </header>
 

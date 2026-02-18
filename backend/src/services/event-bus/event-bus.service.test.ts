@@ -48,7 +48,7 @@ function createTestSubscriptionInput(overrides?: Partial<CreateSubscriptionInput
   return {
     eventType: 'agent:idle',
     filter: { sessionName: 'agent-joe' },
-    subscriberSession: 'agentmux-orc',
+    subscriberSession: 'crewly-orc',
     ...overrides,
   };
 }
@@ -76,7 +76,7 @@ describe('EventBusService', () => {
       expect(sub.id).toBeDefined();
       expect(sub.eventType).toBe('agent:idle');
       expect(sub.filter.sessionName).toBe('agent-joe');
-      expect(sub.subscriberSession).toBe('agentmux-orc');
+      expect(sub.subscriberSession).toBe('crewly-orc');
       expect(sub.oneShot).toBe(true);
       expect(sub.createdAt).toBeDefined();
       expect(sub.expiresAt).toBeDefined();
@@ -289,7 +289,7 @@ describe('EventBusService', () => {
         subscriberSession: 'other-session',
       }));
 
-      expect(eventBus.listSubscriptions('agentmux-orc')).toHaveLength(1);
+      expect(eventBus.listSubscriptions('crewly-orc')).toHaveLength(1);
       expect(eventBus.listSubscriptions('other-session')).toHaveLength(1);
       expect(eventBus.listSubscriptions('nonexistent')).toHaveLength(0);
     });

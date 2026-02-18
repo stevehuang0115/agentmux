@@ -63,7 +63,7 @@ jest.mock('./project-memory.service.js', () => ({
 }));
 
 import { SessionMemoryService } from './session-memory.service.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import type { StartupBriefing } from '../../types/memory.types.js';
 
 describe('SessionMemoryService', () => {
@@ -85,7 +85,7 @@ describe('SessionMemoryService', () => {
   beforeEach(async () => {
     testDir = path.join(
       os.tmpdir(),
-      `agentmux-session-test-${Date.now()}-${Math.random().toString(36).substring(2)}`,
+      `crewly-session-test-${Date.now()}-${Math.random().toString(36).substring(2)}`,
     );
     testProjectPath = path.join(testDir, 'project');
     await fs.mkdir(testProjectPath, { recursive: true });
@@ -145,7 +145,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -166,7 +166,7 @@ describe('SessionMemoryService', () => {
 
       const sessionsDir = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -190,7 +190,7 @@ describe('SessionMemoryService', () => {
 
       const latestPath = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -211,7 +211,7 @@ describe('SessionMemoryService', () => {
 
       const latestPath = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -227,7 +227,7 @@ describe('SessionMemoryService', () => {
 
       const sessionsDir = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -253,7 +253,7 @@ describe('SessionMemoryService', () => {
 
       const latestPath = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -296,7 +296,7 @@ describe('SessionMemoryService', () => {
     it('should read the latest session summary when it exists', async () => {
       const sessionsDir = path.join(
         fakeHome(),
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_DIR,
         testAgentId,
         MEMORY_CONSTANTS.PATHS.SESSIONS_DIR,
@@ -320,7 +320,7 @@ describe('SessionMemoryService', () => {
       const today = new Date().toISOString().split('T')[0];
       const dailyLogDir = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR,
       );
       await fs.mkdir(dailyLogDir, { recursive: true });
@@ -338,7 +338,7 @@ describe('SessionMemoryService', () => {
     it('should read active goals when the goals file exists', async () => {
       const goalsDir = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.GOALS_DIR,
       );
       await fs.mkdir(goalsDir, { recursive: true });
@@ -359,7 +359,7 @@ describe('SessionMemoryService', () => {
     it('should read and tail recent failures to last 500 characters', async () => {
       const learningDir = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
       );
       await fs.mkdir(learningDir, { recursive: true });
@@ -377,7 +377,7 @@ describe('SessionMemoryService', () => {
     it('should read and tail recent successes to last 500 characters', async () => {
       const learningDir = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
       );
       await fs.mkdir(learningDir, { recursive: true });
@@ -421,7 +421,7 @@ describe('SessionMemoryService', () => {
     it('should not tail content shorter than LEARNING_TAIL_CHARS', async () => {
       const learningDir = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
       );
       await fs.mkdir(learningDir, { recursive: true });
@@ -703,7 +703,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -721,7 +721,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -738,7 +738,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -756,7 +756,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -778,14 +778,14 @@ describe('SessionMemoryService', () => {
       expect(index.agents[0].lastActive).not.toBe(firstLastActive);
     });
 
-    it('should create the .agentmux directory if it does not exist', async () => {
+    it('should create the .crewly directory if it does not exist', async () => {
       const freshProject = path.join(testDir, 'fresh-project');
       await fs.mkdir(freshProject, { recursive: true });
 
       await service.updateAgentsIndex(freshProject, testAgentId, testRole);
 
-      const agentmuxDir = path.join(freshProject, AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
-      const stat = await fs.stat(agentmuxDir);
+      const crewlyDir = path.join(freshProject, CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+      const stat = await fs.stat(crewlyDir);
       expect(stat.isDirectory()).toBe(true);
     });
 
@@ -796,7 +796,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -811,7 +811,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -863,7 +863,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 
@@ -880,7 +880,7 @@ describe('SessionMemoryService', () => {
 
       const indexPath = path.join(
         testProjectPath,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
       );
 

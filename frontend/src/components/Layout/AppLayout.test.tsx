@@ -85,9 +85,9 @@ describe('AppLayout', () => {
     expect(menuButton).toBeInTheDocument();
   });
 
-  it('shows AgentMux title in mobile header', () => {
+  it('shows Crewly title in mobile header', () => {
     renderWithProviders(<AppLayout />);
 
-    expect(screen.getByText('AgentMux')).toBeInTheDocument();
+    expect(screen.getByText('Crewly')).toBeInTheDocument();
   });
 });

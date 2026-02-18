@@ -6,14 +6,14 @@ import { existsSync } from 'fs';
 import * as os from 'os';
 
 /**
- * Gets in-progress tasks data from ~/.agentmux/in_progress_tasks.json
+ * Gets in-progress tasks data from ~/.crewly/in_progress_tasks.json
  *
  * @param req - Request
  * @param res - Response with in-progress tasks data
  */
 export async function getInProgressTasks(this: ApiController, req: Request, res: Response): Promise<void> {
   try {
-    const taskTrackingPath = join(os.homedir(), '.agentmux', 'in_progress_tasks.json');
+    const taskTrackingPath = join(os.homedir(), '.crewly', 'in_progress_tasks.json');
 
     // Check if file exists
     if (!existsSync(taskTrackingPath)) {

@@ -61,23 +61,23 @@ export class TeamsBackupService {
   /**
    * Create a new TeamsBackupService.
    *
-   * @param agentmuxHome - Path to the .agentmux home directory
+   * @param crewlyHome - Path to the .crewly home directory
    */
-  constructor(agentmuxHome?: string) {
+  constructor(crewlyHome?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('TeamsBackupService');
-    const home = agentmuxHome || path.join(os.homedir(), '.agentmux');
+    const home = crewlyHome || path.join(os.homedir(), '.crewly');
     this.backupPath = path.join(home, BACKUP_FILENAME);
   }
 
   /**
    * Get singleton instance.
    *
-   * @param agentmuxHome - Optional override for the home directory
+   * @param crewlyHome - Optional override for the home directory
    * @returns TeamsBackupService instance
    */
-  static getInstance(agentmuxHome?: string): TeamsBackupService {
+  static getInstance(crewlyHome?: string): TeamsBackupService {
     if (!TeamsBackupService.instance) {
-      TeamsBackupService.instance = new TeamsBackupService(agentmuxHome);
+      TeamsBackupService.instance = new TeamsBackupService(crewlyHome);
     }
     return TeamsBackupService.instance;
   }

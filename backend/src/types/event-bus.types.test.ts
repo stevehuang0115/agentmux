@@ -50,7 +50,7 @@ describe('Event Bus Types', () => {
     const validInput: CreateSubscriptionInput = {
       eventType: 'agent:idle',
       filter: { sessionName: 'agent-joe' },
-      subscriberSession: 'agentmux-orc',
+      subscriberSession: 'crewly-orc',
     };
 
     it('should return true for valid input with single event type', () => {

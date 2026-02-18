@@ -1,5 +1,5 @@
 /**
- * Error handling utilities for the AgentMux frontend
+ * Error handling utilities for the Crewly frontend
  *
  * Provides consistent error handling patterns for non-critical operations
  * that should not crash the application but should still be logged.

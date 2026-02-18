@@ -10,7 +10,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ProjectMemoryService } from './project-memory.service.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 
 describe('ProjectMemoryService', () => {
   let service: ProjectMemoryService;
@@ -18,7 +18,7 @@ describe('ProjectMemoryService', () => {
 
   beforeEach(async () => {
     // Create a unique temp directory for each test
-    testProjectPath = path.join(os.tmpdir(), `agentmux-project-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+    testProjectPath = path.join(os.tmpdir(), `crewly-project-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
     await fs.mkdir(testProjectPath, { recursive: true });
 
     // Clear singleton and create new instance
@@ -48,7 +48,7 @@ describe('ProjectMemoryService', () => {
     it('should create knowledge directory structure', async () => {
       await service.initializeProject(testProjectPath);
 
-      const knowledgePath = path.join(testProjectPath, AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, MEMORY_CONSTANTS.PATHS.KNOWLEDGE_DIR);
+      const knowledgePath = path.join(testProjectPath, CREWLY_CONSTANTS.PATHS.CREWLY_HOME, MEMORY_CONSTANTS.PATHS.KNOWLEDGE_DIR);
       const indexFile = path.join(knowledgePath, MEMORY_CONSTANTS.PROJECT_FILES.INDEX);
       const patternsFile = path.join(knowledgePath, MEMORY_CONSTANTS.PROJECT_FILES.PATTERNS);
       const learningsFile = path.join(knowledgePath, MEMORY_CONSTANTS.PROJECT_FILES.LEARNINGS);

@@ -12,8 +12,8 @@ import type { TeamMember, Team } from '../../types/index.js';
 jest.mock('../core/storage.service.js', () => ({
   StorageService: {
     getInstance: jest.fn(() => ({
-      getMemberPromptPath: jest.fn((teamId, memberId) => `/home/user/.agentmux/teams/${teamId}/prompts/${memberId}.md`),
-      getOrchestratorPromptPath: jest.fn(() => '/home/user/.agentmux/teams/orchestrator/prompt.md'),
+      getMemberPromptPath: jest.fn((teamId, memberId) => `/home/user/.crewly/teams/${teamId}/prompts/${memberId}.md`),
+      getOrchestratorPromptPath: jest.fn(() => '/home/user/.crewly/teams/orchestrator/prompt.md'),
       saveMemberPrompt: jest.fn().mockResolvedValue(undefined),
     })),
   },
@@ -91,7 +91,7 @@ describe('PromptGeneratorService', () => {
 
       expect(prompt).toContain('## Context Reminder');
       expect(prompt).toContain('If you lose context about who you are, read this file');
-      expect(prompt).toContain('/home/user/.agentmux/teams/team-1/prompts/member-1.md');
+      expect(prompt).toContain('/home/user/.crewly/teams/team-1/prompts/member-1.md');
     });
   });
 
@@ -116,7 +116,7 @@ describe('PromptGeneratorService', () => {
       expect(prefix).toContain('You are: CEO (product-manager)');
       expect(prefix).toContain('Team: Business OS');
       expect(prefix).toContain('Prompt file:');
-      expect(prefix).toContain('/home/user/.agentmux/teams/business-os/prompts/ceo-1.md');
+      expect(prefix).toContain('/home/user/.crewly/teams/business-os/prompts/ceo-1.md');
       expect(prefix).toContain('</CONTEXT>');
     });
   });
@@ -126,9 +126,9 @@ describe('PromptGeneratorService', () => {
       const prefix = service.buildOrchestratorContextPrefix();
 
       expect(prefix).toContain('<CONTEXT>');
-      expect(prefix).toContain('You are: AgentMux Orchestrator');
+      expect(prefix).toContain('You are: Crewly Orchestrator');
       expect(prefix).toContain('Prompt file:');
-      expect(prefix).toContain('/home/user/.agentmux/teams/orchestrator/prompt.md');
+      expect(prefix).toContain('/home/user/.crewly/teams/orchestrator/prompt.md');
       expect(prefix).toContain('</CONTEXT>');
     });
   });

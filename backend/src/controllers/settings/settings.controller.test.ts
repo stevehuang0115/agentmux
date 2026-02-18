@@ -11,9 +11,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { SettingsService, SettingsValidationError, resetSettingsService } from '../../services/settings/settings.service.js';
-import { getDefaultSettings, UpdateSettingsInput, AgentMuxSettings } from '../../types/settings.types.js';
+import { getDefaultSettings, UpdateSettingsInput, CrewlySettings } from '../../types/settings.types.js';
 
-const VALID_SECTIONS: (keyof AgentMuxSettings)[] = ['general', 'chat', 'skills'];
+const VALID_SECTIONS: (keyof CrewlySettings)[] = ['general', 'chat', 'skills'];
 
 /**
  * Create a settings controller router with a specific service
@@ -58,7 +58,7 @@ function createSettingsControllerWithService(service: SettingsService): Router {
 
   router.post('/reset/:section', async (req, res, next) => {
     try {
-      const section = req.params.section as keyof AgentMuxSettings;
+      const section = req.params.section as keyof CrewlySettings;
       if (!VALID_SECTIONS.includes(section)) {
         return res.status(400).json({ success: false, error: `Invalid section. Must be one of: ${VALID_SECTIONS.join(', ')}` });
       }
@@ -71,7 +71,7 @@ function createSettingsControllerWithService(service: SettingsService): Router {
     try {
       const settings = await service.getSettings();
       res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', 'attachment; filename=agentmux-settings.json');
+      res.setHeader('Content-Disposition', 'attachment; filename=crewly-settings.json');
       res.json(settings);
     } catch (error) { next(error); }
   });
