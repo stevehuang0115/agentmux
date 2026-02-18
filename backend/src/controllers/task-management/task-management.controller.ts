@@ -1106,3 +1106,55 @@ export async function readTask(this: ApiController, req: Request, res: Response)
 		res.status(500).json({ success: false, error: 'Failed to read task file' });
 	}
 }
+
+/**
+ * POST /api/task-management/request-review
+ *
+ * Request a code review for a completed task. Logs the review request
+ * and returns success. In the future this may notify the reviewer agent
+ * or broadcast a review request to the team.
+ *
+ * @param req - Request with body: { ticketId, reviewer?, message?, branch? }
+ * @param res - Response with { success, data: { message: string } }
+ */
+export async function requestReview(
+	this: ApiController,
+	req: Request,
+	res: Response
+): Promise<void> {
+	try {
+		const { ticketId, reviewer, message, branch } = req.body;
+
+		if (!ticketId) {
+			res.status(400).json({
+				success: false,
+				error: 'ticketId is required',
+			});
+			return;
+		}
+
+		console.log('[TASK-MGMT] Review requested', {
+			ticketId,
+			reviewer: reviewer || 'any',
+			branch: branch || 'current',
+			message: message || 'No message provided',
+		});
+
+		res.json({
+			success: true,
+			data: {
+				message: 'Review requested',
+				ticketId,
+				reviewer: reviewer || null,
+				branch: branch || null,
+				requestedAt: new Date().toISOString(),
+			},
+		});
+	} catch (error) {
+		console.error('Error requesting review:', error);
+		res.status(500).json({
+			success: false,
+			error: 'Failed to request review',
+		});
+	}
+}

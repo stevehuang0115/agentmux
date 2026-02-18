@@ -3,10 +3,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /**
  * ProcessRecovery manages automatic restart and monitoring of the AgentMux backend process
@@ -67,7 +63,7 @@ export class ProcessRecovery extends EventEmitter {
 			return;
 		}
 
-		const backendScript = path.resolve(__dirname, '../index.js');
+		const backendScript = path.resolve(process.cwd(), 'backend/src/index.js');
 
 		console.log(`🚀 Starting backend process (attempt ${this.restartCount + 1}/${this.maxRestarts + 1})`);
 		console.log(`📂 Script: ${backendScript}`);
@@ -315,7 +311,8 @@ export class ProcessRecovery extends EventEmitter {
 }
 
 // If this script is run directly, start the recovery system
-if (import.meta.url === `file://${process.argv[1]}`) {
+const _isMain = process.argv[1]?.endsWith('process-recovery.ts') || process.argv[1]?.endsWith('process-recovery.js');
+if (_isMain) {
 	const recovery = new ProcessRecovery();
 
 	recovery.on('process_started', () => {

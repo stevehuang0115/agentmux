@@ -154,23 +154,30 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Handle user input - use ref to always get current session
+    // Handle user input - use ref to always get current session.
+    // Filter out terminal response sequences (DA1, DA2, DSR) that xterm.js
+    // generates in response to queries from the child process. These responses
+    // must NOT be sent to the PTY as they would appear as typed text in CLI
+    // input lines (e.g. Gemini CLI shows "[?1;2c" in its prompt).
+    const TERMINAL_RESPONSE_RE = /\x1b\[\??[\d;]*[cRn]|\x1b\[>[\d;]*c/g;
     term.onData((data) => {
       if (webSocketService.isConnected() && selectedSessionRef.current) {
-        webSocketService.sendInput(selectedSessionRef.current, data);
+        const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
+        if (filtered.length > 0) {
+          webSocketService.sendInput(selectedSessionRef.current, filtered);
+        }
       }
     });
 
-    // Smart scroll: detect when user scrolls to enable/disable auto-scroll
-    // When user scrolls up, disable auto-scroll; when they scroll back to bottom, re-enable
+    // Smart scroll: re-enable auto-scroll when viewport reaches the bottom.
+    // IMPORTANT: This handler ONLY re-enables auto-scroll. It must NOT disable it
+    // (set isUserScrolledUp=true) because xterm's internal scroll events fire during
+    // data writes when the viewport is momentarily not at the bottom. That would
+    // falsely disable auto-scroll. Only the wheel handler (user interaction) disables it.
     const viewportElement = container.querySelector('.xterm-viewport');
     const handleScroll = () => {
       if (isAtBottom()) {
-        // User scrolled back to bottom, re-enable auto-scroll
         isUserScrolledUp.current = false;
-      } else {
-        // User scrolled up, disable auto-scroll
-        isUserScrolledUp.current = true;
       }
     };
 
@@ -220,20 +227,43 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     };
   }, [isOpen, isAtBottom]);  // Only depend on isOpen - xterm init shouldn't depend on session loading
 
-  // Write terminal output to xterm
+  // Handle panel opening animation - resize/fit terminal after transition completes
+  useEffect(() => {
+    if (isOpen && xtermInitialized && fitAddonRef.current && xtermRef.current) {
+      // The panel has a 300ms transition (duration-300).
+      // We need to wait for it to finish before fitting, otherwise dimensions are wrong.
+      const timer = setTimeout(() => {
+        if (fitAddonRef.current && xtermRef.current) {
+          fitAddonRef.current.fit();
+          const dimensions = fitAddonRef.current.proposeDimensions();
+          if (dimensions && selectedSessionRef.current) {
+            webSocketService.resizeTerminal(selectedSessionRef.current, dimensions.cols, dimensions.rows);
+          }
+        }
+      }, 350); // 350ms to be safe (slightly longer than transition)
+
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, xtermInitialized]);
+
+  // Write terminal output to xterm, scrolling to bottom after data is processed
   const writeToXterm = useCallback((data: string) => {
     if (xtermRef.current) {
-      xtermRef.current.write(data);
+      xtermRef.current.write(data, () => {
+        scrollToBottomIfEnabled();
+      });
     }
-  }, []);
+  }, [scrollToBottomIfEnabled]);
 
-  // Clear xterm and write new content
+  // Clear xterm and write new content, scrolling to bottom after data is processed
   const replaceXtermContent = useCallback((data: string) => {
     if (xtermRef.current) {
       xtermRef.current.clear();
-      xtermRef.current.write(data);
+      xtermRef.current.write(data, () => {
+        scrollToBottomIfEnabled();
+      });
     }
-  }, []);
+  }, [scrollToBottomIfEnabled]);
 
   // WebSocket event handlers
   const handleTerminalOutput = useCallback((data: any) => {
@@ -244,6 +274,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     if (data && dataSessionName === selectedSessionRef.current) {
       // Write incremental data to xterm.js (don't replace - append for streaming)
+      // Auto-scroll is handled inside writeToXterm via xterm's write callback
       writeToXterm(dataContent || '');
 
       // Clear loading state when we receive terminal output
@@ -251,11 +282,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
       // Clear session switch timeout since we got content
       clearSessionTimeouts();
-
-      // Smart auto-scroll: only scroll to bottom if user hasn't scrolled up
-      scrollToBottomIfEnabled();
     }
-  }, [clearSessionTimeouts, writeToXterm, scrollToBottomIfEnabled]);
+  }, [clearSessionTimeouts, writeToXterm]);
 
   const handleInitialTerminalState = useCallback((data: any) => {
     // Check both direct sessionName and nested structure
@@ -533,6 +561,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
     webSocketService.subscribeToSession(sessionName);
     currentSubscription.current = sessionName;
+
+    // Sync PTY dimensions with the frontend terminal size.
+    // The PTY starts at a default 80x24 which is too small for TUI-based runtimes
+    // like Gemini CLI that render within the PTY viewport. Without this, Gemini CLI
+    // only renders 24 rows of content even though the frontend terminal is larger.
+    if (fitAddonRef.current) {
+      const dimensions = fitAddonRef.current.proposeDimensions();
+      if (dimensions) {
+        webSocketService.resizeTerminal(sessionName, dimensions.cols, dimensions.rows);
+      }
+    }
 
     // Set timeout fallback to clear loading state if no response comes within 10 seconds
     sessionSwitchTimeout.current = setTimeout(() => {

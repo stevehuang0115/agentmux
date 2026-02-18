@@ -272,6 +272,37 @@ describe('MessageQueueService', () => {
     });
   });
 
+  describe('forceCancelCurrent', () => {
+    it('should cancel the currently processing message', () => {
+      queue.enqueue(validInput);
+      const msg = queue.dequeue()!;
+
+      expect(queue.isProcessing()).toBe(true);
+
+      const result = queue.forceCancelCurrent();
+
+      expect(result).toBe(true);
+      expect(queue.isProcessing()).toBe(false);
+      expect(queue.getHistory()[0].status).toBe('cancelled');
+      expect(queue.getHistory()[0].error).toBe('Force-cancelled by user');
+    });
+
+    it('should return false when nothing is processing', () => {
+      expect(queue.forceCancelCurrent()).toBe(false);
+    });
+
+    it('should emit cancelled event', () => {
+      const handler = jest.fn();
+      queue.on('cancelled', handler);
+      queue.enqueue(validInput);
+      queue.dequeue();
+
+      queue.forceCancelCurrent();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('clearPending', () => {
     it('should clear all pending messages', () => {
       queue.enqueue({ ...validInput, content: 'a' });
@@ -441,6 +472,25 @@ describe('MessageQueueService', () => {
 
       const newStatus = queue.getStatus();
       expect(newStatus.isProcessing).toBe(false);
+    });
+
+    it('should increment retryCount on each requeue', () => {
+      queue.enqueue(validInput);
+      const dequeued = queue.dequeue()!;
+
+      expect(dequeued.retryCount).toBeUndefined();
+
+      queue.requeue(dequeued);
+      const reDequeued1 = queue.dequeue()!;
+      expect(reDequeued1.retryCount).toBe(1);
+
+      queue.requeue(reDequeued1);
+      const reDequeued2 = queue.dequeue()!;
+      expect(reDequeued2.retryCount).toBe(2);
+
+      queue.requeue(reDequeued2);
+      const reDequeued3 = queue.dequeue()!;
+      expect(reDequeued3.retryCount).toBe(3);
     });
   });
 

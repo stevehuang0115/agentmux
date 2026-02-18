@@ -66,6 +66,10 @@ export const PTY_CONSTANTS = {
 	DEFAULT_ROWS: 24,
 	MAX_RESIZE_COLS: 1000,
 	MAX_RESIZE_ROWS: 1000,
+	/** Delay before escalating from SIGTERM to SIGKILL in forceKill (ms) */
+	FORCE_KILL_ESCALATION_DELAY: 500,
+	/** Delay before escalating from SIGTERM to SIGKILL in forceDestroyAll (ms) */
+	FORCE_DESTROY_ESCALATION_DELAY: 1000,
 } as const;
 
 // Session command timing delays (in milliseconds)
@@ -84,6 +88,9 @@ export const SESSION_COMMAND_DELAYS = {
 	MESSAGE_RETRY_DELAY: 1000,
 	/** Additional delay for Claude Code to start processing after message sent */
 	MESSAGE_PROCESSING_DELAY: 500,
+	/** Progressive re-check intervals for Claude Code delivery verification (ms).
+	 *  Total window: 500ms (processing delay) + 1000 + 2000 + 3000 = 6.5s */
+	CLAUDE_VERIFICATION_INTERVALS: [1000, 2000, 3000] as const,
 } as const;
 
 // Terminal controller constants
@@ -204,18 +211,34 @@ export const TERMINAL_PATTERNS = {
 	PASTE_STUCK: /\[Pasted text #\d+ \+\d+ lines\]/,
 
 	/**
-	 * Claude Code prompt indicators (characters that appear at input prompts).
+	 * Agent prompt indicators (characters that appear at input prompts).
+	 * Includes Claude Code (❯, >, ⏵), bash ($), and Gemini CLI (!).
 	 */
-	PROMPT_CHARS: ['❯', '>', '⏵', '$'] as const,
+	PROMPT_CHARS: ['❯', '>', '⏵', '$', '!'] as const,
 
 	/**
-	 * Pattern for detecting Claude Code prompt in terminal stream.
-	 * Matches either:
-	 * - A single prompt char (❯, >, ⏵) alone on a line (normal prompt)
-	 * - ❯❯ at start of a line followed by space (bypass permissions mode prompt)
-	 * Both indicate Claude Code is idle and ready for input.
+	 * Claude Code idle prompt detection.
+	 * Matches:
+	 * - ❯ or ⏵ or $ alone on a line (standard Claude Code prompt)
+	 * - ❯❯ followed by space or end-of-line (bypass permissions prompt,
+	 *   e.g. "❯❯ bypass permissions on (shift+tab to cycle)")
 	 */
-	PROMPT_STREAM: /(?:^|\n)\s*(?:[>❯⏵]\s*(?:\n|$)|❯❯\s)/,
+	CLAUDE_CODE_PROMPT: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$))/,
+
+	/**
+	 * Gemini CLI idle prompt detection.
+	 * Matches:
+	 * - > or ! followed by a space (TUI prompt, may have placeholder text)
+	 * - Box-drawing border (│, ┃) followed by > or ! (TUI bordered prompt)
+	 * - "Type your message …" or "YOLO mode …" textual prompts
+	 */
+	GEMINI_CLI_PROMPT: /(?:^|\n)\s*(?:[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
+
+	/**
+	 * Combined prompt pattern for any runtime (union of Claude Code + Gemini CLI).
+	 * Use runtime-specific patterns when you need to distinguish between runtimes.
+	 */
+	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$)|[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
 
 	/**
 	 * Processing indicators including status text patterns.
@@ -246,6 +269,8 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	MAX_HISTORY_SIZE: 50,
 	/** Delay between processing consecutive messages (ms) */
 	INTER_MESSAGE_DELAY: 500,
+	/** Maximum number of requeue retries before permanently failing a message */
+	MAX_REQUEUE_RETRIES: 5,
 	/** Queue persistence file name (stored under agentmux home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -327,6 +352,105 @@ export const CLAUDE_RESUME_CONSTANTS = {
 	SESSION_PICKER_DELAY_MS: 3000,
 	/** Timeout for Claude to resume and return to prompt (ms) */
 	RESUME_READY_TIMEOUT_MS: 30000,
+} as const;
+
+/**
+ * Constants for Gemini CLI shell mode detection and escape.
+ * Gemini CLI enters "shell mode" when it receives a `!` prefix or via `/shell`.
+ * In shell mode, input is executed as shell commands instead of being sent to the model.
+ * The prompt changes from `>` to `!` (or `$` in some versions).
+ */
+export const GEMINI_SHELL_MODE_CONSTANTS = {
+	/**
+	 * Patterns that indicate Gemini CLI is in shell mode.
+	 * Matches `!` prompt char (with optional box-drawing border) when NOT followed
+	 * by typical chat prompt indicators like "Type your message".
+	 */
+	SHELL_MODE_PROMPT_PATTERNS: [
+		/[│┃]\s*!\s*[│┃]/,      // Box-bordered shell prompt: │ ! │
+		/[│┃]\s*!\s+\S/,        // Box-bordered shell prompt with text: │ ! command │
+	] as const,
+	/** Delay after sending Escape to wait for mode switch (ms) */
+	ESCAPE_DELAY_MS: 500,
+	/** Maximum attempts to exit shell mode */
+	MAX_ESCAPE_ATTEMPTS: 3,
+} as const;
+
+/**
+ * Constants for runtime exit detection monitoring.
+ * Used by RuntimeExitMonitorService to detect when an agent CLI exits.
+ */
+export const RUNTIME_EXIT_CONSTANTS = {
+	/** Maximum rolling buffer size for terminal output (bytes) */
+	MAX_BUFFER_SIZE: 8192,
+	/** Debounce delay after exit pattern match before confirming (ms) */
+	CONFIRMATION_DELAY_MS: 500,
+	/**
+	 * Grace period after monitoring start to ignore false positives (ms).
+	 * Set to 0 because exit patterns (e.g. "Agent powering down",
+	 * "Interaction Summary") are specific enough to not appear during
+	 * normal runtime initialization output.
+	 */
+	STARTUP_GRACE_PERIOD_MS: 0,
+} as const;
+
+/**
+ * Constants for sub-agent message queue.
+ * Used by SubAgentMessageQueue to buffer messages for agents that haven't
+ * completed initialization (status !== 'active') yet.
+ */
+export const SUB_AGENT_QUEUE_CONSTANTS = {
+	/** Maximum messages per agent before dropping oldest */
+	MAX_QUEUE_SIZE: 50,
+	/** Delay between flushed messages on registration (ms) */
+	FLUSH_INTER_MESSAGE_DELAY: 2000,
+} as const;
+
+/**
+ * Constants for proactive system resource monitoring and alerting.
+ * Used by SystemResourceAlertService to poll metrics, check thresholds,
+ * and send user-facing notifications before resources are exhausted.
+ */
+export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
+	/** Polling interval for resource checks (ms) */
+	POLL_INTERVAL: 60000, // 1 minute
+	/** Cooldown between repeated alerts for the same metric (ms) */
+	ALERT_COOLDOWN: 600000, // 10 minutes
+	/** Thresholds for triggering alerts */
+	THRESHOLDS: {
+		DISK_WARNING: 85,     // 85% used
+		DISK_CRITICAL: 95,    // 95% used
+		MEMORY_WARNING: 85,   // 85% used
+		MEMORY_CRITICAL: 95,  // 95% used
+		CPU_WARNING: 80,      // load avg 80% of cores
+		CPU_CRITICAL: 95,     // load avg 95% of cores
+	},
+} as const;
+
+/**
+ * Constants for Slack image download and temporary storage.
+ * Used by SlackImageService to validate, download, and manage
+ * images sent by users in Slack messages.
+ */
+export const SLACK_IMAGE_CONSTANTS = {
+	/** Temp directory for downloaded images (relative to ~/.agentmux/) */
+	TEMP_DIR: 'tmp/slack-images',
+	/** Maximum allowed file size for image downloads (20 MB) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/** Supported image MIME types for download */
+	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'] as const,
+	/** Interval for cleaning up expired temp files (1 hour) */
+	CLEANUP_INTERVAL: 60 * 60 * 1000,
+	/** Maximum age for temp files before cleanup (24 hours) */
+	FILE_TTL: 24 * 60 * 60 * 1000,
+	/** Maximum concurrent image downloads per message */
+	MAX_CONCURRENT_DOWNLOADS: 3,
+	/** Warning threshold for temp directory total size (500 MB) */
+	MAX_TEMP_DIR_SIZE: 500 * 1024 * 1024,
+	/** Maximum number of retry attempts for Slack API 429 responses */
+	UPLOAD_MAX_RETRIES: 3,
+	/** Default backoff delay (ms) when no Retry-After header is present */
+	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
 } as const;
 
 // Type helpers

@@ -7,7 +7,9 @@
  */
 
 /**
- * Skill category for grouping and filtering
+ * Skill category for grouping and filtering.
+ * Includes both original categories and categories used by built-in skill.json files
+ * (management, monitoring, memory, system, task-management, quality).
  */
 export type SkillCategory =
   | 'development'
@@ -17,15 +19,20 @@ export type SkillCategory =
   | 'content-creation'
   | 'automation'
   | 'analysis'
-  | 'integration';
+  | 'integration'
+  | 'management'
+  | 'monitoring'
+  | 'memory'
+  | 'system'
+  | 'task-management'
+  | 'quality';
 
 /**
  * Skill type - defines the nature of the skill
- * - mcp: MCP-related skills that require MCP installation or runtime flags
  * - claude-skill: Specialized domain knowledge with optional bash scripts
  * - web-page: Page-specific skills with domain knowledge and actions
  */
-export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
+export type SkillType = 'claude-skill' | 'web-page';
 
 /**
  * Type of skill execution
@@ -33,7 +40,6 @@ export type SkillType = 'mcp' | 'claude-skill' | 'web-page';
 export type SkillExecutionType =
   | 'script'
   | 'browser'
-  | 'mcp-tool'
   | 'composite'
   | 'prompt-only';
 
@@ -62,14 +68,6 @@ export interface SkillBrowserConfig {
 }
 
 /**
- * MCP tool invocation configuration
- */
-export interface SkillMcpToolConfig {
-  toolName: string;
-  defaultParams?: Record<string, unknown>;
-}
-
-/**
  * Composite skill configuration
  */
 export interface SkillCompositeConfig {
@@ -84,7 +82,6 @@ export interface SkillExecutionConfig {
   type: SkillExecutionType;
   script?: SkillScriptConfig;
   browser?: SkillBrowserConfig;
-  mcpTool?: SkillMcpToolConfig;
   composite?: SkillCompositeConfig;
 }
 
@@ -105,8 +102,6 @@ export interface SkillRuntimeConfig {
   runtime?: string;
   /** Additional flags to pass to the runtime (e.g., ['--chrome']) */
   flags?: string[];
-  /** MCP servers required for this skill */
-  requiredMcpServers?: string[];
 }
 
 /**
@@ -236,12 +231,18 @@ export const SKILL_CATEGORIES: SkillCategory[] = [
   'automation',
   'analysis',
   'integration',
+  'management',
+  'monitoring',
+  'memory',
+  'system',
+  'task-management',
+  'quality',
 ];
 
 /**
  * Valid skill types list
  */
-export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
+export const SKILL_TYPES: SkillType[] = ['claude-skill', 'web-page'];
 
 /**
  * Valid execution types list
@@ -249,7 +250,6 @@ export const SKILL_TYPES: SkillType[] = ['mcp', 'claude-skill', 'web-page'];
 export const EXECUTION_TYPES: SkillExecutionType[] = [
   'script',
   'browser',
-  'mcp-tool',
   'composite',
   'prompt-only',
 ];
@@ -300,8 +300,40 @@ export function getSkillCategoryLabel(category: SkillCategory): string {
     automation: 'Automation',
     analysis: 'Analysis',
     integration: 'Integration',
+    management: 'Management',
+    monitoring: 'Monitoring',
+    memory: 'Memory',
+    system: 'System',
+    'task-management': 'Task Management',
+    quality: 'Quality',
   };
   return labels[category] || category;
+}
+
+/**
+ * Get emoji icon for skill category
+ *
+ * @param category - Skill category
+ * @returns Emoji icon string
+ */
+export function getSkillCategoryIcon(category: SkillCategory): string {
+  const icons: Record<SkillCategory, string> = {
+    development: '\u{1F4BB}',
+    design: '\u{1F3A8}',
+    communication: '\u{1F4AC}',
+    research: '\u{1F50D}',
+    'content-creation': '\u270D\uFE0F',
+    automation: '\u2699\uFE0F',
+    analysis: '\u{1F4CA}',
+    integration: '\u{1F517}',
+    management: '\u{1F4CB}',
+    monitoring: '\u{1F4E1}',
+    memory: '\u{1F9E0}',
+    system: '\u{1F5A5}\uFE0F',
+    'task-management': '\u2611\uFE0F',
+    quality: '\u2705',
+  };
+  return icons[category] || '\u{1F4E6}';
 }
 
 /**
@@ -312,7 +344,6 @@ export function getSkillCategoryLabel(category: SkillCategory): string {
  */
 export function getSkillTypeLabel(skillType: SkillType): string {
   const labels: Record<SkillType, string> = {
-    mcp: 'MCP Integration',
     'claude-skill': 'Claude Skill',
     'web-page': 'Web Page',
   };
@@ -329,7 +360,6 @@ export function getExecutionTypeLabel(type: SkillExecutionType): string {
   const labels: Record<SkillExecutionType, string> = {
     script: 'Script',
     browser: 'Browser Automation',
-    'mcp-tool': 'MCP Tool',
     composite: 'Composite',
     'prompt-only': 'Prompt Only',
   };

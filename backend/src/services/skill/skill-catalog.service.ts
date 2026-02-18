@@ -1,13 +1,17 @@
 /**
  * Skill Catalog Service
  *
- * Scans orchestrator skill directories, reads skill.json and instructions.md
- * from each, and generates a formatted SKILLS_CATALOG.md file at
- * ~/.agentmux/skills/SKILLS_CATALOG.md.
+ * Scans skill directories (orchestrator and agent), reads skill.json and
+ * instructions.md from each, and generates formatted catalog Markdown files
+ * at ~/.agentmux/skills/.
  *
- * The catalog provides a human-readable and LLM-readable reference of all
- * available orchestrator skills grouped by category, including usage examples
- * and parameter documentation extracted from each skill's instructions.md.
+ * Generates two catalogs:
+ * - SKILLS_CATALOG.md for orchestrator skills
+ * - AGENT_SKILLS_CATALOG.md for agent skills
+ *
+ * Each catalog provides a human-readable and LLM-readable reference of all
+ * available skills grouped by category, including usage examples and parameter
+ * documentation extracted from each skill's instructions.md.
  *
  * @module services/skill/skill-catalog.service
  */
@@ -23,14 +27,20 @@ import { AGENTMUX_CONSTANTS } from '../../constants.js';
 // Constants
 // =============================================================================
 
-/** Name of the generated catalog file */
+/** Name of the generated orchestrator catalog file */
 const CATALOG_FILENAME = 'SKILLS_CATALOG.md';
+
+/** Name of the generated agent catalog file */
+const AGENT_CATALOG_FILENAME = 'AGENT_SKILLS_CATALOG.md';
 
 /** Subdirectory under ~/.agentmux where the catalog is written */
 const CATALOG_SUBDIR = 'skills';
 
 /** Relative path from project root to orchestrator skills */
 const ORCHESTRATOR_SKILLS_RELATIVE_PATH = 'config/skills/orchestrator';
+
+/** Relative path from project root to agent skills */
+const AGENT_SKILLS_RELATIVE_PATH = 'config/skills/agent';
 
 /** Directory names to skip when scanning for skills */
 const SKIP_DIRECTORIES = ['_common'] as const;
@@ -266,12 +276,108 @@ export class SkillCatalogService {
   }
 
   /**
-   * Get the absolute path where the catalog file will be written.
+   * Generate the agent skills catalog by scanning agent skill directories
+   * and writing a formatted Markdown file.
+   *
+   * This method mirrors generateCatalog() but targets config/skills/agent/
+   * and writes to ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md.
+   *
+   * @returns A result object with success status, path, and counts
+   *
+   * @example
+   * ```typescript
+   * const result = await catalogService.generateAgentCatalog();
+   * if (result.success) {
+   *   console.log(`Agent catalog written to ${result.catalogPath}`);
+   * }
+   * ```
+   */
+  public async generateAgentCatalog(): Promise<CatalogGenerationResult> {
+    const catalogPath = this.getAgentCatalogPath();
+
+    try {
+      this.logger.info('Starting agent skills catalog generation', {
+        projectRoot: this.projectRoot,
+        catalogPath,
+      });
+
+      this.ensureCatalogDirectory();
+
+      const skills = await this.scanSkillDirectoriesAt(AGENT_SKILLS_RELATIVE_PATH);
+
+      // Use absolute path for agent skills because agents run in their target
+      // project directory (e.g. ~/projects/business_os), NOT the AgentMux root.
+      // Relative paths like config/skills/agent/ won't resolve from there.
+      const absoluteSkillsPath = path.join(this.projectRoot, AGENT_SKILLS_RELATIVE_PATH);
+
+      if (skills.length === 0) {
+        this.logger.warn('No agent skills found during catalog generation');
+        const emptyMarkdown = this.renderCatalogWithConfig(new Map(), {
+          title: 'Agent Skills Catalog',
+          skillsRelativePath: absoluteSkillsPath,
+        });
+        await fs.writeFile(catalogPath, emptyMarkdown, 'utf-8');
+
+        return {
+          success: true,
+          catalogPath,
+          skillCount: 0,
+          categoryCount: 0,
+        };
+      }
+
+      const grouped = this.groupByCategory(skills);
+      const markdown = this.renderCatalogWithConfig(grouped, {
+        title: 'Agent Skills Catalog',
+        skillsRelativePath: absoluteSkillsPath,
+      });
+      await fs.writeFile(catalogPath, markdown, 'utf-8');
+
+      const categoryCount = grouped.size;
+      this.logger.info('Agent skills catalog generated successfully', {
+        skillCount: skills.length,
+        categoryCount,
+        catalogPath,
+      });
+
+      return {
+        success: true,
+        catalogPath,
+        skillCount: skills.length,
+        categoryCount,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Failed to generate agent skills catalog', {
+        error: errorMessage,
+      });
+
+      return {
+        success: false,
+        catalogPath,
+        skillCount: 0,
+        categoryCount: 0,
+        error: errorMessage,
+      };
+    }
+  }
+
+  /**
+   * Get the absolute path where the orchestrator catalog file will be written.
    *
    * @returns Absolute path to ~/.agentmux/skills/SKILLS_CATALOG.md
    */
   public getCatalogPath(): string {
     return path.join(this.catalogDir, CATALOG_FILENAME);
+  }
+
+  /**
+   * Get the absolute path where the agent catalog file will be written.
+   *
+   * @returns Absolute path to ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md
+   */
+  public getAgentCatalogPath(): string {
+    return path.join(this.catalogDir, AGENT_CATALOG_FILENAME);
   }
 
   // ==========================================================================
@@ -294,18 +400,30 @@ export class SkillCatalogService {
   /**
    * Scan the orchestrator skills directory for valid skill subdirectories.
    *
+   * Delegates to scanSkillDirectoriesAt() with the orchestrator skills path.
+   *
+   * @returns Array of loaded skills with their definitions and instructions
+   */
+  private async scanSkillDirectories(): Promise<LoadedSkill[]> {
+    return this.scanSkillDirectoriesAt(ORCHESTRATOR_SKILLS_RELATIVE_PATH);
+  }
+
+  /**
+   * Scan a skills directory at a given relative path for valid skill subdirectories.
+   *
    * Reads each subdirectory (skipping entries in SKIP_DIRECTORIES),
    * loads skill.json and instructions.md from each, and returns an array
    * of successfully loaded skills. Directories that fail to load are
    * logged as warnings but do not cause the entire scan to fail.
    *
+   * @param relativePath - Relative path from project root to the skills directory
    * @returns Array of loaded skills with their definitions and instructions
    */
-  private async scanSkillDirectories(): Promise<LoadedSkill[]> {
-    const skillsRootDir = path.join(this.projectRoot, ORCHESTRATOR_SKILLS_RELATIVE_PATH);
+  private async scanSkillDirectoriesAt(relativePath: string): Promise<LoadedSkill[]> {
+    const skillsRootDir = path.join(this.projectRoot, relativePath);
 
     if (!existsSync(skillsRootDir)) {
-      this.logger.warn('Orchestrator skills directory not found', {
+      this.logger.warn('Skills directory not found', {
         path: skillsRootDir,
       });
       return [];
@@ -442,19 +560,41 @@ export class SkillCatalogService {
   /**
    * Render the complete Markdown catalog document from grouped skills.
    *
-   * Produces the full catalog including header, usage instructions,
-   * category sections, and individual skill entries with descriptions
-   * and parameter documentation extracted from instructions.md.
+   * Delegates to renderCatalogWithConfig() with orchestrator defaults.
    *
    * @param groupedSkills - Map of category name to skills in that category
    * @returns Complete Markdown document as a string
    */
   private renderCatalog(groupedSkills: Map<string, LoadedSkill[]>): string {
+    return this.renderCatalogWithConfig(groupedSkills, {
+      title: 'Orchestrator Skills Catalog',
+      skillsRelativePath: ORCHESTRATOR_SKILLS_RELATIVE_PATH,
+    });
+  }
+
+  /**
+   * Render the complete Markdown catalog document from grouped skills
+   * with configurable title and path prefix.
+   *
+   * Produces the full catalog including header, usage instructions,
+   * category sections, and individual skill entries with descriptions
+   * and parameter documentation extracted from instructions.md.
+   *
+   * @param groupedSkills - Map of category name to skills in that category
+   * @param config - Catalog rendering configuration
+   * @param config.title - Catalog title for the Markdown heading
+   * @param config.skillsRelativePath - Relative path prefix for skill usage commands
+   * @returns Complete Markdown document as a string
+   */
+  private renderCatalogWithConfig(
+    groupedSkills: Map<string, LoadedSkill[]>,
+    config: { title: string; skillsRelativePath: string }
+  ): string {
     const timestamp = new Date().toISOString();
     const lines: string[] = [];
 
     // Header
-    lines.push('# Orchestrator Skills Catalog');
+    lines.push(`# ${config.title}`);
     lines.push(`> Auto-generated on ${timestamp}. Execute skills via bash scripts.`);
     lines.push('');
 
@@ -463,7 +603,7 @@ export class SkillCatalogService {
     lines.push('');
     lines.push('All skills follow the pattern:');
     lines.push('```bash');
-    lines.push(`bash ${ORCHESTRATOR_SKILLS_RELATIVE_PATH}/{skill-name}/execute.sh '{"param":"value"}'`);
+    lines.push(`bash ${config.skillsRelativePath}/{skill-name}/execute.sh '{"param":"value"}'`);
     lines.push('```');
     lines.push('All scripts output JSON to stdout. Errors go to stderr.');
     lines.push('');
@@ -474,7 +614,7 @@ export class SkillCatalogService {
       lines.push('');
 
       for (const skill of skills) {
-        lines.push(...this.renderSkillEntry(skill));
+        lines.push(...this.renderSkillEntry(skill, config.skillsRelativePath));
       }
     }
 
@@ -488,9 +628,10 @@ export class SkillCatalogService {
    * Parameters section extracted from the skill's instructions.md.
    *
    * @param skill - The loaded skill to render
+   * @param skillsRelativePath - Relative path prefix for usage command
    * @returns Array of Markdown lines for this skill entry
    */
-  private renderSkillEntry(skill: LoadedSkill): string[] {
+  private renderSkillEntry(skill: LoadedSkill, skillsRelativePath: string = ORCHESTRATOR_SKILLS_RELATIVE_PATH): string[] {
     const lines: string[] = [];
 
     // Skill heading and description
@@ -500,7 +641,7 @@ export class SkillCatalogService {
 
     // Usage line
     lines.push(
-      `**Usage:** \`bash ${ORCHESTRATOR_SKILLS_RELATIVE_PATH}/${skill.dirName}/execute.sh '{}'\``
+      `**Usage:** \`bash ${skillsRelativePath}/${skill.dirName}/execute.sh '{}'\``
     );
     lines.push('');
 

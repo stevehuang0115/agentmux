@@ -18,7 +18,7 @@ jest.mock('../../models/index.js', () => ({
 describe('Scheduled Messages Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockStorageService: any;
   let mockTmuxService: any;
   let mockMessageSchedulerService: any;
@@ -33,20 +33,20 @@ describe('Scheduled Messages Handlers', () => {
     mockMessageDeliveryLogModel = MessageDeliveryLogModel;
 
     mockStorageService = {
-      getScheduledMessages: jest.fn(),
-      getScheduledMessage: jest.fn(),
-      saveScheduledMessage: jest.fn(),
-      deleteScheduledMessage: jest.fn(),
-      saveDeliveryLog: jest.fn()
+      getScheduledMessages: jest.fn<any>(),
+      getScheduledMessage: jest.fn<any>(),
+      saveScheduledMessage: jest.fn<any>(),
+      deleteScheduledMessage: jest.fn<any>(),
+      saveDeliveryLog: jest.fn<any>()
     };
 
     mockTmuxService = {
-      sendMessage: jest.fn()
+      sendMessage: jest.fn<any>()
     };
 
     mockMessageSchedulerService = {
-      scheduleMessage: jest.fn(),
-      cancelMessage: jest.fn()
+      scheduleMessage: jest.fn<any>(),
+      cancelMessage: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -71,9 +71,9 @@ describe('Scheduled Messages Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
-    };
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
+    } as any;
   });
 
   afterEach(() => {
@@ -123,10 +123,10 @@ describe('Scheduled Messages Handlers', () => {
 
     it('should return 400 when required fields are missing', async () => {
       const requiredFields = ['name', 'targetTeam', 'message', 'delayAmount', 'delayUnit'];
-      
+
       for (const field of requiredFields) {
         jest.clearAllMocks();
-        
+
         const requestBody = { ...mockRequest.body };
         delete requestBody[field];
         mockRequest.body = requestBody;
@@ -150,7 +150,7 @@ describe('Scheduled Messages Handlers', () => {
       const mockScheduledMessage = { id: 'message-456' };
       mockScheduledMessageModel.create.mockReturnValue(mockScheduledMessage);
       mockStorageService.saveScheduledMessage.mockResolvedValue(undefined);
-      
+
       mockApiContext.messageSchedulerService = undefined;
 
       await scheduledMessagesHandlers.createScheduledMessage.call(
@@ -598,7 +598,7 @@ describe('Scheduled Messages Handlers', () => {
     it('should preserve context when handling scheduled messages', async () => {
       const contextAwareController = {
         storageService: {
-          getScheduledMessages: jest.fn().mockResolvedValue([])
+          getScheduledMessages: jest.fn<any>().mockResolvedValue([])
         }
       } as any;
 

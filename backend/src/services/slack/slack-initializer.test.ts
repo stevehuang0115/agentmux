@@ -11,7 +11,7 @@ import {
   initializeSlackIfConfigured,
   shutdownSlack,
 } from './slack-initializer.js';
-import { resetSlackService, getSlackService } from './slack.service.js';
+import { resetSlackService, getSlackService, SlackService } from './slack.service.js';
 import { resetSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
 
 describe('Slack Initializer', () => {
@@ -32,6 +32,7 @@ describe('Slack Initializer', () => {
     process.env = originalEnv;
     resetSlackService();
     resetSlackOrchestratorBridge();
+    jest.restoreAllMocks();
   });
 
   describe('isSlackConfigured', () => {
@@ -147,10 +148,14 @@ describe('Slack Initializer', () => {
       process.env.SLACK_APP_TOKEN = 'xapp-test';
       process.env.SLACK_SIGNING_SECRET = 'secret';
 
+      // Mock SlackService.initialize to throw a controlled error
+      // instead of making real network calls to Slack
+      const mockError = new Error('Mock Slack init failure');
+      jest.spyOn(SlackService.prototype, 'initialize').mockRejectedValue(mockError);
+
       const result = await initializeSlackIfConfigured();
 
       expect(result.attempted).toBe(true);
-      // Will fail because @slack/bolt is not installed
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
@@ -160,12 +165,18 @@ describe('Slack Initializer', () => {
       process.env.SLACK_APP_TOKEN = 'xapp-test';
       process.env.SLACK_SIGNING_SECRET = 'secret';
 
+      // Mock SlackService.initialize to throw a controlled error
+      // instead of making real network calls to Slack
+      const mockError = new Error('Mock Slack connection error');
+      jest.spyOn(SlackService.prototype, 'initialize').mockRejectedValue(mockError);
+
       const result = await initializeSlackIfConfigured();
 
       expect(result.attempted).toBe(true);
       expect(result.success).toBe(false);
       expect(typeof result.error).toBe('string');
       expect(result.error?.length).toBeGreaterThan(0);
+      expect(result.error).toBe('Mock Slack connection error');
     });
   });
 

@@ -20,7 +20,10 @@ import {
   ORCHESTRATOR_SESSION_NAME,
   CHAT_CONSTANTS,
   EVENT_DELIVERY_CONSTANTS,
+  RUNTIME_TYPES,
+  type RuntimeType,
 } from '../../constants.js';
+import { StorageService } from '../core/storage.service.js';
 import type { ChatMessage } from '../../types/chat.types.js';
 
 /**
@@ -150,6 +153,19 @@ export class QueueProcessorService extends EventEmitter {
       return;
     }
 
+    // Don't process messages until orchestrator has finished initialization.
+    // 'started' means runtime is running but init prompt is still being processed.
+    // Only deliver when 'active' (agent registered via register-self skill).
+    const orchestratorInfo = await StorageService.getInstance().getOrchestratorStatus();
+    const agentStatus = orchestratorInfo?.agentStatus;
+    if (agentStatus !== 'active') {
+      this.logger.debug('Orchestrator not active yet, deferring message delivery', {
+        agentStatus: agentStatus || 'unknown',
+      });
+      this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
+      return;
+    }
+
     const message = this.queueService.dequeue();
     if (!message) {
       return;
@@ -174,18 +190,69 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
+      // Look up the orchestrator's runtime type early so it can be used for
+      // runtime-aware prompt detection in waitForAgentReady. Without this,
+      // the generic PROMPT_STREAM regex can false-positive on markdown `> `
+      // lines in Claude Code output, causing premature delivery attempts.
+      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
+      const runtimeType: RuntimeType =
+        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+
       // Wait for orchestrator to be at prompt before attempting delivery.
       // After processing a previous message the orchestrator may still be busy
       // (managing agents, running commands) before returning to the input prompt.
       const isReady = await this.agentRegistrationService.waitForAgentReady(
         ORCHESTRATOR_SESSION_NAME,
-        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+        runtimeType
       );
 
+      // Check if message was force-cancelled while waiting for agent readiness
+      if (message.status === 'cancelled') {
+        this.logger.info('Message was cancelled during processing, skipping delivery', {
+          messageId: message.id,
+        });
+        return;
+      }
+
       if (!isReady) {
+        const currentRetries = message.retryCount || 0;
+        const maxRetries = MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES;
+
+        if (currentRetries >= maxRetries) {
+          // Exceeded max retries — permanently fail the message
+          const errorMsg = `Orchestrator not available after ${currentRetries} retries (~${Math.round(currentRetries * EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT / 60000)} minutes). The orchestrator may be busy or unresponsive.`;
+          this.logger.error('Message exceeded max requeue retries, marking as failed', {
+            messageId: message.id,
+            retryCount: currentRetries,
+            maxRetries,
+          });
+
+          this.queueService.markFailed(message.id, errorMsg);
+          this.responseRouter.routeError(message, errorMsg);
+
+          // Notify user in conversation
+          if (message.source !== 'system_event') {
+            try {
+              const chatService = getChatService();
+              await chatService.addSystemMessage(
+                message.conversationId,
+                `Message delivery failed: ${errorMsg} Please try again later.`
+              );
+            } catch (sysErr) {
+              this.logger.warn('Failed to send max-retry failure system message', {
+                error: sysErr instanceof Error ? sysErr.message : String(sysErr),
+              });
+            }
+          }
+          return;
+        }
+
         this.logger.warn('Agent not ready, re-queuing message for retry', {
           messageId: message.id,
           timeoutMs: EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+          retryCount: currentRetries + 1,
+          maxRetries,
         });
 
         // Re-enqueue the message so it gets retried instead of permanently failing
@@ -206,7 +273,8 @@ export class QueueProcessorService extends EventEmitter {
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
         ORCHESTRATOR_SESSION_NAME,
-        deliveryContent
+        deliveryContent,
+        runtimeType
       );
 
       if (!deliveryResult.success) {
@@ -266,7 +334,8 @@ export class QueueProcessorService extends EventEmitter {
       // emitting its chat response.
       await this.agentRegistrationService.waitForAgentReady(
         ORCHESTRATOR_SESSION_NAME,
-        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT
+        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+        runtimeType
       );
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);

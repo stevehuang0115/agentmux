@@ -58,6 +58,7 @@ describe('MessagingController', () => {
       getMessage: jest.fn(),
       cancel: jest.fn(),
       clearPending: jest.fn(),
+      forceCancelCurrent: jest.fn().mockReturnValue(false),
     };
 
     setMessageQueueService(mockQueueService);
@@ -179,13 +180,27 @@ describe('MessagingController', () => {
   describe('clearQueue', () => {
     it('should clear all pending messages', async () => {
       mockQueueService.clearPending.mockReturnValue(3);
+      mockQueueService.forceCancelCurrent.mockReturnValue(false);
 
       await clearQueue({} as any, mockRes, mockNext);
 
       expect(mockRes.json).toHaveBeenCalledWith({
         success: true,
         message: 'Cleared 3 pending messages',
-        data: { clearedCount: 3 },
+        data: { clearedCount: 3, cancelledCurrent: false },
+      });
+    });
+
+    it('should also cancel current processing message', async () => {
+      mockQueueService.clearPending.mockReturnValue(2);
+      mockQueueService.forceCancelCurrent.mockReturnValue(true);
+
+      await clearQueue({} as any, mockRes, mockNext);
+
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Cleared 2 pending messages and cancelled current processing message',
+        data: { clearedCount: 2, cancelledCurrent: true },
       });
     });
   });

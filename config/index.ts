@@ -6,7 +6,7 @@
  * Usage examples:
  * ```typescript
  * // Cross-domain constants
- * import { AGENTMUX_CONSTANTS, MCP_CONSTANTS } from '../config';
+ * import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../config';
  * 
  * // Backend-specific constants  
  * import { BACKEND_CONSTANTS } from '../config';
@@ -21,18 +21,21 @@
 import {
   // Core system constants
   AGENTMUX_CONSTANTS,
-  MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS,
+  MEMORY_CONSTANTS,
+  CONTINUATION_CONSTANTS,
+  EVENT_DEBOUNCE_MS,
 
   // Type helpers
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
-  type MCPTool,
+  type AgentId,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -41,18 +44,21 @@ import {
 export {
   // Core system constants
   AGENTMUX_CONSTANTS,
-  MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
+  AGENT_IDENTITY_CONSTANTS,
+  MEMORY_CONSTANTS,
+  CONTINUATION_CONSTANTS,
+  EVENT_DEBOUNCE_MS,
 
   // Type helpers
   type AgentStatus,
   type WorkingStatus,
   type AgentRole,
-  type MCPTool,
+  type AgentId,
   type MessageType,
   type OrchestratorCommand,
   type HTTPStatusCode,
@@ -68,10 +74,12 @@ export {
  */
 export const CROSS_DOMAIN_CONSTANTS = {
   AGENTMUX: AGENTMUX_CONSTANTS,
-  MCP: MCP_CONSTANTS,
   WEB: WEB_CONSTANTS,
   TIMING: TIMING_CONSTANTS,
   MESSAGES: MESSAGE_CONSTANTS,
   ENV: ENV_CONSTANTS,
   BACKEND: BACKEND_CONSTANTS,
+  AGENT_IDENTITY: AGENT_IDENTITY_CONSTANTS,
+  MEMORY: MEMORY_CONSTANTS,
+  CONTINUATION: CONTINUATION_CONSTANTS,
 } as const;

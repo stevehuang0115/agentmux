@@ -101,7 +101,7 @@ describe('LoggerService', () => {
 
     test('should log debug messages when level permits', () => {
       // Mock debug level by modifying the mock config
-      const mockConfigService = require('../../backend/src/services/config.service').ConfigService;
+      const mockConfigService = require('./config.service').ConfigService;
       const originalGetInstance = mockConfigService.getInstance;
       
       mockConfigService.getInstance = jest.fn(() => ({

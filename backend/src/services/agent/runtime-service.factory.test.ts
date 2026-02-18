@@ -29,11 +29,11 @@ describe('RuntimeServiceFactory', () => {
 			getBackend: jest.fn(),
 		} as any;
 
-		// Set the mock helper for testing
-		RuntimeServiceFactory.setSessionHelperForTesting(mockSessionHelper);
-
-		// Clear the instance cache before each test
+		// Clear the instance cache before each test (this also nulls sessionHelperCache)
 		RuntimeServiceFactory.clearCache();
+
+		// Set the mock helper AFTER clearCache so it is not nulled out
+		RuntimeServiceFactory.setSessionHelperForTesting(mockSessionHelper);
 	});
 
 	afterEach(() => {
@@ -227,7 +227,9 @@ describe('RuntimeServiceFactory', () => {
 
 			expect(RuntimeServiceFactory.getCachedInstanceCount()).toBe(2);
 
+			// clearCache nulls sessionHelperCache, so re-set it after clearing
 			RuntimeServiceFactory.clearCache();
+			RuntimeServiceFactory.setSessionHelperForTesting(mockSessionHelper);
 
 			expect(RuntimeServiceFactory.getCachedInstanceCount()).toBe(0);
 		});

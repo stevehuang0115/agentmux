@@ -33,11 +33,11 @@ export async function stopCommand(options: StopOptions) {
 
   } catch (error) {
     console.error(chalk.red('❌ Error stopping AgentMux:'), error instanceof Error ? error.message : error);
-    
+
     if (!options.force) {
       console.log(chalk.yellow('💡 Try running with --force flag for forceful shutdown'));
     }
-    
+
     process.exit(1);
   }
 }
@@ -65,17 +65,17 @@ async function attemptGracefulShutdown(): Promise<void> {
 async function killAgentMuxSessions(): Promise<void> {
   try {
     console.log(chalk.blue('🖥️  Terminating AgentMux sessions...'));
-    
+
     // List all tmux sessions
     const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""');
     const sessions = stdout.split('\n').filter(s => s.trim());
-    
+
     // Kill AgentMux sessions
     const agentMuxSessions = sessions.filter(s => s.startsWith('agentmux_'));
-    
+
     if (agentMuxSessions.length > 0) {
       console.log(chalk.gray(`Found ${agentMuxSessions.length} AgentMux sessions`));
-      
+
       for (const session of agentMuxSessions) {
         try {
           await execAsync(`tmux kill-session -t "${session}"`);
@@ -87,7 +87,7 @@ async function killAgentMuxSessions(): Promise<void> {
     } else {
       console.log(chalk.gray('No AgentMux sessions found'));
     }
-    
+
   } catch (error) {
     console.log(chalk.yellow('⚠️  tmux not available or no sessions running'));
   }
@@ -96,14 +96,14 @@ async function killAgentMuxSessions(): Promise<void> {
 async function killBackendProcesses(force: boolean = false): Promise<void> {
   try {
     console.log(chalk.blue('🔧 Stopping backend processes...'));
-    
+
     // Find Node.js processes running AgentMux
-    const { stdout } = await execAsync('ps aux | grep -E "(agentmux|backend|mcp-server)" | grep -v grep || echo ""');
-    
+    const { stdout } = await execAsync('ps aux | grep -E "(agentmux|backend)" | grep -v grep || echo ""');
+
     if (stdout.trim()) {
       const lines = stdout.trim().split('\n');
       const pids: string[] = [];
-      
+
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
         if (parts.length > 1) {
@@ -111,10 +111,10 @@ async function killBackendProcesses(force: boolean = false): Promise<void> {
           pids.push(pid);
         }
       }
-      
+
       if (pids.length > 0) {
         console.log(chalk.gray(`Found ${pids.length} backend processes`));
-        
+
         for (const pid of pids) {
           try {
             const signal = force ? 'SIGKILL' : 'SIGTERM';
@@ -124,7 +124,7 @@ async function killBackendProcesses(force: boolean = false): Promise<void> {
             console.log(chalk.yellow(`⚠️  Process ${pid} was already terminated`));
           }
         }
-        
+
         // Wait a moment for graceful shutdown
         if (!force) {
           await new Promise(resolve => setTimeout(resolve, TIMING_CONSTANTS.TIMEOUTS.SHUTDOWN));
@@ -133,7 +133,7 @@ async function killBackendProcesses(force: boolean = false): Promise<void> {
     } else {
       console.log(chalk.gray('No backend processes found'));
     }
-    
+
   } catch (error) {
     console.error(chalk.red('Error killing backend processes:'), error);
     throw error;
@@ -146,10 +146,10 @@ async function killProcessesByPort(port: number): Promise<void> {
     // Find processes using the port
     const { stdout } = await execAsync(`lsof -ti :${port} || echo ""`);
     const pids = stdout.trim().split('\n').filter(pid => pid.trim());
-    
+
     if (pids.length > 0) {
       console.log(chalk.gray(`Killing ${pids.length} processes using port ${port}`));
-      
+
       for (const pid of pids) {
         try {
           await execAsync(`kill -TERM ${pid}`);

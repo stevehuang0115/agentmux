@@ -23,6 +23,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Task Creation Routes
   router.post('/tasks/create-from-config', (req, res) => taskMgmtHandlers.createTasksFromConfig.call(apiController, req, res));
 
+  // Review request endpoint (for agents to request code reviews)
+  router.post('/task-management/request-review', (req, res) => taskMgmtHandlers.requestReview.call(apiController, req, res));
+
   // In-Progress Tasks Routes
   router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }

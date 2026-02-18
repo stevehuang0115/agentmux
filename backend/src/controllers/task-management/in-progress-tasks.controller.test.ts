@@ -1,43 +1,43 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 import { Request, Response } from 'express';
 import * as inProgressController from './in-progress-tasks.controller.js';
 import { ApiController } from '../api.controller.js';
 
 // Mock fs/promises
-const mockReadFile = vi.fn();
-vi.mock('fs/promises', () => ({
-  readFile: mockReadFile
+const mockReadFile = jest.fn<any>();
+jest.mock('fs/promises', () => ({
+  readFile: (...args: any[]) => mockReadFile(...args)
 }));
 
 // Mock fs existsSync
-const mockExistsSync = vi.fn();
-vi.mock('fs', () => ({
-  existsSync: mockExistsSync
+const mockExistsSync = jest.fn<any>();
+jest.mock('fs', () => ({
+  existsSync: (...args: any[]) => mockExistsSync(...args)
 }));
 
 // Mock os
-vi.mock('os', () => ({
+jest.mock('os', () => ({
   homedir: () => '/mock/home'
 }));
 
 describe('InProgressTasksController', () => {
   let mockReq: Partial<Request>;
   let mockRes: Partial<Response>;
-  let jsonSpy: ReturnType<typeof vi.fn>;
-  let statusSpy: ReturnType<typeof vi.fn>;
+  let jsonSpy: jest.Mock<any>;
+  let statusSpy: jest.Mock<any>;
   let apiController: ApiController;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
 
-    jsonSpy = vi.fn();
-    statusSpy = vi.fn(() => ({ json: jsonSpy }));
+    jsonSpy = jest.fn<any>();
+    statusSpy = jest.fn<any>(() => ({ json: jsonSpy }));
 
     mockReq = {};
     mockRes = {
       json: jsonSpy,
       status: statusSpy
-    };
+    } as any;
 
     // Mock ApiController (we don't need actual implementation for this test)
     apiController = {} as ApiController;

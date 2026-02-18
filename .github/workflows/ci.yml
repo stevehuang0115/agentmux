@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install frontend dependencies
+        run: cd frontend && npm ci
+
       - name: Build all packages
         run: npm run build
 
@@ -167,4 +170,3 @@ jobs:
 
       - name: Run frontend tests
         run: cd frontend && npm test
-        continue-on-error: true

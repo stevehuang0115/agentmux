@@ -13,8 +13,8 @@ describe('Delivery Logs Handlers', () => {
     jest.clearAllMocks();
 
     mockStorageService = {
-      getDeliveryLogs: jest.fn(),
-      clearDeliveryLogs: jest.fn()
+      getDeliveryLogs: jest.fn<any>(),
+      clearDeliveryLogs: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -28,8 +28,8 @@ describe('Delivery Logs Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     } as any;
   });
 
@@ -310,7 +310,7 @@ describe('Delivery Logs Handlers', () => {
     it('should preserve context when handling delivery logs operations', async () => {
       const contextAwareController = {
         storageService: {
-          getDeliveryLogs: jest.fn().mockResolvedValue([] as any)
+          getDeliveryLogs: jest.fn<any>().mockResolvedValue([])
         }
       } as any;
 
@@ -326,7 +326,7 @@ describe('Delivery Logs Handlers', () => {
     it('should preserve context when clearing delivery logs', async () => {
       const contextAwareController = {
         storageService: {
-          clearDeliveryLogs: jest.fn().mockResolvedValue(undefined as any)
+          clearDeliveryLogs: jest.fn<any>().mockResolvedValue(undefined)
         }
       } as any;
 
@@ -419,8 +419,8 @@ describe('Delivery Logs Handlers', () => {
   describe('Console logging', () => {
     it('should log errors to console when getDeliveryLogs fails', async () => {
       const originalConsoleError = console.error;
-      console.error = jest.fn();
-      
+      console.error = jest.fn<any>();
+
       const error = new Error('Test storage error');
       mockStorageService.getDeliveryLogs.mockRejectedValue(error);
 
@@ -431,14 +431,14 @@ describe('Delivery Logs Handlers', () => {
       );
 
       expect(console.error).toHaveBeenCalledWith('Error getting delivery logs:', error);
-      
+
       console.error = originalConsoleError;
     });
 
     it('should log errors to console when clearDeliveryLogs fails', async () => {
       const originalConsoleError = console.error;
-      console.error = jest.fn();
-      
+      console.error = jest.fn<any>();
+
       const error = new Error('Test clear error');
       mockStorageService.clearDeliveryLogs.mockRejectedValue(error);
 
@@ -449,7 +449,7 @@ describe('Delivery Logs Handlers', () => {
       );
 
       expect(console.error).toHaveBeenCalledWith('Error clearing delivery logs:', error);
-      
+
       console.error = originalConsoleError;
     });
   });

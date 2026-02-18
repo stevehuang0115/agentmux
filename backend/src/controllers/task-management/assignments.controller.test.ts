@@ -6,15 +6,15 @@ import type { ApiController } from '../api.controller.js';
 describe('Assignments Handlers', () => {
   let mockApiController: Partial<ApiController>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockStorageService: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     mockStorageService = {
-      getProjects: jest.fn(),
-      getTeams: jest.fn()
+      getProjects: jest.fn<any>(),
+      getTeams: jest.fn<any>()
     };
 
     mockApiController = {
@@ -27,8 +27,8 @@ describe('Assignments Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -249,7 +249,7 @@ describe('Assignments Handlers', () => {
 
       const mockProjects = [mockProject];
       mockStorageService.getProjects.mockResolvedValue(mockProjects);
-      mockStorageService.saveProject = jest.fn().mockResolvedValue(undefined);
+      mockStorageService.saveProject = jest.fn<any>().mockResolvedValue(undefined);
 
       mockRequest.params = { id: 'project-1-team-1' };
       mockRequest.body = { status: 'in-progress' };
@@ -277,7 +277,7 @@ describe('Assignments Handlers', () => {
 
       const mockProjects = [mockProject];
       mockStorageService.getProjects.mockResolvedValue(mockProjects);
-      mockStorageService.saveProject = jest.fn().mockResolvedValue(undefined);
+      mockStorageService.saveProject = jest.fn<any>().mockResolvedValue(undefined);
 
       mockRequest.params = { id: 'project-1-team-1' };
       mockRequest.body = { status: 'done' };
@@ -305,7 +305,7 @@ describe('Assignments Handlers', () => {
 
       const mockProjects = [mockProject];
       mockStorageService.getProjects.mockResolvedValue(mockProjects);
-      mockStorageService.saveProject = jest.fn().mockResolvedValue(undefined);
+      mockStorageService.saveProject = jest.fn<any>().mockResolvedValue(undefined);
 
       mockRequest.params = { id: 'project-1-team-1' };
       mockRequest.body = { status: 'invalid-status' };
@@ -333,11 +333,11 @@ describe('Assignments Handlers', () => {
 
       const mockProjects = [mockProject];
       mockStorageService.getProjects.mockResolvedValue(mockProjects);
-      mockStorageService.saveProject = jest.fn().mockResolvedValue(undefined);
+      mockStorageService.saveProject = jest.fn<any>().mockResolvedValue(undefined);
 
       for (const status of ['review', 'todo']) {
         jest.clearAllMocks();
-        
+
         mockRequest.params = { id: 'project-1-team-1' };
         mockRequest.body = { status };
 
@@ -451,8 +451,8 @@ describe('Assignments Handlers', () => {
     it('should preserve controller context when handling assignments', async () => {
       const contextAwareController = {
         storageService: {
-          getProjects: jest.fn().mockResolvedValue([]),
-          getTeams: jest.fn().mockResolvedValue([])
+          getProjects: jest.fn<any>().mockResolvedValue([]),
+          getTeams: jest.fn<any>().mockResolvedValue([])
         }
       } as any;
 

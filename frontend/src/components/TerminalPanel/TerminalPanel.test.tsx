@@ -17,7 +17,10 @@ vi.mock('react-router-dom', () => ({
 
 // Mock xterm.js
 const mockXtermInstance = {
-  write: vi.fn(),
+  write: vi.fn((_data: string, callback?: () => void) => {
+    // Invoke callback to simulate real xterm.js behavior (fires after data processed)
+    if (callback) callback();
+  }),
   clear: vi.fn(),
   dispose: vi.fn(),
   open: vi.fn(),
@@ -25,6 +28,13 @@ const mockXtermInstance = {
   onData: vi.fn(),
   scrollToBottom: vi.fn(),
   focus: vi.fn(),
+  buffer: {
+    active: {
+      viewportY: 0,
+      length: 24,
+    },
+  },
+  rows: 24,
 };
 
 vi.mock('xterm', () => ({
@@ -649,6 +659,95 @@ describe('TerminalPanel', () => {
       });
 
       expect(mockXtermInstance.dispose).toHaveBeenCalled();
+    });
+  });
+
+  describe('Terminal Response Filtering', () => {
+    /**
+     * Helper to get the onData callback registered by the component.
+     * xterm.js onData is called with (callback) — we capture it from the mock.
+     */
+    function getOnDataCallback(): ((data: string) => void) | undefined {
+      const call = mockXtermInstance.onData.mock.calls[0];
+      return call ? call[0] : undefined;
+    }
+
+    it('filters DA1 response from input stream', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      const onData = getOnDataCallback();
+      expect(onData).toBeDefined();
+
+      // Simulate xterm.js generating a DA1 response
+      await act(async () => {
+        onData!('\x1b[?1;2c');
+      });
+
+      // Should NOT send the DA response to the PTY
+      expect(mockWebSocketService.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('filters DA2 response from input stream', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      const onData = getOnDataCallback();
+      expect(onData).toBeDefined();
+
+      await act(async () => {
+        onData!('\x1b[>0;276;0c');
+      });
+
+      expect(mockWebSocketService.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('filters DSR cursor position response from input stream', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      const onData = getOnDataCallback();
+      expect(onData).toBeDefined();
+
+      await act(async () => {
+        onData!('\x1b[24;80R');
+      });
+
+      expect(mockWebSocketService.sendInput).not.toHaveBeenCalled();
+    });
+
+    it('passes normal input through unchanged', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      const onData = getOnDataCallback();
+      expect(onData).toBeDefined();
+
+      await act(async () => {
+        onData!('hello');
+      });
+
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', 'hello');
+    });
+
+    it('strips terminal responses from mixed input', async () => {
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      const onData = getOnDataCallback();
+      expect(onData).toBeDefined();
+
+      // Mixed: normal text with DA response embedded
+      await act(async () => {
+        onData!('abc\x1b[?1;2cdef');
+      });
+
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', 'abcdef');
     });
   });
 });

@@ -14,6 +14,7 @@ import {
   setSessionBackendForTesting,
   resetSessionBackendFactory,
 } from '../session/index.js';
+import { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import {
   DEFAULT_SCHEDULES,
   DEFAULT_ADAPTIVE_CONFIG,
@@ -24,11 +25,19 @@ jest.mock('../core/storage.service.js');
 jest.mock('../core/logger.service.js');
 jest.mock('../../models/ScheduledMessage.js');
 
+const mockSendMessage = jest.fn().mockResolvedValue(undefined);
+jest.mock('../session/session-command-helper.js', () => ({
+  SessionCommandHelper: jest.fn().mockImplementation(() => ({
+    sendMessage: mockSendMessage,
+  })),
+}));
+
 describe('SchedulerService', () => {
   let service: SchedulerService;
   let mockStorageService: jest.Mocked<StorageService>;
   let mockSessionBackend: jest.Mocked<ISessionBackend>;
   let mockSession: jest.Mocked<ISession>;
+  let mockAgentRegistrationService: { sendMessageToAgent: jest.Mock; };
   let mockLogger: any;
 
   const mockDeliveryLog = {
@@ -45,6 +54,7 @@ describe('SchedulerService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSendMessage.mockClear();
     jest.useFakeTimers();
 
     // Create mock session
@@ -77,7 +87,13 @@ describe('SchedulerService', () => {
 
     mockStorageService = {
       saveDeliveryLog: jest.fn().mockResolvedValue(undefined),
+      findMemberBySessionName: jest.fn().mockResolvedValue(null),
     } as any;
+
+    // Mock AgentRegistrationService for reliable delivery
+    mockAgentRegistrationService = {
+      sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+    };
 
     // Mock logger
     mockLogger = {
@@ -94,6 +110,8 @@ describe('SchedulerService', () => {
     (MessageDeliveryLogModel.create as jest.Mock).mockReturnValue(mockDeliveryLog);
 
     service = new SchedulerService(mockStorageService);
+    // Wire up reliable delivery by default
+    service.setAgentRegistrationService(mockAgentRegistrationService as any);
   });
 
   afterEach(() => {
@@ -143,7 +161,11 @@ describe('SchedulerService', () => {
       jest.advanceTimersByTime(60000);
       await jest.runAllTimersAsync();
 
-      expect(mockSession.write).toHaveBeenCalledWith('Test message\n');
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'test-session',
+        'Test message',
+        expect.any(String)
+      );
       expect(emitSpy).toHaveBeenCalledWith('check_executed', expect.any(Object));
     });
 
@@ -217,13 +239,14 @@ describe('SchedulerService', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockSession.write).toHaveBeenCalledTimes(2);
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
     });
 
     it('should track occurrence count', async () => {
       const checkId = service.scheduleRecurringCheck('test-session', 1, 'Recurring message');
 
       jest.advanceTimersByTime(60000);
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
@@ -330,8 +353,10 @@ describe('SchedulerService', () => {
       jest.advanceTimersByTime(60000);
       await jest.runAllTimersAsync();
 
-      expect(mockSession.write).toHaveBeenCalledWith(
-        expect.stringContaining('Continuation check')
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'test-session',
+        expect.stringContaining('Continuation check'),
+        expect.any(String)
       );
     });
 
@@ -560,15 +585,17 @@ describe('SchedulerService', () => {
   });
 
   describe('executeCheck', () => {
-    it('should execute check successfully using PTY', async () => {
+    it('should execute check via reliable delivery when AgentRegistrationService is available', async () => {
       const emitSpy = jest.spyOn(service, 'emit');
 
       await (service as any).executeCheck('test-session', 'Test message');
 
-      expect(mockSessionBackend.sessionExists).toHaveBeenCalledWith('test-session');
-      expect(mockSessionBackend.getSession).toHaveBeenCalledWith('test-session');
-      expect(mockSession.write).toHaveBeenCalledWith('Test message\n');
-      expect(mockLogger.info).toHaveBeenCalledWith('Check-in executed', {
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'test-session',
+        'Test message',
+        expect.any(String) // runtime type
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith('Check-in executed via reliable delivery', {
         targetSession: 'test-session',
         messageLength: 12,
       });
@@ -579,33 +606,10 @@ describe('SchedulerService', () => {
       });
     });
 
-    it('should skip check if session does not exist', async () => {
-      mockSessionBackend.sessionExists.mockReturnValue(false);
-
-      await (service as any).executeCheck('nonexistent-session', 'Test message');
-
-      expect(mockSession.write).not.toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        'Session no longer exists, skipping check-in',
-        { targetSession: 'nonexistent-session' }
-      );
-    });
-
-    it('should handle session not found gracefully', async () => {
-      mockSessionBackend.getSession.mockReturnValue(undefined);
-
-      await (service as any).executeCheck('test-session', 'Test message');
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'Session not found for scheduled message',
-        { targetSession: 'test-session' }
-      );
-    });
-
-    it('should handle write error', async () => {
-      const error = new Error('Write error');
-      mockSession.write.mockImplementation(() => {
-        throw error;
+    it('should handle delivery failure from AgentRegistrationService', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: 'Agent not at prompt',
       });
       const emitSpy = jest.spyOn(service, 'emit');
 
@@ -613,13 +617,39 @@ describe('SchedulerService', () => {
 
       expect(mockLogger.error).toHaveBeenCalledWith('Error executing check-in', {
         targetSession: 'test-session',
-        error: 'Write error',
+        error: 'Agent not at prompt',
       });
       expect(emitSpy).toHaveBeenCalledWith('check_execution_failed', {
         targetSession: 'test-session',
         message: 'Test message',
-        error: 'Write error',
+        error: 'Agent not at prompt',
       });
+    });
+
+    it('should fall back to SessionCommandHelper when AgentRegistrationService is not available', async () => {
+      // Create a new service WITHOUT agentRegistrationService
+      const fallbackService = new SchedulerService(mockStorageService);
+
+      await (fallbackService as any).executeCheck('test-session', 'Test message');
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'AgentRegistrationService not available, using fallback PTY write',
+        { targetSession: 'test-session' }
+      );
+      expect(mockSendMessage).toHaveBeenCalledWith('test-session', 'Test message');
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+    });
+
+    it('should skip check in fallback mode if session does not exist', async () => {
+      const fallbackService = new SchedulerService(mockStorageService);
+      mockSessionBackend.sessionExists.mockReturnValue(false);
+
+      await (fallbackService as any).executeCheck('nonexistent-session', 'Test message');
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Session no longer exists, skipping check-in',
+        { targetSession: 'nonexistent-session' }
+      );
     });
 
     it('should create delivery log with correct message name for git reminder', async () => {
@@ -717,7 +747,7 @@ describe('SchedulerService', () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockSession.write).toHaveBeenCalledTimes(1); // Only the first execution
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1); // Only the first execution
     });
   });
 
@@ -816,6 +846,19 @@ describe('SchedulerService', () => {
       service.setActivityMonitor(mockActivityMonitor);
 
       expect(mockLogger.info).toHaveBeenCalledWith('ActivityMonitor integration enabled');
+    });
+  });
+
+  describe('setAgentRegistrationService', () => {
+    it('should set AgentRegistrationService for reliable delivery', () => {
+      const newService = new SchedulerService(mockStorageService);
+      const mockARS = { sendMessageToAgent: jest.fn() };
+
+      newService.setAgentRegistrationService(mockARS as any);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'AgentRegistrationService integration enabled for reliable delivery'
+      );
     });
   });
 });

@@ -6,10 +6,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
-import { 
+import {
   ORCHESTRATOR_SETUP_TIMEOUT,
   DEFAULT_WEB_PORT,
-  DEFAULT_MCP_PORT,
   API_ENDPOINTS,
   AGENTMUX_HOME_DIR
 } from '../constants.js';
@@ -19,18 +18,15 @@ const __dirname = path.dirname(__filename);
 
 interface StartOptions {
 	port?: string;
-	mcpPort?: string;
 	browser?: boolean;
 }
 
 export async function startCommand(options: StartOptions) {
 	const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
-	const mcpPort = parseInt(options.mcpPort || DEFAULT_MCP_PORT.toString());
 	const openBrowser = options.browser !== false;
 
 	console.log(chalk.blue('🚀 Starting AgentMux...'));
 	console.log(chalk.gray(`Web Port: ${webPort}`));
-	console.log(chalk.gray(`MCP Port: ${mcpPort}`));
 
 	try {
 		// 1. Ensure ~/.agentmux directory exists
@@ -49,20 +45,16 @@ export async function startCommand(options: StartOptions) {
 
 		// 3. Start backend server
 		console.log(chalk.blue('📡 Starting backend server...'));
-		const backendProcess = await startBackendServer(webPort, mcpPort);
+		const backendProcess = await startBackendServer(webPort);
 
-		// 4. Start MCP server
-		console.log(chalk.blue('🔧 Starting MCP server...'));
-		const mcpProcess = await startMCPServer(mcpPort);
-
-		// 5. Wait for servers to be ready
+		// 4. Wait for servers to be ready
 		console.log(chalk.blue('⏳ Waiting for servers to initialize...'));
 		await waitForServer(webPort);
 
-		// 6. Setup orchestrator session (non-blocking)
+		// 5. Setup orchestrator session (non-blocking)
 		setupOrchestratorSessionAsync(webPort);
 
-		// 7. Open browser to dashboard immediately
+		// 6. Open browser to dashboard immediately
 		if (openBrowser) {
 			console.log(chalk.blue('🌐 Opening dashboard...'));
 			await open(`http://localhost:${webPort}`);
@@ -71,13 +63,12 @@ export async function startCommand(options: StartOptions) {
 		console.log(chalk.green('✅ AgentMux started successfully!'));
 		console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
 		console.log(chalk.cyan(`⚡ WebSocket: ws://localhost:${webPort}`));
-		console.log(chalk.cyan(`🔧 MCP Server: http://localhost:${mcpPort}`));
 		console.log(chalk.gray(`🎯 Orchestrator: Setting up in background...`));
 		console.log('');
 		console.log(chalk.yellow('Press Ctrl+C to stop all services'));
 
-		// 8. Monitor for shutdown signals
-		setupShutdownHandlers([backendProcess, mcpProcess]);
+		// 7. Monitor for shutdown signals
+		setupShutdownHandlers([backendProcess]);
 
 		// Keep process alive
 		await new Promise(() => {}); // Wait forever
@@ -151,7 +142,6 @@ async function ensureAgentMuxHome(): Promise<void> {
 	const configPath = path.join(agentmuxHome, 'config.env');
 	if (!fs.existsSync(configPath)) {
 		const defaultConfig = `WEB_PORT=${DEFAULT_WEB_PORT}
-AGENTMUX_MCP_PORT=${DEFAULT_MCP_PORT}
 AGENTMUX_HOME=${agentmuxHome}
 DEFAULT_CHECK_INTERVAL=30
 AUTO_COMMIT_INTERVAL=30`;
@@ -169,14 +159,13 @@ async function checkIfRunning(port: number): Promise<boolean> {
 	}
 }
 
-async function startBackendServer(webPort: number, mcpPort: number): Promise<ChildProcess> {
+async function startBackendServer(webPort: number): Promise<ChildProcess> {
 	// Get the project root directory (go up from dist/cli/commands to the root)
 	const projectRoot = path.resolve(__dirname, '../../../');
 
 	const env = {
 		...process.env,
 		WEB_PORT: webPort.toString(),
-		AGENTMUX_MCP_PORT: mcpPort.toString(),
 		NODE_ENV: process.env.NODE_ENV || 'development',
 	};
 
@@ -224,52 +213,6 @@ async function startBackendServer(webPort: number, mcpPort: number): Promise<Chi
 	return backendProcess;
 }
 
-async function startMCPServer(mcpPort: number): Promise<ChildProcess> {
-	// Get the project root directory (go up from dist/cli/commands to the root)
-	const projectRoot = path.resolve(__dirname, '../../../');
-
-	const env = {
-		...process.env,
-		AGENTMUX_MCP_PORT: mcpPort.toString(),
-		PROJECT_PATH: projectRoot,
-		TMUX_SESSION_NAME: 'mcp-server',
-		AGENT_ROLE: 'orchestrator',
-	};
-
-	const mcpProcess = spawn('node', [path.join(projectRoot, 'dist/mcp-server/mcp-server/src/index.js')], {
-		env,
-		stdio: 'pipe',
-		detached: false,
-		cwd: projectRoot,
-	});
-
-	mcpProcess.stdout?.on('data', (data) => {
-		const output = data.toString().trim();
-		if (output) {
-			console.log(chalk.gray(`[MCP] ${output}`));
-		}
-	});
-
-	mcpProcess.stderr?.on('data', (data) => {
-		const output = data.toString().trim();
-		if (output) {
-			console.error(chalk.red(`[MCP Error] ${output}`));
-		}
-	});
-
-	mcpProcess.on('error', (error) => {
-		console.error(chalk.red('MCP process error:'), error);
-	});
-
-	mcpProcess.on('exit', (code, signal) => {
-		if (code !== 0) {
-			console.error(chalk.red(`MCP process exited with code ${code} (signal: ${signal})`));
-		}
-	});
-
-	return mcpProcess;
-}
-
 async function waitForServer(port: number, maxAttempts: number = 30): Promise<void> {
 	for (let i = 0; i < maxAttempts; i++) {
 		try {
@@ -288,10 +231,9 @@ function setupShutdownHandlers(processes: ChildProcess[]): void {
 	const cleanup = () => {
 		console.log(chalk.yellow('\n🛑 Shutting down AgentMux...'));
 
-		processes.forEach((process, index) => {
-			const name = index === 0 ? 'Backend' : 'MCP';
+		processes.forEach((process) => {
 			if (process && !process.killed) {
-				console.log(chalk.gray(`Stopping ${name} server...`));
+				console.log(chalk.gray(`Stopping Backend server...`));
 				process.kill('SIGTERM');
 
 				// Force kill after 5 seconds

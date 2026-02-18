@@ -1,8 +1,9 @@
+import * as path from 'path';
 import { spawn } from 'child_process';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
-import { getSettingsService } from '../settings/settings.service.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Claude Code specific runtime service implementation.
@@ -34,8 +35,11 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 		// Capture the output after sending '/'
 		const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
 
-		// Clear the '/' command again
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
+		// Exit the slash command palette without issuing another Ctrl+C so we
+		// don't send consecutive interrupts that can terminate the CLI.
+		await this.sessionHelper.sendEscape(sessionName);
+		await delay(200);
+		await this.sessionHelper.sendKey(sessionName, 'C-u');
 
 		const hasOutputChange = afterOutput.length - beforeOutput.length > 5;
 
@@ -61,6 +65,16 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 			'cwd:',
 			'bypass permissions on',
 			'✻ Welcome to Claude',
+		];
+	}
+
+	/**
+	 * Claude Code specific exit patterns for runtime exit detection
+	 */
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [
+			/Claude\s+(Code\s+)?exited/i,
+			/Session\s+ended/i,
 		];
 	}
 
@@ -209,5 +223,37 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	 */
 	async executeClaudeInitScript(sessionName: string, targetPath?: string): Promise<void> {
 		return await this.executeRuntimeInitScript(sessionName, targetPath);
+	}
+
+	/**
+	 * Post-initialization hook for Claude Code.
+	 * Ensures MCP server configuration (e.g., playwright) is present in the project directory.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param targetProjectPath - Optional target project path for MCP config.
+	 *                            Falls back to this.projectRoot if not provided.
+	 */
+	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+		const effectiveProjectPath = targetProjectPath || this.projectRoot;
+		this.logger.info('Claude Code post-init: ensuring MCP config', {
+			sessionName,
+			projectRoot: this.projectRoot,
+			targetProjectPath: effectiveProjectPath,
+		});
+
+		await this.ensureClaudeMcpConfig(effectiveProjectPath);
+	}
+
+	/**
+	 * Ensure Claude Code MCP server configuration exists in the project directory.
+	 *
+	 * Creates or merges `.mcp.json` with required MCP servers.
+	 * Delegates to the shared `ensureMcpConfig` in the base class.
+	 *
+	 * @param projectPath - Project directory where `.mcp.json` will be created
+	 */
+	async ensureClaudeMcpConfig(projectPath: string): Promise<void> {
+		const mcpConfigPath = path.join(projectPath, '.mcp.json');
+		await this.ensureMcpConfig(mcpConfigPath, projectPath);
 	}
 }

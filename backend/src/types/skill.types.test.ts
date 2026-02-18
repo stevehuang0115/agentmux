@@ -53,13 +53,19 @@ describe('Skill Types', () => {
         'automation',
         'analysis',
         'integration',
+        'management',
+        'monitoring',
+        'memory',
+        'system',
+        'task-management',
+        'quality',
       ];
 
       expect(SKILL_CATEGORIES).toEqual(expectedCategories);
     });
 
-    it('should have exactly 8 categories', () => {
-      expect(SKILL_CATEGORIES).toHaveLength(8);
+    it('should have exactly 14 categories', () => {
+      expect(SKILL_CATEGORIES).toHaveLength(14);
     });
   });
 
@@ -74,6 +80,12 @@ describe('Skill Types', () => {
     it('should have correct display names', () => {
       expect(SKILL_CATEGORY_DISPLAY_NAMES['development']).toBe('Development');
       expect(SKILL_CATEGORY_DISPLAY_NAMES['content-creation']).toBe('Content Creation');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['management']).toBe('Management');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['monitoring']).toBe('Monitoring');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['memory']).toBe('Memory');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['system']).toBe('System');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['task-management']).toBe('Task Management');
+      expect(SKILL_CATEGORY_DISPLAY_NAMES['quality']).toBe('Quality');
     });
   });
 
@@ -146,6 +158,7 @@ describe('Skill Types', () => {
         name: 'Test Skill',
         description: 'A test skill',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'test-skill/instructions.md',
         assignableRoles: [],
         triggers: [],
@@ -169,6 +182,7 @@ describe('Skill Types', () => {
         name: 'Script Skill',
         description: 'Runs a script',
         category: 'automation',
+        skillType: 'claude-skill',
         promptFile: 'script-skill/instructions.md',
         execution: {
           type: 'script',
@@ -203,6 +217,7 @@ describe('Skill Types', () => {
         name: 'Browser Skill',
         description: 'Automates browser',
         category: 'automation',
+        skillType: 'web-page',
         promptFile: 'browser-skill/instructions.md',
         execution: {
           type: 'browser',
@@ -225,6 +240,33 @@ describe('Skill Types', () => {
       expect(skill.execution?.type).toBe('browser');
       expect(skill.execution?.browser?.url).toBe('https://example.com');
     });
+
+    it('should define a skill with new categories', () => {
+      const managementSkill: Skill = {
+        id: 'mgmt-skill',
+        name: 'Delegate Task',
+        description: 'Delegates tasks',
+        category: 'management',
+        skillType: 'claude-skill',
+        promptFile: 'mgmt/instructions.md',
+        assignableRoles: ['orchestrator'],
+        triggers: ['delegate'],
+        tags: ['management'],
+        version: '1.0.0',
+        isBuiltin: true,
+        isEnabled: true,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      };
+
+      expect(managementSkill.category).toBe('management');
+      expect(isValidSkillCategory('management')).toBe(true);
+      expect(isValidSkillCategory('monitoring')).toBe(true);
+      expect(isValidSkillCategory('memory')).toBe(true);
+      expect(isValidSkillCategory('system')).toBe(true);
+      expect(isValidSkillCategory('task-management')).toBe(true);
+      expect(isValidSkillCategory('quality')).toBe(true);
+    });
   });
 
   describe('SkillSummary interface', () => {
@@ -234,6 +276,7 @@ describe('Skill Types', () => {
         name: 'Test Skill',
         description: 'A test skill',
         category: 'development',
+        skillType: 'claude-skill',
         executionType: 'script',
         triggerCount: 3,
         roleCount: 2,
@@ -256,6 +299,12 @@ describe('Skill Types', () => {
       expect(isValidSkillCategory('design')).toBe(true);
       expect(isValidSkillCategory('content-creation')).toBe(true);
       expect(isValidSkillCategory('automation')).toBe(true);
+      expect(isValidSkillCategory('management')).toBe(true);
+      expect(isValidSkillCategory('monitoring')).toBe(true);
+      expect(isValidSkillCategory('memory')).toBe(true);
+      expect(isValidSkillCategory('system')).toBe(true);
+      expect(isValidSkillCategory('task-management')).toBe(true);
+      expect(isValidSkillCategory('quality')).toBe(true);
     });
 
     it('should return false for invalid categories', () => {
@@ -374,6 +423,7 @@ describe('Skill Types', () => {
       name: 'Test Skill',
       description: 'A test',
       category: 'development',
+      skillType: 'claude-skill',
       promptFile: 'instructions.md',
       assignableRoles: ['developer', 'qa'],
       triggers: ['test', 'run test'],
@@ -443,6 +493,7 @@ describe('Skill Types', () => {
         name: 'Test Skill',
         description: 'A test',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'instructions.md',
         execution: { type: 'script', script: { file: 'run.sh', interpreter: 'bash' } },
         environment: { variables: { KEY: 'value' } },
@@ -474,6 +525,7 @@ describe('Skill Types', () => {
         name: 'Test Skill',
         description: 'A test',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'instructions.md',
         assignableRoles: ['developer'],
         triggers: ['test'],
@@ -496,6 +548,7 @@ describe('Skill Types', () => {
         name: 'Custom',
         description: 'Custom skill',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'instructions.md',
         assignableRoles: [],
         triggers: [],
@@ -518,6 +571,12 @@ describe('Skill Types', () => {
       expect(getSkillCategoryDisplayName('development')).toBe('Development');
       expect(getSkillCategoryDisplayName('content-creation')).toBe('Content Creation');
       expect(getSkillCategoryDisplayName('analysis')).toBe('Analysis');
+      expect(getSkillCategoryDisplayName('management')).toBe('Management');
+      expect(getSkillCategoryDisplayName('monitoring')).toBe('Monitoring');
+      expect(getSkillCategoryDisplayName('memory')).toBe('Memory');
+      expect(getSkillCategoryDisplayName('system')).toBe('System');
+      expect(getSkillCategoryDisplayName('task-management')).toBe('Task Management');
+      expect(getSkillCategoryDisplayName('quality')).toBe('Quality');
     });
   });
 
@@ -545,6 +604,21 @@ describe('Skill Types', () => {
 
       const errors = validateCreateSkillInput(input);
       expect(errors).toHaveLength(0);
+    });
+
+    it('should validate correct input with new categories', () => {
+      const categories: SkillCategory[] = ['management', 'monitoring', 'memory', 'system', 'task-management', 'quality'];
+      categories.forEach((category) => {
+        const input: CreateSkillInput = {
+          name: 'Valid Skill',
+          description: 'A valid skill',
+          category,
+          promptContent: '# Instructions\n\nDo this...',
+        };
+
+        const errors = validateCreateSkillInput(input);
+        expect(errors).toHaveLength(0);
+      });
     });
 
     it('should detect missing name', () => {
@@ -979,6 +1053,7 @@ describe('Skill Types', () => {
       name: 'Test Skill',
       description: 'A test skill for testing',
       category: 'development',
+      skillType: 'claude-skill',
       promptFile: 'instructions.md',
       execution: { type: 'script', script: { file: 'run.sh', interpreter: 'bash' } },
       assignableRoles: ['developer', 'qa'],
@@ -1004,6 +1079,15 @@ describe('Skill Types', () => {
 
       expect(matchesSkillFilter(skill, { category: 'development' })).toBe(true);
       expect(matchesSkillFilter(skill, { category: 'design' })).toBe(false);
+    });
+
+    it('should filter by new categories', () => {
+      const managementSkill = createTestSkill({ category: 'management' });
+      const monitoringSkill = createTestSkill({ category: 'monitoring' });
+
+      expect(matchesSkillFilter(managementSkill, { category: 'management' })).toBe(true);
+      expect(matchesSkillFilter(managementSkill, { category: 'monitoring' })).toBe(false);
+      expect(matchesSkillFilter(monitoringSkill, { category: 'monitoring' })).toBe(true);
     });
 
     it('should filter by execution type', () => {

@@ -609,7 +609,7 @@ export class TerminalGateway {
 				continue;
 			}
 
-			this.logger.info('Detected NOTIFY marker in orchestrator output', {
+			this.logger.debug('Detected NOTIFY marker in orchestrator output', {
 				contentLength: payload.message.length,
 			});
 
@@ -680,49 +680,31 @@ export class TerminalGateway {
 			}
 		}
 
-		// Route to Slack — only when an explicit channelId is provided.
+		// Slack delivery is handled exclusively by the reply-slack skill
+		// (which calls /api/slack/send directly). Do NOT route NOTIFY payloads
+		// to Slack here — PTY re-renders cause duplicate detections with partial
+		// content, and the timing is unreliable (NOTIFY fires before the skill).
+		// NOTIFY is only for routing responses to the chat UI above.
 		if (payload.channelId) {
-			const slackNotification = this.buildSlackNotification(payload);
-			try {
-				const bridge = getSlackOrchestratorBridge();
-				if (bridge.isInitialized()) {
-					this.logger.info('Routing NOTIFY to Slack', {
-						type: slackNotification.type,
-						channelId: slackNotification.channelId,
-					});
-					await bridge.sendNotification(slackNotification);
+			this.logger.debug('NOTIFY has channelId but Slack delivery is skill-handled, skipping', {
+				channelId: payload.channelId,
+				type: payload.type,
+			});
 
-					// Mark delivery successful on the chat message
-					if (chatMessage && conversationId) {
-						const chatService = getChatService();
-						await chatService.updateMessageMetadata(conversationId, chatMessage.id, {
-							slackDeliveryStatus: 'delivered',
-							slackDeliveryAttemptedAt: new Date().toISOString(),
-							slackDeliveryAttempts: 1,
-						});
-					}
-				} else {
-					this.logger.warn('Slack bridge not initialized, skipping NOTIFY delivery (reconciliation will retry)', {
-						type: slackNotification.type,
-					});
-					// Message already has 'pending' status — reconciliation will pick it up
-				}
-			} catch (error) {
-				const errorMsg = error instanceof Error ? error.message : String(error);
-				this.logger.warn('Failed to route NOTIFY to Slack (reconciliation will retry)', {
-					error: errorMsg,
-					type: slackNotification.type,
+			// Track that this channel+thread was handled by skill so the
+			// SlackBridge's sendSlackResponse fallback can skip its duplicate send.
+			const bridge = getSlackOrchestratorBridge();
+			if (bridge.isInitialized()) {
+				bridge.markDeliveredBySkill(payload.channelId, payload.threadTs);
+			}
+
+			// Mark delivery status on the chat message
+			if (chatMessage && conversationId) {
+				const chatService = getChatService();
+				await chatService.updateMessageMetadata(conversationId, chatMessage.id, {
+					slackDeliveryStatus: 'delivered_by_skill',
+					slackDeliveryAttemptedAt: new Date().toISOString(),
 				});
-
-				// Record failure on the chat message for reconciliation
-				if (chatMessage && conversationId) {
-					const chatService = getChatService();
-					await chatService.updateMessageMetadata(conversationId, chatMessage.id, {
-						slackDeliveryAttemptedAt: new Date().toISOString(),
-						slackDeliveryAttempts: 1,
-						slackDeliveryError: errorMsg,
-					});
-				}
 			}
 		}
 	}
@@ -1074,6 +1056,24 @@ export class TerminalGateway {
 			payload: memberData,
 			timestamp: new Date().toISOString(),
 		} as WebSocketMessage);
+	}
+
+	/**
+	 * Broadcast a system resource alert to all connected clients.
+	 *
+	 * @param alertData - Alert details including key, message, severity, and timestamp
+	 */
+	broadcastSystemResourceAlert(alertData: {
+		alertKey: string;
+		message: string;
+		severity: string;
+		timestamp: string;
+	}): void {
+		this.io.emit('system_resource_alert', {
+			type: 'system_resource_alert',
+			payload: alertData,
+			timestamp: alertData.timestamp,
+		});
 	}
 
 	/**

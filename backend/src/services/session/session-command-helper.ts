@@ -32,6 +32,7 @@ export const KEY_CODES: Record<string, string> = {
 	'C-d': '\x04', // Ctrl+D (EOF)
 	Escape: '\x1b',
 	Tab: '\t',
+	'S-Tab': '\x1b[Z', // Shift+Tab (reverse tab / focus previous in TUI)
 	Backspace: '\x7f',
 	Delete: '\x1b[3~',
 	Up: '\x1b[A',

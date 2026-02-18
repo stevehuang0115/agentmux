@@ -50,29 +50,29 @@ describe('Orchestrator Routes', () => {
   });
 
   it('should have POST route for setup', () => {
-    const setupRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/setup' && layer.route.methods.post
+    const setupRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/setup' && (layer.route as any).methods.post
     );
     expect(setupRoute).toBeDefined();
   });
 
   it('should have GET route for health check', () => {
-    const healthRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/health' && layer.route.methods.get
+    const healthRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/health' && (layer.route as any).methods.get
     );
     expect(healthRoute).toBeDefined();
   });
 
   it('should have POST route for executing commands', () => {
-    const commandRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/commands/execute' && layer.route.methods.post
+    const commandRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/commands/execute' && (layer.route as any).methods.post
     );
     expect(commandRoute).toBeDefined();
   });
 
   it('should have POST route for sending messages', () => {
-    const messageRoute = router.stack.find(layer => 
-      layer.route && layer.route.path === '/messages' && layer.route.methods.post
+    const messageRoute = router.stack.find(layer =>
+      layer.route && layer.route.path === '/messages' && (layer.route as any).methods.post
     );
     expect(messageRoute).toBeDefined();
   });

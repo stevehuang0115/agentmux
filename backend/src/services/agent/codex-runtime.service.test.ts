@@ -1,19 +1,32 @@
 import { CodexRuntimeService } from './codex-runtime.service.js';
-import { TmuxCommandService } from './tmux-command.service.js';
+import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 
 describe('CodexRuntimeService', () => {
 	let service: CodexRuntimeService;
-	let mockTmuxCommandService: jest.Mocked<TmuxCommandService>;
+	let mockSessionHelper: jest.Mocked<SessionCommandHelper>;
 
 	beforeEach(() => {
-		mockTmuxCommandService = {
-			capturePane: jest.fn(),
-			sendKey: jest.fn(),
-			sendEnter: jest.fn(),
+		mockSessionHelper = {
+			capturePane: jest.fn().mockReturnValue(''),
+			sendKey: jest.fn().mockResolvedValue(undefined),
+			sendEnter: jest.fn().mockResolvedValue(undefined),
+			sendCtrlC: jest.fn().mockResolvedValue(undefined),
+			sendMessage: jest.fn().mockResolvedValue(undefined),
+			sendEscape: jest.fn().mockResolvedValue(undefined),
+			clearCurrentCommandLine: jest.fn().mockResolvedValue(undefined),
+			sessionExists: jest.fn().mockReturnValue(true),
+			createSession: jest.fn().mockResolvedValue({ pid: 123, cwd: '/test' }),
+			killSession: jest.fn().mockResolvedValue(undefined),
+			setEnvironmentVariable: jest.fn().mockResolvedValue(undefined),
+			writeRaw: jest.fn(),
+			getSession: jest.fn(),
+			getRawHistory: jest.fn(),
+			getTerminalBuffer: jest.fn(),
+			backend: {},
 		} as any;
 
-		service = new CodexRuntimeService(mockTmuxCommandService, '/test/project');
+		service = new CodexRuntimeService(mockSessionHelper, '/test/project');
 	});
 
 	describe('getRuntimeType', () => {
@@ -23,65 +36,34 @@ describe('CodexRuntimeService', () => {
 	});
 
 	describe('detectRuntimeSpecific', () => {
-		it('should detect Codex when status command shows Codex indicators', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before output')
-				.mockResolvedValueOnce('after output with codex CLI status');
+		it('should detect Codex when output length increases significantly after / key', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before output')
+				.mockReturnValueOnce('before output with much more content added');
 
 			const result = await service['detectRuntimeSpecific']('test-session');
 
 			expect(result).toBe(true);
-			expect(mockTmuxCommandService.sendKey).toHaveBeenCalledWith('test-session', 'status');
-			expect(mockTmuxCommandService.sendEnter).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', '/');
 		});
 
-		it('should detect Codex when OpenAI indicator is present', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before')
-				.mockResolvedValueOnce('Connected to OpenAI API - Available models');
-
-			const result = await service['detectRuntimeSpecific']('test-session');
-
-			expect(result).toBe(true);
-		});
-
-		it('should detect Codex when model configuration is shown', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before')
-				.mockResolvedValueOnce('Current model: code-davinci-002, token: abc123');
-
-			const result = await service['detectRuntimeSpecific']('test-session');
-
-			expect(result).toBe(true);
-		});
-
-		it('should not detect Codex when no indicators present', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('before output')
-				.mockResolvedValueOnce('before output');
+		it('should not detect Codex when output length stays the same', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before output')
+				.mockReturnValueOnce('before output');
 
 			const result = await service['detectRuntimeSpecific']('test-session');
 
 			expect(result).toBe(false);
-		});
-
-		it('should detect Codex based on output length increase', async () => {
-			mockTmuxCommandService.capturePane
-				.mockResolvedValueOnce('short')
-				.mockResolvedValueOnce('much longer output indicating CLI response');
-
-			const result = await service['detectRuntimeSpecific']('test-session');
-
-			expect(result).toBe(true);
 		});
 	});
 
 	describe('getRuntimeReadyPatterns', () => {
 		it('should return Codex-specific ready patterns', () => {
 			const patterns = service['getRuntimeReadyPatterns']();
-			
+
 			expect(patterns).toContain('codex>');
-			expect(patterns).toContain('Ready for input');
 			expect(patterns).toContain('OpenAI Codex');
 			expect(patterns).toContain('Connected to OpenAI');
 		});
@@ -90,11 +72,62 @@ describe('CodexRuntimeService', () => {
 	describe('getRuntimeErrorPatterns', () => {
 		it('should return Codex-specific error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
-			
+
 			expect(patterns).toContain('command not found: codex');
-			expect(patterns).toContain('API key not found');
 			expect(patterns).toContain('Authentication failed');
 			expect(patterns).toContain('Rate limit exceeded');
+		});
+	});
+
+	describe('getRuntimeExitPatterns', () => {
+		it('should return Codex-specific exit patterns', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0].test('codex exited')).toBe(true);
+			expect(patterns[0].test('Codex CLI exited')).toBe(true);
+			expect(patterns[1].test('Session ended')).toBe(true);
+		});
+
+		it('should not match unrelated text', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns.some(p => p.test('Ready for commands'))).toBe(false);
+		});
+	});
+
+	describe('getExitPatterns', () => {
+		it('should expose exit patterns via public accessor', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns).toHaveLength(2);
+		});
+	});
+
+	describe('checkCodexInstallation', () => {
+		it('should report Codex CLI as available', async () => {
+			const result = await service.checkCodexInstallation();
+			expect(result.isInstalled).toBe(true);
+			expect(result.message).toBe('OpenAI Codex CLI is available');
+		});
+	});
+
+	describe('initializeCodexInSession', () => {
+		it('should call executeRuntimeInitScript', async () => {
+			const spy = jest.spyOn(service, 'executeRuntimeInitScript').mockResolvedValue(undefined);
+
+			const result = await service.initializeCodexInSession('test-session');
+
+			expect(result.success).toBe(true);
+			expect(spy).toHaveBeenCalledWith('test-session');
+		});
+
+		it('should handle initialization errors gracefully', async () => {
+			jest.spyOn(service, 'executeRuntimeInitScript').mockRejectedValue(
+				new Error('Init failed')
+			);
+
+			const result = await service.initializeCodexInSession('test-session');
+
+			expect(result.success).toBe(false);
+			expect(result.message).toBe('Init failed');
 		});
 	});
 });

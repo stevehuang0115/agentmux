@@ -108,7 +108,7 @@ describe('SlackService', () => {
       expect(context.channelId).toBe('C123');
       expect(context.userId).toBe('U456');
       expect(context.messageCount).toBe(1);
-      expect(context.conversationId).toBe('slack-C123:thread-1');
+      expect(context.conversationId).toBe('slack-C123-thread-1');
     });
 
     it('should return existing context and increment count', () => {
@@ -220,11 +220,127 @@ describe('SlackService', () => {
     });
   });
 
-  describe('initialize without @slack/bolt installed', () => {
-    it('should throw error when @slack/bolt is not available', async () => {
+  describe('getBotToken', () => {
+    it('should return null when not initialized', () => {
+      const service = new SlackService();
+      expect(service.getBotToken()).toBeNull();
+    });
+  });
+
+  describe('uploadImage', () => {
+    it('should throw when client is not initialized', async () => {
+      const service = new SlackService();
+      await expect(
+        service.uploadImage({ channelId: 'C123', filePath: '/tmp/test.png' })
+      ).rejects.toThrow('Slack client not initialized');
+    });
+
+    describe('retry behavior with mocked client', () => {
+      let service: SlackService;
+      let mockUploadV2: jest.Mock;
+
+      beforeEach(() => {
+        service = new SlackService();
+        mockUploadV2 = jest.fn();
+        // Inject a mock client via private field
+        (service as any).client = {
+          chat: { postMessage: jest.fn(), update: jest.fn() },
+          reactions: { add: jest.fn() },
+          users: { info: jest.fn() },
+          files: { uploadV2: mockUploadV2 },
+        };
+      });
+
+      it('should succeed on first attempt without retrying', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F001' }] });
+
+        const result = await service.uploadImage({
+          channelId: 'C123',
+          filePath: __filename, // Use this test file as a valid file path
+        });
+
+        expect(result.fileId).toBe('F001');
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+      });
+
+      it('should retry on 429 and succeed on subsequent attempt', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0, // 0 seconds so test runs fast
+        });
+        mockUploadV2
+          .mockRejectedValueOnce(rateLimitError)
+          .mockResolvedValueOnce({ files: [{ id: 'F002' }] });
+
+        const result = await service.uploadImage({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(result.fileId).toBe('F002');
+        expect(mockUploadV2).toHaveBeenCalledTimes(2);
+      });
+
+      it('should throw after exhausting all retry attempts', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0,
+        });
+        mockUploadV2.mockRejectedValue(rateLimitError);
+
+        await expect(
+          service.uploadImage({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('rate limited');
+
+        // 1 initial + 3 retries = 4 total calls
+        expect(mockUploadV2).toHaveBeenCalledTimes(4);
+      });
+
+      it('should throw immediately for non-rate-limit errors', async () => {
+        mockUploadV2.mockRejectedValue(new Error('channel_not_found'));
+
+        await expect(
+          service.uploadImage({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('channel_not_found');
+
+        // No retry on non-429 errors
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  describe('rate limit helpers', () => {
+    it('should detect slack_webapi_rate_limited_error as rate limit', () => {
+      const service = new SlackService();
+      const isRateLimit = (service as any).isRateLimitError.bind(service);
+
+      expect(isRateLimit({ code: 'slack_webapi_rate_limited_error' })).toBe(true);
+      expect(isRateLimit({ statusCode: 429 })).toBe(true);
+      expect(isRateLimit({ status: 429 })).toBe(true);
+      expect(isRateLimit({ code: 'some_other_error' })).toBe(false);
+      expect(isRateLimit(null)).toBe(false);
+      expect(isRateLimit('string error')).toBe(false);
+    });
+
+    it('should extract retryAfter from Slack error', () => {
+      const service = new SlackService();
+      const extractRetryAfterMs = (service as any).extractRetryAfterMs.bind(service);
+
+      // @slack/web-api attaches retryAfter in seconds
+      expect(extractRetryAfterMs({ retryAfter: 30 })).toBe(30000);
+      // From headers
+      expect(extractRetryAfterMs({ headers: { 'retry-after': '10' } })).toBe(10000);
+      // No info
+      expect(extractRetryAfterMs({})).toBeNull();
+      expect(extractRetryAfterMs(null)).toBeNull();
+    });
+  });
+
+  describe('initialize with invalid credentials', () => {
+    it('should throw error when credentials are invalid', async () => {
       const service = getSlackService();
 
-      // Since @slack/bolt is not installed, initialize should throw
+      // @slack/bolt is installed but the test token is invalid, so initialize should reject
       await expect(service.initialize(mockConfig)).rejects.toThrow();
     });
   });

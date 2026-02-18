@@ -58,6 +58,10 @@ describe('Main Controller Router', () => {
       },
       taskTrackingService: {
         getAllInProgressTasks: jest.fn()
+      },
+      agentRegistrationService: {
+        getRegisteredAgents: jest.fn(),
+        sendMessageToAgent: jest.fn()
       }
     } as any;
 

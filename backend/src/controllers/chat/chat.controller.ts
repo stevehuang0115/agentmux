@@ -24,6 +24,11 @@ import type {
   ChatSenderType,
   ChatContentType,
 } from '../../types/chat.types.js';
+import {
+  createChatMessage,
+  detectContentType,
+  formatMessageContent,
+} from '../../types/chat.types.js';
 
 // Module-level message queue service instance
 let messageQueueService: MessageQueueService | null = null;
@@ -215,6 +220,118 @@ export async function getMessage(
       data: message,
     });
   } catch (error) {
+    next(error);
+  }
+}
+
+// =============================================================================
+// Agent Response Endpoint
+// =============================================================================
+
+/**
+ * POST /api/chat/agent-response
+ *
+ * Store an agent's response message in a chat conversation. Used by
+ * orchestrator bash skills to post agent responses directly to the
+ * chat without going through terminal output parsing.
+ *
+ * @param req - Request with body: { content, senderName, senderType?, conversationId? }
+ * @param res - Response with { success, data: { messageId, conversationId } }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/chat/agent-response
+ * {
+ *   "content": "Task completed successfully. The API endpoint is live.",
+ *   "senderName": "Orchestrator",
+ *   "senderType": "orchestrator",
+ *   "conversationId": "conv-abc123"
+ * }
+ * ```
+ */
+export async function agentResponse(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const { content, senderName, senderType, conversationId } = req.body;
+
+    if (!content || (typeof content === 'string' && content.trim().length === 0)) {
+      res.status(400).json({
+        success: false,
+        error: 'Message content is required',
+      });
+      return;
+    }
+
+    if (!senderName) {
+      res.status(400).json({
+        success: false,
+        error: 'senderName is required',
+      });
+      return;
+    }
+
+    const chatService = getChatService();
+
+    // Resolve conversation: use provided ID or get/create the current one
+    let resolvedConversationId = conversationId;
+    if (!resolvedConversationId) {
+      const current = await chatService.getCurrentConversation();
+      if (current) {
+        resolvedConversationId = current.id;
+      } else {
+        const newConversation = await chatService.createNewConversation('Agent Chat');
+        resolvedConversationId = newConversation.id;
+      }
+    }
+
+    // Format and create the message
+    const resolvedSenderType = senderType || 'agent';
+    const formattedContent = formatMessageContent(content);
+    const contentType = detectContentType(formattedContent);
+
+    const message = createChatMessage({
+      conversationId: resolvedConversationId,
+      content: formattedContent,
+      from: {
+        type: resolvedSenderType as ChatSenderType,
+        name: senderName,
+      },
+      contentType,
+      status: 'delivered',
+    });
+
+    // Use addDirectMessage to persist and emit events
+    const savedMessage = await chatService.addDirectMessage(
+      resolvedConversationId,
+      content,
+      {
+        type: resolvedSenderType as ChatSenderType,
+        name: senderName,
+      }
+    );
+
+    logger.info('Agent response stored via REST', {
+      senderName,
+      senderType: resolvedSenderType,
+      conversationId: resolvedConversationId,
+      messageId: savedMessage.id,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        messageId: savedMessage.id,
+        conversationId: resolvedConversationId,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to store agent response', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     next(error);
   }
 }

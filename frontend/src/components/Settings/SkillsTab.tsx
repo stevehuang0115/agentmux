@@ -16,7 +16,6 @@ import {
   Info,
   AlertCircle,
   ExternalLink,
-  Plug,
   Brain,
   Globe,
   Plus,
@@ -32,27 +31,18 @@ import type {
   SkillNotice,
 } from '../../types/skill.types';
 import type { CreateSkillInput } from '../../services/skills.service';
-import { getSkillCategoryLabel, getSkillTypeLabel } from '../../types/skill.types';
+import { getSkillCategoryLabel, getSkillTypeLabel, SKILL_CATEGORIES } from '../../types/skill.types';
 import { Button, IconButton } from '../UI/Button';
 import { FormInput, FormSelect, FormLabel, FormTextarea } from '../UI/Form';
 
 /**
- * Build category options from skill types for consistency
+ * Build category options from the canonical SKILL_CATEGORIES list for consistency.
+ * Uses the shared constant to stay in sync with all valid categories.
  */
 const buildCategoryOptions = (): { value: SkillCategory | ''; label: string }[] => {
-  const categories: SkillCategory[] = [
-    'development',
-    'design',
-    'communication',
-    'research',
-    'content-creation',
-    'automation',
-    'analysis',
-    'integration',
-  ];
   return [
     { value: '', label: 'All Categories' },
-    ...categories.map((cat) => ({
+    ...SKILL_CATEGORIES.map((cat) => ({
       value: cat,
       label: getSkillCategoryLabel(cat),
     })),
@@ -76,13 +66,18 @@ const CATEGORY_COLORS: Record<SkillCategory, string> = {
   automation: 'bg-purple-500/15 text-purple-400',
   analysis: 'bg-cyan-500/15 text-cyan-400',
   integration: 'bg-rose-500/15 text-rose-400',
+  management: 'bg-orange-500/15 text-orange-400',
+  monitoring: 'bg-teal-500/15 text-teal-400',
+  memory: 'bg-violet-500/15 text-violet-400',
+  system: 'bg-slate-500/15 text-slate-400',
+  'task-management': 'bg-sky-500/15 text-sky-400',
+  quality: 'bg-lime-500/15 text-lime-400',
 };
 
 /**
  * Skill type badge color mapping
  */
 const SKILL_TYPE_COLORS: Record<SkillType, string> = {
-  'mcp': 'bg-emerald-500/15 text-emerald-400',
   'claude-skill': 'bg-purple-500/15 text-purple-400',
   'web-page': 'bg-blue-500/15 text-blue-400',
 };
@@ -318,8 +313,6 @@ interface SkillCardProps {
  */
 const getSkillTypeIcon = (skillType: SkillType): React.ReactNode => {
   switch (skillType) {
-    case 'mcp':
-      return <Plug className="w-3.5 h-3.5" />;
     case 'claude-skill':
       return <Brain className="w-3.5 h-3.5" />;
     case 'web-page':

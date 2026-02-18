@@ -40,11 +40,11 @@ export interface GeneralSettings {
   /** Enable verbose logging */
   verboseLogging: boolean;
 
-  /** Claude Code startup command */
-  claudeCodeCommand: string;
+  /** Whether to auto-resume agent sessions on restart */
+  autoResumeOnRestart: boolean;
 
-  /** Claude Code initialization script path */
-  claudeCodeInitScript: string;
+  /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
+  runtimeCommands: Record<AIRuntime, string>;
 }
 
 /**
@@ -177,8 +177,12 @@ export function getDefaultSettings(): AgentMuxSettings {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
-      claudeCodeCommand: '~/.claude/local/claude --dangerously-skip-permissions',
-      claudeCodeInitScript: 'config/runtime_scripts/initialize_claude.sh',
+      autoResumeOnRestart: true,
+      runtimeCommands: {
+        'claude-code': 'claude --dangerously-skip-permissions',
+        'gemini-cli': 'gemini --yolo',
+        'codex-cli': 'codex --full-auto',
+      },
     },
     chat: {
       showRawTerminalOutput: false,
@@ -222,12 +226,26 @@ export function validateSettings(settings: AgentMuxSettings): SettingsValidation
     errors.push('autoStartOrchestrator must be a boolean');
   }
 
+  if (typeof settings.general.autoResumeOnRestart !== 'boolean') {
+    errors.push('autoResumeOnRestart must be a boolean');
+  }
+
   if (settings.general.checkInIntervalMinutes < SETTINGS_CONSTRAINTS.MIN_CHECK_IN_INTERVAL) {
     errors.push(`Check-in interval must be at least ${SETTINGS_CONSTRAINTS.MIN_CHECK_IN_INTERVAL} minute`);
   }
 
   if (settings.general.maxConcurrentAgents < SETTINGS_CONSTRAINTS.MIN_MAX_CONCURRENT_AGENTS) {
     errors.push(`Max concurrent agents must be at least ${SETTINGS_CONSTRAINTS.MIN_MAX_CONCURRENT_AGENTS}`);
+  }
+
+  // Validate runtimeCommands
+  if (settings.general.runtimeCommands) {
+    for (const runtime of AI_RUNTIMES) {
+      const cmd = settings.general.runtimeCommands[runtime];
+      if (typeof cmd !== 'string' || cmd.trim().length === 0) {
+        errors.push(`Runtime command for ${runtime} must be a non-empty string`);
+      }
+    }
   }
 
   // Validate chat settings

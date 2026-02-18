@@ -10,10 +10,9 @@ describe('Services Index Module', () => {
     /**
      * Test that agent services can be imported
      */
-    it('should export TmuxService and related types', async () => {
-      const { TmuxService, OrchestratorConfig } = await import('./agent/tmux.service.js');
+    it('should export TmuxService', async () => {
+      const { TmuxService } = await import('./agent/tmux.service.js');
       expect(TmuxService).toBeDefined();
-      expect(OrchestratorConfig).toBeDefined();
     });
 
     /**
@@ -27,9 +26,9 @@ describe('Services Index Module', () => {
     /**
      * Test that claude agent service can be imported
      */
-    it('should export ClaudeAgentService', async () => {
-      const { ClaudeAgentService } = await import('./agent/claude-agent.service.js');
-      expect(ClaudeAgentService).toBeDefined();
+    it('should export ClaudeRuntimeService', async () => {
+      const { ClaudeRuntimeService } = await import('./agent/claude-runtime.service.js');
+      expect(ClaudeRuntimeService).toBeDefined();
     });
 
     /**
@@ -89,9 +88,9 @@ describe('Services Index Module', () => {
     /**
      * Test that workflow services can be imported
      */
-    it('should export WorkflowService', async () => {
-      const { WorkflowService } = await import('./workflow/workflow.service.js');
-      expect(WorkflowService).toBeDefined();
+    it('should export MessageSchedulerService', async () => {
+      const { MessageSchedulerService } = await import('./workflow/message-scheduler.service.js');
+      expect(MessageSchedulerService).toBeDefined();
     });
 
     /**

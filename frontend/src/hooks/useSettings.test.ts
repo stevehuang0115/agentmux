@@ -20,6 +20,12 @@ describe('useSettings Hook', () => {
       checkInIntervalMinutes: 5,
       maxConcurrentAgents: 10,
       verboseLogging: false,
+      autoResumeOnRestart: true,
+      runtimeCommands: {
+        'claude-code': 'claude --dangerously-skip-permissions',
+        'gemini-cli': 'gemini --yolo',
+        'codex-cli': 'codex --full-auto',
+      },
     },
     chat: {
       showRawTerminalOutput: false,

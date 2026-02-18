@@ -18,9 +18,9 @@ describe('Config Handlers', () => {
   let mockRequest: Partial<Request>;
   let mockResponse: Partial<Response>;
   let responseMock: {
-    status: jest.Mock;
-    json: jest.Mock;
-    send: jest.Mock;
+    status: jest.Mock<any>;
+    json: jest.Mock<any>;
+    send: jest.Mock<any>;
   };
 
   beforeEach(() => {
@@ -28,18 +28,21 @@ describe('Config Handlers', () => {
 
     // Create response mock
     responseMock = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis(),
-      send: jest.fn().mockReturnThis(),
+      status: jest.fn<any>().mockReturnThis(),
+      json: jest.fn<any>().mockReturnThis(),
+      send: jest.fn<any>().mockReturnThis(),
     };
 
     // Setup API context
     mockApiContext = {
       storageService: new StorageService() as jest.Mocked<StorageService>,
       tmuxService: new TmuxService() as jest.Mocked<TmuxService>,
-      schedulerService: new SchedulerService() as jest.Mocked<SchedulerService>,
+      schedulerService: new SchedulerService(new StorageService()) as jest.Mocked<SchedulerService>,
       activeProjectsService: new ActiveProjectsService() as jest.Mocked<ActiveProjectsService>,
       promptTemplateService: new PromptTemplateService() as jest.Mocked<PromptTemplateService>,
+      agentRegistrationService: {} as any,
+      taskAssignmentMonitor: {} as any,
+      taskTrackingService: {} as any,
     };
 
     mockRequest = {};
@@ -55,7 +58,6 @@ describe('Config Handlers', () => {
       const mockConfigContent = {
         version: '1.0.0',
         apiPort: 3000,
-        mcpPort: 3001,
         features: {
           gitIntegration: true,
           autoCommit: false
@@ -63,7 +65,7 @@ describe('Config Handlers', () => {
       };
 
       mockRequest.params = { filename: 'config.json' };
-      (fs.readFile as jest.Mock).mockResolvedValue(JSON.stringify(mockConfigContent, null, 2));
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(mockConfigContent, null, 2));
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -84,7 +86,7 @@ describe('Config Handlers', () => {
     it('should handle JSON config files', async () => {
       const jsonConfig = { env: 'development', debug: true };
       mockRequest.params = { filename: 'app.json' };
-      (fs.readFile as jest.Mock).mockResolvedValue(JSON.stringify(jsonConfig));
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(jsonConfig));
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -104,7 +106,7 @@ describe('Config Handlers', () => {
     it('should handle YAML config files', async () => {
       const yamlContent = 'version: 1.0.0\nname: test-app\nport: 3000\n';
       mockRequest.params = { filename: 'app.yml' };
-      (fs.readFile as jest.Mock).mockResolvedValue(yamlContent);
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(yamlContent);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -124,7 +126,7 @@ describe('Config Handlers', () => {
     it('should handle environment files', async () => {
       const envContent = 'NODE_ENV=development\nAPI_PORT=3000\nDATABASE_URL=sqlite://db.sqlite\n';
       mockRequest.params = { filename: '.env' };
-      (fs.readFile as jest.Mock).mockResolvedValue(envContent);
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(envContent);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -145,7 +147,7 @@ describe('Config Handlers', () => {
       mockRequest.params = { filename: 'nonexistent.json' };
       const error = new Error('File not found') as any;
       error.code = 'ENOENT';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -164,9 +166,9 @@ describe('Config Handlers', () => {
       mockRequest.params = { filename: 'secure.json' };
       const error = new Error('Permission denied') as any;
       error.code = 'EACCES';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -186,7 +188,7 @@ describe('Config Handlers', () => {
 
     it('should handle empty config files', async () => {
       mockRequest.params = { filename: 'empty.json' };
-      (fs.readFile as jest.Mock).mockResolvedValue('');
+      (fs.readFile as jest.Mock<any>).mockResolvedValue('');
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -206,7 +208,7 @@ describe('Config Handlers', () => {
     it('should handle binary files gracefully', async () => {
       mockRequest.params = { filename: 'binary.dat' };
       const binaryContent = Buffer.from([0x89, 0x50, 0x4E, 0x47]); // PNG header
-      (fs.readFile as jest.Mock).mockResolvedValue(binaryContent);
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(binaryContent);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -248,7 +250,7 @@ describe('Config Handlers', () => {
 
       for (const testFile of testFiles) {
         mockRequest.params = { filename: testFile.name };
-        (fs.readFile as jest.Mock).mockResolvedValue(testFile.content);
+        (fs.readFile as jest.Mock<any>).mockResolvedValue(testFile.content);
 
         await configHandlers.getConfigFile.call(
           mockApiContext,
@@ -271,9 +273,9 @@ describe('Config Handlers', () => {
       mockRequest.params = { filename: 'corrupted.json' };
       const error = new Error('I/O error') as any;
       error.code = 'EIO';
-      (fs.readFile as jest.Mock).mockRejectedValue(error);
+      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -294,7 +296,7 @@ describe('Config Handlers', () => {
     it('should handle malformed JSON gracefully', async () => {
       mockRequest.params = { filename: 'malformed.json' };
       const malformedJson = '{"name": "test", invalid}';
-      (fs.readFile as jest.Mock).mockResolvedValue(malformedJson);
+      (fs.readFile as jest.Mock<any>).mockResolvedValue(malformedJson);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -316,9 +318,9 @@ describe('Config Handlers', () => {
   describe('Error handling', () => {
     it('should handle async errors properly', async () => {
       mockRequest.params = { filename: 'test.json' };
-      (fs.readFile as jest.Mock).mockRejectedValue(new Error('Async error'));
+      (fs.readFile as jest.Mock<any>).mockRejectedValue(new Error('Async error'));
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -333,7 +335,7 @@ describe('Config Handlers', () => {
     });
 
     it('should handle null filename parameter', async () => {
-      mockRequest.params = { filename: null };
+      mockRequest.params = { filename: null as any };
 
       await configHandlers.getConfigFile.call(
         mockApiContext,
@@ -348,7 +350,7 @@ describe('Config Handlers', () => {
   describe('Integration', () => {
     it('should properly use file system operations', async () => {
       mockRequest.params = { filename: 'integration-test.json' };
-      (fs.readFile as jest.Mock).mockResolvedValue('{"test": true}');
+      (fs.readFile as jest.Mock<any>).mockResolvedValue('{"test": true}');
 
       await configHandlers.getConfigFile.call(
         mockApiContext,

@@ -8,15 +8,37 @@
  */
 
 import { Router } from 'express';
-import { remember, recall, recordLearning } from './memory.controller.js';
+import {
+  remember,
+  recall,
+  recordLearning,
+  setGoal,
+  getGoals,
+  updateFocus,
+  getFocus,
+  appendDailyLog,
+  getDailyLog,
+  recordSuccess,
+  recordFailure,
+  getMyContext,
+} from './memory.controller.js';
 
 /**
  * Creates the memory router with all memory endpoints.
  *
  * Endpoints:
- * - POST /remember   - Store knowledge in agent or project memory
- * - POST /recall     - Retrieve relevant knowledge from memory
+ * - POST /remember        - Store knowledge in agent or project memory
+ * - POST /recall          - Retrieve relevant knowledge from memory
  * - POST /record-learning - Record a learning or discovery
+ * - POST /goals           - Set or append a project goal
+ * - GET  /goals           - Get active project goals
+ * - POST /focus           - Update the team's current focus
+ * - GET  /focus           - Get the team's current focus
+ * - POST /daily-log       - Append an entry to today's daily log
+ * - GET  /daily-log       - Get today's daily log
+ * - POST /record-success  - Record a successful pattern or approach
+ * - POST /record-failure  - Record a failed approach or pitfall
+ * - POST /my-context      - Get combined agent context (memories, goals, focus, logs, learnings)
  *
  * @returns Express router configured with memory routes
  */
@@ -26,6 +48,15 @@ export function createMemoryRouter(): Router {
   router.post('/remember', remember);
   router.post('/recall', recall);
   router.post('/record-learning', recordLearning);
+  router.post('/goals', setGoal);
+  router.get('/goals', getGoals);
+  router.post('/focus', updateFocus);
+  router.get('/focus', getFocus);
+  router.post('/daily-log', appendDailyLog);
+  router.get('/daily-log', getDailyLog);
+  router.post('/record-success', recordSuccess);
+  router.post('/record-failure', recordFailure);
+  router.post('/my-context', getMyContext);
 
   return router;
 }

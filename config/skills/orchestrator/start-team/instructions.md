@@ -13,6 +13,7 @@ bash config/skills/orchestrator/start-team/execute.sh '{"teamId":"abc-123-uuid"}
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `teamId` | Yes | The team's UUID |
+| `projectId` | No | Project UUID to assign before starting (uses team's current project if omitted) |
 
 ## Output
 

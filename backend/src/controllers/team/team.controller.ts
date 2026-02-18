@@ -24,9 +24,11 @@ import {
 } from '../../constants.js';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
-import { getSessionBackendSync } from '../../services/session/index.js';
+import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
+import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
+import { SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 
 /**
@@ -145,6 +147,29 @@ function buildOrchestratorTeam(
     updatedAt: orchestratorStatus?.updatedAt || now,
     ...overrides,
   };
+}
+
+/**
+ * Resolve the display agent status based on stored state and live session presence.
+ *
+ * When a PTY session is alive but the agent hasn't registered yet, we keep
+ * the "started"/"starting" states instead of incorrectly elevating to "active".
+ * Conversely, if the session has disappeared we immediately report "inactive"
+ * regardless of the stored status to avoid stale UI.
+ */
+function resolveAgentStatus(
+  storedStatus: TeamMember['agentStatus'] | undefined,
+  sessionExists: boolean
+): TeamMember['agentStatus'] {
+  if (!sessionExists) {
+    return AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
+  }
+
+  if (!storedStatus || storedStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE) {
+    return AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED as TeamMember['agentStatus'];
+  }
+
+  return storedStatus;
 }
 
 /**
@@ -600,10 +625,10 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
     const backend = getSessionBackendSync();
     const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
-    // Use actual session existence as the source of truth for agentStatus
-    const actualOrchestratorStatus = orchestratorSessionExists
-      ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-      : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    const actualOrchestratorStatus = resolveAgentStatus(
+      orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
+      orchestratorSessionExists
+    );
 
     const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
 
@@ -612,11 +637,10 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       ...team,
       members: team.members.map(member => {
         const memberSessionExists = backend?.sessionExists(member.sessionName) || false;
+        const resolvedStatus = resolveAgentStatus(member.agentStatus, memberSessionExists);
         return {
           ...member,
-          agentStatus: memberSessionExists
-            ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-            : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+          agentStatus: resolvedStatus,
         };
       })
     }));
@@ -629,7 +653,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
         ...orchestratorStatus,
         agentStatus: actualOrchestratorStatus
       }
-    } as ApiResponse<Team[]>);
+  } as ApiResponse<Team[]>);
   } catch (error) {
     console.error('Error getting teams:', error);
     res.status(500).json({
@@ -649,10 +673,10 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       const backend = getSessionBackendSync();
       const orchestratorSessionExists = backend?.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
 
-      // Use actual session existence as the source of truth for agentStatus
-      const actualOrchestratorStatus = orchestratorSessionExists
-        ? AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
-        : AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+      const actualOrchestratorStatus = resolveAgentStatus(
+        orchestratorStatus?.agentStatus as TeamMember['agentStatus'],
+        orchestratorSessionExists
+      );
 
       const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
       res.json({ success: true, data: orchestratorTeam } as ApiResponse<Team>);
@@ -672,9 +696,9 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       for (const member of team.members) {
         if (member.sessionName) {
           const sessionExists = backend.sessionExists(member.sessionName);
-          // Update agentStatus based on actual session existence
-          if (!sessionExists && member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
-            (member as MutableTeamMember).agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+          const resolvedStatus = resolveAgentStatus(member.agentStatus, sessionExists);
+          (member as MutableTeamMember).agentStatus = resolvedStatus;
+          if (!sessionExists) {
             (member as MutableTeamMember).sessionName = '';
           }
         }
@@ -1162,7 +1186,7 @@ export async function reportMemberReady(this: ApiContext, req: Request, res: Res
 
 export async function registerMemberStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { sessionName, role, status, registeredAt, memberId } = req.body as RegisterMemberStatusRequestBody;
+    const { sessionName, role, status, registeredAt, memberId, claudeSessionId } = req.body as RegisterMemberStatusRequestBody;
 
     // Update agent heartbeat (proof of life)
     try {
@@ -1222,27 +1246,68 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     }
 
     // Load fresh team data and apply registration changes to avoid race conditions
-    if (targetTeamId && targetMemberId) {
-      const freshTeams = await this.storageService.getTeams();
-      const freshTeam = freshTeams.find(t => t.id === targetTeamId);
+    if (!targetTeamId || !targetMemberId) {
+      console.warn(`registerMemberStatus: agent not found in any team`, { sessionName, role, memberId });
+      res.status(404).json({ success: false, error: `Agent with sessionName '${sessionName}' not found in any team` } as ApiResponse);
+      return;
+    }
 
-      if (freshTeam) {
-        const freshMember = freshTeam.members.find(m => m.id === targetMemberId) as MutableTeamMember | undefined;
-        if (freshMember) {
-          freshMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
-          freshMember.workingStatus = freshMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
-          freshMember.readyAt = registeredAt || new Date().toISOString();
-          if (memberId && freshMember.id === memberId && !freshMember.sessionName) {
-            freshMember.sessionName = sessionName;
-          }
-          (freshTeam as MutableTeam).updatedAt = new Date().toISOString();
+    const freshTeams = await this.storageService.getTeams();
+    const freshTeam = freshTeams.find(t => t.id === targetTeamId);
 
-          await this.storageService.saveTeam(freshTeam);
+    if (freshTeam) {
+      const freshMember = freshTeam.members.find(m => m.id === targetMemberId) as MutableTeamMember | undefined;
+      if (freshMember) {
+        freshMember.agentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+        freshMember.workingStatus = freshMember.workingStatus || AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE;
+        freshMember.readyAt = registeredAt || new Date().toISOString();
+        if (memberId && freshMember.id === memberId && !freshMember.sessionName) {
+          freshMember.sessionName = sessionName;
         }
+        (freshTeam as MutableTeam).updatedAt = new Date().toISOString();
+
+        await this.storageService.saveTeam(freshTeam);
+      }
+    }
+
+    // Store claudeSessionId for resume-on-restart support
+    if (claudeSessionId) {
+      try {
+        const persistence = getSessionStatePersistence();
+        persistence.updateSessionId(sessionName, claudeSessionId);
+      } catch (persistError) {
+        // Non-fatal: resume just won't work on next restart
+        console.warn('Failed to persist claudeSessionId:', persistError);
       }
     }
 
     res.json({ success: true, message: `Agent ${sessionName} registered as active with role ${role}`, data: { sessionName, role, status: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE, registeredAt: registeredAt || new Date().toISOString() } } as ApiResponse);
+
+    // Flush any queued messages for this sub-agent (fire-and-forget after response)
+    const subAgentQueue = SubAgentMessageQueue.getInstance();
+    if (subAgentQueue.hasPending(sessionName)) {
+      const runtimeType = (freshTeam?.members.find(m => m.id === targetMemberId)?.runtimeType || RUNTIME_TYPES.CLAUDE_CODE) as import('../../constants.js').RuntimeType;
+      const queuedMessages = subAgentQueue.dequeueAll(sessionName);
+      console.log(`[registerMemberStatus] Flushing ${queuedMessages.length} queued message(s) to ${sessionName}`);
+
+      // Deliver sequentially in the background
+      (async () => {
+        for (const queuedMsg of queuedMessages) {
+          try {
+            await this.agentRegistrationService.sendMessageToAgent(sessionName, queuedMsg.data, runtimeType);
+            console.log(`[registerMemberStatus] Delivered queued message to ${sessionName} (queued at ${new Date(queuedMsg.queuedAt).toISOString()})`);
+          } catch (flushError) {
+            console.error(`[registerMemberStatus] Failed to deliver queued message to ${sessionName}:`, flushError);
+          }
+          // Delay between messages to let the agent process each one
+          if (queuedMessages.indexOf(queuedMsg) < queuedMessages.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, SUB_AGENT_QUEUE_CONSTANTS.FLUSH_INTER_MESSAGE_DELAY));
+          }
+        }
+      })().catch(err => {
+        console.error(`[registerMemberStatus] Queue flush failed for ${sessionName}:`, err);
+      });
+    }
   } catch (error) {
     console.error('Error in registerMemberStatus:', error);
     res.status(500).json({ success: false, error: 'Failed to register member status' } as ApiResponse);

@@ -8,6 +8,8 @@
  */
 
 import { EventEmitter } from 'events';
+import { createReadStream } from 'fs';
+import { basename } from 'path';
 import type {
   SlackConfig,
   SlackIncomingMessage,
@@ -18,6 +20,7 @@ import type {
   SlackBlock,
 } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
+import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
 
 /**
  * Events emitted by SlackService
@@ -64,6 +67,21 @@ interface SlackWebClient {
       };
     }>;
   };
+  files: {
+    uploadV2: (args: UploadFileArgs) => Promise<{ files?: Array<{ id: string }> }>;
+  };
+}
+
+/**
+ * Arguments for files.uploadV2 API call
+ */
+interface UploadFileArgs {
+  channel_id: string;
+  file: Buffer | NodeJS.ReadableStream;
+  filename: string;
+  title?: string;
+  initial_comment?: string;
+  thread_ts?: string;
 }
 
 interface PostMessageArgs {
@@ -97,6 +115,19 @@ interface MessageEventArgs {
     channel: string;
     thread_ts?: string;
     team?: string;
+    files?: Array<{
+      id: string;
+      name: string;
+      mimetype: string;
+      filetype: string;
+      size: number;
+      url_private: string;
+      url_private_download: string;
+      thumb_360?: string;
+      original_w?: number;
+      original_h?: number;
+      permalink: string;
+    }>;
   };
   say: (text: string) => Promise<void>;
 }
@@ -185,8 +216,8 @@ export class SlackService extends EventEmitter {
 
     // Handle direct messages
     this.app.message(async ({ message }) => {
-      // Type guard for message with text
-      if (!message.text) return;
+      // Allow messages with text or images (or both)
+      if (!message.text && (!message.files || message.files.length === 0)) return;
       if (!message.user) return;
 
       // Check user permissions
@@ -195,16 +226,21 @@ export class SlackService extends EventEmitter {
         return;
       }
 
+      // Extract image files from the event payload
+      const imageFiles = (message.files || []).filter(f => f.mimetype?.startsWith('image/'));
+
       const incomingMessage: SlackIncomingMessage = {
         id: message.ts || '',
         type: 'message',
-        text: message.text,
+        text: message.text || '',
         userId: message.user,
         channelId: message.channel,
         threadTs: message.thread_ts,
         ts: message.ts || '',
         teamId: message.team || '',
         eventTs: message.ts || '',
+        files: imageFiles.length > 0 ? imageFiles : undefined,
+        hasImages: imageFiles.length > 0,
       };
 
       this.status.messagesReceived++;
@@ -404,6 +440,7 @@ export class SlackService extends EventEmitter {
     userId: string
   ): SlackConversationContext {
     const key = `${channelId}:${threadTs}`;
+    const conversationId = `slack-${channelId}-${threadTs}`.replace(/[^A-Za-z0-9_-]/g, '-');
     let context = this.conversationContexts.get(key);
 
     if (!context) {
@@ -411,12 +448,14 @@ export class SlackService extends EventEmitter {
         threadTs,
         channelId,
         userId,
-        conversationId: `slack-${key}`,
+        conversationId,
         startedAt: new Date().toISOString(),
         lastActivityAt: new Date().toISOString(),
         messageCount: 0,
       };
       this.conversationContexts.set(key, context);
+    } else if (context.conversationId !== conversationId) {
+      context.conversationId = conversationId;
     }
 
     context.lastActivityAt = new Date().toISOString();
@@ -440,6 +479,122 @@ export class SlackService extends EventEmitter {
    */
   isConnected(): boolean {
     return this.status.connected;
+  }
+
+  /**
+   * Get the bot token used to initialize the Slack client.
+   * Required for downloading private files from Slack.
+   *
+   * @returns The bot token string, or null if not initialized
+   */
+  getBotToken(): string | null {
+    return this.config?.botToken || null;
+  }
+
+  /**
+   * Upload an image file to a Slack channel.
+   *
+   * Reads the file from the local filesystem and uploads it
+   * using the Slack files.uploadV2 API.
+   *
+   * @param options - Upload configuration
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized or upload fails
+   */
+  async uploadImage(options: {
+    channelId: string;
+    filePath: string;
+    filename?: string;
+    title?: string;
+    initialComment?: string;
+    threadTs?: string;
+  }): Promise<{ fileId?: string }> {
+    if (!this.client) {
+      throw new Error('Slack client not initialized');
+    }
+
+    const filename = options.filename || basename(options.filePath);
+    const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
+
+    /** Maximum backoff delay to prevent hanging on large Retry-After values (60s) */
+    const MAX_BACKOFF_MS = 60_000;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const fileStream = createReadStream(options.filePath);
+
+      try {
+        const result = await this.client.files.uploadV2({
+          channel_id: options.channelId,
+          file: fileStream,
+          filename,
+          title: options.title,
+          initial_comment: options.initialComment,
+          thread_ts: options.threadTs,
+        });
+
+        this.status.messagesSent++;
+        return { fileId: result.files?.[0]?.id };
+      } catch (error: unknown) {
+        // Destroy the stream to release the file descriptor
+        fileStream.destroy();
+
+        // Handle Slack 429 rate limit with retry-after backoff
+        const isRateLimit = this.isRateLimitError(error);
+        if (isRateLimit && attempt < maxRetries) {
+          const rawMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
+          console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, retryAfterMs));
+          continue;
+        }
+
+        console.error('[SlackService] Upload image error:', error);
+        throw error;
+      }
+    }
+
+    // Should not reach here, but satisfy TypeScript
+    throw new Error('Upload failed after maximum retries');
+  }
+
+  /**
+   * Check if an error is a Slack 429 rate limit error.
+   *
+   * @param error - The caught error
+   * @returns True if the error represents a 429 rate limit response
+   */
+  private isRateLimitError(error: unknown): boolean {
+    if (error && typeof error === 'object') {
+      const err = error as Record<string, unknown>;
+      // @slack/web-api throws errors with code 'slack_webapi_rate_limited_error'
+      if (err.code === 'slack_webapi_rate_limited_error') return true;
+      // Also check for status 429 in case of raw HTTP errors
+      if (err.statusCode === 429 || err.status === 429) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Extract the retry-after delay from a Slack rate limit error.
+   *
+   * @param error - The caught error
+   * @returns Retry delay in milliseconds, or null if not found
+   */
+  private extractRetryAfterMs(error: unknown): number | null {
+    if (error && typeof error === 'object') {
+      const err = error as Record<string, unknown>;
+      // @slack/web-api attaches retryAfter (seconds) to the error
+      if (typeof err.retryAfter === 'number') {
+        return err.retryAfter * 1000;
+      }
+      // Check headers in case of raw response
+      const headers = err.headers as Record<string, string> | undefined;
+      if (headers?.['retry-after']) {
+        const seconds = parseInt(headers['retry-after'], 10);
+        if (!isNaN(seconds)) return seconds * 1000;
+      }
+    }
+    return null;
   }
 
   /**

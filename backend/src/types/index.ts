@@ -138,18 +138,6 @@ export interface TeamMemberSessionConfig {
   excludedRoleSkills?: string[];
 }
 
-export interface MCPToolRequest {
-  tool: string;
-  parameters: Record<string, any>;
-  sessionName: string;
-}
-
-export interface MCPToolResponse {
-  success: boolean;
-  data?: any;
-  error?: string;
-}
-
 export interface TerminalOutput {
   sessionName: string;
   content: string;
@@ -176,7 +164,6 @@ export interface ApiResponse<T = any> {
 
 export interface StartupConfig {
   webPort: number;
-  mcpPort: number;
   agentmuxHome: string;
   defaultCheckInterval: number;
   autoCommitInterval: number;

@@ -191,6 +191,23 @@ export const QueueStatusBar: React.FC = () => {
     }
   };
 
+  /**
+   * Clear all messages from the queue (pending + processing).
+   */
+  const [isClearing, setIsClearing] = useState(false);
+  const handleClearAll = async () => {
+    setIsClearing(true);
+    try {
+      await apiService.clearQueue();
+      setPendingMessages([]);
+      setQueueStatus(null);
+    } catch {
+      // ignore
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -231,6 +248,18 @@ export const QueueStatusBar: React.FC = () => {
         {isProcessing && <div className="queue-spinner" data-testid="queue-spinner" />}
         <span className="queue-status-text">{summaryText}</span>
         <button
+          className="queue-clear-all-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleClearAll();
+          }}
+          disabled={isClearing}
+          data-testid="queue-clear-all-btn"
+          title="Clear all queued messages"
+        >
+          {isClearing ? 'Clearing...' : 'Clear All'}
+        </button>
+        <button
           className={`queue-toggle-btn${isExpanded ? ' expanded' : ''}`}
           aria-label={isExpanded ? 'Collapse queue' : 'Expand queue'}
           tabIndex={-1}
@@ -265,16 +294,14 @@ export const QueueStatusBar: React.FC = () => {
               </div>
             </div>
 
-            {msg.status === 'pending' && (
-              <button
-                className="queue-cancel-btn"
-                onClick={() => handleCancel(msg.id)}
-                disabled={cancellingIds.has(msg.id)}
-                data-testid="queue-cancel-btn"
-              >
-                {cancellingIds.has(msg.id) ? 'Cancelling...' : 'Cancel'}
-              </button>
-            )}
+            <button
+              className="queue-cancel-btn"
+              onClick={() => msg.status === 'processing' ? handleClearAll() : handleCancel(msg.id)}
+              disabled={cancellingIds.has(msg.id) || isClearing}
+              data-testid="queue-cancel-btn"
+            >
+              {cancellingIds.has(msg.id) || isClearing ? 'Cancelling...' : 'Cancel'}
+            </button>
           </div>
         ))}
       </div>

@@ -99,7 +99,7 @@ $RECYCLE.BIN/
 # AgentMux specific
 # Add any project-specific ignores here
 # Example: agentmux data directories if they contain sensitive info
-# .agentmux/
+.agentmux/
 # secrets/
 
 # Auto-generated MCP config (contains localhost URLs, environment-specific)

@@ -35,10 +35,16 @@ describe('Skill Types', () => {
       expect(SKILL_CATEGORIES).toContain('automation');
       expect(SKILL_CATEGORIES).toContain('analysis');
       expect(SKILL_CATEGORIES).toContain('integration');
+      expect(SKILL_CATEGORIES).toContain('management');
+      expect(SKILL_CATEGORIES).toContain('monitoring');
+      expect(SKILL_CATEGORIES).toContain('memory');
+      expect(SKILL_CATEGORIES).toContain('system');
+      expect(SKILL_CATEGORIES).toContain('task-management');
+      expect(SKILL_CATEGORIES).toContain('quality');
     });
 
-    it('should have exactly 8 categories', () => {
-      expect(SKILL_CATEGORIES).toHaveLength(8);
+    it('should have exactly 14 categories', () => {
+      expect(SKILL_CATEGORIES).toHaveLength(14);
     });
   });
 
@@ -46,13 +52,12 @@ describe('Skill Types', () => {
     it('should contain all expected execution types', () => {
       expect(EXECUTION_TYPES).toContain('script');
       expect(EXECUTION_TYPES).toContain('browser');
-      expect(EXECUTION_TYPES).toContain('mcp-tool');
       expect(EXECUTION_TYPES).toContain('composite');
       expect(EXECUTION_TYPES).toContain('prompt-only');
     });
 
-    it('should have exactly 5 execution types', () => {
-      expect(EXECUTION_TYPES).toHaveLength(5);
+    it('should have exactly 4 execution types', () => {
+      expect(EXECUTION_TYPES).toHaveLength(4);
     });
   });
 
@@ -66,6 +71,12 @@ describe('Skill Types', () => {
       expect(isValidSkillCategory('automation')).toBe(true);
       expect(isValidSkillCategory('analysis')).toBe(true);
       expect(isValidSkillCategory('integration')).toBe(true);
+      expect(isValidSkillCategory('management')).toBe(true);
+      expect(isValidSkillCategory('monitoring')).toBe(true);
+      expect(isValidSkillCategory('memory')).toBe(true);
+      expect(isValidSkillCategory('system')).toBe(true);
+      expect(isValidSkillCategory('task-management')).toBe(true);
+      expect(isValidSkillCategory('quality')).toBe(true);
     });
 
     it('should return false for invalid categories', () => {
@@ -90,7 +101,6 @@ describe('Skill Types', () => {
     it('should return true for valid execution types', () => {
       expect(isValidExecutionType('script')).toBe(true);
       expect(isValidExecutionType('browser')).toBe(true);
-      expect(isValidExecutionType('mcp-tool')).toBe(true);
       expect(isValidExecutionType('composite')).toBe(true);
       expect(isValidExecutionType('prompt-only')).toBe(true);
     });
@@ -123,6 +133,12 @@ describe('Skill Types', () => {
       expect(getSkillCategoryLabel('automation')).toBe('Automation');
       expect(getSkillCategoryLabel('analysis')).toBe('Analysis');
       expect(getSkillCategoryLabel('integration')).toBe('Integration');
+      expect(getSkillCategoryLabel('management')).toBe('Management');
+      expect(getSkillCategoryLabel('monitoring')).toBe('Monitoring');
+      expect(getSkillCategoryLabel('memory')).toBe('Memory');
+      expect(getSkillCategoryLabel('system')).toBe('System');
+      expect(getSkillCategoryLabel('task-management')).toBe('Task Management');
+      expect(getSkillCategoryLabel('quality')).toBe('Quality');
     });
 
     it('should return the category itself as fallback for unknown values', () => {
@@ -133,19 +149,25 @@ describe('Skill Types', () => {
 
   describe('getSkillCategoryIcon', () => {
     it('should return correct icons for all categories', () => {
-      expect(getSkillCategoryIcon('development')).toBe('💻');
-      expect(getSkillCategoryIcon('design')).toBe('🎨');
-      expect(getSkillCategoryIcon('communication')).toBe('💬');
-      expect(getSkillCategoryIcon('research')).toBe('🔍');
-      expect(getSkillCategoryIcon('content-creation')).toBe('✍️');
-      expect(getSkillCategoryIcon('automation')).toBe('⚙️');
-      expect(getSkillCategoryIcon('analysis')).toBe('📊');
-      expect(getSkillCategoryIcon('integration')).toBe('🔗');
+      expect(getSkillCategoryIcon('development')).toBe('\u{1F4BB}');
+      expect(getSkillCategoryIcon('design')).toBe('\u{1F3A8}');
+      expect(getSkillCategoryIcon('communication')).toBe('\u{1F4AC}');
+      expect(getSkillCategoryIcon('research')).toBe('\u{1F50D}');
+      expect(getSkillCategoryIcon('content-creation')).toBe('\u270D\uFE0F');
+      expect(getSkillCategoryIcon('automation')).toBe('\u2699\uFE0F');
+      expect(getSkillCategoryIcon('analysis')).toBe('\u{1F4CA}');
+      expect(getSkillCategoryIcon('integration')).toBe('\u{1F517}');
+      expect(getSkillCategoryIcon('management')).toBe('\u{1F4CB}');
+      expect(getSkillCategoryIcon('monitoring')).toBe('\u{1F4E1}');
+      expect(getSkillCategoryIcon('memory')).toBe('\u{1F9E0}');
+      expect(getSkillCategoryIcon('system')).toBe('\u{1F5A5}\uFE0F');
+      expect(getSkillCategoryIcon('task-management')).toBe('\u2611\uFE0F');
+      expect(getSkillCategoryIcon('quality')).toBe('\u2705');
     });
 
     it('should return default icon for unknown category', () => {
       // Type assertion to test fallback behavior
-      expect(getSkillCategoryIcon('unknown' as SkillCategory)).toBe('📦');
+      expect(getSkillCategoryIcon('unknown' as SkillCategory)).toBe('\u{1F4E6}');
     });
   });
 
@@ -153,7 +175,6 @@ describe('Skill Types', () => {
     it('should return correct labels for all execution types', () => {
       expect(getExecutionTypeLabel('script')).toBe('Script');
       expect(getExecutionTypeLabel('browser')).toBe('Browser Automation');
-      expect(getExecutionTypeLabel('mcp-tool')).toBe('MCP Tool');
       expect(getExecutionTypeLabel('composite')).toBe('Composite');
       expect(getExecutionTypeLabel('prompt-only')).toBe('Prompt Only');
     });
@@ -171,6 +192,7 @@ describe('Skill Types', () => {
         name: 'Code Review',
         description: 'Performs automated code review',
         category: 'development',
+        skillType: 'claude-skill',
         promptFile: 'prompts/code-review.md',
         execution: {
           type: 'script',
@@ -198,12 +220,53 @@ describe('Skill Types', () => {
       expect(skill.execution?.type).toBe('script');
     });
 
+    it('should allow creating a Skill with new categories', () => {
+      const managementSkill: Skill = {
+        id: 'skill-mgmt-001',
+        name: 'Delegate Task',
+        description: 'Delegates tasks to team members',
+        category: 'management',
+        skillType: 'claude-skill',
+        promptFile: 'prompts/delegate-task.md',
+        assignableRoles: ['orchestrator'],
+        triggers: ['task-created'],
+        tags: ['management', 'delegation'],
+        version: '1.0.0',
+        isBuiltin: true,
+        isEnabled: true,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      };
+
+      expect(managementSkill.category).toBe('management');
+
+      const monitoringSkill: Skill = {
+        id: 'skill-mon-001',
+        name: 'Agent Status',
+        description: 'Gets agent status',
+        category: 'monitoring',
+        skillType: 'claude-skill',
+        promptFile: 'prompts/agent-status.md',
+        assignableRoles: ['orchestrator'],
+        triggers: ['status-check'],
+        tags: ['monitoring'],
+        version: '1.0.0',
+        isBuiltin: true,
+        isEnabled: true,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+      };
+
+      expect(monitoringSkill.category).toBe('monitoring');
+    });
+
     it('should allow creating a valid SkillSummary object', () => {
       const summary: SkillSummary = {
         id: 'skill-001',
         name: 'Code Review',
         description: 'Performs automated code review',
         category: 'development',
+        skillType: 'claude-skill',
         executionType: 'script',
         triggerCount: 2,
         roleCount: 2,
@@ -229,6 +292,22 @@ describe('Skill Types', () => {
 
       expect(filter.category).toBe('development');
       expect(filter.tags).toContain('code');
+    });
+
+    it('should allow filtering by new categories', () => {
+      const managementFilter: SkillFilter = { category: 'management' };
+      const monitoringFilter: SkillFilter = { category: 'monitoring' };
+      const memoryFilter: SkillFilter = { category: 'memory' };
+      const systemFilter: SkillFilter = { category: 'system' };
+      const taskMgmtFilter: SkillFilter = { category: 'task-management' };
+      const qualityFilter: SkillFilter = { category: 'quality' };
+
+      expect(managementFilter.category).toBe('management');
+      expect(monitoringFilter.category).toBe('monitoring');
+      expect(memoryFilter.category).toBe('memory');
+      expect(systemFilter.category).toBe('system');
+      expect(taskMgmtFilter.category).toBe('task-management');
+      expect(qualityFilter.category).toBe('quality');
     });
 
     it('should allow creating a valid CreateSkillInput object', () => {

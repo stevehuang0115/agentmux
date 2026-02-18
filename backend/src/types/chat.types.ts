@@ -492,6 +492,46 @@ const KNOWN_HEADER_KEYS = new Set([
 ]);
 
 /**
+ * TUI box-drawing and border characters used by Gemini CLI and other TUI tools.
+ * Matches common Unicode box-drawing chars and ASCII pipe characters.
+ */
+const TUI_BORDER_CHARS = /[│┃┆┇┊┋╎╏║|]/;
+
+/**
+ * Strip TUI box-drawing border characters from content lines.
+ *
+ * Gemini CLI wraps terminal output in a TUI with box-drawing borders
+ * (│, ┃, |, etc.) that corrupt header parsing and leak into message bodies.
+ * This function removes leading/trailing border chars and associated whitespace
+ * from each line, plus removes pure border/decoration lines (─, ┌, └, etc.).
+ *
+ * @param content - Content that may contain TUI border artifacts
+ * @returns Content with TUI borders stripped from each line
+ */
+function stripTuiBorders(content: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      // Preserve --- separator lines (used for header-body split)
+      if (/^\s*---\s*$/.test(line)) {
+        return '---';
+      }
+      // Skip pure decoration lines (box corners, horizontal rules)
+      // that contain only box-drawing characters, not regular dashes
+      if (/^[\s│┃┆┇┊┋╎╏║─━┄┅┈┉╌╍═┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬╭╮╰╯]+$/.test(line)) {
+        return '';
+      }
+      // Strip leading border chars and adjacent whitespace, and trailing whitespace + border chars.
+      // Only strip whitespace that's adjacent to an actual border character to avoid
+      // stripping meaningful whitespace from PTY-wrapped JSON continuation lines.
+      return line
+        .replace(/^[│┃┆┇┊┋╎╏║|]+\s*/, '')
+        .replace(/\s*[│┃┆┇┊┋╎╏║|]+$/, '');
+    })
+    .join('\n');
+}
+
+/**
  * Attempt to parse headers from content where a blank line is used as separator
  * instead of `---`. This handles the common LLM behavior of omitting the `---`.
  *
@@ -552,8 +592,9 @@ function parseHeadersWithBlankLineSeparator(cleaned: string): { headers: string;
  * ```
  */
 export function parseNotifyContent(raw: string): NotifyPayload | null {
-  // Strip ANSI escape sequences using the canonical utility
-  const cleaned = stripAnsiCodes(raw).trim();
+  // Strip ANSI escape sequences using the canonical utility, then strip
+  // TUI box-drawing borders (Gemini CLI wraps output in │...│ borders)
+  const cleaned = stripTuiBorders(stripAnsiCodes(raw)).trim();
 
   if (!cleaned) {
     return null;
@@ -855,10 +896,10 @@ export function createChatMessage(input: CreateChatMessageInput): ChatMessage {
  * const conversation = createConversation('Project Discussion');
  * ```
  */
-export function createConversation(title?: string): ChatConversation {
+export function createConversation(title?: string, idOverride?: string): ChatConversation {
   const now = new Date().toISOString();
   return {
-    id: generateChatId(),
+    id: idOverride ?? generateChatId(),
     title,
     participantIds: [],
     createdAt: now,
@@ -940,8 +981,9 @@ export function formatMessageContent(content: string): string {
   // When ESC char lands in one chunk and the CSI params in the next,
   // artifacts like "[1C" or "[22m" appear mid-word.
   // Note: \d+ (one or more digits) to avoid matching [C in [CHAT_RESPONSE]
+  // Multi-param CSI like [38;2;249;226;175m from Gemini CLI truecolor output
   cleaned = cleaned.replace(/\[\d+C/g, ' ');
-  cleaned = cleaned.replace(/\[\d+[A-BJKHfm]/g, '');
+  cleaned = cleaned.replace(/\[\d+(?:;\d+)*[A-BJKHfm]/g, '');
 
   // Remove other control characters except newlines and tabs
   cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');

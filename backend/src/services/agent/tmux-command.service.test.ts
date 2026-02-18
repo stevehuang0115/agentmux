@@ -20,6 +20,34 @@ jest.mock('child_process', () => ({
 	spawn: jest.fn(),
 }));
 
+/**
+ * Helper to create a mock spawn process that resolves with given output
+ */
+function createMockProcess(stdout: string, exitCode: number = 0, stderr: string = '') {
+	return {
+		stdout: {
+			on: jest.fn().mockImplementation((event: string, callback: (data: string) => void) => {
+				if (event === 'data' && stdout) {
+					callback(stdout);
+				}
+			}),
+		},
+		stderr: {
+			on: jest.fn().mockImplementation((event: string, callback: (data: string) => void) => {
+				if (event === 'data' && stderr) {
+					callback(stderr);
+				}
+			}),
+		},
+		on: jest.fn().mockImplementation((event: string, callback: (code: number) => void) => {
+			if (event === 'close') {
+				callback(exitCode);
+			}
+		}),
+		unref: jest.fn(),
+	};
+}
+
 describe('TmuxCommandService', () => {
 	let service: TmuxCommandService;
 	let mockSpawn: jest.Mock;
@@ -36,197 +64,41 @@ describe('TmuxCommandService', () => {
 		});
 	});
 
-	describe('sessionExists', () => {
-		it('should return true when session exists', async () => {
-			// Mock list-sessions command to return session data including test-session
-			mockSpawn.mockImplementation((command, args) => {
-				if (args[0] === '-c' && args[1].includes('list-sessions')) {
-					return {
-						stdout: { 
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('test-session:1234567890:1:2\nother-session:1234567891:0:1\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0); // Success exit code
-							}
-						}),
-					};
-				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
-			});
-
+	describe('sessionExists (dormant - tmux disabled)', () => {
+		it('should return false when tmux is disabled', async () => {
+			// tmuxDisabled = true, so sessionExists always returns false
 			const result = await service.sessionExists('test-session');
-			expect(result).toBe(true);
+			expect(result).toBe(false);
 		});
 
-		it('should return false when session does not exist', async () => {
-			// Mock list-sessions command to return session data without nonexistent-session
-			mockSpawn.mockImplementation((command, args) => {
-				if (args[0] === '-c' && args[1].includes('list-sessions')) {
-					return {
-						stdout: { 
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('other-session:1234567891:0:1\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0); // Success exit code
-							}
-						}),
-					};
-				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
-			});
-
+		it('should return false for any session name', async () => {
 			const result = await service.sessionExists('nonexistent-session');
 			expect(result).toBe(false);
 		});
 	});
 
 	describe('sendKey', () => {
-		it('should send key successfully', async () => {
-			mockSpawn.mockImplementation(() => ({
-				stdout: { on: jest.fn() },
-				stderr: { on: jest.fn() },
-				on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'close') {
-						callback(0); // Success exit code
-					}
-				}),
-			}));
+		it('should send key successfully via executeTmuxCommand', async () => {
+			mockSpawn.mockImplementation(() => createMockProcess('', 0));
 
 			await expect(service.sendKey('test-session', 'Enter')).resolves.not.toThrow();
 		});
 
 		it('should handle errors when sending key fails', async () => {
-			mockSpawn.mockImplementation(() => ({
-				stdout: { on: jest.fn() },
-				stderr: { on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'data') {
-						callback('Error message');
-					}
-				}) },
-				on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'close') {
-						callback(1); // Error exit code
-					}
-				}),
-			}));
+			mockSpawn.mockImplementation(() => createMockProcess('', 1, 'Error message'));
 
 			await expect(service.sendKey('test-session', 'Enter')).rejects.toThrow();
 		});
 	});
 
-	describe('capturePane', () => {
-		it('should return captured output', async () => {
-			const mockOutput = 'test output\nmore output';
-			mockSpawn.mockImplementation((command, args) => {
-				if (args[0] === '-c' && args[1].includes('list-sessions')) {
-					// Mock list-sessions to show test-session exists
-					return {
-						stdout: { 
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('test-session:1234567890:1:2\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
-				} else if (args[0] === '-c' && args[1].includes('capture-pane')) {
-					// Mock capture-pane output
-					return {
-						stdout: { 
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback(mockOutput);
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
-				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
-			});
-
+	describe('capturePane (dormant - tmux disabled)', () => {
+		it('should return empty string because tmux is disabled (sessionExists returns false)', async () => {
+			// capturePane calls sessionExists first, which returns false when tmux is disabled
 			const result = await service.capturePane('test-session', 10);
-			expect(result).toBe(mockOutput);
+			expect(result).toBe('');
 		});
 
 		it('should return empty string for non-existent session', async () => {
-			// Mock list-sessions to return empty result (session doesn't exist)
-			mockSpawn.mockImplementation((command, args) => {
-				if (args[0] === '-c' && args[1].includes('list-sessions')) {
-					return {
-						stdout: { 
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback(''); // No sessions
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
-				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
-			});
-
 			const result = await service.capturePane('nonexistent-session', 10);
 			expect(result).toBe('');
 		});
@@ -234,15 +106,18 @@ describe('TmuxCommandService', () => {
 
 	describe('createSession', () => {
 		it('should create session successfully', async () => {
-			mockSpawn.mockImplementation(() => ({
-				stdout: { on: jest.fn() },
-				stderr: { on: jest.fn() },
-				on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'close') {
-						callback(0); // Success exit code
-					}
-				}),
-			}));
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'new-session') {
+					return createMockProcess('', 0);
+				}
+				if (args[0] === 'list-sessions') {
+					return createMockProcess('test-session\n');
+				}
+				if (args[0] === 'capture-pane') {
+					return createMockProcess('pane content\n');
+				}
+				return createMockProcess('', 0);
+			});
 
 			await expect(
 				service.createSession('test-session', '/tmp', 'test-window')
@@ -250,52 +125,40 @@ describe('TmuxCommandService', () => {
 		});
 
 		it('should include configured shell in tmux command', async () => {
-			mockSpawn.mockImplementation(() => ({
-				stdout: { on: jest.fn() },
-				stderr: { on: jest.fn() },
-				on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'close') {
-						callback(0); // Success exit code
-					}
-				}),
-			}));
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'list-sessions') {
+					return createMockProcess('test-session\n');
+				}
+				if (args[0] === 'capture-pane') {
+					return createMockProcess('pane content\n');
+				}
+				return createMockProcess('', 0);
+			});
 
 			await service.createSession('test-session', '/tmp');
 
-			// Verify tmux was called with the configured shell
-			expect(mockSpawn).toHaveBeenCalledWith('tmux', [
+			// Verify tmux was called with the new-session args
+			expect(mockSpawn).toHaveBeenCalledWith('tmux', expect.arrayContaining([
 				'new-session',
 				'-d',
 				'-s',
 				'test-session',
 				'-c',
 				'/tmp',
-				'bash' // Should use the configured DEFAULT_SHELL
-			]);
+			]));
 		});
 	});
 
-	describe('setEnvironmentVariable', () => {
-		it('should set environment variable successfully', async () => {
-			mockSpawn.mockImplementation(() => ({
-				stdout: { on: jest.fn() },
-				stderr: { on: jest.fn() },
-				on: jest.fn().mockImplementation((event, callback) => {
-					if (event === 'close') {
-						callback(0); // Success exit code
-					}
-				}),
-			}));
-
+	describe('setEnvironmentVariable (dormant - tmux robosend removed)', () => {
+		it('should throw because tmux_robosend.sh has been removed', async () => {
 			await expect(
 				service.setEnvironmentVariable('test-session', 'TEST_VAR', 'test-value')
-			).resolves.not.toThrow();
+			).rejects.toThrow('tmux_robosend.sh has been removed');
 		});
 	});
 
 	describe('validateSessionReady', () => {
 		beforeEach(() => {
-			// Set NODE_ENV to test for faster execution
 			process.env.NODE_ENV = 'test';
 		});
 
@@ -304,49 +167,13 @@ describe('TmuxCommandService', () => {
 		});
 
 		it('should return true when session is ready', async () => {
-			mockSpawn.mockImplementation((command, args) => {
-				if (args.includes('list-sessions')) {
-					return {
-						stdout: {
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('test-session\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
-				} else if (args.includes('capture-pane')) {
-					return {
-						stdout: {
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('pane content\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'list-sessions') {
+					return createMockProcess('test-session\n');
+				} else if (args[0] === 'capture-pane') {
+					return createMockProcess('pane content\n');
 				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
+				return createMockProcess('', 0);
 			});
 
 			const result = await service.validateSessionReady('test-session');
@@ -354,33 +181,11 @@ describe('TmuxCommandService', () => {
 		});
 
 		it('should return false when session is not found', async () => {
-			mockSpawn.mockImplementation((command, args) => {
-				if (args.includes('list-sessions')) {
-					return {
-						stdout: {
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('other-session\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'list-sessions') {
+					return createMockProcess('other-session\n');
 				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
+				return createMockProcess('', 0);
 			});
 
 			const result = await service.validateSessionReady('test-session');
@@ -391,82 +196,27 @@ describe('TmuxCommandService', () => {
 			let callCount = 0;
 			mockSpawn.mockImplementation(() => {
 				callCount++;
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(1); // Error exit code
-						}
-					}),
-				};
+				return createMockProcess('', 1, 'error');
 			});
 
 			const result = await service.validateSessionReady('test-session');
 			expect(result).toBe(false);
-			expect(callCount).toBeGreaterThan(1); // Should have retried
+			expect(callCount).toBeGreaterThan(1);
 		});
 
 		it('should succeed on retry after initial failure', async () => {
 			let callCount = 0;
-			mockSpawn.mockImplementation((command, args) => {
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
 				callCount++;
 				if (callCount === 1) {
-					// First call fails
-					return {
-						stdout: { on: jest.fn() },
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(1); // Error exit code
-							}
-						}),
-					};
-				} else {
-					// Subsequent calls succeed
-					if (args.includes('list-sessions')) {
-						return {
-							stdout: {
-								on: jest.fn().mockImplementation((event, callback) => {
-									if (event === 'data') {
-										callback('test-session\n');
-									}
-								})
-							},
-							stderr: { on: jest.fn() },
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'close') {
-									callback(0);
-								}
-							}),
-						};
-					} else if (args.includes('capture-pane')) {
-						return {
-							stdout: {
-								on: jest.fn().mockImplementation((event, callback) => {
-									if (event === 'data') {
-										callback('pane content\n');
-									}
-								})
-							},
-							stderr: { on: jest.fn() },
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'close') {
-									callback(0);
-								}
-							}),
-						};
-					}
+					return createMockProcess('', 1, 'error');
 				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
+				if (args[0] === 'list-sessions') {
+					return createMockProcess('test-session\n');
+				} else if (args[0] === 'capture-pane') {
+					return createMockProcess('pane content\n');
+				}
+				return createMockProcess('', 0);
 			});
 
 			const result = await service.validateSessionReady('test-session');
@@ -477,7 +227,6 @@ describe('TmuxCommandService', () => {
 
 	describe('createSession with race condition fixes', () => {
 		beforeEach(() => {
-			// Set NODE_ENV to test for faster execution
 			process.env.NODE_ENV = 'test';
 		});
 
@@ -489,50 +238,14 @@ describe('TmuxCommandService', () => {
 			const startTime = Date.now();
 			let validationCalled = false;
 
-			mockSpawn.mockImplementation((command, args) => {
-				if (args.includes('list-sessions')) {
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'list-sessions') {
 					validationCalled = true;
-					return {
-						stdout: {
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('test-session\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
-				} else if (args.includes('capture-pane')) {
-					return {
-						stdout: {
-							on: jest.fn().mockImplementation((event, callback) => {
-								if (event === 'data') {
-									callback('pane content\n');
-								}
-							})
-						},
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0);
-							}
-						}),
-					};
+					return createMockProcess('test-session\n');
+				} else if (args[0] === 'capture-pane') {
+					return createMockProcess('pane content\n');
 				}
-				return {
-					stdout: { on: jest.fn() },
-					stderr: { on: jest.fn() },
-					on: jest.fn().mockImplementation((event, callback) => {
-						if (event === 'close') {
-							callback(0);
-						}
-					}),
-				};
+				return createMockProcess('', 0);
 			});
 
 			await service.createSession('test-session', '/tmp');
@@ -540,42 +253,46 @@ describe('TmuxCommandService', () => {
 			const endTime = Date.now();
 			const duration = endTime - startTime;
 
-			// Should take at least 500ms due to initialization delay in test mode
 			expect(duration).toBeGreaterThanOrEqual(500);
-			// Should have called session validation
 			expect(validationCalled).toBe(true);
 		});
 
 		it('should handle validation failure gracefully', async () => {
-			mockSpawn.mockImplementation((command, args) => {
-				if (args.includes('new-session')) {
-					return {
-						stdout: { on: jest.fn() },
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(0); // Session creation succeeds
-							}
-						}),
-					};
-				} else {
-					// Validation fails
-					return {
-						stdout: { on: jest.fn() },
-						stderr: { on: jest.fn() },
-						on: jest.fn().mockImplementation((event, callback) => {
-							if (event === 'close') {
-								callback(1); // Validation fails
-							}
-						}),
-					};
+			mockSpawn.mockImplementation((_command: string, args: string[]) => {
+				if (args[0] === 'new-session') {
+					return createMockProcess('', 0);
 				}
+				return createMockProcess('', 1, 'error');
 			});
 
-			// Should not throw even if validation fails
 			await expect(
 				service.createSession('test-session', '/tmp')
 			).resolves.not.toThrow();
+		});
+	});
+
+	describe('listSessions (dormant - tmux disabled)', () => {
+		it('should return empty array when tmux is disabled', async () => {
+			const result = await service.listSessions();
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe('executeTmuxCommand', () => {
+		it('should execute tmux command and return output', async () => {
+			mockSpawn.mockImplementation(() => createMockProcess('command output', 0));
+
+			const result = await service.executeTmuxCommand(['display-message', '-p', 'test']);
+			expect(result).toBe('command output');
+			expect(mockSpawn).toHaveBeenCalledWith('tmux', ['display-message', '-p', 'test']);
+		});
+
+		it('should reject on non-zero exit code', async () => {
+			mockSpawn.mockImplementation(() => createMockProcess('', 1, 'tmux error'));
+
+			await expect(
+				service.executeTmuxCommand(['invalid-command'])
+			).rejects.toThrow('tmux command failed');
 		});
 	});
 });

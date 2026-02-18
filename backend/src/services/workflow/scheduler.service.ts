@@ -18,6 +18,8 @@ import {
 import { StorageService } from '../core/storage.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { AgentRegistrationService } from '../agent/agent-registration.service.js';
+import { RUNTIME_TYPES, RuntimeType } from '../../constants.js';
 import {
   ScheduledMessageType,
   EnhancedScheduledMessage,
@@ -92,6 +94,7 @@ export class SchedulerService extends EventEmitter {
   // Optional service integrations
   private continuationService: IContinuationServiceLike | null = null;
   private activityMonitor: IActivityMonitorLike | null = null;
+  private agentRegistrationService: AgentRegistrationService | null = null;
 
   /**
    * Creates a new SchedulerService
@@ -149,6 +152,39 @@ export class SchedulerService extends EventEmitter {
   public setActivityMonitor(monitor: IActivityMonitorLike): void {
     this.activityMonitor = monitor;
     this.logger.info('ActivityMonitor integration enabled');
+  }
+
+  /**
+   * Set the AgentRegistrationService for reliable message delivery.
+   * Called after both services are constructed to avoid circular dependencies.
+   *
+   * @param service - The AgentRegistrationService instance
+   */
+  public setAgentRegistrationService(service: AgentRegistrationService): void {
+    this.agentRegistrationService = service;
+    this.logger.info('AgentRegistrationService integration enabled for reliable delivery');
+  }
+
+  /**
+   * Resolve the runtime type for a target session by looking up the team member.
+   * Falls back to claude-code if the member is not found.
+   *
+   * @param sessionName - The session name to look up
+   * @returns The runtime type for the session
+   */
+  private async resolveRuntimeType(sessionName: string): Promise<RuntimeType> {
+    try {
+      const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
+      if (memberInfo?.member?.runtimeType) {
+        return memberInfo.member.runtimeType as RuntimeType;
+      }
+    } catch (err) {
+      this.logger.debug('Could not resolve runtime type, using default', {
+        sessionName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return RUNTIME_TYPES.CLAUDE_CODE;
   }
 
   /**
@@ -584,7 +620,12 @@ export class SchedulerService extends EventEmitter {
   }
 
   /**
-   * Execute a check-in (send message to PTY session)
+   * Execute a check-in using reliable delivery via AgentRegistrationService.
+   * Falls back to direct PTY write if AgentRegistrationService is not available.
+   *
+   * The reliable delivery path provides: prompt detection before sending,
+   * two-step write (text then Enter separately), progressive delivery verification,
+   * background stuck-message scanning, and retry logic.
    *
    * @param targetSession - Target session name
    * @param message - Message to send
@@ -594,26 +635,45 @@ export class SchedulerService extends EventEmitter {
     let error: string | undefined;
 
     try {
-      const backend = await this.getBackend();
+      if (this.agentRegistrationService) {
+        // Reliable delivery path: uses retry + progressive verification + background scanner
+        const runtimeType = await this.resolveRuntimeType(targetSession);
+        const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
+          targetSession,
+          message,
+          runtimeType
+        );
+        success = deliveryResult.success;
+        if (!success) {
+          throw new Error(deliveryResult.error || 'Delivery failed after retries');
+        }
 
-      // Check if session still exists
-      if (!backend.sessionExists(targetSession)) {
-        this.logger.info('Session no longer exists, skipping check-in', { targetSession });
-        return;
+        this.logger.info('Check-in executed via reliable delivery', {
+          targetSession,
+          messageLength: message.length,
+        });
+      } else {
+        // Fallback: direct PTY write (should not happen in normal operation)
+        this.logger.warn('AgentRegistrationService not available, using fallback PTY write', {
+          targetSession,
+        });
+
+        const backend = await this.getBackend();
+        if (!backend.sessionExists(targetSession)) {
+          this.logger.info('Session no longer exists, skipping check-in', { targetSession });
+          return;
+        }
+
+        const { SessionCommandHelper } = await import('../session/session-command-helper.js');
+        const commandHelper = new SessionCommandHelper(backend);
+        await commandHelper.sendMessage(targetSession, message);
+        success = true;
+
+        this.logger.info('Check-in executed via fallback', {
+          targetSession,
+          messageLength: message.length,
+        });
       }
-
-      // Get the session and write the message
-      const session = backend.getSession(targetSession);
-      if (!session) {
-        this.logger.warn('Session not found for scheduled message', { targetSession });
-        return;
-      }
-
-      // Write to PTY session
-      session.write(message + '\n');
-      success = true;
-
-      this.logger.info('Check-in executed', { targetSession, messageLength: message.length });
 
       this.emit('check_executed', {
         targetSession,
@@ -634,12 +694,12 @@ export class SchedulerService extends EventEmitter {
 
     // Create delivery log for scheduler messages
     const deliveryLog = MessageDeliveryLogModel.create({
-      scheduledMessageId: `scheduler-${uuidv4()}`, // Generate a unique ID for scheduler messages
+      scheduledMessageId: `scheduler-${uuidv4()}`,
       messageName: message.includes('Git reminder')
         ? 'Scheduled Git Reminder'
         : 'Scheduled Status Check-in',
       targetTeam: targetSession,
-      targetProject: '', // We don't have project context for scheduler messages
+      targetProject: '',
       message: message,
       success,
       error,

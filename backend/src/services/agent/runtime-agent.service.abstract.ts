@@ -1,8 +1,12 @@
+import { promises as fs } from 'fs';
 import { readFile } from 'fs/promises';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RuntimeType } from '../../constants.js';
+import { getSettingsService } from '../settings/settings.service.js';
+import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
+import type { AIRuntime } from '../../types/settings.types.js';
 
 /**
  * Runtime configuration interface
@@ -44,6 +48,17 @@ export abstract class RuntimeAgentService {
 	protected abstract detectRuntimeSpecific(sessionName: string): Promise<boolean>;
 	protected abstract getRuntimeReadyPatterns(): string[];
 	protected abstract getRuntimeErrorPatterns(): string[];
+	protected abstract getRuntimeExitPatterns(): RegExp[];
+
+	/**
+	 * Get patterns that indicate this runtime has exited.
+	 * Used by RuntimeExitMonitorService to detect when the CLI process exits.
+	 *
+	 * @returns Array of RegExp patterns that match runtime exit output
+	 */
+	getExitPatterns(): RegExp[] {
+		return this.getRuntimeExitPatterns();
+	}
 
 	/**
 	 * Template method for executing runtime initialization script.
@@ -55,13 +70,35 @@ export abstract class RuntimeAgentService {
 	 */
 	async executeRuntimeInitScript(sessionName: string, targetPath?: string, runtimeFlags?: string[]): Promise<void> {
 		try {
-			const config = this.getRuntimeConfig();
-			const commands = await this.loadInitScript(config.initScript);
+			// Try to get command from user settings first, fallback to init script
+			let commands: string[];
+			const runtimeType = this.getRuntimeType() as AIRuntime;
+			let source: string;
+
+			try {
+				const settingsService = getSettingsService();
+				const settings = await settingsService.getSettings();
+				const userCommand = settings.general.runtimeCommands?.[runtimeType];
+
+				if (userCommand && userCommand.trim()) {
+					commands = [userCommand.trim()];
+					source = 'settings';
+				} else {
+					const config = this.getRuntimeConfig();
+					commands = await this.loadInitScript(config.initScript);
+					source = config.initScript;
+				}
+			} catch {
+				// Settings service unavailable, fallback to init script
+				const config = this.getRuntimeConfig();
+				commands = await this.loadInitScript(config.initScript);
+				source = config.initScript;
+			}
 
 			this.logger.info('Executing runtime initialization script', {
 				sessionName,
 				runtimeType: this.getRuntimeType(),
-				script: config.initScript,
+				source,
 				commandCount: commands.length,
 				targetPath: targetPath || process.cwd(),
 			});
@@ -252,6 +289,22 @@ export abstract class RuntimeAgentService {
 	}
 
 	/**
+	 * Hook called after the runtime is ready but before prompts are sent.
+	 * Override in concrete classes for runtime-specific post-initialization steps
+	 * (e.g., Gemini CLI directory allowlist additions).
+	 *
+	 * Default implementation is a no-op.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param targetProjectPath - Optional target project path for the agent (where MCP configs should be written).
+	 *                            Falls back to this.projectRoot if not provided.
+	 */
+	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+		// No-op by default — override in concrete classes
+		this.logger.debug('postInitialize (no-op)', { sessionName, runtimeType: this.getRuntimeType() });
+	}
+
+	/**
 	 * Clear cached detection results for a session
 	 */
 	clearDetectionCache(sessionName: string): void {
@@ -272,6 +325,95 @@ export abstract class RuntimeAgentService {
 	}
 
 	// Protected helper methods for concrete classes to use
+
+	/**
+	 * Ensure MCP server configuration exists at the given config file path.
+	 *
+	 * Reads `enableBrowserAutomation` from settings, builds the required MCP servers
+	 * list, reads any existing config at `configFilePath`, merge-only adds missing
+	 * servers, and writes the result back via `atomicWriteJson`.
+	 *
+	 * Parent directories of `configFilePath` are created automatically with
+	 * `fs.mkdir({ recursive: true })`.
+	 *
+	 * Preserves any existing user-configured MCP servers (never overwrites).
+	 * Errors are non-fatal and logged as warnings.
+	 *
+	 * @param configFilePath - Absolute path to the MCP config JSON file
+	 *                         (e.g., `/project/.mcp.json` or `/project/.gemini/settings.json`)
+	 * @param projectPath - Project directory path, used only for log context
+	 */
+	protected async ensureMcpConfig(configFilePath: string, projectPath: string): Promise<void> {
+		try {
+			// Check if browser automation is enabled
+			let enableBrowserAutomation = true;
+			try {
+				const settingsService = getSettingsService();
+				const settings = await settingsService.getSettings();
+				enableBrowserAutomation = settings.skills.enableBrowserAutomation;
+			} catch {
+				// Settings service unavailable — default to enabled
+				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
+			}
+
+			// Build required MCP servers
+			const requiredServers: Record<string, { command: string; args: string[] }> = {};
+
+			if (enableBrowserAutomation) {
+				requiredServers['playwright'] = {
+					command: 'npx',
+					args: ['@playwright/mcp@latest', '--headless'],
+				};
+			}
+
+			// If no servers to configure, skip
+			if (Object.keys(requiredServers).length === 0) {
+				this.logger.info('No MCP servers to configure (browser automation disabled)', {
+					runtimeType: this.getRuntimeType(),
+					projectPath,
+				});
+				return;
+			}
+
+			// Ensure parent directory exists (handles .gemini/ and similar)
+			const parentDir = path.dirname(configFilePath);
+			await fs.mkdir(parentDir, { recursive: true });
+
+			// Read existing config (preserves user config)
+			const existing = await safeReadJson<Record<string, unknown>>(configFilePath, {});
+			const existingMcpServers = (existing['mcpServers'] as Record<string, unknown>) || {};
+
+			// Merge: only add servers that don't already exist (don't overwrite user config)
+			let added = 0;
+			for (const [name, config] of Object.entries(requiredServers)) {
+				if (!existingMcpServers[name]) {
+					existingMcpServers[name] = config;
+					added++;
+				}
+			}
+
+			// Write back merged config
+			const merged = { ...existing, mcpServers: existingMcpServers };
+			await atomicWriteJson(configFilePath, merged);
+
+			this.logger.info('MCP config ensured', {
+				runtimeType: this.getRuntimeType(),
+				projectPath,
+				configFilePath,
+				addedServers: added,
+				totalServers: Object.keys(existingMcpServers).length,
+				enableBrowserAutomation,
+			});
+		} catch (error) {
+			// Non-fatal: agent can still work without MCP servers
+			this.logger.warn('Failed to ensure MCP config (non-fatal)', {
+				runtimeType: this.getRuntimeType(),
+				projectPath,
+				configFilePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
 
 	/**
 	 * Initialize runtime configuration from config file

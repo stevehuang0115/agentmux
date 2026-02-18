@@ -25,10 +25,20 @@ jest.mock('./chat.gateway.js', () => ({
 
 // Mock the Slack bridge
 const mockBridgeSendNotification = jest.fn().mockResolvedValue(undefined);
+const mockBridgeMarkDeliveredBySkill = jest.fn();
 jest.mock('../services/slack/slack-orchestrator-bridge.js', () => ({
 	getSlackOrchestratorBridge: jest.fn(() => ({
 		isInitialized: jest.fn(() => true),
 		sendNotification: mockBridgeSendNotification,
+		markDeliveredBySkill: mockBridgeMarkDeliveredBySkill,
+	})),
+}));
+
+// Mock the chat service (used for updateMessageMetadata when channelId present)
+const mockUpdateMessageMetadata = jest.fn().mockResolvedValue(undefined);
+jest.mock('../services/chat/chat.service.js', () => ({
+	getChatService: jest.fn(() => ({
+		updateMessageMetadata: mockUpdateMessageMetadata,
 	})),
 }));
 
@@ -620,6 +630,7 @@ describe('TerminalGateway', () => {
 			gateway.setActiveConversationId('conv-1');
 			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
 			mockBridgeSendNotification.mockClear();
+			mockBridgeMarkDeliveredBySkill.mockClear();
 		});
 
 		it('should route [NOTIFY] with conversationId to chat (header+body format)', async () => {
@@ -640,7 +651,7 @@ describe('TerminalGateway', () => {
 			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
 		});
 
-		it('should route [NOTIFY] with channelId to Slack (header+body format)', async () => {
+		it('should skip Slack routing when channelId present and mark delivered by skill', async () => {
 			// No conversationId, no activeConversationId
 			gateway.setActiveConversationId(null);
 
@@ -651,19 +662,15 @@ describe('TerminalGateway', () => {
 			}
 			await new Promise(resolve => setTimeout(resolve, 10));
 
-			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
-				expect.objectContaining({
-					type: 'task_completed',
-					message: 'Agent done',
-					channelId: 'C0123',
-					threadTs: '170743.001',
-				})
-			);
+			// Slack delivery is now handled by the reply-slack skill, NOT by NOTIFY handler
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			// Should mark as delivered by skill so the bridge skips its fallback
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C0123', '170743.001');
 			// No chat routing (no conversationId, no activeConversationId)
 			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
 		});
 
-		it('should route [NOTIFY] to BOTH chat and Slack when both fields present', async () => {
+		it('should route [NOTIFY] to chat and mark Slack as skill-delivered when both fields present', async () => {
 			const output = `[NOTIFY]\nconversationId: conv-abc\nchannelId: C0123\nthreadTs: 170743.001\ntype: task_completed\nurgency: normal\n---\n## Task Done\n\nJoe finished.\n[/NOTIFY]`;
 
 			if (onDataCallbacks.length > 0) {
@@ -686,15 +693,9 @@ describe('TerminalGateway', () => {
 				})
 			);
 
-			// Slack routing
-			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
-				expect.objectContaining({
-					type: 'task_completed',
-					message: '## Task Done\n\nJoe finished.',
-					channelId: 'C0123',
-					urgency: 'normal',
-				})
-			);
+			// Slack delivery is now handled by the reply-slack skill
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C0123', '170743.001');
 		});
 
 		it('should NOT route to Slack when type is present but channelId is missing', async () => {
@@ -769,7 +770,7 @@ describe('TerminalGateway', () => {
 			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
 		});
 
-		it('should handle legacy JSON NOTIFY via fallback (transition period)', async () => {
+		it('should handle legacy JSON NOTIFY and mark Slack as skill-delivered (transition period)', async () => {
 			const payload = JSON.stringify({
 				message: '## Task Done\n\nJoe finished.',
 				conversationId: 'conv-abc',
@@ -794,12 +795,9 @@ describe('TerminalGateway', () => {
 					notifyType: 'task_completed',
 				})
 			);
-			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
-				expect.objectContaining({
-					channelId: 'C123',
-					type: 'task_completed',
-				})
-			);
+			// Slack delivery is now handled by the reply-slack skill
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C123', undefined);
 		});
 
 		it('should clean terminal line-wrapping artifacts from legacy JSON NOTIFY', async () => {
@@ -812,10 +810,12 @@ describe('TerminalGateway', () => {
 			await new Promise(resolve => setTimeout(resolve, 10));
 
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalled();
-			expect(mockBridgeSendNotification).toHaveBeenCalled();
+			// Slack delivery is now handled by the reply-slack skill
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalled();
 		});
 
-		it('should process multiple NOTIFY blocks in same output', async () => {
+		it('should process multiple NOTIFY blocks and route chat-only or mark skill-delivered accordingly', async () => {
 			gateway.setActiveConversationId(null);
 
 			const n1 = `[NOTIFY]\nconversationId: conv-1\n---\nFirst update\n[/NOTIFY]`;
@@ -827,8 +827,12 @@ describe('TerminalGateway', () => {
 			}
 			await new Promise(resolve => setTimeout(resolve, 10));
 
+			// First block routes to chat (has conversationId)
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledTimes(1);
-			expect(mockBridgeSendNotification).toHaveBeenCalledTimes(1);
+			// Second block has channelId but no Slack send — skill handles it
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledTimes(1);
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C123', undefined);
 		});
 
 		it('should deduplicate identical NOTIFY messages', async () => {
@@ -844,7 +848,7 @@ describe('TerminalGateway', () => {
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledTimes(1);
 		});
 
-		it('should route header+body NOTIFY with all headers to both chat and Slack', async () => {
+		it('should route header+body NOTIFY with all headers to chat and mark Slack as skill-delivered', async () => {
 			const output = `[NOTIFY]\nconversationId: conv-1\nchannelId: C456\nthreadTs: 12345.001\ntype: project_update\ntitle: Update\nurgency: high\n---\n## Progress\n\nAll done.\n[/NOTIFY]`;
 
 			if (onDataCallbacks.length > 0) {
@@ -866,16 +870,9 @@ describe('TerminalGateway', () => {
 					notifyUrgency: 'high',
 				})
 			);
-			expect(mockBridgeSendNotification).toHaveBeenCalledWith(
-				expect.objectContaining({
-					type: 'project_update',
-					title: 'Update',
-					urgency: 'high',
-					channelId: 'C456',
-					threadTs: '12345.001',
-					message: '## Progress\n\nAll done.',
-				})
-			);
+			// Slack delivery is now handled by the reply-slack skill
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C456', '12345.001');
 		});
 	});
 });

@@ -1,21 +1,21 @@
-import { FileWatcherController } from './file-watcher.controller';
-import { FileWatcherService } from '../services/file-watcher.service';
-import { GitIntegrationService } from '../services/git-integration.service';
-import { LoggerService } from '../services/logger.service';
-import { StorageService } from '../services/storage.service';
+import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import { FileWatcherController } from './file-watcher.controller.js';
+import { FileWatcherService, GitIntegrationService, LoggerService, StorageService } from '../../services/index.js';
 import { Request, Response } from 'express';
 
 // Mock dependencies
-jest.mock('../services/file-watcher.service');
-jest.mock('../services/git-integration.service');
-jest.mock('../services/logger.service');
-jest.mock('../services/storage.service');
+jest.mock('../../services/index.js');
+jest.mock('../../utils/security.js', () => ({
+  validateProjectPath: jest.fn<any>().mockReturnValue({ isValid: true, normalizedPath: '/test/project' }),
+}));
+
+import { validateProjectPath } from '../../utils/security.js';
 
 describe('FileWatcherController', () => {
   let controller: FileWatcherController;
   let mockFileWatcher: jest.Mocked<FileWatcherService>;
   let mockGitIntegration: jest.Mocked<GitIntegrationService>;
-  let mockLogger: jest.Mocked<LoggerService>;
+  let mockLogger: any;
   let mockStorage: jest.Mocked<StorageService>;
   let mockReq: Partial<Request>;
   let mockRes: Partial<Response>;
@@ -25,31 +25,39 @@ describe('FileWatcherController', () => {
 
     // Setup mocks
     mockFileWatcher = {
-      watchProject: jest.fn(),
-      stopWatchingProject: jest.fn(),
-      getStats: jest.fn(),
-      getWatchedProjects: jest.fn(),
-      watchAllProjects: jest.fn()
+      watchProject: jest.fn<any>(),
+      stopWatchingProject: jest.fn<any>(),
+      getStats: jest.fn<any>(),
+      getWatchedProjects: jest.fn<any>(),
+      watchAllProjects: jest.fn<any>()
     } as any;
 
     mockGitIntegration = {
-      getGitStatus: jest.fn(),
-      commitChanges: jest.fn(),
-      startScheduledCommits: jest.fn(),
-      stopScheduledCommits: jest.fn(),
-      getScheduledProjects: jest.fn()
+      getGitStatus: jest.fn<any>(),
+      commitChanges: jest.fn<any>(),
+      startScheduledCommits: jest.fn<any>(),
+      stopScheduledCommits: jest.fn<any>(),
+      getScheduledProjects: jest.fn<any>()
     } as any;
 
+    // LoggerService.getInstance() returns the logger directly with error/warn/info methods
     mockLogger = {
-      error: jest.fn()
-    } as any;
+      error: jest.fn<any>(),
+      warn: jest.fn<any>(),
+      info: jest.fn<any>(),
+      debug: jest.fn<any>(),
+      createComponentLogger: jest.fn<any>(),
+    };
 
     mockStorage = {} as any;
 
     (FileWatcherService as jest.MockedClass<typeof FileWatcherService>).mockImplementation(() => mockFileWatcher);
-    (GitIntegrationService as jest.MockedClass<typeof GitIntegrationService>).mockImplementation(() => mockGitIntegration);
-    (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLogger);
+    (GitIntegrationService as jest.MockedClass<typeof GitIntegrationService>).mockImplementation(() => mockGitIntegration as any);
+    (LoggerService.getInstance as jest.Mock<any>).mockReturnValue(mockLogger);
     (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorage);
+
+    // Reset validateProjectPath to default valid response
+    (validateProjectPath as jest.Mock<any>).mockReturnValue({ isValid: true, normalizedPath: '/test/project' });
 
     controller = new FileWatcherController();
 
@@ -61,8 +69,8 @@ describe('FileWatcherController', () => {
     };
 
     mockRes = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis()
+      status: jest.fn<any>().mockReturnThis(),
+      json: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -83,8 +91,8 @@ describe('FileWatcherController', () => {
 
     it('should start watching a project successfully', async () => {
       const mockStats = { totalWatched: 1, activeProjects: 1, eventsToday: 0, lastEvent: null };
-      mockFileWatcher.watchProject.mockResolvedValue();
-      mockFileWatcher.getStats.mockReturnValue(mockStats);
+      mockFileWatcher.watchProject.mockResolvedValue(undefined as any);
+      mockFileWatcher.getStats.mockReturnValue(mockStats as any);
 
       await controller.startWatching(mockReq as Request, mockRes as Response);
 
@@ -120,6 +128,22 @@ describe('FileWatcherController', () => {
       expect(mockFileWatcher.watchProject).not.toHaveBeenCalled();
     });
 
+    it('should return 400 if path validation fails', async () => {
+      (validateProjectPath as jest.Mock<any>).mockReturnValue({
+        isValid: false,
+        error: 'Path traversal detected',
+      });
+
+      await controller.startWatching(mockReq as Request, mockRes as Response);
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        error: 'Invalid project path',
+        details: 'Path traversal detected',
+      });
+      expect(mockFileWatcher.watchProject).not.toHaveBeenCalled();
+    });
+
     it('should handle errors and return 500', async () => {
       const error = new Error('Watch error');
       mockFileWatcher.watchProject.mockRejectedValue(error);
@@ -142,8 +166,8 @@ describe('FileWatcherController', () => {
 
     it('should stop watching a project successfully', async () => {
       const mockStats = { totalWatched: 0, activeProjects: 0, eventsToday: 5, lastEvent: null };
-      mockFileWatcher.stopWatchingProject.mockResolvedValue();
-      mockFileWatcher.getStats.mockReturnValue(mockStats);
+      mockFileWatcher.stopWatchingProject.mockResolvedValue(undefined as any);
+      mockFileWatcher.getStats.mockReturnValue(mockStats as any);
 
       await controller.stopWatching(mockReq as Request, mockRes as Response);
 
@@ -185,7 +209,7 @@ describe('FileWatcherController', () => {
   describe('getStats', () => {
     it('should return file watcher statistics', async () => {
       const mockStats = { totalWatched: 3, activeProjects: 2, eventsToday: 15, lastEvent: new Date() };
-      mockFileWatcher.getStats.mockReturnValue(mockStats);
+      mockFileWatcher.getStats.mockReturnValue(mockStats as any);
 
       await controller.getStats(mockReq as Request, mockRes as Response);
 
@@ -215,7 +239,7 @@ describe('FileWatcherController', () => {
   describe('getWatchedProjects', () => {
     it('should return list of watched projects', async () => {
       const mockProjects = ['project-1', 'project-2', 'project-3'];
-      mockFileWatcher.getWatchedProjects.mockReturnValue(mockProjects);
+      mockFileWatcher.getWatchedProjects.mockReturnValue(mockProjects as any);
 
       await controller.getWatchedProjects(mockReq as Request, mockRes as Response);
 
@@ -245,8 +269,8 @@ describe('FileWatcherController', () => {
   describe('startWatchingAll', () => {
     it('should start watching all active projects', async () => {
       const mockStats = { totalWatched: 5, activeProjects: 5, eventsToday: 0, lastEvent: null };
-      mockFileWatcher.watchAllProjects.mockResolvedValue();
-      mockFileWatcher.getStats.mockReturnValue(mockStats);
+      mockFileWatcher.watchAllProjects.mockResolvedValue(undefined as any);
+      mockFileWatcher.getStats.mockReturnValue(mockStats as any);
 
       await controller.startWatchingAll(mockReq as Request, mockRes as Response);
 
@@ -279,12 +303,12 @@ describe('FileWatcherController', () => {
     });
 
     it('should get git status successfully', async () => {
-      const mockGitStatus = { 
-        hasChanges: true, 
-        branch: 'main', 
-        files: ['file1.js', 'file2.js'] 
+      const mockGitStatus = {
+        hasChanges: true,
+        branch: 'main',
+        files: ['file1.js', 'file2.js']
       };
-      mockGitIntegration.getGitStatus.mockResolvedValue(mockGitStatus);
+      mockGitIntegration.getGitStatus.mockResolvedValue(mockGitStatus as any);
 
       await controller.getGitStatus(mockReq as Request, mockRes as Response);
 
@@ -324,7 +348,7 @@ describe('FileWatcherController', () => {
 
   describe('commitChanges', () => {
     beforeEach(() => {
-      mockReq.body = { 
+      mockReq.body = {
         projectPath: '/test/project',
         message: 'Test commit',
         autoGenerate: false,
@@ -333,7 +357,7 @@ describe('FileWatcherController', () => {
     });
 
     it('should commit changes successfully', async () => {
-      mockGitIntegration.commitChanges.mockResolvedValue('commit-hash');
+      mockGitIntegration.commitChanges.mockResolvedValue('commit-hash' as any);
 
       await controller.commitChanges(mockReq as Request, mockRes as Response);
 
@@ -350,7 +374,7 @@ describe('FileWatcherController', () => {
     });
 
     it('should handle no changes scenario', async () => {
-      mockGitIntegration.commitChanges.mockResolvedValue('no-changes');
+      mockGitIntegration.commitChanges.mockResolvedValue('no-changes' as any);
 
       await controller.commitChanges(mockReq as Request, mockRes as Response);
 
@@ -390,7 +414,7 @@ describe('FileWatcherController', () => {
 
   describe('startScheduledCommits', () => {
     beforeEach(() => {
-      mockReq.body = { 
+      mockReq.body = {
         projectPath: '/test/project',
         intervalMinutes: 15,
         enabled: true,
@@ -400,7 +424,7 @@ describe('FileWatcherController', () => {
     });
 
     it('should start scheduled commits successfully', async () => {
-      mockGitIntegration.startScheduledCommits.mockResolvedValue();
+      mockGitIntegration.startScheduledCommits.mockResolvedValue(undefined as any);
 
       await controller.startScheduledCommits(mockReq as Request, mockRes as Response);
 
@@ -422,7 +446,7 @@ describe('FileWatcherController', () => {
 
     it('should use default values when parameters missing', async () => {
       mockReq.body = { projectPath: '/test/project' };
-      mockGitIntegration.startScheduledCommits.mockResolvedValue();
+      mockGitIntegration.startScheduledCommits.mockResolvedValue(undefined as any);
 
       await controller.startScheduledCommits(mockReq as Request, mockRes as Response);
 
@@ -475,7 +499,7 @@ describe('FileWatcherController', () => {
     });
 
     it('should stop scheduled commits successfully', async () => {
-      mockGitIntegration.stopScheduledCommits.mockReturnValue();
+      mockGitIntegration.stopScheduledCommits.mockReturnValue(undefined as any);
 
       await controller.stopScheduledCommits(mockReq as Request, mockRes as Response);
 
@@ -522,7 +546,7 @@ describe('FileWatcherController', () => {
         { projectPath: '/project1', intervalMinutes: 30 },
         { projectPath: '/project2', intervalMinutes: 60 }
       ];
-      mockGitIntegration.getScheduledProjects.mockReturnValue(mockScheduledProjects);
+      mockGitIntegration.getScheduledProjects.mockReturnValue(mockScheduledProjects as any);
 
       await controller.getScheduledProjects(mockReq as Request, mockRes as Response);
 

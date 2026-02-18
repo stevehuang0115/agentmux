@@ -22,6 +22,7 @@ import {
   deleteConversation,
   clearConversation,
   getStatistics,
+  agentResponse,
 } from './chat.controller.js';
 
 /**
@@ -38,6 +39,9 @@ export function createChatRouter(context?: ApiContext): Router {
   router.post('/send', sendMessage);
   router.get('/messages', getMessages);
   router.get('/messages/:conversationId/:messageId', getMessage);
+
+  // Agent response endpoint (for bash skills to post messages directly)
+  router.post('/agent-response', agentResponse);
 
   // Statistics
   router.get('/statistics', getStatistics);

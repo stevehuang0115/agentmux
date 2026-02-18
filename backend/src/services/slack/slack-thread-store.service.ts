@@ -19,6 +19,7 @@ import path from 'path';
 import os from 'os';
 import { SLACK_THREAD_CONSTANTS } from '../../constants.js';
 import { atomicWriteFile, atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
+import type { SlackImageInfo } from '../../types/slack.types.js';
 
 /**
  * Represents an agent-to-thread mapping stored in the agent index
@@ -132,21 +133,34 @@ export class SlackThreadStoreService {
 
   /**
    * Append a user message to the thread conversation file.
+   * Optionally includes image metadata when the message has image attachments.
    *
    * @param channelId - Slack channel ID
    * @param threadTs - Slack thread timestamp
    * @param userName - Display name of the sender
    * @param message - Message content
+   * @param images - Optional downloaded image info array
    */
   async appendUserMessage(
     channelId: string,
     threadTs: string,
     userName: string,
-    message: string
+    message: string,
+    images?: SlackImageInfo[]
   ): Promise<void> {
     const filePath = await this.ensureThreadFile(channelId, threadTs, userName);
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
-    const entry = `\n**${userName}** (${timestamp}):\n${message}\n`;
+
+    let entry = `\n**${userName}** (${timestamp}):\n${message}\n`;
+
+    // Append image metadata if images are present
+    if (images && images.length > 0) {
+      for (const img of images) {
+        const dims = img.width && img.height ? ` _(${img.width}x${img.height}, ${img.mimetype})_` : ` _(${img.mimetype})_`;
+        entry += `\n![${img.name}](slack://${img.id})${dims}\nLocal: ${img.localPath}\n`;
+      }
+    }
+
     await fs.appendFile(filePath, entry, 'utf-8');
   }
 

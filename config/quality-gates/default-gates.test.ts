@@ -4,7 +4,7 @@
  * @module config/quality-gates/default-gates.test
  */
 
-import { describe, it, expect } from 'vitest';
+// Jest globals (describe, it, expect) are available automatically
 import {
   DEFAULT_GATES,
   MINIMAL_GATES,

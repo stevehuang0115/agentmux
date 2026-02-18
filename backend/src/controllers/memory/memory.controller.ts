@@ -11,6 +11,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import { MemoryService } from '../../services/memory/memory.service.js';
 import type { RememberCategory, MemoryScope } from '../../services/memory/memory.service.js';
+import { GoalTrackingService } from '../../services/memory/goal-tracking.service.js';
+import { DailyLogService } from '../../services/memory/daily-log.service.js';
+import { LearningAccumulationService } from '../../services/memory/learning-accumulation.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('MemoryController');
@@ -25,6 +28,9 @@ const VALID_REMEMBER_SCOPES: ReadonlySet<string> = new Set(['agent', 'project'])
 
 /** Valid scopes for the recall endpoint */
 const VALID_RECALL_SCOPES: ReadonlySet<string> = new Set(['agent', 'project', 'both']);
+
+/** Default character limit for learning accumulation tail reads */
+const LEARNING_TAIL_CHARS = 3000;
 
 /**
  * POST /api/memory/remember
@@ -232,6 +238,311 @@ export async function recordLearning(req: Request, res: Response, next: NextFunc
     res.json({ success: true });
   } catch (error) {
     logger.error('Failed to record learning', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/goals
+ *
+ * Set or append a project goal.
+ *
+ * @param req - Express request with body: { goal, projectPath, setBy? }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ */
+export async function setGoal(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { goal, projectPath, setBy } = req.body;
+
+    if (!goal || !projectPath) {
+      res.status(400).json({ success: false, error: 'Missing required parameters: goal, projectPath' });
+      return;
+    }
+
+    const service = GoalTrackingService.getInstance();
+    await service.setGoal(projectPath, goal, setBy);
+
+    logger.info('Goal set via REST', { projectPath, setBy });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to set goal', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * GET /api/memory/goals
+ *
+ * Get active project goals.
+ *
+ * @param req - Express request with query: { projectPath }
+ * @param res - Express response returning { success, data }
+ * @param next - Express next function for error propagation
+ */
+export async function getGoals(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const projectPath = req.query.projectPath as string;
+
+    if (!projectPath) {
+      res.status(400).json({ success: false, error: 'Missing required query parameter: projectPath' });
+      return;
+    }
+
+    const service = GoalTrackingService.getInstance();
+    const data = await service.getGoals(projectPath);
+
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Failed to get goals', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/focus
+ *
+ * Update the team's current focus.
+ *
+ * @param req - Express request with body: { focus, projectPath, updatedBy? }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ */
+export async function updateFocus(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { focus, projectPath, updatedBy } = req.body;
+
+    if (!focus || !projectPath) {
+      res.status(400).json({ success: false, error: 'Missing required parameters: focus, projectPath' });
+      return;
+    }
+
+    const service = GoalTrackingService.getInstance();
+    await service.updateFocus(projectPath, focus, updatedBy);
+
+    logger.info('Focus updated via REST', { projectPath, updatedBy });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to update focus', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * GET /api/memory/focus
+ *
+ * Get the team's current focus.
+ *
+ * @param req - Express request with query: { projectPath }
+ * @param res - Express response returning { success, data }
+ * @param next - Express next function for error propagation
+ */
+export async function getFocus(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const projectPath = req.query.projectPath as string;
+
+    if (!projectPath) {
+      res.status(400).json({ success: false, error: 'Missing required query parameter: projectPath' });
+      return;
+    }
+
+    const service = GoalTrackingService.getInstance();
+    const data = await service.getCurrentFocus(projectPath);
+
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Failed to get focus', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/daily-log
+ *
+ * Append an entry to today's daily log.
+ *
+ * @param req - Express request with body: { projectPath, agentId, role, entry }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ */
+export async function appendDailyLog(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { projectPath, agentId, role, entry } = req.body;
+
+    if (!projectPath || !agentId || !role || !entry) {
+      res.status(400).json({ success: false, error: 'Missing required parameters: projectPath, agentId, role, entry' });
+      return;
+    }
+
+    const service = DailyLogService.getInstance();
+    await service.appendEntry(projectPath, agentId, role, entry);
+
+    logger.debug('Daily log appended via REST', { projectPath, agentId, role });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to append daily log', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * GET /api/memory/daily-log
+ *
+ * Get today's daily log.
+ *
+ * @param req - Express request with query: { projectPath }
+ * @param res - Express response returning { success, data }
+ * @param next - Express next function for error propagation
+ */
+export async function getDailyLog(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const projectPath = req.query.projectPath as string;
+
+    if (!projectPath) {
+      res.status(400).json({ success: false, error: 'Missing required query parameter: projectPath' });
+      return;
+    }
+
+    const service = DailyLogService.getInstance();
+    const data = await service.getTodaysLog(projectPath);
+
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Failed to get daily log', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/record-success
+ *
+ * Record a successful pattern or approach.
+ *
+ * @param req - Express request with body: { projectPath, teamMemberId, description, context? }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ */
+export async function recordSuccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { projectPath, teamMemberId, description, context, role } = req.body;
+
+    if (!projectPath || !description) {
+      res.status(400).json({ success: false, error: 'Missing required parameters: projectPath, description' });
+      return;
+    }
+
+    const service = LearningAccumulationService.getInstance();
+    await service.recordSuccess(projectPath, teamMemberId || 'unknown', role || 'unknown', description, context);
+
+    logger.info('Success recorded via REST', { projectPath, teamMemberId });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to record success', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/record-failure
+ *
+ * Record a failed approach or pitfall to avoid.
+ *
+ * @param req - Express request with body: { projectPath, teamMemberId, description, context? }
+ * @param res - Express response returning { success }
+ * @param next - Express next function for error propagation
+ */
+export async function recordFailure(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { projectPath, teamMemberId, description, context, role } = req.body;
+
+    if (!projectPath || !description) {
+      res.status(400).json({ success: false, error: 'Missing required parameters: projectPath, description' });
+      return;
+    }
+
+    const service = LearningAccumulationService.getInstance();
+    await service.recordFailure(projectPath, teamMemberId || 'unknown', role || 'unknown', description, context);
+
+    logger.info('Failure recorded via REST', { projectPath, teamMemberId });
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Failed to record failure', { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+}
+
+/**
+ * POST /api/memory/my-context
+ *
+ * Retrieve combined context for an agent, including relevant memories,
+ * project goals, current focus, today's daily log, and recent learnings.
+ * This provides a single-call context briefing for agent startup or task transitions.
+ *
+ * @param req - Express request with body: { agentId, agentRole, projectPath }
+ * @param res - Express response returning { success, data: { memories, goals, focus, dailyLog, learnings } }
+ * @param next - Express next function for error propagation
+ *
+ * @example
+ * ```
+ * POST /api/memory/my-context
+ * {
+ *   "agentId": "dev-001",
+ *   "agentRole": "developer",
+ *   "projectPath": "/path/to/project"
+ * }
+ * ```
+ */
+export async function getMyContext(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { agentId, agentRole, projectPath } = req.body;
+
+    if (!agentId || !agentRole || !projectPath) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: agentId, agentRole, projectPath',
+      });
+      return;
+    }
+
+    // Gather context from all memory subsystems in parallel
+    const memoryService = MemoryService.getInstance();
+    const goalService = GoalTrackingService.getInstance();
+    const dailyLogService = DailyLogService.getInstance();
+    const learningService = LearningAccumulationService.getInstance();
+
+    const [memories, goals, focus, dailyLog, successes, failures] = await Promise.all([
+      memoryService.recall({
+        agentId,
+        context: `${agentRole} agent context for current work`,
+        scope: 'both',
+        projectPath,
+      }),
+      goalService.getGoals(projectPath),
+      goalService.getCurrentFocus(projectPath),
+      dailyLogService.getTodaysLog(projectPath),
+      learningService.getSuccesses(projectPath, LEARNING_TAIL_CHARS),
+      learningService.getFailures(projectPath, LEARNING_TAIL_CHARS),
+    ]);
+
+    logger.debug('Agent context retrieved via REST', { agentId, agentRole, projectPath });
+
+    res.json({
+      success: true,
+      data: {
+        memories,
+        goals,
+        focus,
+        dailyLog,
+        learnings: {
+          successes,
+          failures,
+        },
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get agent context', {
       error: error instanceof Error ? error.message : String(error),
     });
     next(error);

@@ -161,27 +161,32 @@ describe('Role Controller', () => {
     await fs.mkdir(builtinRolesDir, { recursive: true });
     await fs.mkdir(userRolesDir, { recursive: true });
 
-    // Create a sample builtin role
+    // Create a sample builtin role in subdirectory structure
+    // loadBuiltinRoles expects: {builtinRolesDir}/{roleName}/role.json
+    const developerDir = path.join(builtinRolesDir, 'developer');
+    await fs.mkdir(developerDir, { recursive: true });
+
     const sampleRole: RoleStorageFormat = {
       id: 'developer',
       name: 'developer',
       displayName: 'Developer',
       description: 'A software developer role',
       category: 'development',
-      systemPromptFile: 'developer-prompt.md',
+      systemPromptFile: 'prompt.md',
       assignedSkills: [],
       isDefault: true,
+      isHidden: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     await fs.writeFile(
-      path.join(builtinRolesDir, 'developer.json'),
+      path.join(developerDir, 'role.json'),
       JSON.stringify(sampleRole, null, 2)
     );
 
     await fs.writeFile(
-      path.join(builtinRolesDir, 'developer-prompt.md'),
+      path.join(developerDir, 'prompt.md'),
       '# Developer Role\n\nYou are a software developer...'
     );
 
@@ -396,15 +401,17 @@ describe('Role Controller', () => {
       expect(response.body.success).toBe(false);
     });
 
-    it('should return 403 for builtin role', async () => {
+    it('should allow updating builtin role (creates override)', async () => {
+      // The service now supports updating builtin roles by creating overrides
       const response = await request(app)
         .put('/api/settings/roles/developer')
         .send({
           displayName: 'Modified Developer',
         });
 
-      expect(response.status).toBe(403);
-      expect(response.body.success).toBe(false);
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.displayName).toBe('Modified Developer');
     });
   });
 

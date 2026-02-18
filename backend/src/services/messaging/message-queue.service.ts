@@ -236,8 +236,16 @@ export class MessageQueueService extends EventEmitter {
    * @param message - The message to re-queue
    */
   requeue(message: QueuedMessage): void {
+    // If the message was force-cancelled while being processed, do not re-add it
+    if (message.status === 'cancelled') {
+      this.currentMessage = null;
+      this.emitStatusUpdate();
+      this.schedulePersist();
+      return;
+    }
     message.status = 'pending';
     message.processingStartedAt = undefined;
+    message.retryCount = (message.retryCount || 0) + 1;
     this.queue.unshift(message);
     this.currentMessage = null;
     this.emitStatusUpdate();
@@ -313,6 +321,32 @@ export class MessageQueueService extends EventEmitter {
     cancelled.status = 'cancelled';
     cancelled.completedAt = new Date().toISOString();
     this.addToHistory(cancelled);
+
+    this.emit('cancelled', cancelled);
+    this.emitStatusUpdate();
+    this.schedulePersist();
+
+    return true;
+  }
+
+  /**
+   * Force-cancel the currently processing message.
+   * Use this to unstick a message that is stuck in 'processing' state.
+   *
+   * @returns True if there was a processing message to cancel
+   */
+  forceCancelCurrent(): boolean {
+    if (!this.currentMessage) {
+      return false;
+    }
+
+    this.currentMessage.status = 'cancelled';
+    this.currentMessage.completedAt = new Date().toISOString();
+    this.currentMessage.error = 'Force-cancelled by user';
+
+    this.addToHistory(this.currentMessage);
+    const cancelled = this.currentMessage;
+    this.currentMessage = null;
 
     this.emit('cancelled', cancelled);
     this.emitStatusUpdate();

@@ -15,6 +15,7 @@ import {
 import { PtySession } from './pty-session.js';
 import { PtyTerminalBuffer } from './pty-terminal-buffer.js';
 import { LoggerService, ComponentLogger } from '../../core/logger.service.js';
+import { PTY_CONSTANTS } from '../../../constants.js';
 
 /**
  * PTY Session Backend implementation.
@@ -277,6 +278,31 @@ export class PtySessionBackend implements ISessionBackend {
 	}
 
 	/**
+	 * Get the PIDs of all active sessions.
+	 *
+	 * @returns Array of process IDs for all active sessions
+	 *
+	 * @example
+	 * ```typescript
+	 * const pids = backend.getAllSessionPids();
+	 * console.log('Active PIDs:', pids);
+	 * ```
+	 */
+	getAllSessionPids(): number[] {
+		const pids: number[] = [];
+		for (const session of this.sessions.values()) {
+			if (!session.isKilled()) {
+				try {
+					pids.push(session.pid);
+				} catch {
+					// PID may not be accessible if process already exited
+				}
+			}
+		}
+		return pids;
+	}
+
+	/**
 	 * Destroy the backend and clean up all resources.
 	 *
 	 * @returns Promise that resolves when cleanup is complete
@@ -298,6 +324,78 @@ export class PtySessionBackend implements ISessionBackend {
 		}
 
 		this.logger.info('PTY session backend destroyed');
+	}
+
+	/**
+	 * Forcefully destroy all sessions with SIGTERM → SIGKILL escalation.
+	 *
+	 * This method is designed for shutdown scenarios where child processes
+	 * (Claude Code, Gemini CLI) may catch or ignore SIGHUP/SIGTERM.
+	 * It collects all PIDs upfront, sends SIGTERM, waits, then SIGKILLs
+	 * each process and its process group.
+	 *
+	 * @returns Promise that resolves after the force-kill sequence completes
+	 *
+	 * @example
+	 * ```typescript
+	 * await backend.forceDestroyAll();
+	 * ```
+	 */
+	async forceDestroyAll(): Promise<void> {
+		const sessionCount = this.sessions.size;
+		if (sessionCount === 0) {
+			this.logger.debug('No sessions to force-destroy');
+			return;
+		}
+
+		this.logger.info('Force-destroying all PTY sessions', { sessionCount });
+
+		// Step 1: Collect all PIDs before sending any signals
+		const pids = this.getAllSessionPids();
+		this.logger.info('Collected PIDs for force-kill', { pids });
+
+		// Step 2: Send SIGTERM to each session via node-pty
+		for (const session of this.sessions.values()) {
+			try {
+				if (!session.isKilled()) {
+					session.kill('SIGTERM');
+				}
+			} catch (err) {
+				this.logger.debug('Error sending SIGTERM to session', {
+					name: session.name,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
+		// Step 3: Wait for processes to exit gracefully
+		await new Promise<void>((resolve) => setTimeout(resolve, PTY_CONSTANTS.FORCE_DESTROY_ESCALATION_DELAY));
+
+		// Step 4: SIGKILL each PID and its process group
+		for (const pid of pids) {
+			try {
+				process.kill(pid, 'SIGKILL');
+				this.logger.debug('Sent SIGKILL to process', { pid });
+			} catch {
+				// ESRCH = process already gone
+			}
+
+			try {
+				process.kill(-pid, 'SIGKILL');
+				this.logger.debug('Sent SIGKILL to process group', { pgid: -pid });
+			} catch {
+				// ESRCH = process group already gone
+			}
+		}
+
+		// Step 5: Clean up internal maps
+		for (const terminalBuffer of this.terminalBuffers.values()) {
+			terminalBuffer.dispose();
+		}
+		this.sessions.clear();
+		this.terminalBuffers.clear();
+
+		this.logger.info('Force-destroyed all PTY sessions');
 	}
 
 	/**

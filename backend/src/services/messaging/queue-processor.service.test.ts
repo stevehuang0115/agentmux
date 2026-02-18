@@ -16,6 +16,7 @@ jest.mock('../../constants.js', () => ({
     DEFAULT_MESSAGE_TIMEOUT: 5000,
     MAX_HISTORY_SIZE: 50,
     INTER_MESSAGE_DELAY: 10,
+    MAX_REQUEUE_RETRIES: 3,
     PERSISTENCE_FILE: 'message-queue.json',
     PERSISTENCE_DIR: 'queue',
     SOCKET_EVENTS: {
@@ -36,6 +37,11 @@ jest.mock('../../constants.js', () => ({
     AGENT_READY_POLL_INTERVAL: 500,
     PROMPT_DETECTION_TIMEOUT: 5000,
     TOTAL_DELIVERY_TIMEOUT: 10000,
+  },
+  RUNTIME_TYPES: {
+    CLAUDE_CODE: 'claude-code',
+    GEMINI_CLI: 'gemini-cli',
+    CODEX_CLI: 'codex-cli',
   },
 }));
 
@@ -69,6 +75,26 @@ jest.mock('../../websocket/terminal.gateway.js', () => ({
   }),
 }));
 
+// Mock StorageService for orchestrator status and runtime type lookup.
+// Must include agentStatus: 'active' to pass the init guard in processNext().
+// Use a module-level variable so tests can override the return value.
+let mockOrchestratorStatus: any = {
+  agentStatus: 'active',
+  runtimeType: 'claude-code',
+};
+jest.mock('../core/storage.service.js', () => ({
+  StorageService: {
+    getInstance: () => ({
+      getOrchestratorStatus: jest.fn().mockImplementation(() =>
+        Promise.resolve(mockOrchestratorStatus)
+      ),
+    }),
+  },
+}));
+
+/** Flush all pending microtasks (Promises) so async chains in processNext() settle. */
+const flushPromises = () => new Promise<void>((r) => jest.requireActual<typeof import('timers')>('timers').setImmediate(r));
+
 describe('QueueProcessorService', () => {
   let queueService: MessageQueueService;
   let responseRouter: ResponseRouterService;
@@ -82,6 +108,12 @@ describe('QueueProcessorService', () => {
     mockAgentRegistrationService = {
       sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
       waitForAgentReady: jest.fn().mockResolvedValue(true),
+    };
+
+    // Reset orchestrator status to default (active) for each test
+    mockOrchestratorStatus = {
+      agentStatus: 'active',
+      runtimeType: 'claude-code',
     };
 
     processor = new QueueProcessorService(
@@ -141,11 +173,12 @@ describe('QueueProcessorService', () => {
 
       // Advance timers to trigger processNext
       jest.advanceTimersByTime(0);
-      await Promise.resolve(); // flush microtasks
+      await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'agentmux-orc',
-        '[CHAT:conv-1] Hello'
+        '[CHAT:conv-1] Hello',
+        'claude-code'
       );
     });
 
@@ -159,7 +192,7 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
+      await flushPromises();
 
       expect(mockSetActiveConversationId).toHaveBeenCalledWith('conv-42');
     });
@@ -182,9 +215,9 @@ describe('QueueProcessorService', () => {
 
       jest.advanceTimersByTime(0);
       // Need extra microtask flushing for the async chain
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       expect(routeErrorSpy).toHaveBeenCalled();
     });
@@ -199,8 +232,8 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Simulate orchestrator response via chat service event
       mockChatService.emit('message', {
@@ -209,8 +242,8 @@ describe('QueueProcessorService', () => {
         content: 'Here is the response',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       const status = queueService.getStatus();
       expect(status.totalProcessed).toBe(1);
@@ -227,13 +260,13 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Advance past the timeout (5000ms in mock constants)
       jest.advanceTimersByTime(6000);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       const status = queueService.getStatus();
       expect(status.totalProcessed).toBe(1);
@@ -252,8 +285,8 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Simulate response
       mockChatService.emit('message', {
@@ -262,8 +295,8 @@ describe('QueueProcessorService', () => {
         content: 'Slack response',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       expect(slackResolve).toHaveBeenCalledWith('Slack response');
     });
@@ -279,7 +312,7 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(100);
-      await Promise.resolve();
+      await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
     });
@@ -302,8 +335,8 @@ describe('QueueProcessorService', () => {
 
       // Process first message
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       mockChatService.emit('message', {
         conversationId: 'conv-1',
@@ -311,16 +344,16 @@ describe('QueueProcessorService', () => {
         content: 'Response 1',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       expect(routeResponseSpy).toHaveBeenCalledTimes(1);
 
       // Advance past INTER_MESSAGE_DELAY (10ms in mock)
       jest.advanceTimersByTime(20);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Second message should now be processing
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
@@ -340,10 +373,10 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       expect(queueService.getStatus().totalFailed).toBe(1);
     });
@@ -359,8 +392,8 @@ describe('QueueProcessorService', () => {
       processor.start();
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
     });
@@ -375,8 +408,8 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // First call: pre-delivery ready check
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledTimes(1);
@@ -388,10 +421,10 @@ describe('QueueProcessorService', () => {
         content: 'Response',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       // Second call: post-completion idle wait
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledTimes(2);
@@ -407,10 +440,10 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       // Two calls: pre-delivery ready check + post-completion idle wait
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledTimes(2);
@@ -431,10 +464,10 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       // Only one call: pre-delivery ready check. No post-completion idle wait.
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledTimes(1);
@@ -462,8 +495,8 @@ describe('QueueProcessorService', () => {
 
       // Process first message
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       mockChatService.emit('message', {
         conversationId: 'conv-1',
@@ -471,21 +504,22 @@ describe('QueueProcessorService', () => {
         content: 'Response 1',
       });
 
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       // Advance past INTER_MESSAGE_DELAY
       jest.advanceTimersByTime(20);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Second message should still be delivered despite idle wait returning false
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'agentmux-orc',
-        '[CHAT:conv-2] Second'
+        '[CHAT:conv-2] Second',
+        'claude-code'
       );
     });
 
@@ -501,9 +535,9 @@ describe('QueueProcessorService', () => {
       });
 
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       // Should NOT have attempted delivery
       expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
@@ -527,21 +561,191 @@ describe('QueueProcessorService', () => {
 
       // First attempt
       jest.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
 
       // Advance past the retry delay (AGENT_READY_POLL_INTERVAL = 500ms in mock)
       jest.advanceTimersByTime(600);
-      await Promise.resolve();
-      await Promise.resolve();
+      await flushPromises();
+      await flushPromises();
 
       // Second attempt should succeed
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'agentmux-orc',
-        '[CHAT:conv-1] Retry me'
+        '[CHAT:conv-1] Retry me',
+        'claude-code'
+      );
+    });
+
+    it('should defer message delivery when orchestrator is not active', async () => {
+      mockOrchestratorStatus = { agentStatus: 'started', runtimeType: 'claude-code' };
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'During init',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Process triggers but init guard should block
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Should NOT have attempted delivery
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+      expect(mockAgentRegistrationService.waitForAgentReady).not.toHaveBeenCalled();
+      // Message should still be pending in the queue
+      expect(queueService.hasPending()).toBe(true);
+    });
+
+    it('should deliver deferred message after orchestrator becomes active', async () => {
+      // Start with orchestrator not active
+      mockOrchestratorStatus = { agentStatus: 'started', runtimeType: 'claude-code' };
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Queued during init',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // First poll: deferred
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+
+      // Now orchestrator becomes active
+      mockOrchestratorStatus = { agentStatus: 'active', runtimeType: 'claude-code' };
+
+      // Advance past AGENT_READY_POLL_INTERVAL (500ms in mock)
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+
+      // Should now have attempted delivery
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'agentmux-orc',
+        '[CHAT:conv-1] Queued during init',
+        'claude-code'
+      );
+    });
+
+    it('should pass runtimeType to waitForAgentReady', async () => {
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // waitForAgentReady should receive the runtimeType
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'agentmux-orc',
+        5000,
+        'claude-code'
+      );
+    });
+
+    it('should permanently fail message after exceeding max requeue retries', async () => {
+      // Agent never becomes ready
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
+
+      const routeErrorSpy = jest.spyOn(responseRouter, 'routeError');
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Will fail eventually',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Simulate retry loop: MAX_REQUEUE_RETRIES is 3 in mock constants
+      // Each cycle: processNext (immediate) -> waitForAgentReady -> requeue -> scheduleProcessNext(500ms)
+      for (let i = 0; i < 3; i++) {
+        jest.advanceTimersByTime(600);
+        await flushPromises();
+        await flushPromises();
+        await flushPromises();
+      }
+
+      // After 3 requeues, the next attempt should see retryCount >= 3 and fail permanently
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Message should be permanently failed
+      expect(routeErrorSpy).toHaveBeenCalled();
+      const errorArg = routeErrorSpy.mock.calls[0][1];
+      expect(errorArg).toContain('not available after');
+      expect(errorArg).toContain('retries');
+
+      // Queue should be empty (not still re-queuing)
+      expect(queueService.hasPending()).toBe(false);
+      expect(queueService.getStatus().totalFailed).toBe(1);
+
+      // System message should have been sent to the conversation
+      expect((mockChatService as any).addSystemMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('Message delivery failed')
+      );
+    });
+
+    it('should increment retryCount on each requeue', async () => {
+      // Agent not ready for first 2 attempts, then ready
+      mockAgentRegistrationService.waitForAgentReady
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true);
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Retry test',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // First attempt: retryCount 0 -> requeue sets to 1
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Check that message was re-queued with retryCount = 1
+      const pending1 = queueService.getStatus();
+      expect(pending1.pendingCount).toBe(1);
+
+      // Second attempt: retryCount 1 -> requeue sets to 2
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Third attempt: retryCount 2, agent is ready -> delivers
+      jest.advanceTimersByTime(600);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'agentmux-orc',
+        '[CHAT:conv-1] Retry test',
+        'claude-code'
       );
     });
   });

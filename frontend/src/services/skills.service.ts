@@ -236,65 +236,6 @@ export async function refreshSkillsFromDisk(): Promise<void> {
 }
 
 /**
- * MCP server installation status
- */
-export interface McpServerStatus {
-  /** Package name (e.g., @anthropic/mcp-server-playwright) */
-  packageName: string;
-  /** Whether the MCP server is installed/configured */
-  isInstalled: boolean;
-  /** The configured name in Claude settings (if installed) */
-  configuredName?: string;
-  /** Where the MCP server was found ('global' or 'project') */
-  source?: 'global' | 'project';
-}
-
-/**
- * Response from MCP status check
- */
-export interface McpStatusResponse {
-  statuses: McpServerStatus[];
-  allConfiguredServers: string[];
-  /** Whether global Claude settings were found */
-  globalSettingsFound: boolean;
-  /** Whether project-level Claude settings were found */
-  projectSettingsFound: boolean;
-  /** The project path that was checked (if any) */
-  projectPath: string | null;
-}
-
-/**
- * Check MCP server installation status
- *
- * Checks if the specified MCP server packages are installed in Claude Code.
- * Can check both global settings (~/.claude/settings.json) and project-level
- * settings (<projectPath>/.claude/settings.json).
- *
- * @param packages - Array of package names to check
- * @param projectPath - Optional project path to also check project-level settings
- * @returns Promise resolving to MCP status information
- */
-export async function checkMcpStatus(packages: string[], projectPath?: string): Promise<McpStatusResponse> {
-  const params = new URLSearchParams();
-  if (packages.length > 0) {
-    params.set('packages', packages.join(','));
-  }
-  if (projectPath) {
-    params.set('projectPath', projectPath);
-  }
-
-  const url = `${API_BASE}/mcp-status?${params}`;
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Failed to check MCP status: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.data || data;
-}
-
-/**
  * Skills service object for convenience
  */
 export const skillsService = {
@@ -307,7 +248,6 @@ export const skillsService = {
   getForRole: getSkillsForRole,
   execute: executeSkill,
   refreshFromDisk: refreshSkillsFromDisk,
-  checkMcpStatus,
 };
 
 export default skillsService;

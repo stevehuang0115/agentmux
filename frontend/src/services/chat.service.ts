@@ -26,6 +26,26 @@ const API_BASE = '/api/chat';
  */
 class ChatApiService {
   /**
+   * Safely parse a JSON response, handling empty bodies and non-OK statuses.
+   *
+   * @param response - Fetch Response to parse
+   * @param fallbackError - Error message if parsing fails
+   * @returns Parsed JSON data
+   * @throws Error with descriptive message on failure
+   */
+  private async parseResponse(response: Response, fallbackError: string): Promise<any> {
+    const text = await response.text();
+    if (!text) {
+      throw new Error(fallbackError);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(fallbackError);
+    }
+  }
+
+  /**
    * Send a new message to the chat.
    *
    * @param input - Message content and optional conversation ID
@@ -39,7 +59,7 @@ class ChatApiService {
       body: JSON.stringify(input),
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Failed to send message');
     if (!data.success) {
       throw new Error(data.error || 'Failed to send message');
     }
@@ -66,7 +86,7 @@ class ChatApiService {
     if (before) params.set('before', before);
 
     const response = await fetch(`${API_BASE}/messages?${params.toString()}`);
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Failed to load messages');
 
     if (!data.success) {
       throw new Error(data.error || 'Failed to load messages');
@@ -85,7 +105,7 @@ class ChatApiService {
   async getConversations(includeArchived = false): Promise<ChatConversation[]> {
     const params = includeArchived ? '?includeArchived=true' : '';
     const response = await fetch(`${API_BASE}/conversations${params}`);
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Failed to load conversations');
 
     if (!data.success) {
       throw new Error(data.error || 'Failed to load conversations');
@@ -102,7 +122,7 @@ class ChatApiService {
    */
   async getCurrentConversation(): Promise<ChatConversation | null> {
     const response = await fetch(`${API_BASE}/conversations/current`);
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Failed to load current conversation');
 
     if (!data.success) {
       throw new Error(data.error || 'Failed to load current conversation');
@@ -125,7 +145,7 @@ class ChatApiService {
       body: JSON.stringify({ title }),
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Request failed');
     if (!data.success) {
       throw new Error(data.error || 'Failed to create conversation');
     }
@@ -151,7 +171,7 @@ class ChatApiService {
       body: JSON.stringify(updates),
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Request failed');
     if (!data.success) {
       throw new Error(data.error || 'Failed to update conversation');
     }
@@ -170,7 +190,7 @@ class ChatApiService {
       method: 'DELETE',
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Request failed');
     if (!data.success) {
       throw new Error(data.error || 'Failed to delete conversation');
     }
@@ -187,7 +207,7 @@ class ChatApiService {
       method: 'PUT',
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Request failed');
     if (!data.success) {
       throw new Error(data.error || 'Failed to archive conversation');
     }
@@ -204,7 +224,7 @@ class ChatApiService {
       method: 'POST',
     });
 
-    const data = await response.json();
+    const data = await this.parseResponse(response, 'Request failed');
     if (!data.success) {
       throw new Error(data.error || 'Failed to clear conversation');
     }

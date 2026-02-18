@@ -63,6 +63,16 @@ export class CodexRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
+	 * Codex CLI specific exit patterns for runtime exit detection
+	 */
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [
+			/codex.*exited/i,
+			/Session\s+ended/i,
+		];
+	}
+
+	/**
 	 * Codex CLI specific error patterns
 	 */
 	protected getRuntimeErrorPatterns(): string[] {

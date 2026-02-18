@@ -413,7 +413,14 @@ export async function assignTeamsToProject(
 ): Promise<void> {
 	try {
 		const { id } = req.params;
-		const { teamAssignments } = req.body as AssignTeamsRequestBody;
+		let { teamAssignments } = req.body as AssignTeamsRequestBody;
+
+		// Support simple teamIds array as shorthand: ["id1","id2"] → { member: ["id1","id2"] }
+		const { teamIds } = req.body as { teamIds?: string[] };
+		if (!teamAssignments && teamIds && Array.isArray(teamIds) && teamIds.length > 0) {
+			teamAssignments = { member: teamIds };
+		}
+
 		const projects = await this.storageService.getProjects();
 		const project = projects.find((p) => p.id === id);
 		if (!project) {

@@ -6,7 +6,6 @@ import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus, AgentDetailModal } from '../components/TeamDetail';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
-import { safeParseJSON } from '../utils/api';
 import { webSocketService } from '../services/websocket.service';
 
 export const TeamDetail: React.FC = () => {
@@ -345,9 +344,14 @@ export const TeamDetail: React.FC = () => {
   };
 
   const getTeamStatus = (): TeamStatus => {
-    // For Orchestrator Team, check terminal session status
+    // For Orchestrator Team, check both terminal session AND member agentStatus.
+    // orchestratorSessionActive checks if a PTY session exists, while agentStatus
+    // reflects the agent's registered state (e.g. 'active' after MCP registration).
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
-      return orchestratorSessionActive ? 'active' : 'idle';
+      const orchestratorMember = team?.members?.[0];
+      const memberActive = orchestratorMember?.agentStatus === 'active'
+        || orchestratorMember?.agentStatus === 'started';
+      return (orchestratorSessionActive || memberActive) ? 'active' : 'idle';
     }
 
     // For other teams, check if any members have active sessions
@@ -665,7 +669,8 @@ export const TeamDetail: React.FC = () => {
             setShowAgentDetailModal(false);
             setSelectedAgent(null);
           }}
-          projectPath={projectPath || undefined}
+          isEditable={!selectedAgent.agentStatus || selectedAgent.agentStatus === 'inactive'}
+          onSave={handleUpdateMember}
         />
       )}
 

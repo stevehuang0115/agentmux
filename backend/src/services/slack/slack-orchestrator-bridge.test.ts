@@ -12,6 +12,8 @@ import {
 } from './slack-orchestrator-bridge.js';
 import { resetSlackService } from './slack.service.js';
 import { resetChatService } from '../chat/chat.service.js';
+import type { SlackIncomingMessage } from '../../types/slack.types.js';
+import type { NotifyPayload } from '../../types/chat.types.js';
 
 // Mock the orchestrator status module
 jest.mock('../orchestrator/index.js', () => ({
@@ -19,9 +21,28 @@ jest.mock('../orchestrator/index.js', () => ({
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
+// Mock the slack image service
+jest.mock('./slack-image.service.js', () => ({
+  getSlackImageService: jest.fn().mockReturnValue({
+    downloadImage: jest.fn().mockResolvedValue({
+      id: 'F001',
+      name: 'test.png',
+      mimetype: 'image/png',
+      localPath: '/tmp/slack-images/F001-test.png',
+      width: 800,
+      height: 600,
+      permalink: 'https://slack.com/files/F001',
+    }),
+  }),
+  SlackImageService: jest.fn(),
+  setSlackImageService: jest.fn(),
+  resetSlackImageService: jest.fn(),
+}));
+
 import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
 import { getChatService } from '../chat/chat.service.js';
 import { ChatMessage } from '../../types/chat.types.js';
+import { getSlackImageService } from './slack-image.service.js';
 
 describe('SlackOrchestratorBridge', () => {
   beforeEach(() => {
@@ -224,6 +245,272 @@ describe('SlackOrchestratorBridge', () => {
       const result = bridge.formatForSlack(input);
       expect(result).toContain('*Title*');
       expect(result).toContain('Some text');
+    });
+  });
+
+  describe('notify helpers', () => {
+    it('should extract NOTIFY payloads and build fallback response', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const raw = `[NOTIFY]\nconversationId: conv-1\n---\nHello from NOTIFY\n[/NOTIFY]`;
+      const payloads = (bridge as unknown as {
+        extractNotifyPayloads: (text: string) => NotifyPayload[];
+      }).extractNotifyPayloads(raw);
+
+      const fallback = (bridge as unknown as {
+        buildFallbackResponse: (text: string, payloads: NotifyPayload[]) => string;
+      }).buildFallbackResponse(raw, payloads);
+
+      expect(fallback).toBe('Hello from NOTIFY');
+    });
+
+    it('should detect Slack-targeted NOTIFY payload for matching thread', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const raw = `[NOTIFY]\nchannelId: C123\nthreadTs: 1707.001\n---\nHandled in skill\n[/NOTIFY]`;
+      const payloads = (bridge as unknown as {
+        extractNotifyPayloads: (text: string) => NotifyPayload[];
+      }).extractNotifyPayloads(raw);
+
+      const message: SlackIncomingMessage = {
+        id: '123',
+        type: 'message',
+        text: 'hello',
+        userId: 'U123',
+        channelId: 'C123',
+        threadTs: '1707.001',
+        ts: '1707.001',
+        teamId: 'T1',
+        eventTs: '1707.001',
+      };
+
+      const match = (bridge as unknown as {
+        findSlackPayloadForMessage: (
+          msg: SlackIncomingMessage,
+          payloads: NotifyPayload[]
+        ) => NotifyPayload | undefined;
+      }).findSlackPayloadForMessage(message, payloads);
+
+      expect(match?.message).toBe('Handled in skill');
+    });
+  });
+
+  describe('image handling', () => {
+    it('should enrich text with image file references', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Check this', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        images: [{
+          id: 'F001', name: 'shot.png', mimetype: 'image/png',
+          localPath: '/tmp/F001-shot.png', width: 1920, height: 1080,
+          permalink: 'https://slack.com/files/F001',
+        }],
+      };
+
+      const enriched = enrichTextWithImages(message);
+      expect(enriched).toContain('Check this');
+      expect(enriched).toContain('[Slack Image: /tmp/F001-shot.png (1920x1080), image/png]');
+    });
+
+    it('should return original text when no images', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'No images here', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+      };
+
+      expect(enrichTextWithImages(message)).toBe('No images here');
+    });
+
+    it('should download images via SlackImageService', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'here', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{
+          id: 'F001', name: 'test.png', mimetype: 'image/png',
+          filetype: 'png', size: 1024,
+          url_private: 'https://files.slack.com/F001',
+          url_private_download: 'https://files.slack.com/F001/download',
+          permalink: 'https://slack.com/files/F001',
+        }],
+      };
+
+      await downloadMessageImages(message);
+
+      expect(message.images).toBeDefined();
+      expect(message.images).toHaveLength(1);
+      expect(message.images![0].localPath).toBe('/tmp/slack-images/F001-test.png');
+
+      const mockImgService = getSlackImageService();
+      expect(mockImgService.downloadImage).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'F001' }),
+        'xoxb-test'
+      );
+    });
+
+    it('should batch downloads with MAX_CONCURRENT_DOWNLOADS limit', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      // Track concurrent calls to verify batching
+      let activeConcurrent = 0;
+      let maxObservedConcurrent = 0;
+
+      const mockImgService = getSlackImageService();
+      (mockImgService.downloadImage as jest.Mock).mockImplementation(async (file: any) => {
+        activeConcurrent++;
+        maxObservedConcurrent = Math.max(maxObservedConcurrent, activeConcurrent);
+        // Simulate async work so concurrent calls overlap within a batch
+        await new Promise(r => setTimeout(r, 10));
+        activeConcurrent--;
+        return {
+          id: file.id, name: file.name, mimetype: 'image/png',
+          localPath: `/tmp/slack-images/${file.id}-${file.name}`, permalink: file.permalink,
+        };
+      });
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      // Create 5 files to test batching (max concurrent = 3, so 2 batches: [3, 2])
+      const files = Array.from({ length: 5 }, (_, i) => ({
+        id: `F00${i}`, name: `img${i}.png`, mimetype: 'image/png',
+        filetype: 'png', size: 1024,
+        url_private: `https://files.slack.com/F00${i}`,
+        url_private_download: `https://files.slack.com/F00${i}/download`,
+        permalink: `https://slack.com/files/F00${i}`,
+      }));
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'batch test', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files,
+      };
+
+      await downloadMessageImages(message);
+
+      expect(message.images).toBeDefined();
+      expect(message.images).toHaveLength(5);
+      expect(mockImgService.downloadImage).toHaveBeenCalledTimes(5);
+      // Verify concurrency was bounded to batch size (3)
+      expect(maxObservedConcurrent).toBeLessThanOrEqual(3);
+    });
+
+    it('should continue downloading remaining batches when one file fails', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+
+      const mockImgService = getSlackImageService();
+      (mockImgService.downloadImage as jest.Mock)
+        .mockRejectedValueOnce(new Error('Download failed'))
+        .mockResolvedValueOnce({ id: 'F001', name: 'b.png', mimetype: 'image/png', localPath: '/tmp/slack-images/F001-b.png', permalink: 'x' })
+        .mockResolvedValueOnce({ id: 'F002', name: 'c.png', mimetype: 'image/png', localPath: '/tmp/slack-images/F002-c.png', permalink: 'x' });
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [
+          { id: 'F000', name: 'a.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+          { id: 'F001', name: 'b.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+          { id: 'F002', name: 'c.png', mimetype: 'image/png', filetype: 'png', size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' },
+        ],
+      };
+
+      await downloadMessageImages(message);
+
+      // First file failed, but the other 2 in the batch should succeed
+      expect(message.images).toHaveLength(2);
+      expect(mockImgService.downloadImage).toHaveBeenCalledTimes(3);
+    });
+
+    it('should skip image download when no bot token', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue(null);
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'a.png', mimetype: 'image/png', filetype: 'png',
+          size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+      expect(message.images).toBeUndefined();
+    });
+
+    it('should send warning to Slack when file is too large', async () => {
+      const mockImgService = getSlackImageService() as jest.Mocked<ReturnType<typeof getSlackImageService>>;
+      mockImgService.downloadImage = jest.fn().mockRejectedValue(new Error('File too large: 25000000 bytes (max 20 MB)'));
+
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Check this', userId: 'U1',
+        channelId: 'C1', ts: '1.000', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'huge.png', mimetype: 'image/png', filetype: 'png',
+          size: 25000000, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+
+      // Should have no downloaded images
+      expect(message.images).toBeUndefined();
+      // Should have sent a warning back to Slack
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: 'C1',
+          threadTs: '1.000',
+          text: expect.stringContaining('could not be processed'),
+        })
+      );
+    });
+
+    it('should not send warning for non-size/type failures', async () => {
+      const mockImgService = getSlackImageService() as jest.Mocked<ReturnType<typeof getSlackImageService>>;
+      mockImgService.downloadImage = jest.fn().mockRejectedValue(new Error('Download failed with status 500'));
+
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'a.png', mimetype: 'image/png', filetype: 'png',
+          size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+
+      // Should NOT send a warning for generic errors
+      expect(sendMessageSpy).not.toHaveBeenCalled();
     });
   });
 

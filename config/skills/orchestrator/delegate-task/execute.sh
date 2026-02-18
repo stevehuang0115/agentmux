@@ -20,4 +20,4 @@ TASK_MESSAGE="[TASK] Priority: ${PRIORITY}\n\n${TASK}"
 
 BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message}')
 
-api_call POST "/terminal/${TO}/write" "$BODY"
+api_call POST "/terminal/${TO}/deliver" "$BODY"

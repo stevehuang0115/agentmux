@@ -7,6 +7,17 @@ import type { ApiContext } from '../types.js';
 // Mock os module
 jest.mock('os');
 
+// Mock SOP service
+jest.mock('../../services/sop/sop.service.js', () => ({
+  SOPService: {
+    getInstance: jest.fn().mockReturnValue({
+      getAvailableSOPs: jest.fn(),
+    }),
+  },
+}));
+
+// IMPORTANT: Combine all service mocks into a SINGLE jest.mock call.
+// Multiple jest.mock calls for the same module override each other -- only the last one takes effect.
 jest.mock('../../services/index.js', () => ({
   MonitoringService: {
     getInstance: jest.fn().mockReturnValue({
@@ -19,10 +30,7 @@ jest.mock('../../services/index.js', () => ({
       getAlertConditions: jest.fn(),
       updateAlertCondition: jest.fn()
     })
-  }
-}));
-
-jest.mock('../../services/index.js', () => ({
+  },
   ConfigService: {
     getInstance: jest.fn().mockReturnValue({
       getEnvironmentInfo: jest.fn(),
@@ -31,10 +39,7 @@ jest.mock('../../services/index.js', () => ({
       updateConfig: jest.fn(),
       createDefaultConfigFile: jest.fn()
     })
-  }
-}));
-
-jest.mock('../../services/index.js', () => ({
+  },
   LoggerService: {
     getInstance: jest.fn().mockReturnValue({
       getRecentLogs: jest.fn()
@@ -42,10 +47,21 @@ jest.mock('../../services/index.js', () => ({
   }
 }));
 
+const mockSaveState = jest.fn<() => Promise<number>>().mockResolvedValue(3);
+const mockGetSessionBackendSync = jest.fn<() => object | null>().mockReturnValue({});
+const mockGetSessionStatePersistence = jest.fn<any>().mockReturnValue({
+  saveState: mockSaveState,
+});
+
+jest.mock('../../services/session/index.js', () => ({
+  getSessionBackendSync: (...args: unknown[]) => mockGetSessionBackendSync(),
+  getSessionStatePersistence: (...args: unknown[]) => mockGetSessionStatePersistence(),
+}));
+
 describe('System Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockTmuxService: any;
   let mockMonitoringService: any;
   let mockConfigService: any;
@@ -63,7 +79,7 @@ describe('System Handlers', () => {
     mockLoggerService = LoggerService.getInstance();
 
     mockTmuxService = {
-      checkClaudeInstallation: jest.fn()
+      checkClaudeInstallation: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -77,8 +93,8 @@ describe('System Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -154,7 +170,7 @@ describe('System Handlers', () => {
     it('should return metrics with default 1 hour period', async () => {
       const mockCurrentMetrics = { memory: 75, cpu: 50 };
       const mockPerformanceMetrics = { responseTime: 180, throughput: 120 };
-      const mockHistory = [{ timestamp: '2024-01-01T00:00:00Z', memory: 70, cpu: 45 }];
+      const mockHistory: any[] = [{ timestamp: '2024-01-01T00:00:00Z', memory: 70, cpu: 45 }];
 
       mockMonitoringService.getMetricsHistory.mockReturnValue(mockHistory);
       mockMonitoringService.getSystemMetrics.mockReturnValue(mockCurrentMetrics);
@@ -183,7 +199,7 @@ describe('System Handlers', () => {
     });
 
     it('should return metrics with custom hour period', async () => {
-      const mockHistory = [];
+      const mockHistory: any[] = [];
       mockMonitoringService.getMetricsHistory.mockReturnValue(mockHistory);
       mockMonitoringService.getSystemMetrics.mockReturnValue({});
       mockMonitoringService.getPerformanceMetrics.mockReturnValue({});
@@ -270,7 +286,7 @@ describe('System Handlers', () => {
   describe('updateSystemConfiguration', () => {
     it('should update configuration and return validation results', async () => {
       const mockValidation = { isValid: true, warnings: ['Some warning'] };
-      
+
       mockConfigService.updateConfig.mockResolvedValue(undefined);
       mockConfigService.validateConfig.mockReturnValue(mockValidation);
 
@@ -522,9 +538,9 @@ describe('System Handlers', () => {
   describe('healthCheck', () => {
     it('should return healthy status with 200 code', async () => {
       mockMonitoringService.getOverallHealth.mockReturnValue('healthy');
-      
+
       const originalUptime = process.uptime;
-      process.uptime = jest.fn().mockReturnValue(3600.5);
+      process.uptime = jest.fn<any>().mockReturnValue(3600.5) as any;
 
       await systemHandlers.healthCheck.call(
         mockApiContext as ApiContext,
@@ -549,9 +565,9 @@ describe('System Handlers', () => {
 
     it('should return unhealthy status with 503 code', async () => {
       mockMonitoringService.getOverallHealth.mockReturnValue('unhealthy');
-      
+
       const originalUptime = process.uptime;
-      process.uptime = jest.fn().mockReturnValue(1800);
+      process.uptime = jest.fn<any>().mockReturnValue(1800) as any;
 
       await systemHandlers.healthCheck.call(
         mockApiContext as ApiContext,
@@ -594,10 +610,10 @@ describe('System Handlers', () => {
 
   describe('getClaudeStatus', () => {
     it('should return Claude installation status', async () => {
-      const mockClaudeStatus = { 
-        installed: true, 
-        version: '1.0.0', 
-        path: '/usr/local/bin/claude' 
+      const mockClaudeStatus = {
+        installed: true,
+        version: '1.0.0',
+        path: '/usr/local/bin/claude'
       };
 
       mockTmuxService.checkClaudeInstallation.mockResolvedValue(mockClaudeStatus);
@@ -653,7 +669,7 @@ describe('System Handlers', () => {
     it('should preserve context when handling system operations', async () => {
       const contextAwareController = {
         tmuxService: {
-          checkClaudeInstallation: jest.fn().mockResolvedValue({ installed: true })
+          checkClaudeInstallation: jest.fn<any>().mockResolvedValue({ installed: true })
         }
       } as any;
 
@@ -680,12 +696,13 @@ describe('System Handlers', () => {
       expect(typeof systemHandlers.healthCheck).toBe('function');
       expect(typeof systemHandlers.getClaudeStatus).toBe('function');
       expect(typeof systemHandlers.getLocalIpAddress).toBe('function');
+      expect(typeof systemHandlers.restartServer).toBe('function');
     });
 
     it('should handle async operations properly', async () => {
       mockMonitoringService.getOverallHealth.mockReturnValue('healthy');
       const originalUptime = process.uptime;
-      process.uptime = jest.fn().mockReturnValue(3600);
+      process.uptime = jest.fn<any>().mockReturnValue(3600) as any;
 
       const result = await systemHandlers.healthCheck.call(
         mockApiContext as ApiContext,
@@ -697,6 +714,89 @@ describe('System Handlers', () => {
       expect(mockResponse.json).toHaveBeenCalled();
 
       process.uptime = originalUptime;
+    });
+  });
+
+  describe('restartServer', () => {
+    let originalExit: typeof process.exit;
+
+    beforeEach(() => {
+      originalExit = process.exit;
+      process.exit = jest.fn() as any;
+      jest.useFakeTimers();
+      mockSaveState.mockResolvedValue(3);
+      mockGetSessionBackendSync.mockReturnValue({});
+    });
+
+    afterEach(() => {
+      process.exit = originalExit;
+      jest.useRealTimers();
+    });
+
+    it('should save session state and respond with success', async () => {
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockGetSessionBackendSync).toHaveBeenCalled();
+      expect(mockSaveState).toHaveBeenCalled();
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: {
+          message: 'Server is restarting...',
+          savedSessions: 3,
+          timestamp: expect.any(String),
+        },
+      });
+    });
+
+    it('should call process.exit after delay', async () => {
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(process.exit).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(1000);
+      expect(process.exit).toHaveBeenCalledWith(0);
+    });
+
+    it('should handle missing session backend gracefully', async () => {
+      mockGetSessionBackendSync.mockReturnValue(null);
+
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          savedSessions: 0,
+        }),
+      });
+    });
+
+    it('should handle save state errors gracefully', async () => {
+      mockSaveState.mockRejectedValue(new Error('Save failed'));
+
+      await systemHandlers.restartServer.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          message: 'Server is restarting...',
+          savedSessions: 0,
+        }),
+      });
     });
   });
 

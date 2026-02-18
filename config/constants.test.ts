@@ -2,13 +2,12 @@
  * Unit tests for AgentMux cross-domain constants
  * 
  * This test file validates the centralized constants that are shared
- * across all AgentMux domains (backend, frontend, CLI, MCP).
+ * across all AgentMux domains (backend, frontend, CLI).
  */
 
 import {
   AGENTMUX_CONSTANTS,
   AGENT_IDENTITY_CONSTANTS,
-  MCP_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
@@ -17,7 +16,6 @@ import {
   type WorkingStatus,
   type AgentRole,
   type AgentId,
-  type MCPTool,
   type MessageType,
 } from './constants.js';
 
@@ -211,72 +209,11 @@ describe('AgentMux Cross-Domain Constants', () => {
     });
   });
 
-  describe('MCP_CONSTANTS', () => {
-    describe('PORTS', () => {
-      test('should have valid port configuration', () => {
-        expect(MCP_CONSTANTS.PORTS.DEFAULT).toBe(8789);
-        expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toBe('/health');
-      });
-
-      test('port should be in valid range', () => {
-        expect(MCP_CONSTANTS.PORTS.DEFAULT).toBeGreaterThan(1023);
-        expect(MCP_CONSTANTS.PORTS.DEFAULT).toBeLessThan(65536);
-      });
-
-      test('health check should be a valid endpoint', () => {
-        expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toMatch(/^\/[a-z]+$/);
-      });
-    });
-
-    describe('TIMEOUTS', () => {
-      test('should have valid timeout values', () => {
-        expect(MCP_CONSTANTS.TIMEOUTS.RESPONSE).toBe(30000);
-        expect(MCP_CONSTANTS.TIMEOUTS.CONNECTION).toBe(10000);
-      });
-
-      test('timeouts should be positive numbers', () => {
-        Object.values(MCP_CONSTANTS.TIMEOUTS).forEach((timeout) => {
-          expect(typeof timeout).toBe('number');
-          expect(timeout).toBeGreaterThan(0);
-        });
-      });
-
-      test('response timeout should be greater than connection timeout', () => {
-        expect(MCP_CONSTANTS.TIMEOUTS.RESPONSE).toBeGreaterThan(MCP_CONSTANTS.TIMEOUTS.CONNECTION);
-      });
-    });
-
-    describe('TOOLS', () => {
-      test('should have all required MCP tools', () => {
-        const expectedTools = [
-          'send_message',
-          'broadcast',
-          'get_team_status',
-          'get_agent_logs',
-          'get_agent_status',
-          'register_agent_status',
-          'accept_task',
-          'complete_task',
-        ];
-
-        expectedTools.forEach((tool) => {
-          expect(Object.values(MCP_CONSTANTS.TOOLS)).toContain(tool);
-        });
-      });
-
-      test('tool names should follow snake_case convention', () => {
-        Object.values(MCP_CONSTANTS.TOOLS).forEach((tool) => {
-          expect(tool).toMatch(/^[a-z]+(_[a-z]+)*$/);
-        });
-      });
-    });
-  });
-
   describe('WEB_CONSTANTS', () => {
     describe('PORTS', () => {
       test('should have valid port numbers', () => {
-        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(8788);
-        expect(WEB_CONSTANTS.PORTS.FRONTEND).toBe(3002);
+        expect(WEB_CONSTANTS.PORTS.BACKEND).toBe(8787);
+        expect(WEB_CONSTANTS.PORTS.FRONTEND).toBe(8788);
       });
 
       test('ports should be in valid range', () => {
@@ -491,11 +428,6 @@ describe('AgentMux Cross-Domain Constants', () => {
       expect(['orchestrator', 'pm', 'tpm', 'developer', 'qa', 'devops']).toContain(testRole);
     });
 
-    test('MCPTool type should include all tool values', () => {
-      const testTool: MCPTool = 'send_message';
-      expect(Object.values(MCP_CONSTANTS.TOOLS)).toContain(testTool);
-    });
-
     test('MessageType type should include all message type values', () => {
       const testMessageType: MessageType = 'system';
       expect(Object.values(MESSAGE_CONSTANTS.TYPES)).toContain(testMessageType);
@@ -505,7 +437,6 @@ describe('AgentMux Cross-Domain Constants', () => {
   describe('Constants Structure', () => {
     test('all main constant objects should be defined', () => {
       expect(AGENTMUX_CONSTANTS).toBeDefined();
-      expect(MCP_CONSTANTS).toBeDefined();
       expect(WEB_CONSTANTS).toBeDefined();
       expect(TIMING_CONSTANTS).toBeDefined();
       expect(MESSAGE_CONSTANTS).toBeDefined();
@@ -515,7 +446,6 @@ describe('AgentMux Cross-Domain Constants', () => {
     test('constants should be immutable (const assertions)', () => {
       // These tests verify that const assertions are working
       expect(typeof AGENTMUX_CONSTANTS).toBe('object');
-      expect(typeof MCP_CONSTANTS).toBe('object');
       expect(typeof WEB_CONSTANTS).toBe('object');
       expect(typeof TIMING_CONSTANTS).toBe('object');
       expect(typeof MESSAGE_CONSTANTS).toBe('object');
@@ -524,16 +454,8 @@ describe('AgentMux Cross-Domain Constants', () => {
   });
 
   describe('Cross-Domain Consistency', () => {
-    test('MCP port should be different from web backend port', () => {
-      expect(MCP_CONSTANTS.PORTS.DEFAULT).not.toBe(WEB_CONSTANTS.PORTS.BACKEND);
-    });
-
     test('orchestrator session name should be consistent', () => {
       expect(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('agentmux-orc');
-    });
-
-    test('health endpoint should be consistent across domains', () => {
-      expect(MCP_CONSTANTS.PORTS.HEALTH_CHECK).toBe(WEB_CONSTANTS.ENDPOINTS.HEALTH);
     });
 
     test('timeout values should be reasonable', () => {

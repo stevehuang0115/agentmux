@@ -1,6 +1,16 @@
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import * as settingsServiceModule from '../settings/settings.service.js';
+import { getDefaultSettings } from '../../types/settings.types.js';
+import { readFile } from 'fs/promises';
+
+// Mock fs/promises at module level so the static import in the source file is intercepted
+jest.mock('fs/promises', () => ({
+	readFile: jest.fn(),
+}));
+
+const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
 
 // Test implementation of abstract class
 class TestRuntimeService extends RuntimeAgentService {
@@ -22,6 +32,10 @@ class TestRuntimeService extends RuntimeAgentService {
 
 	protected getRuntimeErrorPatterns(): string[] {
 		return ['Error', 'Failed'];
+	}
+
+	protected getRuntimeExitPatterns(): RegExp[] {
+		return [/Test exited/i, /Session ended/i];
 	}
 }
 
@@ -48,6 +62,9 @@ describe('RuntimeAgentService (Abstract)', () => {
 			getTerminalBuffer: jest.fn(),
 			backend: {},
 		} as any;
+
+		// Reset the mock for readFile before each test
+		mockReadFile.mockReset();
 
 		service = new TestRuntimeService(mockSessionHelper, '/test/project');
 	});
@@ -79,14 +96,14 @@ describe('RuntimeAgentService (Abstract)', () => {
 		it('should use cached results within cache timeout', async () => {
 			// First call
 			await service.detectRuntimeWithCommand('test-session-running');
-			
+
 			// Mock the concrete implementation to return different value
 			const spy = jest.spyOn(service as any, 'detectRuntimeSpecific');
 			spy.mockResolvedValue(false);
 
 			// Second call should use cache (not call detectRuntimeSpecific again)
 			const result = await service.detectRuntimeWithCommand('test-session-running');
-			
+
 			expect(result).toBe(true); // Should still be true from cache
 		});
 
@@ -114,10 +131,10 @@ describe('RuntimeAgentService (Abstract)', () => {
 		it('should clear cached detection result for session', async () => {
 			// First call to cache result
 			await service.detectRuntimeWithCommand('test-session-running');
-			
+
 			// Clear cache
 			service.clearDetectionCache('test-session-running');
-			
+
 			// Mock to return different value
 			const spy = jest.spyOn(service as any, 'detectRuntimeSpecific');
 			spy.mockResolvedValue(false);
@@ -134,7 +151,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockSessionHelper.capturePane.mockReturnValue('Welcome to the system');
 
 			const result = await service['waitForRuntimeReady']('test-session', 1000);
-			
+
 			expect(result).toBe(true);
 		});
 
@@ -142,7 +159,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockSessionHelper.capturePane.mockReturnValue('Error: Failed to start');
 
 			const result = await service['waitForRuntimeReady']('test-session', 1000);
-			
+
 			expect(result).toBe(false);
 		});
 
@@ -150,7 +167,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 			mockSessionHelper.capturePane.mockReturnValue('Loading...');
 
 			const result = await service['waitForRuntimeReady']('test-session', 100);
-			
+
 			expect(result).toBe(false);
 		});
 	});
@@ -183,22 +200,13 @@ describe('RuntimeAgentService (Abstract)', () => {
 	});
 
 	describe('script path resolution', () => {
-		const mockReadFile = jest.fn();
-
 		beforeEach(() => {
-			jest.doMock('fs/promises', () => ({
-				readFile: mockReadFile
-			}));
-		});
-
-		afterEach(() => {
 			mockReadFile.mockReset();
-			jest.resetModules();
 		});
 
 		it('should construct correct path for initialization scripts in runtime_scripts directory', async () => {
 			const scriptContent = 'echo "test command"\necho "another command"';
-			mockReadFile.mockResolvedValue(scriptContent);
+			mockReadFile.mockResolvedValue(scriptContent as any);
 
 			const projectRoot = '/test/project';
 			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
@@ -215,7 +223,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 
 		it('should construct correct path for claude initialization script', async () => {
 			const scriptContent = 'claude --version\necho "Claude ready"';
-			mockReadFile.mockResolvedValue(scriptContent);
+			mockReadFile.mockResolvedValue(scriptContent as any);
 
 			const projectRoot = '/test/project';
 			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
@@ -230,7 +238,7 @@ describe('RuntimeAgentService (Abstract)', () => {
 
 		it('should construct correct path for codex initialization script', async () => {
 			const scriptContent = 'codex --help';
-			mockReadFile.mockResolvedValue(scriptContent);
+			mockReadFile.mockResolvedValue(scriptContent as any);
 
 			const projectRoot = '/test/project';
 			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
@@ -252,7 +260,7 @@ echo "first command"
 echo "second command"
 
 `;
-			mockReadFile.mockResolvedValue(scriptContent);
+			mockReadFile.mockResolvedValue(scriptContent as any);
 
 			const projectRoot = '/test/project';
 			const testService = new TestRuntimeService(mockSessionHelper, projectRoot);
@@ -353,6 +361,88 @@ echo "second command"
 		});
 	});
 
+	describe('settings-based init command', () => {
+		it('should use command from settings when available', async () => {
+			const mockSettings = getDefaultSettings();
+			mockSettings.general.runtimeCommands['claude-code'] = '/custom/claude --dangerously-skip-permissions';
+
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(mockSettings),
+			} as any);
+
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['/custom/claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should fallback to init script when settings command is empty', async () => {
+			const mockSettings = getDefaultSettings();
+			mockSettings.general.runtimeCommands['claude-code'] = '  ';
+
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockReturnValue({
+				getSettings: jest.fn().mockResolvedValue(mockSettings),
+			} as any);
+
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+
+		it('should fallback to init script when settings service throws', async () => {
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockImplementation(() => {
+				throw new Error('Settings unavailable');
+			});
+
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript('test-session', '/test/path');
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions'],
+				'/test/path',
+			);
+		});
+	});
+
+	describe('postInitialize', () => {
+		it('should be a no-op by default (does not throw)', async () => {
+			await expect(service.postInitialize('test-session')).resolves.not.toThrow();
+		});
+	});
+
 	describe('abstract method implementations', () => {
 		it('getRuntimeType should return correct runtime type', () => {
 			expect(service['getRuntimeType']()).toBe(RUNTIME_TYPES.CLAUDE_CODE);
@@ -366,6 +456,26 @@ echo "second command"
 		it('getRuntimeErrorPatterns should return array of error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
 			expect(patterns).toEqual(['Error', 'Failed']);
+		});
+
+		it('getRuntimeExitPatterns should return array of exit patterns', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0]).toBeInstanceOf(RegExp);
+		});
+	});
+
+	describe('getExitPatterns', () => {
+		it('should return exit patterns via public accessor', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns).toHaveLength(2);
+			expect(patterns[0].test('Test exited')).toBe(true);
+			expect(patterns[1].test('Session ended')).toBe(true);
+		});
+
+		it('should not match unrelated text', () => {
+			const patterns = service.getExitPatterns();
+			expect(patterns.some(p => p.test('Hello world'))).toBe(false);
 		});
 	});
 });

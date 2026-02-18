@@ -1,11 +1,10 @@
 export default {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/tests', '<rootDir>/backend/src', '<rootDir>/mcp-server/src', '<rootDir>/cli/src', '<rootDir>/config'],
+  roots: ['<rootDir>/tests', '<rootDir>/backend/src', '<rootDir>/cli/src', '<rootDir>/config'],
   testMatch: [
     '**/tests/**/?(*.)+(spec|test).ts',
     '**/backend/src/**/?(*.)+(spec|test).ts',
-    '**/mcp-server/src/**/?(*.)+(spec|test).ts',
     '**/cli/src/**/?(*.)+(spec|test).ts',
     '**/config/**/?(*.)+(spec|test).ts'
   ],
@@ -23,12 +22,11 @@ export default {
   },
   moduleNameMapper: {
     '^@backend/(.*)$': '<rootDir>/backend/src/$1',
-    '^@mcp/(.*)$': '<rootDir>/mcp-server/src/$1',
-    '^@types/(.*)$': '<rootDir>/types/$1',
+'^@types/(.*)$': '<rootDir>/types/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transformIgnorePatterns: [
-    'node_modules/(?!(@modelcontextprotocol)/)',
+    'node_modules/',
   ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   collectCoverageFrom: [

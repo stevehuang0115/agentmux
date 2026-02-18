@@ -17,6 +17,8 @@ export const SHELL_PROMPT_PATTERNS: RegExp[] = [
   /%\s*$/m,
   /bash-\d+\.\d+\$\s*$/m,
   /zsh.*%\s*$/m,
+  /Type\s+your\s+message/i,
+  /YOLO\s+mode/i,
 ];
 
 /**

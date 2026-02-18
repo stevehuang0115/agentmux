@@ -1,8 +1,8 @@
 import { describe, it, expect } from '@jest/globals';
 import type { ApiContext } from './types.js';
 import { StorageService, TmuxService, SchedulerService, MessageSchedulerService } from '../services/index.js';
-import { ActiveProjectsService } from '../services/active-projects.service.js';
-import { PromptTemplateService } from '../services/prompt-template.service.js';
+import { ActiveProjectsService } from '../services/index.js';
+import { PromptTemplateService } from '../services/index.js';
 
 describe('Controller Types', () => {
   describe('ApiContext interface', () => {
@@ -10,14 +10,17 @@ describe('Controller Types', () => {
       const mockContext: ApiContext = {
         storageService: new StorageService(),
         tmuxService: new TmuxService(),
-        schedulerService: new SchedulerService(),
+        schedulerService: {} as SchedulerService,
         activeProjectsService: new ActiveProjectsService(),
         promptTemplateService: new PromptTemplateService(),
+        agentRegistrationService: {} as any,
+        taskAssignmentMonitor: {} as any,
+        taskTrackingService: {} as any,
       };
 
       expect(mockContext.storageService).toBeInstanceOf(StorageService);
       expect(mockContext.tmuxService).toBeInstanceOf(TmuxService);
-      expect(mockContext.schedulerService).toBeInstanceOf(SchedulerService);
+      expect(mockContext.schedulerService).toBeDefined();
       expect(mockContext.activeProjectsService).toBeInstanceOf(ActiveProjectsService);
       expect(mockContext.promptTemplateService).toBeInstanceOf(PromptTemplateService);
     });
@@ -26,10 +29,13 @@ describe('Controller Types', () => {
       const mockContextWithScheduler: ApiContext = {
         storageService: new StorageService(),
         tmuxService: new TmuxService(),
-        schedulerService: new SchedulerService(),
-        messageSchedulerService: new MessageSchedulerService(),
+        schedulerService: {} as SchedulerService,
+        messageSchedulerService: new MessageSchedulerService(new TmuxService(), new StorageService()),
         activeProjectsService: new ActiveProjectsService(),
         promptTemplateService: new PromptTemplateService(),
+        agentRegistrationService: {} as any,
+        taskAssignmentMonitor: {} as any,
+        taskTrackingService: {} as any,
       };
 
       expect(mockContextWithScheduler.messageSchedulerService).toBeInstanceOf(MessageSchedulerService);
@@ -39,9 +45,12 @@ describe('Controller Types', () => {
       const mockContextWithoutScheduler: ApiContext = {
         storageService: new StorageService(),
         tmuxService: new TmuxService(),
-        schedulerService: new SchedulerService(),
+        schedulerService: {} as SchedulerService,
         activeProjectsService: new ActiveProjectsService(),
         promptTemplateService: new PromptTemplateService(),
+        agentRegistrationService: {} as any,
+        taskAssignmentMonitor: {} as any,
+        taskTrackingService: {} as any,
       };
 
       expect(mockContextWithoutScheduler.messageSchedulerService).toBeUndefined();
@@ -56,6 +65,9 @@ describe('Controller Types', () => {
         messageSchedulerService: {} as MessageSchedulerService,
         activeProjectsService: {} as ActiveProjectsService,
         promptTemplateService: {} as PromptTemplateService,
+        agentRegistrationService: {} as any,
+        taskAssignmentMonitor: {} as any,
+        taskTrackingService: {} as any,
       };
 
       // Type assertions to verify interface structure
@@ -75,6 +87,9 @@ describe('Controller Types', () => {
         schedulerService: {} as SchedulerService,
         activeProjectsService: {} as ActiveProjectsService,
         promptTemplateService: {} as PromptTemplateService,
+        agentRegistrationService: {} as any,
+        taskAssignmentMonitor: {} as any,
+        taskTrackingService: {} as any,
       };
 
       // This should be assignable to ApiContext

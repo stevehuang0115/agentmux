@@ -20,14 +20,12 @@
     "baseUrl": ".",
     "paths": {
       "@backend/*": ["backend/src/*"],
-      "@mcp/*": ["mcp-server/src/*"],
       "@cli/*": ["cli/src/*"],
       "@types/*": ["types/*"]
     }
   },
   "include": [
     "backend/src/**/*",
-    "mcp-server/src/**/*",
     "cli/src/**/*",
     "types/**/*"
   ],

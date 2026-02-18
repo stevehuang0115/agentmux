@@ -5,8 +5,7 @@
   },
   "include": [
     "src/**/*",
-    "../config/*.ts",
-    "../mcp-server/src/**/*"
+    "../config/*.ts"
   ],
   "exclude": [
     "node_modules",
@@ -14,7 +13,6 @@
     "src/**/*.test.ts",
     "src/**/__tests__/**",
     "../config/*.test.ts",
-    "../config/*.test.js",
-    "../mcp-server/src/**/*.test.ts"
+    "../config/*.test.js"
   ]
 }

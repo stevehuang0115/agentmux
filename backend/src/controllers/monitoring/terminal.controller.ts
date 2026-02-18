@@ -11,12 +11,15 @@ import { Request, Response } from 'express';
 import { ApiResponse } from '../../types/index.js';
 import { getSessionBackendSync, getSessionBackend } from '../../services/session/index.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
-import { TERMINAL_CONTROLLER_CONSTANTS } from '../../constants.js';
+import { TERMINAL_CONTROLLER_CONSTANTS, ORCHESTRATOR_SESSION_NAME, AGENTMUX_CONSTANTS, RuntimeType } from '../../constants.js';
 import {
 	validateTerminalInput,
 	sanitizeTerminalInput,
 	validateSessionName,
 } from '../../utils/security.js';
+import { StorageService } from '../../services/core/storage.service.js';
+import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
+import type { ApiContext } from '../types.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -274,12 +277,65 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 			return;
 		}
 
-		// Write data to session
-		session.write(dataStr);
+		// Check for "message" mode: uses two-step write pattern for TUI
+		// runtimes where bracketed paste mode swallows an inline \r.
+		// Step 1: Write text only (triggers bracketed paste)
+		// Step 2: Delay based on message length (paste processing time)
+		// Step 3: Write \r separately (submits the message)
+		const mode = req.body.mode as string | undefined;
+
+		if (mode === 'message') {
+			// Queue messages for sub-agents that haven't completed initialization.
+			// Skip for orchestrator (it has its own queue via QueueProcessorService)
+			// and for sessions not tracked as team members (plain shell sessions).
+			if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
+				try {
+					const memberResult = await StorageService.getInstance().findMemberBySessionName(sessionName);
+					if (memberResult && memberResult.member.agentStatus !== AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+						SubAgentMessageQueue.getInstance().enqueue(sessionName, dataStr);
+						logger.info('Message queued until agent is ready', {
+							sessionName,
+							agentStatus: memberResult.member.agentStatus,
+							queueSize: SubAgentMessageQueue.getInstance().getQueueSize(sessionName),
+						});
+						res.status(202).json({
+							success: true,
+							queued: true,
+							message: 'Message queued until agent is ready',
+						} as ApiResponse);
+						return;
+					}
+				} catch (lookupError) {
+					// If lookup fails, deliver normally rather than blocking the message
+					logger.warn('Agent status lookup failed, delivering message directly', {
+						sessionName,
+						error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+					});
+				}
+			}
+
+			// Two-step write: text first, then Enter separately
+			session.write(dataStr);
+
+			// Scale delay based on message length for TUI paste processing
+			const enterDelay = Math.min(1000 + Math.ceil(dataStr.length / 10), 5000);
+			await new Promise(resolve => setTimeout(resolve, enterDelay));
+
+			// Send Enter as a separate write so it's not consumed by paste mode
+			session.write('\r');
+
+			// Backup Enter after a short delay for reliability
+			await new Promise(resolve => setTimeout(resolve, 500));
+			session.write('\r');
+		} else {
+			// Default: single write with carriage return appended (for shell commands)
+			session.write(dataStr + '\r');
+		}
 
 		logger.debug('Data written to session', {
 			sessionName,
 			dataLength: dataStr.length,
+			mode: mode || 'default',
 		});
 
 		res.json({
@@ -594,4 +650,119 @@ function mapKeyToSequence(key: string): string {
 	};
 
 	return keyMap[key] ?? key;
+}
+
+/**
+ * Deliver a message to an agent session with reliable retry and verification.
+ *
+ * Uses AgentRegistrationService.sendMessageToAgent() — the same battle-tested
+ * delivery path that chat-to-orchestrator uses (prompt check + 3-attempt retry
+ * + stuck detection). This replaces the fire-and-forget `/write` endpoint for
+ * sub-agent message delivery from skill scripts.
+ *
+ * Must be called with `.call(apiController, req, res)` so `this` is an ApiContext.
+ *
+ * @param req - Express request with sessionName param and message in body
+ * @param res - Express response object
+ *
+ * @example
+ * POST /api/terminal/my-agent/deliver
+ * Body: { message: "Hello agent", waitForReady: true }
+ * Response: { success: true, verified: true }
+ */
+export async function deliverMessage(this: ApiContext, req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const { message, runtimeType, waitForReady, waitTimeout } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		// Validate session name for security
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
+		if (!message || typeof message !== 'string') {
+			res.status(400).json({
+				success: false,
+				error: 'Message is required and must be a string',
+			} as ApiResponse);
+			return;
+		}
+
+		// Resolve runtime type: prefer request body, fall back to storage lookup
+		let resolvedRuntimeType: RuntimeType | undefined = runtimeType as RuntimeType | undefined;
+		if (!resolvedRuntimeType) {
+			try {
+				const memberResult = await StorageService.getInstance().findMemberBySessionName(sessionName);
+				if (memberResult?.member?.runtimeType) {
+					resolvedRuntimeType = memberResult.member.runtimeType as RuntimeType;
+				}
+			} catch {
+				// Non-fatal: sendMessageToAgent will use its default
+			}
+		}
+
+		// Optionally wait for agent to be at prompt before delivering
+		if (waitForReady) {
+			const timeout = typeof waitTimeout === 'number' ? waitTimeout : 30000;
+			const ready = await this.agentRegistrationService.waitForAgentReady(
+				sessionName,
+				timeout,
+				resolvedRuntimeType
+			);
+			if (!ready) {
+				res.status(408).json({
+					success: false,
+					error: `Agent '${sessionName}' not ready within ${timeout}ms`,
+				} as ApiResponse);
+				return;
+			}
+		}
+
+		// Use the reliable delivery path with retry and verification
+		const result = await this.agentRegistrationService.sendMessageToAgent(
+			sessionName,
+			message,
+			resolvedRuntimeType
+		);
+
+		if (!result.success) {
+			res.status(502).json({
+				success: false,
+				error: result.error || 'Message delivery failed',
+			} as ApiResponse);
+			return;
+		}
+
+		logger.info('Message delivered via reliable endpoint', {
+			sessionName,
+			messageLength: message.length,
+			runtimeType: resolvedRuntimeType,
+		});
+
+		res.json({
+			success: true,
+			verified: true,
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error delivering message', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to deliver message',
+		} as ApiResponse);
+	}
 }

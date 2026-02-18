@@ -196,7 +196,7 @@ export class ChatService extends EventEmitter {
       if (existing) {
         conversation = existing;
       } else {
-        conversation = await this.createNewConversation();
+        conversation = await this.createNewConversation(undefined, input.conversationId);
       }
     } else {
       conversation = await this.createNewConversation();
@@ -563,10 +563,10 @@ export class ChatService extends EventEmitter {
    * const conversation = await chatService.createNewConversation('Project Discussion');
    * ```
    */
-  async createNewConversation(title?: string): Promise<ChatConversation> {
+  async createNewConversation(title?: string, idOverride?: string): Promise<ChatConversation> {
     await this.ensureInitialized();
 
-    const conversation = createConversation(title);
+    const conversation = createConversation(title, idOverride);
 
     this.conversations.set(conversation.id, conversation);
     this.messages.set(conversation.id, []);

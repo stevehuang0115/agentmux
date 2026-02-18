@@ -3,13 +3,14 @@ import { StorageService } from '../core/storage.service.js';
 import * as sessionModule from '../session/index.js';
 import { AgentHeartbeatService } from '../agent/agent-heartbeat.service.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import { AGENTMUX_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
+jest.mock('node-pty', () => ({ spawn: jest.fn() }));
 jest.mock('../core/storage.service.js');
 jest.mock('../session/index.js');
 jest.mock('../agent/agent-heartbeat.service.js');
@@ -47,7 +48,12 @@ describe('ActivityMonitorService', () => {
 
     (LoggerService.getInstance as jest.Mock).mockReturnValue(mockLoggerService);
 
-    mockStorageService = new StorageService() as jest.Mocked<StorageService>;
+    mockStorageService = {
+      getTeams: jest.fn().mockResolvedValue([]),
+      getProjects: jest.fn().mockResolvedValue([]),
+    } as any;
+    (StorageService.getInstance as jest.Mock).mockReturnValue(mockStorageService);
+
     mockSessionBackend = {
       sessionExists: jest.fn().mockReturnValue(true),
       captureOutput: jest.fn().mockReturnValue('some terminal output'),
@@ -64,14 +70,18 @@ describe('ActivityMonitorService', () => {
       getInstance: jest.fn()
     } as any;
 
-    (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorageService);
-    (sessionModule.getSessionBackend as jest.Mock).mockReturnValue(mockSessionBackend);
+    // Source uses getSessionBackendSync (not getSessionBackend)
+    (sessionModule.getSessionBackendSync as jest.Mock).mockReturnValue(mockSessionBackend);
     (AgentHeartbeatService.getInstance as jest.Mock).mockReturnValue(mockAgentHeartbeatService);
 
     // Mock file system
     (existsSync as jest.Mock).mockReturnValue(false);
     (homedir as jest.Mock).mockReturnValue('/mock/home');
     (join as jest.Mock).mockImplementation((...args) => args.join('/'));
+
+    // Mock rename for atomic writes in saveTeamWorkingStatusFile
+    (rename as jest.Mock).mockResolvedValue(undefined);
+    (unlink as jest.Mock).mockResolvedValue(undefined);
 
     service = ActivityMonitorService.getInstance();
   });
@@ -86,7 +96,7 @@ describe('ActivityMonitorService', () => {
     it('should return singleton instance', () => {
       const instance1 = ActivityMonitorService.getInstance();
       const instance2 = ActivityMonitorService.getInstance();
-      
+
       expect(instance1).toBe(instance2);
     });
 
@@ -107,9 +117,9 @@ describe('ActivityMonitorService', () => {
 
     it('should start polling with immediate first check', () => {
       const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue(undefined);
-      
+
       service.startPolling();
-      
+
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(1);
       expect(mockLogger.info).toHaveBeenCalledWith('Starting activity monitoring with 2-minute intervals (NEW ARCHITECTURE: workingStatus only)');
       expect(service.isRunning()).toBe(true);
@@ -117,19 +127,19 @@ describe('ActivityMonitorService', () => {
 
     it('should set up recurring polling', () => {
       const performActivityCheckSpy = jest.spyOn(service as any, 'performActivityCheck').mockResolvedValue(undefined);
-      
+
       service.startPolling();
-      
+
       // Fast forward 2 minutes
       jest.advanceTimersByTime(120000);
-      
+
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(2); // Initial + 1 interval
     });
 
     it('should warn if already running', () => {
       service.startPolling();
       service.startPolling();
-      
+
       expect(mockLogger.warn).toHaveBeenCalledWith('Activity monitoring already running');
     });
   });
@@ -146,16 +156,16 @@ describe('ActivityMonitorService', () => {
     it('should stop polling and clear interval', () => {
       service.startPolling();
       expect(service.isRunning()).toBe(true);
-      
+
       service.stopPolling();
-      
+
       expect(service.isRunning()).toBe(false);
       expect(mockLogger.info).toHaveBeenCalledWith('Activity monitoring stopped');
     });
 
     it('should do nothing if not running', () => {
       service.stopPolling();
-      
+
       expect(mockLogger.info).not.toHaveBeenCalledWith('Activity monitoring stopped');
     });
   });
@@ -308,9 +318,9 @@ describe('ActivityMonitorService', () => {
 
     it('should handle member working status check errors gracefully', async () => {
       mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator session
-      mockSessionBackend.sessionExists.mockReturnValueOnce(true); // member session exists
-      // Simulate an error by throwing when captureOutput is called
-      mockSessionBackend.captureOutput.mockImplementation(() => { throw new Error('Capture error'); });
+      // Make sessionExists throw synchronously for member check
+      // This propagates past Promise.resolve() before the Promise.race .catch() can handle it
+      mockSessionBackend.sessionExists.mockImplementationOnce(() => { throw new Error('Session check error'); });
 
       await (service as any).performActivityCheck();
 
@@ -319,7 +329,7 @@ describe('ActivityMonitorService', () => {
         memberId: 'member-1',
         memberName: 'Test Member 1',
         sessionName: 'test-session-1',
-        error: 'Capture error'
+        error: 'Session check error'
       });
     });
 
@@ -337,6 +347,7 @@ describe('ActivityMonitorService', () => {
   describe('teamWorkingStatus.json file management', () => {
     it('should create default teamWorkingStatus.json if it does not exist', async () => {
       (existsSync as jest.Mock).mockReturnValue(false);
+      (writeFile as jest.Mock).mockResolvedValue(undefined);
 
       const result = await (service as any).loadTeamWorkingStatusFile();
 
@@ -372,6 +383,7 @@ describe('ActivityMonitorService', () => {
     it('should handle corrupted teamWorkingStatus.json file', async () => {
       (existsSync as jest.Mock).mockReturnValue(true);
       (readFile as jest.Mock).mockResolvedValue('invalid json');
+      (writeFile as jest.Mock).mockResolvedValue(undefined);
 
       const result = await (service as any).loadTeamWorkingStatusFile();
 
@@ -458,9 +470,9 @@ describe('ActivityMonitorService', () => {
     it('should return true when polling is active', () => {
       jest.useFakeTimers();
       service.startPolling();
-      
+
       expect(service.isRunning()).toBe(true);
-      
+
       jest.useRealTimers();
       service.stopPolling();
     });

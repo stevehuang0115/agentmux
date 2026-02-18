@@ -14,6 +14,9 @@ export function registerSystemRoutes(router: Router, apiController: ApiControlle
   router.get('/system/alerts', (req, res) => systemHandlers.getAlerts.call(apiController, req, res));
   router.patch('/system/alerts/:conditionId', (req, res) => systemHandlers.updateAlertCondition.call(apiController, req, res));
 
+  // Server restart
+  router.post('/system/restart', (req, res) => systemHandlers.restartServer.call(apiController, req, res));
+
   // API Health within /api scope
   router.get('/health', (req, res) => systemHandlers.healthCheck.call(apiController, req, res));
 
@@ -22,4 +25,7 @@ export function registerSystemRoutes(router: Router, apiController: ApiControlle
 
   // Directory browsing for folder selection (used by project creator)
   router.get('/directories', (req, res) => systemHandlers.browseDirectories.call(apiController, req, res));
+
+  // SOP query endpoint for agents to retrieve relevant procedures
+  router.post('/system/sops/query', (req, res) => systemHandlers.querySOPs.call(apiController, req, res));
 }

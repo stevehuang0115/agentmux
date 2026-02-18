@@ -276,6 +276,12 @@ export interface DecisionEntry {
   status?: 'active' | 'superseded' | 'deprecated';
   /** ID of the decision that supersedes this one */
   supersededBy?: string;
+  /** What actually happened (filled retrospectively) */
+  actualOutcome?: string;
+  /** What was learned from this decision */
+  learnings?: string;
+  /** ISO timestamp when the outcome was recorded */
+  outcomeRecordedAt?: string;
 }
 
 /**
@@ -427,6 +433,98 @@ export interface LearningEntry {
   relatedFiles?: string[];
   /** Related task/ticket ID */
   relatedTask?: string;
+}
+
+// ========================= SESSION & LIFECYCLE TYPES =========================
+
+/**
+ * Summary of an agent's work session, captured on session end
+ */
+export interface SessionSummary {
+  /** Agent identifier */
+  agentId: string;
+  /** ISO timestamp when the session started */
+  sessionStart: string;
+  /** ISO timestamp when the session ended */
+  sessionEnd: string;
+  /** Human-readable summary of what was accomplished */
+  summary: string;
+  /** Description of unfinished work to pick up next session */
+  unfinishedWork?: string;
+  /** Agent's role during this session */
+  role?: string;
+  /** Project path for this session */
+  projectPath?: string;
+}
+
+/**
+ * Briefing assembled for an agent at session startup
+ */
+export interface StartupBriefing {
+  /** Summary from the agent's most recent session (if any) */
+  lastSessionSummary: string | null;
+  /** Agent-level context (knowledge, preferences, performance) */
+  agentContext: string;
+  /** Project-level context (patterns, decisions, gotchas) */
+  projectContext: string;
+  /** Today's daily log entries (if any) */
+  todaysDailyLog: string | null;
+  /** Active goals for the project (if any) */
+  activeGoals: string | null;
+  /** Recent failures to avoid repeating */
+  recentFailures: string | null;
+  /** Recent successes to replicate */
+  recentSuccesses: string | null;
+}
+
+/**
+ * Entry in the project agents index, tracking which agents have worked on a project
+ */
+export interface AgentIndexEntry {
+  /** Agent identifier */
+  agentId: string;
+  /** Agent's role */
+  role: string;
+  /** ISO timestamp of last activity */
+  lastActive: string;
+}
+
+/**
+ * Project agents index file structure
+ */
+export interface ProjectAgentsIndex {
+  /** List of agents that have worked on this project */
+  agents: AgentIndexEntry[];
+}
+
+/**
+ * Entry in the daily log
+ */
+export interface DailyLogEntry {
+  /** ISO timestamp */
+  timestamp: string;
+  /** Agent identifier */
+  agentId: string;
+  /** Agent's role */
+  role: string;
+  /** Log entry content */
+  entry: string;
+}
+
+/**
+ * A learning entry categorized as success or failure
+ */
+export interface LearningAccumulationEntry {
+  /** ISO timestamp when recorded */
+  timestamp: string;
+  /** Agent that recorded this */
+  agentId: string;
+  /** Agent's role */
+  role: string;
+  /** Description of what worked or failed */
+  description: string;
+  /** Related context (file paths, task IDs, etc.) */
+  context?: string;
 }
 
 // ========================= MEMORY OPERATION TYPES =========================

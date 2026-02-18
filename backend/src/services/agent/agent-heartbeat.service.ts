@@ -23,7 +23,7 @@ export interface AgentHeartbeat {
 	teamMemberId?: string;
 	/** Current agent registration status */
 	agentStatus: AgentStatus;
-	/** Timestamp of last MCP tool activity (proof of life) */
+	/** Timestamp of last API activity (proof of life) */
 	lastActiveTime: string;
 	/** When this agent record was first created */
 	createdAt: string;
@@ -196,14 +196,14 @@ export class AgentStatusBatcher {
 /**
  * Agent Heartbeat Service - manages agent proof-of-life tracking
  *
- * This service transforms every MCP tool call into an agent heartbeat,
+ * This service transforms every API call into an agent heartbeat,
  * maintaining agent status and last active time in teamAgentStatus.json.
  *
  * Key responsibilities:
- * - Update agent status and lastActiveTime on every MCP tool call
+ * - Update agent status and lastActiveTime on every API call
  * - Batch updates for efficiency (2-second timeout, 50-item max)
  * - Detect stale agents (30-minute threshold)
- * - Manage separate teamAgentStatus.json file (owned by MCP Registration)
+ * - Manage separate teamAgentStatus.json file (owned by Agent Registration)
  */
 export class AgentHeartbeatService {
 	private logger: ComponentLogger;
@@ -252,18 +252,18 @@ export class AgentHeartbeatService {
 	}
 
 	/**
-	 * Update agent heartbeat - called by every MCP tool
+	 * Update agent heartbeat - called by every API
 	 *
-	 * This is the main entry point that transforms MCP tool calls into agent heartbeats.
+	 * This is the main entry point that transforms API calls into agent heartbeats.
 	 * Uses batching for efficiency and error resilience.
 	 *
-	 * @param sessionName - Tmux session name from MCP tool call
-	 * @param teamMemberId - Team member ID from MCP tool call (optional)
+	 * @param sessionName - Tmux session name from API call
+	 * @param teamMemberId - Team member ID from API call (optional)
 	 * @param agentStatus - Current agent status (defaults to 'active')
 	 *
 	 * @example
 	 * ```typescript
-	 * // Called by every MCP tool handler
+	 * // Called by every API handler
 	 * await updateAgentHeartbeat('dev-session-1', 'member_123', 'active');
 	 * ```
 	 */
@@ -287,7 +287,7 @@ export class AgentHeartbeatService {
 			this.batcher.addUpdate(agentId, sessionName, agentStatus, teamMemberId);
 
 		} catch (error) {
-			// Log error but don't throw - heartbeat failures shouldn't break MCP tools
+			// Log error but don't throw - heartbeat failures shouldn't break APIs
 			this.logger.error('Failed to update agent heartbeat', {
 				sessionName,
 				teamMemberId,
@@ -631,15 +631,15 @@ export class AgentHeartbeatService {
  * Convenience function to update agent heartbeat
  * Creates a singleton instance and calls updateAgentHeartbeat
  *
- * This is the main function that all MCP tool handlers should call.
+ * This is the main function that all API handlers should call.
  *
- * @param sessionName - Tmux session name from MCP tool call
- * @param teamMemberId - Team member ID from MCP tool call (optional)
+ * @param sessionName - Tmux session name from API call
+ * @param teamMemberId - Team member ID from API call (optional)
  * @param agentStatus - Current agent status (defaults to 'active')
  *
  * @example
  * ```typescript
- * // In MCP tool handler:
+ * // In API handler:
  * import { updateAgentHeartbeat } from '../services/agent/agent-heartbeat.service.js';
  *
  * export async function handleSendMessage(params: any) {
@@ -647,7 +647,7 @@ export class AgentHeartbeatService {
  *     // Update heartbeat first
  *     await updateAgentHeartbeat(params.sessionName, params.teamMemberId);
  *
- *     // Handle the actual MCP tool logic
+ *     // Handle the actual API logic
  *     // ...
  *   } catch (error) {
  *     // Handle errors

@@ -4,14 +4,9 @@
 // This ensures env vars are available when services initialize
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-// Get __dirname equivalent for ESM
-const __filename_early = fileURLToPath(import.meta.url);
-const __dirname_early = path.dirname(__filename_early);
-
-// Load .env from project root (two directories up from backend/src/index.ts)
-dotenv.config({ path: path.resolve(__dirname_early, '../../.env') });
+// Load .env from project root
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 import express from 'express';
 import { createServer } from 'http';
@@ -21,6 +16,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import os from 'os';
 import { promises as fs } from 'fs';
+import { fileURLToPath } from 'url';
 
 import {
 	StorageService,
@@ -34,12 +30,13 @@ import {
 } from './services/index.js';
 import {
 	getSessionBackend,
+	getSessionBackendSync,
 	getSessionStatePersistence,
 	destroySessionBackend,
+	PtySessionBackend,
 } from './services/session/index.js';
 import { ApiController } from './controllers/api.controller.js';
 import { createApiRoutes } from './routes/api.routes.js';
-import { createMCPRoutes, initializeMCPServer, destroyMCPServer } from './routes/mcp.routes.js';
 import { TerminalGateway, setTerminalGateway } from './websocket/terminal.gateway.js';
 import { initializeChatGateway } from './websocket/chat.gateway.js';
 import { StartupConfig } from './types/index.js';
@@ -50,6 +47,8 @@ import {
 	ORCHESTRATOR_ROLE,
 	ORCHESTRATOR_WINDOW_NAME,
 	MESSAGE_QUEUE_CONSTANTS,
+	RUNTIME_TYPES,
+	type RuntimeType,
 } from './constants.js';
 import { getSettingsService } from './services/settings/index.js';
 import { MemoryService } from './services/memory/memory.service.js';
@@ -58,6 +57,7 @@ import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/ind
 import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
 import { EventBusService } from './services/event-bus/index.js';
 import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
+import { SlackImageService, setSlackImageService } from './services/slack/slack-image.service.js';
 import { NotifyReconciliationService } from './services/slack/notify-reconciliation.service.js';
 import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
 import { setTeamControllerEventBusService } from './controllers/team/team.controller.js';
@@ -66,9 +66,11 @@ import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.j
 import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
+import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 
-// Use the early-defined __dirname for consistency
-const __dirname = __dirname_early;
+// ESM __dirname equivalent using import.meta.url
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Safely parses an integer from a string with validation and fallback.
@@ -131,6 +133,7 @@ export class AgentMuxServer {
 	private queueProcessorService!: QueueProcessorService;
 	private eventBusService!: EventBusService;
 	private notifyReconciliationService!: NotifyReconciliationService;
+	private systemResourceAlertService!: SystemResourceAlertService;
 
 	// Shutdown state
 	private isShuttingDown = false;
@@ -153,7 +156,6 @@ export class AgentMuxServer {
 
 		this.config = {
 			webPort: config?.webPort || parseIntWithFallback(process.env.WEB_PORT, 8787, 'WEB_PORT'),
-			mcpPort: config?.mcpPort || parseIntWithFallback(process.env.AGENTMUX_MCP_PORT, 8789, 'AGENTMUX_MCP_PORT'),
 			agentmuxHome: resolveHomePath(defaultAgentmuxHome),
 			defaultCheckInterval:
 				config?.defaultCheckInterval ||
@@ -208,6 +210,16 @@ export class AgentMuxServer {
 			this.schedulerService,
 			this.messageSchedulerService
 		);
+
+		// Wire up reliable delivery: both schedulers use AgentRegistrationService
+		// for retry + progressive verification + background stuck-detection
+		this.messageSchedulerService.setAgentRegistrationService(
+			this.apiController.agentRegistrationService
+		);
+		this.schedulerService.setAgentRegistrationService(
+			this.apiController.agentRegistrationService
+		);
+
 		this.terminalGateway = new TerminalGateway(this.io);
 
 		// Set terminal gateway singleton for chat integration
@@ -238,6 +250,9 @@ export class AgentMuxServer {
 		setChatMessageQueueService(this.messageQueueService);
 		setMessagingControllerQueueService(this.messageQueueService);
 
+		// Initialize system resource alert service for proactive monitoring
+		this.systemResourceAlertService = new SystemResourceAlertService();
+
 		// Initialize event bus service for agent lifecycle pub/sub
 		this.eventBusService = new EventBusService();
 		this.eventBusService.setMessageQueueService(this.messageQueueService);
@@ -249,6 +264,10 @@ export class AgentMuxServer {
 		const slackThreadStore = new SlackThreadStoreService(this.config.agentmuxHome);
 		setSlackThreadStore(slackThreadStore);
 		this.eventBusService.setSlackThreadStore(slackThreadStore);
+
+		// Initialize Slack image service for downloading images from Slack messages
+		const slackImageService = new SlackImageService(this.config.agentmuxHome);
+		setSlackImageService(slackImageService);
 
 		// Broadcast queue events via Socket.IO
 		this.messageQueueService.on('enqueued', (msg) => {
@@ -306,9 +325,6 @@ export class AgentMuxServer {
 		// API routes
 		this.app.use('/api', createApiRoutes(this.apiController));
 
-		// MCP routes - JSON-RPC endpoint for Claude Code integration
-		this.app.use('/mcp', createMCPRoutes());
-
 		// Health check
 		this.app.get('/health', (req, res) => {
 			res.json({
@@ -351,13 +367,6 @@ export class AgentMuxServer {
 			}
 		);
 
-		// 404 handler
-		this.app.use((req, res) => {
-			res.status(404).json({
-				success: false,
-				error: 'Endpoint not found',
-			});
-		});
 	}
 
 	private configureWebSocket(): void {
@@ -472,19 +481,20 @@ export class AgentMuxServer {
 			this.teamsJsonWatcherService.start();
 			this.logger.info('Teams.json file watcher started for real-time updates');
 
-			// Initialize MCP server (integrated into backend)
-			this.logger.info('Initializing MCP server...');
-			await initializeMCPServer();
-			this.logger.info('MCP server integrated at /mcp endpoint');
-
 			// Generate orchestrator skills catalog
 			try {
 				const skillCatalogProjectRoot = path.resolve(__dirname, '../..');
 				const catalogService = SkillCatalogService.getInstance(skillCatalogProjectRoot);
 				const catalogResult = await catalogService.generateCatalog();
-				this.logger.info('Skills catalog generated', {
+				this.logger.info('Orchestrator skills catalog generated', {
 					catalogPath: catalogResult.catalogPath,
 					skillCount: catalogResult.skillCount,
+				});
+
+				const agentCatalogResult = await catalogService.generateAgentCatalog();
+				this.logger.info('Agent skills catalog generated', {
+					catalogPath: agentCatalogResult.catalogPath,
+					skillCount: agentCatalogResult.skillCount,
 				});
 			} catch (error) {
 				this.logger.warn('Failed to generate skills catalog (non-critical)', {
@@ -512,12 +522,27 @@ export class AgentMuxServer {
 			this.logger.info('Starting message queue processor...');
 			this.queueProcessorService.start();
 
+			// Start Slack image cleanup (download temp files)
+			try {
+				const { getSlackImageService: getImgService } = await import('./services/slack/slack-image.service.js');
+				const imgService = getImgService();
+				await imgService.cleanupOnStartup();
+				imgService.startCleanup();
+			} catch (err) {
+				this.logger.warn('Failed to initialize Slack image service', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+
 			// Initialize Slack if configured
 			await this.initializeSlackIfConfigured();
 
 			// Start NOTIFY reconciliation service (retries failed Slack deliveries)
 			this.notifyReconciliationService = new NotifyReconciliationService();
 			this.notifyReconciliationService.start();
+
+			// Start system resource alert monitoring (proactive disk/memory/CPU alerts)
+			this.systemResourceAlertService.startMonitoring();
 
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
@@ -592,11 +617,11 @@ export class AgentMuxServer {
 			this.logger.info('Auto-start orchestrator is enabled, starting orchestrator...');
 
 			// Determine runtime type from orchestrator status
-			let runtimeType = 'claude-code';
+			let runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE;
 			try {
 				const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 				if (orchestratorStatus?.runtimeType) {
-					runtimeType = orchestratorStatus.runtimeType;
+					runtimeType = orchestratorStatus.runtimeType as RuntimeType;
 				}
 			} catch {
 				// Use default runtime type
@@ -608,7 +633,7 @@ export class AgentMuxServer {
 				role: ORCHESTRATOR_ROLE,
 				projectPath: process.cwd(),
 				windowName: ORCHESTRATOR_WINDOW_NAME,
-				runtimeType: runtimeType as any,
+				runtimeType,
 			});
 
 			if (!result.success) {
@@ -677,43 +702,11 @@ export class AgentMuxServer {
 		}
 	}
 
-	/**
-	 * Ensure .mcp.json exists at the project root with the AgentMux MCP server configured.
-	 * Preserves any existing MCP server entries the user may have added.
-	 */
-	private async ensureMcpConfig(): Promise<void> {
-		const mcpConfigPath = path.join(process.cwd(), '.mcp.json');
-		const mcpUrl = `http://localhost:${this.config.webPort}/mcp`;
-
-		let config: { mcpServers?: Record<string, unknown> } = {};
-
-		// Read existing .mcp.json if it exists (preserve other servers)
-		try {
-			const existing = await fs.readFile(mcpConfigPath, 'utf-8');
-			config = JSON.parse(existing);
-		} catch {
-			// File doesn't exist or invalid JSON — start fresh
-		}
-
-		if (!config.mcpServers) {
-			config.mcpServers = {};
-		}
-
-		// Add/update the agentmux MCP server entry
-		config.mcpServers['agentmux'] = {
-			type: 'url',
-			url: mcpUrl,
-		};
-
-		await fs.writeFile(mcpConfigPath, JSON.stringify(config, null, 2) + '\n');
-		this.logger.info('Generated .mcp.json for Claude Code agents', { mcpConfigPath, mcpUrl });
-	}
-
 	private async checkPortAvailability(): Promise<void> {
-		return new Promise(async (resolve, reject) => {
-			const { createServer } = await import('net');
-			const testServer = createServer();
+		const { createServer } = await import('net');
+		const testServer = createServer();
 
+		return new Promise<void>((resolve, reject) => {
 			testServer.listen(this.config.webPort, () => {
 				testServer.close(() => {
 					this.logger.info('Port is available', { port: this.config.webPort });
@@ -721,7 +714,7 @@ export class AgentMuxServer {
 				});
 			});
 
-			testServer.on('error', (error: any) => {
+			testServer.on('error', (error: NodeJS.ErrnoException) => {
 				if (error.code === 'EADDRINUSE') {
 					reject(new Error(`Port ${this.config.webPort} is already in use`));
 				} else {
@@ -741,20 +734,8 @@ export class AgentMuxServer {
 					port: this.config.webPort,
 					durationMs: duration,
 					dashboardUrl: `http://localhost:${this.config.webPort}`,
-					mcpUrl: `http://localhost:${this.config.webPort}/mcp`,
 					websocketUrl: `ws://localhost:${this.config.webPort}`,
 					home: this.config.agentmuxHome
-				});
-				this.logger.info('To configure Claude Code, run:', {
-					command: `claude mcp add --transport http agentmux http://localhost:${this.config.webPort}/mcp`
-				});
-
-				// Generate .mcp.json at project root so Claude Code agents
-				// automatically discover the AgentMux MCP server
-				this.ensureMcpConfig().catch((err) => {
-					this.logger.warn('Failed to generate .mcp.json (non-critical)', {
-						error: err instanceof Error ? err.message : String(err),
-					});
 				});
 
 				resolve();
@@ -861,13 +842,14 @@ export class AgentMuxServer {
 		this.isShuttingDown = true;
 		this.logger.info('Shutting down AgentMux server...');
 
-		// Set a hard timeout to force exit if graceful shutdown takes too long
-		// Use shorter timeout in development for faster restarts
+		// Set a hard timeout to force exit if graceful shutdown takes too long.
+		// Use SIGKILL on self as the ultimate fallback — this is uncatchable and
+		// guarantees death even if native node-pty handles keep the event loop alive.
 		const isDev = process.env.NODE_ENV !== 'production';
-		const timeoutMs = isDev ? 3000 : 10000;
+		const timeoutMs = isDev ? 5000 : 10000;
 		const forceExitTimeout = setTimeout(() => {
-			this.logger.warn('Graceful shutdown timed out, forcing exit...');
-			process.exit(1);
+			this.logger.warn('Graceful shutdown timed out, sending SIGKILL to self...');
+			process.kill(process.pid, 'SIGKILL');
 		}, timeoutMs);
 
 		try {
@@ -877,16 +859,40 @@ export class AgentMuxServer {
 				this.healthMonitoringInterval = null;
 			}
 
-			// Save PTY session state before cleanup
-			this.logger.info('Saving PTY session state...');
+			// Save PTY session state and force-kill all child processes
+			this.logger.info('Saving PTY session state and force-killing child processes...');
 			try {
-				const sessionBackend = await getSessionBackend();
-				const persistence = getSessionStatePersistence();
-				const savedCount = await persistence.saveState(sessionBackend);
-				if (savedCount > 0) {
-					this.logger.info('Saved PTY sessions for later restoration', { count: savedCount });
+				const sessionBackend = getSessionBackendSync();
+				if (sessionBackend) {
+					// Save state for resume-on-restart
+					const persistence = getSessionStatePersistence();
+					const savedCount = await persistence.saveState(sessionBackend);
+					if (savedCount > 0) {
+						this.logger.info('Saved PTY sessions for later restoration', { count: savedCount });
+					}
+
+					// Collect PIDs before destroying for belt-and-suspenders cleanup
+					let collectedPids: number[] = [];
+					if (sessionBackend instanceof PtySessionBackend) {
+						collectedPids = sessionBackend.getAllSessionPids();
+						this.logger.info('Collected PTY PIDs for shutdown', { pids: collectedPids });
+
+						// Use forceDestroyAll for SIGTERM → SIGKILL escalation
+						await sessionBackend.forceDestroyAll();
+					} else {
+						await sessionBackend.destroy();
+					}
+
+					// Belt-and-suspenders: SIGKILL any remaining PIDs
+					for (const pid of collectedPids) {
+						try {
+							process.kill(pid, 'SIGKILL');
+						} catch {
+							// ESRCH = already dead, which is expected
+						}
+					}
 				}
-				// Destroy PTY session backend
+				// Clear the factory singleton
 				await destroySessionBackend();
 			} catch (error) {
 				this.logger.warn('Failed to save PTY session state', { error: error instanceof Error ? error.message : String(error) });
@@ -900,6 +906,11 @@ export class AgentMuxServer {
 				this.logger.warn('Failed to flush message queue', {
 					error: error instanceof Error ? error.message : String(error),
 				});
+			}
+
+			// Stop system resource alert monitoring
+			if (this.systemResourceAlertService) {
+				this.systemResourceAlertService.stopMonitoring();
 			}
 
 			// Stop NOTIFY reconciliation service
@@ -929,13 +940,17 @@ export class AgentMuxServer {
 			// Clean up tmux service resources
 			this.tmuxService.destroy();
 
+			// Stop Slack image cleanup timer
+			try {
+				const { getSlackImageService: getImgSvc } = await import('./services/slack/slack-image.service.js');
+				getImgSvc().stopCleanup();
+			} catch {
+				// Ignore if not initialized
+			}
+
 			// Shutdown Slack integration
 			this.logger.info('Shutting down Slack integration...');
 			await shutdownSlack();
-
-			// Destroy MCP server
-			this.logger.info('Stopping MCP server...');
-			destroyMCPServer();
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();
@@ -975,7 +990,10 @@ export class AgentMuxServer {
 }
 
 // Start server if this file is run directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isMainModule = process.argv[1] && (
+	process.argv[1].endsWith('/index.ts') || process.argv[1].endsWith('/index.js')
+);
+if (isMainModule) {
 	const server = new AgentMuxServer();
 	const logger = LoggerService.getInstance().createComponentLogger('AgentMuxServer');
 	server.start().catch((error) => {

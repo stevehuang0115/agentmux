@@ -4,7 +4,9 @@ import path from 'path';
 import * as fs from 'fs/promises';
 import type { ApiContext } from '../types.js';
 import { MonitoringService, ConfigService, LoggerService } from '../../services/index.js';
+import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { ApiResponse } from '../../types/index.js';
+import { SOPService } from '../../services/sop/sop.service.js';
 
 /**
  * Directory entry for filesystem browsing
@@ -288,6 +290,135 @@ export async function browseDirectories(
     res.status(500).json({
       success: false,
       error: 'Failed to browse directories',
+    } as ApiResponse);
+  }
+}
+
+/**
+ * Gracefully restart the AgentMux backend server.
+ *
+ * Saves PTY session state, responds to the caller, then exits with code 0.
+ * The external process manager (nodemon, systemd, ECS, ProcessRecovery) is
+ * responsible for restarting the process after exit.
+ *
+ * @param req - Express request object
+ * @param res - Express response object
+ */
+export async function restartServer(
+  this: ApiContext,
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    // Save session state before exit
+    let savedCount = 0;
+    try {
+      const sessionBackend = getSessionBackendSync();
+      if (sessionBackend) {
+        const persistence = getSessionStatePersistence();
+        savedCount = await persistence.saveState(sessionBackend);
+      }
+    } catch (saveError) {
+      console.warn('Failed to save session state before restart:', saveError);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        message: 'Server is restarting...',
+        savedSessions: savedCount,
+        timestamp: new Date().toISOString(),
+      },
+    } as ApiResponse);
+
+    // Trigger restart after HTTP response flushes.
+    // Strategy depends on environment:
+    // - Development (tsx watch): touch a source file to trigger file-watcher restart
+    // - Production (pm2/Docker/ECS): process.exit(0) and supervisor restarts
+    setTimeout(async () => {
+      console.log('Restarting AgentMux server...');
+
+      // Try tsx watch restart: touch the entry file to trigger file-watcher
+      const entryFile = path.resolve(process.cwd(), 'backend/src/index.ts');
+      try {
+        await fs.utimes(entryFile, new Date(), new Date());
+        console.log('Touched entry file to trigger tsx watch restart');
+        // tsx watch should pick up the mtime change and restart.
+        // If not running under tsx watch (production), fall through to process.exit.
+        // Give tsx watch 2 seconds to detect the change.
+        setTimeout(() => {
+          // If we're still alive, the file watcher didn't restart us.
+          // Fall back to process.exit for production environments.
+          console.log('File watcher did not restart — falling back to process.exit(0)');
+          process.exit(0);
+        }, 2000);
+      } catch {
+        // Can't touch the file (e.g., running from dist/), use process.exit
+        console.log('Cannot touch entry file, using process.exit(0)');
+        process.exit(0);
+      }
+    }, 1000);
+  } catch (error) {
+    console.error('Error initiating server restart:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to initiate server restart',
+    } as ApiResponse);
+  }
+}
+
+/**
+ * POST /api/system/sops/query
+ *
+ * Query Standard Operating Procedures relevant to a given context.
+ * Uses the SOPService to find and format relevant SOPs based on
+ * the agent's role and current task context.
+ *
+ * @param req - Express request with body: { context, category?, role? }
+ * @param res - Express response returning { success, data: { sopContext: string } }
+ *
+ * @example
+ * ```
+ * POST /api/system/sops/query
+ * {
+ *   "context": "implementing a new API endpoint",
+ *   "role": "developer",
+ *   "category": "workflow"
+ * }
+ * ```
+ */
+export async function querySOPs(
+  this: ApiContext,
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const { context, category, role } = req.body;
+
+    if (!context) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameter: context',
+      } as ApiResponse);
+      return;
+    }
+
+    const sopService = SOPService.getInstance();
+    const sopContext = await sopService.generateSOPContext({
+      role: role || 'developer',
+      taskContext: context,
+      taskType: category,
+    });
+
+    res.json({
+      success: true,
+      data: { sopContext },
+    } as ApiResponse);
+  } catch (error) {
+    console.error('Error querying SOPs:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to query SOPs',
     } as ApiResponse);
   }
 }

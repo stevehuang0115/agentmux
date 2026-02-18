@@ -20,15 +20,33 @@ jest.mock('../../websocket/terminal.gateway.js', () => ({
     broadcastOrchestratorStatus: jest.fn(),
   }),
 }));
+
+// Mock orchestrator status service
+jest.mock('../../services/orchestrator/index.js', () => ({
+  getOrchestratorStatus: jest.fn().mockResolvedValue({
+    isActive: true,
+    agentStatus: 'active',
+    message: 'Orchestrator is running',
+  }),
+  getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
+}));
+
+// Mock session backend for list_sessions command
+jest.mock('../../services/session/index.js', () => ({
+  getSessionBackendSync: jest.fn().mockReturnValue({
+    listSessions: jest.fn().mockReturnValue(['session-1', 'session-2']),
+  }),
+}));
+
 import type { ApiContext } from '../types.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { AGENTMUX_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 describe('Orchestrator Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
   let mockResponse: Partial<Response>;
   let mockStorageService: any;
-  let mockTmuxService: any;
+  let mockAgentRegistrationService: any;
   let mockPromptTemplateService: any;
 
   beforeEach(() => {
@@ -36,21 +54,17 @@ describe('Orchestrator Handlers', () => {
 
     mockStorageService = {
       getTeams: jest.fn(),
-      getProjects: jest.fn()
+      getProjects: jest.fn(),
+      updateAgentStatus: jest.fn(),
+      getOrchestratorStatus: jest.fn().mockResolvedValue({ runtimeType: 'claude-code' }),
     };
 
-    mockTmuxService = {
-      sendMessage: jest.fn(),
-      sendKey: jest.fn(),
-      sessionExists: jest.fn(),
-      createOrchestratorSession: jest.fn(),
-      initializeAgentWithRegistration: jest.fn(),
-      killSession: jest.fn()
-    };
-
-    mockStorageService = {
-      ...mockStorageService,
-      updateAgentStatus: jest.fn()
+    mockAgentRegistrationService = {
+      sendMessageToAgent: jest.fn(),
+      sendKeyToAgent: jest.fn(),
+      createAgentSession: jest.fn(),
+      terminateAgentSession: jest.fn(),
+      checkAgentHealth: jest.fn(),
     };
 
     mockPromptTemplateService = {
@@ -59,13 +73,13 @@ describe('Orchestrator Handlers', () => {
 
     mockApiContext = {
       storageService: mockStorageService,
-      tmuxService: mockTmuxService,
+      agentRegistrationService: mockAgentRegistrationService,
       promptTemplateService: mockPromptTemplateService
     } as any;
 
     mockRequest = {
       params: { projectId: 'project-1' },
-      body: { 
+      body: {
         command: 'help',
         message: 'Test message',
         taskId: 'task-123',
@@ -115,16 +129,22 @@ describe('Orchestrator Handlers', () => {
       const originalConsoleError = console.error;
       console.error = jest.fn();
 
-      // Force an error by making the context undefined
+      // Force an error by making res.json throw on first call,
+      // then work normally for the error handler's res.status().json() call
+      const errorResponse = {
+        json: jest.fn().mockImplementationOnce(() => { throw new Error('json error'); }),
+        status: jest.fn().mockReturnThis(),
+      };
+
       await orchestratorHandlers.getOrchestratorCommands.call(
-        undefined as any,
+        mockApiContext as ApiContext,
         mockRequest as Request,
-        mockResponse as Response
+        errorResponse as unknown as Response
       );
 
-      expect(mockResponse.status).toHaveBeenCalledWith(500);
-      expect(mockResponse.json).toHaveBeenCalledWith([]);
-      
+      expect(errorResponse.status).toHaveBeenCalledWith(500);
+      expect(errorResponse.json).toHaveBeenCalledWith([]);
+
       console.error = originalConsoleError;
     });
   });
@@ -313,7 +333,10 @@ describe('Orchestrator Handlers', () => {
 
   describe('sendOrchestratorMessage', () => {
     it('should send message to orchestrator successfully', async () => {
-      mockTmuxService.sendMessage.mockResolvedValue(undefined);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: true,
+        message: 'Message delivered',
+      });
 
       await orchestratorHandlers.sendOrchestratorMessage.call(
         mockApiContext as ApiContext,
@@ -321,7 +344,10 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Test message');
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'Test message'
+      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
         message: 'Message sent to orchestrator successfully',
@@ -330,8 +356,12 @@ describe('Orchestrator Handlers', () => {
       });
     });
 
-    it('should return 400 when message is missing', async () => {
+    it('should return 400 when message sending fails', async () => {
       mockRequest.body = {};
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: 'Message is required and must be a string',
+      });
 
       await orchestratorHandlers.sendOrchestratorMessage.call(
         mockApiContext as ApiContext,
@@ -342,12 +372,16 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(400);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Message is required'
+        error: 'Message is required and must be a string',
       });
     });
 
     it('should return 400 when message is not a string', async () => {
       mockRequest.body = { message: 123 };
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: 'Message is required and must be a string',
+      });
 
       await orchestratorHandlers.sendOrchestratorMessage.call(
         mockApiContext as ApiContext,
@@ -358,12 +392,12 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(400);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Message is required'
+        error: 'Message is required and must be a string',
       });
     });
 
-    it('should handle tmux service errors', async () => {
-      mockTmuxService.sendMessage.mockRejectedValue(new Error('Tmux error'));
+    it('should handle agentRegistrationService errors', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValue(new Error('Service error'));
 
       await orchestratorHandlers.sendOrchestratorMessage.call(
         mockApiContext as ApiContext,
@@ -374,14 +408,17 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(500);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Failed to send message to orchestrator session'
+        error: 'Service error'
       });
     });
   });
 
   describe('sendOrchestratorEnter', () => {
     it('should send Enter key to orchestrator successfully', async () => {
-      mockTmuxService.sendKey.mockResolvedValue(undefined);
+      mockAgentRegistrationService.sendKeyToAgent.mockResolvedValue({
+        success: true,
+        message: 'Key sent',
+      });
 
       await orchestratorHandlers.sendOrchestratorEnter.call(
         mockApiContext as ApiContext,
@@ -389,7 +426,10 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sendKey).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Enter');
+      expect(mockAgentRegistrationService.sendKeyToAgent).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'Enter'
+      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
         message: 'Enter key sent to orchestrator',
@@ -397,8 +437,8 @@ describe('Orchestrator Handlers', () => {
       });
     });
 
-    it('should handle tmux service errors when sending Enter key', async () => {
-      mockTmuxService.sendKey.mockRejectedValue(new Error('Send key error'));
+    it('should handle agentRegistrationService errors when sending Enter key', async () => {
+      mockAgentRegistrationService.sendKeyToAgent.mockRejectedValue(new Error('Send key error'));
 
       await orchestratorHandlers.sendOrchestratorEnter.call(
         mockApiContext as ApiContext,
@@ -409,18 +449,36 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(500);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Failed to send Enter key'
+        error: 'Send key error'
+      });
+    });
+
+    it('should return 500 when sendKeyToAgent returns failure', async () => {
+      mockAgentRegistrationService.sendKeyToAgent.mockResolvedValue({
+        success: false,
+        error: 'Session does not exist',
+      });
+
+      await orchestratorHandlers.sendOrchestratorEnter.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Session does not exist',
       });
     });
   });
 
   describe('setupOrchestrator', () => {
-    it('should setup orchestrator when session does not exist', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(false);
-      mockTmuxService.createOrchestratorSession.mockResolvedValue({ success: true });
-      mockTmuxService.initializeAgentWithRegistration.mockResolvedValue({ 
-        success: true, 
-        message: 'Orchestrator initialized successfully' 
+    it('should setup orchestrator successfully via agentRegistrationService', async () => {
+      mockAgentRegistrationService.createAgentSession.mockResolvedValue({
+        success: true,
+        sessionName: ORCHESTRATOR_SESSION_NAME,
+        message: 'Orchestrator created and registered successfully',
       });
 
       await orchestratorHandlers.setupOrchestrator.call(
@@ -429,44 +487,25 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockTmuxService.createOrchestratorSession).toHaveBeenCalledWith({
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      expect(mockStorageService.getOrchestratorStatus).toHaveBeenCalled();
+      expect(mockAgentRegistrationService.createAgentSession).toHaveBeenCalledWith({
+        sessionName: ORCHESTRATOR_SESSION_NAME,
+        role: 'orchestrator',
         projectPath: process.cwd(),
-        windowName: 'Orchestrator'
+        windowName: expect.any(String),
+        runtimeType: 'claude-code',
       });
-      expect(mockTmuxService.initializeAgentWithRegistration).toHaveBeenCalledWith(
-        AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'orchestrator', process.cwd(), 90000
-      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
-        message: 'Orchestrator initialized successfully',
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+        message: 'Orchestrator created and registered successfully',
+        sessionName: ORCHESTRATOR_SESSION_NAME,
       });
     });
 
-    it('should setup orchestrator when session already exists', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
-      mockTmuxService.initializeAgentWithRegistration.mockResolvedValue({ 
-        success: true, 
-        message: 'Orchestrator registered successfully' 
-      });
-
-      await orchestratorHandlers.setupOrchestrator.call(
-        mockApiContext as ApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockTmuxService.createOrchestratorSession).not.toHaveBeenCalled();
-      expect(mockTmuxService.initializeAgentWithRegistration).toHaveBeenCalled();
-    });
-
-    it('should handle orchestrator session creation failure', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(false);
-      mockTmuxService.createOrchestratorSession.mockResolvedValue({ 
-        success: false, 
-        error: 'Session creation failed' 
+    it('should handle createAgentSession failure', async () => {
+      mockAgentRegistrationService.createAgentSession.mockResolvedValue({
+        success: false,
+        error: 'Session creation failed',
       });
 
       await orchestratorHandlers.setupOrchestrator.call(
@@ -478,32 +517,12 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(500);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Session creation failed'
-      });
-    });
-
-    it('should handle orchestrator initialization failure', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
-      mockTmuxService.initializeAgentWithRegistration.mockResolvedValue({ 
-        success: false, 
-        error: 'Registration failed' 
-      });
-
-      await orchestratorHandlers.setupOrchestrator.call(
-        mockApiContext as ApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockResponse.status).toHaveBeenCalledWith(500);
-      expect(mockResponse.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Registration failed'
+        error: 'Session creation failed',
       });
     });
 
     it('should handle unexpected setup errors', async () => {
-      mockTmuxService.sessionExists.mockRejectedValue(new Error('Unexpected error'));
+      mockAgentRegistrationService.createAgentSession.mockRejectedValue(new Error('Unexpected error'));
 
       await orchestratorHandlers.setupOrchestrator.call(
         mockApiContext as ApiContext,
@@ -517,13 +536,70 @@ describe('Orchestrator Handlers', () => {
         error: 'Unexpected error'
       });
     });
+
+    it('should fall back to default runtime type when getOrchestratorStatus fails', async () => {
+      mockStorageService.getOrchestratorStatus.mockRejectedValue(new Error('Storage unavailable'));
+      mockAgentRegistrationService.createAgentSession.mockResolvedValue({
+        success: true,
+        sessionName: ORCHESTRATOR_SESSION_NAME,
+        message: 'Orchestrator created',
+      });
+
+      await orchestratorHandlers.setupOrchestrator.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Should still succeed with default claude-code runtime type
+      expect(mockAgentRegistrationService.createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeType: 'claude-code',
+        })
+      );
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+    });
+
+    it('should use runtime type from storage when available', async () => {
+      mockStorageService.getOrchestratorStatus.mockResolvedValue({ runtimeType: 'gemini-cli' });
+      mockAgentRegistrationService.createAgentSession.mockResolvedValue({
+        success: true,
+        sessionName: ORCHESTRATOR_SESSION_NAME,
+        message: 'Orchestrator created',
+      });
+      // Mock getProjects for Gemini allowlist flow
+      mockStorageService.getProjects.mockResolvedValue([]);
+
+      await orchestratorHandlers.setupOrchestrator.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockAgentRegistrationService.createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeType: 'gemini-cli',
+        })
+      );
+    });
   });
 
   describe('assignTaskToOrchestrator', () => {
     it('should assign task to orchestrator successfully', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
+      mockAgentRegistrationService.checkAgentHealth.mockResolvedValue({
+        success: true,
+        data: {
+          agent: { running: true, status: 'active' },
+          timestamp: new Date().toISOString(),
+        },
+      });
       mockPromptTemplateService.getOrchestratorTaskAssignmentPrompt.mockResolvedValue('Task assignment prompt');
-      mockTmuxService.sendMessage.mockResolvedValue(undefined);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: true,
+        message: 'Message delivered',
+      });
 
       await orchestratorHandlers.assignTaskToOrchestrator.call(
         mockApiContext as ApiContext,
@@ -531,7 +607,10 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+      expect(mockAgentRegistrationService.checkAgentHealth).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'orchestrator'
+      );
       expect(mockPromptTemplateService.getOrchestratorTaskAssignmentPrompt).toHaveBeenCalledWith({
         projectName: 'Test Project',
         projectPath: '/test/path',
@@ -541,14 +620,17 @@ describe('Orchestrator Handlers', () => {
         taskPriority: 'high',
         taskMilestone: 'milestone-1'
       });
-      expect(mockTmuxService.sendMessage).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Task assignment prompt');
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'Task assignment prompt'
+      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
         message: 'Task assigned to orchestrator successfully',
         data: {
           taskId: 'task-123',
           taskTitle: 'Test Task',
-          sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          sessionName: ORCHESTRATOR_SESSION_NAME,
           assignedAt: expect.any(String)
         }
       });
@@ -586,8 +668,14 @@ describe('Orchestrator Handlers', () => {
       });
     });
 
-    it('should return 400 when orchestrator session does not exist', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(false);
+    it('should return 400 when orchestrator session is not running', async () => {
+      mockAgentRegistrationService.checkAgentHealth.mockResolvedValue({
+        success: true,
+        data: {
+          agent: { running: false, status: 'inactive' },
+          timestamp: new Date().toISOString(),
+        },
+      });
 
       await orchestratorHandlers.assignTaskToOrchestrator.call(
         mockApiContext as ApiContext,
@@ -603,7 +691,13 @@ describe('Orchestrator Handlers', () => {
     });
 
     it('should handle template service errors', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
+      mockAgentRegistrationService.checkAgentHealth.mockResolvedValue({
+        success: true,
+        data: {
+          agent: { running: true, status: 'active' },
+          timestamp: new Date().toISOString(),
+        },
+      });
       mockPromptTemplateService.getOrchestratorTaskAssignmentPrompt.mockRejectedValue(new Error('Template error'));
 
       await orchestratorHandlers.assignTaskToOrchestrator.call(
@@ -615,14 +709,23 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(500);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Failed to assign task to orchestrator'
+        error: 'Template error'
       });
     });
 
-    it('should handle tmux message sending errors', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
+    it('should handle message sending errors', async () => {
+      mockAgentRegistrationService.checkAgentHealth.mockResolvedValue({
+        success: true,
+        data: {
+          agent: { running: true, status: 'active' },
+          timestamp: new Date().toISOString(),
+        },
+      });
       mockPromptTemplateService.getOrchestratorTaskAssignmentPrompt.mockResolvedValue('Prompt');
-      mockTmuxService.sendMessage.mockRejectedValue(new Error('Send message error'));
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: 'Failed to send task assignment to orchestrator',
+      });
 
       await orchestratorHandlers.assignTaskToOrchestrator.call(
         mockApiContext as ApiContext,
@@ -633,7 +736,7 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.status).toHaveBeenCalledWith(500);
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Failed to assign task to orchestrator'
+        error: 'Failed to send task assignment to orchestrator'
       });
     });
   });
@@ -641,8 +744,8 @@ describe('Orchestrator Handlers', () => {
   describe('Context preservation', () => {
     it('should preserve context when handling orchestrator operations', async () => {
       const contextAwareController = {
-        tmuxService: {
-          sendKey: jest.fn().mockResolvedValue(undefined)
+        agentRegistrationService: {
+          sendKeyToAgent: jest.fn().mockResolvedValue({ success: true }),
         }
       } as any;
 
@@ -652,15 +755,19 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(contextAwareController.tmuxService.sendKey).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'Enter');
+      expect(contextAwareController.agentRegistrationService.sendKeyToAgent).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'Enter'
+      );
     });
   });
 
   describe('stopOrchestrator', () => {
     it('should stop orchestrator successfully when session exists', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(true);
-      mockTmuxService.killSession.mockResolvedValue(undefined);
-      mockStorageService.updateAgentStatus.mockResolvedValue(undefined);
+      mockAgentRegistrationService.terminateAgentSession.mockResolvedValue({
+        success: true,
+        message: 'Agent session terminated successfully',
+      });
 
       await orchestratorHandlers.stopOrchestrator.call(
         mockApiContext as ApiContext,
@@ -668,19 +775,22 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockTmuxService.killSession).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'inactive');
+      expect(mockAgentRegistrationService.terminateAgentSession).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'orchestrator'
+      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
-        message: 'Orchestrator stopped successfully',
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        message: 'Agent session terminated successfully',
+        sessionName: ORCHESTRATOR_SESSION_NAME,
       });
     });
 
     it('should return success when orchestrator is already stopped', async () => {
-      mockTmuxService.sessionExists.mockResolvedValue(false);
-      mockStorageService.updateAgentStatus.mockResolvedValue(undefined);
+      mockAgentRegistrationService.terminateAgentSession.mockResolvedValue({
+        success: true,
+        message: 'Agent session was already terminated',
+      });
 
       await orchestratorHandlers.stopOrchestrator.call(
         mockApiContext as ApiContext,
@@ -688,19 +798,22 @@ describe('Orchestrator Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockTmuxService.sessionExists).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-      expect(mockTmuxService.killSession).not.toHaveBeenCalled();
-      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, 'inactive');
+      expect(mockAgentRegistrationService.terminateAgentSession).toHaveBeenCalledWith(
+        ORCHESTRATOR_SESSION_NAME,
+        'orchestrator'
+      );
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
-        message: 'Orchestrator session is already stopped',
+        message: 'Agent session was already terminated',
+        sessionName: ORCHESTRATOR_SESSION_NAME,
       });
     });
 
     it('should handle errors when stopping orchestrator', async () => {
-      const error = new Error('Failed to kill session');
-      mockTmuxService.sessionExists.mockResolvedValue(true);
-      mockTmuxService.killSession.mockRejectedValue(error);
+      mockAgentRegistrationService.terminateAgentSession.mockResolvedValue({
+        success: false,
+        error: 'Failed to kill session',
+      });
 
       await orchestratorHandlers.stopOrchestrator.call(
         mockApiContext as ApiContext,
@@ -712,6 +825,24 @@ describe('Orchestrator Handlers', () => {
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: false,
         error: 'Failed to kill session',
+      });
+    });
+
+    it('should handle unexpected errors when stopping orchestrator', async () => {
+      mockAgentRegistrationService.terminateAgentSession.mockRejectedValue(
+        new Error('Unexpected termination error')
+      );
+
+      await orchestratorHandlers.stopOrchestrator.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Unexpected termination error',
       });
     });
   });
@@ -728,7 +859,7 @@ describe('Orchestrator Handlers', () => {
     });
 
     it('should handle async operations properly', async () => {
-      mockTmuxService.sendKey.mockResolvedValue(undefined);
+      mockAgentRegistrationService.sendKeyToAgent.mockResolvedValue({ success: true });
 
       const result = await orchestratorHandlers.sendOrchestratorEnter.call(
         mockApiContext as ApiContext,
@@ -742,13 +873,8 @@ describe('Orchestrator Handlers', () => {
   });
 
   describe('Command execution edge cases', () => {
-    it('should handle list_sessions command tmux errors', async () => {
+    it('should handle list_sessions command via session backend', async () => {
       mockRequest.body = { command: 'list_sessions' };
-
-      // Mock child_process import to simulate exec error
-      jest.doMock('child_process', () => ({
-        exec: jest.fn()
-      }));
 
       await orchestratorHandlers.executeOrchestratorCommand.call(
         mockApiContext as ApiContext,
@@ -758,7 +884,7 @@ describe('Orchestrator Handlers', () => {
 
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,
-        output: expect.stringContaining('Active tmux sessions:'),
+        output: expect.stringContaining('Active terminal sessions:'),
         timestamp: expect.any(String)
       });
     });
@@ -859,7 +985,7 @@ describe('Orchestrator Handlers', () => {
     });
   });
 
-    describe('getOrchestratorStatus', () => {
+  describe('getOrchestratorStatus', () => {
     it('should have the status endpoint function exported', () => {
       expect(typeof orchestratorHandlers.getOrchestratorStatus).toBe('function');
     });

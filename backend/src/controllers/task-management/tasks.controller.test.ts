@@ -15,7 +15,7 @@ jest.mock('../../services/index.js', () => ({
 describe('Tasks Handlers', () => {
   let mockApiContext: Partial<ApiContext>;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
+  let mockResponse: any;
   let mockStorageService: any;
   let mockTaskService: any;
 
@@ -26,7 +26,7 @@ describe('Tasks Handlers', () => {
     mockTaskService = new TaskService();
 
     mockStorageService = {
-      getProjects: jest.fn()
+      getProjects: jest.fn<any>()
     };
 
     mockApiContext = {
@@ -34,8 +34,8 @@ describe('Tasks Handlers', () => {
     } as any;
 
     mockRequest = {
-      params: { 
-        projectId: 'project-1', 
+      params: {
+        projectId: 'project-1',
         status: 'in-progress',
         milestoneId: 'milestone-1'
       },
@@ -44,8 +44,8 @@ describe('Tasks Handlers', () => {
     };
 
     mockResponse = {
-      json: jest.fn(),
-      status: jest.fn().mockReturnThis()
+      json: jest.fn<any>(),
+      status: jest.fn<any>().mockReturnThis()
     };
   });
 
@@ -494,7 +494,7 @@ describe('Tasks Handlers', () => {
     it('should preserve context when handling tasks', async () => {
       const contextAwareController = {
         storageService: {
-          getProjects: jest.fn().mockResolvedValue([{ id: 'project-1', path: '/test/path' }])
+          getProjects: jest.fn<any>().mockResolvedValue([{ id: 'project-1', path: '/test/path' }])
         }
       } as any;
 
@@ -542,7 +542,7 @@ describe('Tasks Handlers', () => {
     it('should handle null or undefined project ID consistently', async () => {
       for (const projectId of [null, undefined, '']) {
         jest.clearAllMocks();
-        mockRequest.params = { projectId };
+        mockRequest.params = { projectId: projectId as any };
 
         await tasksHandlers.getAllTasks.call(
           mockApiContext as ApiContext,

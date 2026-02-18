@@ -252,6 +252,51 @@ describe('PtySession', () => {
 
 			expect(session.isKilled()).toBe(true);
 		});
+
+		it('should accept a signal parameter', () => {
+			session = new PtySession('test-session', TEST_CWD, createTestOptions());
+
+			// Should not throw when passing a signal
+			expect(() => session!.kill('SIGTERM')).not.toThrow();
+			expect(session.isKilled()).toBe(true);
+		});
+
+		it('should accept SIGKILL as a signal', () => {
+			session = new PtySession('test-session', TEST_CWD, createTestOptions());
+
+			expect(() => session!.kill('SIGKILL')).not.toThrow();
+			expect(session.isKilled()).toBe(true);
+		});
+	});
+
+	describe('forceKill', () => {
+		it('should force-kill the session', async () => {
+			session = new PtySession('test-session', TEST_CWD, createTestOptions());
+
+			await session.forceKill();
+			expect(session.isKilled()).toBe(true);
+		});
+
+		it('should not throw if process is already dead', async () => {
+			session = new PtySession('test-session', TEST_CWD, createTestOptions());
+
+			// Kill normally first, then force-kill should still work
+			session.kill();
+			await expect(session.forceKill()).resolves.toBeUndefined();
+		});
+
+		it('should clear all listeners', async () => {
+			session = new PtySession('test-session', TEST_CWD, createTestOptions());
+
+			const dataCallback = jest.fn();
+			const exitCallback = jest.fn();
+
+			session.onData(dataCallback);
+			session.onExit(exitCallback);
+
+			await session.forceKill();
+			expect(session.isKilled()).toBe(true);
+		});
 	});
 
 	describe('isKilled', () => {

@@ -14,4 +14,4 @@ require_param "message" "$MESSAGE"
 
 BODY=$(jq -n --arg message "$MESSAGE" '{message: $message}')
 
-api_call POST "/terminal/${SESSION_NAME}/write" "$BODY"
+api_call POST "/terminal/${SESSION_NAME}/deliver" "$BODY"

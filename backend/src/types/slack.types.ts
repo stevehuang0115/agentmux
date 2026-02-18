@@ -50,6 +50,57 @@ export interface SlackChannel {
 }
 
 /**
+ * Slack file object from event payload.
+ * Represents a file attached to a Slack message, including download URLs
+ * and optional thumbnail/dimension metadata for images.
+ */
+export interface SlackFile {
+  /** Slack file ID (e.g., F0123ABC456) */
+  id: string;
+  /** Original file name */
+  name: string;
+  /** MIME type (e.g., image/png) */
+  mimetype: string;
+  /** Slack file type identifier (e.g., png, jpg) */
+  filetype: string;
+  /** File size in bytes */
+  size: number;
+  /** Private URL requiring Bearer token to download */
+  url_private: string;
+  /** Private download URL requiring Bearer token */
+  url_private_download: string;
+  /** Optional 360px thumbnail URL */
+  thumb_360?: string;
+  /** Original image width in pixels */
+  original_w?: number;
+  /** Original image height in pixels */
+  original_h?: number;
+  /** Permalink to view the file in Slack */
+  permalink: string;
+}
+
+/**
+ * Downloaded image info with local file path.
+ * Created after successfully downloading a SlackFile to the local filesystem.
+ */
+export interface SlackImageInfo {
+  /** Slack file ID */
+  id: string;
+  /** Original file name */
+  name: string;
+  /** MIME type of the image */
+  mimetype: string;
+  /** Absolute path to the downloaded file on disk */
+  localPath: string;
+  /** Image width in pixels (from Slack metadata) */
+  width?: number;
+  /** Image height in pixels (from Slack metadata) */
+  height?: number;
+  /** Permalink to the original file in Slack */
+  permalink: string;
+}
+
+/**
  * Incoming Slack message
  */
 export interface SlackIncomingMessage {
@@ -64,6 +115,12 @@ export interface SlackIncomingMessage {
   eventTs: string;
   user?: SlackUser;
   channel?: SlackChannel;
+  /** Raw Slack file objects from the event payload */
+  files?: SlackFile[];
+  /** Downloaded image info with local paths (populated after download) */
+  images?: SlackImageInfo[];
+  /** Whether the message contains image attachments */
+  hasImages?: boolean;
 }
 
 /**

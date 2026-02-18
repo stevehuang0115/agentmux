@@ -53,8 +53,12 @@ describe('Settings Types', () => {
         checkInIntervalMinutes: 5,
         maxConcurrentAgents: 10,
         verboseLogging: false,
-        claudeCodeCommand: 'claude --flag',
-        claudeCodeInitScript: 'scripts/init.sh',
+        autoResumeOnRestart: true,
+        runtimeCommands: {
+          'claude-code': 'claude --dangerously-skip-permissions',
+          'gemini-cli': 'gemini --yolo',
+          'codex-cli': 'codex --full-auto',
+        },
       };
 
       expect(settings.defaultRuntime).toBe('claude-code');
@@ -62,23 +66,28 @@ describe('Settings Types', () => {
       expect(settings.checkInIntervalMinutes).toBe(5);
       expect(settings.maxConcurrentAgents).toBe(10);
       expect(settings.verboseLogging).toBe(false);
-      expect(settings.claudeCodeCommand).toBe('claude --flag');
-      expect(settings.claudeCodeInitScript).toBe('scripts/init.sh');
+      expect(settings.autoResumeOnRestart).toBe(true);
+      expect(settings.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
     });
 
-    it('should allow custom Claude Code configuration', () => {
+    it('should allow custom runtime commands for all runtimes', () => {
       const settings: GeneralSettings = {
         defaultRuntime: 'claude-code',
         autoStartOrchestrator: true,
         checkInIntervalMinutes: 10,
         maxConcurrentAgents: 5,
         verboseLogging: true,
-        claudeCodeCommand: '/custom/path/to/claude --dangerously-skip-permissions',
-        claudeCodeInitScript: 'custom/runtime_scripts/my_init.sh',
+        autoResumeOnRestart: false,
+        runtimeCommands: {
+          'claude-code': '/custom/path/to/claude --dangerously-skip-permissions',
+          'gemini-cli': '/custom/gemini --custom-flag',
+          'codex-cli': '/custom/codex --custom-flag',
+        },
       };
 
-      expect(settings.claudeCodeCommand).toContain('/custom/path');
-      expect(settings.claudeCodeInitScript).toContain('custom/runtime_scripts');
+      expect(settings.runtimeCommands['claude-code']).toContain('/custom/path');
+      expect(settings.runtimeCommands['gemini-cli']).toContain('/custom/gemini');
+      expect(settings.runtimeCommands['codex-cli']).toContain('/custom/codex');
     });
   });
 
@@ -125,8 +134,12 @@ describe('Settings Types', () => {
           checkInIntervalMinutes: 5,
           maxConcurrentAgents: 10,
           verboseLogging: false,
-          claudeCodeCommand: 'claude --dangerously-skip-permissions',
-          claudeCodeInitScript: 'config/runtime_scripts/initialize_claude.sh',
+          autoResumeOnRestart: true,
+          runtimeCommands: {
+            'claude-code': 'claude --dangerously-skip-permissions',
+            'gemini-cli': 'gemini --yolo',
+            'codex-cli': 'codex --full-auto',
+          },
         },
         chat: {
           showRawTerminalOutput: false,
@@ -146,8 +159,8 @@ describe('Settings Types', () => {
       expect(settings.general).toBeDefined();
       expect(settings.chat).toBeDefined();
       expect(settings.skills).toBeDefined();
-      expect(settings.general.claudeCodeCommand).toBeDefined();
-      expect(settings.general.claudeCodeInitScript).toBeDefined();
+      expect(settings.general.runtimeCommands).toBeDefined();
+      expect(settings.general.runtimeCommands['claude-code']).toBeDefined();
     });
   });
 
@@ -233,22 +246,25 @@ describe('Settings Types', () => {
       expect(defaults.general.checkInIntervalMinutes).toBe(5);
       expect(defaults.general.maxConcurrentAgents).toBe(10);
       expect(defaults.general.verboseLogging).toBe(false);
+      expect(defaults.general.autoResumeOnRestart).toBe(true);
     });
 
-    it('should have Claude Code configuration defaults', () => {
+    it('should have runtime commands defaults for all runtimes', () => {
       const defaults = getDefaultSettings();
 
-      expect(defaults.general.claudeCodeCommand).toBe('~/.claude/local/claude --dangerously-skip-permissions');
-      expect(defaults.general.claudeCodeInitScript).toBe('config/runtime_scripts/initialize_claude.sh');
+      expect(defaults.general.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
+      expect(defaults.general.runtimeCommands['gemini-cli']).toBe('gemini --yolo');
+      expect(defaults.general.runtimeCommands['codex-cli']).toBe('codex --full-auto');
     });
 
-    it('should include Claude Code fields in default settings', () => {
+    it('should include non-empty runtime commands for all runtimes', () => {
       const defaults = getDefaultSettings();
 
-      expect(typeof defaults.general.claudeCodeCommand).toBe('string');
-      expect(typeof defaults.general.claudeCodeInitScript).toBe('string');
-      expect(defaults.general.claudeCodeCommand.length).toBeGreaterThan(0);
-      expect(defaults.general.claudeCodeInitScript.length).toBeGreaterThan(0);
+      for (const runtime of AI_RUNTIMES) {
+        const cmd = defaults.general.runtimeCommands[runtime];
+        expect(typeof cmd).toBe('string');
+        expect(cmd.length).toBeGreaterThan(0);
+      }
     });
 
     it('should have sensible chat defaults', () => {
@@ -298,6 +314,16 @@ describe('Settings Types', () => {
       expect(result.errors.some(e => e.includes('runtime'))).toBe(true);
     });
 
+    it('should detect non-boolean autoResumeOnRestart', () => {
+      const settings = getDefaultSettings();
+      (settings.general as any).autoResumeOnRestart = 'yes';
+
+      const result = validateSettings(settings);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('autoResumeOnRestart'))).toBe(true);
+    });
+
     it('should detect negative checkInIntervalMinutes', () => {
       const settings = getDefaultSettings();
       settings.general.checkInIntervalMinutes = -1;
@@ -345,6 +371,26 @@ describe('Settings Types', () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors.some(e => e.includes('Skill execution timeout'))).toBe(true);
+    });
+
+    it('should detect empty runtime command', () => {
+      const settings = getDefaultSettings();
+      settings.general.runtimeCommands['gemini-cli'] = '';
+
+      const result = validateSettings(settings);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('gemini-cli'))).toBe(true);
+    });
+
+    it('should detect whitespace-only runtime command', () => {
+      const settings = getDefaultSettings();
+      settings.general.runtimeCommands['codex-cli'] = '   ';
+
+      const result = validateSettings(settings);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('codex-cli'))).toBe(true);
     });
 
     it('should collect multiple errors', () => {

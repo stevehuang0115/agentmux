@@ -21,6 +21,7 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
   const isActive = member.agentStatus === 'active';
   const isStarted = member.agentStatus === 'started';
   const isStartingStatus = member.agentStatus === 'starting' || member.agentStatus === 'activating';
+  const isRunning = isActive || isStarted || isStartingStatus;
   // Show as loading if: starting/activating status, OR individual start is clicked, OR team is starting (and member not already active/started)
   const isInTransition = isStartingStatus || isStarting || (isStartingTeam && !isActive && !isStarted);
   const isLoading = isStarting || isStopping || (isStartingTeam && !isActive && !isStarted);
@@ -136,11 +137,11 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
             items={[
               ...(onViewAgent ? [
                 {
-                  label: 'View Agent',
+                  label: isRunning ? 'View Agent' : 'Edit Agent',
                   onClick: () => onViewAgent(member)
                 }
               ] : []),
-              ...(member.sessionName && onViewTerminal ? [
+              ...(isRunning && member.sessionName && onViewTerminal ? [
                 {
                   label: 'View Terminal',
                   onClick: () => onViewTerminal(member)
