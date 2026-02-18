@@ -363,6 +363,23 @@ describe('SlackOrchestratorBridge', () => {
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
 
+      // Track concurrent calls to verify batching
+      let activeConcurrent = 0;
+      let maxObservedConcurrent = 0;
+
+      const mockImgService = getSlackImageService();
+      (mockImgService.downloadImage as jest.Mock).mockImplementation(async (file: any) => {
+        activeConcurrent++;
+        maxObservedConcurrent = Math.max(maxObservedConcurrent, activeConcurrent);
+        // Simulate async work so concurrent calls overlap within a batch
+        await new Promise(r => setTimeout(r, 10));
+        activeConcurrent--;
+        return {
+          id: file.id, name: file.name, mimetype: 'image/png',
+          localPath: `/tmp/slack-images/${file.id}-${file.name}`, permalink: file.permalink,
+        };
+      });
+
       const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
 
       // Create 5 files to test batching (max concurrent = 3, so 2 batches: [3, 2])
@@ -385,9 +402,9 @@ describe('SlackOrchestratorBridge', () => {
 
       expect(message.images).toBeDefined();
       expect(message.images).toHaveLength(5);
-
-      const mockImgService = getSlackImageService();
       expect(mockImgService.downloadImage).toHaveBeenCalledTimes(5);
+      // Verify concurrency was bounded to batch size (3)
+      expect(maxObservedConcurrent).toBeLessThanOrEqual(3);
     });
 
     it('should continue downloading remaining batches when one file fails', async () => {

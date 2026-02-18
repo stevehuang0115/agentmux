@@ -234,6 +234,79 @@ describe('SlackService', () => {
         service.uploadImage({ channelId: 'C123', filePath: '/tmp/test.png' })
       ).rejects.toThrow('Slack client not initialized');
     });
+
+    describe('retry behavior with mocked client', () => {
+      let service: SlackService;
+      let mockUploadV2: jest.Mock;
+
+      beforeEach(() => {
+        service = new SlackService();
+        mockUploadV2 = jest.fn();
+        // Inject a mock client via private field
+        (service as any).client = {
+          chat: { postMessage: jest.fn(), update: jest.fn() },
+          reactions: { add: jest.fn() },
+          users: { info: jest.fn() },
+          files: { uploadV2: mockUploadV2 },
+        };
+      });
+
+      it('should succeed on first attempt without retrying', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F001' }] });
+
+        const result = await service.uploadImage({
+          channelId: 'C123',
+          filePath: __filename, // Use this test file as a valid file path
+        });
+
+        expect(result.fileId).toBe('F001');
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+      });
+
+      it('should retry on 429 and succeed on subsequent attempt', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0, // 0 seconds so test runs fast
+        });
+        mockUploadV2
+          .mockRejectedValueOnce(rateLimitError)
+          .mockResolvedValueOnce({ files: [{ id: 'F002' }] });
+
+        const result = await service.uploadImage({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(result.fileId).toBe('F002');
+        expect(mockUploadV2).toHaveBeenCalledTimes(2);
+      });
+
+      it('should throw after exhausting all retry attempts', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0,
+        });
+        mockUploadV2.mockRejectedValue(rateLimitError);
+
+        await expect(
+          service.uploadImage({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('rate limited');
+
+        // 1 initial + 3 retries = 4 total calls
+        expect(mockUploadV2).toHaveBeenCalledTimes(4);
+      });
+
+      it('should throw immediately for non-rate-limit errors', async () => {
+        mockUploadV2.mockRejectedValue(new Error('channel_not_found'));
+
+        await expect(
+          service.uploadImage({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('channel_not_found');
+
+        // No retry on non-429 errors
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   describe('rate limit helpers', () => {

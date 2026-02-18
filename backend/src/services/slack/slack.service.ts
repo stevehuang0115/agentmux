@@ -8,6 +8,8 @@
  */
 
 import { EventEmitter } from 'events';
+import { createReadStream } from 'fs';
+import { basename } from 'path';
 import type {
   SlackConfig,
   SlackIncomingMessage,
@@ -510,9 +512,6 @@ export class SlackService extends EventEmitter {
     if (!this.client) {
       throw new Error('Slack client not initialized');
     }
-
-    const { createReadStream } = await import('fs');
-    const { basename } = await import('path');
 
     const filename = options.filename || basename(options.filePath);
     const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;

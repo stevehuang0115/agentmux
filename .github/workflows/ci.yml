@@ -170,4 +170,3 @@ jobs:
 
       - name: Run frontend tests
         run: cd frontend && npm test
-        continue-on-error: true

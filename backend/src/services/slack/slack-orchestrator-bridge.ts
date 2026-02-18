@@ -483,11 +483,15 @@ Just type naturally to chat with the orchestrator!`;
       return;
     }
 
+    if (!message.files || message.files.length === 0) {
+      return;
+    }
+
     const slackImageService = getSlackImageService();
-    const files = message.files!;
+    const files = message.files;
     const downloadedImages: SlackImageInfo[] = [];
     const maxConcurrent = SLACK_IMAGE_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
-    const rejectedFiles: string[] = [];
+    const rejectionMessages: string[] = [];
 
     for (let i = 0; i < files.length; i += maxConcurrent) {
       const batch = files.slice(i, i + maxConcurrent);
@@ -506,7 +510,7 @@ Just type naturally to chat with the orchestrator!`;
           // Track files rejected due to validation (size/type) to warn the Slack user.
           // These match the error prefixes from SlackImageService.downloadImage().
           if (reason.startsWith('File too large:') || reason.startsWith('Unsupported image type:')) {
-            rejectedFiles.push(`${fileName}: ${reason}`);
+            rejectionMessages.push(`${fileName}: ${reason}`);
           }
         }
       }
@@ -517,11 +521,11 @@ Just type naturally to chat with the orchestrator!`;
     }
 
     // Send a warning back to Slack if any files were rejected
-    if (rejectedFiles.length > 0) {
+    if (rejectionMessages.length > 0) {
       try {
         const maxMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
         const supportedTypes = SLACK_IMAGE_CONSTANTS.SUPPORTED_MIMES.map(m => m.replace('image/', '').toUpperCase()).join(', ');
-        const warningText = `:warning: Some image(s) could not be processed:\n${rejectedFiles.map(f => `• ${f}`).join('\n')}\n\nSupported types: ${supportedTypes}. Max size: ${maxMB} MB.`;
+        const warningText = `:warning: Some image(s) could not be processed:\n${rejectionMessages.map(f => `• ${f}`).join('\n')}\n\nSupported types: ${supportedTypes}. Max size: ${maxMB} MB.`;
         await this.slackService.sendMessage({
           channelId: message.channelId,
           text: warningText,
