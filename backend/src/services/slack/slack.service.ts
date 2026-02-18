@@ -517,6 +517,9 @@ export class SlackService extends EventEmitter {
     const filename = options.filename || basename(options.filePath);
     const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
 
+    /** Maximum backoff delay to prevent hanging on large Retry-After values (60s) */
+    const MAX_BACKOFF_MS = 60_000;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const fileStream = createReadStream(options.filePath);
 
@@ -533,10 +536,14 @@ export class SlackService extends EventEmitter {
         this.status.messagesSent++;
         return { fileId: result.files?.[0]?.id };
       } catch (error: unknown) {
+        // Destroy the stream to release the file descriptor
+        fileStream.destroy();
+
         // Handle Slack 429 rate limit with retry-after backoff
         const isRateLimit = this.isRateLimitError(error);
         if (isRateLimit && attempt < maxRetries) {
-          const retryAfterMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          const rawMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
           console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise(resolve => setTimeout(resolve, retryAfterMs));
           continue;

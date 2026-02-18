@@ -503,8 +503,9 @@ Just type naturally to chat with the orchestrator!`;
           const fileName = batch[j].name;
           const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
           console.warn(`[SlackBridge] Failed to download image ${fileName}:`, reason);
-          // Track files that were too large or unsupported to warn the user
-          if (reason.includes('too large') || reason.includes('Unsupported')) {
+          // Track files rejected due to validation (size/type) to warn the Slack user.
+          // These match the error prefixes from SlackImageService.downloadImage().
+          if (reason.startsWith('File too large:') || reason.startsWith('Unsupported image type:')) {
             rejectedFiles.push(`${fileName}: ${reason}`);
           }
         }
@@ -519,7 +520,8 @@ Just type naturally to chat with the orchestrator!`;
     if (rejectedFiles.length > 0) {
       try {
         const maxMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
-        const warningText = `:warning: Some image(s) could not be processed:\n${rejectedFiles.map(f => `• ${f}`).join('\n')}\n\nSupported types: PNG, JPEG, GIF, WebP, SVG. Max size: ${maxMB} MB.`;
+        const supportedTypes = SLACK_IMAGE_CONSTANTS.SUPPORTED_MIMES.map(m => m.replace('image/', '').toUpperCase()).join(', ');
+        const warningText = `:warning: Some image(s) could not be processed:\n${rejectedFiles.map(f => `• ${f}`).join('\n')}\n\nSupported types: ${supportedTypes}. Max size: ${maxMB} MB.`;
         await this.slackService.sendMessage({
           channelId: message.channelId,
           text: warningText,
