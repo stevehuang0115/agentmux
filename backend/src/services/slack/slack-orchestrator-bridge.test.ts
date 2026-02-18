@@ -205,7 +205,7 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const help = bridge.getHelpMessage();
 
-      expect(help).toContain('AgentMux Commands');
+      expect(help).toContain('Crewly Commands');
       expect(help).toContain('status');
       expect(help).toContain('list projects');
       expect(help).toContain('list teams');

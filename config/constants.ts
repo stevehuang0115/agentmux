@@ -1,7 +1,7 @@
 /**
- * AgentMux Cross-Domain Constants
+ * Crewly Cross-Domain Constants
  *
- * This file contains constants shared across all AgentMux domains:
+ * This file contains constants shared across all Crewly domains:
  * - Backend (Express.js server)
  * - Frontend (React application)
  * - CLI (Command-line interface)
@@ -13,15 +13,15 @@
 // ========================= CORE SYSTEM CONSTANTS =========================
 
 /**
- * AgentMux core system identifiers and names
+ * Crewly core system identifiers and names
  */
-export const AGENTMUX_CONSTANTS = {
+export const CREWLY_CONSTANTS = {
 	/**
 	 * Session and orchestrator configuration
 	 */
 	SESSIONS: {
 		/** Default orchestrator session name used across all domains */
-		ORCHESTRATOR_NAME: 'agentmux-orc',
+		ORCHESTRATOR_NAME: 'crewly-orc',
 		/** Default timeout for agent initialization (2 minutes) */
 		DEFAULT_TIMEOUT: 120000,
 		/** Interval for checking agent registration status (5 seconds) */
@@ -36,8 +36,8 @@ export const AGENTMUX_CONSTANTS = {
 	 * File system paths and directory structure
 	 */
 	PATHS: {
-		/** AgentMux home directory name */
-		AGENTMUX_HOME: '.agentmux',
+		/** Crewly home directory name */
+		CREWLY_HOME: '.crewly',
 		/** Teams configuration file */
 		TEAMS_FILE: 'teams.json',
 		/** Projects configuration file */
@@ -132,9 +132,9 @@ export const AGENTMUX_CONSTANTS = {
 		/** Display name for the orchestrator role */
 		DISPLAY_NAME: 'Orchestrator',
 		/** Default orchestrator window name */
-		WINDOW_NAME: 'AgentMux Orchestrator',
-		/** AgentMux session name prefix pattern */
-		SESSION_PREFIX: 'agentmux_',
+		WINDOW_NAME: 'Crewly Orchestrator',
+		/** Crewly session name prefix pattern */
+		SESSION_PREFIX: 'crewly_',
 	},
 } as const;
 
@@ -149,11 +149,11 @@ export const AGENT_IDENTITY_CONSTANTS = {
 	 */
 	ORCHESTRATOR: {
 		/** Agent identifier used in teamAgentStatus.json */
-		ID: AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID, // 'orchestrator'
+		ID: CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID, // 'orchestrator'
 		/** PTY session name */
-		SESSION_NAME: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // 'agentmux-orc'
+		SESSION_NAME: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // 'crewly-orc'
 		/** Agent role */
-		ROLE: AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR // 'orchestrator'
+		ROLE: CREWLY_CONSTANTS.ROLES.ORCHESTRATOR // 'orchestrator'
 	}
 } as const;
 
@@ -342,12 +342,12 @@ export const MESSAGE_CONSTANTS = {
 export const ENV_CONSTANTS = {
 	/** Session name (legacy: kept for compatibility with older agents) */
 	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
-	/** AgentMux role identifier */
-	AGENTMUX_ROLE: 'AGENTMUX_ROLE',
+	/** Crewly role identifier */
+	CREWLY_ROLE: 'CREWLY_ROLE',
 	/** API server port */
 	API_PORT: 'API_PORT',
 	/** MCP server port */
-	MCP_PORT: 'AGENTMUX_MCP_PORT',
+	MCP_PORT: 'CREWLY_MCP_PORT',
 	/** Project path */
 	PROJECT_PATH: 'PROJECT_PATH',
 	/** Agent role */
@@ -381,12 +381,12 @@ export const BACKEND_CONSTANTS = {
 			APP_JSON: 'app.json',
 		},
 		/** Log file naming patterns */
-		LOG_FILE_PREFIX: 'agentmux-',
+		LOG_FILE_PREFIX: 'crewly-',
 		LOG_FILE_EXTENSION: '.log',
 	},
 
 	/**
-	 * Additional directory names not covered in AGENTMUX_CONSTANTS.PATHS
+	 * Additional directory names not covered in CREWLY_CONSTANTS.PATHS
 	 */
 	ADDITIONAL_DIRS: {
 		LOGS: 'logs',
@@ -488,7 +488,7 @@ export const BACKEND_CONSTANTS = {
 		WEB_PORT: 'WEB_PORT',
 		DEFAULT_CHECK_INTERVAL: 'DEFAULT_CHECK_INTERVAL',
 		AUTO_COMMIT_INTERVAL: 'AUTO_COMMIT_INTERVAL',
-		AGENTMUX_HOME: 'AGENTMUX_HOME',
+		CREWLY_HOME: 'CREWLY_HOME',
 	},
 
 	/**
@@ -508,25 +508,25 @@ Available commands:
 
 /**
  * Memory system configuration for the two-level memory architecture
- * Agent-level: ~/.agentmux/agents/{agentId}/
- * Project-level: project/.agentmux/knowledge/
+ * Agent-level: ~/.crewly/agents/{agentId}/
+ * Project-level: project/.crewly/knowledge/
  */
 export const MEMORY_CONSTANTS = {
   /**
    * Storage paths for memory files
    */
   PATHS: {
-    /** Agent memory directory (relative to AGENTMUX_HOME) */
+    /** Agent memory directory (relative to CREWLY_HOME) */
     AGENTS_DIR: 'agents',
-    /** Project knowledge directory (relative to project .agentmux) */
+    /** Project knowledge directory (relative to project .crewly) */
     KNOWLEDGE_DIR: 'knowledge',
     /** Agent session archives directory name (under agent dir) */
     SESSIONS_DIR: 'sessions',
     /** Latest session summary file name */
     LATEST_SUMMARY: 'latest-summary.md',
-    /** Daily log directory (under project .agentmux) */
+    /** Daily log directory (under project .crewly) */
     DAILY_LOG_DIR: 'logs/daily',
-    /** Goals directory (under project .agentmux) */
+    /** Goals directory (under project .crewly) */
     GOALS_DIR: 'goals',
     /** Goals file */
     GOALS_FILE: 'goals.md',
@@ -534,17 +534,17 @@ export const MEMORY_CONSTANTS = {
     FOCUS_FILE: 'current_focus.md',
     /** Decisions log file (with retrospective outcomes) */
     DECISIONS_LOG: 'decisions_log.md',
-    /** Learning accumulation directory (under project .agentmux) */
+    /** Learning accumulation directory (under project .crewly) */
     LEARNING_DIR: 'learning',
     /** What worked file */
     WHAT_WORKED_FILE: 'what_worked.md',
     /** What failed file */
     WHAT_FAILED_FILE: 'what_failed.md',
-    /** Global learning directory (under AGENTMUX_HOME) */
+    /** Global learning directory (under CREWLY_HOME) */
     GLOBAL_LEARNING_DIR: 'learning',
     /** Cross-project insights file */
     CROSS_PROJECT_INSIGHTS: 'cross_project_insights.md',
-    /** Agents index file (under project .agentmux) */
+    /** Agents index file (under project .crewly) */
     AGENTS_INDEX: 'agents-index.json',
   },
 
@@ -755,13 +755,13 @@ export const EVENT_DEBOUNCE_MS = CONTINUATION_CONSTANTS.EVENTS.DEBOUNCE_MS;
  * Type helpers for extracting literal types from constants
  */
 export type AgentStatus =
-	(typeof AGENTMUX_CONSTANTS.AGENT_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.AGENT_STATUSES];
+	(typeof CREWLY_CONSTANTS.AGENT_STATUSES)[keyof typeof CREWLY_CONSTANTS.AGENT_STATUSES];
 export type WorkingStatus =
-	(typeof AGENTMUX_CONSTANTS.WORKING_STATUSES)[keyof typeof AGENTMUX_CONSTANTS.WORKING_STATUSES];
-export type AgentRole = (typeof AGENTMUX_CONSTANTS.ROLES)[keyof typeof AGENTMUX_CONSTANTS.ROLES];
+	(typeof CREWLY_CONSTANTS.WORKING_STATUSES)[keyof typeof CREWLY_CONSTANTS.WORKING_STATUSES];
+export type AgentRole = (typeof CREWLY_CONSTANTS.ROLES)[keyof typeof CREWLY_CONSTANTS.ROLES];
 export type MessageType = (typeof MESSAGE_CONSTANTS.TYPES)[keyof typeof MESSAGE_CONSTANTS.TYPES];
 export type OrchestratorCommand =
 	(typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS)[keyof typeof BACKEND_CONSTANTS.ORCHESTRATOR_COMMANDS];
 export type HTTPStatusCode =
 	(typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES)[keyof typeof BACKEND_CONSTANTS.NETWORK.HTTP_STATUS_CODES];
-export type AgentId = (typeof AGENTMUX_CONSTANTS.AGENT_IDS)[keyof typeof AGENTMUX_CONSTANTS.AGENT_IDS];
+export type AgentId = (typeof CREWLY_CONSTANTS.AGENT_IDS)[keyof typeof CREWLY_CONSTANTS.AGENT_IDS];

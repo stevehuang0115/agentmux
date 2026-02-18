@@ -11,7 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { DailyLogService } from './daily-log.service.js';
-import { AGENTMUX_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
 
 describe('DailyLogService', () => {
   let service: DailyLogService;
@@ -20,7 +20,7 @@ describe('DailyLogService', () => {
   beforeEach(async () => {
     testProjectDir = path.join(
       os.tmpdir(),
-      `agentmux-daily-log-test-${Date.now()}-${Math.random().toString(36).substring(2)}`,
+      `crewly-daily-log-test-${Date.now()}-${Math.random().toString(36).substring(2)}`,
     );
     await fs.mkdir(testProjectDir, { recursive: true });
 
@@ -62,7 +62,7 @@ describe('DailyLogService', () => {
   });
 
   describe('getLogPath', () => {
-    it('should return path under .agentmux/logs/daily using today\'s date by default', () => {
+    it('should return path under .crewly/logs/daily using today\'s date by default', () => {
       const logPath = service.getLogPath(testProjectDir);
       const today = new Date();
       const year = today.getFullYear();
@@ -73,7 +73,7 @@ describe('DailyLogService', () => {
       expect(logPath).toBe(
         path.join(
           testProjectDir,
-          AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+          CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
           MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR,
           `${expectedDate}.md`,
         ),
@@ -144,7 +144,7 @@ describe('DailyLogService', () => {
     it('should create the directory structure if it does not exist', async () => {
       const logDir = path.join(
         testProjectDir,
-        AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+        CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
         MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR,
       );
 

@@ -20,7 +20,7 @@ Data created through the UI (projects, teams) disappears after page refresh or n
 - Created projects should persist and show in Projects list
 - Created teams should persist and show in Teams list
 - Data should survive page refresh and navigation
-- Data should be properly saved to storage (~/.agentmux/)
+- Data should be properly saved to storage (~/.crewly/)
 
 ## Root Cause Analysis
 
@@ -31,8 +31,8 @@ The storage service might not be properly persisting data to the JSON files.
 
 ```typescript
 // Check if data is being written to:
-// ~/.agentmux/projects.json
-// ~/.agentmux/teams.json
+// ~/.crewly/projects.json
+// ~/.crewly/teams.json
 ```
 
 ### 2. API Not Calling Storage Service
@@ -55,18 +55,18 @@ The storage path might be incorrect or inaccessible.
 
 ```bash
 # Check if files exist and have content
-cat ~/.agentmux/projects.json
-cat ~/.agentmux/teams.json
+cat ~/.crewly/projects.json
+cat ~/.crewly/teams.json
 
 # Watch for changes when creating
-watch -n 1 'cat ~/.agentmux/projects.json'
+watch -n 1 'cat ~/.crewly/projects.json'
 ```
 
 ### 2. Check Backend Logs
 
 ```bash
 # Look for storage-related errors
-tail -f ~/.agentmux/logs/server.log | grep -i storage
+tail -f ~/.crewly/logs/server.log | grep -i storage
 ```
 
 ### 3. Test API Directly
@@ -93,8 +93,8 @@ Check `backend/src/services/storage.service.ts`:
 1. `backend/src/services/storage.service.ts` - Core storage logic
 2. `backend/src/controllers/project.controller.ts` - Project creation
 3. `backend/src/controllers/team/team.controller.ts` - Team creation
-4. `~/.agentmux/projects.json` - Project data file
-5. `~/.agentmux/teams.json` - Team data file
+4. `~/.crewly/projects.json` - Project data file
+5. `~/.crewly/teams.json` - Team data file
 
 ## Files to Modify
 
@@ -113,5 +113,5 @@ Based on investigation, fix the storage persistence issue.
 - [ ] Created projects persist across server restart
 - [ ] Created teams persist across page refresh
 - [ ] Created teams persist across server restart
-- [ ] Data correctly written to ~/.agentmux/*.json files
+- [ ] Data correctly written to ~/.crewly/*.json files
 - [ ] No data loss during normal operation

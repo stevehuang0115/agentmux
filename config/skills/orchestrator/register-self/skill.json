@@ -1,7 +1,7 @@
 {
   "id": "orc-register-self",
   "name": "Register Self",
-  "description": "Register the orchestrator as active with the AgentMux backend. Must be called on startup.",
+  "description": "Register the orchestrator as active with the Crewly backend. Must be called on startup.",
   "category": "system",
   "skillType": "claude-skill",
   "promptFile": "instructions.md",

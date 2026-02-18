@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create the Settings page in the React frontend with tab navigation for General, Roles, and Skills sections. This page serves as the central hub for configuring AgentMux behavior.
+Create the Settings page in the React frontend with tab navigation for General, Roles, and Skills sections. This page serves as the central hub for configuring Crewly behavior.
 
 ## Priority
 
@@ -28,7 +28,7 @@ import './Settings.css';
 type SettingsTab = 'general' | 'roles' | 'skills';
 
 /**
- * Settings page with tabbed navigation for managing AgentMux configuration
+ * Settings page with tabbed navigation for managing Crewly configuration
  */
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
@@ -56,7 +56,7 @@ export const Settings: React.FC = () => {
     <div className="settings-page">
       <header className="settings-header">
         <h1>Settings</h1>
-        <p>Configure AgentMux behavior and manage roles and skills</p>
+        <p>Configure Crewly behavior and manage roles and skills</p>
       </header>
 
       <nav className="settings-tabs">
@@ -109,7 +109,7 @@ describe('Settings', () => {
     render(<Settings />);
 
     expect(screen.getByText('Settings')).toBeInTheDocument();
-    expect(screen.getByText(/Configure AgentMux/)).toBeInTheDocument();
+    expect(screen.getByText(/Configure Crewly/)).toBeInTheDocument();
   });
 
   it('shows all tab buttons', () => {
@@ -163,7 +163,7 @@ describe('Settings', () => {
 ```typescript
 import React, { useEffect, useState } from 'react';
 import { useSettings } from '../../hooks/useSettings.js';
-import { AgentMuxSettings, AIRuntime } from '../../types/settings.types.js';
+import { CrewlySettings, AIRuntime } from '../../types/settings.types.js';
 import './GeneralTab.css';
 
 /**
@@ -171,7 +171,7 @@ import './GeneralTab.css';
  */
 export const GeneralTab: React.FC = () => {
   const { settings, updateSettings, resetSection, isLoading, error } = useSettings();
-  const [localSettings, setLocalSettings] = useState<AgentMuxSettings | null>(null);
+  const [localSettings, setLocalSettings] = useState<CrewlySettings | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -181,9 +181,9 @@ export const GeneralTab: React.FC = () => {
     }
   }, [settings]);
 
-  const handleChange = <K extends keyof AgentMuxSettings>(
+  const handleChange = <K extends keyof CrewlySettings>(
     section: K,
-    field: keyof AgentMuxSettings[K],
+    field: keyof CrewlySettings[K],
     value: any
   ) => {
     if (!localSettings) return;
@@ -266,7 +266,7 @@ export const GeneralTab: React.FC = () => {
             onChange={(e) => handleChange('general', 'autoStartOrchestrator', e.target.checked)}
           />
           <p className="setting-description">
-            Automatically start the orchestrator when AgentMux launches
+            Automatically start the orchestrator when Crewly launches
           </p>
         </div>
 

@@ -9,7 +9,7 @@
 import React, { useEffect, useState } from 'react';
 import { Save, RotateCcw, Check, AlertCircle } from 'lucide-react';
 import { useSettings } from '../../hooks/useSettings';
-import { AgentMuxSettings, AIRuntime, AI_RUNTIMES, AI_RUNTIME_DISPLAY_NAMES } from '../../types/settings.types';
+import { CrewlySettings, AIRuntime, AI_RUNTIMES, AI_RUNTIME_DISPLAY_NAMES } from '../../types/settings.types';
 import { Button } from '../UI/Button';
 import { FormInput, FormLabel, FormSelect } from '../UI/Form';
 
@@ -25,7 +25,7 @@ type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
  */
 export const GeneralTab: React.FC = () => {
   const { settings, updateSettings, resetSection, isLoading, error } = useSettings();
-  const [localSettings, setLocalSettings] = useState<AgentMuxSettings | null>(null);
+  const [localSettings, setLocalSettings] = useState<CrewlySettings | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
 
@@ -40,10 +40,10 @@ export const GeneralTab: React.FC = () => {
   /**
    * Handle setting change
    */
-  const handleChange = <K extends keyof AgentMuxSettings>(
+  const handleChange = <K extends keyof CrewlySettings>(
     section: K,
-    field: keyof AgentMuxSettings[K],
-    value: AgentMuxSettings[K][keyof AgentMuxSettings[K]]
+    field: keyof CrewlySettings[K],
+    value: CrewlySettings[K][keyof CrewlySettings[K]]
   ) => {
     if (!localSettings) return;
 
@@ -163,7 +163,7 @@ export const GeneralTab: React.FC = () => {
                 Auto-Start Orchestrator
               </label>
               <p className="text-xs text-text-secondary-dark mt-0.5">
-                Automatically start the orchestrator when AgentMux launches
+                Automatically start the orchestrator when Crewly launches
               </p>
             </div>
             <input

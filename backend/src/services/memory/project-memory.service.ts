@@ -1,7 +1,7 @@
 /**
  * Project Memory Service
  *
- * Manages project-level persistent memory stored in project/.agentmux/knowledge/
+ * Manages project-level persistent memory stored in project/.crewly/knowledge/
  * Provides storage for patterns, decisions, gotchas, and relationships.
  *
  * @module services/memory/project-memory.service
@@ -23,7 +23,7 @@ import {
   type GotchaSeverity,
   type RelationshipType,
 } from '../../types/memory.types.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -118,7 +118,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
    * @returns Path to the knowledge directory
    */
   private getKnowledgePath(projectPath: string): string {
-    return path.join(projectPath, AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME, MEMORY_CONSTANTS.PATHS.KNOWLEDGE_DIR);
+    return path.join(projectPath, CREWLY_CONSTANTS.PATHS.CREWLY_HOME, MEMORY_CONSTANTS.PATHS.KNOWLEDGE_DIR);
   }
 
   /**

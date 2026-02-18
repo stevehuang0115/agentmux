@@ -154,7 +154,7 @@ export class SOPService implements ISOPService {
    */
   private constructor(basePath?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('SOPService');
-    this.basePath = basePath || path.join(this.getAgentMuxHome(), SOP_CONSTANTS.PATHS.SOP_DIR);
+    this.basePath = basePath || path.join(this.getCrewlyHome(), SOP_CONSTANTS.PATHS.SOP_DIR);
     this.systemPath = path.join(this.basePath, SOP_CONSTANTS.PATHS.SYSTEM_SOP_DIR);
     this.customPath = path.join(this.basePath, SOP_CONSTANTS.PATHS.CUSTOM_SOP_DIR);
     this.indexPath = path.join(this.basePath, SOP_CONSTANTS.PATHS.INDEX_FILE);
@@ -190,12 +190,12 @@ export class SOPService implements ISOPService {
   }
 
   /**
-   * Get the AgentMux home directory
+   * Get the Crewly home directory
    *
    * @returns Home directory path
    */
-  private getAgentMuxHome(): string {
-    return process.env.AGENTMUX_HOME || path.join(process.env.HOME || '', '.agentmux');
+  private getCrewlyHome(): string {
+    return process.env.CREWLY_HOME || path.join(process.env.HOME || '', '.crewly');
   }
 
   /**

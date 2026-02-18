@@ -142,7 +142,7 @@ export const TeamDetail: React.FC = () => {
         const result = await response.json();
         if (result.success && result.data) {
           const hasOrcSession = result.data.some((session: any) =>
-            session.sessionName === 'agentmux-orc'
+            session.sessionName === 'crewly-orc'
           );
           setOrchestratorSessionActive(hasOrcSession);
         }
@@ -365,9 +365,9 @@ export const TeamDetail: React.FC = () => {
   };
 
   const handleViewTerminal = () => {
-    // For Orchestrator Team, open terminal with agentmux-orc session
+    // For Orchestrator Team, open terminal with crewly-orc session
     if (team?.id === 'orchestrator' || team?.name === 'Orchestrator Team') {
-      openTerminalWithSession('agentmux-orc');
+      openTerminalWithSession('crewly-orc');
     }
   };
 

@@ -2,8 +2,8 @@
  * Learning Accumulation Service
  *
  * Manages persistent learning files at two levels:
- * - **Project-level:** `{projectPath}/.agentmux/learning/what_worked.md` and `what_failed.md`
- * - **Global-level:** `~/.agentmux/learning/cross_project_insights.md`
+ * - **Project-level:** `{projectPath}/.crewly/learning/what_worked.md` and `what_failed.md`
+ * - **Global-level:** `~/.crewly/learning/cross_project_insights.md`
  *
  * Learning entries are appended as timestamped markdown sections so agents can
  * review past successes, failures, and cross-project insights when starting
@@ -16,7 +16,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ensureDir } from '../../utils/file-io.utils.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -90,12 +90,12 @@ export class LearningAccumulationService {
    * Returns the absolute path to a project's learning directory
    *
    * @param projectPath - Absolute path to the project root
-   * @returns Absolute path to `{projectPath}/.agentmux/learning`
+   * @returns Absolute path to `{projectPath}/.crewly/learning`
    */
   private getLearningDir(projectPath: string): string {
     return path.join(
       projectPath,
-      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
       MEMORY_CONSTANTS.PATHS.LEARNING_DIR,
     );
   }
@@ -103,12 +103,12 @@ export class LearningAccumulationService {
   /**
    * Returns the absolute path to the global learning directory
    *
-   * @returns Absolute path to `~/.agentmux/learning`
+   * @returns Absolute path to `~/.crewly/learning`
    */
   private getGlobalLearningDir(): string {
     return path.join(
       os.homedir(),
-      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
       MEMORY_CONSTANTS.PATHS.GLOBAL_LEARNING_DIR,
     );
   }
@@ -266,7 +266,7 @@ export class LearningAccumulationService {
 
   /**
    * Records a cross-project insight to the global
-   * `~/.agentmux/learning/cross_project_insights.md` file
+   * `~/.crewly/learning/cross_project_insights.md` file
    *
    * Cross-project insights capture learnings that are not specific to a
    * single project and can inform agent behaviour across the entire workspace.

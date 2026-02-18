@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# AgentMux MCP Server Test Runner
+# Crewly MCP Server Test Runner
 # Runs all MCP server tests (unit and integration)
 
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 # Configuration
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEST_PORT=3002
-TEST_LOG="/tmp/agentmux-test.log"
+TEST_LOG="/tmp/crewly-test.log"
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,11 +39,11 @@ cleanup() {
     log_info "Cleaning up test processes..."
     
     # Kill any test MCP server processes
-    pkill -f "AGENTMUX_MCP_PORT=${TEST_PORT}" 2>/dev/null || true
+    pkill -f "CREWLY_MCP_PORT=${TEST_PORT}" 2>/dev/null || true
     pkill -f "mcp-server.*${TEST_PORT}" 2>/dev/null || true
     
     # Clean up temp files
-    rm -f /tmp/mcp-test-* /tmp/agentmux-test-* 2>/dev/null || true
+    rm -f /tmp/mcp-test-* /tmp/crewly-test-* 2>/dev/null || true
     
     log_info "Cleanup completed"
 }
@@ -93,7 +93,7 @@ start_test_server() {
     cd "$PROJECT_ROOT"
     
     MCP_HTTP=true \
-    AGENTMUX_MCP_PORT="$TEST_PORT" \
+    CREWLY_MCP_PORT="$TEST_PORT" \
     TMUX_SESSION_NAME="test-session" \
     PROJECT_PATH="/tmp/test-project" \
     AGENT_ROLE="test" \
@@ -271,11 +271,11 @@ run_stress_tests() {
 generate_report() {
     log_info "Generating test report..."
     
-    local report_file="/tmp/agentmux-mcp-test-report.txt"
+    local report_file="/tmp/crewly-mcp-test-report.txt"
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     
     cat > "$report_file" << EOF
-AgentMux MCP Server Test Report
+Crewly MCP Server Test Report
 Generated: $timestamp
 
 Test Environment:
@@ -320,11 +320,11 @@ EOF
 main() {
     local start_time=$(date +%s)
     
-    log_info "Starting AgentMux MCP Server Test Suite"
+    log_info "Starting Crewly MCP Server Test Suite"
     log_info "Timestamp: $(date)"
     
     # Initialize test log
-    echo "AgentMux MCP Server Test Log - $(date)" > "$TEST_LOG"
+    echo "Crewly MCP Server Test Log - $(date)" > "$TEST_LOG"
     
     # Run test phases
     if ! check_prerequisites; then

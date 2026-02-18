@@ -5,7 +5,7 @@ import { AgentRegistrationService } from '../agent/agent-registration.service.js
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, RuntimeType } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, RuntimeType } from '../../constants.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -168,7 +168,7 @@ export class MessageSchedulerService extends EventEmitter {
 
       // Determine target session name
       const sessionName = message.targetTeam === 'orchestrator'
-        ? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+        ? CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
         : message.targetTeam;
 
       // Enhance message with continuation instructions to handle interruptions gracefully

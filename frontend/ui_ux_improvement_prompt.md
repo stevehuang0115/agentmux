@@ -1,8 +1,8 @@
-# Stitch AI Prompt: Recreate and Enhance the AgentMux Dashboard
+# Stitch AI Prompt: Recreate and Enhance the Crewly Dashboard
 
 ## 1. High-Level Goal
 
-Your task is to generate a set of high-fidelity, modern, and clean UI mockups for a web application called **AgentMux**. This application is a dashboard for managing AI agent teams that work on software projects.
+Your task is to generate a set of high-fidelity, modern, and clean UI mockups for a web application called **Crewly**. This application is a dashboard for managing AI agent teams that work on software projects.
 
 The goal is not just to recreate the existing UI, but to **enhance it**. The final design should feel like a polished, production-ready application. Draw inspiration from the clean, spacious, and professional aesthetic of platforms like **Vercel, Linear, and GitHub**.
 

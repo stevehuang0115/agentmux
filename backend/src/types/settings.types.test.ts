@@ -7,7 +7,7 @@
 // Jest globals are available automatically
 import {
   AIRuntime,
-  AgentMuxSettings,
+  CrewlySettings,
   GeneralSettings,
   ChatSettings,
   SkillsSettings,
@@ -125,9 +125,9 @@ describe('Settings Types', () => {
     });
   });
 
-  describe('AgentMuxSettings interface', () => {
+  describe('CrewlySettings interface', () => {
     it('should combine all settings sections', () => {
-      const settings: AgentMuxSettings = {
+      const settings: CrewlySettings = {
         general: {
           defaultRuntime: 'claude-code',
           autoStartOrchestrator: false,

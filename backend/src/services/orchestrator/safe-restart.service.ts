@@ -1,7 +1,7 @@
 /**
  * Safe Restart Service
  *
- * Manages graceful shutdown and restart of AgentMux,
+ * Manages graceful shutdown and restart of Crewly,
  * preserving state and enabling seamless recovery.
  *
  * @module services/orchestrator/safe-restart
@@ -191,7 +191,7 @@ export class SafeRestartService {
         if (notification.type === 'slack') {
           await slackBridge.sendNotification({
             type: 'alert',
-            title: 'AgentMux Restarted',
+            title: 'Crewly Restarted',
             message: notification.message,
             urgency: 'normal',
             timestamp: new Date().toISOString(),
@@ -250,7 +250,7 @@ export class SafeRestartService {
       const slackBridge = getSlackOrchestratorBridge();
       await slackBridge.sendNotification({
         type: 'alert',
-        title: 'AgentMux Shutting Down',
+        title: 'Crewly Shutting Down',
         message: `Reason: ${reason}. State has been saved and will resume on restart.`,
         urgency: 'normal',
         timestamp: new Date().toISOString(),
@@ -352,8 +352,8 @@ export class SafeRestartService {
       stdio: 'inherit',
       env: {
         ...process.env,
-        AGENTMUX_RESTARTED: 'true',
-        AGENTMUX_RESTART_REASON: config.reason,
+        CREWLY_RESTARTED: 'true',
+        CREWLY_RESTART_REASON: config.reason,
       },
     });
 
@@ -377,7 +377,7 @@ export class SafeRestartService {
       const slackBridge = getSlackOrchestratorBridge();
       await slackBridge.sendNotification({
         type: 'alert',
-        title: 'AgentMux Restart Scheduled',
+        title: 'Crewly Restart Scheduled',
         message: `:hourglass: Restarting in ${Math.round(
           delayMs / 1000
         )} seconds\nReason: ${reason}`,
@@ -417,7 +417,7 @@ export class SafeRestartService {
    * @returns True if this process was started after a restart
    */
   isRestart(): boolean {
-    return process.env.AGENTMUX_RESTARTED === 'true';
+    return process.env.CREWLY_RESTARTED === 'true';
   }
 
   /**
@@ -426,7 +426,7 @@ export class SafeRestartService {
    * @returns Restart reason or undefined for fresh start
    */
   getRestartReason(): string | undefined {
-    return process.env.AGENTMUX_RESTART_REASON;
+    return process.env.CREWLY_RESTART_REASON;
   }
 
   /**

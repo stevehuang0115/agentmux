@@ -3,7 +3,7 @@
  *
  * Manages project-level goal files, current team focus, and a decisions log
  * with retrospective outcomes. All files are stored as Markdown under
- * `{projectPath}/.agentmux/goals/`.
+ * `{projectPath}/.crewly/goals/`.
  *
  * Files managed:
  * - `goals.md` — Append-only log of user-stated goals
@@ -113,10 +113,10 @@ export class GoalTrackingService {
    * Returns the absolute path to the goals directory for a project.
    *
    * @param projectPath - Absolute path to the project root
-   * @returns Absolute path to `{projectPath}/.agentmux/goals`
+   * @returns Absolute path to `{projectPath}/.crewly/goals`
    */
   private getGoalsDir(projectPath: string): string {
-    return path.join(projectPath, '.agentmux', MEMORY_CONSTANTS.PATHS.GOALS_DIR);
+    return path.join(projectPath, '.crewly', MEMORY_CONSTANTS.PATHS.GOALS_DIR);
   }
 
   /**

@@ -5,7 +5,7 @@ Quickly record a learning or discovery. Simpler than `remember` — good for jot
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/record-learning/execute.sh '{"learning":"Always check agent status before delegating","teamMemberId":"agentmux-orc"}'
+bash config/skills/orchestrator/record-learning/execute.sh '{"learning":"Always check agent status before delegating","teamMemberId":"crewly-orc"}'
 ```
 
 ## Parameters

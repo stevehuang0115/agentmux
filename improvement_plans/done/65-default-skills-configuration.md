@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create default built-in skills that ship with AgentMux so the Skills tab shows useful options out of the box.
+Create default built-in skills that ship with Crewly so the Skills tab shows useful options out of the box.
 
 ## Problem
 

@@ -21,7 +21,7 @@ Create the core Slack service that manages the bot connection, sends messages, a
  * Slack Service
  *
  * Manages Slack bot connection and messaging using Bolt SDK.
- * Enables bidirectional communication between Slack and AgentMux.
+ * Enables bidirectional communication between Slack and Crewly.
  *
  * @module services/slack
  */

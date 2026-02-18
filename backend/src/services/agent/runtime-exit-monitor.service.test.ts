@@ -1,5 +1,5 @@
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
-import { AGENTMUX_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -210,7 +210,7 @@ describe('RuntimeExitMonitorService', () => {
 			// Status SHOULD be updated (grace period is 0, so no delay)
 			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
 				'test-agent',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 
 			jest.useRealTimers();
@@ -236,7 +236,7 @@ describe('RuntimeExitMonitorService', () => {
 
 			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
 				'test-agent',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 
 			jest.useRealTimers();
@@ -317,7 +317,7 @@ describe('RuntimeExitMonitorService', () => {
 			expect(mockBroadcastTeamMemberStatus).toHaveBeenCalledWith(
 				expect.objectContaining({
 					sessionName: 'dev-agent',
-					status: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				})
 			);
@@ -328,8 +328,8 @@ describe('RuntimeExitMonitorService', () => {
 		it('should broadcast orchestrator status for orchestrator session', async () => {
 			jest.useFakeTimers();
 
-			// ORCHESTRATOR_SESSION_NAME is 'agentmux-orc'
-			service.startMonitoring('agentmux-orc', RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			// ORCHESTRATOR_SESSION_NAME is 'crewly-orc'
+			service.startMonitoring('crewly-orc', RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
 			const onDataCallback = mockOnData.mock.calls[0][0];
 
 			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
@@ -339,8 +339,8 @@ describe('RuntimeExitMonitorService', () => {
 
 			expect(mockBroadcastOrchestratorStatus).toHaveBeenCalledWith(
 				expect.objectContaining({
-					sessionName: 'agentmux-orc',
-					status: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					sessionName: 'crewly-orc',
+					status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				})
 			);

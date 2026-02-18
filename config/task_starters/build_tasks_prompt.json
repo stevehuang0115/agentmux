@@ -9,7 +9,7 @@
 			"delayMinutes": 10,
 			"verification": {
 				"type": "milestone_subdirs_contain_files",
-				"path": "{PROJECT_PATH}/.agentmux/tasks",
+				"path": "{PROJECT_PATH}/.crewly/tasks",
 				"min_files_per_subdir": 2,
 				"file_pattern": "*.md"
 			},
@@ -20,9 +20,9 @@
 		"step1": "Complete task structure creation: Analyze specifications, create milestone directories, and populate with detailed task files"
 	},
 	"expectedDeliverables": {
-		"prerequisites": ["Project specifications must exist in .agentmux/specs/ directory"],
+		"prerequisites": ["Project specifications must exist in .crewly/specs/ directory"],
 		"step1": [
-			"Feature-based milestone directories created under .agentmux/tasks/",
+			"Feature-based milestone directories created under .crewly/tasks/",
 			"Directory naming: m[#]_[feature]_[platform] (e.g., m4_auth_backend, m5_auth_web, m6_auth_mobile)",
 			"5-15 feature-based milestone directories based on project complexity analysis",
 			"3-8 granular task files per milestone directory (maximum 4 hours per task)",
@@ -43,7 +43,7 @@
 			"Platform-specific tasks properly separated and organized"
 		],
 		"notes": [
-			"This workflow assumes specifications already exist in .agentmux/specs/",
+			"This workflow assumes specifications already exist in .crewly/specs/",
 			"Milestone structure adapts to project features and platforms (5-15 milestones typical)",
 			"Single comprehensive step combines feature analysis, directory creation, and granular task generation",
 			"Tasks organized by: Feature Area > Platform > Individual Granular Tasks",

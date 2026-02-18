@@ -1,12 +1,12 @@
 /**
- * Unit tests for AgentMux cross-domain constants
+ * Unit tests for Crewly cross-domain constants
  * 
  * This test file validates the centralized constants that are shared
- * across all AgentMux domains (backend, frontend, CLI).
+ * across all Crewly domains (backend, frontend, CLI).
  */
 
 import {
-  AGENTMUX_CONSTANTS,
+  CREWLY_CONSTANTS,
   AGENT_IDENTITY_CONSTANTS,
   WEB_CONSTANTS,
   TIMING_CONSTANTS,
@@ -19,25 +19,25 @@ import {
   type MessageType,
 } from './constants.js';
 
-describe('AgentMux Cross-Domain Constants', () => {
-  describe('AGENTMUX_CONSTANTS', () => {
+describe('Crewly Cross-Domain Constants', () => {
+  describe('CREWLY_CONSTANTS', () => {
     describe('SESSIONS', () => {
       test('should have valid orchestrator name', () => {
-        expect(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('agentmux-orc');
-        expect(typeof AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('string');
+        expect(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('crewly-orc');
+        expect(typeof CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('string');
       });
 
       test('should have valid timeout values', () => {
-        expect(AGENTMUX_CONSTANTS.SESSIONS.DEFAULT_TIMEOUT).toBe(120000);
-        expect(AGENTMUX_CONSTANTS.SESSIONS.REGISTRATION_CHECK_INTERVAL).toBe(5000);
-        expect(AGENTMUX_CONSTANTS.SESSIONS.CLAUDE_DETECTION_CACHE_TIMEOUT).toBe(30000);
+        expect(CREWLY_CONSTANTS.SESSIONS.DEFAULT_TIMEOUT).toBe(120000);
+        expect(CREWLY_CONSTANTS.SESSIONS.REGISTRATION_CHECK_INTERVAL).toBe(5000);
+        expect(CREWLY_CONSTANTS.SESSIONS.CLAUDE_DETECTION_CACHE_TIMEOUT).toBe(30000);
       });
 
       test('timeout values should be positive numbers', () => {
         const timeouts = [
-          AGENTMUX_CONSTANTS.SESSIONS.DEFAULT_TIMEOUT,
-          AGENTMUX_CONSTANTS.SESSIONS.REGISTRATION_CHECK_INTERVAL,
-          AGENTMUX_CONSTANTS.SESSIONS.CLAUDE_DETECTION_CACHE_TIMEOUT,
+          CREWLY_CONSTANTS.SESSIONS.DEFAULT_TIMEOUT,
+          CREWLY_CONSTANTS.SESSIONS.REGISTRATION_CHECK_INTERVAL,
+          CREWLY_CONSTANTS.SESSIONS.CLAUDE_DETECTION_CACHE_TIMEOUT,
         ];
 
         timeouts.forEach((timeout) => {
@@ -49,31 +49,31 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     describe('PATHS', () => {
       test('should have all required paths', () => {
-        expect(AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME).toBe('.agentmux');
-        expect(AGENTMUX_CONSTANTS.PATHS.TEAMS_FILE).toBe('teams.json');
-        expect(AGENTMUX_CONSTANTS.PATHS.PROJECTS_FILE).toBe('projects.json');
-        expect(AGENTMUX_CONSTANTS.PATHS.CONFIG_DIR).toBe('config');
-        expect(AGENTMUX_CONSTANTS.PATHS.PROMPTS_DIR).toBe('prompts');
-        expect(AGENTMUX_CONSTANTS.PATHS.TASKS_DIR).toBe('tasks');
-        expect(AGENTMUX_CONSTANTS.PATHS.SPECS_DIR).toBe('specs');
-        expect(AGENTMUX_CONSTANTS.PATHS.MEMORY_DIR).toBe('memory');
+        expect(CREWLY_CONSTANTS.PATHS.CREWLY_HOME).toBe('.crewly');
+        expect(CREWLY_CONSTANTS.PATHS.TEAMS_FILE).toBe('teams.json');
+        expect(CREWLY_CONSTANTS.PATHS.PROJECTS_FILE).toBe('projects.json');
+        expect(CREWLY_CONSTANTS.PATHS.CONFIG_DIR).toBe('config');
+        expect(CREWLY_CONSTANTS.PATHS.PROMPTS_DIR).toBe('prompts');
+        expect(CREWLY_CONSTANTS.PATHS.TASKS_DIR).toBe('tasks');
+        expect(CREWLY_CONSTANTS.PATHS.SPECS_DIR).toBe('specs');
+        expect(CREWLY_CONSTANTS.PATHS.MEMORY_DIR).toBe('memory');
       });
 
       test('file paths should have proper extensions', () => {
-        expect(AGENTMUX_CONSTANTS.PATHS.TEAMS_FILE).toMatch(/\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.PROJECTS_FILE).toMatch(/\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.RUNTIME_FILE).toMatch(/\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.SCHEDULED_MESSAGES_FILE).toMatch(/\.json$/);
-        expect(AGENTMUX_CONSTANTS.PATHS.MESSAGE_DELIVERY_LOGS_FILE).toMatch(/\.json$/);
+        expect(CREWLY_CONSTANTS.PATHS.TEAMS_FILE).toMatch(/\.json$/);
+        expect(CREWLY_CONSTANTS.PATHS.PROJECTS_FILE).toMatch(/\.json$/);
+        expect(CREWLY_CONSTANTS.PATHS.RUNTIME_FILE).toMatch(/\.json$/);
+        expect(CREWLY_CONSTANTS.PATHS.SCHEDULED_MESSAGES_FILE).toMatch(/\.json$/);
+        expect(CREWLY_CONSTANTS.PATHS.MESSAGE_DELIVERY_LOGS_FILE).toMatch(/\.json$/);
       });
 
       test('directory names should not contain slashes', () => {
         const dirs = [
-          AGENTMUX_CONSTANTS.PATHS.CONFIG_DIR,
-          AGENTMUX_CONSTANTS.PATHS.PROMPTS_DIR,
-          AGENTMUX_CONSTANTS.PATHS.TASKS_DIR,
-          AGENTMUX_CONSTANTS.PATHS.SPECS_DIR,
-          AGENTMUX_CONSTANTS.PATHS.MEMORY_DIR,
+          CREWLY_CONSTANTS.PATHS.CONFIG_DIR,
+          CREWLY_CONSTANTS.PATHS.PROMPTS_DIR,
+          CREWLY_CONSTANTS.PATHS.TASKS_DIR,
+          CREWLY_CONSTANTS.PATHS.SPECS_DIR,
+          CREWLY_CONSTANTS.PATHS.MEMORY_DIR,
         ];
 
         dirs.forEach((dir) => {
@@ -85,13 +85,13 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     describe('AGENT_STATUSES', () => {
       test('should have all required statuses', () => {
-        expect(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE).toBe('inactive');
-        expect(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING).toBe('activating');
-        expect(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE).toBe('active');
+        expect(CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE).toBe('inactive');
+        expect(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING).toBe('activating');
+        expect(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE).toBe('active');
       });
 
       test('all statuses should be lowercase strings', () => {
-        Object.values(AGENTMUX_CONSTANTS.AGENT_STATUSES).forEach((status) => {
+        Object.values(CREWLY_CONSTANTS.AGENT_STATUSES).forEach((status) => {
           expect(typeof status).toBe('string');
           expect(status).toBe(status.toLowerCase());
         });
@@ -100,12 +100,12 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     describe('WORKING_STATUSES', () => {
       test('should have all required working statuses', () => {
-        expect(AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE).toBe('idle');
-        expect(AGENTMUX_CONSTANTS.WORKING_STATUSES.IN_PROGRESS).toBe('in_progress');
+        expect(CREWLY_CONSTANTS.WORKING_STATUSES.IDLE).toBe('idle');
+        expect(CREWLY_CONSTANTS.WORKING_STATUSES.IN_PROGRESS).toBe('in_progress');
       });
 
       test('all working statuses should be lowercase strings', () => {
-        Object.values(AGENTMUX_CONSTANTS.WORKING_STATUSES).forEach((status) => {
+        Object.values(CREWLY_CONSTANTS.WORKING_STATUSES).forEach((status) => {
           expect(typeof status).toBe('string');
           expect(status).toBe(status.toLowerCase());
         });
@@ -114,23 +114,23 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     describe('ROLES', () => {
       test('should have all required roles', () => {
-        expect(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR).toBe('orchestrator');
-        expect(AGENTMUX_CONSTANTS.ROLES.PROJECT_MANAGER).toBe('pm');
-        expect(AGENTMUX_CONSTANTS.ROLES.TECH_LEAD).toBe('tpm');
-        expect(AGENTMUX_CONSTANTS.ROLES.DEVELOPER).toBe('developer');
-        expect(AGENTMUX_CONSTANTS.ROLES.QA).toBe('qa');
-        expect(AGENTMUX_CONSTANTS.ROLES.DEVOPS).toBe('devops');
+        expect(CREWLY_CONSTANTS.ROLES.ORCHESTRATOR).toBe('orchestrator');
+        expect(CREWLY_CONSTANTS.ROLES.PROJECT_MANAGER).toBe('pm');
+        expect(CREWLY_CONSTANTS.ROLES.TECH_LEAD).toBe('tpm');
+        expect(CREWLY_CONSTANTS.ROLES.DEVELOPER).toBe('developer');
+        expect(CREWLY_CONSTANTS.ROLES.QA).toBe('qa');
+        expect(CREWLY_CONSTANTS.ROLES.DEVOPS).toBe('devops');
       });
 
       test('should have display names for all roles', () => {
-        Object.values(AGENTMUX_CONSTANTS.ROLES).forEach((role) => {
-          expect(AGENTMUX_CONSTANTS.ROLE_DISPLAY_NAMES).toHaveProperty(role);
-          expect(typeof AGENTMUX_CONSTANTS.ROLE_DISPLAY_NAMES[role as keyof typeof AGENTMUX_CONSTANTS.ROLE_DISPLAY_NAMES]).toBe('string');
+        Object.values(CREWLY_CONSTANTS.ROLES).forEach((role) => {
+          expect(CREWLY_CONSTANTS.ROLE_DISPLAY_NAMES).toHaveProperty(role);
+          expect(typeof CREWLY_CONSTANTS.ROLE_DISPLAY_NAMES[role as keyof typeof CREWLY_CONSTANTS.ROLE_DISPLAY_NAMES]).toBe('string');
         });
       });
 
       test('display names should be properly formatted', () => {
-        Object.values(AGENTMUX_CONSTANTS.ROLE_DISPLAY_NAMES).forEach((displayName) => {
+        Object.values(CREWLY_CONSTANTS.ROLE_DISPLAY_NAMES).forEach((displayName) => {
           expect(displayName.charAt(0)).toMatch(/[A-Z]/);
           expect(displayName.length).toBeGreaterThan(0);
         });
@@ -139,18 +139,18 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     describe('AGENT_IDS', () => {
       test('should have orchestrator ID defined', () => {
-        expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
+        expect(CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
       });
 
       test('should be a valid string constant', () => {
-        const orchestratorId: AgentId = AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID;
+        const orchestratorId: AgentId = CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID;
         expect(typeof orchestratorId).toBe('string');
         expect(orchestratorId.length).toBeGreaterThan(0);
         expect(orchestratorId).toBe('orchestrator');
       });
 
       test('orchestrator ID should match role constant', () => {
-        expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR);
+        expect(CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe(CREWLY_CONSTANTS.ROLES.ORCHESTRATOR);
       });
     });
   });
@@ -161,7 +161,7 @@ describe('AgentMux Cross-Domain Constants', () => {
         const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
 
         expect(orch.ID).toBe('orchestrator');
-        expect(orch.SESSION_NAME).toBe('agentmux-orc');
+        expect(orch.SESSION_NAME).toBe('crewly-orc');
         expect(orch.ROLE).toBe('orchestrator');
       });
 
@@ -169,9 +169,9 @@ describe('AgentMux Cross-Domain Constants', () => {
         const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
 
         // Verify references point to correct source constants
-        expect(orch.ID).toBe(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID);
-        expect(orch.SESSION_NAME).toBe(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
-        expect(orch.ROLE).toBe(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR);
+        expect(orch.ID).toBe(CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID);
+        expect(orch.SESSION_NAME).toBe(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+        expect(orch.ROLE).toBe(CREWLY_CONSTANTS.ROLES.ORCHESTRATOR);
       });
 
       test('should maintain type safety', () => {
@@ -197,15 +197,15 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     test('should maintain consistency across all orchestrator references', () => {
       // All orchestrator constants should be consistent
-      expect(AGENTMUX_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
-      expect(AGENTMUX_CONSTANTS.ROLES.ORCHESTRATOR).toBe('orchestrator');
-      expect(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('agentmux-orc');
+      expect(CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID).toBe('orchestrator');
+      expect(CREWLY_CONSTANTS.ROLES.ORCHESTRATOR).toBe('orchestrator');
+      expect(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('crewly-orc');
 
       // Identity helper should match
       const orch = AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR;
       expect(orch.ID).toBe('orchestrator');
       expect(orch.ROLE).toBe('orchestrator');
-      expect(orch.SESSION_NAME).toBe('agentmux-orc');
+      expect(orch.SESSION_NAME).toBe('crewly-orc');
     });
   });
 
@@ -385,9 +385,9 @@ describe('AgentMux Cross-Domain Constants', () => {
     test('should have all required environment variables', () => {
       const expectedEnvVars = [
         'TMUX_SESSION_NAME',
-        'AGENTMUX_ROLE',
+        'CREWLY_ROLE',
         'API_PORT',
-        'AGENTMUX_MCP_PORT',
+        'CREWLY_MCP_PORT',
         'PROJECT_PATH',
         'AGENT_ROLE',
         'NODE_ENV',
@@ -436,7 +436,7 @@ describe('AgentMux Cross-Domain Constants', () => {
 
   describe('Constants Structure', () => {
     test('all main constant objects should be defined', () => {
-      expect(AGENTMUX_CONSTANTS).toBeDefined();
+      expect(CREWLY_CONSTANTS).toBeDefined();
       expect(WEB_CONSTANTS).toBeDefined();
       expect(TIMING_CONSTANTS).toBeDefined();
       expect(MESSAGE_CONSTANTS).toBeDefined();
@@ -445,7 +445,7 @@ describe('AgentMux Cross-Domain Constants', () => {
 
     test('constants should be immutable (const assertions)', () => {
       // These tests verify that const assertions are working
-      expect(typeof AGENTMUX_CONSTANTS).toBe('object');
+      expect(typeof CREWLY_CONSTANTS).toBe('object');
       expect(typeof WEB_CONSTANTS).toBe('object');
       expect(typeof TIMING_CONSTANTS).toBe('object');
       expect(typeof MESSAGE_CONSTANTS).toBe('object');
@@ -455,7 +455,7 @@ describe('AgentMux Cross-Domain Constants', () => {
 
   describe('Cross-Domain Consistency', () => {
     test('orchestrator session name should be consistent', () => {
-      expect(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('agentmux-orc');
+      expect(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME).toBe('crewly-orc');
     });
 
     test('timeout values should be reasonable', () => {

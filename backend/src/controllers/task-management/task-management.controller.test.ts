@@ -77,7 +77,7 @@ describe('Task Management Handlers', () => {
     let jsonSpy: jest.Mock<any>;
     let statusSpy: jest.Mock<any>;
 
-    const validTaskPath = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
+    const validTaskPath = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.crewly/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
     const validSessionName = 'session-123';
 
     beforeEach(() => {
@@ -166,7 +166,7 @@ describe('Task Management Handlers', () => {
       });
 
       it('should return 200 with success=false when task is not in open folder', async () => {
-        const invalidPath = '/Users/test/project/.agentmux/tasks/m0_initial_tasks/in_progress/task.md';
+        const invalidPath = '/Users/test/project/.crewly/tasks/m0_initial_tasks/in_progress/task.md';
         mockReq.body!.taskPath = invalidPath;
         (existsSync as jest.Mock<any>).mockReturnValue(true);
 
@@ -184,7 +184,7 @@ describe('Task Management Handlers', () => {
 
     describe('Path parsing - REGEX ISSUE TESTS', () => {
       it('should return 400 with current broken regex for gas-vibe-coder path', async () => {
-        const taskPathWithDashes = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
+        const taskPathWithDashes = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.crewly/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
         mockReq.body!.taskPath = taskPathWithDashes;
         (existsSync as jest.Mock<any>).mockReturnValue(true);
         (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
@@ -198,7 +198,7 @@ describe('Task Management Handlers', () => {
         });
       });
 
-      it('should return 400 when cannot determine project from task path - no .agentmux', async () => {
+      it('should return 400 when cannot determine project from task path - no .crewly', async () => {
         const invalidPath = '/Users/test/project/tasks/open/task.md';
         mockReq.body!.taskPath = invalidPath;
         (existsSync as jest.Mock<any>).mockReturnValue(true);
@@ -206,7 +206,7 @@ describe('Task Management Handlers', () => {
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
         // Without /open/ in path it fails at the open folder check
-        // Let's use a path that has /open/ but no .agentmux
+        // Let's use a path that has /open/ but no .crewly
         mockReq.body!.taskPath = '/Users/test/project/open/task.md';
         (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
 
@@ -227,10 +227,10 @@ describe('Task Management Handlers', () => {
 
         // Mock the path matching to pass (we'll test the fix separately)
         jest.spyOn(String.prototype, 'match').mockImplementation(function(this: string, regexp: string | RegExp) {
-          if (regexp.toString() === '/\\/([^\\/]+)\\.agentmux/') {
+          if (regexp.toString() === '/\\/([^\\/]+)\\.crewly/') {
             // Simulate fixed regex behavior
-            if (this.includes('/.agentmux/')) {
-              const match = this.match(/\/([^\/]+)\/\.agentmux/);
+            if (this.includes('/.crewly/')) {
+              const match = this.match(/\/([^\/]+)\/\.crewly/);
               return match;
             }
             return null;
@@ -281,52 +281,52 @@ describe('Task Management Handlers', () => {
       const testCases = [
         {
           name: 'should NOT match project with dashes using CURRENT BROKEN regex',
-          path: '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md',
+          path: '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.crewly/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md',
           expectedMatch: null,
           shouldMatch: false,
-          regex: /\/([^\/]+)\.agentmux/, // Current broken regex
+          regex: /\/([^\/]+)\.crewly/, // Current broken regex
         },
         {
           name: 'should match project with dashes using FIXED regex',
-          path: '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.agentmux/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md',
+          path: '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.crewly/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md',
           expectedMatch: 'gas-vibe-coder',
           shouldMatch: true,
-          regex: /\/([^\/]+)\/\.agentmux/, // Fixed regex
+          regex: /\/([^\/]+)\/\.crewly/, // Fixed regex
         },
         {
           name: 'should match project with underscores using FIXED regex',
-          path: '/Users/test/project_name_test/.agentmux/tasks/open/task.md',
+          path: '/Users/test/project_name_test/.crewly/tasks/open/task.md',
           expectedMatch: 'project_name_test',
           shouldMatch: true,
-          regex: /\/([^\/]+)\/\.agentmux/,
+          regex: /\/([^\/]+)\/\.crewly/,
         },
         {
           name: 'should match simple project name using FIXED regex',
-          path: '/Users/test/myproject/.agentmux/tasks/open/task.md',
+          path: '/Users/test/myproject/.crewly/tasks/open/task.md',
           expectedMatch: 'myproject',
           shouldMatch: true,
-          regex: /\/([^\/]+)\/\.agentmux/,
+          regex: /\/([^\/]+)\/\.crewly/,
         },
         {
-          name: 'should not match when .agentmux is missing',
+          name: 'should not match when .crewly is missing',
           path: '/Users/test/project/tasks/open/task.md',
           expectedMatch: null,
           shouldMatch: false,
-          regex: /\/([^\/]+)\/\.agentmux/,
+          regex: /\/([^\/]+)\/\.crewly/,
         },
         {
           name: 'should match project with numbers using FIXED regex',
-          path: '/Users/test/project123/.agentmux/tasks/open/task.md',
+          path: '/Users/test/project123/.crewly/tasks/open/task.md',
           expectedMatch: 'project123',
           shouldMatch: true,
-          regex: /\/([^\/]+)\/\.agentmux/,
+          regex: /\/([^\/]+)\/\.crewly/,
         },
         {
           name: 'should match project with mixed characters using FIXED regex',
-          path: '/Users/test/my-project_v2/.agentmux/tasks/open/task.md',
+          path: '/Users/test/my-project_v2/.crewly/tasks/open/task.md',
           expectedMatch: 'my-project_v2',
           shouldMatch: true,
-          regex: /\/([^\/]+)\/\.agentmux/,
+          regex: /\/([^\/]+)\/\.crewly/,
         },
       ];
 

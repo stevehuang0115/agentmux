@@ -332,16 +332,16 @@ describe('PtySession integration', () => {
 		session.onData((data) => {
 			outputBuffer += data;
 			// Look for our test string in the output
-			if (outputBuffer.includes('AGENTMUX_TEST_123')) {
-				expect(outputBuffer).toContain('AGENTMUX_TEST_123');
+			if (outputBuffer.includes('CREWLY_TEST_123')) {
+				expect(outputBuffer).toContain('CREWLY_TEST_123');
 				done();
 			}
 		});
 
 		// Use a command that works on both Unix and Windows
 		const command = process.platform === 'win32'
-			? 'Write-Host "AGENTMUX_TEST_123"\r\n'
-			: 'echo "AGENTMUX_TEST_123"\n';
+			? 'Write-Host "CREWLY_TEST_123"\r\n'
+			: 'echo "CREWLY_TEST_123"\n';
 
 		setTimeout(() => {
 			session!.write(command);

@@ -10,7 +10,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { settingsService } from '../services/settings.service';
 import {
-  AgentMuxSettings,
+  CrewlySettings,
   UpdateSettingsInput,
 } from '../types/settings.types';
 
@@ -19,17 +19,17 @@ import {
  */
 export interface UseSettingsResult {
   /** Current settings */
-  settings: AgentMuxSettings | null;
+  settings: CrewlySettings | null;
   /** Whether settings are loading */
   isLoading: boolean;
   /** Error message if any */
   error: string | null;
   /** Update settings */
-  updateSettings: (input: UpdateSettingsInput) => Promise<AgentMuxSettings>;
+  updateSettings: (input: UpdateSettingsInput) => Promise<CrewlySettings>;
   /** Reset all settings to defaults */
-  resetSettings: () => Promise<AgentMuxSettings>;
+  resetSettings: () => Promise<CrewlySettings>;
   /** Reset a specific section to defaults */
-  resetSection: (section: keyof AgentMuxSettings) => Promise<AgentMuxSettings>;
+  resetSection: (section: keyof CrewlySettings) => Promise<CrewlySettings>;
   /** Refresh settings from server */
   refreshSettings: () => Promise<void>;
 }
@@ -49,7 +49,7 @@ export interface UseSettingsResult {
  * ```
  */
 export function useSettings(): UseSettingsResult {
-  const [settings, setSettings] = useState<AgentMuxSettings | null>(null);
+  const [settings, setSettings] = useState<CrewlySettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,7 +72,7 @@ export function useSettings(): UseSettingsResult {
   /**
    * Update settings
    */
-  const updateSettings = useCallback(async (input: UpdateSettingsInput): Promise<AgentMuxSettings> => {
+  const updateSettings = useCallback(async (input: UpdateSettingsInput): Promise<CrewlySettings> => {
     const updated = await settingsService.updateSettings(input);
     setSettings(updated);
     return updated;
@@ -81,7 +81,7 @@ export function useSettings(): UseSettingsResult {
   /**
    * Reset all settings to defaults
    */
-  const resetSettings = useCallback(async (): Promise<AgentMuxSettings> => {
+  const resetSettings = useCallback(async (): Promise<CrewlySettings> => {
     const defaults = await settingsService.resetSettings();
     setSettings(defaults);
     return defaults;
@@ -90,7 +90,7 @@ export function useSettings(): UseSettingsResult {
   /**
    * Reset a specific section to defaults
    */
-  const resetSection = useCallback(async (section: keyof AgentMuxSettings): Promise<AgentMuxSettings> => {
+  const resetSection = useCallback(async (section: keyof CrewlySettings): Promise<CrewlySettings> => {
     const updated = await settingsService.resetSection(section);
     setSettings(updated);
     return updated;

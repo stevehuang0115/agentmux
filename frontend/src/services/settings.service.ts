@@ -8,7 +8,7 @@
 
 import axios from 'axios';
 import {
-  AgentMuxSettings,
+  CrewlySettings,
   UpdateSettingsInput,
   SettingsValidationResult,
 } from '../types/settings.types';
@@ -27,8 +27,8 @@ class SettingsService {
    * @returns Promise resolving to current settings
    * @throws Error if request fails
    */
-  async getSettings(): Promise<AgentMuxSettings> {
-    const response = await axios.get<ApiResponse<AgentMuxSettings>>(SETTINGS_API_BASE);
+  async getSettings(): Promise<CrewlySettings> {
+    const response = await axios.get<ApiResponse<CrewlySettings>>(SETTINGS_API_BASE);
     if (!response.data.success || !response.data.data) {
       throw new Error(response.data.error || 'Failed to get settings');
     }
@@ -42,8 +42,8 @@ class SettingsService {
    * @returns Promise resolving to updated settings
    * @throws Error if validation fails or request fails
    */
-  async updateSettings(input: UpdateSettingsInput): Promise<AgentMuxSettings> {
-    const response = await axios.put<ApiResponse<AgentMuxSettings>>(SETTINGS_API_BASE, input);
+  async updateSettings(input: UpdateSettingsInput): Promise<CrewlySettings> {
+    const response = await axios.put<ApiResponse<CrewlySettings>>(SETTINGS_API_BASE, input);
     if (!response.data.success || !response.data.data) {
       throw new Error(response.data.error || 'Failed to update settings');
     }
@@ -74,8 +74,8 @@ class SettingsService {
    * @returns Promise resolving to default settings
    * @throws Error if request fails
    */
-  async resetSettings(): Promise<AgentMuxSettings> {
-    const response = await axios.post<ApiResponse<AgentMuxSettings>>(
+  async resetSettings(): Promise<CrewlySettings> {
+    const response = await axios.post<ApiResponse<CrewlySettings>>(
       `${SETTINGS_API_BASE}/reset`
     );
     if (!response.data.success || !response.data.data) {
@@ -91,8 +91,8 @@ class SettingsService {
    * @returns Promise resolving to updated settings
    * @throws Error if request fails
    */
-  async resetSection(section: keyof AgentMuxSettings): Promise<AgentMuxSettings> {
-    const response = await axios.post<ApiResponse<AgentMuxSettings>>(
+  async resetSection(section: keyof CrewlySettings): Promise<CrewlySettings> {
+    const response = await axios.post<ApiResponse<CrewlySettings>>(
       `${SETTINGS_API_BASE}/reset/${section}`
     );
     if (!response.data.success || !response.data.data) {
@@ -107,8 +107,8 @@ class SettingsService {
    * @returns Promise resolving to settings object
    * @throws Error if request fails
    */
-  async exportSettings(): Promise<AgentMuxSettings> {
-    const response = await axios.post<AgentMuxSettings>(`${SETTINGS_API_BASE}/export`);
+  async exportSettings(): Promise<CrewlySettings> {
+    const response = await axios.post<CrewlySettings>(`${SETTINGS_API_BASE}/export`);
     return response.data;
   }
 
@@ -119,8 +119,8 @@ class SettingsService {
    * @returns Promise resolving to imported settings
    * @throws Error if validation fails or request fails
    */
-  async importSettings(settings: AgentMuxSettings): Promise<AgentMuxSettings> {
-    const response = await axios.post<ApiResponse<AgentMuxSettings>>(
+  async importSettings(settings: CrewlySettings): Promise<CrewlySettings> {
+    const response = await axios.post<ApiResponse<CrewlySettings>>(
       `${SETTINGS_API_BASE}/import`,
       settings
     );

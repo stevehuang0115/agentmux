@@ -1,8 +1,8 @@
 /**
  * Settings Management Service
  *
- * Handles persistence and validation of AgentMux application settings.
- * Settings are stored in ~/.agentmux/settings.json.
+ * Handles persistence and validation of Crewly application settings.
+ * Settings are stored in ~/.crewly/settings.json.
  *
  * @module services/settings/settings.service
  */
@@ -10,7 +10,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import {
-  AgentMuxSettings,
+  CrewlySettings,
   UpdateSettingsInput,
   SettingsValidationResult,
   getDefaultSettings,
@@ -52,9 +52,9 @@ export class SettingsFileError extends Error {
 // ============================================================================
 
 /**
- * Service for managing AgentMux application settings
+ * Service for managing Crewly application settings
  *
- * Settings are stored in ~/.agentmux/settings.json by default.
+ * Settings are stored in ~/.crewly/settings.json by default.
  * Default values are used when no settings file exists.
  *
  * @example
@@ -76,7 +76,7 @@ export class SettingsFileError extends Error {
 export class SettingsService {
   private readonly settingsDir: string;
   private readonly settingsFile: string;
-  private settingsCache: AgentMuxSettings | null = null;
+  private settingsCache: CrewlySettings | null = null;
 
   /**
    * Create a new SettingsService instance
@@ -86,7 +86,7 @@ export class SettingsService {
    */
   constructor(options?: { settingsDir?: string }) {
     this.settingsDir = options?.settingsDir ??
-      path.join(process.env.HOME || '~', '.agentmux');
+      path.join(process.env.HOME || '~', '.crewly');
     this.settingsFile = path.join(this.settingsDir, 'settings.json');
   }
 
@@ -97,12 +97,12 @@ export class SettingsService {
    *
    * @returns Current settings
    */
-  async getSettings(): Promise<AgentMuxSettings> {
+  async getSettings(): Promise<CrewlySettings> {
     if (this.settingsCache) {
       return this.settingsCache;
     }
 
-    const loaded = await safeReadJson<Partial<AgentMuxSettings> | null>(this.settingsFile, null);
+    const loaded = await safeReadJson<Partial<CrewlySettings> | null>(this.settingsFile, null);
     if (loaded) {
       // Migrate legacy claudeCodeCommand/claudeCodeInitScript → runtimeCommands
       this.migrateSettings(loaded);
@@ -121,7 +121,7 @@ export class SettingsService {
    * @returns Updated settings
    * @throws {SettingsValidationError} If validation fails
    */
-  async updateSettings(input: UpdateSettingsInput): Promise<AgentMuxSettings> {
+  async updateSettings(input: UpdateSettingsInput): Promise<CrewlySettings> {
     const current = await this.getSettings();
     const merged = mergeSettings(current, input);
 
@@ -140,7 +140,7 @@ export class SettingsService {
    *
    * @returns Default settings
    */
-  async resetSettings(): Promise<AgentMuxSettings> {
+  async resetSettings(): Promise<CrewlySettings> {
     const defaults = getDefaultSettings();
     await this.saveSettings(defaults);
     this.settingsCache = defaults;
@@ -153,11 +153,11 @@ export class SettingsService {
    * @param section - The section to reset ('general', 'chat', or 'skills')
    * @returns Updated settings
    */
-  async resetSection(section: keyof AgentMuxSettings): Promise<AgentMuxSettings> {
+  async resetSection(section: keyof CrewlySettings): Promise<CrewlySettings> {
     const current = await this.getSettings();
     const defaults = getDefaultSettings();
 
-    const updated: AgentMuxSettings = {
+    const updated: CrewlySettings = {
       ...current,
       [section]: defaults[section],
     };
@@ -201,7 +201,7 @@ export class SettingsService {
    * @throws {SettingsValidationError} If imported settings are invalid
    * @throws {SettingsFileError} If file cannot be read or parsed
    */
-  async importSettings(importPath: string): Promise<AgentMuxSettings> {
+  async importSettings(importPath: string): Promise<CrewlySettings> {
     let content: string;
     try {
       content = await fs.readFile(importPath, 'utf-8');
@@ -209,7 +209,7 @@ export class SettingsService {
       throw new SettingsFileError(`Failed to read settings file: ${importPath}`, err as Error);
     }
 
-    let imported: Partial<AgentMuxSettings>;
+    let imported: Partial<CrewlySettings>;
     try {
       imported = JSON.parse(content);
     } catch (err) {
@@ -274,7 +274,7 @@ export class SettingsService {
    *
    * @param loaded - Partially loaded settings from disk
    */
-  private migrateSettings(loaded: Partial<AgentMuxSettings>): void {
+  private migrateSettings(loaded: Partial<CrewlySettings>): void {
     const general = loaded.general as Record<string, unknown> | undefined;
     if (!general) return;
 
@@ -300,7 +300,7 @@ export class SettingsService {
    *
    * @param settings - Settings to save
    */
-  private async saveSettings(settings: AgentMuxSettings): Promise<void> {
+  private async saveSettings(settings: CrewlySettings): Promise<void> {
     await fs.mkdir(this.settingsDir, { recursive: true });
     await atomicWriteJson(this.settingsFile, settings);
   }

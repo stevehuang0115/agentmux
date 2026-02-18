@@ -4,7 +4,7 @@ import { AgentRegistrationService } from '../agent/agent-registration.service.js
 import { StorageService } from '../core/storage.service.js';
 import { ScheduledMessage, MessageDeliveryLog } from '../../types/index';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 // Mock dependencies
@@ -329,7 +329,7 @@ describe('MessageSchedulerService', () => {
 			await (service as any).executeMessage(orchestratorMessage);
 
 			expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
-				AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+				CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
 				expect.stringContaining('Hello World'),
 				expect.any(String),
 			);
@@ -566,7 +566,7 @@ describe('MessageSchedulerService', () => {
 		const mockAutoAssignmentMessage: ScheduledMessage = {
 			id: 'auto-assign-project-123',
 			name: 'Auto Task Assignment - Test Project',
-			targetTeam: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+			targetTeam: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
 			targetProject: 'project-123',
 			message: 'Auto assignment check message',
 			delayAmount: 15,

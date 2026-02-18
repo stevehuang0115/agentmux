@@ -5,7 +5,7 @@ import { LoadingSpinner } from './LoadingSpinner';
 describe('LoadingSpinner', () => {
   it('renders with default message', () => {
     render(<LoadingSpinner />);
-    expect(screen.getByText('Loading AgentMux...')).toBeInTheDocument();
+    expect(screen.getByText('Loading Crewly...')).toBeInTheDocument();
   });
 
   it('renders with custom message', () => {

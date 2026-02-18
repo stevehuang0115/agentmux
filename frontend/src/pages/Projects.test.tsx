@@ -148,7 +148,7 @@ describe('Projects Page', () => {
         expect(screen.getByText('Projects')).toBeInTheDocument();
       });
 
-      expect(screen.getByText('Manage and monitor your AgentMux projects')).toBeInTheDocument();
+      expect(screen.getByText('Manage and monitor your Crewly projects')).toBeInTheDocument();
       expect(screen.getByText('New Project')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('Search projects...')).toBeInTheDocument();
       expect(screen.getByRole('combobox')).toBeInTheDocument();
@@ -526,7 +526,7 @@ describe('Projects Page', () => {
       // Should show empty state when no projects are loaded due to error
       await waitFor(() => {
         expect(screen.getByText('No projects yet')).toBeInTheDocument();
-        expect(screen.getByText('Create your first project to get started with AgentMux')).toBeInTheDocument();
+        expect(screen.getByText('Create your first project to get started with Crewly')).toBeInTheDocument();
       });
 
       consoleSpy.mockRestore();
@@ -563,7 +563,7 @@ describe('Projects Page', () => {
 
       await waitFor(() => {
         expect(screen.getByText('No projects yet')).toBeInTheDocument();
-        expect(screen.getByText('Create your first project to get started with AgentMux')).toBeInTheDocument();
+        expect(screen.getByText('Create your first project to get started with Crewly')).toBeInTheDocument();
         expect(screen.getByText('Create Project')).toBeInTheDocument();
       });
     });

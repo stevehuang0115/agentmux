@@ -22,23 +22,23 @@ describe('InProgressTasksService', () => {
   const mockInProgressTasks: InProgressTask[] = [
     {
       id: 'task-1',
-      taskPath: '/project/.agentmux/tasks/m1/in_progress/01_setup_backend.md',
+      taskPath: '/project/.crewly/tasks/m1/in_progress/01_setup_backend.md',
       taskName: '01_setup_backend',
       assignedSessionName: 'backend-dev-1',
       assignedMemberId: 'member-123',
       assignedAt: '2025-01-15T10:00:00Z',
       status: 'in_progress',
-      originalPath: '/project/.agentmux/tasks/m1/open/01_setup_backend.md'
+      originalPath: '/project/.crewly/tasks/m1/open/01_setup_backend.md'
     },
     {
       id: 'task-2',
-      taskPath: '/project/.agentmux/tasks/m1/in_progress/02_frontend_setup.md',
+      taskPath: '/project/.crewly/tasks/m1/in_progress/02_frontend_setup.md',
       taskName: '02_frontend_setup',
       assignedSessionName: 'frontend-dev-1',
       assignedMemberId: 'member-456',
       assignedAt: '2025-01-15T11:00:00Z',
       status: 'in_progress',
-      originalPath: '/project/.agentmux/tasks/m1/open/02_frontend_setup.md'
+      originalPath: '/project/.crewly/tasks/m1/open/02_frontend_setup.md'
     }
   ];
 
@@ -106,7 +106,7 @@ describe('InProgressTasksService', () => {
 
     it('should find task by exact task path', async () => {
       const task = await inProgressTasksService.getTaskAssignedMember(
-        '/project/.agentmux/tasks/m1/in_progress/01_setup_backend.md'
+        '/project/.crewly/tasks/m1/in_progress/01_setup_backend.md'
       );
 
       expect(task).toEqual(mockInProgressTasks[0]);
@@ -114,7 +114,7 @@ describe('InProgressTasksService', () => {
 
     it('should find task by original path', async () => {
       const task = await inProgressTasksService.getTaskAssignedMember(
-        '/project/.agentmux/tasks/m1/open/01_setup_backend.md'
+        '/project/.crewly/tasks/m1/open/01_setup_backend.md'
       );
 
       expect(task).toEqual(mockInProgressTasks[0]);
@@ -122,7 +122,7 @@ describe('InProgressTasksService', () => {
 
     it('should return null when task not found', async () => {
       const task = await inProgressTasksService.getTaskAssignedMember(
-        '/project/.agentmux/tasks/m1/open/non_existent_task.md'
+        '/project/.crewly/tasks/m1/open/non_existent_task.md'
       );
 
       expect(task).toBeNull();
@@ -172,7 +172,7 @@ describe('InProgressTasksService', () => {
 
     it('should return member details with team information', async () => {
       const details = await inProgressTasksService.getTaskAssignedMemberDetails(
-        '/project/.agentmux/tasks/m1/in_progress/01_setup_backend.md'
+        '/project/.crewly/tasks/m1/in_progress/01_setup_backend.md'
       );
 
       expect(details).toEqual({
@@ -184,7 +184,7 @@ describe('InProgressTasksService', () => {
 
     it('should return empty object when task not found', async () => {
       const details = await inProgressTasksService.getTaskAssignedMemberDetails(
-        '/project/.agentmux/tasks/m1/open/non_existent_task.md'
+        '/project/.crewly/tasks/m1/open/non_existent_task.md'
       );
 
       expect(details).toEqual({});
@@ -195,7 +195,7 @@ describe('InProgressTasksService', () => {
       vi.mocked(apiService.getTeams).mockRejectedValue(new Error('API Error'));
 
       const details = await inProgressTasksService.getTaskAssignedMemberDetails(
-        '/project/.agentmux/tasks/m1/in_progress/01_setup_backend.md'
+        '/project/.crewly/tasks/m1/in_progress/01_setup_backend.md'
       );
 
       // When teams API fails, the service catches the error and returns empty object
@@ -207,7 +207,7 @@ describe('InProgressTasksService', () => {
       vi.mocked(apiService.getTeams).mockResolvedValue([]);
 
       const details = await inProgressTasksService.getTaskAssignedMemberDetails(
-        '/project/.agentmux/tasks/m1/in_progress/01_setup_backend.md'
+        '/project/.crewly/tasks/m1/in_progress/01_setup_backend.md'
       );
 
       // When member is not found, return sessionName from the task

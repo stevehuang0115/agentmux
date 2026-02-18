@@ -367,7 +367,7 @@ export const SlackTab: React.FC = () => {
                 type="text"
                 value={formData.defaultChannel}
                 onChange={handleInputChange}
-                placeholder="C1234567890 or #agentmux"
+                placeholder="C1234567890 or #crewly"
               />
               <p className="text-xs text-text-secondary-dark mt-1">
                 Channel ID or name where notifications will be sent by default

@@ -5,7 +5,7 @@ Record a failed approach or pitfall so the team can avoid repeating it.
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/record-failure/execute.sh '{"description":"Deploying database migrations during peak hours caused 5min downtime","projectPath":"/path/to/project","teamMemberId":"agentmux-orc","context":"production deploy on 2026-02-10"}'
+bash config/skills/orchestrator/record-failure/execute.sh '{"description":"Deploying database migrations during peak hours caused 5min downtime","projectPath":"/path/to/project","teamMemberId":"crewly-orc","context":"production deploy on 2026-02-10"}'
 ```
 
 ## Parameters

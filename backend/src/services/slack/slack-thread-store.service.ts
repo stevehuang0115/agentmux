@@ -6,7 +6,7 @@
  * from which Slack threads, enabling thread-aware proactive notifications.
  *
  * Storage layout:
- *   ~/.agentmux/slack-threads/
+ *   ~/.crewly/slack-threads/
  *     {channelId}/
  *       {threadTs}.md          — Thread conversation file
  *     agent-index.json         — Maps agent session → thread(s)
@@ -67,10 +67,10 @@ export class SlackThreadStoreService {
   /**
    * Create a new SlackThreadStoreService.
    *
-   * @param agentmuxHome - Base agentmux home directory (defaults to ~/.agentmux)
+   * @param crewlyHome - Base crewly home directory (defaults to ~/.crewly)
    */
-  constructor(agentmuxHome?: string) {
-    const home = agentmuxHome || path.join(os.homedir(), '.agentmux');
+  constructor(crewlyHome?: string) {
+    const home = crewlyHome || path.join(os.homedir(), '.crewly');
     this.baseDir = path.join(home, SLACK_THREAD_CONSTANTS.STORAGE_DIR);
   }
 
@@ -186,7 +186,7 @@ export class SlackThreadStoreService {
     }
 
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
-    const entry = `\n**AgentMux** (${timestamp}):\n${message}\n`;
+    const entry = `\n**Crewly** (${timestamp}):\n${message}\n`;
     await fs.appendFile(filePath, entry, 'utf-8');
   }
 

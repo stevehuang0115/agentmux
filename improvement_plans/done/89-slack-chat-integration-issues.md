@@ -75,7 +75,7 @@ User → Chat UI → ChatService.sendMessage() → Orchestrator Terminal
 
 ### Fix Options
 A. Add `dotenv.config()` to `backend/src/index.ts`
-B. Persist Slack config to `~/.agentmux/slack.json` and auto-load
+B. Persist Slack config to `~/.crewly/slack.json` and auto-load
 
 ### Files Affected
 - `backend/src/index.ts` - Add dotenv loading

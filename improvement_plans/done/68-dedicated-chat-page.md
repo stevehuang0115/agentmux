@@ -23,7 +23,7 @@ export function Chat() {
       <div className="chat-page">
         <div className="chat-page-header">
           <h1>Chat with Orchestrator</h1>
-          <p>Communicate with the AgentMux orchestrator to manage projects and teams</p>
+          <p>Communicate with the Crewly orchestrator to manage projects and teams</p>
         </div>
         <div className="chat-page-content">
           <ChatPanel />

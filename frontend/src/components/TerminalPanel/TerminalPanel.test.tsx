@@ -95,7 +95,7 @@ describe('TerminalPanel', () => {
     // Mock TerminalContext
     mockUseTerminal.mockReturnValue({
       isTerminalOpen: true,
-      selectedSession: 'agentmux-orc',
+      selectedSession: 'crewly-orc',
       openTerminal: vi.fn(),
       closeTerminal: vi.fn(),
       setSelectedSession: mockSetSelectedSession,
@@ -120,7 +120,7 @@ describe('TerminalPanel', () => {
       json: () => Promise.resolve({
         success: true,
         data: {
-          sessions: ['agentmux-orc', 'agentmux-dev']
+          sessions: ['crewly-orc', 'crewly-dev']
         }
       })
     });
@@ -258,7 +258,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'Enter' });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\r');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\r');
     });
 
     it('sends Escape key correctly', async () => {
@@ -270,7 +270,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'Escape' });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x1b');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x1b');
     });
 
     it('sends Tab key correctly', async () => {
@@ -282,7 +282,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'Tab' });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\t');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\t');
     });
 
     it('sends Ctrl+C correctly', async () => {
@@ -294,7 +294,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'c', ctrlKey: true });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x03');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x03');
     });
 
     it('sends Ctrl+L correctly', async () => {
@@ -306,7 +306,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'l', ctrlKey: true });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x0c');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x0c');
     });
 
     it('sends arrow keys correctly', async () => {
@@ -317,22 +317,22 @@ describe('TerminalPanel', () => {
       await act(async () => {
         fireEvent.keyDown(document, { key: 'ArrowUp' });
       });
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x1b[A');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x1b[A');
 
       await act(async () => {
         fireEvent.keyDown(document, { key: 'ArrowDown' });
       });
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x1b[B');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x1b[B');
 
       await act(async () => {
         fireEvent.keyDown(document, { key: 'ArrowRight' });
       });
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x1b[C');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x1b[C');
 
       await act(async () => {
         fireEvent.keyDown(document, { key: 'ArrowLeft' });
       });
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', '\x1b[D');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', '\x1b[D');
     });
 
     it('sends printable characters correctly', async () => {
@@ -344,7 +344,7 @@ describe('TerminalPanel', () => {
         fireEvent.keyDown(document, { key: 'a' });
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', 'a');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', 'a');
     });
 
     it('does not handle keys when terminal is not open', async () => {
@@ -403,7 +403,7 @@ describe('TerminalPanel', () => {
       });
 
       await waitFor(() => {
-        expect(mockWebSocketService.subscribeToSession).toHaveBeenCalledWith('agentmux-orc');
+        expect(mockWebSocketService.subscribeToSession).toHaveBeenCalledWith('crewly-orc');
       });
     });
 
@@ -460,10 +460,10 @@ describe('TerminalPanel', () => {
 
       await waitFor(() => {
         const select = screen.getByRole('combobox');
-        fireEvent.change(select, { target: { value: 'agentmux-dev' } });
+        fireEvent.change(select, { target: { value: 'crewly-dev' } });
       });
 
-      expect(mockSetSelectedSession).toHaveBeenCalledWith('agentmux-dev');
+      expect(mockSetSelectedSession).toHaveBeenCalledWith('crewly-dev');
     });
 
     it('updates selectedSession when current selection is not in available sessions', async () => {
@@ -502,7 +502,7 @@ describe('TerminalPanel', () => {
       // Mock selectedSession as a session that exists in the available sessions
       mockUseTerminal.mockReturnValue({
         isTerminalOpen: true,
-        selectedSession: 'agentmux-orc',
+        selectedSession: 'crewly-orc',
         openTerminal: vi.fn(),
         closeTerminal: vi.fn(),
         setSelectedSession: mockSetSelectedSession,
@@ -515,7 +515,7 @@ describe('TerminalPanel', () => {
         json: () => Promise.resolve({
           success: true,
           data: {
-            sessions: ['agentmux-orc', 'team-member-abc123']
+            sessions: ['crewly-orc', 'team-member-abc123']
           }
         })
       });
@@ -731,7 +731,7 @@ describe('TerminalPanel', () => {
         onData!('hello');
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', 'hello');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', 'hello');
     });
 
     it('strips terminal responses from mixed input', async () => {
@@ -747,7 +747,7 @@ describe('TerminalPanel', () => {
         onData!('abc\x1b[?1;2cdef');
       });
 
-      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('agentmux-orc', 'abcdef');
+      expect(mockWebSocketService.sendInput).toHaveBeenCalledWith('crewly-orc', 'abcdef');
     });
   });
 });

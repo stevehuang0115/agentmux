@@ -396,7 +396,7 @@ describe('Auto-Assignment Types', () => {
     describe('PATHS', () => {
       it('should define config paths', () => {
         expect(AUTO_ASSIGN_CONSTANTS.PATHS.CONFIG_FILE).toBe('auto-assign.yaml');
-        expect(AUTO_ASSIGN_CONSTANTS.PATHS.CONFIG_DIR).toBe('.agentmux/config');
+        expect(AUTO_ASSIGN_CONSTANTS.PATHS.CONFIG_DIR).toBe('.crewly/config');
       });
     });
   });

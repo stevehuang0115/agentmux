@@ -15,7 +15,7 @@ interface StatusOptions {
 }
 
 export async function statusCommand(options: StatusOptions) {
-  console.log(chalk.blue('🔍 AgentMux Status'));
+  console.log(chalk.blue('🔍 Crewly Status'));
   console.log(chalk.gray('='.repeat(50)));
 
   try {
@@ -65,7 +65,7 @@ async function checkBackendStatus(): Promise<void> {
     }
   } catch (error) {
     console.log(chalk.red('❌ Backend Server: Not Running'));
-    console.log(chalk.gray('   Run "npx agentmux start" to start the server'));
+    console.log(chalk.gray('   Run "npx crewly start" to start the server'));
   }
 }
 
@@ -79,13 +79,13 @@ async function checkTmuxSessions(verbose: boolean = false): Promise<void> {
     }
 
     const sessions = stdout.trim().split('\n');
-    const agentMuxSessions = sessions.filter(s => s.includes('agentmux_'));
+    const agentMuxSessions = sessions.filter(s => s.includes('crewly_'));
 
     console.log(chalk.green(`✅ Tmux: ${sessions.length} total sessions`));
-    console.log(chalk.gray(`   AgentMux sessions: ${agentMuxSessions.length}`));
+    console.log(chalk.gray(`   Crewly sessions: ${agentMuxSessions.length}`));
 
     if (verbose && agentMuxSessions.length > 0) {
-      console.log(chalk.gray('\n   AgentMux Sessions:'));
+      console.log(chalk.gray('\n   Crewly Sessions:'));
 
       for (const session of agentMuxSessions) {
         const [name, attached, created] = session.split(':');
@@ -110,7 +110,7 @@ async function checkTmuxSessions(verbose: boolean = false): Promise<void> {
 
   } catch (error) {
     console.log(chalk.red('❌ Tmux: Not available'));
-    console.log(chalk.gray('   Install tmux to use AgentMux session management'));
+    console.log(chalk.gray('   Install tmux to use Crewly session management'));
   }
 }
 
@@ -118,8 +118,8 @@ async function checkRunningProcesses(): Promise<void> {
   try {
     console.log(chalk.blue('\n🔍 Running Processes:'));
 
-    // Check for Node.js processes related to AgentMux
-    const { stdout } = await execAsync('ps aux | grep -E "(agentmux|backend)" | grep -v grep || echo ""');
+    // Check for Node.js processes related to Crewly
+    const { stdout } = await execAsync('ps aux | grep -E "(crewly|backend)" | grep -v grep || echo ""');
 
     if (stdout.trim()) {
       const lines = stdout.trim().split('\n');
@@ -138,7 +138,7 @@ async function checkRunningProcesses(): Promise<void> {
         }
       }
     } else {
-      console.log(chalk.gray('   No AgentMux processes found'));
+      console.log(chalk.gray('   No Crewly processes found'));
     }
 
     // Check port usage

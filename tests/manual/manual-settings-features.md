@@ -11,7 +11,7 @@ Verify that the Settings page loads correctly, all tabs are functional, and each
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
 
 ---

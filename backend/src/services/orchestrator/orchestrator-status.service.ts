@@ -9,7 +9,7 @@
  */
 
 import { StorageService } from '../core/storage.service.js';
-import { AGENTMUX_CONSTANTS, WEB_CONSTANTS } from '../../../../config/index.js';
+import { CREWLY_CONSTANTS, WEB_CONSTANTS } from '../../../../config/index.js';
 import { getSessionBackendSync } from '../session/index.js';
 
 /** Dashboard URL for user-facing messages */
@@ -77,7 +77,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     let sessionExists = false;
     try {
       const sessionBackend = getSessionBackendSync();
-      const sessionName = orchestratorStatus?.sessionName || AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+      const sessionName = orchestratorStatus?.sessionName || CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
       if (sessionBackend && sessionName) {
         sessionExists = sessionBackend.sessionExists(sessionName);
       }
@@ -93,29 +93,29 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
       };
     }
 
-    const agentStatus = orchestratorStatus.agentStatus || AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE;
+    const agentStatus = orchestratorStatus.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
 
     // Orchestrator is active when fully registered via MCP
-    const isRegisteredActive = agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+    const isRegisteredActive = agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
     // Also treat as active when the PTY session exists and the runtime is running
     // ("started" means Claude Code is running). This aligns with the teams controller
     // which uses session existence as ground truth for status.
-    const isSessionActive = sessionExists && agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED;
+    const isSessionActive = sessionExists && agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTED;
 
     if (isRegisteredActive || isSessionActive) {
       return {
         isActive: true,
-        agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
         message: 'Orchestrator is active and ready.',
       };
     }
 
     // Provide context-appropriate message based on status
     // Note: STARTED without a live session falls here (session died or config is stale)
-    if (agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING ||
-        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTING ||
-        agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED) {
+    if (agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING ||
+        agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTING ||
+        agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTED) {
       return {
         isActive: false,
         agentStatus,
@@ -156,7 +156,7 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
 export function getOrchestratorOfflineMessage(includeUrl = true): string {
   const baseMessage = 'The orchestrator is currently offline.';
   if (includeUrl) {
-    return `${baseMessage} Please start it from the AgentMux dashboard at ${DASHBOARD_URL}`;
+    return `${baseMessage} Please start it from the Crewly dashboard at ${DASHBOARD_URL}`;
   }
-  return `${baseMessage} Please start it from the AgentMux dashboard.`;
+  return `${baseMessage} Please start it from the Crewly dashboard.`;
 }

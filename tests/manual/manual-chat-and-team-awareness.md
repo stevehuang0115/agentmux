@@ -11,7 +11,7 @@ Verify that the chat pipeline works end-to-end (user message reaches orchestrato
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
 - Orchestrator is active (start from `/teams/orchestrator` if needed)
 

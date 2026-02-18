@@ -74,32 +74,32 @@ describe('FileWatcherService', () => {
       (path.join as jest.Mock).mockImplementation((...parts) => parts.join('/'));
     });
 
-    it('should watch project agentmux directory and subdirectories', async () => {
+    it('should watch project crewly directory and subdirectories', async () => {
       const projectId = 'test-project';
       const projectPath = '/test/project';
 
       await service.watchProject(projectId, projectPath);
 
-      // Should check if .agentmux directory exists
-      expect(fs.existsSync).toHaveBeenCalledWith('/resolved/test/project/.agentmux');
+      // Should check if .crewly directory exists
+      expect(fs.existsSync).toHaveBeenCalledWith('/resolved/test/project/.crewly');
 
       // Should create watchers for main directory and subdirectories
       expect(fs.watch).toHaveBeenCalledTimes(5); // main + 4 subdirs
-      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux', { recursive: true }, expect.any(Function));
-      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/specs', { recursive: true }, expect.any(Function));
-      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/tasks', { recursive: true }, expect.any(Function));
-      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/memory', { recursive: true }, expect.any(Function));
-      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.agentmux/prompts', { recursive: true }, expect.any(Function));
+      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.crewly', { recursive: true }, expect.any(Function));
+      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.crewly/specs', { recursive: true }, expect.any(Function));
+      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.crewly/tasks', { recursive: true }, expect.any(Function));
+      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.crewly/memory', { recursive: true }, expect.any(Function));
+      expect(fs.watch).toHaveBeenCalledWith('/resolved/test/project/.crewly/prompts', { recursive: true }, expect.any(Function));
 
       expect(service.isWatching(projectId)).toBe(true);
     });
 
-    it('should warn and return early if agentmux directory does not exist', async () => {
+    it('should warn and return early if crewly directory does not exist', async () => {
       (fs.existsSync as jest.Mock).mockReturnValue(false);
 
       await service.watchProject('test-project', '/test/project');
 
-      expect(mockLogger.warn).toHaveBeenCalledWith('AgentMux directory does not exist: /resolved/test/project/.agentmux');
+      expect(mockLogger.warn).toHaveBeenCalledWith('Crewly directory does not exist: /resolved/test/project/.crewly');
       expect(fs.watch).not.toHaveBeenCalled();
     });
 
@@ -201,7 +201,7 @@ describe('FileWatcherService', () => {
 
       await (service as any).processFileChange(
         'rename',
-        '/project/.agentmux/specs/test-spec.md',
+        '/project/.crewly/specs/test-spec.md',
         'specs/test-spec.md',
         'test-project',
         'specs'
@@ -209,7 +209,7 @@ describe('FileWatcherService', () => {
 
       expect(emitSpy).toHaveBeenCalledWith('fileChange', expect.objectContaining({
         type: 'created',
-        filepath: '/project/.agentmux/specs/test-spec.md',
+        filepath: '/project/.crewly/specs/test-spec.md',
         relativePath: 'specs/test-spec.md',
         projectId: 'test-project',
         category: 'specs'
@@ -222,7 +222,7 @@ describe('FileWatcherService', () => {
 
       await (service as any).processFileChange(
         'rename',
-        '/project/.agentmux/specs/test-spec.md',
+        '/project/.crewly/specs/test-spec.md',
         'specs/test-spec.md',
         'test-project',
         'specs'
@@ -239,7 +239,7 @@ describe('FileWatcherService', () => {
 
       await (service as any).processFileChange(
         'change',
-        '/project/.agentmux/specs/test-spec.md',
+        '/project/.crewly/specs/test-spec.md',
         'specs/test-spec.md',
         'test-project',
         'specs'
@@ -256,7 +256,7 @@ describe('FileWatcherService', () => {
 
       await (service as any).processFileChange(
         'change',
-        '/project/.agentmux/specs/test-spec.md',
+        '/project/.crewly/specs/test-spec.md',
         'specs/test-spec.md',
         'test-project',
         'specs'

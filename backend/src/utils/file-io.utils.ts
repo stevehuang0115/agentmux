@@ -1,7 +1,7 @@
 /**
  * Centralized Atomic File I/O Utilities
  *
- * Provides safe, atomic file operations for all JSON persistence in AgentMux.
+ * Provides safe, atomic file operations for all JSON persistence in Crewly.
  * Uses temp-file + fsync + rename to prevent corruption on crash,
  * and in-process locks to serialize concurrent writes to the same file.
  *

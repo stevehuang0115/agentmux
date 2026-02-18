@@ -6,7 +6,7 @@ import { writeFile, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { AGENTMUX_CONSTANTS, type WorkingStatus } from '../../constants.js';
+import { CREWLY_CONSTANTS, type WorkingStatus } from '../../constants.js';
 
 /**
  * Team Working Status File Structure
@@ -63,15 +63,15 @@ export class ActivityMonitorService {
   private readonly MAX_OUTPUT_SIZE = 512; // 512 bytes max per output
   private readonly ACTIVITY_CHECK_TIMEOUT = 6000; // 6 second timeout per check
   private lastCleanup: number = Date.now();
-  private agentmuxHome: string;
+  private crewlyHome: string;
   private teamWorkingStatusFile: string;
 
   private constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('ActivityMonitor');
     this.storageService = StorageService.getInstance();
     this.agentHeartbeatService = AgentHeartbeatService.getInstance();
-    this.agentmuxHome = join(homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
-    this.teamWorkingStatusFile = join(this.agentmuxHome, 'teamWorkingStatus.json');
+    this.crewlyHome = join(homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+    this.teamWorkingStatusFile = join(this.crewlyHome, 'teamWorkingStatus.json');
   }
 
   /**
@@ -179,14 +179,14 @@ export class ActivityMonitorService {
       // Step 3: Check orchestrator working status
       const backend = await this.getBackend();
       const orchestratorRunning = await Promise.race([
-        Promise.resolve(backend.sessionExists(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME)),
+        Promise.resolve(backend.sessionExists(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME)),
         new Promise<boolean>((_, reject) =>
           setTimeout(() => reject(new Error('Orchestrator check timeout')), 1000)
         )
       ]).catch(() => false);
 
       if (orchestratorRunning) {
-        const orchestratorOutput = await this.getTerminalOutput(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+        const orchestratorOutput = await this.getTerminalOutput(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
         const previousOutput = this.lastTerminalOutputs.get('orchestrator') || '';
         const outputChanged = orchestratorOutput !== previousOutput && orchestratorOutput.trim() !== '';
         const newWorkingStatus: WorkingStatus = outputChanged ? 'in_progress' : 'idle';
@@ -198,7 +198,7 @@ export class ActivityMonitorService {
           hasChanges = true;
 
           this.logger.info('Orchestrator working status updated', {
-            sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+            sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
             newWorkingStatus,
             outputChanged
           });
@@ -379,7 +379,7 @@ export class ActivityMonitorService {
     const now = new Date().toISOString();
     return {
       orchestrator: {
-        sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         workingStatus: 'idle',
         lastActivityCheck: now,
         updatedAt: now
@@ -473,7 +473,7 @@ export class ActivityMonitorService {
     try {
       const data = await this.loadTeamWorkingStatusFile();
 
-      if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+      if (sessionName === CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
         return data.orchestrator.workingStatus;
       }
 

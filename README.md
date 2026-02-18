@@ -1,6 +1,6 @@
-# AgentMux
+# Crewly
 
-AgentMux orchestrates multiple Claude Code instances via terminal sessions, enabling autonomous team collaboration with web-based monitoring and filesystem-based persistence.
+Crewly orchestrates multiple Claude Code instances via terminal sessions, enabling autonomous team collaboration with web-based monitoring and filesystem-based persistence.
 
 ## Features
 
@@ -33,7 +33,7 @@ This will:
 1. Start backend server on port 3000
 2. Start MCP server on port 3001
 3. Open dashboard in browser
-4. Create `~/.agentmux` configuration directory
+4. Create `~/.crewly` configuration directory
 
 ## Architecture
 
@@ -42,19 +42,19 @@ User → Web Dashboard → Backend Server → PTY Sessions (Claude Code agents)
                            ↓
                       MCP Server ← All agents connect here for tools
                            ↓
-                    Filesystem Storage (~/.agentmux & project/.agentmux)
+                    Filesystem Storage (~/.crewly & project/.crewly)
 ```
 
 ### Session Backend
 
-AgentMux uses **node-pty** as the default session backend for managing terminal sessions. This provides:
+Crewly uses **node-pty** as the default session backend for managing terminal sessions. This provides:
 
 - **Direct PTY access**: No intermediate process for input/output
 - **Cross-platform support**: Works on Windows, macOS, and Linux
 - **Real-time streaming**: WebSocket-based terminal output
 - **Better input reliability**: Direct file descriptor writes avoid race conditions
 
-## Running AgentMux
+## Running Crewly
 
 ### Production Mode
 
@@ -64,7 +64,7 @@ npm run build
 npm start
 
 # Or use the CLI directly
-npx agentmux start
+npx crewly start
 ```
 
 ### Development Mode
@@ -112,7 +112,7 @@ npm run docker:compose:down
 
 ## Session Backend Configuration
 
-AgentMux supports two session backend implementations:
+Crewly supports two session backend implementations:
 
 ### PTY Backend (Default - Recommended)
 
@@ -208,7 +208,7 @@ npm run lint
 ## Project Structure
 
 ```
-agentmux/
+crewly/
 ├── backend/          # Express API server & services
 │   └── src/services/session/  # Session backend implementations
 │       ├── pty/      # PTY backend (node-pty) - ACTIVE
@@ -222,7 +222,7 @@ agentmux/
 
 ## Usage
 
-1. **Start AgentMux**: `npm start` or `npx agentmux start`
+1. **Start Crewly**: `npm start` or `npx crewly start`
 2. **Select Project**: Choose a project folder in the dashboard
 3. **Create Teams**: Add agents with specific roles and system prompts
 4. **Monitor Progress**: Watch real-time terminal output and team communication
@@ -230,12 +230,12 @@ agentmux/
 
 ## Configuration
 
-Configuration is stored in `~/.agentmux/config.env`:
+Configuration is stored in `~/.crewly/config.env`:
 
 ```bash
 WEB_PORT=3000
-AGENTMUX_MCP_PORT=3001
-AGENTMUX_HOME=~/.agentmux
+CREWLY_MCP_PORT=3001
+CREWLY_HOME=~/.crewly
 DEFAULT_CHECK_INTERVAL=30  # minutes
 AUTO_COMMIT_INTERVAL=30    # minutes
 ```
@@ -253,11 +253,11 @@ PTY_ROWS=40            # Terminal rows
 
 ## MCP Server Integration
 
-AgentMux includes a Model Context Protocol (MCP) server that provides specialized tools for AI agents to collaborate autonomously. The MCP server enables Claude Code and other AI tools to communicate, manage tasks, and coordinate workflows through a standardized interface.
+Crewly includes a Model Context Protocol (MCP) server that provides specialized tools for AI agents to collaborate autonomously. The MCP server enables Claude Code and other AI tools to communicate, manage tasks, and coordinate workflows through a standardized interface.
 
 ### Available MCP Tools
 
-The AgentMux MCP server provides 14 specialized tools:
+The Crewly MCP server provides 14 specialized tools:
 
 #### Communication Tools
 
@@ -289,16 +289,16 @@ The AgentMux MCP server provides 14 specialized tools:
 
 #### For Claude Code
 
-1. **Install AgentMux globally:**
+1. **Install Crewly globally:**
 
 ```bash
-npm install -g agentmux
+npm install -g crewly
 ```
 
-2. **Start AgentMux (backend + MCP server):**
+2. **Start Crewly (backend + MCP server):**
 
 ```bash
-npx agentmux start
+npx crewly start
 # Backend starts on port 3000, MCP server on port 3001
 ```
 
@@ -309,11 +309,11 @@ npx agentmux start
 claude mcp list
 
 ## Add
-claude mcp add --transport http agentmux http://localhost:8789/mcp --scope user
+claude mcp add --transport http crewly http://localhost:8789/mcp --scope user
 
 ## Remove
-claude mcp remove "agentmux" -s local
-claude mcp remove "agentmux" -s user
+claude mcp remove "crewly" -s local
+claude mcp remove "crewly" -s user
 ```
 
 Create or update your Claude Code configuration file (`~/.claude-code/config.json`):
@@ -321,7 +321,7 @@ Create or update your Claude Code configuration file (`~/.claude-code/config.jso
 ```json
 {
 	"mcpServers": {
-		"agentmux": {
+		"crewly": {
 			"transport": {
 				"type": "http",
 				"url": "http://localhost:3001"
@@ -349,10 +349,10 @@ npm install -g @google-ai/generativelanguage-cli
 gemini mcp list
 
 ## Add
-gemini mcp add --transport http agentmux http://localhost:8789/mcp --scope user
+gemini mcp add --transport http crewly http://localhost:8789/mcp --scope user
 
 ## Remove
-gemini mcp remove "agentmux" --scope user
+gemini mcp remove "crewly" --scope user
 ```
 
 2. **Create MCP configuration file** (`~/.gemini-cli/mcp.json`):
@@ -360,7 +360,7 @@ gemini mcp remove "agentmux" --scope user
 ```json
 {
 	"mcpServers": {
-		"agentmux": {
+		"crewly": {
 			"httpUrl": "http://localhost:3001/mcp"
 		}
 	}
@@ -384,8 +384,8 @@ PROJECT_PATH="/path/to/project"           # Project root directory
 AGENT_ROLE="developer"                    # Agent role: orchestrator, pm, developer, qa
 
 # Optional
-API_PORT="3000"                           # AgentMux backend API port
-AGENTMUX_MCP_PORT="3001"                  # MCP server HTTP port
+API_PORT="3000"                           # Crewly backend API port
+CREWLY_MCP_PORT="3001"                  # MCP server HTTP port
 ```
 
 ### Testing MCP Connection
@@ -405,7 +405,7 @@ curl -X POST http://localhost:3001/mcp \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}'
 ```
 
-3. **Verify AgentMux backend is running:**
+3. **Verify Crewly backend is running:**
 
 ```bash
 curl http://localhost:3000/api/projects
@@ -484,14 +484,14 @@ const summary = await mcp.get_context_summary();
 
 ### MCP Server Architecture
 
-The MCP server integrates with AgentMux's architecture:
+The MCP server integrates with Crewly's architecture:
 
 ```
 AI Agent (Claude Code/Gemini)
     ↓ MCP Protocol
 MCP Server (port 3001)
     ↓ PTY commands & file operations
-AgentMux Backend (port 3000)
+Crewly Backend (port 3000)
     ↓
 Project Files & Agent Sessions (node-pty)
 ```
@@ -500,7 +500,7 @@ Project Files & Agent Sessions (node-pty)
 
 1. **Connection Issues:**
 
-   - Verify AgentMux is running: `npx agentmux status`
+   - Verify Crewly is running: `npx crewly status`
    - Check MCP server is accessible: `curl http://localhost:3001/health`
    - Check backend server is accessible: `curl http://localhost:3000/health`
    - Validate environment variables are set correctly
@@ -509,7 +509,7 @@ Project Files & Agent Sessions (node-pty)
 
    - Check agent has proper permissions for the tool
    - Verify project path exists and is accessible
-   - Review MCP server logs: `npx agentmux logs`
+   - Review MCP server logs: `npx crewly logs`
 
 3. **Communication Problems:**
    - Ensure PTY sessions exist (check dashboard)
@@ -518,17 +518,17 @@ Project Files & Agent Sessions (node-pty)
 
 ## Commands
 
-- `npx agentmux start` - Start all services and open dashboard
-- `npx agentmux stop` - Stop all services and agent sessions
-- `npx agentmux status` - Show status of running services
-- `npx agentmux logs` - View aggregated logs from all components
+- `npx crewly start` - Start all services and open dashboard
+- `npx crewly stop` - Stop all services and agent sessions
+- `npx crewly status` - Show status of running services
+- `npx crewly logs` - View aggregated logs from all components
 
 ## Debug
 
 1. Terminal 1 - Start MCP Server:
 
 ```bash
-cd agentmux
+cd crewly
 npm run build:mcp
 node dist/mcp-server/index.js
 ```
@@ -536,7 +536,7 @@ node dist/mcp-server/index.js
 2. Terminal 2 - Start Frontend:
 
 ```bash
-cd agentmux/frontend
+cd crewly/frontend
 npm run dev
 ```
 

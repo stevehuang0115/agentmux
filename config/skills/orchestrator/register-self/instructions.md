@@ -1,11 +1,11 @@
 # Register Self
 
-Registers the orchestrator as active with the AgentMux backend. Call this immediately on startup.
+Registers the orchestrator as active with the Crewly backend. Call this immediately on startup.
 
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/register-self/execute.sh '{"role":"orchestrator","sessionName":"agentmux-orc"}'
+bash config/skills/orchestrator/register-self/execute.sh '{"role":"orchestrator","sessionName":"crewly-orc"}'
 ```
 
 ## Parameters

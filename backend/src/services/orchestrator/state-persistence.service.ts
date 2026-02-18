@@ -474,7 +474,7 @@ export class StatePersistenceService {
     // Add notification about restart
     instructions.notifications.push({
       type: 'slack',
-      message: `AgentMux has restarted (restart #${
+      message: `Crewly has restarted (restart #${
         previousState.metadata.restartCount + 1
       }). Resuming ${inProgressTasks.length} tasks and ${
         activeConversations.length

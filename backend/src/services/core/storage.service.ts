@@ -8,7 +8,7 @@ import { Team, TeamMember, Project, Ticket, TicketFilter, ScheduledMessage, Mess
 import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDeliveryLogModel } from '../../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, type RuntimeType } from '../../constants.js';
 import { LoggerService, ComponentLogger } from './logger.service.js';
 import { TeamsBackupService } from './teams-backup.service.js';
 import { atomicWriteFile, withOperationLock } from '../../utils/file-io.utils.js';
@@ -17,7 +17,7 @@ export class StorageService {
   private static instance: StorageService | null = null;
   private static instanceHome: string | null = null;
 
-  private agentmuxHome: string;
+  private crewlyHome: string;
   /** @deprecated Use teamsDir instead - kept for migration */
   private teamsFile: string;
   /** Directory containing individual team files */
@@ -32,28 +32,28 @@ export class StorageService {
   /** Flag to track if migration has been performed */
   private migrationDone: boolean = false;
 
-  constructor(agentmuxHome?: string) {
+  constructor(crewlyHome?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('StorageService');
-    this.agentmuxHome = agentmuxHome || path.join(os.homedir(), '.agentmux');
-    this.teamsFile = path.join(this.agentmuxHome, 'teams.json'); // Legacy, kept for migration
-    this.teamsDir = path.join(this.agentmuxHome, 'teams');
+    this.crewlyHome = crewlyHome || path.join(os.homedir(), '.crewly');
+    this.teamsFile = path.join(this.crewlyHome, 'teams.json'); // Legacy, kept for migration
+    this.teamsDir = path.join(this.crewlyHome, 'teams');
     // Orchestrator now uses directory structure: teams/orchestrator/config.json
     this.orchestratorFile = path.join(this.teamsDir, 'orchestrator', 'config.json');
-    this.projectsFile = path.join(this.agentmuxHome, 'projects.json');
-    this.runtimeFile = path.join(this.agentmuxHome, 'runtime.json');
-    this.scheduledMessagesFile = path.join(this.agentmuxHome, 'scheduled-messages.json');
-    this.deliveryLogsFile = path.join(this.agentmuxHome, 'message-delivery-logs.json');
+    this.projectsFile = path.join(this.crewlyHome, 'projects.json');
+    this.runtimeFile = path.join(this.crewlyHome, 'runtime.json');
+    this.scheduledMessagesFile = path.join(this.crewlyHome, 'scheduled-messages.json');
+    this.deliveryLogsFile = path.join(this.crewlyHome, 'message-delivery-logs.json');
 
     this.ensureDirectories();
-    this.logger.info('StorageService initialized', { agentmuxHome: this.agentmuxHome });
+    this.logger.info('StorageService initialized', { crewlyHome: this.crewlyHome });
   }
 
   /**
    * Get singleton instance of StorageService to prevent multiple instances
    * from interfering with each other's file operations
    */
-  public static getInstance(agentmuxHome?: string): StorageService {
-    const homeDir = agentmuxHome || path.join(os.homedir(), '.agentmux');
+  public static getInstance(crewlyHome?: string): StorageService {
+    const homeDir = crewlyHome || path.join(os.homedir(), '.crewly');
     
     // Return existing instance if it matches the same home directory
     if (StorageService.instance && StorageService.instanceHome === homeDir) {
@@ -76,11 +76,11 @@ export class StorageService {
   }
 
   /**
-   * Ensures the agentmux home and teams directories exist, creating them if necessary
+   * Ensures the crewly home and teams directories exist, creating them if necessary
    */
   private ensureDirectories(): void {
-    if (!existsSync(this.agentmuxHome)) {
-      mkdirSync(this.agentmuxHome, { recursive: true });
+    if (!existsSync(this.crewlyHome)) {
+      mkdirSync(this.crewlyHome, { recursive: true });
     }
     if (!existsSync(this.teamsDir)) {
       mkdirSync(this.teamsDir, { recursive: true });
@@ -292,9 +292,9 @@ export class StorageService {
    */
   private createDefaultOrchestrator() {
     return {
-      sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-      agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
-      workingStatus: AGENTMUX_CONSTANTS.WORKING_STATUSES.IDLE,
+      sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+      workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
       runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -625,7 +625,7 @@ export class StorageService {
 
   async addProject(projectPath: string): Promise<Project> {
     try {
-      // Resolve to absolute path to ensure .agentmux is created in the correct location
+      // Resolve to absolute path to ensure .crewly is created in the correct location
       // If path is relative, resolve it relative to the parent directory of the current working directory
       let resolvedProjectPath: string;
       if (path.isAbsolute(projectPath)) {
@@ -646,19 +646,19 @@ export class StorageService {
         status: 'stopped',
       });
 
-      // Ensure project directory and .agentmux structure exists with template files
+      // Ensure project directory and .crewly structure exists with template files
       mkdirSync(resolvedProjectPath, { recursive: true });
       
-      const agentmuxDir = path.join(resolvedProjectPath, '.agentmux');
-      if (!existsSync(agentmuxDir)) {
-        mkdirSync(agentmuxDir, { recursive: true });
-        mkdirSync(path.join(agentmuxDir, 'tasks'), { recursive: true });
-        mkdirSync(path.join(agentmuxDir, 'specs'), { recursive: true });
-        mkdirSync(path.join(agentmuxDir, 'memory'), { recursive: true });
-        mkdirSync(path.join(agentmuxDir, 'prompts'), { recursive: true });
+      const crewlyDir = path.join(resolvedProjectPath, '.crewly');
+      if (!existsSync(crewlyDir)) {
+        mkdirSync(crewlyDir, { recursive: true });
+        mkdirSync(path.join(crewlyDir, 'tasks'), { recursive: true });
+        mkdirSync(path.join(crewlyDir, 'specs'), { recursive: true });
+        mkdirSync(path.join(crewlyDir, 'memory'), { recursive: true });
+        mkdirSync(path.join(crewlyDir, 'prompts'), { recursive: true });
         
         // Create template files
-        await this.createProjectTemplateFiles(agentmuxDir, projectName);
+        await this.createProjectTemplateFiles(crewlyDir, projectName);
       }
 
       await this.saveProject(project.toJSON());
@@ -717,7 +717,7 @@ export class StorageService {
   async getTickets(projectPath: string, filter?: TicketFilter): Promise<Ticket[]> {
     try {
       const resolvedProjectPath = path.resolve(projectPath);
-      const ticketsDir = path.join(resolvedProjectPath, '.agentmux', 'tasks');
+      const ticketsDir = path.join(resolvedProjectPath, '.crewly', 'tasks');
       
       if (!existsSync(ticketsDir)) {
         return [];
@@ -766,7 +766,7 @@ export class StorageService {
   async saveTicket(projectPath: string, ticket: Ticket): Promise<void> {
     try {
       const resolvedProjectPath = path.resolve(projectPath);
-      const ticketsDir = path.join(resolvedProjectPath, '.agentmux', 'tasks');
+      const ticketsDir = path.join(resolvedProjectPath, '.crewly', 'tasks');
       
       if (!existsSync(ticketsDir)) {
         mkdirSync(ticketsDir, { recursive: true });
@@ -786,7 +786,7 @@ export class StorageService {
   async deleteTicket(projectPath: string, ticketId: string): Promise<void> {
     try {
       const resolvedProjectPath = path.resolve(projectPath);
-      const ticketsDir = path.join(resolvedProjectPath, '.agentmux', 'tasks');
+      const ticketsDir = path.join(resolvedProjectPath, '.crewly', 'tasks');
       const filename = `${ticketId}.yaml`;
       const filePath = path.join(ticketsDir, filename);
       
@@ -844,9 +844,9 @@ export class StorageService {
   // File watching
   watchProject(projectPath: string): FSWatcher {
     const resolvedProjectPath = path.resolve(projectPath);
-    const agentmuxDir = path.join(resolvedProjectPath, '.agentmux');
+    const crewlyDir = path.join(resolvedProjectPath, '.crewly');
     
-    return watch(agentmuxDir, { recursive: true }, (eventType, filename) => {
+    return watch(crewlyDir, { recursive: true }, (eventType, filename) => {
       if (filename) {
         console.log(`File ${eventType}: ${filename} in project ${resolvedProjectPath}`);
         // Emit events that can be handled by WebSocket gateway
@@ -878,10 +878,10 @@ export class StorageService {
   /**
    * Create template files for a new project
    */
-  private async createProjectTemplateFiles(agentmuxDir: string, projectName: string): Promise<void> {
+  private async createProjectTemplateFiles(crewlyDir: string, projectName: string): Promise<void> {
     try {
       // Project specification template
-      const projectSpecPath = path.join(agentmuxDir, 'specs', 'project.md');
+      const projectSpecPath = path.join(crewlyDir, 'specs', 'project.md');
       const projectSpecTemplate = `# ${projectName} - Project Specification
 
 ## Overview
@@ -921,11 +921,11 @@ High-level system architecture and technology stack.
 
       await fs.writeFile(projectSpecPath, projectSpecTemplate, 'utf8');
 
-      // README for the .agentmux directory
-      const readmePath = path.join(agentmuxDir, 'README.md');
-      const readmeTemplate = `# AgentMux Project Directory
+      // README for the .crewly directory
+      const readmePath = path.join(crewlyDir, 'README.md');
+      const readmeTemplate = `# Crewly Project Directory
 
-This directory contains AgentMux-specific files for **${projectName}** project orchestration.
+This directory contains Crewly-specific files for **${projectName}** project orchestration.
 
 ## Structure
 
@@ -936,26 +936,26 @@ This directory contains AgentMux-specific files for **${projectName}** project o
 
 ## Usage
 
-AgentMux agents automatically read from these directories to understand:
+Crewly agents automatically read from these directories to understand:
 - Project requirements and specifications
 - Current tasks and their status
 - Historical context and decisions
 - Role-specific instructions
 
-All files in this directory are monitored by AgentMux for real-time updates.
+All files in this directory are monitored by Crewly for real-time updates.
 
 ## Getting Started
 
 1. Update \`specs/project.md\` with your project requirements
 2. Create task items in \`tasks/\` directory for specific tasks
 3. Customize team member prompts in \`prompts/\` as needed
-4. Let AgentMux orchestrate your development workflow!
+4. Let Crewly orchestrate your development workflow!
 `;
 
       await fs.writeFile(readmePath, readmeTemplate, 'utf8');
 
       // Sample ticket template
-      const sampleTicketPath = path.join(agentmuxDir, 'tasks', 'sample-setup-task.yaml');
+      const sampleTicketPath = path.join(crewlyDir, 'tasks', 'sample-setup-task.yaml');
       const ticketTemplate = `---
 id: sample-setup-task
 title: Project Setup and Configuration
@@ -996,7 +996,7 @@ This is a foundational task that should be completed first before other developm
 
       await fs.writeFile(sampleTicketPath, ticketTemplate, 'utf8');
 
-      console.log(`Created AgentMux template files for project: ${projectName}`);
+      console.log(`Created Crewly template files for project: ${projectName}`);
     } catch (error) {
       console.error('Error creating project template files:', error);
       // Don't throw - project can still work without template files
@@ -1147,12 +1147,12 @@ This is a foundational task that should be completed first before other developm
    * Orchestrator status is stored in teams/orchestrator.json.
    * Team member status is stored in the respective team's file.
    *
-   * @param sessionName - Session name of the agent (AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
-   * @param status - New agent status (AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVATING | AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE)
+   * @param sessionName - Session name of the agent (CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME for orchestrator)
+   * @param status - New agent status (CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE | CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVATING | CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE)
    */
   async updateAgentStatus(sessionName: string, status: AgentStatus): Promise<void> {
     // Handle orchestrator separately
-    if (sessionName === AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
+    if (sessionName === CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) {
       return withOperationLock(this.orchestratorFile, async () => {
         try {
           let orchestrator;
@@ -1290,6 +1290,6 @@ This is a foundational task that should be completed first before other developm
    * @deprecated Use updateAgentStatus instead
    */
   async updateOrchestratorStatus(status: string): Promise<void> {
-    return this.updateAgentStatus(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
+    return this.updateAgentStatus(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, status as AgentStatus);
   }
 }

@@ -9,7 +9,7 @@ import { LoggerService } from '../core/logger.service.js';
 import * as sessionModule from '../session/index.js';
 import { getSessionStatePersistence } from '../session/index.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
-import { AGENTMUX_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -221,7 +221,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
 				'test-session',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.STARTED
+				CREWLY_CONSTANTS.AGENT_STATUSES.STARTED
 			);
 		});
 	});
@@ -294,7 +294,7 @@ describe('AgentRegistrationService', () => {
 			);
 			expect(mockSessionHelper.setEnvironmentVariable).toHaveBeenCalledWith(
 				'test-session',
-				'AGENTMUX_ROLE',
+				'CREWLY_ROLE',
 				'developer'
 			);
 		});
@@ -354,7 +354,7 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.killSession).toHaveBeenCalledWith('test-session');
 			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
 				'test-session',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 		});
 
@@ -367,7 +367,7 @@ describe('AgentRegistrationService', () => {
 			expect(result.message).toContain('already terminated');
 			expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
 				'test-session',
-				AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 		});
 
@@ -567,7 +567,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(result.success).toBe(true);
 			expect(result.data?.agent.running).toBe(true);
-			expect(result.data?.agent.status).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(result.data?.agent.status).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		});
 
 		it('should return inactive status when session does not exist', async () => {
@@ -577,7 +577,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(result.success).toBe(true);
 			expect(result.data?.agent.running).toBe(false);
-			expect(result.data?.agent.status).toBe(AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE);
+			expect(result.data?.agent.status).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
 		});
 
 		it('should include timestamp in response', async () => {
@@ -631,7 +631,7 @@ describe('AgentRegistrationService', () => {
 	describe('checkAgentRegistration (private method)', () => {
 		it('should return true for active orchestrator', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
-				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
 			} as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
@@ -642,7 +642,7 @@ describe('AgentRegistrationService', () => {
 
 		it('should return false for inactive orchestrator', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
-				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 			} as any);
 
 			const checkAgentRegistration = (service as any).checkAgentRegistration.bind(service);
@@ -657,7 +657,7 @@ describe('AgentRegistrationService', () => {
 				members: [{
 					sessionName: 'test-session',
 					role: 'developer',
-					agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
 				}],
 			}] as any);
 
@@ -919,7 +919,7 @@ describe('AgentRegistrationService', () => {
 		describe('waitForRegistration (private method)', () => {
 		it('should return true when registration is confirmed', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
-				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE,
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
 			} as any);
 
 			const waitForRegistration = (service as any).waitForRegistration.bind(service);
@@ -930,7 +930,7 @@ describe('AgentRegistrationService', () => {
 
 		it('should timeout if registration is not confirmed', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
-				agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 			} as any);
 
 			const waitForRegistration = (service as any).waitForRegistration.bind(service);
@@ -1291,17 +1291,17 @@ describe('AgentRegistrationService', () => {
 			// First capturePane: still in shell mode (but isGeminiInShellMode will see normal prompt)
 			mockSessionHelper.capturePane.mockReturnValue('│ > Type your message │');
 
-			const result = await escapeGeminiShellMode('agentmux-orc', mockSessionHelper);
+			const result = await escapeGeminiShellMode('crewly-orc', mockSessionHelper);
 
 			expect(result).toBe(true);
-			expect(mockSessionHelper.sendEscape).toHaveBeenCalledWith('agentmux-orc');
+			expect(mockSessionHelper.sendEscape).toHaveBeenCalledWith('crewly-orc');
 		});
 
 		it('should retry and return false after max attempts if still in shell mode', async () => {
 			// capturePane always shows shell mode
 			mockSessionHelper.capturePane.mockReturnValue('│ ! │');
 
-			const result = await escapeGeminiShellMode('agentmux-orc', mockSessionHelper);
+			const result = await escapeGeminiShellMode('crewly-orc', mockSessionHelper);
 
 			expect(result).toBe(false);
 			expect(mockSessionHelper.sendEscape).toHaveBeenCalledTimes(3); // MAX_ESCAPE_ATTEMPTS
@@ -1330,7 +1330,7 @@ describe('AgentRegistrationService', () => {
 			});
 
 			const result = await service.sendMessageToAgent(
-				'agentmux-orc',
+				'crewly-orc',
 				'Hello!',
 				RUNTIME_TYPES.GEMINI_CLI
 			);
@@ -1346,7 +1346,7 @@ describe('AgentRegistrationService', () => {
 				.mockReturnValueOnce('⏺ Processing');   // 1st interval: ⏺ found → success
 
 			const result = await service.sendMessageToAgent(
-				'agentmux-orc',
+				'crewly-orc',
 				'Hello',
 				RUNTIME_TYPES.CLAUDE_CODE
 			);

@@ -2,7 +2,7 @@ Hey! I need your help with frontend development for this project.
 
 ## Quick context about this setup
 
-This project uses AgentMux for team coordination. You have bash skills available at `{{AGENT_SKILLS_PATH}}/` that communicate with the AgentMux backend running locally. Read the skills catalog at `~/.agentmux/skills/AGENT_SKILLS_CATALOG.md` for a full reference of available skills.
+This project uses Crewly for team coordination. You have bash skills available at `{{AGENT_SKILLS_PATH}}/` that communicate with the Crewly backend running locally. Read the skills catalog at `~/.crewly/skills/AGENT_SKILLS_CATALOG.md` for a full reference of available skills.
 
 ## First thing - please check in
 

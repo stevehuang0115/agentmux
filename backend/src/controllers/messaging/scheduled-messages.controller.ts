@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
 import { ScheduledMessageModel, MessageDeliveryLogModel } from '../../models/index.js';
 import { ApiResponse } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 export async function createScheduledMessage(
 	this: ApiContext,
@@ -223,7 +223,7 @@ export async function runScheduledMessage(
 		try {
 			const sessionName =
 				scheduledMessage.targetTeam === 'orchestrator'
-					? AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
+					? CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
 					: scheduledMessage.targetTeam;
 			await this.tmuxService.sendMessage(sessionName, scheduledMessage.message);
 			success = true;

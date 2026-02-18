@@ -229,7 +229,7 @@ const SceneContent: React.FC = () => {
       {/* Jensen Huang NPC - inside the building */}
       <JensenHuangNPC />
 
-      {/* Steve Huang NPC - builder/architect of AgentMux */}
+      {/* Steve Huang NPC - builder/architect of Crewly */}
       <SteveHuangNPC />
 
       {/* Camera controls */}

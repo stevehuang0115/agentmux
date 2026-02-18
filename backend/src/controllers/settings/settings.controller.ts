@@ -1,7 +1,7 @@
 /**
  * Settings Controller
  *
- * REST API endpoints for managing AgentMux application settings.
+ * REST API endpoints for managing Crewly application settings.
  *
  * @module controllers/settings/settings.controller
  */
@@ -11,14 +11,14 @@ import {
   getSettingsService,
   SettingsValidationError,
 } from '../../services/settings/settings.service.js';
-import { UpdateSettingsInput, AgentMuxSettings } from '../../types/settings.types.js';
+import { UpdateSettingsInput, CrewlySettings } from '../../types/settings.types.js';
 
 const router = Router();
 
 /**
  * Valid section names for reset endpoints
  */
-const VALID_SECTIONS: (keyof AgentMuxSettings)[] = ['general', 'chat', 'skills'];
+const VALID_SECTIONS: (keyof CrewlySettings)[] = ['general', 'chat', 'skills'];
 
 /**
  * GET /api/settings
@@ -110,7 +110,7 @@ router.post('/reset', async (req: Request, res: Response, next: NextFunction) =>
  */
 router.post('/reset/:section', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const section = req.params.section as keyof AgentMuxSettings;
+    const section = req.params.section as keyof CrewlySettings;
 
     if (!VALID_SECTIONS.includes(section)) {
       return res.status(400).json({
@@ -142,7 +142,7 @@ router.post('/export', async (req: Request, res: Response, next: NextFunction) =
     const settings = await settingsService.getSettings();
 
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=agentmux-settings.json');
+    res.setHeader('Content-Disposition', 'attachment; filename=crewly-settings.json');
     res.json(settings);
   } catch (error) {
     next(error);

@@ -16,7 +16,7 @@
 **CRITICAL: READ THE ACTUAL TASK FILE**
 The complete requirements are in the task markdown file. You and the assigned team member MUST read the actual task file to get the full specifications:
 
-**Task File Location:** `{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md`
+**Task File Location:** `{projectPath}/.crewly/tasks/{taskMilestone}/open/{taskId}.md`
 
 **Instructions:**
 
@@ -35,7 +35,7 @@ The complete requirements are in the task markdown file. You and the assigned te
 **WORKFLOW:**
 
 1. First call `read_task` to read and understand the task requirements:
-   read_task({ absoluteTaskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md' })
+   read_task({ absoluteTaskPath: '{projectPath}/.crewly/tasks/{taskMilestone}/open/{taskId}.md' })
 
 2. Then call `get_team_status` to get available team members
 
@@ -47,7 +47,7 @@ The complete requirements are in the task markdown file. You and the assigned te
 
 ```
 assign_task({
-  taskPath: '{projectPath}/.agentmux/tasks/{taskMilestone}/open/{taskId}.md',
+  taskPath: '{projectPath}/.crewly/tasks/{taskMilestone}/open/{taskId}.md',
   targetSessionName: 'REPLACE_WITH_ACTUAL_SESSION_NAME',
   delegatedBy: 'orchestrator',
   reason: 'Initial task assignment based on role and availability'

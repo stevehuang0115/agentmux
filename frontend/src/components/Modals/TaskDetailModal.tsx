@@ -53,7 +53,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             <div>
               <h3 className="text-xl font-bold">{task.title}</h3>
               <p className="text-sm text-text-secondary-dark">
-                In <span className="text-primary">AgentMux Project</span>
+                In <span className="text-primary">Crewly Project</span>
               </p>
             </div>
           </div>

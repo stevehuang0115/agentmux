@@ -276,7 +276,7 @@ export const AUTO_ASSIGN_CONSTANTS = {
   /** Configuration file paths */
   PATHS: {
     CONFIG_FILE: 'auto-assign.yaml',
-    CONFIG_DIR: '.agentmux/config',
+    CONFIG_DIR: '.crewly/config',
   },
 } as const;
 

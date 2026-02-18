@@ -197,7 +197,7 @@ export class ImprovementStartupService {
 
     await this.notifySlack(
       marker,
-      ':hourglass: AgentMux restarted after self-improvement. Running validation...',
+      ':hourglass: Crewly restarted after self-improvement. Running validation...',
       'normal'
     );
 

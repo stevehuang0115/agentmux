@@ -24,7 +24,7 @@ import { ProjectModel, TeamModel } from '../../models/index.js';
 import { ContextLoaderService, TicketEditorService, TaskService } from '../../services/index.js';
 import { ApiResponse, Project, TeamMember } from '../../types/index.js';
 import { getFileIcon, countFiles } from '../utils/file-utils.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 const execAsync = promisify(exec);
 
@@ -82,7 +82,7 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 			const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 			const isGeminiOrchestrator = orchestratorStatus?.runtimeType === 'gemini-cli';
 			const isOrchestratorActive =
-				orchestratorStatus?.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE;
+				orchestratorStatus?.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
 			if (isGeminiOrchestrator && isOrchestratorActive) {
 				console.log(
@@ -256,7 +256,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 				const scheduledMessage = {
 					id: `checkin-${id}-${Date.now()}`,
 					name: `Check-in for Project ${project.name}`,
-					targetTeam: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
+					targetTeam: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
 					targetProject: id,
 					message: checkinMessage,
 					delayAmount: 15,
@@ -282,7 +282,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 				const immediateCoordinationMessage = {
 					id: `immediate-coord-${id}-${Date.now()}`,
 					name: `Project Started - Immediate Coordination - ${project.name}`,
-					targetTeam: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
+					targetTeam: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME, // Send to orchestrator
 					targetProject: id,
 					message: projectStartMessage,
 					delayAmount: 5, // 5 seconds
@@ -453,7 +453,7 @@ export async function assignTeamsToProject(
 		}
 		if (assignedTeamDetails.length > 0) {
 			try {
-				const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+				const orchestratorSession = CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
 				const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
 				if (sessionExists) {
 					const teamsInfo = assignedTeamDetails
@@ -542,7 +542,7 @@ export async function unassignTeamFromProject(
 		team.updatedAt = new Date().toISOString();
 		await this.storageService.saveTeam(team);
 		try {
-			const orchestratorSession = AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+			const orchestratorSession = CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
 			const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
 			if (sessionExists) {
 				const memberLines =
@@ -609,7 +609,7 @@ export async function getProjectFiles(
 				const items = await fs.readdir(dirPath);
 				const tree: FileTreeNode[] = [];
 				for (const item of items) {
-					const isAgentmuxFolder = item === '.agentmux';
+					const isAgentmuxFolder = item === '.crewly';
 					const isDotFile = item.startsWith('.');
 					if (isDotFile && !isAgentmuxFolder && includeDotFiles !== 'true') continue;
 					const fullPath = path.join(dirPath, item);
@@ -636,8 +636,8 @@ export async function getProjectFiles(
 					} catch {}
 				}
 				return tree.sort((a, b) => {
-					if (a.name === '.agentmux') return -1;
-					if (b.name === '.agentmux') return 1;
+					if (a.name === '.crewly') return -1;
+					if (b.name === '.crewly') return 1;
 					if (a.type === 'folder' && b.type === 'file') return -1;
 					if (a.type === 'file' && b.type === 'folder') return 1;
 					return a.name.localeCompare(b.name);
@@ -766,12 +766,12 @@ export async function getAgentmuxMarkdownFiles(
 			} as ApiResponse);
 			return;
 		}
-		const agentmuxPath = path.join(projectPath, '.agentmux');
+		const crewlyPath = path.join(projectPath, '.crewly');
 		try {
-			await fs.access(agentmuxPath);
+			await fs.access(crewlyPath);
 		} catch {
-			await fs.mkdir(agentmuxPath, { recursive: true });
-			await fs.mkdir(path.join(agentmuxPath, 'specs'), { recursive: true });
+			await fs.mkdir(crewlyPath, { recursive: true });
+			await fs.mkdir(path.join(crewlyPath, 'specs'), { recursive: true });
 		}
 		const files: string[] = [];
 		const scanDirectory = async (dirPath: string, relativePath = '') => {
@@ -785,13 +785,13 @@ export async function getAgentmuxMarkdownFiles(
 				}
 			} catch {}
 		};
-		await scanDirectory(agentmuxPath);
+		await scanDirectory(crewlyPath);
 		res.json({ success: true, data: { files } } as ApiResponse<{ files: string[] }>);
 	} catch (error) {
-		console.error('Error scanning .agentmux files:', error);
+		console.error('Error scanning .crewly files:', error);
 		res.status(500).json({
 			success: false,
-			error: 'Failed to scan .agentmux files',
+			error: 'Failed to scan .crewly files',
 		} as ApiResponse);
 	}
 }
@@ -924,7 +924,7 @@ export async function getProjectStats(
 			? project.path
 			: path.resolve(process.cwd(), project.path);
 
-		const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
+		const specsPath = path.join(resolvedProjectPath, '.crewly', 'specs');
 
 		let mdFileCount = 0;
 		let hasProjectMd = false;
@@ -1041,7 +1041,7 @@ export async function createSpecFile(this: ApiContext, req: Request, res: Respon
 		const resolvedProjectPath = path.isAbsolute(project.path)
 			? project.path
 			: path.resolve(process.cwd(), project.path);
-		const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
+		const specsPath = path.join(resolvedProjectPath, '.crewly', 'specs');
 		const filePath = path.join(specsPath, fileName);
 		try {
 			await fs.mkdir(specsPath, { recursive: true });
@@ -1091,7 +1091,7 @@ export async function getSpecFileContent(
 		const resolvedProjectPath = path.isAbsolute(project.path)
 			? project.path
 			: path.resolve(process.cwd(), project.path);
-		const specsPath = path.join(resolvedProjectPath, '.agentmux', 'specs');
+		const specsPath = path.join(resolvedProjectPath, '.crewly', 'specs');
 		const filePath = path.join(specsPath, String(fileName));
 		try {
 			const content = await fs.readFile(filePath, 'utf-8');

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a service that handles graceful shutdown and restart of AgentMux, ensuring state is preserved and operations can resume after restart. This is critical for self-improvement scenarios where code changes require a restart.
+Create a service that handles graceful shutdown and restart of Crewly, ensuring state is preserved and operations can resume after restart. This is critical for self-improvement scenarios where code changes require a restart.
 
 ## Priority
 
@@ -21,7 +21,7 @@ Create a service that handles graceful shutdown and restart of AgentMux, ensurin
 /**
  * Safe Restart Service
  *
- * Manages graceful shutdown and restart of AgentMux,
+ * Manages graceful shutdown and restart of Crewly,
  * preserving state and enabling seamless recovery.
  *
  * @module services/orchestrator/safe-restart
@@ -142,7 +142,7 @@ export class SafeRestartService {
         if (notification.type === 'slack') {
           await slackBridge.sendNotification({
             type: 'alert',
-            title: 'AgentMux Restarted',
+            title: 'Crewly Restarted',
             message: notification.message,
             urgency: 'normal',
             timestamp: new Date().toISOString(),
@@ -193,7 +193,7 @@ export class SafeRestartService {
       const slackBridge = getSlackOrchestratorBridge();
       await slackBridge.sendNotification({
         type: 'alert',
-        title: 'AgentMux Shutting Down',
+        title: 'Crewly Shutting Down',
         message: `Reason: ${reason}. State has been saved and will resume on restart.`,
         urgency: 'normal',
         timestamp: new Date().toISOString(),
@@ -275,8 +275,8 @@ export class SafeRestartService {
       stdio: 'inherit',
       env: {
         ...process.env,
-        AGENTMUX_RESTARTED: 'true',
-        AGENTMUX_RESTART_REASON: config.reason,
+        CREWLY_RESTARTED: 'true',
+        CREWLY_RESTART_REASON: config.reason,
       },
     });
 
@@ -294,7 +294,7 @@ export class SafeRestartService {
       const slackBridge = getSlackOrchestratorBridge();
       await slackBridge.sendNotification({
         type: 'alert',
-        title: 'AgentMux Restart Scheduled',
+        title: 'Crewly Restart Scheduled',
         message: `:hourglass: Restarting in ${Math.round(delayMs / 1000)} seconds\nReason: ${reason}`,
         urgency: 'normal',
         timestamp: new Date().toISOString(),
@@ -318,14 +318,14 @@ export class SafeRestartService {
    * Check if this is a restart (vs fresh start)
    */
   isRestart(): boolean {
-    return process.env.AGENTMUX_RESTARTED === 'true';
+    return process.env.CREWLY_RESTARTED === 'true';
   }
 
   /**
    * Get restart reason (if restarted)
    */
   getRestartReason(): string | undefined {
-    return process.env.AGENTMUX_RESTART_REASON;
+    return process.env.CREWLY_RESTART_REASON;
   }
 
   /**
@@ -492,16 +492,16 @@ describe('SafeRestartService', () => {
     });
 
     it('should detect restart from environment', () => {
-      process.env.AGENTMUX_RESTARTED = 'true';
-      process.env.AGENTMUX_RESTART_REASON = 'test-reason';
+      process.env.CREWLY_RESTARTED = 'true';
+      process.env.CREWLY_RESTART_REASON = 'test-reason';
 
       const service = new SafeRestartService();
 
       expect(service.isRestart()).toBe(true);
       expect(service.getRestartReason()).toBe('test-reason');
 
-      delete process.env.AGENTMUX_RESTARTED;
-      delete process.env.AGENTMUX_RESTART_REASON;
+      delete process.env.CREWLY_RESTARTED;
+      delete process.env.CREWLY_RESTART_REASON;
     });
   });
 });

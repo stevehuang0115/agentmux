@@ -1,5 +1,5 @@
 /**
- * Memory Data Models for AgentMux Two-Level Memory System
+ * Memory Data Models for Crewly Two-Level Memory System
  *
  * This module defines the data structures for the structured memory system:
  * - Agent-level memory: Role knowledge, preferences, and performance metrics
@@ -159,7 +159,7 @@ export interface PerformanceMetrics {
 /**
  * Complete agent-level memory structure
  *
- * Stored at: ~/.agentmux/agents/{agentId}/memory.json
+ * Stored at: ~/.crewly/agents/{agentId}/memory.json
  *
  * @example
  * ```typescript
@@ -367,7 +367,7 @@ export interface RelationshipEntry {
 /**
  * Complete project-level memory structure
  *
- * Stored at: project/.agentmux/knowledge/index.json
+ * Stored at: project/.crewly/knowledge/index.json
  *
  * @example
  * ```typescript
@@ -583,7 +583,7 @@ export interface MemoryStoreOptions {
 /**
  * Agent memory file structure
  *
- * Location: ~/.agentmux/agents/{agentId}/
+ * Location: ~/.crewly/agents/{agentId}/
  */
 export interface AgentMemoryFileStructure {
   /** Main memory file containing AgentMemory */
@@ -601,7 +601,7 @@ export interface AgentMemoryFileStructure {
 /**
  * Project memory file structure
  *
- * Location: project/.agentmux/knowledge/
+ * Location: project/.crewly/knowledge/
  */
 export interface ProjectMemoryFileStructure {
   /** Main index file containing ProjectMemory summary */

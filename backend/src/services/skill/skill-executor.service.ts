@@ -374,11 +374,11 @@ export class SkillExecutorService {
     const env: NodeJS.ProcessEnv = { ...process.env };
 
     // Add context variables
-    env.AGENTMUX_AGENT_ID = context.agentId;
-    env.AGENTMUX_ROLE_ID = context.roleId;
-    if (context.projectId) env.AGENTMUX_PROJECT_ID = context.projectId;
-    if (context.taskId) env.AGENTMUX_TASK_ID = context.taskId;
-    if (context.userInput) env.AGENTMUX_USER_INPUT = context.userInput;
+    env.CREWLY_AGENT_ID = context.agentId;
+    env.CREWLY_ROLE_ID = context.roleId;
+    if (context.projectId) env.CREWLY_PROJECT_ID = context.projectId;
+    if (context.taskId) env.CREWLY_TASK_ID = context.taskId;
+    if (context.userInput) env.CREWLY_USER_INPUT = context.userInput;
 
     const envConfig = skill.environment;
     if (!envConfig) return env;

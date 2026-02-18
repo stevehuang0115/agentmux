@@ -27,13 +27,13 @@ export class PromptGeneratorService {
   private storageService: StorageService;
   private logger: ComponentLogger;
   private configDir: string;
-  private agentmuxHome: string;
+  private crewlyHome: string;
 
   constructor() {
     this.storageService = StorageService.getInstance();
     this.logger = LoggerService.getInstance().createComponentLogger('PromptGeneratorService');
     this.configDir = path.resolve(process.cwd(), 'config');
-    this.agentmuxHome = path.join(os.homedir(), '.agentmux');
+    this.crewlyHome = path.join(os.homedir(), '.crewly');
   }
 
   /**
@@ -192,8 +192,8 @@ export class PromptGeneratorService {
       }
     }
 
-    // Fallback: try user override in ~/.agentmux/roles/{role}/role.json
-    const userRolePath = path.join(this.agentmuxHome, 'roles', role, 'role.json');
+    // Fallback: try user override in ~/.crewly/roles/{role}/role.json
+    const userRolePath = path.join(this.crewlyHome, 'roles', role, 'role.json');
     if (existsSync(userRolePath)) {
       try {
         const content = await fs.readFile(userRolePath, 'utf-8');
@@ -224,8 +224,8 @@ export class PromptGeneratorService {
       }
     }
 
-    // Fallback: try user override in ~/.agentmux/roles/{role}/prompt.md
-    const userRolePath = path.join(this.agentmuxHome, 'roles', role, 'prompt.md');
+    // Fallback: try user override in ~/.crewly/roles/{role}/prompt.md
+    const userRolePath = path.join(this.crewlyHome, 'roles', role, 'prompt.md');
     if (existsSync(userRolePath)) {
       try {
         return await fs.readFile(userRolePath, 'utf-8');
@@ -255,8 +255,8 @@ export class PromptGeneratorService {
       }
     }
 
-    // Fallback: try user override in ~/.agentmux/skills/{skillId}/instructions.md
-    const userSkillPath = path.join(this.agentmuxHome, 'skills', skillId, 'instructions.md');
+    // Fallback: try user override in ~/.crewly/skills/{skillId}/instructions.md
+    const userSkillPath = path.join(this.crewlyHome, 'skills', skillId, 'instructions.md');
     if (existsSync(userSkillPath)) {
       try {
         return await fs.readFile(userSkillPath, 'utf-8');
@@ -300,7 +300,7 @@ Read this file if you need to remember your instructions.
     const promptPath = this.storageService.getOrchestratorPromptPath();
 
     return `<CONTEXT>
-You are: AgentMux Orchestrator
+You are: Crewly Orchestrator
 Prompt file: ${promptPath}
 Read this file if you need to remember your instructions.
 </CONTEXT>

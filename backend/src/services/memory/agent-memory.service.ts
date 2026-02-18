@@ -1,7 +1,7 @@
 /**
  * Agent Memory Service
  *
- * Manages agent-level persistent memory stored in ~/.agentmux/agents/{agentId}/
+ * Manages agent-level persistent memory stored in ~/.crewly/agents/{agentId}/
  * Provides storage for role knowledge, preferences, and performance metrics.
  *
  * @module services/memory/agent-memory.service
@@ -23,7 +23,7 @@ import {
   MEMORY_SCHEMA_VERSION,
   type RoleKnowledgeCategory,
 } from '../../types/memory.types.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -89,10 +89,10 @@ export class AgentMemoryService implements IAgentMemoryService {
   /**
    * Creates a new AgentMemoryService instance
    *
-   * @param agentmuxHome - Optional custom path for agentmux home directory
+   * @param crewlyHome - Optional custom path for crewly home directory
    */
-  constructor(agentmuxHome?: string) {
-    const homeDir = agentmuxHome || path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+  constructor(crewlyHome?: string) {
+    const homeDir = crewlyHome || path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
     this.basePath = path.join(homeDir, MEMORY_CONSTANTS.PATHS.AGENTS_DIR);
     this.ensureBaseDirectory();
   }
@@ -100,11 +100,11 @@ export class AgentMemoryService implements IAgentMemoryService {
   /**
    * Gets the singleton instance of AgentMemoryService
    *
-   * @param agentmuxHome - Optional custom path for agentmux home directory
+   * @param crewlyHome - Optional custom path for crewly home directory
    * @returns The singleton AgentMemoryService instance
    */
-  public static getInstance(agentmuxHome?: string): AgentMemoryService {
-    const homeDir = agentmuxHome || path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+  public static getInstance(crewlyHome?: string): AgentMemoryService {
+    const homeDir = crewlyHome || path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
 
     if (AgentMemoryService.instance && AgentMemoryService.instanceHome === homeDir) {
       return AgentMemoryService.instance;

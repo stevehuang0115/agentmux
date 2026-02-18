@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a service that enables the orchestrator to safely modify the AgentMux codebase itself. This includes planning changes, creating backups, validating changes, and rolling back if needed.
+Create a service that enables the orchestrator to safely modify the Crewly codebase itself. This includes planning changes, creating backups, validating changes, and rolling back if needed.
 
 ## Priority
 
@@ -22,7 +22,7 @@ Create a service that enables the orchestrator to safely modify the AgentMux cod
 /**
  * Self-Improvement Service
  *
- * Enables the orchestrator to safely modify the AgentMux codebase,
+ * Enables the orchestrator to safely modify the Crewly codebase,
  * with proper validation, backup, and rollback capabilities.
  *
  * @module services/orchestrator/self-improvement
@@ -261,7 +261,7 @@ export class SelfImprovementService {
 
         const backupPath = path.join(
           this.projectRoot,
-          '.agentmux',
+          '.crewly',
           'self-improvement',
           backupId,
           file
@@ -707,7 +707,7 @@ Add MCP tool for orchestrator to use:
 // In MCP server, add tool:
 {
   name: 'self_improve',
-  description: 'Plan and execute improvements to the AgentMux codebase',
+  description: 'Plan and execute improvements to the Crewly codebase',
   inputSchema: {
     type: 'object',
     properties: {

@@ -1,9 +1,9 @@
-# Task 80: Browser Testing Summary - AgentMux Application
+# Task 80: Browser Testing Summary - Crewly Application
 
 ## Test Date: 2026-02-01
 
 ## Test Scope
-Comprehensive browser testing of the AgentMux AI Employee Hub application to verify:
+Comprehensive browser testing of the Crewly AI Employee Hub application to verify:
 1. Slack integration for mobile communication
 2. Self-improvement capability
 3. Create support agent team, assign visa project, test orchestrator task assignment
@@ -79,7 +79,7 @@ Claude Code is still waiting at the prompt (`❯`) - the message was echoed to t
 - Agent session shows "Started" status
 
 ### 4. Orchestrator Testing
-- Orchestrator Team exists with "agentmux-orc" session
+- Orchestrator Team exists with "crewly-orc" session
 - Cannot start orchestrator from UI (by design - system level)
 - Started via API: `POST /api/orchestrator/setup`
 - Health check shows: `"running": true, "status": "active"`
@@ -128,5 +128,5 @@ Claude Code is still waiting at the prompt (`❯`) - the message was echoed to t
 ## Environment
 - Application URL: http://localhost:8788
 - Backend API: http://localhost:8787
-- Active Sessions: agentmux-orc (orchestrator), support-team-support-agent-* (support agent)
+- Active Sessions: crewly-orc (orchestrator), support-team-support-agent-* (support agent)
 - Claude Code Version: v2.1.29

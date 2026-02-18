@@ -32,7 +32,7 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       expect(screen.getByText('Settings')).toBeInTheDocument();
-      expect(screen.getByText(/Configure AgentMux/)).toBeInTheDocument();
+      expect(screen.getByText(/Configure Crewly/)).toBeInTheDocument();
     });
 
     it('should show all tab buttons', () => {

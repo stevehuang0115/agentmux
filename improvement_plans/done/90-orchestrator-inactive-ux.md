@@ -51,7 +51,7 @@ When the orchestrator is not active:
 
 **Backend Changes:**
 - In `SlackOrchestratorBridge.sendToOrchestrator()`, check orchestrator status first
-- If inactive, immediately respond: "The orchestrator is currently offline. Please start it from the AgentMux dashboard at http://localhost:8788"
+- If inactive, immediately respond: "The orchestrator is currently offline. Please start it from the Crewly dashboard at http://localhost:8788"
 
 **Files to modify:**
 - `backend/src/services/slack/slack-orchestrator-bridge.ts`
@@ -74,7 +74,7 @@ export async function isOrchestratorActive(): Promise<boolean> {
 ```typescript
 // In SlackOrchestratorBridge.sendToOrchestrator()
 if (!await isOrchestratorActive()) {
-  return 'The orchestrator is currently offline. Please start it from the AgentMux dashboard to enable chat functionality.';
+  return 'The orchestrator is currently offline. Please start it from the Crewly dashboard to enable chat functionality.';
 }
 ```
 

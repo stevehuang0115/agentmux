@@ -15,7 +15,7 @@
  * State file paths configuration
  */
 export const STATE_PATHS = {
-  STATE_DIR: '.agentmux/state',
+  STATE_DIR: '.crewly/state',
   CURRENT_STATE: 'orchestrator-state.json',
   BACKUP_DIR: 'backups',
   SELF_IMPROVEMENT_DIR: 'self-improvement',
@@ -436,7 +436,7 @@ export interface SelfImprovementState {
  * Orchestrator metadata
  */
 export interface OrchestratorMetadata {
-  /** AgentMux version */
+  /** Crewly version */
   version: string;
   /** Hostname for identification */
   hostname: string;

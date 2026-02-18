@@ -30,8 +30,8 @@ export class TaskService {
 
   constructor(projectPath?: string) {
     this.tasksDir = projectPath 
-      ? path.join(path.resolve(projectPath), '.agentmux', 'tasks')
-      : path.join(process.cwd(), '.agentmux', 'tasks');
+      ? path.join(path.resolve(projectPath), '.crewly', 'tasks')
+      : path.join(process.cwd(), '.crewly', 'tasks');
   }
 
   private parseMarkdownContent(content: string): {

@@ -41,7 +41,7 @@ function createTestApp() {
   app.post('/api/orchestrator/setup', async (req: any, res: any) => {
     try {
       const { projectPath } = req.body;
-      const sessionName = 'agentmux-orc';
+      const sessionName = 'crewly-orc';
       
       // Update orchestrator status to activating
       await mockStorageService.updateOrchestratorStatus('activating');
@@ -144,7 +144,7 @@ function createTestApp() {
     try {
       const { role, sessionId } = req.body;
       
-      if (role === 'orchestrator' && sessionId === 'agentmux-orc') {
+      if (role === 'orchestrator' && sessionId === 'crewly-orc') {
         await mockStorageService.updateOrchestratorStatus('active');
         
         res.json({
@@ -219,12 +219,12 @@ describe('Orchestrator Initialization Integration Tests', () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.message).toBe('Orchestrator initialized successfully');
-      expect(response.body.sessionName).toBe('agentmux-orc');
+      expect(response.body.sessionName).toBe('crewly-orc');
       expect(response.body.status).toBe('active');
 
       // Verify initialization was called with correct parameters
       expect(mockTmuxService.initializeAgentWithRegistration).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         'orchestrator',
         '/test/project',
         90000
@@ -303,7 +303,7 @@ describe('Orchestrator Initialization Integration Tests', () => {
         .expect(200);
 
       expect(mockTmuxService.initializeAgentWithRegistration).toHaveBeenCalledWith(
-        'agentmux-orc',
+        'crewly-orc',
         'orchestrator',
         process.cwd(),
         90000
@@ -326,7 +326,7 @@ describe('Orchestrator Initialization Integration Tests', () => {
 
     test('should return orchestrator status when exists', async () => {
       const mockStatus = {
-        sessionId: 'agentmux-orc',
+        sessionId: 'crewly-orc',
         status: 'active',
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z'
@@ -354,7 +354,7 @@ describe('Orchestrator Initialization Integration Tests', () => {
       };
       
       const mockOrchestratorStatus = {
-        sessionId: 'agentmux-orc',
+        sessionId: 'crewly-orc',
         status: 'active',
         createdAt: '2024-01-01T00:00:00Z',
         updatedAt: '2024-01-01T00:00:00Z'
@@ -379,13 +379,13 @@ describe('Orchestrator Initialization Integration Tests', () => {
         .post('/api/agents/register')
         .send({
           role: 'orchestrator',
-          sessionId: 'agentmux-orc'
+          sessionId: 'crewly-orc'
         })
         .expect(200);
 
       expect(response.body.success).toBe(true);
       expect(response.body.message).toBe('Orchestrator registered successfully');
-      expect(response.body.sessionId).toBe('agentmux-orc');
+      expect(response.body.sessionId).toBe('crewly-orc');
       expect(response.body.role).toBe('orchestrator');
       expect(response.body.timestamp).toBeDefined();
 
@@ -425,7 +425,7 @@ describe('Orchestrator Initialization Integration Tests', () => {
 
       // Step 2: Verify orchestrator status was updated
       const mockActiveStatus = {
-        sessionId: 'agentmux-orc',
+        sessionId: 'crewly-orc',
         status: 'active',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -474,7 +474,7 @@ describe('Orchestrator Initialization Integration Tests', () => {
 
       // Step 2: Verify status reflects failure
       const mockInactiveStatus = {
-        sessionId: 'agentmux-orc',
+        sessionId: 'crewly-orc',
         status: 'inactive',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()

@@ -2,7 +2,7 @@ import React from 'react';
 import { LoadingSpinnerProps } from './types';
 
 export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
-  message = 'Loading AgentMux...',
+  message = 'Loading Crewly...',
   className = ''
 }) => {
   return (

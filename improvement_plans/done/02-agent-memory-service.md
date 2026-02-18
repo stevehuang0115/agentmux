@@ -12,7 +12,7 @@ blocks: [05-memory-prompt-integration, 06-memory-mcp-tools]
 # Task: Implement MemoryService for Agent-Level Memory
 
 ## Objective
-Create the service that manages agent-level persistent memory stored in `~/.agentmux/agents/{agentId}/`.
+Create the service that manages agent-level persistent memory stored in `~/.crewly/agents/{agentId}/`.
 
 ## Background
 Agent-level memory stores role-specific knowledge, preferences, and performance metrics that persist across projects. This enables agents to become more effective over time.
@@ -56,7 +56,7 @@ interface IAgentMemoryService {
 
 ```typescript
 class AgentMemoryService implements IAgentMemoryService {
-  private readonly basePath: string;  // ~/.agentmux/agents
+  private readonly basePath: string;  // ~/.crewly/agents
 
   private getAgentPath(agentId: string): string {
     return path.join(this.basePath, agentId);

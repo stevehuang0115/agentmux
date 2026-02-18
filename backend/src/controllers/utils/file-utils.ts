@@ -1,6 +1,6 @@
 export function getFileIcon(fileName: string, isDirectory: boolean): string {
   if (isDirectory) {
-    if (fileName === '.agentmux') return '⚙️';
+    if (fileName === '.crewly') return '⚙️';
     if (fileName === 'node_modules') return '📦';
     if (fileName === '.git') return '🔗';
     if (fileName === 'src' || fileName === 'source') return '📁';

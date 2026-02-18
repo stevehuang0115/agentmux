@@ -393,8 +393,8 @@ describe('TerminalGateway', () => {
 			gateway.setActiveConversationId('fallback-conv');
 
 			// Subscribe to orchestrator session to start streaming
-			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
-			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			mockSessionBackend.listSessions.mockReturnValue(['crewly-orc']);
+			gateway.subscribeToSession('crewly-orc', mockSocket as Socket);
 
 			// Simulate orchestrator output with embedded conversation ID
 			const output = '[CHAT_RESPONSE:conv-123]Hello from conv-123[/CHAT_RESPONSE]';
@@ -404,7 +404,7 @@ describe('TerminalGateway', () => {
 
 			// Should route to the embedded conversation ID, not the fallback
 			expect(mockChatGateway.processTerminalOutput).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				expect.stringContaining('Hello from conv-123'),
 				'conv-123'
 			);
@@ -419,8 +419,8 @@ describe('TerminalGateway', () => {
 
 			gateway.setActiveConversationId('active-conv');
 
-			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
-			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			mockSessionBackend.listSessions.mockReturnValue(['crewly-orc']);
+			gateway.subscribeToSession('crewly-orc', mockSocket as Socket);
 
 			// Simulate old-format orchestrator output without conversation ID
 			const output = '[CHAT_RESPONSE]Hello from old format[/CHAT_RESPONSE]';
@@ -430,7 +430,7 @@ describe('TerminalGateway', () => {
 
 			// Should route to activeConversationId since no embedded ID
 			expect(mockChatGateway.processTerminalOutput).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				expect.stringContaining('Hello from old format'),
 				'active-conv'
 			);
@@ -447,9 +447,9 @@ describe('TerminalGateway', () => {
 				return jest.fn();
 			});
 
-			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			mockSessionBackend.listSessions.mockReturnValue(['crewly-orc']);
 			gateway.setActiveConversationId('conv-1');
-			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			gateway.subscribeToSession('crewly-orc', mockSocket as Socket);
 			mockBridgeSendNotification.mockClear();
 		});
 
@@ -626,9 +626,9 @@ describe('TerminalGateway', () => {
 			};
 			getChatGateway.mockReturnValue(mockChatGateway);
 
-			mockSessionBackend.listSessions.mockReturnValue(['agentmux-orc']);
+			mockSessionBackend.listSessions.mockReturnValue(['crewly-orc']);
 			gateway.setActiveConversationId('conv-1');
-			gateway.subscribeToSession('agentmux-orc', mockSocket as Socket);
+			gateway.subscribeToSession('crewly-orc', mockSocket as Socket);
 			mockBridgeSendNotification.mockClear();
 			mockBridgeMarkDeliveredBySkill.mockClear();
 		});
@@ -642,7 +642,7 @@ describe('TerminalGateway', () => {
 			await new Promise(resolve => setTimeout(resolve, 10));
 
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'## Update\n\nDetails here.',
 				'conv-abc',
 				undefined
@@ -680,7 +680,7 @@ describe('TerminalGateway', () => {
 
 			// Chat routing (with Slack delivery tracking metadata)
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'## Task Done\n\nJoe finished.',
 				'conv-abc',
 				expect.objectContaining({
@@ -710,7 +710,7 @@ describe('TerminalGateway', () => {
 
 			// Should route to chat (with notifyType metadata)
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'Daily progress update',
 				'conv-123',
 				expect.objectContaining({ notifyType: 'daily_summary' })
@@ -730,7 +730,7 @@ describe('TerminalGateway', () => {
 			await new Promise(resolve => setTimeout(resolve, 10));
 
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'Fallback test',
 				'active-conv-fallback',
 				undefined
@@ -785,7 +785,7 @@ describe('TerminalGateway', () => {
 			await new Promise(resolve => setTimeout(resolve, 10));
 
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'## Task Done\n\nJoe finished.',
 				'conv-abc',
 				expect.objectContaining({
@@ -857,7 +857,7 @@ describe('TerminalGateway', () => {
 			await new Promise(resolve => setTimeout(resolve, 10));
 
 			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
-				'agentmux-orc',
+				'crewly-orc',
 				'## Progress\n\nAll done.',
 				'conv-1',
 				expect.objectContaining({

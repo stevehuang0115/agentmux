@@ -2,7 +2,7 @@
  * Session Backend Interface Module
  *
  * Defines the abstraction layer interfaces for terminal session backends.
- * This enables the AgentMux system to use terminal session backends
+ * This enables the Crewly system to use terminal session backends
  * without changing the higher-level code that uses these interfaces.
  *
  * @module session-backend.interface

@@ -127,7 +127,7 @@ class BudgetService extends EventEmitter implements IBudgetService {
 
   private constructor() {
     super();
-    const home = getAgentMuxHome();
+    const home = getCrewlyHome();
     this.usagePath = path.join(home, 'usage');
     this.configPath = path.join(home, 'budgets.json');
     this.logger = LoggerService.getInstance().createLogger('BudgetService');
@@ -285,7 +285,7 @@ class BudgetService extends EventEmitter implements IBudgetService {
 ### 3. Configuration
 
 ```yaml
-# ~/.agentmux/budgets.yaml
+# ~/.crewly/budgets.yaml
 
 global:
   dailyLimit: 50.00

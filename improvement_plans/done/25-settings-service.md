@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a backend service for managing AgentMux application settings. This service handles global configuration options for the application including runtime preferences, chat settings, and skill configurations.
+Create a backend service for managing Crewly application settings. This service handles global configuration options for the application including runtime preferences, chat settings, and skill configurations.
 
 ## Priority
 
@@ -80,9 +80,9 @@ export interface SkillsSettings {
 }
 
 /**
- * Complete AgentMux settings
+ * Complete Crewly settings
  */
-export interface AgentMuxSettings {
+export interface CrewlySettings {
   general: GeneralSettings;
   chat: ChatSettings;
   skills: SkillsSettings;
@@ -112,7 +112,7 @@ export interface SettingsValidationResult {
 import { describe, it, expect } from 'vitest';
 import {
   AIRuntime,
-  AgentMuxSettings,
+  CrewlySettings,
   isValidAIRuntime,
   getDefaultSettings,
   validateSettings,
@@ -214,7 +214,7 @@ describe('Settings Types', () => {
 import { promises as fs } from 'fs';
 import path from 'path';
 import {
-  AgentMuxSettings,
+  CrewlySettings,
   UpdateSettingsInput,
   SettingsValidationResult,
   getDefaultSettings,
@@ -223,26 +223,26 @@ import {
 } from '../../types/settings.types.js';
 
 /**
- * Service for managing AgentMux application settings
+ * Service for managing Crewly application settings
  *
- * Settings are stored in ~/.agentmux/settings.json
+ * Settings are stored in ~/.crewly/settings.json
  * Default values are used when no settings file exists
  */
 export class SettingsService {
   private readonly settingsDir: string;
   private readonly settingsFile: string;
-  private settingsCache: AgentMuxSettings | null = null;
+  private settingsCache: CrewlySettings | null = null;
 
   constructor(options?: { settingsDir?: string }) {
     this.settingsDir = options?.settingsDir ??
-      path.join(process.env.HOME || '~', '.agentmux');
+      path.join(process.env.HOME || '~', '.crewly');
     this.settingsFile = path.join(this.settingsDir, 'settings.json');
   }
 
   /**
    * Get current settings, loading from file if not cached
    */
-  async getSettings(): Promise<AgentMuxSettings> {
+  async getSettings(): Promise<CrewlySettings> {
     if (this.settingsCache) {
       return this.settingsCache;
     }
@@ -261,7 +261,7 @@ export class SettingsService {
   /**
    * Update settings with partial input
    */
-  async updateSettings(input: UpdateSettingsInput): Promise<AgentMuxSettings> {
+  async updateSettings(input: UpdateSettingsInput): Promise<CrewlySettings> {
     const current = await this.getSettings();
     const merged = mergeSettings(current, input);
 
@@ -278,7 +278,7 @@ export class SettingsService {
   /**
    * Reset all settings to defaults
    */
-  async resetSettings(): Promise<AgentMuxSettings> {
+  async resetSettings(): Promise<CrewlySettings> {
     const defaults = getDefaultSettings();
     await this.saveSettings(defaults);
     this.settingsCache = defaults;
@@ -289,8 +289,8 @@ export class SettingsService {
    * Reset a specific settings section to defaults
    */
   async resetSection(
-    section: keyof AgentMuxSettings
-  ): Promise<AgentMuxSettings> {
+    section: keyof CrewlySettings
+  ): Promise<CrewlySettings> {
     const current = await this.getSettings();
     const defaults = getDefaultSettings();
 
@@ -326,7 +326,7 @@ export class SettingsService {
   /**
    * Import settings from a file
    */
-  async importSettings(importPath: string): Promise<AgentMuxSettings> {
+  async importSettings(importPath: string): Promise<CrewlySettings> {
     const content = await fs.readFile(importPath, 'utf-8');
     const imported = JSON.parse(content);
 
@@ -350,7 +350,7 @@ export class SettingsService {
     this.settingsCache = null;
   }
 
-  private async saveSettings(settings: AgentMuxSettings): Promise<void> {
+  private async saveSettings(settings: CrewlySettings): Promise<void> {
     await fs.mkdir(this.settingsDir, { recursive: true });
     await fs.writeFile(
       this.settingsFile,
@@ -632,7 +632,7 @@ export function isValidAIRuntime(value: string): value is AIRuntime {
 /**
  * Get default settings
  */
-export function getDefaultSettings(): AgentMuxSettings {
+export function getDefaultSettings(): CrewlySettings {
   return {
     general: {
       defaultRuntime: 'claude-code',
@@ -661,7 +661,7 @@ export function getDefaultSettings(): AgentMuxSettings {
  * Validate settings
  */
 export function validateSettings(
-  settings: AgentMuxSettings
+  settings: CrewlySettings
 ): SettingsValidationResult {
   const errors: string[] = [];
 
@@ -696,9 +696,9 @@ export function validateSettings(
  * Deep merge settings with partial updates
  */
 export function mergeSettings(
-  existing: AgentMuxSettings,
+  existing: CrewlySettings,
   updates: UpdateSettingsInput
-): AgentMuxSettings {
+): CrewlySettings {
   return {
     general: { ...existing.general, ...updates.general },
     chat: { ...existing.chat, ...updates.chat },
@@ -711,7 +711,7 @@ export function mergeSettings(
 
 - [ ] Settings types are fully defined with JSDoc comments
 - [ ] SettingsService class is fully implemented
-- [ ] Settings persist to ~/.agentmux/settings.json
+- [ ] Settings persist to ~/.crewly/settings.json
 - [ ] Default values are applied when settings are missing
 - [ ] Validation prevents invalid settings from being saved
 - [ ] Export/import functionality works correctly
@@ -732,4 +732,4 @@ export function mergeSettings(
 - Use deep merge for partial updates
 - Validate all settings before saving
 - Always return defaults for missing sections
-- Support both ~/.agentmux and configurable paths for testing
+- Support both ~/.crewly and configurable paths for testing

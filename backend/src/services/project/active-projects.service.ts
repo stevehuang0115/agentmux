@@ -29,7 +29,7 @@ export class ActiveProjectsService {
   private promptTemplateService: PromptTemplateService;
 
   constructor(storageService?: StorageService) {
-    this.activeProjectsPath = path.join(os.homedir(), '.agentmux', 'active_projects.json');
+    this.activeProjectsPath = path.join(os.homedir(), '.crewly', 'active_projects.json');
     this.storageService = storageService;
     this.promptTemplateService = new PromptTemplateService();
   }

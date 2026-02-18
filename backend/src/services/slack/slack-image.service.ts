@@ -19,7 +19,7 @@ import type { SlackFile, SlackImageInfo } from '../../types/slack.types.js';
 /**
  * SlackImageService manages downloading and lifecycle of images
  * sent by Slack users. Downloaded files are stored under
- * `~/.agentmux/tmp/slack-images/` and cleaned up periodically.
+ * `~/.crewly/tmp/slack-images/` and cleaned up periodically.
  *
  * @example
  * ```typescript
@@ -36,10 +36,10 @@ export class SlackImageService {
   /**
    * Create a new SlackImageService.
    *
-   * @param agentmuxHome - Base agentmux home directory (defaults to ~/.agentmux)
+   * @param crewlyHome - Base crewly home directory (defaults to ~/.crewly)
    */
-  constructor(agentmuxHome?: string) {
-    const home = agentmuxHome || path.join(os.homedir(), '.agentmux');
+  constructor(crewlyHome?: string) {
+    const home = crewlyHome || path.join(os.homedir(), '.crewly');
     this.tempDir = path.join(home, SLACK_IMAGE_CONSTANTS.TEMP_DIR);
   }
 

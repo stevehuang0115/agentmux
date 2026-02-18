@@ -201,7 +201,7 @@ const DEFAULT_ASSIGNMENT_STRATEGY: AssignmentStrategy = {
 ### 6. Configuration
 
 ```yaml
-# project/.agentmux/config/auto-assign.yaml
+# project/.crewly/config/auto-assign.yaml
 
 enabled: true
 

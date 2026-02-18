@@ -1,6 +1,6 @@
-# AgentMux Improvement Plans
+# Crewly Improvement Plans
 
-This directory contains structured improvement tickets for the AgentMux codebase, organized by priority milestones.
+This directory contains structured improvement tickets for the Crewly codebase, organized by priority milestones.
 
 ## Overview
 

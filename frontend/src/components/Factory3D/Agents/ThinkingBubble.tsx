@@ -534,17 +534,17 @@ export const JENSEN_HUANG_THOUGHTS: Record<string, string[]> = {
  */
 export const STEVE_HUANG_THOUGHTS: Record<string, string[]> = {
   wandering: [
-    'Wow, look at AgentMux go!',
+    'Wow, look at Crewly go!',
     'I created all of this...',
     'What a beautiful creation',
     'My vision, brought to life',
-    'AgentMux is my masterpiece',
+    'Crewly is my masterpiece',
     'This factory is incredible',
     'Look at what we built!',
     'Every agent, every detail...',
     'From idea to reality',
     'This is beyond what I imagined',
-    'AgentMux changes everything',
+    'Crewly changes everything',
     'I can\'t believe how far we\'ve come',
     'This is just the beginning',
     'What a great company',
@@ -555,7 +555,7 @@ export const STEVE_HUANG_THOUGHTS: Record<string, string[]> = {
     'You make me proud!',
     'Keep building great things',
     'This is what I envisioned',
-    'You\'re the heart of AgentMux',
+    'You\'re the heart of Crewly',
     'Amazing work, keep going!',
     'Built with love, running with purpose',
   ],
@@ -567,7 +567,7 @@ export const STEVE_HUANG_THOUGHTS: Record<string, string[]> = {
   ],
   watching_stage: [
     'Look at them perform!',
-    'AgentMux talent on display',
+    'Crewly talent on display',
     'This is what it\'s all about',
     'Incredible team!',
   ],

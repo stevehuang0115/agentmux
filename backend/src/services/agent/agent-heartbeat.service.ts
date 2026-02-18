@@ -4,7 +4,7 @@ import * as os from 'os';
 import { existsSync, mkdirSync } from 'fs';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
-	AGENTMUX_CONSTANTS,
+	CREWLY_CONSTANTS,
 	AGENT_IDENTITY_CONSTANTS,
 	TIMING_CONSTANTS,
 	type AgentStatus,
@@ -207,16 +207,16 @@ export class AgentStatusBatcher {
  */
 export class AgentHeartbeatService {
 	private logger: ComponentLogger;
-	private agentmuxHome: string;
+	private crewlyHome: string;
 	private teamAgentStatusFile: string;
 	private fileLocks: Map<string, Promise<void>> = new Map();
 	private batcher: AgentStatusBatcher;
 	private static instance: AgentHeartbeatService | null = null;
 
-	constructor(agentmuxHome?: string) {
+	constructor(crewlyHome?: string) {
 		this.logger = LoggerService.getInstance().createComponentLogger('AgentHeartbeatService');
-		this.agentmuxHome = agentmuxHome || path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
-		this.teamAgentStatusFile = path.join(this.agentmuxHome, 'teamAgentStatus.json');
+		this.crewlyHome = crewlyHome || path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+		this.teamAgentStatusFile = path.join(this.crewlyHome, 'teamAgentStatus.json');
 		this.batcher = new AgentStatusBatcher(this);
 
 		this.ensureDirectories();
@@ -225,9 +225,9 @@ export class AgentHeartbeatService {
 	/**
 	 * Get singleton instance to prevent multiple instances from interfering
 	 */
-	public static getInstance(agentmuxHome?: string): AgentHeartbeatService {
+	public static getInstance(crewlyHome?: string): AgentHeartbeatService {
 		if (!AgentHeartbeatService.instance) {
-			AgentHeartbeatService.instance = new AgentHeartbeatService(agentmuxHome);
+			AgentHeartbeatService.instance = new AgentHeartbeatService(crewlyHome);
 		}
 		return AgentHeartbeatService.instance;
 	}
@@ -246,8 +246,8 @@ export class AgentHeartbeatService {
 	 * Ensure required directories exist
 	 */
 	private ensureDirectories(): void {
-		if (!existsSync(this.agentmuxHome)) {
-			mkdirSync(this.agentmuxHome, { recursive: true });
+		if (!existsSync(this.crewlyHome)) {
+			mkdirSync(this.crewlyHome, { recursive: true });
 		}
 	}
 
@@ -270,7 +270,7 @@ export class AgentHeartbeatService {
 	async updateAgentHeartbeat(
 		sessionName: string,
 		teamMemberId?: string,
-		agentStatus: AgentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+		agentStatus: AgentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
 	): Promise<void> {
 		try {
 			// Determine agent ID based on session name
@@ -458,7 +458,7 @@ export class AgentHeartbeatService {
 		return {
 			agentId: AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID,
 			sessionName: AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.SESSION_NAME,
-			agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+			agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 			lastActiveTime: now,
 			createdAt: now,
 			updatedAt: now
@@ -478,7 +478,7 @@ export class AgentHeartbeatService {
 			agentId,
 			sessionName,
 			teamMemberId,
-			agentStatus: AGENTMUX_CONSTANTS.AGENT_STATUSES.INACTIVE,
+			agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 			lastActiveTime: now,
 			createdAt: now,
 			updatedAt: now
@@ -500,7 +500,7 @@ export class AgentHeartbeatService {
 			// Check orchestrator
 			const orchLastActive = new Date(statusData.orchestrator.lastActiveTime);
 			if (orchLastActive < thresholdTime &&
-				statusData.orchestrator.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+				statusData.orchestrator.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
 				staleAgents.push(statusData.orchestrator.agentId);
 			}
 
@@ -508,7 +508,7 @@ export class AgentHeartbeatService {
 			for (const [memberId, member] of Object.entries(statusData.teamMembers)) {
 				const memberLastActive = new Date(member.lastActiveTime);
 				if (memberLastActive < thresholdTime &&
-					member.agentStatus === AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+					member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
 					staleAgents.push(memberId);
 				}
 			}
@@ -658,7 +658,7 @@ export class AgentHeartbeatService {
 export async function updateAgentHeartbeat(
 	sessionName: string,
 	teamMemberId?: string,
-	agentStatus: AgentStatus = AGENTMUX_CONSTANTS.AGENT_STATUSES.ACTIVE
+	agentStatus: AgentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
 ): Promise<void> {
 	const service = AgentHeartbeatService.getInstance();
 	await service.updateAgentHeartbeat(sessionName, teamMemberId, agentStatus);

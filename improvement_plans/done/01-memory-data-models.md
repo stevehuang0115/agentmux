@@ -15,13 +15,13 @@ blocks: [02-agent-memory-service, 03-project-memory-service]
 Define the data structures and file formats for the two-level memory system (agent-level and project-level).
 
 ## Background
-Currently, AgentMux stores memory as unstructured logs in `project/.agentmux/memory/`. We need structured, queryable memory that persists across sessions.
+Currently, Crewly stores memory as unstructured logs in `project/.crewly/memory/`. We need structured, queryable memory that persists across sessions.
 
 ## Deliverables
 
 ### 1. Agent-Level Memory Schema
 
-**Location:** `~/.agentmux/agents/{agentId}/`
+**Location:** `~/.crewly/agents/{agentId}/`
 
 ```typescript
 // File: backend/src/types/memory.types.ts
@@ -85,7 +85,7 @@ interface ErrorPattern {
 
 **File Structure:**
 ```
-~/.agentmux/agents/{agentId}/
+~/.crewly/agents/{agentId}/
 ├── memory.json           # Main memory file (AgentMemory)
 ├── role-knowledge.json   # Detailed knowledge entries
 ├── preferences.json      # Agent preferences
@@ -96,7 +96,7 @@ interface ErrorPattern {
 
 ### 2. Project-Level Memory Schema
 
-**Location:** `project/.agentmux/knowledge/`
+**Location:** `project/.crewly/knowledge/`
 
 ```typescript
 interface ProjectMemory {
@@ -161,7 +161,7 @@ interface RelationshipEntry {
 
 **File Structure:**
 ```
-project/.agentmux/knowledge/
+project/.crewly/knowledge/
 ├── index.json           # ProjectMemory summary
 ├── patterns.json        # All PatternEntry records
 ├── decisions.json       # All DecisionEntry records

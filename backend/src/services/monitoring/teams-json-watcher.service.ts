@@ -12,7 +12,7 @@ import type { AgentEvent, EventType } from '../../types/event-bus.types.js';
  * Service that watches the teams directory for changes and triggers
  * real-time WebSocket updates when agent registrations or team status changes occur.
  *
- * Watches: ~/.agentmux/teams/{team-id}/config.json files
+ * Watches: ~/.crewly/teams/{team-id}/config.json files
  */
 export class TeamsJsonWatcherService extends EventEmitter {
   private logger: ComponentLogger;
@@ -28,7 +28,7 @@ export class TeamsJsonWatcherService extends EventEmitter {
   constructor() {
     super();
     this.logger = LoggerService.getInstance().createComponentLogger('TeamsDirectoryWatcher');
-    this.teamsDir = path.join(os.homedir(), '.agentmux', 'teams');
+    this.teamsDir = path.join(os.homedir(), '.crewly', 'teams');
 
     // Cleanup on process exit
     process.on('SIGINT', () => this.cleanup());

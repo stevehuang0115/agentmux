@@ -10,7 +10,7 @@ import {
   ORCHESTRATOR_SETUP_TIMEOUT,
   DEFAULT_WEB_PORT,
   API_ENDPOINTS,
-  AGENTMUX_HOME_DIR
+  CREWLY_HOME_DIR
 } from '../constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -25,17 +25,17 @@ export async function startCommand(options: StartOptions) {
 	const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
 	const openBrowser = options.browser !== false;
 
-	console.log(chalk.blue('🚀 Starting AgentMux...'));
+	console.log(chalk.blue('🚀 Starting Crewly...'));
 	console.log(chalk.gray(`Web Port: ${webPort}`));
 
 	try {
-		// 1. Ensure ~/.agentmux directory exists
-		await ensureAgentMuxHome();
+		// 1. Ensure ~/.crewly directory exists
+		await ensureCrewlyHome();
 
 		// 2. Check if services are already running
 		const alreadyRunning = await checkIfRunning(webPort);
 		if (alreadyRunning) {
-			console.log(chalk.yellow('⚠️  AgentMux is already running'));
+			console.log(chalk.yellow('⚠️  Crewly is already running'));
 			if (openBrowser) {
 				console.log(chalk.blue('🌐 Opening dashboard...'));
 				await open(`http://localhost:${webPort}`);
@@ -60,7 +60,7 @@ export async function startCommand(options: StartOptions) {
 			await open(`http://localhost:${webPort}`);
 		}
 
-		console.log(chalk.green('✅ AgentMux started successfully!'));
+		console.log(chalk.green('✅ Crewly started successfully!'));
 		console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
 		console.log(chalk.cyan(`⚡ WebSocket: ws://localhost:${webPort}`));
 		console.log(chalk.gray(`🎯 Orchestrator: Setting up in background...`));
@@ -74,7 +74,7 @@ export async function startCommand(options: StartOptions) {
 		await new Promise(() => {}); // Wait forever
 	} catch (error) {
 		console.error(
-			chalk.red('❌ Failed to start AgentMux:'),
+			chalk.red('❌ Failed to start Crewly:'),
 			error instanceof Error ? error.message : error
 		);
 		process.exit(1);
@@ -130,19 +130,19 @@ function setupOrchestratorSessionAsync(webPort: number): void {
 		});
 }
 
-async function ensureAgentMuxHome(): Promise<void> {
-	const agentmuxHome = path.join(os.homedir(), AGENTMUX_HOME_DIR);
+async function ensureCrewlyHome(): Promise<void> {
+	const crewlyHome = path.join(os.homedir(), CREWLY_HOME_DIR);
 
-	if (!fs.existsSync(agentmuxHome)) {
-		fs.mkdirSync(agentmuxHome, { recursive: true });
-		console.log(chalk.green(`📁 Created AgentMux home: ${agentmuxHome}`));
+	if (!fs.existsSync(crewlyHome)) {
+		fs.mkdirSync(crewlyHome, { recursive: true });
+		console.log(chalk.green(`📁 Created Crewly home: ${crewlyHome}`));
 	}
 
 	// Create default config if it doesn't exist
-	const configPath = path.join(agentmuxHome, 'config.env');
+	const configPath = path.join(crewlyHome, 'config.env');
 	if (!fs.existsSync(configPath)) {
 		const defaultConfig = `WEB_PORT=${DEFAULT_WEB_PORT}
-AGENTMUX_HOME=${agentmuxHome}
+CREWLY_HOME=${crewlyHome}
 DEFAULT_CHECK_INTERVAL=30
 AUTO_COMMIT_INTERVAL=30`;
 		fs.writeFileSync(configPath, defaultConfig);
@@ -229,7 +229,7 @@ async function waitForServer(port: number, maxAttempts: number = 30): Promise<vo
 
 function setupShutdownHandlers(processes: ChildProcess[]): void {
 	const cleanup = () => {
-		console.log(chalk.yellow('\n🛑 Shutting down AgentMux...'));
+		console.log(chalk.yellow('\n🛑 Shutting down Crewly...'));
 
 		processes.forEach((process) => {
 			if (process && !process.killed) {
@@ -246,7 +246,7 @@ function setupShutdownHandlers(processes: ChildProcess[]): void {
 		});
 
 		setTimeout(() => {
-			console.log(chalk.green('✅ AgentMux stopped'));
+			console.log(chalk.green('✅ Crewly stopped'));
 			process.exit(0);
 		}, 1000);
 	};

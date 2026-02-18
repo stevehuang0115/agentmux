@@ -57,7 +57,7 @@ describe('TicketEditorService', () => {
       expect(result.updatedAt).toBeDefined();
 
       expect(mockFs.mkdir).toHaveBeenCalledWith(
-        path.join(testProjectPath, '.agentmux', 'tasks'),
+        path.join(testProjectPath, '.crewly', 'tasks'),
         { recursive: true }
       );
       expect(mockFs.writeFile).toHaveBeenCalled();
@@ -124,7 +124,7 @@ priority: medium
       });
 
       expect(mockFs.readFile).toHaveBeenCalledWith(
-        path.join(testProjectPath, '.agentmux', 'tasks', `${ticketId}.yaml`),
+        path.join(testProjectPath, '.crewly', 'tasks', `${ticketId}.yaml`),
         'utf-8'
       );
     });
@@ -351,7 +351,7 @@ subtasks:
 
       expect(result).toBe(true);
       expect(mockFs.unlink).toHaveBeenCalledWith(
-        path.join(testProjectPath, '.agentmux', 'tasks', `${ticketId}.yaml`)
+        path.join(testProjectPath, '.crewly', 'tasks', `${ticketId}.yaml`)
       );
     });
 
@@ -393,11 +393,11 @@ subtasks:
       await ticketService.createTicketTemplate(templateName, template);
 
       expect(mockFs.mkdir).toHaveBeenCalledWith(
-        path.join(testProjectPath, '.agentmux', 'tasks', 'templates'),
+        path.join(testProjectPath, '.crewly', 'tasks', 'templates'),
         { recursive: true }
       );
       expect(mockFs.writeFile).toHaveBeenCalledWith(
-        path.join(testProjectPath, '.agentmux', 'tasks', 'templates', `${templateName}.yaml`),
+        path.join(testProjectPath, '.crewly', 'tasks', 'templates', `${templateName}.yaml`),
         expect.any(String),
         'utf-8'
       );

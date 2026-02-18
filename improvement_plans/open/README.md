@@ -1,6 +1,6 @@
 # AI Employee Hub - Implementation Tasks
 
-This folder contains detailed implementation tasks for transforming AgentMux into a comprehensive **AI Employee Hub**.
+This folder contains detailed implementation tasks for transforming Crewly into a comprehensive **AI Employee Hub**.
 
 ## Overview
 
@@ -9,7 +9,7 @@ The implementation plan covers:
 2. **Skills System** - Evolving from SOP with prompts, scripts, and browser automation
 3. **Chat-Based Dashboard** - Conversational interface with the Orchestrator
 4. **Slack Integration** - Mobile communication with orchestrator via Slack
-5. **Self-Improvement** - Enable orchestrator to safely modify AgentMux codebase
+5. **Self-Improvement** - Enable orchestrator to safely modify Crewly codebase
 
 ---
 
@@ -80,7 +80,7 @@ Enable mobile communication with the orchestrator via Slack.
 
 ### Sprint 7: Self-Improvement & Persistence
 
-Enable the orchestrator to safely modify the AgentMux codebase and resume after restarts.
+Enable the orchestrator to safely modify the Crewly codebase and resume after restarts.
 
 | # | Task | Description | Priority | Dependencies |
 |---|------|-------------|----------|--------------|
@@ -138,7 +138,7 @@ These gaps were identified through thorough browser testing of the running appli
 | # | Task | Description | Priority | Dependencies |
 |---|------|-------------|----------|--------------|
 | 64 | [Slack Integration UI](./64-slack-integration-ui.md) | Add Slack tab to Settings for configuration | High | 44, 46 |
-| 65 | [Default Skills Configuration](./65-default-skills-configuration.md) | Create built-in skills that ship with AgentMux | High | 29 |
+| 65 | [Default Skills Configuration](./65-default-skills-configuration.md) | Create built-in skills that ship with Crewly | High | 29 |
 
 ### Sprint 11: UI Consistency Fixes
 
@@ -281,7 +281,7 @@ Phase 13 (Final):
 3. **Browser Automation**: Uses Claude's Chrome Extension (claude-in-chrome MCP)
 4. **Response Formatting**: Agents use `[CHAT_RESPONSE]` markers for clean output
 5. **Slack Integration**: Uses Socket Mode for real-time communication without webhooks
-6. **State Persistence**: Orchestrator state saved to `~/.agentmux/state/` with periodic checkpoints
+6. **State Persistence**: Orchestrator state saved to `~/.crewly/state/` with periodic checkpoints
 7. **Self-Improvement Safety**: Backup + validation + automatic rollback on failure
 
 ---

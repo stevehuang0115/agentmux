@@ -48,8 +48,8 @@ function createEnhancedTestApp() {
     // Mock file tree structure
     const mockFileTree = [
       {
-        name: '.agentmux',
-        path: '.agentmux',
+        name: '.crewly',
+        path: '.crewly',
         type: 'folder',
         size: 192,
         modified: new Date().toISOString(),
@@ -57,7 +57,7 @@ function createEnhancedTestApp() {
         children: [
           {
             name: 'specs',
-            path: '.agentmux/specs',
+            path: '.crewly/specs',
             type: 'folder',
             size: 64,
             modified: new Date().toISOString(),
@@ -65,7 +65,7 @@ function createEnhancedTestApp() {
             children: [
               {
                 name: 'requirements.md',
-                path: '.agentmux/specs/requirements.md',
+                path: '.crewly/specs/requirements.md',
                 type: 'file',
                 size: 1024,
                 modified: new Date().toISOString(),
@@ -75,7 +75,7 @@ function createEnhancedTestApp() {
           },
           {
             name: 'tickets',
-            path: '.agentmux/tickets',
+            path: '.crewly/tickets',
             type: 'folder',
             size: 64,
             modified: new Date().toISOString(),
@@ -181,7 +181,7 @@ function createEnhancedTestApp() {
           id: memberId,
           name: 'Test Member',
           role: 'developer',
-          sessionName: 'agentmux_developer_12345678',
+          sessionName: 'crewly_developer_12345678',
           systemPrompt: 'You are a test developer.',
           status: 'working'
         }
@@ -208,7 +208,7 @@ function createEnhancedTestApp() {
     // Mock terminal output
     const mockOutput = `
 export TMUX_SESSION_NAME="${member.sessionName}"
-export AGENTMUX_ROLE="${member.role}"
+export CREWLY_ROLE="${member.role}"
 
 $ echo "Hello from ${member.name} session"
 Hello from ${member.name} session
@@ -265,7 +265,7 @@ $
       name: member.name,
       role: member.role,
       systemPrompt: member.systemPrompt,
-      sessionName: `agentmux_${member.role}_${Math.random().toString(36).substr(2, 8)}`,
+      sessionName: `crewly_${member.role}_${Math.random().toString(36).substr(2, 8)}`,
       status: 'idle',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -306,7 +306,7 @@ $
             id: 'member-1',
             name: 'Project Manager',
             role: 'pm',
-            sessionName: 'agentmux_pm_12345678',
+            sessionName: 'crewly_pm_12345678',
             systemPrompt: 'You are a project manager.',
             status: 'working'
           },
@@ -314,7 +314,7 @@ $
             id: 'member-2',
             name: 'Senior Developer',
             role: 'developer',
-            sessionName: 'agentmux_developer_87654321',
+            sessionName: 'crewly_developer_87654321',
             systemPrompt: 'You are a senior developer.',
             status: 'idle'
           }
@@ -410,10 +410,10 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     
     // Create test project structure
     await fs.mkdir(path.join(testProjectPath, 'src'), { recursive: true });
-    await fs.mkdir(path.join(testProjectPath, '.agentmux', 'specs'), { recursive: true });
+    await fs.mkdir(path.join(testProjectPath, '.crewly', 'specs'), { recursive: true });
     await fs.writeFile(path.join(testProjectPath, 'package.json'), '{"name": "test-project"}');
     await fs.writeFile(path.join(testProjectPath, 'src', 'index.ts'), 'console.log("Hello World");');
-    await fs.writeFile(path.join(testProjectPath, '.agentmux', 'specs', 'requirements.md'), '# Requirements\n\nTest requirements');
+    await fs.writeFile(path.join(testProjectPath, '.crewly', 'specs', 'requirements.md'), '# Requirements\n\nTest requirements');
   });
 
   afterAll(async () => {
@@ -447,15 +447,15 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
       const files = response.body.data.files;
       expect(Array.isArray(files)).toBe(true);
       
-      // Check for .agentmux folder
-      const agentmuxFolder = files.find((f: any) => f.name === '.agentmux');
-      expect(agentmuxFolder).toBeTruthy();
-      expect(agentmuxFolder.type).toBe('folder');
-      expect(agentmuxFolder.icon).toBe('⚙️');
-      expect(Array.isArray(agentmuxFolder.children)).toBe(true);
+      // Check for .crewly folder
+      const crewlyFolder = files.find((f: any) => f.name === '.crewly');
+      expect(crewlyFolder).toBeTruthy();
+      expect(crewlyFolder.type).toBe('folder');
+      expect(crewlyFolder.icon).toBe('⚙️');
+      expect(Array.isArray(crewlyFolder.children)).toBe(true);
 
       // Check for nested structure
-      const specsFolder = agentmuxFolder.children.find((c: any) => c.name === 'specs');
+      const specsFolder = crewlyFolder.children.find((c: any) => c.name === 'specs');
       expect(specsFolder).toBeTruthy();
       expect(specsFolder.children).toHaveLength(1);
       expect(specsFolder.children[0].name).toBe('requirements.md');
@@ -485,8 +485,8 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
       expect(jsonFile.icon).toBe('⚙️'); // JSON icon
 
       // Find Markdown file
-      const agentmuxFolder = files.find((f: any) => f.name === '.agentmux');
-      const specsFolder = agentmuxFolder.children.find((c: any) => c.name === 'specs');
+      const crewlyFolder = files.find((f: any) => f.name === '.crewly');
+      const specsFolder = crewlyFolder.children.find((c: any) => c.name === 'specs');
       const mdFile = specsFolder.children.find((c: any) => c.name === 'requirements.md');
       expect(mdFile.icon).toBe('📝'); // Markdown icon
     });
@@ -569,7 +569,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
         expect(member.name).toBe(teamData.members[index].name);
         expect(member.role).toBe(teamData.members[index].role);
         expect(member.systemPrompt).toBe(teamData.members[index].systemPrompt);
-        expect(member.sessionName).toMatch(new RegExp(`^agentmux_${member.role}_`));
+        expect(member.sessionName).toMatch(new RegExp(`^crewly_${member.role}_`));
       });
     });
 
@@ -624,7 +624,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
 
       // Verify output contains expected terminal content
       expect(response.body.data.output).toContain('TMUX_SESSION_NAME');
-      expect(response.body.data.output).toContain('AGENTMUX_ROLE');
+      expect(response.body.data.output).toContain('CREWLY_ROLE');
       expect(response.body.data.output).toContain('git status');
       expect(response.body.data.output).toContain('npm test');
     });
@@ -671,7 +671,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     });
 
     test('should handle session subscription', (done) => {
-      const sessionName = 'agentmux_developer_test123';
+      const sessionName = 'crewly_developer_test123';
       
       clientSocket.on('subscription_confirmed', (message: any) => {
         expect(message.type).toBe('subscription_confirmed');
@@ -683,7 +683,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     });
 
     test('should receive initial terminal state', (done) => {
-      const sessionName = 'agentmux_pm_test456';
+      const sessionName = 'crewly_pm_test456';
       
       clientSocket.on('initial_terminal_state', (message: any) => {
         expect(message.type).toBe('initial_terminal_state');
@@ -696,7 +696,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     });
 
     test('should handle terminal input and output', (done) => {
-      const sessionName = 'agentmux_developer_input_test';
+      const sessionName = 'crewly_developer_input_test';
       const testInput = 'ls -la';
       
       clientSocket.on('terminal_output', (message: any) => {
@@ -714,7 +714,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
     });
 
     test('should handle session unsubscription', (done) => {
-      const sessionName = 'agentmux_tester_unsubtest';
+      const sessionName = 'crewly_tester_unsubtest';
       
       clientSocket.on('unsubscription_confirmed', (message: any) => {
         expect(message.type).toBe('unsubscription_confirmed');
@@ -772,7 +772,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
         .get(`/api/teams/${teamId}/members/${memberId}/session`)
         .expect(200);
 
-      expect(sessionResponse.body.data.sessionName).toMatch(/^agentmux_developer_/);
+      expect(sessionResponse.body.data.sessionName).toMatch(/^crewly_developer_/);
       expect(sessionResponse.body.data.output).toBeTruthy();
 
       // Verify complete workflow

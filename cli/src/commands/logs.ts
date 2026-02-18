@@ -15,21 +15,21 @@ interface LogsOptions {
 export async function logsCommand(options: LogsOptions) {
   const numLines = parseInt(options.lines || '50');
   
-  console.log(chalk.blue(`📄 AgentMux Logs (last ${numLines} lines)`));
+  console.log(chalk.blue(`📄 Crewly Logs (last ${numLines} lines)`));
   console.log(chalk.gray('='.repeat(60)));
 
   try {
-    const agentmuxHome = path.join(os.homedir(), '.agentmux');
+    const crewlyHome = path.join(os.homedir(), '.crewly');
     
     // Show different types of logs
-    await showProjectLogs(agentmuxHome, numLines);
-    await showCommunicationLogs(agentmuxHome, numLines);
-    await showSchedulerLogs(agentmuxHome, numLines);
+    await showProjectLogs(crewlyHome, numLines);
+    await showCommunicationLogs(crewlyHome, numLines);
+    await showSchedulerLogs(crewlyHome, numLines);
     
     // If follow mode, tail the logs
     if (options.follow) {
       console.log(chalk.yellow('\n👁️  Following logs (Ctrl+C to stop)...'));
-      await followLogs(agentmuxHome);
+      await followLogs(crewlyHome);
     }
     
   } catch (error) {
@@ -38,13 +38,13 @@ export async function logsCommand(options: LogsOptions) {
   }
 }
 
-async function showProjectLogs(agentmuxHome: string, lines: number): Promise<void> {
+async function showProjectLogs(crewlyHome: string, lines: number): Promise<void> {
   try {
     // Find all project communication logs
     const projects = await findProjectDirectories();
     
     for (const projectPath of projects.slice(0, 3)) { // Limit to 3 most recent
-      const logPath = path.join(projectPath, '.agentmux', 'memory', 'communication.log');
+      const logPath = path.join(projectPath, '.crewly', 'memory', 'communication.log');
       
       if (fs.existsSync(logPath)) {
         console.log(chalk.cyan(`\n📁 Project: ${path.basename(projectPath)}`));
@@ -70,12 +70,12 @@ async function showProjectLogs(agentmuxHome: string, lines: number): Promise<voi
   }
 }
 
-async function showCommunicationLogs(agentmuxHome: string, lines: number): Promise<void> {
+async function showCommunicationLogs(crewlyHome: string, lines: number): Promise<void> {
   console.log(chalk.cyan('\n💬 Recent Communication:'));
   
   try {
     // Look for global communication logs
-    const globalLogPath = path.join(agentmuxHome, 'communication.log');
+    const globalLogPath = path.join(crewlyHome, 'communication.log');
     
     if (fs.existsSync(globalLogPath)) {
       const { stdout } = await execAsync(`tail -n ${lines} "${globalLogPath}" 2>/dev/null || echo "No logs"`);
@@ -102,12 +102,12 @@ async function showCommunicationLogs(agentmuxHome: string, lines: number): Promi
   }
 }
 
-async function showSchedulerLogs(agentmuxHome: string, lines: number): Promise<void> {
+async function showSchedulerLogs(crewlyHome: string, lines: number): Promise<void> {
   console.log(chalk.cyan('\n⏰ Scheduler Activity:'));
   
   try {
     // Look for scheduler logs
-    const schedulerLogPath = path.join(agentmuxHome, 'scheduler.log');
+    const schedulerLogPath = path.join(crewlyHome, 'scheduler.log');
     
     if (fs.existsSync(schedulerLogPath)) {
       const { stdout } = await execAsync(`tail -n ${Math.floor(lines / 2)} "${schedulerLogPath}" 2>/dev/null || echo "No logs"`);
@@ -134,19 +134,19 @@ async function showSchedulerLogs(agentmuxHome: string, lines: number): Promise<v
   }
 }
 
-async function followLogs(agentmuxHome: string): Promise<void> {
+async function followLogs(crewlyHome: string): Promise<void> {
   // This would implement log following in a real scenario
   // For now, we'll just show a simulation
   
   const logFiles = [
-    path.join(agentmuxHome, 'communication.log'),
-    path.join(agentmuxHome, 'scheduler.log')
+    path.join(crewlyHome, 'communication.log'),
+    path.join(crewlyHome, 'scheduler.log')
   ];
   
   // Find project logs
   const projects = await findProjectDirectories();
   for (const projectPath of projects.slice(0, 2)) {
-    const commLogPath = path.join(projectPath, '.agentmux', 'memory', 'communication.log');
+    const commLogPath = path.join(projectPath, '.crewly', 'memory', 'communication.log');
     if (fs.existsSync(commLogPath)) {
       logFiles.push(commLogPath);
     }
@@ -201,8 +201,8 @@ async function followLogs(agentmuxHome: string): Promise<void> {
 
 async function findProjectDirectories(): Promise<string[]> {
   try {
-    const agentmuxHome = path.join(os.homedir(), '.agentmux');
-    const projectsFile = path.join(agentmuxHome, 'projects.json');
+    const crewlyHome = path.join(os.homedir(), '.crewly');
+    const projectsFile = path.join(crewlyHome, 'projects.json');
     
     if (!fs.existsSync(projectsFile)) {
       return [];

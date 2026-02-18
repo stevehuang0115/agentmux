@@ -6,7 +6,7 @@
 
 -   **Project:** `{PROJECT_NAME}`
 -   **Repo Path:** `{PROJECT_PATH}`
--   **Specs:** `{PROJECT_PATH}/.agentmux/specs/` (incl. `project.md`, user journeys)
+-   **Specs:** `{PROJECT_PATH}/.crewly/specs/` (incl. `project.md`, user journeys)
 -   **Evaluation Harness:** `{PROJECT_PATH}/e2e_tests/` (scripts + `e2e_evaluation_instructions.md`)
 -   **Envs/Secrets:** `.env` / CI variables referenced by the harness
 
@@ -14,7 +14,7 @@
 
 1.  `{PROJECT_PATH}/e2e_tests/e2e_evaluation_report.md`
 2.  `{PROJECT_PATH}/README.md` — **only if not exists**; include “How to run E2E evaluation” instructions
-3.  Improvement tasks under `{PROJECT_PATH}/.agentmux/tasks/m*_e2e_tests_improvement/` with subfolders: `open/`, `in_progress/`, `blocked/`, `done/` (use the next milestone, e.g., `m1_e2e_tests_improvement`)
+3.  Improvement tasks under `{PROJECT_PATH}/.crewly/tasks/m*_e2e_tests_improvement/` with subfolders: `open/`, `in_progress/`, `blocked/`, `done/` (use the next milestone, e.g., `m1_e2e_tests_improvement`)
 
 **Hard Rules:**
 
@@ -111,7 +111,7 @@ Populate exactly with this structure:
 -   **Evidence:** <<log excerpt + artifact paths to **diff images** or **full a11y reports**>>
 -   **Root Cause Hypothesis:** <<brief>>
 -   **Proposed Fix:** <<one-liner, e.g., "Fix CSS bug" or "**Approve visual change and update baseline**">>
--   **Linked Task:** `./../.agentmux/tasks/m*/e2e_tests_improvement/open/IMPR-00X_<slug>.md`
+-   **Linked Task:** `./../.crewly/tasks/m*/e2e_tests_improvement/open/IMPR-00X_<slug>.md`
 
 > Repeat for each failure or defect category (env/config, data, flakiness, docs).
 
@@ -164,11 +164,11 @@ Artifacts (traces/screenshots/videos) are written to `e2e_tests/artifacts/`.
 ## Output 3 — Improvement Tasks
 
 Create a new milestone folder if none exists:
-`{PROJECT_PATH}/.agentmux/tasks/m1_e2e_tests_improvement/` with subfolders `open/`, `in_progress/`, `blocked/`, `done/`.
+`{PROJECT_PATH}/.crewly/tasks/m1_e2e_tests_improvement/` with subfolders `open/`, `in_progress/`, `blocked/`, `done/`.
 
 For **each Finding (F-00X)** in the report, create a matching task in `open/`:
 
-**Task file:** `{PROJECT_PATH}/.agentmux/tasks/m1_e2e_tests_improvement/open/IMPR-00X_<kebab-title>.md`
+**Task file:** `{PROJECT_PATH}/.crewly/tasks/m1_e2e_tests_improvement/open/IMPR-00X_<kebab-title>.md`
 
 **Template (fill completely):**
 
@@ -215,7 +215,7 @@ For **each Finding (F-00X)** in the report, create a matching task in `open/`:
 
 ## References
 
--   Spec: `{PROJECT_PATH}/.agentmux/specs/<file>.md`
+-   Spec: `{PROJECT_PATH}/.crewly/specs/<file>.md`
 -   Artifacts: `e2e_tests/artifacts/<files>`
 ```
 

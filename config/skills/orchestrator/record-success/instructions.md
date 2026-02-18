@@ -5,7 +5,7 @@ Record a successful pattern or approach so the team can replicate it in the futu
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/record-success/execute.sh '{"description":"Breaking large tasks into sub-tasks of 30 min or less reduced errors by 50%","projectPath":"/path/to/project","teamMemberId":"agentmux-orc","context":"sprint-12 refactoring"}'
+bash config/skills/orchestrator/record-success/execute.sh '{"description":"Breaking large tasks into sub-tasks of 30 min or less reduced errors by 50%","projectPath":"/path/to/project","teamMemberId":"crewly-orc","context":"sprint-12 refactoring"}'
 ```
 
 ## Parameters

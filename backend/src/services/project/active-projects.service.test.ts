@@ -21,7 +21,7 @@ describe('ActiveProjectsService', () => {
   let service: ActiveProjectsService;
   let mockStorageService: jest.Mocked<StorageService>;
   let mockMessageSchedulerService: any;
-  const mockActiveProjectsPath = '/mock/home/.agentmux/active_projects.json';
+  const mockActiveProjectsPath = '/mock/home/.crewly/active_projects.json';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -42,7 +42,7 @@ describe('ActiveProjectsService', () => {
 
   describe('constructor', () => {
     it('should initialize with correct path', () => {
-      expect(path.join).toHaveBeenCalledWith('/mock/home', '.agentmux', 'active_projects.json');
+      expect(path.join).toHaveBeenCalledWith('/mock/home', '.crewly', 'active_projects.json');
     });
 
     it('should work without storage service', () => {
@@ -112,14 +112,14 @@ describe('ActiveProjectsService', () => {
         version: '1.0.0'
       };
 
-      (path.dirname as jest.Mock).mockReturnValue('/mock/home/.agentmux');
+      (path.dirname as jest.Mock).mockReturnValue('/mock/home/.crewly');
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
       (fs.writeFile as jest.Mock).mockResolvedValue(undefined);
 
       await service.saveActiveProjectsData(mockData);
 
       expect(mockData.lastUpdated).not.toBe('2023-01-01T00:00:00.000Z');
-      expect(fs.mkdir).toHaveBeenCalledWith('/mock/home/.agentmux', { recursive: true });
+      expect(fs.mkdir).toHaveBeenCalledWith('/mock/home/.crewly', { recursive: true });
       expect(fs.writeFile).toHaveBeenCalledWith(
         mockActiveProjectsPath,
         JSON.stringify(mockData, null, 2),
@@ -134,7 +134,7 @@ describe('ActiveProjectsService', () => {
         version: '1.0.0'
       };
 
-      (path.dirname as jest.Mock).mockReturnValue('/mock/home/.agentmux');
+      (path.dirname as jest.Mock).mockReturnValue('/mock/home/.crewly');
       (fs.mkdir as jest.Mock).mockResolvedValue(undefined);
       (fs.writeFile as jest.Mock).mockRejectedValue(new Error('Write error'));
 

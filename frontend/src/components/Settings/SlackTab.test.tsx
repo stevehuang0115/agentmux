@@ -180,8 +180,8 @@ describe('SlackTab', () => {
           data: {
             isConfigured: true,
             workspaceName: 'Test Workspace',
-            botName: 'AgentMux Bot',
-            channels: ['general', 'agentmux'],
+            botName: 'Crewly Bot',
+            channels: ['general', 'crewly'],
             messagesSent: 42,
             messagesReceived: 15,
           },
@@ -197,8 +197,8 @@ describe('SlackTab', () => {
       });
 
       expect(screen.getByText('Test Workspace')).toBeInTheDocument();
-      expect(screen.getByText('AgentMux Bot')).toBeInTheDocument();
-      expect(screen.getByText('general, agentmux')).toBeInTheDocument();
+      expect(screen.getByText('Crewly Bot')).toBeInTheDocument();
+      expect(screen.getByText('general, crewly')).toBeInTheDocument();
       expect(screen.getByText('42')).toBeInTheDocument();
       expect(screen.getByText('15')).toBeInTheDocument();
     });

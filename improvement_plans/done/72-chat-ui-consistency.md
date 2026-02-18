@@ -380,7 +380,7 @@ export const ChatPanel: React.FC = () => {
               <MessageSquare className="w-8 h-8 text-text-secondary-dark" />
             </div>
             <h3 className="text-lg font-semibold text-text-primary-dark mb-2">
-              Welcome to AgentMux
+              Welcome to Crewly
             </h3>
             <p className="text-text-secondary-dark mb-4 max-w-md">
               Start a conversation with the Orchestrator. Try asking to:

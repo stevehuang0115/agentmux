@@ -155,7 +155,7 @@ export const Assignments: React.FC = () => {
    * Handles click on the orchestrator to open the orchestrator terminal session.
    */
   const handleOrchestratorClick = useCallback(() => {
-    openTerminalWithSession('agentmux-orc');
+    openTerminalWithSession('crewly-orc');
   }, [openTerminalWithSession]);
 
   /**

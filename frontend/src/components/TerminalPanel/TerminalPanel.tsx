@@ -28,8 +28,8 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const { selectedSession, setSelectedSession } = useTerminal();
   const [availableSessions, setAvailableSessions] = useState<TerminalSession[]>([
     {
-      id: 'agentmux-orc',
-      name: 'agentmux-orc',
+      id: 'crewly-orc',
+      name: 'crewly-orc',
       displayName: 'Orchestrator',
       type: 'orchestrator'
     }
@@ -601,9 +601,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         const sessions = sessionNames.map((sessionName: string) => ({
           id: sessionName,
           name: sessionName,
-          displayName: sessionName === 'agentmux-orc' ? 'Orchestrator' :
-                      sessionName.replace('agentmux-', ''),
-          type: sessionName === 'agentmux-orc' ? 'orchestrator' as const : 'team_member' as const
+          displayName: sessionName === 'crewly-orc' ? 'Orchestrator' :
+                      sessionName.replace('crewly-', ''),
+          type: sessionName === 'crewly-orc' ? 'orchestrator' as const : 'team_member' as const
         }));
 
         // Ensure orchestrator is always first
@@ -616,7 +616,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         setAvailableSessions(sessions);
 
         // If current selectedSession is not in the available sessions, update to first available
-        // This fixes the bug where the default 'agentmux-orc' session may not exist
+        // This fixes the bug where the default 'crewly-orc' session may not exist
         const currentSessionExists = sessions.some(s => s.id === selectedSession);
         if (!currentSessionExists && sessions.length > 0) {
           setSelectedSession(sessions[0].id);

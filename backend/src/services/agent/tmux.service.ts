@@ -458,7 +458,7 @@ export class TmuxService extends EventEmitter {
 
 			// Set environment variables for MCP connection
 			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.TMUX_SESSION_NAME, sessionName);
-			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.AGENTMUX_ROLE, config.role);
+			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.CREWLY_ROLE, config.role);
 
 			// Use the optimized agent registration system for initialization
 			const initResult = await this.agentRegistration.initializeAgentWithRegistration(
@@ -573,7 +573,7 @@ export class TmuxService extends EventEmitter {
 
 			// Set environment variables for MCP connection
 			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.TMUX_SESSION_NAME, sessionName);
-			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.AGENTMUX_ROLE, config.role);
+			await this.tmuxCommand.setEnvironmentVariable(sessionName, ENV_CONSTANTS.CREWLY_ROLE, config.role);
 
 			// Get runtime type from config or default to claude-code
 			const runtimeType = config.runtimeType || 'claude-code';

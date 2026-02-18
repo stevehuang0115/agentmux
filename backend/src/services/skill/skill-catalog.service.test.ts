@@ -96,7 +96,7 @@ describe('SkillCatalogService', () => {
     // Create unique test directory structure
     testDir = path.join(os.tmpdir(), `skill-catalog-test-${Date.now()}-${Math.random()}`);
     projectRoot = path.join(testDir, 'project');
-    catalogOutputDir = path.join(testDir, 'home', '.agentmux', 'skills');
+    catalogOutputDir = path.join(testDir, 'home', '.crewly', 'skills');
 
     // Create the orchestrator skills directory
     await fs.mkdir(path.join(projectRoot, 'config', 'skills', 'orchestrator'), {
@@ -112,7 +112,7 @@ describe('SkillCatalogService', () => {
     service = new SkillCatalogService(projectRoot);
 
     // Override the private catalogDir to point to our test location
-    // This avoids writing to the real ~/.agentmux/skills/ during tests
+    // This avoids writing to the real ~/.crewly/skills/ during tests
     (service as unknown as SkillCatalogServiceTestAccess).catalogDir = catalogOutputDir;
   });
 

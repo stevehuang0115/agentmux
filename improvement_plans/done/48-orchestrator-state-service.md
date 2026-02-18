@@ -2,7 +2,7 @@
 
 ## Overview
 
-Create a service that saves and restores orchestrator state to/from disk. This enables the orchestrator to resume conversations, tasks, and work after AgentMux restarts.
+Create a service that saves and restores orchestrator state to/from disk. This enables the orchestrator to resume conversations, tasks, and work after Crewly restarts.
 
 ## Priority
 
@@ -341,7 +341,7 @@ export class StatePersistenceService {
     // Add notification about restart
     instructions.notifications.push({
       type: 'slack',
-      message: `AgentMux has restarted (restart #${previousState.metadata.restartCount + 1}). Resuming ${inProgressTasks.length} tasks and ${activeConversations.length} conversations.`,
+      message: `Crewly has restarted (restart #${previousState.metadata.restartCount + 1}). Resuming ${inProgressTasks.length} tasks and ${activeConversations.length} conversations.`,
     });
 
     // Check for self-improvement state
@@ -492,7 +492,7 @@ describe('StatePersistenceService', () => {
     it('should create state directories', async () => {
       await service.initialize();
 
-      const stateDir = path.join(testDir, '.agentmux/state');
+      const stateDir = path.join(testDir, '.crewly/state');
       const stat = await fs.stat(stateDir);
       expect(stat.isDirectory()).toBe(true);
     });
@@ -680,7 +680,7 @@ describe('StatePersistenceService', () => {
 
 ## Acceptance Criteria
 
-- [ ] Service saves state to `~/.agentmux/state/`
+- [ ] Service saves state to `~/.crewly/state/`
 - [ ] State loads correctly on restart
 - [ ] Periodic checkpointing works
 - [ ] Backup creation and restoration works

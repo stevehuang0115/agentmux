@@ -2,7 +2,7 @@
  * Factory SSE Service
  *
  * Manages Server-Sent Events connections for real-time factory state updates.
- * Broadcasts combined data from AgentMux teams AND Claude Code processes.
+ * Broadcasts combined data from Crewly teams AND Claude Code processes.
  *
  * Instead of each client polling, this service:
  * - Maintains a single internal poll loop (3s interval)

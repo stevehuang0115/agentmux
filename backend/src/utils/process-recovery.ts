@@ -5,7 +5,7 @@ import { EventEmitter } from 'events';
 import path from 'path';
 
 /**
- * ProcessRecovery manages automatic restart and monitoring of the AgentMux backend process
+ * ProcessRecovery manages automatic restart and monitoring of the Crewly backend process
  *
  * Features:
  * - Automatic restart on crashes
@@ -43,7 +43,7 @@ export class ProcessRecovery extends EventEmitter {
 	 * @returns Promise that resolves when the process recovery system is started
 	 */
 	async start(): Promise<void> {
-		console.log('🔄 Starting AgentMux Backend with Process Recovery...');
+		console.log('🔄 Starting Crewly Backend with Process Recovery...');
 		console.log(`📊 Max restarts: ${this.maxRestarts}`);
 		console.log(`⏱️ Min runtime: ${this.minRuntime / 1000}s`);
 
@@ -92,7 +92,7 @@ export class ProcessRecovery extends EventEmitter {
 			console.log(`[Backend] ${output}`);
 
 			// Check for successful startup
-			if (output.includes('AgentMux server started on port')) {
+			if (output.includes('Crewly server started on port')) {
 				console.log('✅ Backend process started successfully');
 				this.emit('process_started');
 			}

@@ -115,7 +115,7 @@ export interface ImprovementMarker {
 /**
  * Marker file paths
  */
-const MARKER_DIR = path.join(os.homedir(), '.agentmux', 'self-improvement');
+const MARKER_DIR = path.join(os.homedir(), '.crewly', 'self-improvement');
 const MARKER_FILE = 'pending.json';
 const HISTORY_DIR = 'history';
 const MAX_HISTORY = 20;

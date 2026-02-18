@@ -32,7 +32,7 @@ The browser automation tools are available through MCP (Model Context Protocol) 
 
 1. Install the Claude Code Chrome extension from the Chrome Web Store
 2. Keep Chrome running with the extension active
-3. Ensure Claude Code is started with the `--chrome` flag (AgentMux handles this automatically when this skill is enabled)
+3. Ensure Claude Code is started with the `--chrome` flag (Crewly handles this automatically when this skill is enabled)
 
 ## Best Practices
 

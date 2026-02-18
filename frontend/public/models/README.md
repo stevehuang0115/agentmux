@@ -1,6 +1,6 @@
 # 3D Model Creation Workflow
 
-This document describes how to create custom 3D character models for the AgentMux factory visualization.
+This document describes how to create custom 3D character models for the Crewly factory visualization.
 
 ## Overview
 
@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
 ---
 
-## Step 6: Integrate into AgentMux
+## Step 6: Integrate into Crewly
 
 ### Add Model Path
 In `src/types/factory.types.ts`:

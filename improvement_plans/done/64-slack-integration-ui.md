@@ -181,7 +181,7 @@ export const SlackTab: React.FC = () => {
                 type="text"
                 value={defaultChannel}
                 onChange={(e) => setDefaultChannel(e.target.value)}
-                placeholder="#agentmux"
+                placeholder="#crewly"
               />
             </div>
 

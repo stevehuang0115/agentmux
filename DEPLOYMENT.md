@@ -1,17 +1,17 @@
-# AgentMux Deployment Guide
+# Crewly Deployment Guide
 
-This guide covers various deployment options for AgentMux in production environments.
+This guide covers various deployment options for Crewly in production environments.
 
 ## Quick Start Options
 
 ### 1. Docker Compose (Recommended)
 
-The easiest way to deploy AgentMux with all dependencies:
+The easiest way to deploy Crewly with all dependencies:
 
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd agentmux
+cd crewly
 
 # Start with Docker Compose
 npm run docker:compose:up
@@ -25,13 +25,13 @@ npm run docker:compose:down
 
 Services will be available at:
 
--   **AgentMux Web UI**: http://localhost:3000
+-   **Crewly Web UI**: http://localhost:3000
 -   **MCP Server**: http://localhost:3001
 -   **Health Check**: http://localhost:3000/health
 
 ### 2. Docker Only
 
-Build and run just the AgentMux container:
+Build and run just the Crewly container:
 
 ```bash
 # Build the Docker image
@@ -70,7 +70,7 @@ npm run logs:pm2
 ```bash
 NODE_ENV=production
 PORT=3000
-AGENTMUX_MCP_PORT=3001
+CREWLY_MCP_PORT=3001
 SESSION_SECRET=your-secure-secret-key-here
 ```
 
@@ -133,7 +133,7 @@ Create a production `docker-compose.prod.yml`:
 version: '3.8'
 
 services:
-    agentmux:
+    crewly:
         build: .
         restart: unless-stopped
         ports:
@@ -144,8 +144,8 @@ services:
             - SESSION_SECRET=${SESSION_SECRET}
             - CORS_ORIGIN=${CORS_ORIGIN}
         volumes:
-            - agentmux_data:/app/data
-            - agentmux_logs:/app/logs
+            - crewly_data:/app/data
+            - crewly_logs:/app/logs
         depends_on:
             - redis
             - postgres
@@ -176,11 +176,11 @@ services:
             - ./nginx.conf:/etc/nginx/nginx.conf
             - ./ssl:/etc/nginx/ssl
         depends_on:
-            - agentmux
+            - crewly
 
 volumes:
-    agentmux_data:
-    agentmux_logs:
+    crewly_data:
+    crewly_logs:
     redis_data:
     postgres_data:
 ```
@@ -200,7 +200,7 @@ For high-availability deployment:
 module.exports = {
 	apps: [
 		{
-			name: 'agentmux-cluster',
+			name: 'crewly-cluster',
 			script: 'backend/dist/server.js',
 			instances: 'max', // Use all CPU cores
 			exec_mode: 'cluster',
@@ -226,7 +226,7 @@ pm2 startup
 
 ### Health Checks
 
-AgentMux provides built-in health endpoints:
+Crewly provides built-in health endpoints:
 
 -   **Basic Health**: `GET /health`
 -   **Detailed Health**: `GET /api/system/health`
@@ -236,8 +236,8 @@ AgentMux provides built-in health endpoints:
 
 Logs are written to:
 
--   **Application**: `/app/logs/agentmux-combined.log`
--   **Errors**: `/app/logs/agentmux-error.log`
+-   **Application**: `/app/logs/crewly-combined.log`
+-   **Errors**: `/app/logs/crewly-error.log`
 -   **MCP Server**: `/app/logs/mcp-combined.log`
 
 Configure log rotation:
@@ -310,22 +310,22 @@ done
 
 ```bash
 # Docker volume backup
-docker run --rm -v agentmux_data:/data -v $(pwd):/backup alpine \
-  tar czf /backup/agentmux-data-$(date +%Y%m%d).tar.gz -C /data .
+docker run --rm -v crewly_data:/data -v $(pwd):/backup alpine \
+  tar czf /backup/crewly-data-$(date +%Y%m%d).tar.gz -C /data .
 
 # Database backup (if using PostgreSQL)
-docker exec agentmux_postgres pg_dump -U agentmux agentmux > backup.sql
+docker exec crewly_postgres pg_dump -U crewly crewly > backup.sql
 ```
 
 ### Recovery
 
 ```bash
 # Restore data volume
-docker run --rm -v agentmux_data:/data -v $(pwd):/backup alpine \
-  tar xzf /backup/agentmux-data-20241201.tar.gz -C /data
+docker run --rm -v crewly_data:/data -v $(pwd):/backup alpine \
+  tar xzf /backup/crewly-data-20241201.tar.gz -C /data
 
 # Restore database
-docker exec -i agentmux_postgres psql -U agentmux agentmux < backup.sql
+docker exec -i crewly_postgres psql -U crewly crewly < backup.sql
 ```
 
 ## Troubleshooting
@@ -335,7 +335,7 @@ docker exec -i agentmux_postgres psql -U agentmux agentmux < backup.sql
 1. **Container fails to start**
 
     ```bash
-    docker logs agentmux
+    docker logs crewly
     # Check for port conflicts or missing environment variables
     ```
 
@@ -353,10 +353,10 @@ docker exec -i agentmux_postgres psql -U agentmux agentmux < backup.sql
 
     ```bash
     # Check database logs
-    docker logs agentmux_postgres
+    docker logs crewly_postgres
 
     # Verify connection settings
-    docker exec -it agentmux_postgres psql -U agentmux agentmux
+    docker exec -it crewly_postgres psql -U crewly crewly
     ```
 
 ### Performance Tuning
@@ -370,22 +370,22 @@ docker exec -i agentmux_postgres psql -U agentmux agentmux < backup.sql
 
 ### Horizontal Scaling
 
--   Deploy multiple AgentMux instances behind a load balancer
+-   Deploy multiple Crewly instances behind a load balancer
 -   Use shared Redis for session storage
 -   Configure database clustering
 
 ### Load Balancing
 
 ```nginx
-upstream agentmux_backend {
-    server agentmux1:3000;
-    server agentmux2:3000;
-    server agentmux3:3000;
+upstream crewly_backend {
+    server crewly1:3000;
+    server crewly2:3000;
+    server crewly3:3000;
 }
 
 server {
     location / {
-        proxy_pass http://agentmux_backend;
+        proxy_pass http://crewly_backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

@@ -11,10 +11,10 @@ Verify that agent memory (facts the orchestrator or team members are told to rem
 
 ## Prerequisites
 
-- AgentMux is running (`npm start`)
+- Crewly is running (`npm start`)
 - Browser open to `http://localhost:8787`
 - Orchestrator is active (start from `/teams/orchestrator` if needed)
-- Access to the filesystem at `~/.agentmux/agents/`
+- Access to the filesystem at `~/.crewly/agents/`
 
 ---
 
@@ -29,14 +29,14 @@ Verify that agent memory (facts the orchestrator or team members are told to rem
 3. Wait for the orchestrator to respond. Verify the response is non-empty (acknowledges the information).
 4. Check the filesystem for agent memory files:
    ```bash
-   ls ~/.agentmux/agents/*/memory.json
+   ls ~/.crewly/agents/*/memory.json
    ```
 5. Read the memory file contents:
    ```bash
-   cat ~/.agentmux/agents/*/memory.json
+   cat ~/.crewly/agents/*/memory.json
    ```
 6. Verify the memory file contains references to the stored information (look for keywords like `docker`, `aws ecs`, or `us-east-1` — case-insensitive).
-7. **Restart AgentMux** — stop the server (Ctrl+C) and start it again (`npm start`).
+7. **Restart Crewly** — stop the server (Ctrl+C) and start it again (`npm start`).
 8. Once the server is back, navigate to `/teams/orchestrator` and click **Start Orchestrator**.
 9. Wait for the orchestrator to reach **Active** status.
 10. Navigate to **Chat** and start a **fresh conversation**.
@@ -64,14 +64,14 @@ Verify that agent memory (facts the orchestrator or team members are told to rem
 6. Wait an additional ~10 seconds for the developer agent to process and save the memory.
 7. Check the memory files on disk:
    ```bash
-   ls ~/.agentmux/agents/*/memory.json
+   ls ~/.crewly/agents/*/memory.json
    ```
 8. Read the memory files and find one that belongs to a non-orchestrator agent and contains deployment information:
    ```bash
-   for f in ~/.agentmux/agents/*/memory.json; do echo "=== $f ==="; cat "$f"; done
+   for f in ~/.crewly/agents/*/memory.json; do echo "=== $f ==="; cat "$f"; done
    ```
 9. Verify at least one non-orchestrator memory file mentions `docker`, `aws ecs`, or `us-east-1`.
-10. **Restart AgentMux** — stop and restart the server.
+10. **Restart Crewly** — stop and restart the server.
 11. Start the orchestrator and wait for it to reach **Active** status.
 12. Wait for the `business_os` team member to reach **Active** status (check the Teams page or poll the API).
 13. Navigate to **Chat** and start a **fresh conversation**.

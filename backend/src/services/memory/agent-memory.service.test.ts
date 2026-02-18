@@ -21,7 +21,7 @@ describe('AgentMemoryService', () => {
 
   beforeEach(async () => {
     // Create a unique temp directory for each test
-    testDir = path.join(os.tmpdir(), `agentmux-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
+    testDir = path.join(os.tmpdir(), `crewly-test-${Date.now()}-${Math.random().toString(36).substring(2)}`);
     await fs.mkdir(testDir, { recursive: true });
 
     // Clear singleton and create new instance with test directory
@@ -47,7 +47,7 @@ describe('AgentMemoryService', () => {
     });
 
     it('should create new instance for different home directory', () => {
-      const otherDir = path.join(os.tmpdir(), `agentmux-test-other-${Date.now()}`);
+      const otherDir = path.join(os.tmpdir(), `crewly-test-other-${Date.now()}`);
       const instance1 = AgentMemoryService.getInstance(testDir);
       const instance2 = AgentMemoryService.getInstance(otherDir);
       expect(instance1).not.toBe(instance2);

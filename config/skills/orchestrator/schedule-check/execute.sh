@@ -14,7 +14,7 @@ require_param "minutes" "$MINUTES"
 require_param "message" "$MESSAGE"
 
 # Default target to the caller's own session (orchestrator sends reminders to itself)
-TARGET_SESSION="${TARGET:-${TMUX_SESSION_NAME:-agentmux-orc}}"
+TARGET_SESSION="${TARGET:-${TMUX_SESSION_NAME:-crewly-orc}}"
 
 # API expects: targetSession, minutes, message
 BODY=$(jq -n --arg target "$TARGET_SESSION" --arg minutes "$MINUTES" --arg message "$MESSAGE" \

@@ -63,7 +63,7 @@ export const AppLayout: React.FC = () => {
             onClick={() => setMobileMenuOpen(true)}
             aria-label="Open menu"
           />
-          <h1 className="text-lg font-bold">AgentMux</h1>
+          <h1 className="text-lg font-bold">Crewly</h1>
           <div className="w-10 h-10" /> {/* Spacer to center title */}
         </header>
 

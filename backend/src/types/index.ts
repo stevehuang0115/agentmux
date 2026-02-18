@@ -164,7 +164,7 @@ export interface ApiResponse<T = any> {
 
 export interface StartupConfig {
   webPort: number;
-  agentmuxHome: string;
+  crewlyHome: string;
   defaultCheckInterval: number;
   autoCommitInterval: number;
 }

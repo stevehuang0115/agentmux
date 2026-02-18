@@ -37,8 +37,8 @@ jest.mock('../../constants.js', () => ({
 		MAX_CAPTURE_LINES: 500,
 		MAX_OUTPUT_SIZE: 16384,
 	},
-	ORCHESTRATOR_SESSION_NAME: 'agentmux-orc',
-	AGENTMUX_CONSTANTS: {
+	ORCHESTRATOR_SESSION_NAME: 'crewly-orc',
+	CREWLY_CONSTANTS: {
 		AGENT_STATUSES: {
 			INACTIVE: 'inactive',
 			STARTING: 'starting',
@@ -438,7 +438,7 @@ describe('TerminalController', () => {
 		it('should skip queuing for orchestrator session', async () => {
 			jest.useFakeTimers();
 			mockReq = {
-				params: { sessionName: 'agentmux-orc' } as any,
+				params: { sessionName: 'crewly-orc' } as any,
 				body: { data: 'orc message', mode: 'message' },
 			};
 

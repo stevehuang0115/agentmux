@@ -13,9 +13,9 @@ const mockProject = {
 };
 
 describe('DashboardHeader', () => {
-  it('renders AgentMux title', () => {
+  it('renders Crewly title', () => {
     render(<DashboardHeader connected={true} selectedProject={null} teamsCount={0} />);
-    expect(screen.getByText('AgentMux')).toBeInTheDocument();
+    expect(screen.getByText('Crewly')).toBeInTheDocument();
   });
 
   it('shows connected status when connected', () => {

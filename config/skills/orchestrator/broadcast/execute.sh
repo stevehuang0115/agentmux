@@ -22,7 +22,7 @@ FAILED=0
 
 for NAME in $NAMES; do
   # Skip orchestrator's own session
-  [ "$NAME" = "agentmux-orc" ] && continue
+  [ "$NAME" = "crewly-orc" ] && continue
 
   BODY=$(jq -n --arg message "$MESSAGE" '{message: $message}')
   if api_call POST "/terminal/${NAME}/deliver" "$BODY" >/dev/null 2>&1; then

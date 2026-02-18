@@ -8,12 +8,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { useSettings } from './useSettings';
 import { settingsService } from '../services/settings.service';
-import { AgentMuxSettings } from '../types/settings.types';
+import { CrewlySettings } from '../types/settings.types';
 
 vi.mock('../services/settings.service');
 
 describe('useSettings Hook', () => {
-  const mockSettings: AgentMuxSettings = {
+  const mockSettings: CrewlySettings = {
     general: {
       defaultRuntime: 'claude-code',
       autoStartOrchestrator: false,
@@ -114,7 +114,7 @@ describe('useSettings Hook', () => {
         expect(result.current.isLoading).toBe(false);
       });
 
-      let returnedSettings: AgentMuxSettings | undefined;
+      let returnedSettings: CrewlySettings | undefined;
       await act(async () => {
         returnedSettings = await result.current.updateSettings({ general: { verboseLogging: true } });
       });

@@ -68,7 +68,7 @@ export interface Role {
   /** Whether this role is built-in (system) or user-created */
   isBuiltin: boolean;
 
-  /** Whether this builtin role has a user override in ~/.agentmux/roles/ */
+  /** Whether this builtin role has a user override in ~/.crewly/roles/ */
   hasOverride?: boolean;
 
   /** ISO timestamp of role creation */

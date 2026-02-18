@@ -1,7 +1,7 @@
 /**
  * Settings Type Definitions
  *
- * Types for managing AgentMux application settings including
+ * Types for managing Crewly application settings including
  * runtime preferences, chat settings, and skill configurations.
  *
  * @module types/settings.types
@@ -85,9 +85,9 @@ export interface SkillsSettings {
 }
 
 /**
- * Complete AgentMux settings
+ * Complete Crewly settings
  */
-export interface AgentMuxSettings {
+export interface CrewlySettings {
   /** General application settings */
   general: GeneralSettings;
 
@@ -161,7 +161,7 @@ export function isValidAIRuntime(value: string): value is AIRuntime {
 /**
  * Get default settings with all sensible values
  *
- * @returns Complete AgentMux settings with default values
+ * @returns Complete Crewly settings with default values
  *
  * @example
  * ```typescript
@@ -169,7 +169,7 @@ export function isValidAIRuntime(value: string): value is AIRuntime {
  * console.log(defaults.general.defaultRuntime); // 'claude-code'
  * ```
  */
-export function getDefaultSettings(): AgentMuxSettings {
+export function getDefaultSettings(): CrewlySettings {
   return {
     general: {
       defaultRuntime: 'claude-code',
@@ -214,7 +214,7 @@ export function getDefaultSettings(): AgentMuxSettings {
  * }
  * ```
  */
-export function validateSettings(settings: AgentMuxSettings): SettingsValidationResult {
+export function validateSettings(settings: CrewlySettings): SettingsValidationResult {
   const errors: string[] = [];
 
   // Validate general settings
@@ -281,9 +281,9 @@ export function validateSettings(settings: AgentMuxSettings): SettingsValidation
  * ```
  */
 export function mergeSettings(
-  existing: AgentMuxSettings,
+  existing: CrewlySettings,
   updates: UpdateSettingsInput
-): AgentMuxSettings {
+): CrewlySettings {
   return {
     general: { ...existing.general, ...updates.general },
     chat: { ...existing.chat, ...updates.chat },

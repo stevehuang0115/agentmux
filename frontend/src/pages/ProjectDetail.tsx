@@ -703,7 +703,7 @@ export const ProjectDetail: React.FC = () => {
     if (!state.project) return;
     
     showConfirm(
-      `Are you sure you want to delete "${state.project.name}"?\n\nThis will:\n• Remove the project from AgentMux registry\n• Keep all project files and .agentmux folder intact\n• Unassign any active teams from this project\n\nThis action cannot be undone.`,
+      `Are you sure you want to delete "${state.project.name}"?\n\nThis will:\n• Remove the project from Crewly registry\n• Keep all project files and .crewly folder intact\n• Unassign any active teams from this project\n\nThis action cannot be undone.`,
       async () => await executeDeleteProject(),
       {
         title: 'Delete Project',
@@ -1056,7 +1056,7 @@ export const ProjectDetail: React.FC = () => {
         const maxDelayMinutes = Math.max(...steps.map(s => s.delayMinutes));
         
         showSuccess(
-          `Build Tasks process sent to ${selectedMember.name}!\n\n📋 ${totalSteps} steps sent to ${selectedTeam.name}\n⏱️ Final step in ${maxDelayMinutes} minutes\n\n🔍 Monitor ${selectedMember.name}'s terminal for progress.\n\nThis will create milestone directories and detailed task files in .agentmux/tasks/`,
+          `Build Tasks process sent to ${selectedMember.name}!\n\n📋 ${totalSteps} steps sent to ${selectedTeam.name}\n⏱️ Final step in ${maxDelayMinutes} minutes\n\n🔍 Monitor ${selectedMember.name}'s terminal for progress.\n\nThis will create milestone directories and detailed task files in .crewly/tasks/`,
           'Build Tasks Started'
         );
       } else {

@@ -15,7 +15,7 @@ interface StopOptions {
 }
 
 export async function stopCommand(options: StopOptions) {
-  console.log(chalk.yellow('🛑 Stopping AgentMux...'));
+  console.log(chalk.yellow('🛑 Stopping Crewly...'));
 
   try {
     // 1. Try graceful shutdown via API
@@ -23,16 +23,16 @@ export async function stopCommand(options: StopOptions) {
       await attemptGracefulShutdown();
     }
 
-    // 2. Kill AgentMux tmux sessions
-    await killAgentMuxSessions();
+    // 2. Kill Crewly tmux sessions
+    await killCrewlySessions();
 
     // 3. Kill backend processes
     await killBackendProcesses(options.force);
 
-    console.log(chalk.green('✅ AgentMux stopped successfully'));
+    console.log(chalk.green('✅ Crewly stopped successfully'));
 
   } catch (error) {
-    console.error(chalk.red('❌ Error stopping AgentMux:'), error instanceof Error ? error.message : error);
+    console.error(chalk.red('❌ Error stopping Crewly:'), error instanceof Error ? error.message : error);
 
     if (!options.force) {
       console.log(chalk.yellow('💡 Try running with --force flag for forceful shutdown'));
@@ -62,19 +62,19 @@ async function attemptGracefulShutdown(): Promise<void> {
   }
 }
 
-async function killAgentMuxSessions(): Promise<void> {
+async function killCrewlySessions(): Promise<void> {
   try {
-    console.log(chalk.blue('🖥️  Terminating AgentMux sessions...'));
+    console.log(chalk.blue('🖥️  Terminating Crewly sessions...'));
 
     // List all tmux sessions
     const { stdout } = await execAsync('tmux list-sessions -F "#{session_name}" 2>/dev/null || echo ""');
     const sessions = stdout.split('\n').filter(s => s.trim());
 
-    // Kill AgentMux sessions
-    const agentMuxSessions = sessions.filter(s => s.startsWith('agentmux_'));
+    // Kill Crewly sessions
+    const agentMuxSessions = sessions.filter(s => s.startsWith('crewly_'));
 
     if (agentMuxSessions.length > 0) {
-      console.log(chalk.gray(`Found ${agentMuxSessions.length} AgentMux sessions`));
+      console.log(chalk.gray(`Found ${agentMuxSessions.length} Crewly sessions`));
 
       for (const session of agentMuxSessions) {
         try {
@@ -85,7 +85,7 @@ async function killAgentMuxSessions(): Promise<void> {
         }
       }
     } else {
-      console.log(chalk.gray('No AgentMux sessions found'));
+      console.log(chalk.gray('No Crewly sessions found'));
     }
 
   } catch (error) {
@@ -97,8 +97,8 @@ async function killBackendProcesses(force: boolean = false): Promise<void> {
   try {
     console.log(chalk.blue('🔧 Stopping backend processes...'));
 
-    // Find Node.js processes running AgentMux
-    const { stdout } = await execAsync('ps aux | grep -E "(agentmux|backend)" | grep -v grep || echo ""');
+    // Find Node.js processes running Crewly
+    const { stdout } = await execAsync('ps aux | grep -E "(crewly|backend)" | grep -v grep || echo ""');
 
     if (stdout.trim()) {
       const lines = stdout.trim().split('\n');

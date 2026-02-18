@@ -61,7 +61,7 @@ Quality gates ensure that tasks meet minimum quality standards before being mark
 ### 2. Gate Configuration Schema
 
 ```yaml
-# project/.agentmux/config/quality-gates.yaml
+# project/.crewly/config/quality-gates.yaml
 
 # Global settings
 settings:

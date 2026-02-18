@@ -38,7 +38,8 @@ export async function getSystemMetrics(this: ApiContext, req: Request, res: Resp
   try {
     const { hours } = req.query as any;
     const monitoring = MonitoringService.getInstance();
-    const hoursToFetch = hours ? parseInt(hours) : 1;
+    const parsed = hours ? parseInt(hours) : 1;
+    const hoursToFetch = isNaN(parsed) ? 1 : parsed;
     const metricsHistory = monitoring.getMetricsHistory(hoursToFetch);
     const currentMetrics = monitoring.getSystemMetrics();
     const performanceMetrics = monitoring.getPerformanceMetrics();
@@ -295,7 +296,7 @@ export async function browseDirectories(
 }
 
 /**
- * Gracefully restart the AgentMux backend server.
+ * Gracefully restart the Crewly backend server.
  *
  * Saves PTY session state, responds to the caller, then exits with code 0.
  * The external process manager (nodemon, systemd, ECS, ProcessRecovery) is
@@ -336,7 +337,7 @@ export async function restartServer(
     // - Development (tsx watch): touch a source file to trigger file-watcher restart
     // - Production (pm2/Docker/ECS): process.exit(0) and supervisor restarts
     setTimeout(async () => {
-      console.log('Restarting AgentMux server...');
+      console.log('Restarting Crewly server...');
 
       // Try tsx watch restart: touch the entry file to trigger file-watcher
       const entryFile = path.resolve(process.cwd(), 'backend/src/index.ts');

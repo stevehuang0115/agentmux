@@ -1,6 +1,6 @@
 # Create Project
 
-Creates a new project in AgentMux with a specified filesystem path, display name, and optional description.
+Creates a new project in Crewly with a specified filesystem path, display name, and optional description.
 
 ## Usage
 

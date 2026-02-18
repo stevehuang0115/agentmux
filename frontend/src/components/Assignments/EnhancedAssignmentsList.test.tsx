@@ -57,7 +57,7 @@ describe('EnhancedAssignmentsList', () => {
       currentTask: {
         id: 'task-1',
         taskName: 'Implement feature X',
-        taskFilePath: '/project/.agentmux/tasks/m1/in_progress/task-1.md',
+        taskFilePath: '/project/.crewly/tasks/m1/in_progress/task-1.md',
         assignedAt: '2023-01-01T10:00:00Z',
         status: 'assigned'
       }

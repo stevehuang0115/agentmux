@@ -221,6 +221,9 @@ export interface Skill {
   /** Whether this skill is enabled */
   isEnabled: boolean;
 
+  /** Whether this skill was installed from the marketplace */
+  isMarketplace?: boolean;
+
   /** ISO timestamp of creation */
   createdAt: string;
 

@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { SessionInfo } from '../../types/index.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 
 /**
  * Service responsible for all direct, low-level interactions with the tmux command-line tool.
@@ -940,7 +940,7 @@ export class TmuxCommandService {
 		workingDirectory: string,
 		windowName?: string
 	): Promise<void> {
-		const shell = AGENTMUX_CONSTANTS.SESSIONS.DEFAULT_SHELL;
+		const shell = CREWLY_CONSTANTS.SESSIONS.DEFAULT_SHELL;
 		const createCommand = [
 			'new-session',
 			'-d',

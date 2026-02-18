@@ -12,7 +12,7 @@ import path from 'path';
  * 3. Assign Team to project
  * 
  * This test suite focuses on end-to-end workflows that the frontend
- * would execute when users interact with the AgentMux dashboard.
+ * would execute when users interact with the Crewly dashboard.
  */
 
 // Mock services for testing
@@ -128,7 +128,7 @@ function createFrontendTestApp() {
     }
 
     const teamId = `team-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
-    const sessionName = `agentmux_${role}_${teamId.slice(-8)}`;
+    const sessionName = `crewly_${role}_${teamId.slice(-8)}`;
 
     // Simulate tmux session creation
     mockServices.tmux.activeSessions.push(sessionName);
@@ -396,7 +396,7 @@ describe('Frontend Workflow Integration Tests', () => {
       expect(response.body.data).toHaveProperty('id');
       expect(response.body.data.name).toBe(teamData.name);
       expect(response.body.data.role).toBe(teamData.role);
-      expect(response.body.data.sessionName).toMatch(/^agentmux_developer_/);
+      expect(response.body.data.sessionName).toMatch(/^crewly_developer_/);
       expect(response.body.data.status).toBe('working');
 
       // Verify tmux session was "created"
@@ -429,7 +429,7 @@ describe('Frontend Workflow Integration Tests', () => {
           .expect(201);
 
         expect(response.body.data.role).toBe(config.role);
-        expect(response.body.data.sessionName).toMatch(new RegExp(`^agentmux_${config.role}_`));
+        expect(response.body.data.sessionName).toMatch(new RegExp(`^crewly_${config.role}_`));
         expect(mockServices.tmux.activeSessions).toContain(response.body.data.sessionName);
       }
 

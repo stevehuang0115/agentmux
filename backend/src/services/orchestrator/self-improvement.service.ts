@@ -1,7 +1,7 @@
 /**
  * Self-Improvement Service
  *
- * Enables the orchestrator to safely modify the AgentMux codebase,
+ * Enables the orchestrator to safely modify the Crewly codebase,
  * using the marker system to persist state across hot-reload restarts.
  *
  * @module services/orchestrator/self-improvement
@@ -342,7 +342,7 @@ export class SelfImprovementService {
     const backups: FileBackupRecord[] = [];
     const backupDir = path.join(
       this.projectRoot,
-      '.agentmux',
+      '.crewly',
       'self-improvement',
       'backups',
       `backup-${Date.now()}`

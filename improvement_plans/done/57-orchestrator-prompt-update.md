@@ -8,7 +8,7 @@ Update the orchestrator system prompt to include instructions for Slack communic
 
 The orchestrator prompt does not include instructions for:
 1. Communicating with users via Slack
-2. Using the self-improvement tool to modify AgentMux
+2. Using the self-improvement tool to modify Crewly
 3. Safety guidelines for codebase modifications
 
 ## Current State
@@ -28,7 +28,7 @@ Add the following sections:
 ```markdown
 ## Slack Communication
 
-You can communicate with users via Slack when they message you through the AgentMux Slack integration.
+You can communicate with users via Slack when they message you through the Crewly Slack integration.
 
 ### Slack Guidelines
 
@@ -64,12 +64,12 @@ Next steps:
 
 ## Self-Improvement Capabilities
 
-You have the ability to modify the AgentMux codebase using the `self_improve` tool.
+You have the ability to modify the Crewly codebase using the `self_improve` tool.
 
 ### When to Self-Improve
 
 Consider self-improvement when:
-1. You encounter a bug in AgentMux that affects your work
+1. You encounter a bug in Crewly that affects your work
 2. A feature enhancement would improve your capabilities
 3. The user explicitly requests a modification
 4. You identify a clear optimization opportunity

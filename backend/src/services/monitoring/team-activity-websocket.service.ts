@@ -3,7 +3,7 @@ import { StorageService } from '../core/storage.service.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { TerminalGateway } from '../../websocket/terminal.gateway.js';
-import { AGENTMUX_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 import { getSessionBackendSync } from '../session/index.js';
 
 export interface TeamActivityData {
@@ -153,7 +153,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
     });
 
     // Collect all session names for bulk checking (including orchestrator)
-    const allSessionNames: string[] = [AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME];
+    const allSessionNames: string[] = [CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME];
     const membersBySession = new Map<string, any>();
     
     for (const team of teams) {
@@ -185,9 +185,9 @@ export class TeamActivityWebSocketService extends EventEmitter {
     }
 
     // Build orchestrator data
-    const orchestratorRunning = sessionExistenceMap.get(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
+    const orchestratorRunning = sessionExistenceMap.get(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) || false;
     const orchestratorData = {
-      sessionName: AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+      sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
       running: orchestratorRunning,
       lastCheck: now
     };
@@ -245,7 +245,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
       }
     }
 
-    console.log(`🚀 Optimized session check completed: checked ${allSessionNames.length} sessions with ${sessionExistenceMap.has(AGENTMUX_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) ? 'bulk' : 'individual'} method`);
+    console.log(`🚀 Optimized session check completed: checked ${allSessionNames.length} sessions with ${sessionExistenceMap.has(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) ? 'bulk' : 'individual'} method`);
 
     return {
       orchestrator: orchestratorData,

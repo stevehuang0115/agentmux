@@ -1,16 +1,16 @@
 #!/bin/bash
 
-# AgentMux MCP Server Health Monitor
+# Crewly MCP Server Health Monitor
 # Continuously monitors MCP server health and auto-restarts if needed
 
 set -euo pipefail
 
 # Configuration
-AGENTMUX_MCP_PORT="${AGENTMUX_MCP_PORT:-3001}"
-MCP_URL="http://localhost:${AGENTMUX_MCP_PORT}"
+CREWLY_MCP_PORT="${CREWLY_MCP_PORT:-3001}"
+MCP_URL="http://localhost:${CREWLY_MCP_PORT}"
 HEALTH_ENDPOINT="${MCP_URL}/health"
-LOG_FILE="/tmp/agentmux-health-monitor.log"
-PID_FILE="/tmp/agentmux-mcp.pid"
+LOG_FILE="/tmp/crewly-health-monitor.log"
+PID_FILE="/tmp/crewly-mcp.pid"
 MAX_FAILURES=3
 CHECK_INTERVAL=30  # seconds
 RESTART_DELAY=5    # seconds
@@ -138,8 +138,8 @@ restart_mcp_server() {
         ./start-mcp-http.sh
     else
         # Fallback direct start
-        MCP_HTTP=true AGENTMUX_MCP_PORT="$AGENTMUX_MCP_PORT" nohup node dist/mcp-server/index.js \
-            > /tmp/agentmux-mcp.log 2>&1 &
+        MCP_HTTP=true CREWLY_MCP_PORT="$CREWLY_MCP_PORT" nohup node dist/mcp-server/index.js \
+            > /tmp/crewly-mcp.log 2>&1 &
         echo $! > "$PID_FILE"
     fi
     

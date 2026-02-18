@@ -302,7 +302,7 @@ export default router;
 ```typescript
 import { Router, Request, Response, NextFunction } from 'express';
 import { getSettingsService } from '../../services/settings/settings.service.js';
-import { UpdateSettingsInput, AgentMuxSettings } from '../../types/settings.types.js';
+import { UpdateSettingsInput, CrewlySettings } from '../../types/settings.types.js';
 
 const router = Router();
 
@@ -396,7 +396,7 @@ router.post('/reset', async (req: Request, res: Response, next: NextFunction) =>
  */
 router.post('/reset/:section', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const section = req.params.section as keyof AgentMuxSettings;
+    const section = req.params.section as keyof CrewlySettings;
 
     if (!['general', 'chat', 'skills'].includes(section)) {
       return res.status(400).json({
@@ -428,7 +428,7 @@ router.post('/export', async (req: Request, res: Response, next: NextFunction) =
     const settings = await settingsService.getSettings();
 
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=agentmux-settings.json');
+    res.setHeader('Content-Disposition', 'attachment; filename=crewly-settings.json');
     res.json(settings);
   } catch (error) {
     next(error);

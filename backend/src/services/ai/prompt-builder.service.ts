@@ -125,13 +125,13 @@ Please:
 1. Create a ${teamDetails.name || 'development team'} (${teamMembers
 				.replace(/- /g, '')
 				.replace(/\n/g, ' + ')})
-2. Have them build according to the specs in ${projectPath}/.agentmux/specs/
+2. Have them build according to the specs in ${projectPath}/.crewly/specs/
 3. Ensure 30-minute git commits
 4. Coordinate the team to work on Phase 1 simultaneously
 
 ## Project: ${projectName}
 **Path**: ${projectPath}
-**Requirements**: ${requirements || 'See project documentation in .agentmux/specs/'}
+**Requirements**: ${requirements || 'See project documentation in .crewly/specs/'}
 
 ## Team Structure
 ${teamMembers}
@@ -408,7 +408,7 @@ ${fullContext}
 		sections.push('\n---\n');
 		sections.push(`## Communication
 
-Use bash skills at \`${this.agentSkillsPath}/\` for all team communication. Read \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference.
+Use bash skills at \`${this.agentSkillsPath}/\` for all team communication. Read \`~/.crewly/skills/AGENT_SKILLS_CATALOG.md\` for a full reference.
 - \`send-message\` to communicate with other agents
 - \`report-progress\` to update on task status
 - \`remember\` to store important learnings (always pass your \`agentId\` and \`projectPath\`)
@@ -536,13 +536,13 @@ This ensures your knowledge is stored under your identity and in the correct pro
 
 			const memberIdParam = memberId ? `,"teamMemberId":"${memberId}"` : '';
 
-			return `# AgentMux Agent Registration
+			return `# Crewly Agent Registration
 
-You are running in the **AgentMux multi-agent orchestration environment**.
+You are running in the **Crewly multi-agent orchestration environment**.
 
 ## Registration Required
 
-**IMMEDIATELY** register yourself with the AgentMux system using the register-self bash skill:
+**IMMEDIATELY** register yourself with the Crewly system using the register-self bash skill:
 
 \`\`\`bash
 bash ${this.agentSkillsPath}/register-self/execute.sh '{"role":"${role}","sessionName":"${sessionName}"${memberIdParam}}'
@@ -550,7 +550,7 @@ bash ${this.agentSkillsPath}/register-self/execute.sh '{"role":"${role}","sessio
 
 After registering, read the agent skills catalog for a full reference of available skills:
 \`\`\`bash
-cat ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md
+cat ~/.crewly/skills/AGENT_SKILLS_CATALOG.md
 \`\`\`
 
 **IMPORTANT:** You MUST complete registration before proceeding.
@@ -560,7 +560,7 @@ cat ~/.agentmux/skills/AGENT_SKILLS_CATALOG.md
 After successful registration, respond with:
 \`\`\`
 Agent registered and awaiting instructions from orchestrator.
-Environment: AgentMux
+Environment: Crewly
 Role: ${role}
 Status: Active and ready for task assignments
 \`\`\`
@@ -577,7 +577,7 @@ Then wait for explicit task assignments from the orchestrator.`;
 
 ## Quick context about this setup
 
-This project uses AgentMux for team coordination. You have bash skills available at \`${this.agentSkillsPath}/\` that communicate with the AgentMux backend running locally. Read the skills catalog at \`~/.agentmux/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
+This project uses Crewly for team coordination. You have bash skills available at \`${this.agentSkillsPath}/\` that communicate with the Crewly backend running locally. Read the skills catalog at \`~/.crewly/skills/AGENT_SKILLS_CATALOG.md\` for a full reference of available skills.
 
 ## First thing - please check in
 
@@ -628,7 +628,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.
 	 * Load prompt template from file
 	 *
 	 * Loads from config/roles/{roleName}/prompt.md or by full file name for backwards compatibility.
-	 * Checks for user override files in ~/.agentmux/roles/{roleName}/prompt.md first.
+	 * Checks for user override files in ~/.crewly/roles/{roleName}/prompt.md first.
 	 *
 	 * @param fileNameOrRole - Either a role name (e.g., 'orchestrator') or legacy file name (e.g., 'orchestrator-prompt.md')
 	 * @returns The prompt content, or null if not found

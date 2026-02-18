@@ -7,8 +7,8 @@
  * a new work session and to persist what it learned when the session ends.
  *
  * Storage locations:
- * - Session summaries: ~/.agentmux/agents/{agentId}/sessions/
- * - Agents index: {projectPath}/.agentmux/agents-index.json
+ * - Session summaries: ~/.crewly/agents/{agentId}/sessions/
+ * - Agents index: {projectPath}/.crewly/agents-index.json
  *
  * @module services/memory/session-memory.service
  */
@@ -17,7 +17,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ensureDir, atomicWriteFile, safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
-import { MEMORY_CONSTANTS, AGENTMUX_CONSTANTS } from '../../constants.js';
+import { MEMORY_CONSTANTS, CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 import { AgentMemoryService } from './agent-memory.service.js';
 import { ProjectMemoryService } from './project-memory.service.js';
@@ -81,12 +81,12 @@ export class SessionMemoryService {
   // ========================= HELPER METHODS =========================
 
   /**
-   * Returns the absolute path to the AgentMux home directory (~/.agentmux)
+   * Returns the absolute path to the Crewly home directory (~/.crewly)
    *
-   * @returns Absolute path to AgentMux home
+   * @returns Absolute path to Crewly home
    */
   private getAgentmuxHome(): string {
-    return path.join(os.homedir(), AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+    return path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
   }
 
   /**
@@ -97,7 +97,7 @@ export class SessionMemoryService {
    *
    * @example
    * ```typescript
-   * // Returns: ~/.agentmux/agents/dev-001/sessions
+   * // Returns: ~/.crewly/agents/dev-001/sessions
    * this.getSessionsDir('dev-001');
    * ```
    */
@@ -266,7 +266,7 @@ export class SessionMemoryService {
     role: string,
     projectPath: string,
   ): Promise<StartupBriefing> {
-    const agentmuxDir = path.join(projectPath, AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME);
+    const crewlyDir = path.join(projectPath, CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
 
     // Read latest session summary
     const latestSummaryPath = path.join(
@@ -293,22 +293,22 @@ export class SessionMemoryService {
 
     // Today's daily log
     const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    const dailyLogPath = path.join(agentmuxDir, MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR, `${today}.md`);
+    const dailyLogPath = path.join(crewlyDir, MEMORY_CONSTANTS.PATHS.DAILY_LOG_DIR, `${today}.md`);
     const todaysDailyLog = await this.safeReadFile(dailyLogPath);
 
     // Active goals
-    const goalsPath = path.join(agentmuxDir, MEMORY_CONSTANTS.PATHS.GOALS_DIR, MEMORY_CONSTANTS.PATHS.GOALS_FILE);
+    const goalsPath = path.join(crewlyDir, MEMORY_CONSTANTS.PATHS.GOALS_DIR, MEMORY_CONSTANTS.PATHS.GOALS_FILE);
     const activeGoals = await this.safeReadFile(goalsPath);
 
     // Recent failures (tail only)
-    const failedPath = path.join(agentmuxDir, MEMORY_CONSTANTS.PATHS.LEARNING_DIR, MEMORY_CONSTANTS.PATHS.WHAT_FAILED_FILE);
+    const failedPath = path.join(crewlyDir, MEMORY_CONSTANTS.PATHS.LEARNING_DIR, MEMORY_CONSTANTS.PATHS.WHAT_FAILED_FILE);
     const failedRaw = await this.safeReadFile(failedPath);
     const recentFailures = failedRaw !== null
       ? failedRaw.slice(-LEARNING_TAIL_CHARS)
       : null;
 
     // Recent successes (tail only)
-    const workedPath = path.join(agentmuxDir, MEMORY_CONSTANTS.PATHS.LEARNING_DIR, MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE);
+    const workedPath = path.join(crewlyDir, MEMORY_CONSTANTS.PATHS.LEARNING_DIR, MEMORY_CONSTANTS.PATHS.WHAT_WORKED_FILE);
     const workedRaw = await this.safeReadFile(workedPath);
     const recentSuccesses = workedRaw !== null
       ? workedRaw.slice(-LEARNING_TAIL_CHARS)
@@ -388,7 +388,7 @@ export class SessionMemoryService {
   /**
    * Updates the project-level agents index with an agent's latest activity
    *
-   * The agents index lives at `{projectPath}/.agentmux/agents-index.json` and
+   * The agents index lives at `{projectPath}/.crewly/agents-index.json` and
    * tracks every agent that has worked on the project, along with the timestamp
    * of their most recent activity.
    *
@@ -409,7 +409,7 @@ export class SessionMemoryService {
   public async updateAgentsIndex(projectPath: string, agentId: string, role: string): Promise<void> {
     const indexPath = path.join(
       projectPath,
-      AGENTMUX_CONSTANTS.PATHS.AGENTMUX_HOME,
+      CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
       MEMORY_CONSTANTS.PATHS.AGENTS_INDEX,
     );
 

@@ -1,4 +1,4 @@
-# CI Workflow for AgentMux
+# CI Workflow for Crewly
 # Runs on push to main/develop and pull requests
 # Tests on Windows, macOS, and Linux to ensure cross-platform compatibility
 

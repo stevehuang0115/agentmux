@@ -189,7 +189,7 @@ const STEVE_HUANG_GREETINGS = [
 const STEVE_HUANG_SMALL_TALK: ReadonlyArray<[string, string]> = [
   ["How's everything going?", "Going great, thanks!"],
   ["I built this whole factory", "It's amazing!"],
-  ["AgentMux is coming along", "Looks awesome!"],
+  ["Crewly is coming along", "Looks awesome!"],
   ["Need anything from me?", "We're good, thanks!"],
   ["Just making the rounds", "Good to see you!"],
   ["The codebase is looking clean", "Thanks for the review!"],

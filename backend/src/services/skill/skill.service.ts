@@ -45,7 +45,7 @@ export interface SkillServiceOptions {
  *
  * Handles:
  * - Loading built-in skills from config/skills/
- * - Managing user-created skills in ~/.agentmux/skills/
+ * - Managing user-created skills in ~/.crewly/skills/
  * - CRUD operations for skills
  * - Skill matching for prompts
  * - Integration with role service for skill assignment
@@ -66,7 +66,7 @@ export class SkillService {
       options?.builtinSkillsDir ?? path.join(process.cwd(), 'config', 'skills');
     this.userSkillsDir =
       options?.userSkillsDir ??
-      path.join(process.env.HOME || '~', '.agentmux', SKILL_CONSTANTS.PATHS.SKILLS_DIR);
+      path.join(process.env.HOME || '~', '.crewly', SKILL_CONSTANTS.PATHS.SKILLS_DIR);
   }
 
   /**

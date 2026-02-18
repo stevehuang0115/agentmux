@@ -1,7 +1,7 @@
 /**
  * Frontend Role Types
  *
- * Type definitions for role management in AgentMux.
+ * Type definitions for role management in Crewly.
  * These types mirror the backend role types.
  *
  * @module types/role.types

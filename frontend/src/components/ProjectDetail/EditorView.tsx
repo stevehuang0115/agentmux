@@ -64,7 +64,7 @@ const EditorView: React.FC<EditorViewProps> = ({
   setIsMarkdownEditorOpen 
 }) => {
   const [projectFiles, setProjectFiles] = useState<FileTreeNode[]>([]);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['.agentmux']));
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set(['.crewly']));
   const [fileContent, setFileContent] = useState<string>('');
   const [loadingFile, setLoadingFile] = useState<boolean>(false);
   const [fileError, setFileError] = useState<string | null>(null);
@@ -118,10 +118,10 @@ const EditorView: React.FC<EditorViewProps> = ({
           console.log('Files found:', result.data.files.map((f: any) => f.name).join(', '));
           setProjectFiles(result.data.files);
           
-          // Auto-expand .agentmux folder if it exists
-          const agentmuxExists = result.data.files.some((file: any) => file.name === '.agentmux');
-          if (agentmuxExists) {
-            setExpandedFolders(prev => new Set([...prev, '.agentmux']));
+          // Auto-expand .crewly folder if it exists
+          const crewlyExists = result.data.files.some((file: any) => file.name === '.crewly');
+          if (crewlyExists) {
+            setExpandedFolders(prev => new Set([...prev, '.crewly']));
           }
         } else {
           console.error('Failed to load project files:', result.error);
@@ -199,7 +199,7 @@ const EditorView: React.FC<EditorViewProps> = ({
                 variant="primary"
                 icon={FileText}
                 onClick={() => setIsMarkdownEditorOpen(true)}
-                title="Edit .agentmux spec files"
+                title="Edit .crewly spec files"
               >
                 Edit Specs
               </Button>

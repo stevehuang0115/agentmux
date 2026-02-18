@@ -112,7 +112,7 @@ Ensure Slack settings are defined in settings types:
 
 ```typescript
 // backend/src/types/settings.types.ts
-interface AgentMuxSettings {
+interface CrewlySettings {
   // ... existing settings ...
 
   slack?: {

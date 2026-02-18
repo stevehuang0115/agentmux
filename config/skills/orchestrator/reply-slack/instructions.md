@@ -1,6 +1,6 @@
 # Reply Slack
 
-Send a message to a Slack channel or thread via the AgentMux backend API. This bypasses terminal output parsing and delivers the message directly to Slack, avoiding PTY line-wrapping and ANSI artifacts.
+Send a message to a Slack channel or thread via the Crewly backend API. This bypasses terminal output parsing and delivers the message directly to Slack, avoiding PTY line-wrapping and ANSI artifacts.
 
 ## Usage
 

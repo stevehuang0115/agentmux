@@ -10,7 +10,7 @@ The Slack integration fails to connect because the `@slack/bolt` package is not 
 ## Error Message
 ```
 Cannot find package '@slack/bolt' imported from
-/Users/yellowsunhy/Desktop/projects/agentmux/backend/src/services/slack/slack.service.ts
+/Users/yellowsunhy/Desktop/projects/crewly/backend/src/services/slack/slack.service.ts
 ```
 
 ## Root Cause

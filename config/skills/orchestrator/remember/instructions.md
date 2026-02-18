@@ -5,7 +5,7 @@ Store knowledge in your persistent memory for future reference.
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/remember/execute.sh '{"content":"TypeScript strict mode is required","category":"pattern","scope":"project","teamMemberId":"agentmux-orc","projectPath":"/path/to/project"}'
+bash config/skills/orchestrator/remember/execute.sh '{"content":"TypeScript strict mode is required","category":"pattern","scope":"project","teamMemberId":"crewly-orc","projectPath":"/path/to/project"}'
 ```
 
 ## Parameters

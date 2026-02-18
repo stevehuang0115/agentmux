@@ -61,7 +61,7 @@ let service: GoalTrackingService;
  * Returns the goals directory for the temp project.
  */
 function goalsDir(): string {
-  return path.join(tmpDir, '.agentmux', 'goals');
+  return path.join(tmpDir, '.crewly', 'goals');
 }
 
 // ---------------------------------------------------------------------------

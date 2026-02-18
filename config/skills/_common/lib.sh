@@ -1,22 +1,22 @@
 #!/bin/bash
 # =============================================================================
-# AgentMux Shared Skills Common Library
+# Crewly Shared Skills Common Library
 # Provides common utilities for all bash skills (agent and orchestrator).
 # =============================================================================
 
-# Base URL for the AgentMux backend API
-AGENTMUX_API_URL="${AGENTMUX_API_URL:-http://localhost:8787}"
+# Base URL for the Crewly backend API
+CREWLY_API_URL="${CREWLY_API_URL:-http://localhost:8787}"
 
 # -----------------------------------------------------------------------------
 # api_call METHOD endpoint [json_body]
 #
-# Makes an HTTP request to the AgentMux backend API.
+# Makes an HTTP request to the Crewly backend API.
 # Outputs the response body on success (stdout).
 # Outputs a JSON error object on failure (stderr) and returns 1.
 # -----------------------------------------------------------------------------
 api_call() {
   local method="$1" endpoint="$2" body="${3:-}"
-  local url="${AGENTMUX_API_URL}/api${endpoint}"
+  local url="${CREWLY_API_URL}/api${endpoint}"
   local args=(-s -w '\n%{http_code}' -X "$method" -H "Content-Type: application/json")
   [ -n "$body" ] && args+=(-d "$body")
 

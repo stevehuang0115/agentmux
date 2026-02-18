@@ -57,7 +57,7 @@ export interface GetFileContentQuery {
 }
 
 /**
- * Query parameters for getting agentmux markdown files
+ * Query parameters for getting crewly markdown files
  */
 export interface GetAgentmuxMarkdownFilesQuery {
   projectPath?: string;

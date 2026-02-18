@@ -5,7 +5,7 @@ describe('file-utils', () => {
   describe('getFileIcon', () => {
     describe('directories', () => {
       it('should return specific icons for special directories', () => {
-        expect(getFileIcon('.agentmux', true)).toBe('⚙️');
+        expect(getFileIcon('.crewly', true)).toBe('⚙️');
         expect(getFileIcon('node_modules', true)).toBe('📦');
         expect(getFileIcon('.git', true)).toBe('🔗');
         expect(getFileIcon('src', true)).toBe('📁');

@@ -15,7 +15,7 @@ blocks: [08-output-analyzer, 09-continuation-service]
 Design the system architecture for detecting when agents stop/idle and determining whether to continue their work automatically.
 
 ## Background
-AgentMux controls agent sessions via PTY. We have:
+Crewly controls agent sessions via PTY. We have:
 - `PtySession.onExit()` - fires when process terminates
 - `ActivityMonitorService` - polls every 2 minutes for output changes
 - `AgentHeartbeatService` - tracks MCP tool calls (30-min stale threshold)

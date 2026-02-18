@@ -1,7 +1,7 @@
 # Task 86: Slack Settings Page UI Inconsistency
 
 ## Problem
-The Slack configuration page in Settings does not follow the consistent dark theme used throughout the AgentMux dashboard. It appears to use light/cream backgrounds while the rest of the application uses a dark theme.
+The Slack configuration page in Settings does not follow the consistent dark theme used throughout the Crewly dashboard. It appears to use light/cream backgrounds while the rest of the application uses a dark theme.
 
 ## Expected Behavior
 The Slack settings tab should:

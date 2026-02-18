@@ -1,20 +1,20 @@
-# AgentMux Enhancement Plan - Executive Summary (Revised)
+# Crewly Enhancement Plan - Executive Summary (Revised)
 
 ## Goal
-Transform AgentMux into a fully autonomous "one-man company" platform where AI agent teams (PM, Engineers, Sales, Ops) work autonomously with role-specific knowledge bases and SOPs.
+Transform Crewly into a fully autonomous "one-man company" platform where AI agent teams (PM, Engineers, Sales, Ops) work autonomously with role-specific knowledge bases and SOPs.
 
 ---
 
 ## Key Insight
 
-**AgentMux doesn't need Claude Code's stop hook** because it directly controls PTY sessions:
+**Crewly doesn't need Claude Code's stop hook** because it directly controls PTY sessions:
 - Can detect when agents stop via `onExit()` callback
 - Can detect idle via `ActivityMonitorService` (2-min polling)
 - Can inject continuation prompts directly
 
 ---
 
-## What AgentMux Already Has
+## What Crewly Already Has
 
 ```
 ✅ PTY Session Management (onData, onExit listeners)
@@ -23,7 +23,7 @@ Transform AgentMux into a fully autonomous "one-man company" platform where AI a
 ✅ Scheduled Check-ins (SchedulerService)
 ✅ Context Loading (ContextLoaderService)
 ✅ Prompt Building (PromptBuilderService)
-✅ Memory Logs (project/.agentmux/memory/)
+✅ Memory Logs (project/.crewly/memory/)
 ```
 
 ## What We Need to Add
@@ -40,12 +40,12 @@ Transform AgentMux into a fully autonomous "one-man company" platform where AI a
 
 ## Two-Level Memory System
 
-Since AgentMux is **project-based**, memory needs to exist at two levels:
+Since Crewly is **project-based**, memory needs to exist at two levels:
 
 | Level | Location | Purpose |
 |-------|----------|---------|
-| **Agent** | `~/.agentmux/agents/{id}/` | Role knowledge, preferences, custom SOPs |
-| **Project** | `project/.agentmux/knowledge/` | Patterns, decisions, gotchas, learnings |
+| **Agent** | `~/.crewly/agents/{id}/` | Role knowledge, preferences, custom SOPs |
+| **Project** | `project/.crewly/knowledge/` | Patterns, decisions, gotchas, learnings |
 
 ---
 

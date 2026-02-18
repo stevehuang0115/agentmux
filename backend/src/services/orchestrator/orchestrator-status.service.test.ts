@@ -50,7 +50,7 @@ jest.mock('../core/logger.service.js', () => ({
 
 // Mock the config module to ensure constants are available
 jest.mock('../../../../config/index.js', () => ({
-  AGENTMUX_CONSTANTS: {
+  CREWLY_CONSTANTS: {
     AGENT_STATUSES: {
       INACTIVE: 'inactive',
       STARTING: 'starting',
@@ -59,7 +59,7 @@ jest.mock('../../../../config/index.js', () => ({
       ACTIVE: 'active',
     },
     SESSIONS: {
-      ORCHESTRATOR_NAME: 'agentmux-orc',
+      ORCHESTRATOR_NAME: 'crewly-orc',
     },
   },
   WEB_CONSTANTS: {
@@ -85,7 +85,7 @@ describe('OrchestratorStatusService', () => {
    */
   function createMockOrchestratorStatus(agentStatus: string): Record<string, unknown> {
     return {
-      sessionName: 'agentmux-orc',
+      sessionName: 'crewly-orc',
       agentStatus,
       workingStatus: 'idle',
       runtimeType: 'claude-code',

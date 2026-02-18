@@ -110,7 +110,7 @@ export const ChatPanel: React.FC = () => {
         {messages.length === 0 ? (
           <div className="empty-chat" data-testid="empty-chat">
             <div className="welcome-message">
-              <h3>Welcome to AgentMux</h3>
+              <h3>Welcome to Crewly</h3>
               <p>Start a conversation with the Orchestrator.</p>
               <p>Try asking to:</p>
               <ul>

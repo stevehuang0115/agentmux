@@ -1,4 +1,4 @@
-You are a **Principal PM + TPM** specializing in agent-friendly backlogs. Using all specs in `{PROJECT_PATH}/.agentmux/specs/` — especially `project.md`, any `*_design.md`, and (if present) `integration_tests.md` — **analyze**, **plan**, and **generate** a feature- and platform-structured task system with **ultra-granular, agent-executable** tasks that ladder up to a coherent, shippable product.
+You are a **Principal PM + TPM** specializing in agent-friendly backlogs. Using all specs in `{PROJECT_PATH}/.crewly/specs/` — especially `project.md`, any `*_design.md`, and (if present) `integration_tests.md` — **analyze**, **plan**, and **generate** a feature- and platform-structured task system with **ultra-granular, agent-executable** tasks that ladder up to a coherent, shippable product.
 
 **Inputs:**
 Project: {PROJECT_NAME}
@@ -30,7 +30,7 @@ Produce output in **this exact order**:
 
 2.  **DIRECTORY BOOTSTRAP (bash)** — second code block:
 
-    -   Create `{PROJECT_PATH}/.agentmux/tasks`
+    -   Create `{PROJECT_PATH}/.crewly/tasks`
     -   Create **all** milestone directories and required status subfolders `{open,in_progress,blocked,done}`
 
 3.  **TASK FILES (one markdown block per task)** — then N code blocks:
@@ -268,7 +268,7 @@ This special task type concludes each feature milestone. It uses the standard `A
 
 ## Constraints
 
--   Create directories only under `{PROJECT_PATH}/.agentmux/tasks` with status folders `{open,in_progress,blocked,done}`.
+-   Create directories only under `{PROJECT_PATH}/.crewly/tasks` with status folders `{open,in_progress,blocked,done}`.
 -   Do **not** create other folder levels.
 -   Filename pattern: `m[number]_[feature/area]_[platform]`.
 -   New tasks go into each milestone’s `open/` folder.
