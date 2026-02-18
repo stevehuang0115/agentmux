@@ -7,6 +7,13 @@ import type { ApiContext } from '../types.js';
 // Mock os module
 jest.mock('os');
 
+// Mock fs/promises so utimes resolves immediately under fake timers
+jest.mock('fs/promises', () => ({
+  utimes: jest.fn<any>().mockResolvedValue(undefined),
+  stat: jest.fn<any>().mockResolvedValue({ isDirectory: () => true }),
+  readdir: jest.fn<any>().mockResolvedValue([]),
+}));
+
 // Mock SOP service
 jest.mock('../../services/sop/sop.service.js', () => ({
   SOPService: {
@@ -99,7 +106,7 @@ describe('System Handlers', () => {
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    jest.clearAllMocks();
   });
 
   describe('getSystemHealth', () => {
@@ -760,7 +767,9 @@ describe('System Handlers', () => {
       );
 
       expect(process.exit).not.toHaveBeenCalled();
-      jest.advanceTimersByTime(1000);
+      // Advance past outer setTimeout (1000ms), flush microtasks for async fs.utimes,
+      // then advance past inner setTimeout (2000ms)
+      await jest.advanceTimersByTimeAsync(4000);
       expect(process.exit).toHaveBeenCalledWith(0);
     });
 

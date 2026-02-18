@@ -38,7 +38,8 @@ export async function getSystemMetrics(this: ApiContext, req: Request, res: Resp
   try {
     const { hours } = req.query as any;
     const monitoring = MonitoringService.getInstance();
-    const hoursToFetch = hours ? parseInt(hours) : 1;
+    const parsed = hours ? parseInt(hours) : 1;
+    const hoursToFetch = isNaN(parsed) ? 1 : parsed;
     const metricsHistory = monitoring.getMetricsHistory(hoursToFetch);
     const currentMetrics = monitoring.getSystemMetrics();
     const performanceMetrics = monitoring.getPerformanceMetrics();
