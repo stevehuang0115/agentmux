@@ -18,6 +18,7 @@ import type {
   SlackBlock,
 } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
+import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
 
 /**
  * Events emitted by SlackService
@@ -513,25 +514,81 @@ export class SlackService extends EventEmitter {
     const { createReadStream } = await import('fs');
     const { basename } = await import('path');
 
-    const fileStream = createReadStream(options.filePath);
     const filename = options.filename || basename(options.filePath);
+    const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
 
-    try {
-      const result = await this.client.files.uploadV2({
-        channel_id: options.channelId,
-        file: fileStream,
-        filename,
-        title: options.title,
-        initial_comment: options.initialComment,
-        thread_ts: options.threadTs,
-      });
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const fileStream = createReadStream(options.filePath);
 
-      this.status.messagesSent++;
-      return { fileId: result.files?.[0]?.id };
-    } catch (error) {
-      console.error('[SlackService] Upload image error:', error);
-      throw error;
+      try {
+        const result = await this.client.files.uploadV2({
+          channel_id: options.channelId,
+          file: fileStream,
+          filename,
+          title: options.title,
+          initial_comment: options.initialComment,
+          thread_ts: options.threadTs,
+        });
+
+        this.status.messagesSent++;
+        return { fileId: result.files?.[0]?.id };
+      } catch (error: unknown) {
+        // Handle Slack 429 rate limit with retry-after backoff
+        const isRateLimit = this.isRateLimitError(error);
+        if (isRateLimit && attempt < maxRetries) {
+          const retryAfterMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, retryAfterMs));
+          continue;
+        }
+
+        console.error('[SlackService] Upload image error:', error);
+        throw error;
+      }
     }
+
+    // Should not reach here, but satisfy TypeScript
+    throw new Error('Upload failed after maximum retries');
+  }
+
+  /**
+   * Check if an error is a Slack 429 rate limit error.
+   *
+   * @param error - The caught error
+   * @returns True if the error represents a 429 rate limit response
+   */
+  private isRateLimitError(error: unknown): boolean {
+    if (error && typeof error === 'object') {
+      const err = error as Record<string, unknown>;
+      // @slack/web-api throws errors with code 'slack_webapi_rate_limited_error'
+      if (err.code === 'slack_webapi_rate_limited_error') return true;
+      // Also check for status 429 in case of raw HTTP errors
+      if (err.statusCode === 429 || err.status === 429) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Extract the retry-after delay from a Slack rate limit error.
+   *
+   * @param error - The caught error
+   * @returns Retry delay in milliseconds, or null if not found
+   */
+  private extractRetryAfterMs(error: unknown): number | null {
+    if (error && typeof error === 'object') {
+      const err = error as Record<string, unknown>;
+      // @slack/web-api attaches retryAfter (seconds) to the error
+      if (typeof err.retryAfter === 'number') {
+        return err.retryAfter * 1000;
+      }
+      // Check headers in case of raw response
+      const headers = err.headers as Record<string, string> | undefined;
+      if (headers?.['retry-after']) {
+        const seconds = parseInt(headers['retry-after'], 10);
+        if (!isNaN(seconds)) return seconds * 1000;
+      }
+    }
+    return null;
   }
 
   /**

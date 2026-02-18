@@ -298,7 +298,12 @@ export const SlackTab: React.FC = () => {
                   <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">channels:read</code> - View channels</li>
                   <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">app_mentions:read</code> - Respond to mentions</li>
                   <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">im:read</code>, <code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">im:write</code> - Direct messages</li>
+                  <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">files:read</code> - Receive images from Slack</li>
+                  <li><code className="text-xs bg-background-dark px-1.5 py-0.5 rounded">files:write</code> - Upload images to Slack</li>
                 </ul>
+                <p className="text-xs text-amber-400/80 mt-1.5 ml-4">
+                  Note: Adding <code className="text-xs bg-background-dark px-1 py-0.5 rounded">files:read</code> and <code className="text-xs bg-background-dark px-1 py-0.5 rounded">files:write</code> scopes requires reinstalling the app to your workspace.
+                </p>
               </li>
               <li>Install the app to your workspace</li>
               <li>Copy the Bot Token (xoxb-...), App Token (xapp-...), and Signing Secret</li>

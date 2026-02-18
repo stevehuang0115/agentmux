@@ -447,6 +447,10 @@ export const SLACK_IMAGE_CONSTANTS = {
 	MAX_CONCURRENT_DOWNLOADS: 3,
 	/** Warning threshold for temp directory total size (500 MB) */
 	MAX_TEMP_DIR_SIZE: 500 * 1024 * 1024,
+	/** Maximum number of retry attempts for Slack API 429 responses */
+	UPLOAD_MAX_RETRIES: 3,
+	/** Default backoff delay (ms) when no Retry-After header is present */
+	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
 } as const;
 
 // Type helpers

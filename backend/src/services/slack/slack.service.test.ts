@@ -236,6 +236,33 @@ describe('SlackService', () => {
     });
   });
 
+  describe('rate limit helpers', () => {
+    it('should detect slack_webapi_rate_limited_error as rate limit', () => {
+      const service = new SlackService();
+      const isRateLimit = (service as any).isRateLimitError.bind(service);
+
+      expect(isRateLimit({ code: 'slack_webapi_rate_limited_error' })).toBe(true);
+      expect(isRateLimit({ statusCode: 429 })).toBe(true);
+      expect(isRateLimit({ status: 429 })).toBe(true);
+      expect(isRateLimit({ code: 'some_other_error' })).toBe(false);
+      expect(isRateLimit(null)).toBe(false);
+      expect(isRateLimit('string error')).toBe(false);
+    });
+
+    it('should extract retryAfter from Slack error', () => {
+      const service = new SlackService();
+      const extractRetryAfterMs = (service as any).extractRetryAfterMs.bind(service);
+
+      // @slack/web-api attaches retryAfter in seconds
+      expect(extractRetryAfterMs({ retryAfter: 30 })).toBe(30000);
+      // From headers
+      expect(extractRetryAfterMs({ headers: { 'retry-after': '10' } })).toBe(10000);
+      // No info
+      expect(extractRetryAfterMs({})).toBeNull();
+      expect(extractRetryAfterMs(null)).toBeNull();
+    });
+  });
+
   describe('initialize with invalid credentials', () => {
     it('should throw error when credentials are invalid', async () => {
       const service = getSlackService();

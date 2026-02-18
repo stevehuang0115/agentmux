@@ -487,6 +487,7 @@ Just type naturally to chat with the orchestrator!`;
     const files = message.files!;
     const downloadedImages: SlackImageInfo[] = [];
     const maxConcurrent = SLACK_IMAGE_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
+    const rejectedFiles: string[] = [];
 
     for (let i = 0; i < files.length; i += maxConcurrent) {
       const batch = files.slice(i, i + maxConcurrent);
@@ -500,13 +501,33 @@ Just type naturally to chat with the orchestrator!`;
           downloadedImages.push(result.value);
         } else {
           const fileName = batch[j].name;
-          console.warn(`[SlackBridge] Failed to download image ${fileName}:`, result.reason instanceof Error ? result.reason.message : String(result.reason));
+          const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          console.warn(`[SlackBridge] Failed to download image ${fileName}:`, reason);
+          // Track files that were too large or unsupported to warn the user
+          if (reason.includes('too large') || reason.includes('Unsupported')) {
+            rejectedFiles.push(`${fileName}: ${reason}`);
+          }
         }
       }
     }
 
     if (downloadedImages.length > 0) {
       message.images = downloadedImages;
+    }
+
+    // Send a warning back to Slack if any files were rejected
+    if (rejectedFiles.length > 0) {
+      try {
+        const maxMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
+        const warningText = `:warning: Some image(s) could not be processed:\n${rejectedFiles.map(f => `• ${f}`).join('\n')}\n\nSupported types: PNG, JPEG, GIF, WebP, SVG. Max size: ${maxMB} MB.`;
+        await this.slackService.sendMessage({
+          channelId: message.channelId,
+          text: warningText,
+          threadTs: message.threadTs || message.ts,
+        });
+      } catch (err) {
+        console.warn('[SlackBridge] Failed to send rejection warning to Slack:', err instanceof Error ? err.message : String(err));
+      }
     }
   }
 
