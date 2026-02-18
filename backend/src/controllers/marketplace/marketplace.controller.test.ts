@@ -1,0 +1,447 @@
+/**
+ * Tests for Marketplace Controller
+ *
+ * Validates the REST handlers for marketplace endpoints including
+ * list, detail, install, uninstall, update, refresh, and error handling.
+ *
+ * @module controllers/marketplace/marketplace.controller.test
+ */
+
+import {
+  handleListItems,
+  handleListInstalled,
+  handleListUpdates,
+  handleGetItem,
+  handleRefresh,
+  handleInstall,
+  handleUninstall,
+  handleUpdate,
+} from './marketplace.controller.js';
+
+// Mock marketplace service
+const mockListItems = jest.fn();
+const mockGetItem = jest.fn();
+const mockGetInstalledItems = jest.fn();
+const mockGetUpdatableItems = jest.fn();
+const mockFetchRegistry = jest.fn();
+const mockInstallItem = jest.fn();
+const mockUninstallItem = jest.fn();
+const mockUpdateItem = jest.fn();
+
+jest.mock('../../services/marketplace/index.js', () => ({
+  listItems: (...args: unknown[]) => mockListItems(...args),
+  getItem: (...args: unknown[]) => mockGetItem(...args),
+  getInstalledItems: (...args: unknown[]) => mockGetInstalledItems(...args),
+  getUpdatableItems: (...args: unknown[]) => mockGetUpdatableItems(...args),
+  fetchRegistry: (...args: unknown[]) => mockFetchRegistry(...args),
+  installItem: (...args: unknown[]) => mockInstallItem(...args),
+  uninstallItem: (...args: unknown[]) => mockUninstallItem(...args),
+  updateItem: (...args: unknown[]) => mockUpdateItem(...args),
+}));
+
+describe('MarketplaceController', () => {
+  let mockRes: { json: jest.Mock; status: jest.Mock };
+
+  beforeEach(() => {
+    mockRes = {
+      json: jest.fn().mockReturnThis(),
+      status: jest.fn().mockReturnThis(),
+    };
+
+    mockListItems.mockReset();
+    mockGetItem.mockReset();
+    mockGetInstalledItems.mockReset();
+    mockGetUpdatableItems.mockReset();
+    mockFetchRegistry.mockReset();
+    mockInstallItem.mockReset();
+    mockUninstallItem.mockReset();
+    mockUpdateItem.mockReset();
+  });
+
+  // ========================= handleListItems =========================
+
+  describe('handleListItems', () => {
+    it('should return items with success envelope', async () => {
+      const items = [{ id: 'skill-1', name: 'Deploy Skill' }];
+      mockListItems.mockResolvedValue(items);
+
+      await handleListItems(
+        { query: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockListItems).toHaveBeenCalledWith({
+        type: undefined,
+        search: undefined,
+        sortBy: undefined,
+      });
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: items });
+    });
+
+    it('should pass filter parameters from query string', async () => {
+      mockListItems.mockResolvedValue([]);
+
+      await handleListItems(
+        { query: { type: 'skill', search: 'deploy', sort: 'popular' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockListItems).toHaveBeenCalledWith({
+        type: 'skill',
+        search: 'deploy',
+        sortBy: 'popular',
+      });
+    });
+
+    it('should return 500 on service error', async () => {
+      mockListItems.mockRejectedValue(new Error('Registry fetch failed'));
+
+      await handleListItems(
+        { query: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Registry fetch failed',
+      });
+    });
+
+    it('should handle non-Error thrown values', async () => {
+      mockListItems.mockRejectedValue('string error');
+
+      await handleListItems(
+        { query: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'string error',
+      });
+    });
+  });
+
+  // ========================= handleListInstalled =========================
+
+  describe('handleListInstalled', () => {
+    it('should return installed items', async () => {
+      const installed = [{ id: 'skill-1', version: '1.0.0' }];
+      mockGetInstalledItems.mockResolvedValue(installed);
+
+      await handleListInstalled(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockGetInstalledItems).toHaveBeenCalled();
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: installed });
+    });
+
+    it('should return 500 on service error', async () => {
+      mockGetInstalledItems.mockRejectedValue(new Error('Manifest read failed'));
+
+      await handleListInstalled(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Manifest read failed',
+      });
+    });
+  });
+
+  // ========================= handleListUpdates =========================
+
+  describe('handleListUpdates', () => {
+    it('should return updatable items', async () => {
+      const updatable = [{ id: 'skill-1', installStatus: 'update_available' }];
+      mockGetUpdatableItems.mockResolvedValue(updatable);
+
+      await handleListUpdates(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockGetUpdatableItems).toHaveBeenCalled();
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: updatable });
+    });
+
+    it('should return 500 on service error', async () => {
+      mockGetUpdatableItems.mockRejectedValue(new Error('Version comparison failed'));
+
+      await handleListUpdates(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Version comparison failed',
+      });
+    });
+  });
+
+  // ========================= handleGetItem =========================
+
+  describe('handleGetItem', () => {
+    it('should return item when found', async () => {
+      const item = { id: 'skill-deploy', name: 'Deploy Skill' };
+      mockGetItem.mockResolvedValue(item);
+
+      await handleGetItem(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: item });
+    });
+
+    it('should return 404 when item not found', async () => {
+      mockGetItem.mockResolvedValue(null);
+
+      await handleGetItem(
+        { params: { id: 'nonexistent' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Item not found',
+      });
+    });
+
+    it('should return 404 when item is undefined', async () => {
+      mockGetItem.mockResolvedValue(undefined);
+
+      await handleGetItem(
+        { params: { id: 'nonexistent' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+    });
+
+    it('should return 500 on service error', async () => {
+      mockGetItem.mockRejectedValue(new Error('Registry error'));
+
+      await handleGetItem(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Registry error',
+      });
+    });
+  });
+
+  // ========================= handleRefresh =========================
+
+  describe('handleRefresh', () => {
+    it('should refresh registry and return summary', async () => {
+      mockFetchRegistry.mockResolvedValue({
+        items: [{ id: '1' }, { id: '2' }, { id: '3' }],
+        lastUpdated: '2026-02-17T00:00:00Z',
+      });
+
+      await handleRefresh(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockFetchRegistry).toHaveBeenCalledWith(true);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        data: { itemCount: 3, lastUpdated: '2026-02-17T00:00:00Z' },
+      });
+    });
+
+    it('should return 500 on fetch error', async () => {
+      mockFetchRegistry.mockRejectedValue(new Error('Network timeout'));
+
+      await handleRefresh(
+        {} as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Network timeout',
+      });
+    });
+  });
+
+  // ========================= handleInstall =========================
+
+  describe('handleInstall', () => {
+    it('should install item and return result', async () => {
+      const item = { id: 'skill-deploy', name: 'Deploy Skill' };
+      const result = { success: true, message: 'Installed successfully', item: { id: 'skill-deploy', version: '1.0.0' } };
+      mockGetItem.mockResolvedValue(item);
+      mockInstallItem.mockResolvedValue(result);
+
+      await handleInstall(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
+      expect(mockInstallItem).toHaveBeenCalledWith(item);
+      expect(mockRes.json).toHaveBeenCalledWith(result);
+    });
+
+    it('should return 404 when item not found for install', async () => {
+      mockGetItem.mockResolvedValue(null);
+
+      await handleInstall(
+        { params: { id: 'nonexistent' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Item not found',
+      });
+      expect(mockInstallItem).not.toHaveBeenCalled();
+    });
+
+    it('should return 500 on install error', async () => {
+      const item = { id: 'skill-deploy', name: 'Deploy Skill' };
+      mockGetItem.mockResolvedValue(item);
+      mockInstallItem.mockRejectedValue(new Error('Disk full'));
+
+      await handleInstall(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Disk full',
+      });
+    });
+
+    it('should return 500 when getItem throws during install', async () => {
+      mockGetItem.mockRejectedValue(new Error('Registry offline'));
+
+      await handleInstall(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockInstallItem).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========================= handleUninstall =========================
+
+  describe('handleUninstall', () => {
+    it('should uninstall item and return result', async () => {
+      const result = { success: true, message: 'Uninstalled successfully' };
+      mockUninstallItem.mockResolvedValue(result);
+
+      await handleUninstall(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockUninstallItem).toHaveBeenCalledWith('skill-deploy');
+      expect(mockRes.json).toHaveBeenCalledWith(result);
+    });
+
+    it('should return 500 on uninstall error', async () => {
+      mockUninstallItem.mockRejectedValue(new Error('Permission denied'));
+
+      await handleUninstall(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Permission denied',
+      });
+    });
+  });
+
+  // ========================= handleUpdate =========================
+
+  describe('handleUpdate', () => {
+    it('should update item and return result', async () => {
+      const item = { id: 'skill-deploy', name: 'Deploy Skill' };
+      const result = { success: true, message: 'Updated to 2.0.0', item: { id: 'skill-deploy', version: '2.0.0' } };
+      mockGetItem.mockResolvedValue(item);
+      mockUpdateItem.mockResolvedValue(result);
+
+      await handleUpdate(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
+      expect(mockUpdateItem).toHaveBeenCalledWith(item);
+      expect(mockRes.json).toHaveBeenCalledWith(result);
+    });
+
+    it('should return 404 when item not found for update', async () => {
+      mockGetItem.mockResolvedValue(null);
+
+      await handleUpdate(
+        { params: { id: 'nonexistent' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Item not found',
+      });
+      expect(mockUpdateItem).not.toHaveBeenCalled();
+    });
+
+    it('should return 500 on update error', async () => {
+      const item = { id: 'skill-deploy', name: 'Deploy Skill' };
+      mockGetItem.mockResolvedValue(item);
+      mockUpdateItem.mockRejectedValue(new Error('Download failed'));
+
+      await handleUpdate(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Download failed',
+      });
+    });
+
+    it('should return 500 when getItem throws during update', async () => {
+      mockGetItem.mockRejectedValue(new Error('Registry offline'));
+
+      await handleUpdate(
+        { params: { id: 'skill-deploy' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+      expect(mockUpdateItem).not.toHaveBeenCalled();
+    });
+  });
+});

@@ -18,6 +18,7 @@ import { createEventBusRouter } from '../controllers/event-bus/event-bus.routes.
 import { createSlackThreadRouter } from '../controllers/slack/slack-thread.routes.js';
 import { createMemoryRouter } from '../controllers/memory/memory.routes.js';
 import { createQualityGateRouter } from './modules/quality-gate.routes.js';
+import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -71,6 +72,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Quality gate routes for running quality checks before task completion
   router.use('/quality-gates', createQualityGateRouter());
+
+  // Marketplace routes for browsing, installing, and managing marketplace items
+  router.use('/marketplace', createMarketplaceRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

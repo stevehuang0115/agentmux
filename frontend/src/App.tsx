@@ -10,6 +10,7 @@ import { ScheduledCheckins } from './pages/ScheduledCheckins';
 import { Factory } from './pages/Factory';
 import { Settings } from './pages/Settings';
 import { Chat } from './pages/Chat';
+import Marketplace from './pages/Marketplace';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ChatProvider } from './contexts/ChatContext';
@@ -29,6 +30,7 @@ function App() {
               <Route path="assignments" element={<Assignments />} />
               <Route path="scheduled-checkins" element={<ScheduledCheckins />} />
               <Route path="factory" element={<Factory />} />
+              <Route path="marketplace" element={<Marketplace />} />
               <Route path="settings" element={<Settings />} />
               <Route
                 path="chat"

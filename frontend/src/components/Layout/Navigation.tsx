@@ -11,6 +11,7 @@ import {
 	ChevronRight,
 	X,
 	Factory,
+	Store,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -24,6 +25,7 @@ const navigationItems = [
 	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
 	{ name: 'Chat', href: '/chat', icon: MessageSquare },
 	{ name: '3D Factory', href: '/factory', icon: Factory },
+	{ name: 'Marketplace', href: '/marketplace', icon: Store },
 ];
 
 interface NavigationProps {
