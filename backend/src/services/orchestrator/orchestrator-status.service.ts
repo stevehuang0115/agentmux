@@ -75,11 +75,13 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
     // Use the well-known constant as fallback when sessionName isn't stored,
     // aligning with how the teams controller checks session existence.
     let sessionExists = false;
+    let sessionCheckPerformed = false;
     try {
       const sessionBackend = getSessionBackendSync();
       const sessionName = orchestratorStatus?.sessionName || CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
       if (sessionBackend && sessionName) {
         sessionExists = sessionBackend.sessionExists(sessionName);
+        sessionCheckPerformed = true;
       }
     } catch {
       // Ignore session check errors - fall back to storage-based status
@@ -95,8 +97,11 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
 
     const agentStatus = orchestratorStatus.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE;
 
-    // Orchestrator is active when fully registered via MCP
-    const isRegisteredActive = agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
+    // Orchestrator is active when fully registered via MCP AND the session is
+    // confirmed alive (or the session backend was unavailable to check).
+    // If the session backend confirmed the session is dead, treat as not active.
+    const isRegisteredActive = agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
+      && (!sessionCheckPerformed || sessionExists);
 
     // Also treat as active when the PTY session exists and the runtime is running
     // ("started" means Claude Code is running). This aligns with the teams controller
@@ -109,6 +114,22 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
         agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
         message: 'Orchestrator is active and ready.',
       };
+    }
+
+    // Proactive cleanup: if the session backend confirmed the session is dead
+    // but stored status says active, update storage to prevent repeated stale checks
+    // from other callers (QueueProcessor, dashboard).
+    if (sessionCheckPerformed && !sessionExists && agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+      try {
+        const storageServiceForCleanup = StorageService.getInstance();
+        const cleanupSessionName = orchestratorStatus?.sessionName || CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+        await storageServiceForCleanup.updateAgentStatus(
+          cleanupSessionName,
+          CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+        );
+      } catch {
+        // Best-effort cleanup — don't let it break the status check
+      }
     }
 
     // Provide context-appropriate message based on status

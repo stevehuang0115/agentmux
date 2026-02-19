@@ -111,8 +111,8 @@ export const Projects: React.FC = () => {
       const entries = list.map(project => {
         const assignedTeams = migratedTeams.filter(team => {
           // Match by project ID or project name
-          const matchesById = team.currentProject === project.id;
-          const matchesByName = team.currentProject === project.name;
+          const matchesById = team.projectIds?.includes(project.id);
+          const matchesByName = team.projectIds?.includes(project.name);
           return matchesById || matchesByName;
         });
         return [project.id, assignedTeams] as const;

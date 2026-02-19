@@ -26,7 +26,7 @@ import { getSlackImageService } from './slack-image.service.js';
 import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_BRIDGE_CONSTANTS } from '../../constants.js';
 
 /**
  * Bridge configuration
@@ -42,6 +42,8 @@ export interface SlackBridgeConfig {
   enableNotifications: boolean;
   /** Response timeout in ms */
   responseTimeoutMs: number;
+  /** Time to wait for reply-slack skill before fallback delivery (ms) */
+  skillDeliveryWaitMs: number;
 }
 
 /**
@@ -53,6 +55,7 @@ const DEFAULT_CONFIG: SlackBridgeConfig = {
   maxResponseLength: 3000,
   enableNotifications: true,
   responseTimeoutMs: MESSAGE_QUEUE_CONSTANTS.DEFAULT_MESSAGE_TIMEOUT + 5000,
+  skillDeliveryWaitMs: SLACK_BRIDGE_CONSTANTS.SKILL_DELIVERY_WAIT_MS,
 };
 
 /**
@@ -493,6 +496,33 @@ Just type naturally to chat with the orchestrator!`;
     const maxConcurrent = SLACK_IMAGE_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
     const rejectionMessages: string[] = [];
 
+    // Refresh file URLs via files.info API before downloading.
+    // The event payload URLs may not work with just the bot token — the
+    // files.info API returns authenticated URLs and also validates that
+    // the bot has the required files:read scope.
+    for (const file of files) {
+      try {
+        const freshInfo = await this.slackService.getFileInfo(file.id);
+        if (freshInfo.url_private_download) {
+          file.url_private_download = freshInfo.url_private_download;
+        }
+        if (freshInfo.url_private) {
+          file.url_private = freshInfo.url_private;
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
+          console.error(
+            '[SlackBridge] Bot token lacks files:read scope — cannot download images. ' +
+            'Please add the "files:read" scope to your Slack app at https://api.slack.com/apps and reinstall.'
+          );
+          return; // Skip all downloads — scope is missing for all files
+        }
+        // For other errors (e.g. file_not_found), continue with original URL
+        console.warn(`[SlackBridge] Could not refresh URL for ${file.name} via files.info:`, errMsg);
+      }
+    }
+
     for (let i = 0; i < files.length; i += maxConcurrent) {
       const batch = files.slice(i, i + maxConcurrent);
       const results = await Promise.allSettled(
@@ -599,7 +629,12 @@ Just type naturally to chat with the orchestrator!`;
   }
 
   /**
-   * Send response back to Slack
+   * Send response back to Slack with fallback delivery.
+   *
+   * Waits for the reply-slack skill to deliver via the skill pipeline.
+   * If the skill delivers (detected via markDeliveredBySkill), this method
+   * skips sending to avoid duplicates. If the skill does not deliver within
+   * the wait window, sends the response directly to Slack as a fallback.
    *
    * @param originalMessage - Original incoming message
    * @param response - Response content
@@ -608,13 +643,38 @@ Just type naturally to chat with the orchestrator!`;
     originalMessage: SlackIncomingMessage,
     response: string
   ): Promise<void> {
-    // Slack delivery is handled exclusively by the reply-slack skill
-    // (which calls /api/slack/send directly). The sendSlackResponse fallback
-    // is no longer needed — the skill sends the clean response directly via
-    // the Slack API, avoiding PTY artifacts and timing issues.
-    // Just record the thread reply for context tracking.
-    console.log('[SlackBridge] Skipping sendSlackResponse — Slack delivery is handled by reply-slack skill');
+    // Record to thread store regardless of delivery path
     await this.recordThreadReply(originalMessage, response);
+
+    // Skip empty responses
+    const trimmed = response?.trim();
+    if (!trimmed) return;
+
+    // Wait for the reply-slack skill to deliver (it runs asynchronously in the PTY)
+    if (this.config.skillDeliveryWaitMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, this.config.skillDeliveryWaitMs));
+    }
+
+    // Check if the reply-slack skill already delivered to this thread
+    const threadTs = originalMessage.threadTs || originalMessage.ts;
+    if (this.wasDeliveredBySkill(originalMessage.channelId, threadTs)) {
+      console.log('[SlackBridge] Slack reply already delivered by skill, skipping fallback');
+      return;
+    }
+
+    // Fallback: send the response directly to Slack
+    try {
+      console.log('[SlackBridge] reply-slack skill did not deliver, sending fallback response to Slack');
+      await this.slackService.sendMessage({
+        channelId: originalMessage.channelId,
+        text: trimmed,
+        threadTs,
+      });
+    } catch (err) {
+      console.error('[SlackBridge] Fallback Slack delivery failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**

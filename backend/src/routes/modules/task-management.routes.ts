@@ -5,6 +5,7 @@ import * as inProgressHandlers from '../../controllers/task-management/in-progre
 
 export function registerTaskManagementRoutes(router: Router, apiController: ApiController): void {
   // Task Management Routes (for MCP tools)
+  router.post('/task-management/create', (req, res) => taskMgmtHandlers.createTask.call(apiController, req, res));
   router.post('/task-management/assign', (req, res) => taskMgmtHandlers.assignTask.call(apiController, req, res));
   router.post('/task-management/complete', (req, res) => taskMgmtHandlers.completeTask.call(apiController, req, res));
   router.post('/task-management/block', (req, res) => taskMgmtHandlers.blockTask.call(apiController, req, res));

@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, watch, FSWatcher } from 'fs';
 import { promisify } from 'util';
 import { exec } from 'child_process';
 import { parse as parseYAML, stringify as stringifyYAML } from 'yaml';
-import { Team, TeamMember, Project, Ticket, TicketFilter, ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
+import { Team, TeamMember, Project, Ticket, TicketFilter, ScheduledCheck, ScheduledMessage, MessageDeliveryLog } from '../../types/index.js';
 import { TeamModel, ProjectModel, TicketModel, ScheduledMessageModel, MessageDeliveryLogModel } from '../../models/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as os from 'os';
@@ -28,6 +28,8 @@ export class StorageService {
   private runtimeFile: string;
   private scheduledMessagesFile: string;
   private deliveryLogsFile: string;
+  private recurringChecksFile: string;
+  private oneTimeChecksFile: string;
   private logger: ComponentLogger;
   /** Flag to track if migration has been performed */
   private migrationDone: boolean = false;
@@ -43,6 +45,8 @@ export class StorageService {
     this.runtimeFile = path.join(this.crewlyHome, 'runtime.json');
     this.scheduledMessagesFile = path.join(this.crewlyHome, 'scheduled-messages.json');
     this.deliveryLogsFile = path.join(this.crewlyHome, 'message-delivery-logs.json');
+    this.recurringChecksFile = path.join(this.crewlyHome, 'recurring-checks.json');
+    this.oneTimeChecksFile = path.join(this.crewlyHome, 'one-time-checks.json');
 
     this.ensureDirectories();
     this.logger.info('StorageService initialized', { crewlyHome: this.crewlyHome });
@@ -1070,6 +1074,200 @@ This is a foundational task that should be completed first before other developm
       return true;
     } catch (error) {
       console.error('Error deleting scheduled message:', error);
+      throw error;
+    }
+  }
+
+  // Recurring Checks persistence
+  /**
+   * Get all persisted recurring checks.
+   *
+   * @returns Array of persisted ScheduledCheck entries
+   */
+  async getRecurringChecks(): Promise<ScheduledCheck[]> {
+    try {
+      await this.ensureFile(this.recurringChecksFile, []);
+      const content = await fs.readFile(this.recurringChecksFile, 'utf-8');
+
+      if (!content.trim()) {
+        await atomicWriteFile(this.recurringChecksFile, JSON.stringify([], null, 2));
+        return [];
+      }
+
+      try {
+        return JSON.parse(content) as ScheduledCheck[];
+      } catch (parseError) {
+        this.logger.error('Error parsing recurring checks JSON, resetting file', {
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        await atomicWriteFile(this.recurringChecksFile, JSON.stringify([], null, 2));
+        return [];
+      }
+    } catch (error) {
+      this.logger.error('Error reading recurring checks', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Save or update a recurring check entry on disk.
+   *
+   * @param check - The ScheduledCheck to persist
+   */
+  async saveRecurringCheck(check: ScheduledCheck): Promise<void> {
+    try {
+      const checks = await this.getRecurringChecks();
+      const existingIndex = checks.findIndex(c => c.id === check.id);
+
+      if (existingIndex >= 0) {
+        checks[existingIndex] = check;
+      } else {
+        checks.push(check);
+      }
+
+      await atomicWriteFile(this.recurringChecksFile, JSON.stringify(checks, null, 2));
+    } catch (error) {
+      this.logger.error('Error saving recurring check', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a persisted recurring check by ID.
+   *
+   * @param id - The check ID to delete
+   * @returns true if the check was found and deleted
+   */
+  async deleteRecurringCheck(id: string): Promise<boolean> {
+    try {
+      const checks = await this.getRecurringChecks();
+      const filtered = checks.filter(c => c.id !== id);
+
+      if (filtered.length === checks.length) {
+        return false;
+      }
+
+      await atomicWriteFile(this.recurringChecksFile, JSON.stringify(filtered, null, 2));
+      return true;
+    } catch (error) {
+      this.logger.error('Error deleting recurring check', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Clear all persisted recurring checks.
+   */
+  async clearRecurringChecks(): Promise<void> {
+    try {
+      await atomicWriteFile(this.recurringChecksFile, JSON.stringify([], null, 2));
+    } catch (error) {
+      this.logger.error('Error clearing recurring checks', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  // One-Time Checks persistence
+  /**
+   * Get all persisted one-time checks.
+   *
+   * @returns Array of persisted ScheduledCheck entries
+   */
+  async getOneTimeChecks(): Promise<ScheduledCheck[]> {
+    try {
+      await this.ensureFile(this.oneTimeChecksFile, []);
+      const content = await fs.readFile(this.oneTimeChecksFile, 'utf-8');
+
+      if (!content.trim()) {
+        await atomicWriteFile(this.oneTimeChecksFile, JSON.stringify([], null, 2));
+        return [];
+      }
+
+      try {
+        return JSON.parse(content) as ScheduledCheck[];
+      } catch (parseError) {
+        this.logger.error('Error parsing one-time checks JSON, resetting file', {
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+        });
+        await atomicWriteFile(this.oneTimeChecksFile, JSON.stringify([], null, 2));
+        return [];
+      }
+    } catch (error) {
+      this.logger.error('Error reading one-time checks', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Save or update a one-time check entry on disk.
+   *
+   * @param check - The ScheduledCheck to persist
+   */
+  async saveOneTimeCheck(check: ScheduledCheck): Promise<void> {
+    try {
+      const checks = await this.getOneTimeChecks();
+      const existingIndex = checks.findIndex(c => c.id === check.id);
+
+      if (existingIndex >= 0) {
+        checks[existingIndex] = check;
+      } else {
+        checks.push(check);
+      }
+
+      await atomicWriteFile(this.oneTimeChecksFile, JSON.stringify(checks, null, 2));
+    } catch (error) {
+      this.logger.error('Error saving one-time check', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a persisted one-time check by ID.
+   *
+   * @param id - The check ID to delete
+   * @returns true if the check was found and deleted
+   */
+  async deleteOneTimeCheck(id: string): Promise<boolean> {
+    try {
+      const checks = await this.getOneTimeChecks();
+      const filtered = checks.filter(c => c.id !== id);
+
+      if (filtered.length === checks.length) {
+        return false;
+      }
+
+      await atomicWriteFile(this.oneTimeChecksFile, JSON.stringify(filtered, null, 2));
+      return true;
+    } catch (error) {
+      this.logger.error('Error deleting one-time check', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Clear all persisted one-time checks.
+   */
+  async clearOneTimeChecks(): Promise<void> {
+    try {
+      await atomicWriteFile(this.oneTimeChecksFile, JSON.stringify([], null, 2));
+    } catch (error) {
+      this.logger.error('Error clearing one-time checks', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw error;
     }
   }

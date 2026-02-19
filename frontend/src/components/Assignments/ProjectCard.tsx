@@ -9,7 +9,7 @@ export const ProjectCard: React.FC<ProjectCardProps> = ({
   onOrchestratorClick,
   onUnassignTeam,
 }) => {
-  const projectTeams = teams.filter(team => team.currentProject === project.id);
+  const projectTeams = teams.filter(team => team.projectIds?.includes(project.id));
 
   return (
     <div key={project.id} className="assignment-card project-card">

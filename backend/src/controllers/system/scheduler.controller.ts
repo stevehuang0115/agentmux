@@ -4,10 +4,10 @@ import { ApiResponse } from '../../types/index.js';
 
 export async function scheduleCheck(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { targetSession, minutes, message, isRecurring, intervalMinutes } = req.body as any;
+    const { targetSession, minutes, message, isRecurring, intervalMinutes, maxOccurrences } = req.body as any;
     if (!targetSession || !minutes || !message) { res.status(400).json({ success: false, error: 'targetSession, minutes, and message are required' } as ApiResponse); return; }
     let checkId: string;
-    if (isRecurring && intervalMinutes) checkId = this.schedulerService.scheduleRecurringCheck(targetSession, intervalMinutes, message);
+    if (isRecurring && intervalMinutes) checkId = this.schedulerService.scheduleRecurringCheck(targetSession, intervalMinutes, message, 'progress-check', maxOccurrences);
     else checkId = this.schedulerService.scheduleCheck(targetSession, minutes, message);
     res.status(201).json({ success: true, data: { checkId }, message: 'Check-in scheduled successfully' } as ApiResponse<{ checkId: string }>);
   } catch (error) {
@@ -35,5 +35,26 @@ export async function cancelScheduledCheck(this: ApiContext, req: Request, res: 
   } catch (error) {
     console.error('Error cancelling check:', error);
     res.status(500).json({ success: false, error: 'Failed to cancel check-in' } as ApiResponse);
+  }
+}
+
+/**
+ * Restores persisted scheduled checks (both recurring and one-time) after a restart.
+ *
+ * @param req - Request (no body required)
+ * @param res - Response with restore counts
+ */
+export async function restoreScheduledChecks(this: ApiContext, req: Request, res: Response): Promise<void> {
+  try {
+    const recurringCount = await this.schedulerService.restoreRecurringChecks();
+    const oneTimeCount = await this.schedulerService.restoreOneTimeChecks();
+    res.json({
+      success: true,
+      data: { recurringRestored: recurringCount, oneTimeRestored: oneTimeCount },
+      message: `Restored ${recurringCount} recurring and ${oneTimeCount} one-time checks`,
+    } as ApiResponse<{ recurringRestored: number; oneTimeRestored: number }>);
+  } catch (error) {
+    console.error('Error restoring scheduled checks:', error);
+    res.status(500).json({ success: false, error: 'Failed to restore scheduled checks' } as ApiResponse);
   }
 }

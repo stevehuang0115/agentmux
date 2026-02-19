@@ -70,7 +70,7 @@ describe('FactoryService', () => {
             data: [
               {
                 name: 'Team 1',
-                currentProject: 'Project A',
+                projectIds: ['Project A'],
                 members: [
                   {
                     id: 'member-1',
@@ -122,7 +122,7 @@ describe('FactoryService', () => {
             success: true,
             data: [{
               name: 'Team',
-              currentProject: 'Project',
+              projectIds: ['Project'],
               members: [{
                 id: '1',
                 name: 'Agent',
@@ -146,7 +146,7 @@ describe('FactoryService', () => {
             success: true,
             data: [{
               name: 'Team',
-              currentProject: 'Project',
+              projectIds: ['Project'],
               members: [{
                 id: '1',
                 name: 'Agent',
@@ -172,7 +172,7 @@ describe('FactoryService', () => {
             success: true,
             data: [{
               name: 'Team',
-              currentProject: 'Project',
+              projectIds: ['Project'],
               members: [{
                 id: '1',
                 name: 'Agent',
@@ -190,7 +190,7 @@ describe('FactoryService', () => {
       expect(result.agents[0].activity).toBeUndefined();
     });
 
-    it('should use team name when currentProject is missing', async () => {
+    it('should use team name when projectIds is missing', async () => {
       mockedAxios.get = vi.fn()
         .mockRejectedValueOnce(new Error('Not found'))
         .mockResolvedValueOnce({
@@ -214,7 +214,7 @@ describe('FactoryService', () => {
       expect(result.projects).toContain('My Team');
     });
 
-    it('should use Unassigned when both currentProject and name are missing', async () => {
+    it('should use Unassigned when both projectIds and name are missing', async () => {
       mockedAxios.get = vi.fn()
         .mockRejectedValueOnce(new Error('Not found'))
         .mockResolvedValueOnce({
@@ -244,7 +244,7 @@ describe('FactoryService', () => {
             success: true,
             data: [{
               name: 'Empty Team',
-              currentProject: 'Project',
+              projectIds: ['Project'],
             }],
           },
         });
@@ -262,7 +262,7 @@ describe('FactoryService', () => {
             success: true,
             data: [{
               name: 'Team',
-              currentProject: 'Project',
+              projectIds: ['Project'],
               members: [
                 { id: '1', name: 'A1', sessionName: 's1', agentStatus: 'active', workingStatus: 'in_progress' },
                 { id: '2', name: 'A2', sessionName: 's2', agentStatus: 'active', workingStatus: 'idle' },

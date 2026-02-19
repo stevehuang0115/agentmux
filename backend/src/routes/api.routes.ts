@@ -19,6 +19,7 @@ import { createSlackThreadRouter } from '../controllers/slack/slack-thread.route
 import { createMemoryRouter } from '../controllers/memory/memory.routes.js';
 import { createQualityGateRouter } from './modules/quality-gate.routes.js';
 import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
+import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -75,6 +76,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Marketplace routes for browsing, installing, and managing marketplace items
   router.use('/marketplace', createMarketplaceRouter());
+
+  // Knowledge document routes for company knowledge management
+  router.use('/knowledge', createKnowledgeRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

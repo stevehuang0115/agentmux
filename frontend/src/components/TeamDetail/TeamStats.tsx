@@ -69,7 +69,7 @@ export const TeamStats: React.FC<TeamStatsExtendedProps> = ({
       return (
         <div className="project-edit-container" style={{ minWidth: '200px' }}>
           <select
-            value={team?.currentProject || ''}
+            value={team?.projectIds?.[0] || ''}
             onChange={(e) => handleProjectSelect(e.target.value || null)}
             disabled={loading}
             autoFocus

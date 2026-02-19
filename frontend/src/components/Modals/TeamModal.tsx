@@ -156,7 +156,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
     if (team) {
       setFormData({
         name: team.name || '',
-        projectPath: team.currentProject || team.projectPath || '',
+        projectPath: team.projectIds?.[0] || team.projectPath || '',
       });
       if (team.members && Array.isArray(team.members)) {
         // Ensure all members have runtimeType, avatar, skillOverrides, and excludedRoleSkills (for backward compatibility)
@@ -297,7 +297,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
           skillOverrides: member.skillOverrides || [],
           excludedRoleSkills: member.excludedRoleSkills || []
         })),
-        currentProject: formData.projectPath || undefined, // Send project ID, not path
+        projectIds: formData.projectPath ? [formData.projectPath] : [], // Send project ID, not path
         projectPath: selectedProject ? selectedProject.path : undefined, // Keep path for backend processing
       };
       await onSubmit(submitData);

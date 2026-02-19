@@ -9,6 +9,110 @@ import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.servi
 import { CREWLY_CONSTANTS } from '../../constants.js';
 
 /**
+ * Creates a new task MD file in the project's .crewly/tasks/ directory.
+ * Optionally assigns it immediately if a sessionName is provided.
+ *
+ * @param req - Request containing projectPath, task, priority, sessionName (optional), milestone (optional)
+ * @param res - Response with success status, created task path, and status
+ */
+export async function createTask(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const {
+			projectPath,
+			task,
+			priority = 'medium',
+			sessionName,
+			milestone = 'delegated',
+		} = req.body;
+
+		if (!projectPath) {
+			res.status(400).json({ success: false, error: 'projectPath is required' });
+			return;
+		}
+
+		if (!task) {
+			res.status(400).json({ success: false, error: 'task is required' });
+			return;
+		}
+
+		// Determine initial status folder based on whether an assignee is provided
+		const statusFolder = sessionName ? 'in_progress' : 'open';
+		const tasksDir = join(projectPath, '.crewly', 'tasks', milestone, statusFolder);
+
+		// Ensure directory exists
+		await ensureDirectoryExists(tasksDir);
+
+		// Generate sanitized filename from task description
+		const sanitizedName = task
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '_')
+			.replace(/^_|_$/g, '')
+			.substring(0, 80);
+		const timestamp = Date.now();
+		const fileName = `${sanitizedName}_${timestamp}.md`;
+		const taskPath = join(tasksDir, fileName);
+
+		// Build task markdown content
+		let taskContent = `# ${task}\n\n## Task Information\n- **Priority**: ${priority}\n- **Milestone**: ${milestone}\n- **Created at**: ${new Date().toISOString()}\n- **Status**: ${statusFolder === 'in_progress' ? 'In Progress' : 'Open'}\n`;
+
+		if (sessionName) {
+			taskContent += `\n## Assignment Information\n- **Assigned to**: ${sessionName}\n- **Assigned at**: ${new Date().toISOString()}\n- **Status**: In Progress\n`;
+		}
+
+		taskContent += `\n## Task Description\n\n${task}\n`;
+
+		await writeFile(taskPath, taskContent, 'utf-8');
+
+		// If assigned, track via TaskTrackingService
+		if (sessionName) {
+			try {
+				const projects = await this.storageService.getProjects();
+				const project = projects.find(p => projectPath.startsWith(p.path));
+				if (project) {
+					const teams = await this.storageService.getTeams();
+					let teamId = '';
+					let memberId = '';
+					for (const team of teams) {
+						const member = team.members.find(m => m.sessionName === sessionName);
+						if (member) {
+							teamId = team.id;
+							memberId = member.id;
+							break;
+						}
+					}
+					if (teamId) {
+						await this.taskTrackingService.assignTask(
+							project.id,
+							teamId,
+							taskPath,
+							task,
+							'delegated',
+							memberId,
+							sessionName
+						);
+					}
+				}
+			} catch (trackingError) {
+				console.log('[TASK-MGMT] Warning: Failed to track task assignment:', trackingError);
+				// Non-fatal - the file was still created
+			}
+		}
+
+		res.json({
+			success: true,
+			message: `Task file created: ${fileName}`,
+			taskPath,
+			fileName,
+			status: statusFolder,
+			milestone,
+		});
+	} catch (error) {
+		console.error('Error creating task:', error);
+		res.status(500).json({ success: false, error: 'Failed to create task' });
+	}
+}
+
+/**
  * Assigns a task to a team member by moving it from open/ to in_progress/ folder
  *
  * @param req - Request containing taskPath and memberId

@@ -329,6 +329,10 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'https://files.slack.com/F001',
+        url_private_download: 'https://files.slack.com/F001/download',
+      });
 
       const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
 
@@ -362,6 +366,10 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'https://files.slack.com/refreshed',
+        url_private_download: 'https://files.slack.com/refreshed/download',
+      });
 
       // Track concurrent calls to verify batching
       let activeConcurrent = 0;
@@ -411,6 +419,10 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'https://files.slack.com/refreshed',
+        url_private_download: 'https://files.slack.com/refreshed/download',
+      });
 
       const mockImgService = getSlackImageService();
       (mockImgService.downloadImage as jest.Mock)
@@ -438,6 +450,59 @@ describe('SlackOrchestratorBridge', () => {
       expect(mockImgService.downloadImage).toHaveBeenCalledTimes(3);
     });
 
+    it('should skip all downloads when files:read scope is missing', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockRejectedValue(
+        new Error('An API error occurred: missing_scope')
+      );
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'a.png', mimetype: 'image/png', filetype: 'png',
+          size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+
+      // Should skip all downloads — no images downloaded
+      expect(message.images).toBeUndefined();
+      // Should log a clear error about missing scope
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('files:read scope')
+      );
+      consoleSpy.mockRestore();
+    });
+
+    it('should continue with original URLs when getFileInfo fails for other reasons', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockRejectedValue(
+        new Error('file_not_found')
+      );
+
+      const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasImages: true,
+        files: [{ id: 'F001', name: 'a.png', mimetype: 'image/png', filetype: 'png',
+          size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
+      };
+
+      await downloadMessageImages(message);
+
+      // Should still attempt download with original URLs
+      const mockImgService = getSlackImageService();
+      expect(mockImgService.downloadImage).toHaveBeenCalled();
+    });
+
     it('should skip image download when no bot token', async () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
@@ -463,6 +528,9 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'x', url_private_download: 'x',
+      });
       const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
 
       const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
@@ -496,6 +564,9 @@ describe('SlackOrchestratorBridge', () => {
       const bridge = new SlackOrchestratorBridge();
       const slackService = (bridge as any).slackService;
       jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'x', url_private_download: 'x',
+      });
       const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
 
       const downloadMessageImages = (bridge as any).downloadMessageImages.bind(bridge);
@@ -889,6 +960,152 @@ describe('SlackOrchestratorBridge', () => {
 
       const response = await messagePromise;
       expect(response).toContain('Failed to enqueue message');
+    });
+  });
+
+  describe('sendSlackResponse fallback', () => {
+    let bridge: SlackOrchestratorBridge;
+    let slackService: any;
+    let sendMessageSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Use skillDeliveryWaitMs: 0 to avoid real 10s waits in tests
+      bridge = new SlackOrchestratorBridge({ skillDeliveryWaitMs: 0 });
+      slackService = (bridge as any).slackService;
+      sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+    });
+
+    const makeMessage = (overrides: Partial<SlackIncomingMessage> = {}): SlackIncomingMessage => ({
+      id: 'msg-1',
+      type: 'message',
+      text: 'hello',
+      userId: 'U123',
+      channelId: 'C123',
+      ts: '1707.001',
+      teamId: 'T1',
+      eventTs: '1707.001',
+      ...overrides,
+    });
+
+    it('should skip sending when response is empty', async () => {
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(makeMessage(), '');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+
+    it('should skip sending when response is whitespace-only', async () => {
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(makeMessage(), '   \n  ');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+
+    it('should skip fallback when skill already delivered', async () => {
+      const message = makeMessage();
+      const threadTs = message.threadTs || message.ts;
+
+      // Mark as delivered by skill before sendSlackResponse checks
+      bridge.markDeliveredBySkill(message.channelId, threadTs);
+
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(message, 'Hello from orchestrator');
+
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+
+    it('should send fallback when skill did not deliver', async () => {
+      const message = makeMessage();
+
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(message, 'Hello from orchestrator');
+
+      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).toHaveBeenCalledWith({
+        channelId: 'C123',
+        text: 'Hello from orchestrator',
+        threadTs: '1707.001',
+      });
+    });
+
+    it('should use threadTs when present on original message', async () => {
+      const message = makeMessage({ threadTs: '1700.000', ts: '1707.001' });
+
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(message, 'Reply in thread');
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ threadTs: '1700.000' })
+      );
+    });
+
+    it('should catch and log errors when fallback send fails', async () => {
+      sendMessageSpy.mockRejectedValue(new Error('Slack API error'));
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(makeMessage(), 'Will fail');
+
+      // Should not throw, error is caught internally
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[SlackBridge] Fallback Slack delivery failed',
+        expect.objectContaining({ error: 'Slack API error' })
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('should record thread reply regardless of delivery path', async () => {
+      const mockThreadStore = {
+        appendOrchestratorReply: jest.fn().mockResolvedValue(undefined),
+        getThreadFilePath: jest.fn(),
+      };
+      bridge.setSlackThreadStore(mockThreadStore as any);
+
+      // Mark as delivered by skill — fallback should be skipped but thread record still saved
+      const message = makeMessage();
+      bridge.markDeliveredBySkill(message.channelId, message.ts);
+
+      const sendSlackResponse = (bridge as any).sendSlackResponse.bind(bridge);
+      await sendSlackResponse(message, 'Recorded response');
+
+      expect(mockThreadStore.appendOrchestratorReply).toHaveBeenCalledWith(
+        'C123',
+        '1707.001',
+        'Recorded response'
+      );
+      // Fallback send should be skipped
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markDeliveredBySkill / wasDeliveredBySkill', () => {
+    it('should mark and detect delivery', () => {
+      const bridge = new SlackOrchestratorBridge();
+      bridge.markDeliveredBySkill('C123', '1707.001');
+      expect(bridge.wasDeliveredBySkill('C123', '1707.001')).toBe(true);
+    });
+
+    it('should consume the delivery flag on check', () => {
+      const bridge = new SlackOrchestratorBridge();
+      bridge.markDeliveredBySkill('C123', '1707.001');
+      bridge.wasDeliveredBySkill('C123', '1707.001'); // consumes
+      expect(bridge.wasDeliveredBySkill('C123', '1707.001')).toBe(false);
+    });
+
+    it('should return false for undelivered threads', () => {
+      const bridge = new SlackOrchestratorBridge();
+      expect(bridge.wasDeliveredBySkill('C999', '1707.999')).toBe(false);
+    });
+
+    it('should evict oldest entries when exceeding max', () => {
+      const bridge = new SlackOrchestratorBridge();
+      // Add MAX_SKILL_DELIVERY_RECORDS + 1 entries
+      for (let i = 0; i <= 50; i++) {
+        bridge.markDeliveredBySkill(`C${i}`, `ts-${i}`);
+      }
+      // First entry should have been evicted
+      expect(bridge.wasDeliveredBySkill('C0', 'ts-0')).toBe(false);
+      // Recent entry should still exist
+      expect(bridge.wasDeliveredBySkill('C50', 'ts-50')).toBe(true);
     });
   });
 });

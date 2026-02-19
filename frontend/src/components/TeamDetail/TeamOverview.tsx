@@ -62,13 +62,13 @@ export const TeamOverview: React.FC<TeamOverviewProps> = ({
   isStartingTeam,
 }) => {
   const [showProjectSelector, setShowProjectSelector] = useState(false);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.currentProject || '');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(team?.projectIds?.[0] || '');
   const { projectOptions } = useProjects();
   const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
 
   useEffect(() => {
-    setSelectedProjectId(team?.currentProject || '');
-  }, [team?.currentProject]);
+    setSelectedProjectId(team?.projectIds?.[0] || '');
+  }, [team?.projectIds]);
 
   /**
    * Handle project selection change

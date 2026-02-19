@@ -168,8 +168,8 @@ export const Dashboard: React.FC = () => {
       if (projectsResponse.data.success && teamsResponse.data.success) {
         const teamsMapping = projectList.reduce((acc, project) => {
           const assignedTeams = migratedTeams.filter(team => {
-            const matchesById = team.currentProject === project.id;
-            const matchesByName = team.currentProject === project.name;
+            const matchesById = team.projectIds?.includes(project.id);
+            const matchesByName = team.projectIds?.includes(project.name);
             return matchesById || matchesByName;
           });
           acc[project.id] = assignedTeams;

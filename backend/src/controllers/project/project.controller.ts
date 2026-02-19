@@ -443,7 +443,9 @@ export async function assignTeamsToProject(
 				for (const teamId of teamIds) {
 					const team = teams.find((t) => t.id === teamId) as MutableTeam | undefined;
 					if (team) {
-						team.currentProject = id;
+						if (!team.projectIds.includes(id)) {
+							team.projectIds.push(id);
+						}
 						team.updatedAt = new Date().toISOString();
 						await this.storageService.saveTeam(team);
 						assignedTeamDetails.push({ team, role });
@@ -528,7 +530,7 @@ export async function unassignTeamFromProject(
 			res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse);
 			return;
 		}
-		if (team.currentProject !== projectId) {
+		if (!team.projectIds.includes(projectId)) {
 			res.status(400).json({
 				success: false,
 				error: 'Team is not assigned to this project',
@@ -538,7 +540,7 @@ export async function unassignTeamFromProject(
 		const projectModel = ProjectModel.fromJSON(project);
 		projectModel.unassignTeam(teamId);
 		await this.storageService.saveProject(projectModel.toJSON());
-		team.currentProject = undefined;
+		team.projectIds = team.projectIds.filter((pid: string) => pid !== projectId);
 		team.updatedAt = new Date().toISOString();
 		await this.storageService.saveTeam(team);
 		try {
@@ -886,11 +888,11 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 		console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages before deleting project ${id}`);
 
 		const teams = await this.storageService.getTeams();
-		const activeTeams = teams.filter((t) => t.currentProject === id);
+		const activeTeams = teams.filter((t) => t.projectIds.includes(id));
 		if (activeTeams.length > 0) {
 			for (const team of activeTeams) {
 				const teamModel = (await import('../../models/index.js')).TeamModel.fromJSON(team);
-				teamModel.currentProject = undefined;
+				teamModel.unassignFromProject(id);
 				await this.storageService.saveTeam(teamModel.toJSON());
 			}
 		}

@@ -30,11 +30,11 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
       setLoading(true);
       const teams = await apiService.getTeams();
       setAllTeams(teams);
-      
+
       // Pre-select teams that are already assigned to this project
       const assignedTeamIds = new Set(
         teams
-          .filter(team => team.currentProject === project.id)
+          .filter(team => team.projectIds?.includes(project.id))
           .map(team => team.id)
       );
       setSelectedTeams(assignedTeamIds);
@@ -63,7 +63,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
 
       // Call the API to assign teams to project
       await apiService.assignTeamsToProject(project.id, Array.from(selectedTeams));
-      
+
       onAssignmentComplete();
       onClose();
     } catch (err) {
@@ -134,27 +134,24 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
                 <h3>Available Teams ({allTeams.length})</h3>
                 <p>Selected: {selectedTeams.size} team{selectedTeams.size !== 1 ? 's' : ''}</p>
               </div>
-              
+
               <div className="teams-grid">
                 {allTeams.map((team) => {
                   const isSelected = selectedTeams.has(team.id);
-                  const isCurrentlyAssigned = team.currentProject === project.id;
-                  const isAssignedToOtherProject = team.currentProject && team.currentProject !== project.id;
-                  
+                  const isCurrentlyAssigned = team.projectIds?.includes(project.id);
+
                   return (
                     <div
                       key={team.id}
-                      className={`team-selection-card ${isSelected ? 'selected' : ''} ${
-                        isAssignedToOtherProject ? 'unavailable' : ''
-                      }`}
-                      onClick={() => !isAssignedToOtherProject && handleTeamToggle(team.id)}
+                      className={`team-selection-card ${isSelected ? 'selected' : ''}`}
+                      onClick={() => handleTeamToggle(team.id)}
                     >
                       {isSelected && (
                         <div className="selection-indicator">
                           <Check size={16} />
                         </div>
                       )}
-                      
+
                       <div className="team-card-header">
                         <div className="team-info">
                           <h4 className="team-name">{team.name}</h4>
@@ -162,7 +159,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
                             <p className="team-description">{team.description}</p>
                           )}
                         </div>
-                        
+
                         <div className="team-meta">
                           <span className="team-meta-info">
                             {new Date(team.updatedAt).toLocaleDateString()}
@@ -175,7 +172,7 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
                           <Users size={14} />
                           <span>{team.members?.length || 0} member{(team.members?.length || 0) !== 1 ? 's' : ''}</span>
                         </div>
-                        
+
                         {team.members && team.members.length > 0 && (
                           <div className="member-roles">
                             {team.members.slice(0, 3).map((member, index) => (
@@ -199,12 +196,6 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
                           Currently assigned to this project
                         </div>
                       )}
-
-                      {isAssignedToOtherProject && (
-                        <div className="assignment-status other-project">
-                          Assigned to another project
-                        </div>
-                      )}
                     </div>
                   );
                 })}
@@ -217,8 +208,8 @@ export const TeamAssignmentModal: React.FC<TeamAssignmentModalProps> = ({
           <Button className="secondary-button" onClick={onClose} disabled={saving} variant="secondary">
             Cancel
           </Button>
-          <Button 
-            className="primary-button" 
+          <Button
+            className="primary-button"
             onClick={handleSave}
             disabled={saving || allTeams.length === 0}
             loading={saving}

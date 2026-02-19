@@ -617,7 +617,7 @@ describe('TeamModal Component', () => {
       await waitFor(() => {
         expect(defaultProps.onSubmit).toHaveBeenCalledWith(
           expect.objectContaining({
-            currentProject: 'project-1',
+            projectIds: ['project-1'],
             projectPath: '/path/to/frontend'
           })
         );
@@ -638,7 +638,7 @@ describe('TeamModal Component', () => {
       await waitFor(() => {
         expect(defaultProps.onSubmit).toHaveBeenCalledWith(
           expect.objectContaining({
-            currentProject: undefined,
+            projectIds: [],
             projectPath: undefined
           })
         );

@@ -93,7 +93,7 @@ function createTestApp() {
       updatedAt: new Date().toISOString()
     };
 
-    // Mock team updates with currentProject field
+    // Mock team updates with projectIds field
     const teams = [
       {
         id: 'team-123',
@@ -110,7 +110,7 @@ function createTestApp() {
             updatedAt: new Date().toISOString()
           }
         ],
-        currentProject: id, // This is the key field for assignments
+        projectIds: [id], // This is the key field for assignments
         status: 'idle',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -123,7 +123,7 @@ function createTestApp() {
       for (const teamId of teamIds as string[]) {
         const team = teams.find(t => t.id === teamId);
         if (team) {
-          team.currentProject = id; // Update the team object
+          team.projectIds = [id]; // Update the team object
           mockStorageService.saveTeam(team); // Actually call the mock
         }
       }
@@ -157,7 +157,7 @@ function createTestApp() {
             updatedAt: new Date().toISOString()
           }
         ],
-        currentProject: null, // Will be set when assigned
+        projectIds: [], // Will be set when assigned
         status: 'idle',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -302,7 +302,7 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
         'tester': ['team-456']
       });
       expect(response.body.data.assignedTeams).toHaveLength(1);
-      expect(response.body.data.assignedTeams[0].currentProject).toBe('test-project-1');
+      expect(response.body.data.assignedTeams[0].projectIds).toEqual(['test-project-1']);
     });
 
     test('should reject invalid teamAssignments format', async () => {
@@ -317,7 +317,7 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
       expect(response.body.error).toContain('teamAssignments must be an object');
     });
 
-    test('should update team currentProject field bidirectionally', async () => {
+    test('should update team projectIds field bidirectionally', async () => {
       const response = await request(app)
         .post('/api/projects/test-project-1/assign-teams')
         .send({
@@ -328,10 +328,10 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
         .expect(200);
 
       expect(response.body.success).toBe(true);
-      expect(response.body.data.assignedTeams[0].currentProject).toBe('test-project-1');
+      expect(response.body.data.assignedTeams[0].projectIds).toEqual(['test-project-1']);
       expect(mockStorageService.saveTeam).toHaveBeenCalledWith(
         expect.objectContaining({
-          currentProject: 'test-project-1'
+          projectIds: ['test-project-1']
         })
       );
     });
@@ -416,12 +416,12 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
         })
         .expect(200);
 
-      // The assignment page would filter projects based on teams.currentProject
-      const assignedTeams = teams.filter((team: any) => team.currentProject);
-      // After assignment, team should have currentProject set
+      // The assignment page would filter projects based on teams.projectIds
+      const assignedTeams = teams.filter((team: any) => team.projectIds && team.projectIds.length > 0);
+      // After assignment, team should have projectIds set
       // This tests the logic that the Assignment page uses
       expect(assignedTeams.length).toBe(0); // Before assignment
-      // After assignment API call, teams would have currentProject field
+      // After assignment API call, teams would have projectIds field
     });
   });
 
@@ -454,7 +454,7 @@ describe('Phase 8E UI/UX Fixes Integration Tests', () => {
         .expect(200);
 
       expect(assignResponse.body.success).toBe(true);
-      expect(assignResponse.body.data.assignedTeams[0].currentProject).toBe(project.id);
+      expect(assignResponse.body.data.assignedTeams[0].projectIds).toEqual([project.id]);
 
       // 4. Load project files (Phase 8E fix)
       const filesResponse = await request(app)

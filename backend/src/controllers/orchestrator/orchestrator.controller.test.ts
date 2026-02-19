@@ -158,13 +158,14 @@ describe('Orchestrator Handlers', () => {
             { agentStatus: 'active', name: 'Alice' },
             { agentStatus: 'inactive', name: 'Bob' }
           ],
-          currentProject: 'Test Project'
+          projectIds: ['Test Project']
         },
         {
           name: 'QA Team',
           members: [
             { agentStatus: 'activating', name: 'Charlie' }
-          ]
+          ],
+          projectIds: []
         }
       ];
 

@@ -89,13 +89,13 @@ export const TeamDetail: React.FC = () => {
   }, [handleTeamMemberStatusChange, handleOrchestratorStatusChange]);
 
   useEffect(() => {
-    if (team?.currentProject) {
-      fetchProjectData(team.currentProject);
+    if (team?.projectIds?.length > 0) {
+      fetchProjectData(team.projectIds[0]);
     } else {
       setProjectName(null);
       setProjectPath(null);
     }
-  }, [team?.currentProject]);
+  }, [team?.projectIds]);
 
   // Terminal output handled by centralized WebSocket system
 
@@ -567,7 +567,7 @@ export const TeamDetail: React.FC = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          currentProject: projectId
+          projectIds: projectId ? [projectId] : []
         }),
       });
 

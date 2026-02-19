@@ -227,6 +227,51 @@ describe('SlackService', () => {
     });
   });
 
+  describe('getFileInfo', () => {
+    it('should throw when client is not initialized', async () => {
+      const service = new SlackService();
+      await expect(service.getFileInfo('F001')).rejects.toThrow(
+        'Slack client not initialized'
+      );
+    });
+
+    it('should return file URLs from files.info API', async () => {
+      const service = new SlackService();
+      const mockFilesInfo = jest.fn().mockResolvedValue({
+        file: {
+          url_private: 'https://files.slack.com/F001',
+          url_private_download: 'https://files.slack.com/F001/download',
+        },
+      });
+      (service as any).client = {
+        files: { info: mockFilesInfo, uploadV2: jest.fn() },
+        chat: { postMessage: jest.fn(), update: jest.fn() },
+        reactions: { add: jest.fn() },
+        users: { info: jest.fn() },
+      };
+
+      const result = await service.getFileInfo('F001');
+      expect(result.url_private).toBe('https://files.slack.com/F001');
+      expect(result.url_private_download).toBe('https://files.slack.com/F001/download');
+      expect(mockFilesInfo).toHaveBeenCalledWith({ file: 'F001' });
+    });
+
+    it('should return empty strings when file info has no URLs', async () => {
+      const service = new SlackService();
+      const mockFilesInfo = jest.fn().mockResolvedValue({ file: {} });
+      (service as any).client = {
+        files: { info: mockFilesInfo, uploadV2: jest.fn() },
+        chat: { postMessage: jest.fn(), update: jest.fn() },
+        reactions: { add: jest.fn() },
+        users: { info: jest.fn() },
+      };
+
+      const result = await service.getFileInfo('F001');
+      expect(result.url_private).toBe('');
+      expect(result.url_private_download).toBe('');
+    });
+  });
+
   describe('uploadImage', () => {
     it('should throw when client is not initialized', async () => {
       const service = new SlackService();
@@ -333,6 +378,52 @@ describe('SlackService', () => {
       // No info
       expect(extractRetryAfterMs({})).toBeNull();
       expect(extractRetryAfterMs(null)).toBeNull();
+    });
+  });
+
+  describe('setupConnectionMonitoring', () => {
+    it('should not throw when receiver is not accessible', () => {
+      const service = new SlackService();
+      // setupConnectionMonitoring is private, but we test it via initialize path
+      // When app is null, it should not throw
+      const setup = (service as any).setupConnectionMonitoring?.bind(service);
+      if (setup) {
+        expect(() => setup()).not.toThrow();
+      }
+    });
+
+    it('should update status on simulated disconnect/reconnect events', () => {
+      const service = new SlackService();
+      const { EventEmitter } = require('events');
+      const mockSocketClient = new EventEmitter();
+
+      // Inject a fake app with a receiver that has a client
+      (service as any).app = {
+        receiver: { client: mockSocketClient },
+        message: jest.fn(),
+        event: jest.fn(),
+        error: jest.fn(),
+        start: jest.fn(),
+        stop: jest.fn(),
+      };
+      (service as any).status.connected = true;
+
+      // Call the private method
+      (service as any).setupConnectionMonitoring();
+
+      // Simulate disconnect
+      mockSocketClient.emit('disconnected');
+      expect(service.isConnected()).toBe(false);
+      expect(service.getStatus().lastError).toBe('Socket Mode connection lost');
+
+      // Simulate reconnect
+      mockSocketClient.emit('connected');
+      expect(service.isConnected()).toBe(true);
+
+      // Simulate close event
+      (service as any).status.connected = true;
+      mockSocketClient.emit('close');
+      expect(service.isConnected()).toBe(false);
     });
   });
 

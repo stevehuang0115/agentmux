@@ -88,6 +88,14 @@ describe('SchedulerService', () => {
     mockStorageService = {
       saveDeliveryLog: jest.fn().mockResolvedValue(undefined),
       findMemberBySessionName: jest.fn().mockResolvedValue(null),
+      saveRecurringCheck: jest.fn().mockResolvedValue(undefined),
+      deleteRecurringCheck: jest.fn().mockResolvedValue(true),
+      clearRecurringChecks: jest.fn().mockResolvedValue(undefined),
+      getRecurringChecks: jest.fn().mockResolvedValue([]),
+      saveOneTimeCheck: jest.fn().mockResolvedValue(undefined),
+      deleteOneTimeCheck: jest.fn().mockResolvedValue(true),
+      clearOneTimeChecks: jest.fn().mockResolvedValue(undefined),
+      getOneTimeChecks: jest.fn().mockResolvedValue([]),
     } as any;
 
     // Mock AgentRegistrationService for reliable delivery
@@ -231,11 +239,21 @@ describe('SchedulerService', () => {
     it('should execute recurring checks multiple times', async () => {
       service.scheduleRecurringCheck('test-session', 1, 'Recurring message');
 
-      // Fast forward through multiple intervals - use Promise.resolve() to allow async operations to complete
-      jest.advanceTimersByTime(60000); // First execution
+      // First execution: advance timer, then flush microtasks to let async executeRecurring complete
+      jest.advanceTimersByTime(60000);
+      await Promise.resolve(); // enter async executeRecurring
+      await Promise.resolve(); // await executeCheck
+      await Promise.resolve(); // await resolveRuntimeType
+      await Promise.resolve(); // await sendMessageToAgent
+      await Promise.resolve(); // await saveDeliveryLog
+      await Promise.resolve(); // schedule next timeout
+
+      // Second execution
+      jest.advanceTimersByTime(60000);
       await Promise.resolve();
       await Promise.resolve();
-      jest.advanceTimersByTime(60000); // Second execution
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
@@ -249,9 +267,54 @@ describe('SchedulerService', () => {
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
       const enhanced = service.getEnhancedMessage(checkId);
       expect(enhanced?.recurring?.currentOccurrence).toBe(1);
+    });
+
+    it('should store maxOccurrences when provided', () => {
+      const checkId = service.scheduleRecurringCheck('test-session', 10, 'Limited message', 'progress-check', 5);
+
+      const enhanced = service.getEnhancedMessage(checkId);
+      expect(enhanced?.recurring?.maxOccurrences).toBe(5);
+    });
+
+    it('should stop after maxOccurrences is reached', async () => {
+      const checkId = service.scheduleRecurringCheck('test-session', 1, 'Limited message', 'progress-check', 2);
+
+      // Helper to flush microtasks after advancing timer
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 10; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      // First execution
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      // Second execution (should hit maxOccurrences and cancel)
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
+
+      // Third execution should NOT happen — check was auto-cancelled
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
+      expect(service.getStats().recurringChecks).toBe(0);
+    });
+
+    it('should leave maxOccurrences undefined when not provided', () => {
+      const checkId = service.scheduleRecurringCheck('test-session', 10, 'Unlimited message');
+
+      const enhanced = service.getEnhancedMessage(checkId);
+      expect(enhanced?.recurring?.maxOccurrences).toBeUndefined();
     });
   });
 
@@ -738,16 +801,325 @@ describe('SchedulerService', () => {
       jest.advanceTimersByTime(60000);
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
 
-      // Cancel the check
+      // Cancel the check (clears the recurring timeout)
       service.cancelCheck(checkId);
 
       // Fast forward and verify no more executions
       jest.advanceTimersByTime(60000);
       await Promise.resolve();
       await Promise.resolve();
+      await Promise.resolve();
 
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1); // Only the first execution
+    });
+
+    it('should track recurring timeouts and clear them on cancel', () => {
+      const checkId = service.scheduleRecurringCheck('test-session', 10, 'Test message');
+
+      // Verify the recurring timeout is tracked (access private map via any)
+      const recurringTimeouts = (service as any).recurringTimeouts as Map<string, NodeJS.Timeout>;
+      expect(recurringTimeouts.has(checkId)).toBe(true);
+
+      // Cancel and verify timeout is cleared
+      service.cancelCheck(checkId);
+      expect(recurringTimeouts.has(checkId)).toBe(false);
+    });
+
+    it('should clear recurring timeouts during cleanup', () => {
+      service.scheduleRecurringCheck('test-session', 10, 'Test message');
+      service.scheduleRecurringCheck('test-session', 20, 'Another message');
+
+      const recurringTimeouts = (service as any).recurringTimeouts as Map<string, NodeJS.Timeout>;
+      expect(recurringTimeouts.size).toBe(2);
+
+      service.cleanup();
+      expect(recurringTimeouts.size).toBe(0);
+    });
+
+    it('should schedule next execution only after delivery completes', async () => {
+      // Use a slow-resolving mock to simulate async delivery
+      let resolveDelivery: (() => void) | undefined;
+      mockAgentRegistrationService.sendMessageToAgent.mockImplementation(
+        () => new Promise<{ success: boolean }>((resolve) => {
+          resolveDelivery = () => resolve({ success: true });
+        })
+      );
+
+      const checkId = service.scheduleRecurringCheck('test-session', 1, 'Test message');
+      const recurringTimeouts = (service as any).recurringTimeouts as Map<string, NodeJS.Timeout>;
+
+      // Trigger first execution — the setTimeout fires the async callback
+      jest.advanceTimersByTime(60000);
+      // Flush microtasks to let async chain reach sendMessageToAgent
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+
+      // At this point delivery is in-flight and resolveDelivery should be assigned
+      expect(resolveDelivery).toBeDefined();
+
+      // Resolve the delivery
+      resolveDelivery!();
+      // Flush microtasks to let the rest of the chain complete
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+
+      // After delivery completes, the next timeout should be scheduled
+      expect(recurringTimeouts.has(checkId)).toBe(true);
+    });
+  });
+
+  describe('persistence', () => {
+    it('should save recurring check to disk when scheduling', async () => {
+      const checkId = service.scheduleRecurringCheck('session-1', 10, 'Recurring message');
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.saveRecurringCheck).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkId,
+          targetSession: 'session-1',
+          message: 'Recurring message',
+          intervalMinutes: 10,
+          isRecurring: true,
+        })
+      );
+    });
+
+    it('should delete recurring check from disk when cancelling', async () => {
+      const checkId = service.scheduleRecurringCheck('session-1', 10, 'Recurring message');
+
+      service.cancelCheck(checkId);
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.deleteRecurringCheck).toHaveBeenCalledWith(checkId);
+    });
+
+    it('should clear persisted recurring checks during cleanup', async () => {
+      service.scheduleRecurringCheck('session-1', 10, 'Message');
+
+      service.cleanup();
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.clearRecurringChecks).toHaveBeenCalled();
+    });
+
+    it('should restore recurring checks from disk', async () => {
+      const persistedChecks = [
+        {
+          id: 'restored-1',
+          targetSession: 'session-1',
+          message: 'Restored message',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 15,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'restored-2',
+          targetSession: 'session-2',
+          message: 'Another restored',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 30,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      mockStorageService.getRecurringChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(2);
+      expect(service.getStats().recurringChecks).toBe(2);
+
+      // Verify enhanced messages are created
+      const enhanced1 = service.getEnhancedMessage('restored-1');
+      expect(enhanced1).toBeDefined();
+      expect(enhanced1?.sessionName).toBe('session-1');
+      expect(enhanced1?.recurring?.interval).toBe(15);
+
+      const enhanced2 = service.getEnhancedMessage('restored-2');
+      expect(enhanced2).toBeDefined();
+      expect(enhanced2?.sessionName).toBe('session-2');
+    });
+
+    it('should skip non-recurring entries when restoring', async () => {
+      const persistedChecks = [
+        {
+          id: 'valid-1',
+          targetSession: 'session-1',
+          message: 'Valid',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 15,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'invalid-1',
+          targetSession: 'session-2',
+          message: 'Not recurring',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: undefined,
+          isRecurring: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      mockStorageService.getRecurringChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(1);
+      expect(service.getStats().recurringChecks).toBe(1);
+    });
+
+    it('should return 0 when no persisted checks exist', async () => {
+      mockStorageService.getRecurringChecks.mockResolvedValue([]);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(0);
+    });
+
+    it('should handle restore errors gracefully', async () => {
+      mockStorageService.getRecurringChecks.mockRejectedValue(new Error('Disk read failed'));
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Failed to restore recurring checks',
+        expect.objectContaining({ error: 'Disk read failed' })
+      );
+    });
+
+    it('should save one-time check to disk when scheduling', async () => {
+      const checkId = service.scheduleCheck('session-1', 5, 'One-time message');
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.saveOneTimeCheck).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: checkId,
+          targetSession: 'session-1',
+          message: 'One-time message',
+          isRecurring: false,
+        })
+      );
+    });
+
+    it('should delete one-time check from disk after execution', async () => {
+      const checkId = service.scheduleCheck('session-1', 1, 'One-time message');
+
+      jest.advanceTimersByTime(60000);
+      await jest.runAllTimersAsync();
+
+      expect(mockStorageService.deleteOneTimeCheck).toHaveBeenCalledWith(checkId);
+    });
+
+    it('should delete one-time check from disk when cancelling', async () => {
+      const checkId = service.scheduleCheck('session-1', 5, 'One-time message');
+
+      service.cancelCheck(checkId);
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.deleteOneTimeCheck).toHaveBeenCalledWith(checkId);
+    });
+
+    it('should clear persisted one-time checks during cleanup', async () => {
+      service.scheduleCheck('session-1', 5, 'Message');
+
+      service.cleanup();
+
+      // Allow the fire-and-forget .catch() chain to resolve
+      await Promise.resolve();
+
+      expect(mockStorageService.clearOneTimeChecks).toHaveBeenCalled();
+    });
+
+    it('should restore one-time checks from disk', async () => {
+      const futureTime = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+      const persistedChecks = [
+        {
+          id: 'ot-1',
+          targetSession: 'session-1',
+          message: 'Restored one-time',
+          scheduledFor: futureTime.toISOString(),
+          isRecurring: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      mockStorageService.getOneTimeChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(1);
+      expect(service.getStats().oneTimeChecks).toBe(1);
+
+      const enhanced = service.getEnhancedMessage('ot-1');
+      expect(enhanced).toBeDefined();
+      expect(enhanced?.sessionName).toBe('session-1');
+    });
+
+    it('should skip stale one-time checks when restoring', async () => {
+      const pastTime = new Date(Date.now() - 10 * 60 * 1000); // 10 minutes ago
+      const persistedChecks = [
+        {
+          id: 'stale-1',
+          targetSession: 'session-1',
+          message: 'Stale check',
+          scheduledFor: pastTime.toISOString(),
+          isRecurring: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      mockStorageService.getOneTimeChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(0);
+      expect(mockStorageService.deleteOneTimeCheck).toHaveBeenCalledWith('stale-1');
+    });
+
+    it('should return 0 when no persisted one-time checks exist', async () => {
+      mockStorageService.getOneTimeChecks.mockResolvedValue([]);
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(0);
+    });
+
+    it('should handle restore one-time check errors gracefully', async () => {
+      mockStorageService.getOneTimeChecks.mockRejectedValue(new Error('Disk read failed'));
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(0);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Failed to restore one-time checks',
+        expect.objectContaining({ error: 'Disk read failed' })
+      );
+    });
+
+    it('should not call save for non-recurring checks via saveRecurringCheck', async () => {
+      service.scheduleCheck('session-1', 5, 'One-time message');
+
+      await Promise.resolve();
+
+      expect(mockStorageService.saveRecurringCheck).not.toHaveBeenCalled();
     });
   });
 

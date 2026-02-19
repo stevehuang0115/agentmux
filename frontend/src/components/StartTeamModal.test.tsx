@@ -83,12 +83,12 @@ const mockTeam = {
     { id: 'member-1', name: 'John Doe', role: 'Developer' },
     { id: 'member-2', name: 'Jane Smith', role: 'Designer' }
   ],
-  currentProject: null
+  projectIds: []
 };
 
 const mockTeamAssigned = {
   ...mockTeam,
-  currentProject: 'project-1'
+  projectIds: ['project-1']
 };
 
 const mockProjects = [
@@ -466,7 +466,7 @@ describe('StartTeamModal Component', () => {
     it('should show "Unknown Project" for assigned team with missing project', async () => {
       const teamWithUnknownProject = {
         ...mockTeam,
-        currentProject: 'non-existent-project'
+        projectIds: ['non-existent-project']
       };
 
       await act(async () => {

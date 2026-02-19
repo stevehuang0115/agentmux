@@ -94,7 +94,7 @@ const mockTeams = [
     id: 'team-1',
     name: 'Frontend Team',
     description: 'Frontend development team',
-    currentProject: 'project-1',
+    projectIds: ['project-1'],
     status: 'active',
     members: [
       {
@@ -117,7 +117,7 @@ const mockTeams = [
     id: 'team-2',
     name: 'Backend Team',
     description: 'Backend development team',
-    currentProject: null,
+    projectIds: [],
     status: 'inactive',
     members: [
       {

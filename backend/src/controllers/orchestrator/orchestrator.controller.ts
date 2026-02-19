@@ -76,7 +76,7 @@ export async function executeOrchestratorCommand(
 					name: team.name,
 					status: computedStatus,
 					members: team.members.length,
-					project: (team as any).currentProject || 'None',
+					project: (team as any).projectIds?.length ? (team as any).projectIds.join(', ') : 'None',
 				};
 			});
 			output = `Team Status Report:\n${teamStatuses

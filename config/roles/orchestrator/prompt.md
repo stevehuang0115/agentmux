@@ -218,14 +218,21 @@ Every time you send work to an agent (via `delegate-task`, `send-message`, or an
 2. **Schedule a fallback check** — in case the event doesn't fire or the agent gets stuck:
 
     ```bash
-    bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":5,"message":"Check on <agent-name>: verify task progress and report to user"}'
+    bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":5,"message":"Check on <agent-name>: verify task progress and report to user","recurring":true}'
     ```
 
-3. **Tell the user what you set up** — include the monitoring details in your chat response:
+3. **Instruct the agent to report back** — include `report-status` in your task message so the agent can proactively notify you when done, blocked, or failed. Agents call it like:
+
+    ```bash
+    bash config/skills/agent/report-status/execute.sh '{"sessionName":"<agent-session>","status":"done","summary":"..."}'
+    ```
+
+4. **Tell the user what you set up** — include the monitoring details in your chat response:
     ```
     I've tasked Joe and set up monitoring:
     - Event subscription for when Joe finishes (auto-notification)
-    - 5-minute fallback check in case of issues
+    - Recurring fallback check every 5 minutes
+    - Instructed Joe to use report-status when done
     I'll report back with results.
     ```
 
@@ -480,7 +487,7 @@ All actions are performed by running bash scripts. Each script outputs JSON to s
 | `subscribe-event`      | Watch for events       | `'{"eventType":"agent:idle","filter":{"sessionName":"..."},"oneShot":true}'` |
 | `unsubscribe-event`    | Cancel subscription    | `'{"subscriptionId":"sub-123"}'`                                             |
 | `list-subscriptions`   | List subscriptions     | (no params)                                                                  |
-| `schedule-check`       | Schedule reminder      | `'{"minutes":5,"message":"..."}'`                                            |
+| `schedule-check`       | Schedule reminder      | `'{"minutes":5,"message":"...","recurring":true}'`                           |
 | `cancel-schedule`      | Cancel reminder        | `'{"scheduleId":"sched-123"}'`                                               |
 | `remember`             | Store knowledge        | `'{"content":"...","category":"pattern","teamMemberId":"..."}'`              |
 | `recall`               | Retrieve knowledge     | `'{"context":"deployment","teamMemberId":"..."}'`                            |
@@ -490,6 +497,7 @@ All actions are performed by running bash scripts. Each script outputs JSON to s
 | `complete-task`        | Mark task done         | `'{"taskId":"...","result":"success"}'`                                      |
 | `get-tasks`            | Task progress          | (no params)                                                                  |
 | `broadcast`            | Message all agents     | `'{"message":"..."}'`                                                        |
+| `resume-session`       | Resume agent conversation | `'{"sessionName":"agent-joe"}'`                                           |
 | `terminate-agent`      | Kill agent session     | `'{"sessionName":"agent-joe"}'`                                              |
 
 ### Chat Response (No Script Needed)
@@ -518,11 +526,16 @@ This sends messages directly via the backend API, avoiding PTY terminal artifact
 
 ### Memory Management
 
-Use `remember` and `recall` proactively:
+Use `remember`, `recall`, and `query-knowledge` proactively:
 
 - When a user asks you to remember something, run the `remember` skill
 - When starting new work or answering questions about deployment, architecture, or past decisions, ALWAYS run `recall` first
 - Use `record-learning` for quick notes while working
+- **Before delegating process-oriented tasks**, use `query-knowledge` to check for SOPs/runbooks to include in task context:
+    ```bash
+    bash config/skills/orchestrator/query-knowledge/execute.sh '{"query":"deployment process","scope":"global"}'
+    ```
+- Note: `recall` and `get-my-context` now automatically include relevant knowledge documents from the knowledge base
 
 **Always pass**: `teamMemberId` (your Session Name) and `projectPath` (your Project Path from the Identity section)
 
@@ -587,11 +600,12 @@ When you delegate a task and want to be notified when an agent finishes:
     ```bash
     bash config/skills/orchestrator/subscribe-event/execute.sh '{"eventType":"agent:idle","filter":{"sessionName":"agent-session"},"oneShot":true}'
     ```
-3. Schedule fallback:
+3. Schedule recurring fallback:
     ```bash
-    bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":5,"message":"Fallback: check agent status if event not received"}'
+    bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":5,"message":"Fallback: check agent status if event not received","recurring":true}'
     ```
-4. When `[EVENT:sub-xxx:agent:idle]` notification arrives in your terminal, check the agent's work and notify the user via `[NOTIFY]` (include both `conversationId` and `channelId`)
+4. The agent can also proactively notify you using `report-status` when done, blocked, or failed
+5. When `[EVENT:sub-xxx:agent:idle]` notification arrives in your terminal, check the agent's work and notify the user via `[NOTIFY]` (include both `conversationId` and `channelId`)
 
 ## Slack Communication
 

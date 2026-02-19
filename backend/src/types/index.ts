@@ -23,7 +23,7 @@ export interface Team {
   name: string;
   description?: string;
   members: TeamMember[];
-  currentProject?: string;
+  projectIds: string[];
   createdAt: string;
   updatedAt: string;
 }

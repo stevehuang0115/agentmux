@@ -41,6 +41,8 @@ export const ENV_CONSTANTS = {
 	CREWLY_ROLE: 'CREWLY_ROLE',
 	/** Base URL for the Crewly backend API (used by orchestrator bash skills) */
 	CREWLY_API_URL: 'CREWLY_API_URL',
+	/** Gemini API key for embedding-based knowledge search */
+	GEMINI_API_KEY: 'GEMINI_API_KEY',
 } as const;
 
 // Agent-specific timeout values (in milliseconds)
@@ -328,6 +330,16 @@ export const SLACK_THREAD_CONSTANTS = {
 } as const;
 
 /**
+ * Constants for Slack bridge fallback delivery.
+ * When the reply-slack skill doesn't deliver within the wait window,
+ * the bridge sends the response directly as a fallback.
+ */
+export const SLACK_BRIDGE_CONSTANTS = {
+	/** Time to wait for the reply-slack skill to deliver before fallback (ms) */
+	SKILL_DELIVERY_WAIT_MS: 10_000,
+} as const;
+
+/**
  * Constants for NOTIFY Slack delivery reconciliation.
  * Used by NotifyReconciliationService to retry failed Slack deliveries
  * using persisted chat messages as the source of truth.
@@ -437,8 +449,25 @@ export const SLACK_IMAGE_CONSTANTS = {
 	TEMP_DIR: 'tmp/slack-images',
 	/** Maximum allowed file size for image downloads (20 MB) */
 	MAX_FILE_SIZE: 20 * 1024 * 1024,
-	/** Supported image MIME types for download */
-	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'] as const,
+	/** Supported image MIME types for download (SVG excluded — not accepted by LLM vision APIs) */
+	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const,
+	/**
+	 * Expected Content-Type prefixes for valid image responses from Slack.
+	 * Used to detect when Slack returns an HTML error page instead of an image.
+	 */
+	VALID_RESPONSE_CONTENT_TYPES: ['image/'] as const,
+	/**
+	 * Magic byte signatures for supported image formats.
+	 * Used to verify that a downloaded file is actually an image
+	 * (Slack can return 200 OK with an HTML body when auth fails).
+	 */
+	IMAGE_MAGIC_BYTES: {
+		PNG: [0x89, 0x50, 0x4E, 0x47],      // \x89PNG
+		JPEG: [0xFF, 0xD8, 0xFF],             // JPEG SOI marker
+		GIF87: [0x47, 0x49, 0x46, 0x38, 0x37], // GIF87a
+		GIF89: [0x47, 0x49, 0x46, 0x38, 0x39], // GIF89a
+		WEBP_RIFF: [0x52, 0x49, 0x46, 0x46],  // RIFF (WebP container)
+	} as const,
 	/** Interval for cleaning up expired temp files (1 hour) */
 	CLEANUP_INTERVAL: 60 * 60 * 1000,
 	/** Maximum age for temp files before cleanup (24 hours) */
@@ -447,10 +476,46 @@ export const SLACK_IMAGE_CONSTANTS = {
 	MAX_CONCURRENT_DOWNLOADS: 3,
 	/** Warning threshold for temp directory total size (500 MB) */
 	MAX_TEMP_DIR_SIZE: 500 * 1024 * 1024,
+	/** Maximum redirect hops to follow during file download */
+	MAX_DOWNLOAD_REDIRECTS: 5,
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: 3,
 	/** Default backoff delay (ms) when no Retry-After header is present */
 	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+} as const;
+
+/**
+ * Constants for generic file uploads to Slack channels.
+ * Used by the upload-file endpoint and send-pdf-to-slack skill
+ * to validate and upload arbitrary file types (PDF, images, docs, etc.).
+ */
+export const SLACK_FILE_UPLOAD_CONSTANTS = {
+	/** Temp directory for generated PDFs (relative to ~/.crewly/) */
+	TEMP_DIR: 'tmp/slack-pdfs',
+	/** Maximum allowed file size for uploads (20 MB — Slack limit) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/** File extensions accepted for upload */
+	SUPPORTED_EXTENSIONS: [
+		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
+	] as const,
+} as const;
+
+/**
+ * Constants for Gemini embedding-based knowledge search.
+ * Used by KnowledgeSearchService when GEMINI_API_KEY is configured.
+ */
+export const EMBEDDING_CONSTANTS = {
+	/** Gemini embedding model identifier */
+	GEMINI_MODEL: 'text-embedding-004',
+	/** Base endpoint for Gemini generative language API */
+	GEMINI_ENDPOINT: 'https://generativelanguage.googleapis.com/v1beta/models',
+	/** Timeout for embedding API calls (ms) */
+	TIMEOUT_MS: 10000,
+	/** Maximum documents to embed in a single batch */
+	MAX_BATCH_SIZE: 20,
+	/** Expected embedding vector dimensions */
+	EMBEDDING_DIMENSIONS: 768,
 } as const;
 
 // Type helpers

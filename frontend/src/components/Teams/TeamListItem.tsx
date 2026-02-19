@@ -36,7 +36,7 @@ export const TeamListItem: React.FC<TeamListItemProps> = ({
         <div className="flex items-center gap-3">
           <div>
             <p className="font-semibold text-text-primary-dark">{team.name}</p>
-            <p className="text-sm text-text-secondary-dark">{projectName || team.currentProject || 'No Project'}</p>
+            <p className="text-sm text-text-secondary-dark">{projectName || (team.projectIds?.length > 0 ? team.projectIds.join(', ') : 'No Project')}</p>
           </div>
           {hasActiveMembers && (
             <span className="px-2 py-1 text-xs font-medium rounded-full bg-green-500/10 text-green-400">

@@ -70,7 +70,7 @@ const DetailView: React.FC<DetailViewProps> = ({
         const total = tasks.length;
         const completed = tasks.filter((t: any) => t.status === 'done' || t.status === 'completed').length;
         const progress = total ? Math.round((completed / total) * 100) : 0;
-        const assigned = (availableTeams || []).filter((t: any) => t.currentProject === project.id || t.currentProject === project.name).length;
+        const assigned = (availableTeams || []).filter((t: any) => t.projectIds?.includes(project.id) || t.projectIds?.includes(project.name)).length;
         setMetrics({ progressPercent: progress, tasksCompleted: completed, tasksTotal: total, assignedTeams: assigned });
       } catch (e) {
         console.warn('Failed to compute prototype metrics', e);

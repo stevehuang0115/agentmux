@@ -153,6 +153,28 @@ describe('Slack Controller', () => {
       expect(response.status).toBe(503);
       expect(response.body.error).toBe('Slack is not connected');
     });
+
+    it('should mark delivery by skill on successful send', async () => {
+      // Mock the slack service as connected with a working sendMessage
+      const slackService = getSlackService();
+      jest.spyOn(slackService, 'isConnected').mockReturnValue(true);
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue('1707.001');
+
+      // Initialize the bridge so markDeliveredBySkill can be called
+      const bridge = getSlackOrchestratorBridge();
+      await bridge.initialize();
+      const markSpy = jest.spyOn(bridge, 'markDeliveredBySkill');
+
+      const response = await request(app).post('/api/slack/send').send({
+        channelId: 'C123',
+        text: 'Hello from skill',
+        threadTs: '1707.000',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(markSpy).toHaveBeenCalledWith('C123', '1707.000');
+    });
   });
 
   describe('POST /api/slack/notify', () => {
@@ -278,6 +300,123 @@ describe('Slack Controller', () => {
 
         expect(response.status).toBe(503);
         expect(response.body.error).toBe('Slack is not connected');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+  });
+
+  describe('POST /api/slack/upload-file', () => {
+    it('should require channelId', async () => {
+      const response = await request(app).post('/api/slack/upload-file').send({
+        filePath: '/tmp/test.pdf',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('channelId and filePath are required');
+    });
+
+    it('should require filePath', async () => {
+      const response = await request(app).post('/api/slack/upload-file').send({
+        channelId: 'C123',
+      });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toContain('channelId and filePath are required');
+    });
+
+    it('should return 404 when file does not exist', async () => {
+      const response = await request(app).post('/api/slack/upload-file').send({
+        channelId: 'C123',
+        filePath: '/tmp/nonexistent-file.pdf',
+      });
+
+      expect(response.status).toBe(404);
+      expect(response.body.error).toContain('File not found');
+    });
+
+    it('should reject unsupported file extensions', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.exe');
+      await fs.writeFile(tmpFile, 'binary data');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-file').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(415);
+        expect(response.body.error).toContain('Unsupported file type');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+
+    it('should accept PDF files and return 503 when Slack is not connected', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.pdf');
+      await fs.writeFile(tmpFile, 'fake pdf data');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-file').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(503);
+        expect(response.body.error).toBe('Slack is not connected');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+
+    it('should accept CSV files and return 503 when Slack is not connected', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.csv');
+      await fs.writeFile(tmpFile, 'col1,col2\nval1,val2');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-file').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(503);
+        expect(response.body.error).toBe('Slack is not connected');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+
+    it('should upload file successfully when Slack is connected', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload-success.pdf');
+      await fs.writeFile(tmpFile, 'fake pdf data');
+
+      const slackService = getSlackService();
+      jest.spyOn(slackService, 'isConnected').mockReturnValue(true);
+      jest.spyOn(slackService, 'uploadFile').mockResolvedValue({ fileId: 'F123ABC' });
+
+      try {
+        const response = await request(app).post('/api/slack/upload-file').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+          title: 'Test PDF',
+          initialComment: 'Here is the file',
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.fileId).toBe('F123ABC');
       } finally {
         await fs.unlink(tmpFile).catch(() => {});
       }
