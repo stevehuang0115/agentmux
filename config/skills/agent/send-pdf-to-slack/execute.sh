@@ -65,9 +65,12 @@ if [ ! -f "$MD_FILE" ]; then
   error_exit "Markdown file not found: $MD_FILE"
 fi
 
-# Check python3 is available
+# Check required dependencies
 if ! command -v python3 &>/dev/null; then
   error_exit "python3 is not installed. Install it with: brew install python3 (macOS) or sudo apt-get install python3 (Linux)."
+fi
+if ! command -v jq &>/dev/null; then
+  error_exit "jq is not installed. Install it with: brew install jq (macOS) or sudo apt-get install jq (Linux)."
 fi
 
 # Set up a persistent venv with weasyprint + markdown if not already present
@@ -95,6 +98,10 @@ mkdir -p "$TMP_DIR"
 BASE_NAME="$(basename "$MD_FILE" .md)"
 TIMESTAMP="$(date +%s)"
 PDF_FILE="${TMP_DIR}/${BASE_NAME}-${TIMESTAMP}.pdf"
+
+# Ensure temp PDF is cleaned up on exit (success or failure)
+cleanup() { rm -f "$PDF_FILE"; }
+trap cleanup EXIT
 
 # Convert markdown to PDF using weasyprint
 if ! "$PYTHON" -c "
@@ -155,9 +162,6 @@ BODY=$(jq -n \
 
 # Upload to Slack
 RESULT=$(api_call POST "/slack/upload-file" "$BODY")
-
-# Clean up temp PDF
-rm -f "$PDF_FILE"
 
 # Output the result
 echo "$RESULT"
