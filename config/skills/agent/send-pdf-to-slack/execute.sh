@@ -100,7 +100,7 @@ TIMESTAMP="$(date +%s)"
 PDF_FILE="${TMP_DIR}/${BASE_NAME}-${TIMESTAMP}.pdf"
 
 # Ensure temp PDF is cleaned up on exit (success or failure)
-cleanup() { rm -f "$PDF_FILE"; }
+cleanup() { rm -f "$PDF_FILE" "/tmp/weasyprint-err-$$.log"; }
 trap cleanup EXIT
 
 # Convert markdown to PDF using weasyprint
@@ -124,7 +124,7 @@ styled_html = '''<!DOCTYPE html>
   h1 { font-size: 24px; border-bottom: 2px solid #333; padding-bottom: 8px; }
   h2 { font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin-top: 28px; }
   h3 { font-size: 16px; margin-top: 20px; }
-  table { border-collapse: collapse; width: 100%%; margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
   th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
   th { background-color: #f5f5f5; font-weight: 600; }
   code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
@@ -137,10 +137,8 @@ styled_html = '''<!DOCTYPE html>
 weasyprint.HTML(string=styled_html).write_pdf(pdf_file)
 " "$MD_FILE" "$PDF_FILE" 2>/tmp/weasyprint-err-$$.log; then
   WP_ERR="$(cat /tmp/weasyprint-err-$$.log 2>/dev/null || echo 'unknown error')"
-  rm -f "/tmp/weasyprint-err-$$.log"
   error_exit "weasyprint conversion failed: ${WP_ERR}"
 fi
-rm -f "/tmp/weasyprint-err-$$.log"
 
 # Verify PDF was created
 if [ ! -f "$PDF_FILE" ]; then
