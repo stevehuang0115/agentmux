@@ -18,6 +18,31 @@ import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../consta
 const router = Router();
 
 /**
+ * Handle Slack platform errors consistently across endpoints.
+ * Returns true if the error was handled (422 sent), false otherwise.
+ *
+ * @param error - The caught error
+ * @param res - Express response object
+ * @returns True if a Slack platform error response was sent
+ */
+function handleSlackPlatformError(error: unknown, res: Response): boolean {
+  if (
+    error instanceof Error &&
+    'code' in error &&
+    (error as any).code === 'slack_webapi_platform_error'
+  ) {
+    const slackError = (error as any).data?.error || 'unknown_slack_error';
+    res.status(422).json({
+      success: false,
+      error: `Slack API error: ${slackError}`,
+      slackError,
+    });
+    return true;
+  }
+  return false;
+}
+
+/**
  * GET /api/slack/status
  *
  * Get Slack integration status including connection state and message counts.
@@ -164,18 +189,9 @@ router.post('/send', async (req: Request, res: Response, next: NextFunction) => 
       data: { messageTs },
     });
   } catch (error: unknown) {
-    // Handle Slack API errors (channel_not_found, not_in_channel, etc.) as 422
-    // instead of letting them propagate as 500 internal errors
-    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
-      const slackError = (error as any).data?.error || 'unknown_slack_error';
-      res.status(422).json({
-        success: false,
-        error: `Slack API error: ${slackError}`,
-        slackError,
-      });
-      return;
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
     }
-    next(error);
   }
 });
 
@@ -313,16 +329,9 @@ router.post('/upload-image', async (req: Request, res: Response, next: NextFunct
       data: { fileId: result.fileId },
     });
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
-      const slackError = (error as any).data?.error || 'unknown_slack_error';
-      res.status(422).json({
-        success: false,
-        error: `Slack API error: ${slackError}`,
-        slackError,
-      });
-      return;
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
     }
-    next(error);
   }
 });
 
@@ -408,16 +417,9 @@ router.post('/upload-file', async (req: Request, res: Response, next: NextFuncti
       data: { fileId: result.fileId },
     });
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
-      const slackError = (error as any).data?.error || 'unknown_slack_error';
-      res.status(422).json({
-        success: false,
-        error: `Slack API error: ${slackError}`,
-        slackError,
-      });
-      return;
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
     }
-    next(error);
   }
 });
 

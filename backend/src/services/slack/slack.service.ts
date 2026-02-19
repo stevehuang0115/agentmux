@@ -90,6 +90,19 @@ interface UploadFileArgs {
   thread_ts?: string;
 }
 
+/**
+ * Options for uploading a file to Slack.
+ * Used by both uploadImage() and uploadFile().
+ */
+interface FileUploadOptions {
+  channelId: string;
+  filePath: string;
+  filename?: string;
+  title?: string;
+  initialComment?: string;
+  threadTs?: string;
+}
+
 interface PostMessageArgs {
   channel: string;
   text: string;
@@ -558,29 +571,53 @@ export class SlackService extends EventEmitter {
   /**
    * Upload an image file to a Slack channel.
    *
-   * Reads the file from the local filesystem and uploads it
-   * using the Slack files.uploadV2 API.
+   * Delegates to the shared upload-with-retry logic.
+   * Kept as a separate public method for backward compatibility
+   * with callers that use the image-specific endpoint.
    *
    * @param options - Upload configuration
    * @returns Object with the uploaded file ID
    * @throws Error if the client is not initialized or upload fails
    */
-  async uploadImage(options: {
-    channelId: string;
-    filePath: string;
-    filename?: string;
-    title?: string;
-    initialComment?: string;
-    threadTs?: string;
-  }): Promise<{ fileId?: string }> {
+  async uploadImage(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    return this.uploadWithRetry(options, SLACK_IMAGE_CONSTANTS);
+  }
+
+  /**
+   * Upload any supported file to a Slack channel.
+   *
+   * Delegates to the shared upload-with-retry logic.
+   * Works for PDFs, images, documents, and other file types supported by Slack.
+   *
+   * @param options - Upload configuration
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized or upload fails
+   */
+  async uploadFile(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    return this.uploadWithRetry(options, SLACK_FILE_UPLOAD_CONSTANTS);
+  }
+
+  /**
+   * Shared upload logic with retry/backoff for Slack rate limits.
+   *
+   * Reads the file from disk and uploads via files.uploadV2.
+   * Retries on 429 responses with exponential backoff capped at 60s.
+   *
+   * @param options - Upload configuration (channel, path, filename, etc.)
+   * @param constants - Constants object providing UPLOAD_MAX_RETRIES and UPLOAD_DEFAULT_BACKOFF_MS
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized, retries exhausted, or a non-rate-limit error occurs
+   */
+  private async uploadWithRetry(
+    options: FileUploadOptions,
+    constants: { UPLOAD_MAX_RETRIES: number; UPLOAD_DEFAULT_BACKOFF_MS: number },
+  ): Promise<{ fileId?: string }> {
     if (!this.client) {
       throw new Error('Slack client not initialized');
     }
 
     const filename = options.filename || basename(options.filePath);
-    const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
-
-    /** Maximum backoff delay to prevent hanging on large Retry-After values (60s) */
+    const maxRetries = constants.UPLOAD_MAX_RETRIES;
     const MAX_BACKOFF_MS = 60_000;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -599,88 +636,23 @@ export class SlackService extends EventEmitter {
         this.status.messagesSent++;
         return { fileId: result.files?.[0]?.id };
       } catch (error: unknown) {
-        // Destroy the stream to release the file descriptor
         fileStream.destroy();
 
-        // Handle Slack 429 rate limit with retry-after backoff
         const isRateLimit = this.isRateLimitError(error);
         if (isRateLimit && attempt < maxRetries) {
-          const rawMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          const rawMs = this.extractRetryAfterMs(error) || constants.UPLOAD_DEFAULT_BACKOFF_MS;
           const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
           console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise(resolve => setTimeout(resolve, retryAfterMs));
           continue;
         }
 
-        console.error('[SlackService] Upload image error:', error);
+        console.error('[SlackService] Upload error:', error);
         throw error;
       }
     }
 
-    // Should not reach here, but satisfy TypeScript
     throw new Error('Upload failed after maximum retries');
-  }
-
-  /**
-   * Upload any supported file to a Slack channel.
-   *
-   * Reads the file from the local filesystem and uploads it
-   * using the Slack files.uploadV2 API. Works for PDFs, images,
-   * documents, and other file types supported by Slack.
-   *
-   * @param options - Upload configuration
-   * @returns Object with the uploaded file ID
-   * @throws Error if the client is not initialized or upload fails
-   */
-  async uploadFile(options: {
-    channelId: string;
-    filePath: string;
-    filename?: string;
-    title?: string;
-    initialComment?: string;
-    threadTs?: string;
-  }): Promise<{ fileId?: string }> {
-    if (!this.client) {
-      throw new Error('Slack client not initialized');
-    }
-
-    const filename = options.filename || basename(options.filePath);
-    const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
-    const MAX_BACKOFF_MS = 60_000;
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const fileStream = createReadStream(options.filePath);
-
-      try {
-        const result = await this.client.files.uploadV2({
-          channel_id: options.channelId,
-          file: fileStream,
-          filename,
-          title: options.title,
-          initial_comment: options.initialComment,
-          thread_ts: options.threadTs,
-        });
-
-        this.status.messagesSent++;
-        return { fileId: result.files?.[0]?.id };
-      } catch (error: unknown) {
-        fileStream.destroy();
-
-        const isRateLimit = this.isRateLimitError(error);
-        if (isRateLimit && attempt < maxRetries) {
-          const rawMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
-          const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
-          console.warn(`[SlackService] File upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
-          await new Promise(resolve => setTimeout(resolve, retryAfterMs));
-          continue;
-        }
-
-        console.error('[SlackService] Upload file error:', error);
-        throw error;
-      }
-    }
-
-    throw new Error('File upload failed after maximum retries');
   }
 
   /**

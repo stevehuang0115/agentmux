@@ -1,11 +1,11 @@
 # Send PDF to Slack
 
-Converts a markdown file to PDF using `pandoc` and uploads it to a Slack channel via the `/api/slack/upload-file` endpoint.
+Converts a markdown file to PDF using `weasyprint` (Python) and uploads it to a Slack channel via the `/api/slack/upload-file` endpoint.
 
 ## Prerequisites
 
-- **pandoc** must be installed (`brew install pandoc` on macOS, `sudo apt-get install pandoc` on Linux)
-- A **LaTeX engine** is required for PDF output (e.g. `brew install basictex` on macOS, `sudo apt-get install texlive` on Linux)
+- **python3** must be installed (comes with macOS, or `brew install python3`)
+- On first run, a virtual environment is created at `~/.crewly/venv/pdf-tools/` with `weasyprint` and `markdown` packages installed automatically
 
 ## Usage
 
@@ -42,7 +42,8 @@ JSON response from the upload API with `fileId` on success. Also emits a `[NOTIF
 
 ## Error Handling
 
-- Exits with error if `pandoc` is not installed (includes install instructions)
+- Exits with error if `python3` is not installed (includes install instructions)
+- Auto-installs weasyprint/markdown into a persistent venv on first run
 - Exits with error if the markdown file does not exist
 - Exits with error if PDF conversion fails
 - Temp PDF files are cleaned up after upload (stored in `~/.crewly/tmp/slack-pdfs/`)

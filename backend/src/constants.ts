@@ -499,6 +499,10 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
 	] as const,
+	/** Maximum number of retry attempts for Slack API 429 responses */
+	UPLOAD_MAX_RETRIES: 3,
+	/** Default backoff delay (ms) when no Retry-After header is present */
+	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
 } as const;
 
 /**
