@@ -20,7 +20,7 @@ import type {
   SlackBlock,
 } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
-import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
+import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../constants.js';
 
 /**
  * Events emitted by SlackService
@@ -69,6 +69,12 @@ interface SlackWebClient {
   };
   files: {
     uploadV2: (args: UploadFileArgs) => Promise<{ files?: Array<{ id: string }> }>;
+    info: (args: { file: string }) => Promise<{
+      file?: {
+        url_private?: string;
+        url_private_download?: string;
+      };
+    }>;
   };
 }
 
@@ -82,6 +88,19 @@ interface UploadFileArgs {
   title?: string;
   initial_comment?: string;
   thread_ts?: string;
+}
+
+/**
+ * Options for uploading a file to Slack.
+ * Used by both uploadImage() and uploadFile().
+ */
+interface FileUploadOptions {
+  channelId: string;
+  filePath: string;
+  filename?: string;
+  title?: string;
+  initialComment?: string;
+  threadTs?: string;
 }
 
 interface PostMessageArgs {
@@ -195,6 +214,10 @@ export class SlackService extends EventEmitter {
         await this.app.start();
         this.status.connected = true;
         this.status.socketMode = true;
+
+        // Monitor SocketModeClient connection state for logging and status tracking
+        this.setupConnectionMonitoring();
+
         this.emit('connected');
         console.log('[SlackService] Connected in Socket Mode');
       }
@@ -279,6 +302,60 @@ export class SlackService extends EventEmitter {
       this.status.lastErrorAt = new Date().toISOString();
       this.emit('error', error);
     });
+  }
+
+  /**
+   * Attach listeners to the underlying SocketModeClient to track
+   * connection lifecycle (disconnected, reconnecting, connected).
+   * Updates `status.connected` so health checks reflect actual state.
+   *
+   * The Bolt App stores the receiver at `app.receiver`, and the
+   * SocketModeReceiver exposes `client` (SocketModeClient), which
+   * is an EventEmitter emitting: connected, reconnecting, disconnected, close.
+   */
+  private setupConnectionMonitoring(): void {
+    // Access the SocketModeClient from Bolt's internal receiver.
+    // This relies on Bolt's internal structure, so we guard with try/catch.
+    try {
+      const receiver = (this.app as unknown as { receiver?: { client?: EventEmitter } })?.receiver;
+      const socketClient = receiver?.client;
+      if (!socketClient) {
+        console.warn('[SlackService] Could not access SocketModeClient for connection monitoring');
+        return;
+      }
+
+      socketClient.on('disconnected', () => {
+        this.status.connected = false;
+        this.status.lastError = 'Socket Mode connection lost';
+        this.status.lastErrorAt = new Date().toISOString();
+        console.warn('[SlackService] Socket Mode disconnected');
+        this.emit('disconnected');
+      });
+
+      socketClient.on('reconnecting', () => {
+        this.status.connected = false;
+        console.log('[SlackService] Socket Mode reconnecting...');
+      });
+
+      socketClient.on('connected', () => {
+        this.status.connected = true;
+        console.log('[SlackService] Socket Mode reconnected');
+        this.emit('connected');
+      });
+
+      socketClient.on('close', () => {
+        // 'close' fires on WebSocket close before reconnection kicks in
+        if (this.status.connected) {
+          this.status.connected = false;
+          console.warn('[SlackService] Socket Mode WebSocket closed, awaiting reconnect...');
+        }
+      });
+    } catch (err) {
+      console.warn(
+        '[SlackService] Failed to set up connection monitoring:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
 
   /**
@@ -494,29 +571,53 @@ export class SlackService extends EventEmitter {
   /**
    * Upload an image file to a Slack channel.
    *
-   * Reads the file from the local filesystem and uploads it
-   * using the Slack files.uploadV2 API.
+   * Delegates to the shared upload-with-retry logic.
+   * Kept as a separate public method for backward compatibility
+   * with callers that use the image-specific endpoint.
    *
    * @param options - Upload configuration
    * @returns Object with the uploaded file ID
    * @throws Error if the client is not initialized or upload fails
    */
-  async uploadImage(options: {
-    channelId: string;
-    filePath: string;
-    filename?: string;
-    title?: string;
-    initialComment?: string;
-    threadTs?: string;
-  }): Promise<{ fileId?: string }> {
+  async uploadImage(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    return this.uploadWithRetry(options, SLACK_IMAGE_CONSTANTS);
+  }
+
+  /**
+   * Upload any supported file to a Slack channel.
+   *
+   * Delegates to the shared upload-with-retry logic.
+   * Works for PDFs, images, documents, and other file types supported by Slack.
+   *
+   * @param options - Upload configuration
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized or upload fails
+   */
+  async uploadFile(options: FileUploadOptions): Promise<{ fileId?: string }> {
+    return this.uploadWithRetry(options, SLACK_FILE_UPLOAD_CONSTANTS);
+  }
+
+  /**
+   * Shared upload logic with retry/backoff for Slack rate limits.
+   *
+   * Reads the file from disk and uploads via files.uploadV2.
+   * Retries on 429 responses with exponential backoff capped at 60s.
+   *
+   * @param options - Upload configuration (channel, path, filename, etc.)
+   * @param constants - Constants object providing UPLOAD_MAX_RETRIES and UPLOAD_DEFAULT_BACKOFF_MS
+   * @returns Object with the uploaded file ID
+   * @throws Error if the client is not initialized, retries exhausted, or a non-rate-limit error occurs
+   */
+  private async uploadWithRetry(
+    options: FileUploadOptions,
+    constants: { UPLOAD_MAX_RETRIES: number; UPLOAD_DEFAULT_BACKOFF_MS: number },
+  ): Promise<{ fileId?: string }> {
     if (!this.client) {
       throw new Error('Slack client not initialized');
     }
 
     const filename = options.filename || basename(options.filePath);
-    const maxRetries = SLACK_IMAGE_CONSTANTS.UPLOAD_MAX_RETRIES;
-
-    /** Maximum backoff delay to prevent hanging on large Retry-After values (60s) */
+    const maxRetries = constants.UPLOAD_MAX_RETRIES;
     const MAX_BACKOFF_MS = 60_000;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -535,25 +636,22 @@ export class SlackService extends EventEmitter {
         this.status.messagesSent++;
         return { fileId: result.files?.[0]?.id };
       } catch (error: unknown) {
-        // Destroy the stream to release the file descriptor
         fileStream.destroy();
 
-        // Handle Slack 429 rate limit with retry-after backoff
         const isRateLimit = this.isRateLimitError(error);
         if (isRateLimit && attempt < maxRetries) {
-          const rawMs = this.extractRetryAfterMs(error) || SLACK_IMAGE_CONSTANTS.UPLOAD_DEFAULT_BACKOFF_MS;
+          const rawMs = this.extractRetryAfterMs(error) || constants.UPLOAD_DEFAULT_BACKOFF_MS;
           const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
           console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
           await new Promise(resolve => setTimeout(resolve, retryAfterMs));
           continue;
         }
 
-        console.error('[SlackService] Upload image error:', error);
+        console.error('[SlackService] Upload error:', error);
         throw error;
       }
     }
 
-    // Should not reach here, but satisfy TypeScript
     throw new Error('Upload failed after maximum retries');
   }
 
@@ -607,6 +705,26 @@ export class SlackService extends EventEmitter {
       this.emit('disconnected');
       console.log('[SlackService] Disconnected');
     }
+  }
+
+  /**
+   * Get file info from Slack via the files.info API.
+   * Requires the bot token to have `files:read` scope.
+   *
+   * @param fileId - Slack file ID (e.g., F0123ABC456)
+   * @returns Object with private download URLs
+   * @throws Error if the client is not initialized or API call fails
+   */
+  async getFileInfo(fileId: string): Promise<{ url_private: string; url_private_download: string }> {
+    if (!this.client) {
+      throw new Error('Slack client not initialized');
+    }
+
+    const result = await this.client.files.info({ file: fileId });
+    return {
+      url_private: result.file?.url_private || '',
+      url_private_download: result.file?.url_private_download || '',
+    };
   }
 
   /**

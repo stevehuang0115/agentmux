@@ -11,8 +11,10 @@ import * as path from 'path';
 import { AgentMemoryService, IAgentMemoryService } from './agent-memory.service.js';
 import { ProjectMemoryService, IProjectMemoryService, SearchResults } from './project-memory.service.js';
 import { LoggerService } from '../core/logger.service.js';
+import { KnowledgeSearchService } from '../knowledge/knowledge-search.service.js';
 import { safeReadJson } from '../../utils/file-io.utils.js';
 import { CREWLY_CONSTANTS, MEMORY_CONSTANTS } from '../../constants.js';
+import type { KnowledgeDocumentSummary } from '../../types/knowledge.types.js';
 import type {
   RoleKnowledgeEntry,
   RoleKnowledgeCategory,
@@ -101,6 +103,8 @@ export interface RecallResult {
   projectMemories: string[];
   /** Combined formatted result */
   combined: string;
+  /** Matching knowledge documents (optional, from knowledge base search) */
+  knowledgeDocuments?: KnowledgeDocumentSummary[];
 }
 
 /**
@@ -339,6 +343,15 @@ export class MemoryService implements IMemoryService {
       sections.push('### From Project Knowledge\n' + result.projectMemories.map(m => `- ${m}`).join('\n'));
     }
 
+    if (result.knowledgeDocuments && result.knowledgeDocuments.length > 0) {
+      sections.push(
+        '### From Knowledge Base\n' +
+          result.knowledgeDocuments
+            .map((d) => `- **${d.title}** (${d.category}): ${d.preview}`)
+            .join('\n'),
+      );
+    }
+
     return sections.join('\n\n');
   }
 
@@ -491,20 +504,81 @@ export class MemoryService implements IMemoryService {
       combined: '',
     };
 
+    // Build parallel fetch promises
+    const promises: Promise<void>[] = [];
+
     // Fetch from agent memory
     if (params.scope === 'agent' || params.scope === 'both') {
-      const knowledge = await this.agentMemory.getRoleKnowledge(params.agentId);
-      result.agentMemories = this.filterRelevant(knowledge, params.context, params.limit);
+      promises.push(
+        this.agentMemory.getRoleKnowledge(params.agentId).then((knowledge) => {
+          result.agentMemories = this.filterRelevant(knowledge, params.context, params.limit);
+        }),
+      );
     }
 
     // Fetch from project memory
     if ((params.scope === 'project' || params.scope === 'both') && params.projectPath) {
-      const searchResults = await this.projectMemory.searchAll(params.projectPath, params.context);
-      result.projectMemories = this.formatSearchResults(searchResults, params.limit);
+      promises.push(
+        this.projectMemory.searchAll(params.projectPath, params.context).then((searchResults) => {
+          result.projectMemories = this.formatSearchResults(searchResults, params.limit);
+        }),
+      );
     }
+
+    // Fetch from knowledge base (search both global and project scopes)
+    promises.push(
+      this.searchKnowledgeDocuments(params.context, params.projectPath).then((docs) => {
+        if (docs.length > 0) {
+          result.knowledgeDocuments = docs;
+        }
+      }),
+    );
+
+    await Promise.all(promises);
 
     result.combined = this.combineMemories(result);
     return result;
+  }
+
+  /**
+   * Searches knowledge documents across global and project scopes.
+   *
+   * @param context - Search query text
+   * @param projectPath - Optional project path for project-scoped search
+   * @returns Combined and deduplicated knowledge document summaries
+   */
+  private async searchKnowledgeDocuments(
+    context: string,
+    projectPath?: string,
+  ): Promise<KnowledgeDocumentSummary[]> {
+    try {
+      const searchService = KnowledgeSearchService.getInstance();
+      const searchPromises: Promise<KnowledgeDocumentSummary[]>[] = [
+        searchService.search(context, 'global'),
+      ];
+
+      if (projectPath) {
+        searchPromises.push(searchService.search(context, 'project', projectPath));
+      }
+
+      const results = await Promise.all(searchPromises);
+      const combined = results.flat();
+
+      // Deduplicate by document ID
+      const seen = new Set<string>();
+      return combined.filter((doc) => {
+        if (seen.has(doc.id)) {
+          return false;
+        }
+        seen.add(doc.id);
+        return true;
+      });
+    } catch (error) {
+      this.logger.warn('Failed to search knowledge documents', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   /**

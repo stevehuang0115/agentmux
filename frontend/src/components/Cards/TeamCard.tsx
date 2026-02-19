@@ -72,11 +72,11 @@ export const TeamCard: React.FC<TeamCardProps> = ({
       )}
 
 
-      {team.currentProject && (
+      {team.projectIds?.length > 0 && (
         <div className="flex items-center gap-2 mb-4 text-sm text-text-secondary-dark">
           <FolderOpen className="h-4 w-4" />
-          <span title={team.currentProject}>
-            {team.currentProject}
+          <span title={team.projectIds.join(', ')}>
+            {team.projectIds.length === 1 ? team.projectIds[0] : `${team.projectIds.length} projects`}
           </span>
         </div>
       )}

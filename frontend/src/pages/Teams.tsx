@@ -119,7 +119,7 @@ export const Teams: React.FC = () => {
       filtered = filtered.filter(team =>
         team.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (team.description && team.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (team.currentProject && team.currentProject.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (team.projectIds?.length > 0 && team.projectIds.some(pid => pid.toLowerCase().includes(searchQuery.toLowerCase()))) ||
         team.members.some(member => 
           member.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           member.role.toLowerCase().includes(searchQuery.toLowerCase())
@@ -139,7 +139,7 @@ export const Teams: React.FC = () => {
     }
 
     if (projectFilter !== 'all') {
-      filtered = filtered.filter(team => team.currentProject === projectFilter);
+      filtered = filtered.filter(team => team.projectIds?.includes(projectFilter));
     }
 
     setFilteredTeams(filtered);
@@ -270,7 +270,7 @@ export const Teams: React.FC = () => {
             <TeamsGridCard
               key={team.id}
               team={team}
-              projectName={projectMap[team.currentProject || '']}
+              projectName={team.projectIds?.length > 0 ? projectMap[team.projectIds[0]] : undefined}
               onClick={() => handleTeamClick(team)}
               onViewTeam={(id) => navigate(`/teams/${id}`)}
               onEditTeam={(id) => navigate(`/teams/${id}?edit=true`)}
@@ -290,7 +290,7 @@ export const Teams: React.FC = () => {
             <TeamListItem
               key={team.id}
               team={team}
-              projectName={projectMap[team.currentProject || '']}
+              projectName={team.projectIds?.length > 0 ? projectMap[team.projectIds[0]] : undefined}
               onClick={() => handleTeamClick(team)}
               onViewTeam={(id) => navigate(`/teams/${id}`)}
               onEditTeam={(id) => navigate(`/teams/${id}?edit=true`)}

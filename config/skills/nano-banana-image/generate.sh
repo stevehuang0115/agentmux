@@ -1,6 +1,7 @@
 #!/bin/bash
 # Nano Banana Image Generation Script
 # This script calls the Gemini API to generate images
+# Supports both standard (flash) and pro models
 
 set -e
 
@@ -10,8 +11,21 @@ if [ -z "$GEMINI_API_KEY" ]; then
     exit 1
 fi
 
-# Get the prompt from the first argument or stdin
-PROMPT="${1:-}"
+# Model selection
+# Usage: generate.sh [prompt] [--pro]
+#   --pro    Use gemini-3-pro-image-preview (higher quality)
+#   default  Use gemini-2.0-flash-exp-image-generation (faster)
+MODEL="gemini-2.0-flash-exp-image-generation"
+PROMPT=""
+
+for arg in "$@"; do
+    if [ "$arg" = "--pro" ]; then
+        MODEL="gemini-3-pro-image-preview"
+    elif [ -z "$PROMPT" ]; then
+        PROMPT="$arg"
+    fi
+done
+
 if [ -z "$PROMPT" ]; then
     read -r PROMPT
 fi
@@ -22,7 +36,7 @@ if [ -z "$PROMPT" ]; then
 fi
 
 # API endpoint
-API_URL="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+API_URL="https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent"
 
 # Create the request payload
 PAYLOAD=$(cat <<EOF

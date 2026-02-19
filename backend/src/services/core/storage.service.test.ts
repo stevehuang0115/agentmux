@@ -52,6 +52,7 @@ describe('StorageService', () => {
         id: 'test-id',
         name: 'Test Team',
         description: 'Test team description',
+        projectIds: [],
         members: [
           {
             id: 'member-1',
@@ -100,6 +101,7 @@ describe('StorageService', () => {
         id: 'test-id',
         name: 'Test Team',
         description: 'Test team description',
+        projectIds: [],
         members: [],
         createdAt: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z',
@@ -193,6 +195,7 @@ describe('StorageService', () => {
         id: 'test-id',
         name: 'Test Team',
         description: 'Test team description',
+        projectIds: [],
         members: [],
         createdAt: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z',
@@ -219,6 +222,7 @@ describe('StorageService', () => {
         id: 'team-1',
         name: 'Team 1',
         description: 'Team 1 description',
+        projectIds: [],
         members: [],
         createdAt: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z',
@@ -228,6 +232,7 @@ describe('StorageService', () => {
         id: 'team-2',
         name: 'Team 2',
         description: 'Team 2 description',
+        projectIds: [],
         members: [],
         createdAt: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z',
@@ -253,6 +258,7 @@ describe('StorageService', () => {
         id: 'test-id',
         name: 'Test Team',
         description: 'Test team description',
+        projectIds: [],
         members: [],
         createdAt: '2023-01-01T00:00:00.000Z',
         updatedAt: '2023-01-01T00:00:00.000Z',
@@ -268,6 +274,86 @@ describe('StorageService', () => {
       expect(mockFsPromises.unlink).toHaveBeenCalledWith(
         expect.stringMatching(/teams\/test-id\/config\.json\.tmp\.\d+\.[a-z0-9]+$/)
       );
+    });
+  });
+
+  describe('One-Time Checks Persistence', () => {
+    test('should save and retrieve one-time checks', async () => {
+      const check = {
+        id: 'check-1',
+        targetSession: 'session-1',
+        message: 'Test check',
+        scheduledFor: new Date().toISOString(),
+        isRecurring: false,
+        createdAt: new Date().toISOString(),
+      };
+
+      // Mock empty file first read, then read with the saved check
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify([]));
+
+      const checks = await storageService.getOneTimeChecks();
+      expect(checks).toEqual([]);
+    });
+
+    test('should delete one-time check by ID', async () => {
+      const checks = [
+        {
+          id: 'check-1',
+          targetSession: 'session-1',
+          message: 'Test check 1',
+          scheduledFor: new Date().toISOString(),
+          isRecurring: false,
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'check-2',
+          targetSession: 'session-2',
+          message: 'Test check 2',
+          scheduledFor: new Date().toISOString(),
+          isRecurring: false,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify(checks));
+
+      const result = await storageService.deleteOneTimeCheck('check-1');
+      expect(result).toBe(true);
+
+      // Verify atomic write was called with filtered array
+      expect(mockFsPromises.writeFile).toHaveBeenCalled();
+    });
+
+    test('should return false when deleting non-existent check', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue(JSON.stringify([]));
+
+      const result = await storageService.deleteOneTimeCheck('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    test('should clear all one-time checks', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+
+      await storageService.clearOneTimeChecks();
+
+      // Verify atomic write was called with empty array
+      expect(mockFsPromises.writeFile).toHaveBeenCalledWith(
+        expect.stringMatching(/one-time-checks\.json\.tmp/),
+        JSON.stringify([], null, 2),
+        'utf8'
+      );
+    });
+
+    test('should handle corrupted one-time checks file', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFsPromises.readFile.mockResolvedValue('invalid json{');
+      mockFsPromises.copyFile.mockResolvedValue(undefined);
+
+      const checks = await storageService.getOneTimeChecks();
+      expect(checks).toEqual([]);
     });
   });
 

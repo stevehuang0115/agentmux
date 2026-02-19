@@ -61,10 +61,11 @@ function createMockTeam(id: string, name: string): Team {
   return {
     id,
     name,
+    projectIds: [],
     members: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  } as Team;
+  };
 }
 
 /**

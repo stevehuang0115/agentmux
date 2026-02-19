@@ -213,21 +213,9 @@ export const ProjectDetail: React.FC = () => {
       // Get assigned teams based on project data
       const allTeams = await apiService.getTeams();
       const assignedTeams = allTeams.filter(team => {
-        // More robust matching - handle both project ID and project name
-        const matchesById = team.currentProject === projectId;
-        const matchesByName = team.currentProject === project.name;
-        
-        // Debug logging to help troubleshoot
-        if (team.currentProject) {
-          console.log('Team assignment check:', {
-            teamName: team.name,
-            teamCurrentProject: team.currentProject,
-            projectId,
-            projectName: project.name,
-            matchesById,
-            matchesByName
-          });
-        }
+        // Match teams that have this project in their projectIds array
+        const matchesById = team.projectIds?.includes(projectId);
+        const matchesByName = team.projectIds?.includes(project.name);
         
         return matchesById || matchesByName;
       });

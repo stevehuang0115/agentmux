@@ -40,10 +40,11 @@ describe('TeamsBackupService', () => {
     return {
       id,
       name,
+      projectIds: [],
       members: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    } as Team;
+    };
   }
 
   beforeEach(() => {

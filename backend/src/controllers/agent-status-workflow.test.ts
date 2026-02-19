@@ -58,6 +58,7 @@ describe('Agent Status Workflow Integration', () => {
           updatedAt: new Date().toISOString()
         }
       ],
+      projectIds: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };

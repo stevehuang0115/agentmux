@@ -23,7 +23,7 @@ const mockTeams: Team[] = [
     name: 'Team Alpha',
     description: 'Test team',
     members: [],
-    currentProject: '1',
+    projectIds: ['1'],
     createdAt: '2023-01-01',
     updatedAt: '2023-01-01'
   }

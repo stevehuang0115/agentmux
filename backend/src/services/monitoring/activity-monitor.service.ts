@@ -162,14 +162,53 @@ export class ActivityMonitorService {
     const now = new Date().toISOString();
 
     try {
-      // Step 1: Detect stale agents and mark as potentialInactive
+      // Step 1: Detect stale agents and mark dead ones as inactive
       const staleAgents = await this.agentHeartbeatService.detectStaleAgents(30);
       if (staleAgents.length > 0) {
         this.logger.info('Detected stale agents for potential inactivity', {
           staleAgents,
           thresholdMinutes: 30
         });
-        // Note: AgentHeartbeatService will handle marking them as potentialInactive
+
+        // Check each stale agent's PTY session; if dead, mark as inactive
+        try {
+          const backend = await this.getBackend();
+          const heartbeats = await this.agentHeartbeatService.getAllAgentHeartbeats();
+
+          for (const agentId of staleAgents) {
+            try {
+              // Resolve session name from heartbeat data
+              let sessionName: string | undefined;
+              if (agentId === 'orchestrator') {
+                sessionName = heartbeats.orchestrator?.sessionName;
+              } else {
+                sessionName = heartbeats.teamMembers[agentId]?.sessionName;
+              }
+
+              if (!sessionName) {
+                continue;
+              }
+
+              const sessionAlive = backend.sessionExists(sessionName);
+              if (!sessionAlive) {
+                this.logger.info('Marking stale agent as inactive (session dead)', {
+                  agentId,
+                  sessionName
+                });
+                await this.storageService.updateAgentStatus(sessionName, CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
+              }
+            } catch (agentError) {
+              this.logger.error('Error checking stale agent session', {
+                agentId,
+                error: agentError instanceof Error ? agentError.message : String(agentError)
+              });
+            }
+          }
+        } catch (cleanupError) {
+          this.logger.error('Error during stale agent cleanup', {
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          });
+        }
       }
 
       // Step 2: Load current working status file

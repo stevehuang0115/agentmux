@@ -11,7 +11,11 @@ import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals
 const mockOrchestratorData: { value: any | null | Error } = { value: null };
 
 // Whether the mock session backend reports the session as existing
-const mockSessionState: { exists: boolean } = { exists: false };
+// and whether the backend itself is available
+const mockSessionState: { exists: boolean; backendAvailable: boolean } = { exists: false, backendAvailable: true };
+
+// Track calls to updateAgentStatus for assertions
+const mockUpdateAgentStatus = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
 
 // Mock storage service (using path without .js since moduleNameMapper strips it)
 jest.mock('../core/storage.service', () => ({
@@ -24,15 +28,21 @@ jest.mock('../core/storage.service', () => ({
         }
         return data;
       },
+      updateAgentStatus: (...args: unknown[]) => mockUpdateAgentStatus(...(args as [])),
     }),
   },
 }));
 
 // Mock session backend to control sessionExists behavior
 jest.mock('../session/index', () => ({
-  getSessionBackendSync: () => ({
-    sessionExists: () => mockSessionState.exists,
-  }),
+  getSessionBackendSync: () => {
+    if (!mockSessionState.backendAvailable) {
+      return null;
+    }
+    return {
+      sessionExists: () => mockSessionState.exists,
+    };
+  },
 }));
 
 jest.mock('../core/logger.service.js', () => ({
@@ -98,16 +108,21 @@ describe('OrchestratorStatusService', () => {
     // Reset mock data to null before each test
     mockOrchestratorData.value = null;
     mockSessionState.exists = false;
+    mockSessionState.backendAvailable = true;
+    mockUpdateAgentStatus.mockClear();
   });
 
   afterEach(() => {
     mockOrchestratorData.value = null;
     mockSessionState.exists = false;
+    mockSessionState.backendAvailable = true;
+    mockUpdateAgentStatus.mockClear();
   });
 
   describe('isOrchestratorActive', () => {
     it('should return true when orchestrator is active', async () => {
       mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = true;
 
       const result = await isOrchestratorActive();
       expect(result).toBe(true);
@@ -156,11 +171,28 @@ describe('OrchestratorStatusService', () => {
       const result = await isOrchestratorActive();
       expect(result).toBe(false);
     });
+
+    it('should return false when active but session does not exist', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = false;
+
+      const result = await isOrchestratorActive();
+      expect(result).toBe(false);
+    });
+
+    it('should trust stored active status when session backend is unavailable', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.backendAvailable = false;
+
+      const result = await isOrchestratorActive();
+      expect(result).toBe(true);
+    });
   });
 
   describe('getOrchestratorStatus', () => {
     it('should return active status with correct message', async () => {
       mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = true;
 
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(true);
@@ -277,6 +309,56 @@ describe('OrchestratorStatusService', () => {
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
       expect(result.agentStatus).toBe('inactive');
+    });
+
+    it('should return false when active but session does not exist', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = false;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('not running');
+    });
+
+    it('should proactively update status to inactive when session is dead', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = false;
+
+      await getOrchestratorStatus();
+
+      expect(mockUpdateAgentStatus).toHaveBeenCalledWith('crewly-orc', 'inactive');
+    });
+
+    it('should not proactively update status when session is alive', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = true;
+
+      await getOrchestratorStatus();
+
+      expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+    });
+
+    it('should trust stored active status when session backend is unavailable', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.backendAvailable = false;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(true);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('active and ready');
+      expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+    });
+
+    it('should handle updateAgentStatus errors gracefully during cleanup', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('active');
+      mockSessionState.exists = false;
+      mockUpdateAgentStatus.mockRejectedValueOnce(new Error('Storage write error'));
+
+      // Should not throw even when cleanup fails
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      expect(mockUpdateAgentStatus).toHaveBeenCalledWith('crewly-orc', 'inactive');
     });
   });
 

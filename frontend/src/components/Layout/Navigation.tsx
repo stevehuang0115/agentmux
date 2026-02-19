@@ -12,6 +12,7 @@ import {
 	X,
 	Factory,
 	Store,
+	BookOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -20,11 +21,11 @@ import { QRCodeDisplay } from './QRCodeDisplay';
 
 const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
-	{ name: 'Projects', href: '/projects', icon: FolderOpen },
-	{ name: 'Teams', href: '/teams', icon: Users },
-	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
 	{ name: 'Chat', href: '/chat', icon: MessageSquare },
-	{ name: '3D Factory', href: '/factory', icon: Factory },
+	{ name: 'Teams', href: '/teams', icon: Users },
+	{ name: 'Projects', href: '/projects', icon: FolderOpen },
+	{ name: 'Knowledge', href: '/knowledge', icon: BookOpen },
+	{ name: 'Schedules', href: '/scheduled-checkins', icon: Clock },
 	{ name: 'Marketplace', href: '/marketplace', icon: Store },
 ];
 
@@ -55,14 +56,12 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
 			{/* Logo Section */}
 			<div className="flex items-center justify-between p-4 border-b border-border-dark">
 				<div className="flex items-center">
-					<div className="bg-primary text-white p-2 rounded-lg">
-						<svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-							<path d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 12" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2"></path>
-						</svg>
+					<div className="p-1">
+						<img src="/logo/crewly-icon.svg" alt="Crewly" className="h-8 w-8 invert" />
 					</div>
 					{(!isCollapsed || isMobileOpen) && (
-						<span className="ml-3 text-lg font-bold text-text-primary-dark">
-							Crewly
+						<span className="ml-3 text-2xl font-extrabold text-text-primary-dark font-logo">
+							CREWLY
 						</span>
 					)}
 				</div>
@@ -161,6 +160,18 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
                         }
                       >
                         Teams
+                      </NavLink>
+                      <NavLink
+                        to={`/knowledge?project=${activeProjectId}`}
+                        onClick={handleLinkClick}
+                        className={() =>
+                          clsx(
+                            'block px-4 py-2 text-sm rounded-lg transition-colors',
+                            'text-text-secondary-dark hover:bg-background-dark hover:text-text-primary-dark'
+                          )
+                        }
+                      >
+                        Knowledge
                       </NavLink>
                     </div>
                   )}

@@ -58,6 +58,10 @@ export const CREWLY_CONSTANTS = {
 		SPECS_DIR: 'specs',
 		/** Agent memory directory */
 		MEMORY_DIR: 'memory',
+		/** Knowledge documents directory */
+		DOCS_DIR: 'docs',
+		/** Knowledge documents index file */
+		DOCS_INDEX_FILE: 'docs-index.json',
 	},
 
 	/**

@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import * as taskManagementHandlers from './task-management.controller.js';
-import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress } from './task-management.controller.js';
+import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask } from './task-management.controller.js';
 import type { ApiController } from '../api.controller.js';
 
 // Mock filesystem modules
@@ -67,6 +67,7 @@ describe('Task Management Handlers', () => {
       expect(typeof taskManagementHandlers.syncTaskStatus).toBe('function');
       expect(typeof taskManagementHandlers.getTeamProgress).toBe('function');
       expect(typeof taskManagementHandlers.createTasksFromConfig).toBe('function');
+      expect(typeof taskManagementHandlers.createTask).toBe('function');
     });
   });
 
@@ -182,19 +183,25 @@ describe('Task Management Handlers', () => {
       });
     });
 
-    describe('Path parsing - REGEX ISSUE TESTS', () => {
-      it('should return 400 with current broken regex for gas-vibe-coder path', async () => {
+    describe('Path parsing - REGEX TESTS', () => {
+      it('should correctly match gas-vibe-coder path with regex and return 404 when project not found', async () => {
         const taskPathWithDashes = '/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder/.crewly/tasks/m0_initial_tasks/open/01_create_project_requirements_document.md';
         mockReq.body!.taskPath = taskPathWithDashes;
         (existsSync as jest.Mock<any>).mockReturnValue(true);
         (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
+        (basename as jest.Mock<any>).mockReturnValue('01_create_project_requirements_document.md');
+        (dirname as jest.Mock<any>).mockReturnValue('/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder');
+        mockStorageService.getProjects.mockResolvedValue([]);
 
         await assignTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
 
-        expect(statusSpy).toHaveBeenCalledWith(400);
+        // The regex /\/([^/]+)\/\.crewly/ correctly matches gas-vibe-coder,
+        // so the controller proceeds past regex validation to project lookup.
+        // With no projects returned, it returns 404.
+        expect(statusSpy).toHaveBeenCalledWith(404);
         expect(jsonSpy).toHaveBeenCalledWith({
           success: false,
-          error: 'Cannot determine project from task path',
+          error: 'Project not found',
         });
       });
 
@@ -224,23 +231,9 @@ describe('Task Management Handlers', () => {
       beforeEach(() => {
         (existsSync as jest.Mock<any>).mockReturnValue(true);
         (readFile as jest.Mock<any>).mockResolvedValue('# Test Task\n## Task Information\n- **Target Role**: developer');
-
-        // Mock the path matching to pass (we'll test the fix separately)
-        jest.spyOn(String.prototype, 'match').mockImplementation(function(this: string, regexp: string | RegExp) {
-          if (regexp.toString() === '/\\/([^\\/]+)\\.crewly/') {
-            // Simulate fixed regex behavior
-            if (this.includes('/.crewly/')) {
-              const match = this.match(/\/([^\/]+)\/\.crewly/);
-              return match;
-            }
-            return null;
-          }
-          return String.prototype.match.call(this, regexp as RegExp);
-        } as any);
-      });
-
-      afterEach(() => {
-        jest.restoreAllMocks();
+        // Mock path functions so that the controller can resolve the project path correctly
+        (basename as jest.Mock<any>).mockReturnValue('01_create_project_requirements_document.md');
+        (dirname as jest.Mock<any>).mockReturnValue('/Users/yellowsunhy/Desktop/projects/justslash/gas-vibe-coder');
       });
 
       it('should return 404 when project is not found', async () => {
@@ -271,6 +264,158 @@ describe('Task Management Handlers', () => {
         expect(jsonSpy).toHaveBeenCalledWith({
           success: false,
           error: 'Team member not found for sessionName',
+        });
+      });
+    });
+  });
+
+  describe('createTask Function Logic', () => {
+    let mockReq: Partial<Request>;
+    let mockRes: any;
+    let jsonSpy: jest.Mock<any>;
+    let statusSpy: jest.Mock<any>;
+
+    beforeEach(() => {
+      jsonSpy = jest.fn<any>();
+      statusSpy = jest.fn<any>().mockReturnValue({ json: jsonSpy });
+
+      mockRes = {
+        status: statusSpy,
+        json: jsonSpy,
+      };
+
+      mockReq = {
+        body: {
+          projectPath: '/test/project',
+          task: 'Implement feature X',
+          priority: 'high',
+          sessionName: 'dev-session-1',
+          milestone: 'delegated',
+        },
+      };
+
+      jest.clearAllMocks();
+    });
+
+    describe('Request validation', () => {
+      it('should return 400 when projectPath is missing', async () => {
+        mockReq.body!.projectPath = undefined;
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(statusSpy).toHaveBeenCalledWith(400);
+        expect(jsonSpy).toHaveBeenCalledWith({
+          success: false,
+          error: 'projectPath is required',
+        });
+      });
+
+      it('should return 400 when task is missing', async () => {
+        mockReq.body!.task = undefined;
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(statusSpy).toHaveBeenCalledWith(400);
+        expect(jsonSpy).toHaveBeenCalledWith({
+          success: false,
+          error: 'task is required',
+        });
+      });
+
+      it('should return 400 when task is empty string', async () => {
+        mockReq.body!.task = '';
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(statusSpy).toHaveBeenCalledWith(400);
+        expect(jsonSpy).toHaveBeenCalledWith({
+          success: false,
+          error: 'task is required',
+        });
+      });
+    });
+
+    describe('Task file creation', () => {
+      it('should create task file with sessionName in in_progress folder', async () => {
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
+        (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+        (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+        mockStorageService.getProjects.mockResolvedValue([]);
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(mkdir).toHaveBeenCalled();
+        expect(writeFile).toHaveBeenCalled();
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: true,
+            status: 'in_progress',
+            milestone: 'delegated',
+          })
+        );
+      });
+
+      it('should create task file without sessionName in open folder', async () => {
+        mockReq.body!.sessionName = undefined;
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
+        (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+        (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: true,
+            status: 'open',
+          })
+        );
+      });
+
+      it('should use default priority when not provided', async () => {
+        mockReq.body!.priority = undefined;
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
+        (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+        (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+        mockStorageService.getProjects.mockResolvedValue([]);
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: true,
+          })
+        );
+      });
+
+      it('should use default milestone when not provided', async () => {
+        mockReq.body!.milestone = undefined;
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
+        (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+        (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+        mockStorageService.getProjects.mockResolvedValue([]);
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(jsonSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            success: true,
+            milestone: 'delegated',
+          })
+        );
+      });
+    });
+
+    describe('Error handling', () => {
+      it('should return 500 when file creation fails', async () => {
+        (existsSync as jest.Mock<any>).mockReturnValue(false);
+        (mkdir as jest.Mock<any>).mockRejectedValue(new Error('Disk full'));
+
+        await createTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+        expect(statusSpy).toHaveBeenCalledWith(500);
+        expect(jsonSpy).toHaveBeenCalledWith({
+          success: false,
+          error: 'Failed to create task',
         });
       });
     });

@@ -78,7 +78,7 @@ class FactoryService {
       const teams = teamsResponse.data.data || [];
 
       teams.forEach((team: any) => {
-        const projectName = team.currentProject || team.name || 'Unassigned';
+        const projectName = team.projectIds?.[0] || team.name || 'Unassigned';
         projectSet.add(projectName);
 
         if (team.members) {

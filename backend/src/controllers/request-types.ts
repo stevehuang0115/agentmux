@@ -123,7 +123,8 @@ export interface CreateTeamRequestBody {
   description?: string;
   members: CreateTeamMemberInput[];
   projectPath?: string;
-  currentProject?: string;
+  currentProject?: string; // Legacy: converted to projectIds on creation
+  projectIds?: string[];
 }
 
 /**
@@ -219,7 +220,7 @@ export interface TeamMemberUpdate {
 export interface UpdateTeamRequestBody {
   name?: string;
   description?: string;
-  currentProject?: string;
+  projectIds?: string[];
   members?: TeamMemberUpdate[];
 }
 
@@ -247,7 +248,7 @@ export interface MutableTeam {
   name: string;
   description?: string;
   members: MutableTeamMember[];
-  currentProject?: string;
+  projectIds: string[];
   createdAt: string;
   updatedAt: string;
 }

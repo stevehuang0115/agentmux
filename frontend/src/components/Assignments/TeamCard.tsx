@@ -7,7 +7,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
   projects,
   onUnassignTeam,
 }) => {
-  const assignedProject = projects.find(p => p.id === team.currentProject);
+  const assignedProject = projects.find(p => team.projectIds?.includes(p.id));
 
   return (
     <div key={team.id} className="assignment-card team-card">
@@ -24,7 +24,7 @@ export const TeamCard: React.FC<TeamCardProps> = ({
             className="unassign-team-btn"
             onClick={(e) => {
               e.stopPropagation();
-              onUnassignTeam(team.id, team.name, team.currentProject);
+              onUnassignTeam(team.id, team.name, team.projectIds?.[0]);
             }}
             title="Unassign team from project"
           >

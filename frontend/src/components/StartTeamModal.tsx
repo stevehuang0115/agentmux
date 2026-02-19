@@ -30,16 +30,16 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 	const [fetchingProjects, setFetchingProjects] = useState(false);
 
 	// Check if team is already assigned to a project
-	const isAlreadyAssigned = team?.currentProject;
+	const isAlreadyAssigned = team?.projectIds?.length > 0;
 
 	useEffect(() => {
 		if (isOpen) {
 			fetchProjects();
 			if (isAlreadyAssigned) {
-				setSelectedProject(team.currentProject);
+				setSelectedProject(team.projectIds[0]);
 			}
 		}
-	}, [isOpen, isAlreadyAssigned, team?.currentProject]);
+	}, [isOpen, isAlreadyAssigned, team?.projectIds]);
 
 	const fetchProjects = async () => {
 		setFetchingProjects(true);
@@ -65,14 +65,14 @@ export const StartTeamModal: React.FC<StartTeamModalProps> = ({
 			return;
 		}
 
-		const projectId = isAlreadyAssigned ? team.currentProject : selectedProject;
+		const projectId = isAlreadyAssigned ? team.projectIds[0] : selectedProject;
 		onStartTeam(projectId);
 		onClose(); // Close popup after starting team
 	};
 
 	const getAssignedProjectName = () => {
 		if (!isAlreadyAssigned) return '';
-		const project = projects.find((p) => p.id === team.currentProject);
+		const project = projects.find((p) => p.id === team.projectIds?.[0]);
 		return project ? project.name : 'Unknown Project';
 	};
 

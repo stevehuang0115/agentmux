@@ -50,6 +50,11 @@ You have bash skills that let you store and retrieve knowledge that persists acr
   bash {{AGENT_SKILLS_PATH}}/record-learning/execute.sh '{"agentId":"{{SESSION_NAME}}","agentRole":"{{ROLE}}","projectPath":"{{PROJECT_PATH}}","learning":"what you learned"}'
   ```
 
+- **`query-knowledge`** — Search company knowledge base for SOPs, runbooks, architecture docs
+  ```bash
+  bash {{AGENT_SKILLS_PATH}}/query-knowledge/execute.sh '{"query":"deployment process","scope":"global"}'
+  ```
+
 ### When to Use Memory Tools
 
 **On session startup** (before doing any work):

@@ -11,6 +11,7 @@ import { Factory } from './pages/Factory';
 import { Settings } from './pages/Settings';
 import { Chat } from './pages/Chat';
 import Marketplace from './pages/Marketplace';
+import { Knowledge } from './pages/Knowledge';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ChatProvider } from './contexts/ChatContext';
@@ -31,6 +32,7 @@ function App() {
               <Route path="scheduled-checkins" element={<ScheduledCheckins />} />
               <Route path="factory" element={<Factory />} />
               <Route path="marketplace" element={<Marketplace />} />
+              <Route path="knowledge" element={<Knowledge />} />
               <Route path="settings" element={<Settings />} />
               <Route
                 path="chat"

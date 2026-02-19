@@ -887,9 +887,9 @@ export class AgentRegistrationService {
 				const teams = await this.storageService.getTeams();
 				for (const team of teams) {
 					const member = team.members?.find((m) => m.sessionName === sessionName);
-					if (member && team.currentProject) {
+					if (member && team.projectIds[0]) {
 						const projects = await this.storageService.getProjects();
-						const project = projects.find((p) => p.id === team.currentProject);
+						const project = projects.find((p) => p.id === team.projectIds[0]);
 						if (project?.path) {
 							projectPath = project.path;
 						}

@@ -237,10 +237,10 @@ export const Assignments: React.FC = () => {
 
 
   const assignedProjects = projects.filter(project =>
-    teams.some(team => team.currentProject === project.id)
+    teams.some(team => team.projectIds?.includes(project.id))
   );
 
-  const assignedTeams = teams.filter(team => team.currentProject);
+  const assignedTeams = teams.filter(team => team.projectIds?.length > 0);
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-8">

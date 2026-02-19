@@ -116,7 +116,7 @@ interface OrchestratorStatusInfo {
  *
  * @param actualAgentStatus - Resolved agent status (from session existence check)
  * @param orchestratorStatus - Persisted orchestrator status from storage
- * @param overrides - Optional field overrides (e.g. currentProject for updates)
+ * @param overrides - Optional field overrides (e.g. projectIds for updates)
  * @returns A Team object representing the orchestrator
  */
 function buildOrchestratorTeam(
@@ -143,10 +143,11 @@ function buildOrchestratorTeam(
         updatedAt: orchestratorStatus?.updatedAt || now
       }
     ],
+    projectIds: [],
     createdAt: orchestratorStatus?.createdAt || now,
     updatedAt: orchestratorStatus?.updatedAt || now,
     ...overrides,
-  };
+  } as Team;
 }
 
 /**
@@ -527,7 +528,7 @@ function ensureOrchestratorSubscriptions(): void {
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { name, description, members, projectPath, currentProject } = req.body as CreateTeamRequestBody;
+    const { name, description, members, projectPath, currentProject, projectIds } = req.body as CreateTeamRequestBody;
 
     if (!name || !members || !Array.isArray(members) || members.length === 0) {
       res.status(400).json({
@@ -586,7 +587,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
       name,
       description: description || '',
       members: teamMembers,
-      currentProject: currentProject || undefined,
+      projectIds: projectIds || (currentProject ? [currentProject] : []),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -733,7 +734,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
     }
 
     const projects = await this.storageService.getProjects();
-    let targetProjectId = projectId || team.currentProject;
+    let targetProjectId = projectId || team.projectIds[0];
 
     if (!targetProjectId) {
       res.status(400).json({ success: false, error: 'No project specified. Please select a project to assign this team to.' } as ApiResponse);
@@ -746,8 +747,10 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
       return;
     }
 
-    // Update team's currentProject field to persist the project assignment
-    team.currentProject = targetProjectId;
+    // Update team's projectIds to persist the project assignment
+    if (!team.projectIds.includes(targetProjectId)) {
+      team.projectIds.push(targetProjectId);
+    }
     team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
 
@@ -915,7 +918,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
       const sessionExists = await this.tmuxService.sessionExists(orchestratorSession);
       if (sessionExists) {
         const sessionNames = team.members?.map(m => m.sessionName).filter(Boolean) || [];
-        const orchestratorPrompt = `## Team Deletion Notification\n\nTeam **"${team.name}"** (ID: ${id}) is being deleted.\n\n### Sessions to be terminated:\n${sessionNames.length > 0 ? sessionNames.map(name => `- ${name}`).join('\n') : '- No active sessions'}\n\n### Team Details:\n- **Team Name**: ${team.name}\n- **Members**: ${team.members?.length || 0}\n- **Current Project**: ${team.currentProject || 'None'}\n\nThe orchestrator should be aware that these team members are no longer available for task delegation.\n\n---\n*Team deletion initiated by user request.*`;
+        const orchestratorPrompt = `## Team Deletion Notification\n\nTeam **"${team.name}"** (ID: ${id}) is being deleted.\n\n### Sessions to be terminated:\n${sessionNames.length > 0 ? sessionNames.map(name => `- ${name}`).join('\n') : '- No active sessions'}\n\n### Team Details:\n- **Team Name**: ${team.name}\n- **Members**: ${team.members?.length || 0}\n- **Current Projects**: ${team.projectIds?.length ? team.projectIds.join(', ') : 'None'}\n\nThe orchestrator should be aware that these team members are no longer available for task delegation.\n\n---\n*Team deletion initiated by user request.*`;
         await this.tmuxService.sendMessage(orchestratorSession, orchestratorPrompt);
       }
     } catch (notificationError) {
@@ -1057,9 +1060,9 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
 
     // Get project path if team has a current project
     let projectPath: string | undefined;
-    if (team.currentProject) {
+    if (team.projectIds[0]) {
       const projects = await this.storageService.getProjects();
-      const project = projects.find(p => p.id === team.currentProject);
+      const project = projects.find(p => p.id === team.projectIds[0]);
       projectPath = project?.path;
     }
 
@@ -1693,19 +1696,19 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
         return;
       }
 
-      // For orchestrator, we currently cannot update the currentProject
+      // For orchestrator, we currently cannot update the projectIds
       // because there's no method to save the full orchestrator status
       // Only status updates are supported through updateOrchestratorStatus
       // We'll simulate the update for the response but not persist it
 
-      // The orchestrator team virtual response will include the project
+      // The orchestrator team virtual response will include the projects
       // but it won't be persisted until we add the proper storage method
 
       // Return the virtual orchestrator team structure
       const orchestratorTeam = buildOrchestratorTeam(
         orchestratorStatus?.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
         orchestratorStatus,
-        { currentProject: updates.currentProject }
+        { projectIds: updates.projectIds }
       );
 
       res.json({
@@ -1731,8 +1734,8 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     const team = teams[teamIndex] as MutableTeam;
 
     // Update allowed fields
-    if (updates.currentProject !== undefined) {
-      team.currentProject = updates.currentProject;
+    if (updates.projectIds !== undefined) {
+      team.projectIds = updates.projectIds;
     }
     if (updates.name !== undefined) {
       team.name = updates.name;

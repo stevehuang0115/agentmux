@@ -7,7 +7,7 @@
  * @module controllers/memory/memory.controller.test
  */
 
-import { remember, recall, recordLearning } from './memory.controller.js';
+import { remember, recall, recordLearning, getMyContext } from './memory.controller.js';
 
 // Mock LoggerService before any imports that use it
 jest.mock('../../services/core/logger.service.js', () => ({
@@ -34,6 +34,45 @@ jest.mock('../../services/memory/memory.service.js', () => ({
       remember: mockRemember,
       recall: mockRecall,
       recordLearning: mockRecordLearning,
+    }),
+  },
+}));
+
+// Mock GoalTrackingService
+jest.mock('../../services/memory/goal-tracking.service.js', () => ({
+  GoalTrackingService: {
+    getInstance: () => ({
+      getGoals: jest.fn().mockResolvedValue([]),
+      getCurrentFocus: jest.fn().mockResolvedValue(null),
+    }),
+  },
+}));
+
+// Mock DailyLogService
+jest.mock('../../services/memory/daily-log.service.js', () => ({
+  DailyLogService: {
+    getInstance: () => ({
+      getTodaysLog: jest.fn().mockResolvedValue(''),
+    }),
+  },
+}));
+
+// Mock LearningAccumulationService
+jest.mock('../../services/memory/learning-accumulation.service.js', () => ({
+  LearningAccumulationService: {
+    getInstance: () => ({
+      getSuccesses: jest.fn().mockResolvedValue(''),
+      getFailures: jest.fn().mockResolvedValue(''),
+    }),
+  },
+}));
+
+// Mock KnowledgeService
+const mockListDocuments = jest.fn();
+jest.mock('../../services/knowledge/knowledge.service.js', () => ({
+  KnowledgeService: {
+    getInstance: () => ({
+      listDocuments: mockListDocuments,
     }),
   },
 }));
@@ -681,6 +720,133 @@ describe('MemoryController', () => {
       );
 
       expect(mockNext).toHaveBeenCalledWith(serviceError);
+    });
+  });
+
+  // ========================= getMyContext =========================
+
+  describe('getMyContext', () => {
+    beforeEach(() => {
+      mockRecall.mockResolvedValue({
+        agentMemories: [],
+        projectMemories: [],
+        combined: '',
+      });
+      mockListDocuments.mockReset();
+    });
+
+    it('should include knowledgeDocs in response', async () => {
+      const globalDocs = [{ id: 'g1', title: 'Global SOP', category: 'SOPs' }];
+      const projectDocs = [{ id: 'p1', title: 'Project Architecture', category: 'Architecture' }];
+
+      mockListDocuments
+        .mockResolvedValueOnce(globalDocs)
+        .mockResolvedValueOnce(projectDocs);
+
+      await getMyContext(
+        {
+          body: {
+            agentId: 'dev-001',
+            agentRole: 'developer',
+            projectPath: '/path/to/project',
+          },
+        } as any,
+        mockRes as any,
+        mockNext,
+      );
+
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            knowledgeDocs: {
+              global: globalDocs,
+              project: projectDocs,
+            },
+          }),
+        }),
+      );
+    });
+
+    it('should return empty arrays when knowledge service fails', async () => {
+      mockListDocuments
+        .mockRejectedValueOnce(new Error('Index not found'))
+        .mockRejectedValueOnce(new Error('Index not found'));
+
+      await getMyContext(
+        {
+          body: {
+            agentId: 'dev-001',
+            agentRole: 'developer',
+            projectPath: '/path/to/project',
+          },
+        } as any,
+        mockRes as any,
+        mockNext,
+      );
+
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            knowledgeDocs: {
+              global: [],
+              project: [],
+            },
+          }),
+        }),
+      );
+    });
+
+    it('should return 400 when agentId is missing', async () => {
+      await getMyContext(
+        {
+          body: {
+            agentRole: 'developer',
+            projectPath: '/path',
+          },
+        } as any,
+        mockRes as any,
+        mockNext,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('agentId'),
+        }),
+      );
+    });
+
+    it('should return 400 when agentRole is missing', async () => {
+      await getMyContext(
+        {
+          body: {
+            agentId: 'dev-001',
+            projectPath: '/path',
+          },
+        } as any,
+        mockRes as any,
+        mockNext,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+    });
+
+    it('should return 400 when projectPath is missing', async () => {
+      await getMyContext(
+        {
+          body: {
+            agentId: 'dev-001',
+            agentRole: 'developer',
+          },
+        } as any,
+        mockRes as any,
+        mockNext,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
     });
   });
 });

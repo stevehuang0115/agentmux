@@ -10,6 +10,7 @@
 
 import { promises as fs } from 'fs';
 import { createWriteStream } from 'fs';
+import { open } from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { pipeline } from 'stream/promises';
@@ -82,13 +83,12 @@ export class SlackImageService {
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const localPath = path.join(this.tempDir, `${file.id}-${safeName}`);
 
-    // Download using native fetch with bearer token
+    // Download using native fetch with bearer token.
+    // Uses manual redirect handling because Node.js fetch strips the
+    // Authorization header on cross-origin redirects (per Fetch spec),
+    // but Slack file URLs redirect to CDN domains that may need it.
     const downloadUrl = file.url_private_download || file.url_private;
-    const response = await fetch(downloadUrl, {
-      headers: {
-        'Authorization': `Bearer ${botToken}`,
-      },
-    });
+    const response = await this.authenticatedFetch(downloadUrl, botToken);
 
     if (!response.ok) {
       throw new Error(`Download failed with status ${response.status}`);
@@ -98,12 +98,35 @@ export class SlackImageService {
       throw new Error('Empty response body from Slack');
     }
 
+    // Validate Content-Type header to catch Slack returning HTML error pages with 200 OK
+    const contentType = response.headers.get('content-type') || '';
+    const isImageContentType = SLACK_IMAGE_CONSTANTS.VALID_RESPONSE_CONTENT_TYPES.some(
+      prefix => contentType.startsWith(prefix)
+    );
+    if (!isImageContentType) {
+      throw new Error(
+        `Unexpected Content-Type from Slack: "${contentType}" (expected image/*). ` +
+        'This usually means the bot token lacks files:read scope or has expired.'
+      );
+    }
+
     // Stream response to file
     const fileStream = createWriteStream(localPath);
     // Convert Web ReadableStream to Node stream for pipeline
     const { Readable } = await import('stream');
     const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
     await pipeline(nodeStream, fileStream);
+
+    // Verify the file is actually an image by checking magic bytes
+    const isValid = await this.verifyImageMagicBytes(localPath);
+    if (!isValid) {
+      // Clean up the invalid file
+      try { await fs.unlink(localPath); } catch { /* ignore */ }
+      throw new Error(
+        'Downloaded file is not a valid image (magic bytes mismatch). ' +
+        'Slack may have returned an HTML error page instead of the image.'
+      );
+    }
 
     // Warn if temp dir is getting large
     await this.checkTempDirSize();
@@ -196,6 +219,84 @@ export class SlackImageService {
     if (count > 0) {
       console.log(`[SlackImageService] Startup cleanup: removed ${count} expired image(s)`);
     }
+  }
+
+  /**
+   * Verify that a file on disk starts with valid image magic bytes.
+   * Reads the first 8 bytes and checks against known signatures
+   * for PNG, JPEG, GIF, and WebP formats.
+   *
+   * @param filePath - Path to the downloaded file
+   * @returns True if the file matches a known image signature
+   */
+  async verifyImageMagicBytes(filePath: string): Promise<boolean> {
+    let fh: import('fs/promises').FileHandle | null = null;
+    try {
+      fh = await open(filePath, 'r');
+      const buf = Buffer.alloc(8);
+      const { bytesRead } = await fh.read(buf, 0, 8, 0);
+      if (bytesRead < 3) return false;
+
+      const magicBytes = SLACK_IMAGE_CONSTANTS.IMAGE_MAGIC_BYTES;
+
+      // Check each known signature
+      const signatures: ReadonlyArray<readonly number[]> = [
+        magicBytes.PNG,
+        magicBytes.JPEG,
+        magicBytes.GIF87,
+        magicBytes.GIF89,
+        magicBytes.WEBP_RIFF,
+      ];
+
+      for (const sig of signatures) {
+        if (bytesRead >= sig.length && sig.every((byte, i) => buf[i] === byte)) {
+          return true;
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    } finally {
+      if (fh) await fh.close();
+    }
+  }
+
+  /**
+   * Fetch a URL with manual redirect handling to preserve the Authorization header.
+   * Node.js fetch strips the Authorization header on cross-origin redirects
+   * (per the Fetch specification), but Slack file URLs redirect from
+   * files.slack.com to CDN domains that may require the token.
+   *
+   * @param url - URL to fetch
+   * @param botToken - Bot OAuth token for the Authorization header
+   * @returns Final response after following any redirects
+   * @throws Error if too many redirects or a redirect has no Location header
+   */
+  private async authenticatedFetch(url: string, botToken: string): Promise<Response> {
+    const maxRedirects = SLACK_IMAGE_CONSTANTS.MAX_DOWNLOAD_REDIRECTS;
+    let currentUrl = url;
+
+    for (let i = 0; i <= maxRedirects; i++) {
+      const response = await fetch(currentUrl, {
+        headers: { 'Authorization': `Bearer ${botToken}` },
+        redirect: 'manual',
+      });
+
+      // Follow redirects manually, preserving the auth header on each hop
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new Error(`Slack returned redirect (${response.status}) without Location header`);
+        }
+        currentUrl = location;
+        continue;
+      }
+
+      return response;
+    }
+
+    throw new Error(`Too many redirects (${maxRedirects}) while downloading file from Slack`);
   }
 
   /**

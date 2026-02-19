@@ -165,6 +165,272 @@ describe('SlackImageService', () => {
       // Verify fetch was called (validation passed)
       expect(mockFetch).toHaveBeenCalled();
     });
+
+    it('should reject SVG files (not supported by LLM vision APIs)', async () => {
+      const svgFile = { ...mockSlackFile, mimetype: 'image/svg+xml' };
+      await expect(service.downloadImage(svgFile, 'xoxb-token')).rejects.toThrow(
+        'Unsupported image type: image/svg+xml'
+      );
+    });
+
+    it('should throw when response Content-Type is not an image', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: 'not used',
+        headers: new Map([['content-type', 'text/html; charset=utf-8']]),
+      });
+
+      await expect(service.downloadImage(mockSlackFile, 'xoxb-token')).rejects.toThrow(
+        /Unexpected Content-Type from Slack.*text\/html/
+      );
+    });
+
+    it('should throw when response Content-Type is missing', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: 'not used',
+        headers: new Map(),
+      });
+
+      await expect(service.downloadImage(mockSlackFile, 'xoxb-token')).rejects.toThrow(
+        /Unexpected Content-Type from Slack/
+      );
+    });
+
+    it('should throw when downloaded file has invalid magic bytes', async () => {
+      // Simulate a response that has correct Content-Type but HTML body (edge case)
+      const { Readable } = await import('stream');
+      const htmlBody = Buffer.from('<!DOCTYPE html><html>Error</html>');
+      const readable = new Readable();
+      readable.push(htmlBody);
+      readable.push(null);
+
+      // Convert to Web ReadableStream
+      const webStream = Readable.toWeb(readable);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: webStream,
+        headers: new Map([['content-type', 'image/png']]),
+      });
+
+      await expect(service.downloadImage(mockSlackFile, 'xoxb-token')).rejects.toThrow(
+        /not a valid image.*magic bytes/
+      );
+    });
+
+    it('should succeed with valid PNG magic bytes', async () => {
+      const { Readable } = await import('stream');
+      // PNG magic bytes followed by some data
+      const pngData = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00]);
+      const readable = new Readable();
+      readable.push(pngData);
+      readable.push(null);
+
+      const webStream = Readable.toWeb(readable);
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: webStream,
+        headers: new Map([['content-type', 'image/png']]),
+      });
+
+      const result = await service.downloadImage(mockSlackFile, 'xoxb-token');
+      expect(result.localPath).toContain(mockSlackFile.id);
+      expect(result.mimetype).toBe('image/png');
+    });
+
+    it('should succeed with valid JPEG magic bytes', async () => {
+      const { Readable } = await import('stream');
+      const jpegData = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]);
+      const readable = new Readable();
+      readable.push(jpegData);
+      readable.push(null);
+
+      const webStream = Readable.toWeb(readable);
+      const jpegFile = { ...mockSlackFile, mimetype: 'image/jpeg', name: 'photo.jpg' };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        body: webStream,
+        headers: new Map([['content-type', 'image/jpeg']]),
+      });
+
+      const result = await service.downloadImage(jpegFile, 'xoxb-token');
+      expect(result.localPath).toContain(jpegFile.id);
+    });
+
+    it('should use redirect: manual to preserve auth on cross-origin redirects', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
+      try {
+        await service.downloadImage(mockSlackFile, 'xoxb-token');
+      } catch {
+        // Expected to fail
+      }
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        mockSlackFile.url_private_download,
+        expect.objectContaining({
+          redirect: 'manual',
+          headers: { Authorization: 'Bearer xoxb-token' },
+        })
+      );
+    });
+
+    it('should follow redirects with auth header preserved', async () => {
+      const { Readable } = await import('stream');
+      const pngData = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00]);
+      const readable = new Readable();
+      readable.push(pngData);
+      readable.push(null);
+      const webStream = Readable.toWeb(readable);
+
+      // First call: Slack returns a redirect
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://cdn.slack.com/signed-url']]),
+      });
+
+      // Second call: CDN returns the image
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: webStream,
+        headers: new Map([['content-type', 'image/png']]),
+      });
+
+      const result = await service.downloadImage(mockSlackFile, 'xoxb-token');
+      expect(result.localPath).toContain(mockSlackFile.id);
+
+      // Verify first call was to the original URL
+      expect(mockFetch).toHaveBeenNthCalledWith(1,
+        mockSlackFile.url_private_download,
+        expect.objectContaining({ redirect: 'manual' })
+      );
+
+      // Verify second call followed the redirect with auth
+      expect(mockFetch).toHaveBeenNthCalledWith(2,
+        'https://cdn.slack.com/signed-url',
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer xoxb-token' },
+          redirect: 'manual',
+        })
+      );
+    });
+
+    it('should follow multiple redirect hops', async () => {
+      const { Readable } = await import('stream');
+      const pngData = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00]);
+      const readable = new Readable();
+      readable.push(pngData);
+      readable.push(null);
+      const webStream = Readable.toWeb(readable);
+
+      // Hop 1: redirect
+      mockFetch.mockResolvedValueOnce({
+        status: 301,
+        headers: new Map([['location', 'https://hop2.slack.com/file']]),
+      });
+
+      // Hop 2: redirect
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Map([['location', 'https://hop3.cdn.com/file']]),
+      });
+
+      // Hop 3: actual image
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        body: webStream,
+        headers: new Map([['content-type', 'image/png']]),
+      });
+
+      const result = await service.downloadImage(mockSlackFile, 'xoxb-token');
+      expect(result.localPath).toContain(mockSlackFile.id);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('should throw on too many redirects', async () => {
+      // Return redirects indefinitely
+      mockFetch.mockResolvedValue({
+        status: 302,
+        headers: new Map([['location', 'https://loop.slack.com/file']]),
+      });
+
+      await expect(service.downloadImage(mockSlackFile, 'xoxb-token')).rejects.toThrow(
+        /Too many redirects/
+      );
+    });
+
+    it('should throw on redirect without Location header', async () => {
+      mockFetch.mockResolvedValueOnce({
+        status: 302,
+        headers: new Map(),
+      });
+
+      await expect(service.downloadImage(mockSlackFile, 'xoxb-token')).rejects.toThrow(
+        /redirect.*without Location header/
+      );
+    });
+  });
+
+  describe('verifyImageMagicBytes', () => {
+    it('should return true for PNG files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'test.png');
+      await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A]));
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(true);
+    });
+
+    it('should return true for JPEG files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'test.jpg');
+      await fs.writeFile(filePath, Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00]));
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(true);
+    });
+
+    it('should return true for GIF files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'test.gif');
+      await fs.writeFile(filePath, Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]));
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(true);
+    });
+
+    it('should return true for WebP files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'test.webp');
+      await fs.writeFile(filePath, Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00]));
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(true);
+    });
+
+    it('should return false for HTML files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'test.html');
+      await fs.writeFile(filePath, '<!DOCTYPE html><html>Error</html>');
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(false);
+    });
+
+    it('should return false for empty files', async () => {
+      const imageDir = service.getTempDir();
+      await fs.mkdir(imageDir, { recursive: true });
+      const filePath = path.join(imageDir, 'empty.png');
+      await fs.writeFile(filePath, '');
+      expect(await service.verifyImageMagicBytes(filePath)).toBe(false);
+    });
+
+    it('should return false for non-existent files', async () => {
+      expect(await service.verifyImageMagicBytes('/tmp/does-not-exist-12345.png')).toBe(false);
+    });
   });
 
   describe('cleanupExpired', () => {

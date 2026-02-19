@@ -36,7 +36,7 @@ describe('EnhancedAssignmentsList', () => {
           updatedAt: '2023-01-01T00:00:00Z'
         }
       ],
-      currentProject: 'project-1',
+      projectIds: ['project-1'],
       createdAt: '2023-01-01T00:00:00Z',
       updatedAt: '2023-01-01T00:00:00Z'
     }
@@ -225,7 +225,7 @@ describe('EnhancedAssignmentsList', () => {
             updatedAt: '2023-01-01T00:00:00Z'
           }
         ],
-        currentProject: 'project-1',
+        projectIds: ['project-1'],
         createdAt: '2023-01-01T00:00:00Z',
         updatedAt: '2023-01-01T00:00:00Z'
       }

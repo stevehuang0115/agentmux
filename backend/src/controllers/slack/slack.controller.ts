@@ -13,9 +13,34 @@ import path from 'path';
 import { getSlackService } from '../../services/slack/slack.service.js';
 import { getSlackOrchestratorBridge } from '../../services/slack/slack-orchestrator-bridge.js';
 import { SlackConfig, SlackNotification, SlackNotificationType } from '../../types/slack.types.js';
-import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
+import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../constants.js';
 
 const router = Router();
+
+/**
+ * Handle Slack platform errors consistently across endpoints.
+ * Returns true if the error was handled (422 sent), false otherwise.
+ *
+ * @param error - The caught error
+ * @param res - Express response object
+ * @returns True if a Slack platform error response was sent
+ */
+function handleSlackPlatformError(error: unknown, res: Response): boolean {
+  if (
+    error instanceof Error &&
+    'code' in error &&
+    (error as any).code === 'slack_webapi_platform_error'
+  ) {
+    const slackError = (error as any).data?.error || 'unknown_slack_error';
+    res.status(422).json({
+      success: false,
+      error: `Slack API error: ${slackError}`,
+      slackError,
+    });
+    return true;
+  }
+  return false;
+}
 
 /**
  * GET /api/slack/status
@@ -152,23 +177,21 @@ router.post('/send', async (req: Request, res: Response, next: NextFunction) => 
       threadTs,
     });
 
+    // Mark this channel+thread as delivered by skill so the bridge's
+    // sendSlackResponse fallback knows not to send a duplicate.
+    const bridge = getSlackOrchestratorBridge();
+    if (bridge.isInitialized()) {
+      bridge.markDeliveredBySkill(channelId, threadTs);
+    }
+
     res.json({
       success: true,
       data: { messageTs },
     });
   } catch (error: unknown) {
-    // Handle Slack API errors (channel_not_found, not_in_channel, etc.) as 422
-    // instead of letting them propagate as 500 internal errors
-    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
-      const slackError = (error as any).data?.error || 'unknown_slack_error';
-      res.status(422).json({
-        success: false,
-        error: `Slack API error: ${slackError}`,
-        slackError,
-      });
-      return;
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
     }
-    next(error);
   }
 });
 
@@ -306,16 +329,97 @@ router.post('/upload-image', async (req: Request, res: Response, next: NextFunct
       data: { fileId: result.fileId },
     });
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && (error as any).code === 'slack_webapi_platform_error') {
-      const slackError = (error as any).data?.error || 'unknown_slack_error';
-      res.status(422).json({
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
+    }
+  }
+});
+
+/**
+ * POST /api/slack/upload-file
+ *
+ * Upload a local file (PDF, image, document, etc.) to a Slack channel.
+ * Accepts a JSON body with a filePath (not multipart) since the backend
+ * and agents share the same filesystem.
+ *
+ * @body channelId - Slack channel to upload to (required)
+ * @body filePath - Absolute path to the file on disk (required)
+ * @body filename - Override filename (optional)
+ * @body title - Title for the uploaded file (optional)
+ * @body initialComment - Comment to include with the upload (optional)
+ * @body threadTs - Thread timestamp to upload in a thread (optional)
+ * @returns Object with fileId on success
+ */
+router.post('/upload-file', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { channelId, filePath, filename, title, initialComment, threadTs } = req.body;
+
+    if (!channelId || !filePath) {
+      res.status(400).json({
         success: false,
-        error: `Slack API error: ${slackError}`,
-        slackError,
+        error: 'channelId and filePath are required',
       });
       return;
     }
-    next(error);
+
+    // Validate file exists
+    try {
+      await fs.access(filePath);
+    } catch {
+      res.status(404).json({
+        success: false,
+        error: `File not found: ${filePath}`,
+      });
+      return;
+    }
+
+    // Validate file size
+    const stat = await fs.stat(filePath);
+    if (stat.size > SLACK_FILE_UPLOAD_CONSTANTS.MAX_FILE_SIZE) {
+      const maxMB = Math.round(SLACK_FILE_UPLOAD_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
+      res.status(413).json({
+        success: false,
+        error: `File too large (max ${maxMB} MB)`,
+      });
+      return;
+    }
+
+    // Validate file extension
+    const ext = path.extname(filePath).toLowerCase();
+    if (!SLACK_FILE_UPLOAD_CONSTANTS.SUPPORTED_EXTENSIONS.includes(ext as typeof SLACK_FILE_UPLOAD_CONSTANTS.SUPPORTED_EXTENSIONS[number])) {
+      res.status(415).json({
+        success: false,
+        error: `Unsupported file type: ${ext}`,
+      });
+      return;
+    }
+
+    const slackService = getSlackService();
+    if (!slackService.isConnected()) {
+      res.status(503).json({
+        success: false,
+        error: 'Slack is not connected',
+      });
+      return;
+    }
+
+    const result = await slackService.uploadFile({
+      channelId,
+      filePath,
+      filename,
+      title,
+      initialComment,
+      threadTs,
+    });
+
+    res.json({
+      success: true,
+      data: { fileId: result.fileId },
+    });
+  } catch (error: unknown) {
+    if (!handleSlackPlatformError(error, res)) {
+      next(error);
+    }
   }
 });
 

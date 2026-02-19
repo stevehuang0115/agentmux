@@ -23,11 +23,11 @@ export const EnhancedAssignmentsList: React.FC<EnhancedAssignmentsListProps> = (
 }) => {
   // Group members by project
   const projectsWithMembers: ProjectWithTeamMembers[] = projects
-    .filter(project => teams.some(team => team.currentProject === project.id))
+    .filter(project => teams.some(team => team.projectIds?.includes(project.id)))
     .map(project => {
       const teamMembers = enhancedMembers.filter(member => {
         const team = teams.find(t => t.id === member.teamId);
-        return team && team.currentProject === project.id;
+        return team && team.projectIds?.includes(project.id);
       });
       return { project, teamMembers };
     })

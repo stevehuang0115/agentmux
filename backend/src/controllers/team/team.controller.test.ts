@@ -138,7 +138,7 @@ describe('Teams Handlers', () => {
           }
         ],
         projectPath: '/test/project',
-        currentProject: 'test-project'
+        projectIds: ['test-project']
       };
 
       await teamsHandlers.createTeam.call(
@@ -618,6 +618,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -690,6 +691,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -778,6 +780,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -898,6 +901,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1009,6 +1013,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1043,7 +1048,7 @@ describe('Teams Handlers', () => {
       );
 
       // The second save (index 1) sets all members to 'starting' for instant UI feedback
-      // Save 0: currentProject update, Save 1: members set to 'starting'
+      // Save 0: projectIds update, Save 1: members set to 'starting'
       expect(allSaves.length).toBeGreaterThanOrEqual(2);
       expect(allSaves[1].members[0].agentStatus).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.STARTING);
 
@@ -1102,6 +1107,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1255,6 +1261,7 @@ describe('Teams Handlers', () => {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -1296,6 +1303,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1339,6 +1347,7 @@ describe('Teams Handlers', () => {
             updatedAt: new Date().toISOString()
           }
         ],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -1388,6 +1397,7 @@ describe('Teams Handlers', () => {
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }],
+        projectIds: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };

@@ -14,6 +14,7 @@ import type { RememberCategory, MemoryScope } from '../../services/memory/memory
 import { GoalTrackingService } from '../../services/memory/goal-tracking.service.js';
 import { DailyLogService } from '../../services/memory/daily-log.service.js';
 import { LearningAccumulationService } from '../../services/memory/learning-accumulation.service.js';
+import { KnowledgeService } from '../../services/knowledge/knowledge.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('MemoryController');
@@ -511,8 +512,9 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
     const goalService = GoalTrackingService.getInstance();
     const dailyLogService = DailyLogService.getInstance();
     const learningService = LearningAccumulationService.getInstance();
+    const knowledgeService = KnowledgeService.getInstance();
 
-    const [memories, goals, focus, dailyLog, successes, failures] = await Promise.all([
+    const [memories, goals, focus, dailyLog, successes, failures, globalKnowledgeDocs, projectKnowledgeDocs] = await Promise.all([
       memoryService.recall({
         agentId,
         context: `${agentRole} agent context for current work`,
@@ -524,6 +526,8 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
       dailyLogService.getTodaysLog(projectPath),
       learningService.getSuccesses(projectPath, LEARNING_TAIL_CHARS),
       learningService.getFailures(projectPath, LEARNING_TAIL_CHARS),
+      knowledgeService.listDocuments('global').catch(() => []),
+      knowledgeService.listDocuments('project', projectPath).catch(() => []),
     ]);
 
     logger.debug('Agent context retrieved via REST', { agentId, agentRole, projectPath });
@@ -538,6 +542,10 @@ export async function getMyContext(req: Request, res: Response, next: NextFuncti
         learnings: {
           successes,
           failures,
+        },
+        knowledgeDocs: {
+          global: globalKnowledgeDocs,
+          project: projectKnowledgeDocs,
         },
       },
     });

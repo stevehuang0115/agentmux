@@ -66,7 +66,7 @@ const mockTeams = [
         status: 'working'
       }
     ],
-    currentProject: 'proj-001',
+    projectIds: ['proj-001'],
     status: 'working',
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z'
@@ -85,7 +85,7 @@ const mockTeams = [
         status: 'idle'
       }
     ],
-    currentProject: 'proj-001',
+    projectIds: ['proj-001'],
     status: 'idle',
     createdAt: '2024-01-01T00:00:00Z',
     updatedAt: '2024-01-01T00:00:00Z'
@@ -153,7 +153,7 @@ function createTestApp() {
           name: team.name,
           status: team.status,
           members: team.members.length,
-          project: team.currentProject || 'None',
+          project: (team.projectIds && team.projectIds[0]) || 'None',
           activeSessions: team.members.filter(m => m.status === 'working').length
         }));
         

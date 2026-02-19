@@ -6,7 +6,7 @@ export class TeamModel implements Team {
   name: string;
   description?: string;
   members: TeamMember[];
-  currentProject?: string;
+  projectIds: string[];
   createdAt: string;
   updatedAt: string;
 
@@ -15,13 +15,20 @@ export class TeamModel implements Team {
     this.name = data.name || '';
     this.description = data.description;
     this.members = data.members || [];
-    this.currentProject = data.currentProject;
+    this.projectIds = data.projectIds || [];
     this.createdAt = data.createdAt || new Date().toISOString();
     this.updatedAt = data.updatedAt || new Date().toISOString();
   }
 
   assignToProject(projectId: string): void {
-    this.currentProject = projectId;
+    if (!this.projectIds.includes(projectId)) {
+      this.projectIds.push(projectId);
+    }
+    this.updatedAt = new Date().toISOString();
+  }
+
+  unassignFromProject(projectId: string): void {
+    this.projectIds = this.projectIds.filter(id => id !== projectId);
     this.updatedAt = new Date().toISOString();
   }
 
@@ -38,8 +45,8 @@ export class TeamModel implements Team {
   updateMember(memberId: string, updates: Partial<TeamMember>): void {
     const memberIndex = this.members.findIndex(member => member.id === memberId);
     if (memberIndex !== -1) {
-      this.members[memberIndex] = { 
-        ...this.members[memberIndex], 
+      this.members[memberIndex] = {
+        ...this.members[memberIndex],
         ...updates,
         updatedAt: new Date().toISOString()
       };
@@ -62,7 +69,7 @@ export class TeamModel implements Team {
       name: this.name,
       description: this.description,
       members: this.members,
-      currentProject: this.currentProject,
+      projectIds: this.projectIds,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
@@ -70,8 +77,15 @@ export class TeamModel implements Team {
 
   static fromJSON(data: Team): TeamModel {
     // Handle data migration from legacy format
-    const migratedData = { ...data };
-    
+    const migratedData: any = { ...data };
+
+    // Migration: convert legacy currentProject to projectIds
+    if ((data as any).currentProject && !data.projectIds) {
+      migratedData.projectIds = [(data as any).currentProject];
+    } else {
+      migratedData.projectIds = data.projectIds || [];
+    }
+
     // Migrate legacy status fields for team members
     if (migratedData.members) {
       migratedData.members = migratedData.members.map((member: any) => {
@@ -116,7 +130,7 @@ export class TeamModel implements Team {
         return migratedMember;
       });
     }
-    
+
     return new TeamModel(migratedData);
   }
 }

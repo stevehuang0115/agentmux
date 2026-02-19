@@ -42,7 +42,7 @@ const mockTeams = [
   {
     id: 'team-1',
     name: 'Development Team',
-    currentProject: 'project-1',
+    projectIds: ['project-1'],
     members: [
       { id: 'member-1', name: 'John Doe', sessionName: 'john_doe' }
     ],

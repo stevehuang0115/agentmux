@@ -205,7 +205,7 @@ export class FactoryService {
 			const backendPort = process.env.WEB_PORT || WEB_CONSTANTS.PORTS.BACKEND;
 			const teamsResponse = await axios.get<{ success: boolean; data: Array<{
 				name: string;
-				currentProject?: string;
+				projectIds?: string[];
 				members?: Array<{
 					id: string;
 					sessionName: string;
@@ -218,7 +218,7 @@ export class FactoryService {
 			const teams = teamsResponse.data.data || [];
 
 			teams.forEach((team) => {
-				const projectName = team.currentProject || team.name || 'Unassigned';
+				const projectName = team.projectIds?.[0] || team.name || 'Unassigned';
 				projectSet.add(projectName);
 
 				if (team.members) {

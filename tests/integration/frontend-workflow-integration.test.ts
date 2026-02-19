@@ -140,7 +140,7 @@ function createFrontendTestApp() {
       role,
       systemPrompt,
       status: 'working',
-      currentProject: null,
+      projectIds: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -210,7 +210,7 @@ function createFrontendTestApp() {
         teamIds.forEach((teamId: string) => {
           const teamIndex = mockServices.storage.teams.findIndex(t => t.id === teamId);
           if (teamIndex !== -1) {
-            mockServices.storage.teams[teamIndex].currentProject = req.params.id;
+            mockServices.storage.teams[teamIndex].projectIds = [req.params.id];
             mockServices.storage.teams[teamIndex].updatedAt = new Date().toISOString();
           }
         });
@@ -565,7 +565,7 @@ describe('Frontend Workflow Integration Tests', () => {
         .expect(200);
 
       const assignedTeam = teamResponse.body.data.find((t: any) => t.id === developmentTeamId);
-      expect(assignedTeam.currentProject).toBe(projectId);
+      expect(assignedTeam.projectIds).toEqual([projectId]);
     });
 
     test('should assign multiple teams with different roles to project', async () => {
@@ -592,8 +592,8 @@ describe('Frontend Workflow Integration Tests', () => {
       const devTeam = teams.find((t: any) => t.id === developmentTeamId);
       const testTeam = teams.find((t: any) => t.id === testingTeamId);
 
-      expect(devTeam.currentProject).toBe(projectId);
-      expect(testTeam.currentProject).toBe(projectId);
+      expect(devTeam.projectIds).toEqual([projectId]);
+      expect(testTeam.projectIds).toEqual([projectId]);
     });
 
     test('should start project with team assignments', async () => {
@@ -715,7 +715,7 @@ describe('Frontend Workflow Integration Tests', () => {
         .get('/api/teams')
         .expect(200);
 
-      const assignedTeams = teamsResponse.body.data.filter((t: any) => t.currentProject === projectId);
+      const assignedTeams = teamsResponse.body.data.filter((t: any) => t.projectIds && t.projectIds.includes(projectId));
       expect(assignedTeams).toHaveLength(3);
 
       // Verify tmux sessions are active

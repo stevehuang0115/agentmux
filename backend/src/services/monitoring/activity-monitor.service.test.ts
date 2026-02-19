@@ -51,6 +51,7 @@ describe('ActivityMonitorService', () => {
     mockStorageService = {
       getTeams: jest.fn().mockResolvedValue([]),
       getProjects: jest.fn().mockResolvedValue([]),
+      updateAgentStatus: jest.fn().mockResolvedValue(undefined),
     } as any;
     (StorageService.getInstance as jest.Mock).mockReturnValue(mockStorageService);
 
@@ -67,6 +68,18 @@ describe('ActivityMonitorService', () => {
     } as any;
     mockAgentHeartbeatService = {
       detectStaleAgents: jest.fn().mockResolvedValue([]),
+      getAllAgentHeartbeats: jest.fn().mockResolvedValue({
+        orchestrator: {
+          agentId: 'orchestrator',
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          agentStatus: 'active',
+          lastActiveTime: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        teamMembers: {},
+        metadata: { lastUpdated: new Date().toISOString(), version: '1.0.0' },
+      }),
       getInstance: jest.fn()
     } as any;
 
@@ -174,6 +187,7 @@ describe('ActivityMonitorService', () => {
     const mockTeam = {
       id: 'test-team',
       name: 'Test Team',
+      projectIds: [],
       createdAt: '2023-01-01T00:00:00.000Z',
       updatedAt: '2023-01-01T00:00:00.000Z',
       members: [
@@ -233,6 +247,39 @@ describe('ActivityMonitorService', () => {
     it('should detect stale agents using AgentHeartbeatService', async () => {
       const staleAgents = ['member-1', 'member-2'];
       mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue(staleAgents);
+      mockAgentHeartbeatService.getAllAgentHeartbeats.mockResolvedValue({
+        orchestrator: {
+          agentId: 'orchestrator',
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          agentStatus: 'active',
+          lastActiveTime: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        teamMembers: {
+          'member-1': {
+            agentId: 'member-1',
+            sessionName: 'test-session-1',
+            teamMemberId: 'member-1',
+            agentStatus: 'active',
+            lastActiveTime: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          'member-2': {
+            agentId: 'member-2',
+            sessionName: 'test-session-2',
+            teamMemberId: 'member-2',
+            agentStatus: 'active',
+            lastActiveTime: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+        metadata: { lastUpdated: new Date().toISOString(), version: '1.0.0' },
+      });
+      // Sessions are dead
+      mockSessionBackend.sessionExists.mockReturnValue(false);
 
       await (service as any).performActivityCheck();
 
@@ -241,6 +288,68 @@ describe('ActivityMonitorService', () => {
         staleAgents,
         thresholdMinutes: 30
       });
+      // Both dead sessions should be marked inactive
+      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith('test-session-1', 'inactive');
+      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith('test-session-2', 'inactive');
+    });
+
+    it('should mark stale orchestrator as inactive when session is dead', async () => {
+      mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue(['orchestrator']);
+      mockAgentHeartbeatService.getAllAgentHeartbeats.mockResolvedValue({
+        orchestrator: {
+          agentId: 'orchestrator',
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          agentStatus: 'active',
+          lastActiveTime: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        teamMembers: {},
+        metadata: { lastUpdated: new Date().toISOString(), version: '1.0.0' },
+      });
+      // Orchestrator session is dead
+      mockSessionBackend.sessionExists.mockReturnValue(false);
+
+      await (service as any).performActivityCheck();
+
+      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
+        CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        'inactive'
+      );
+    });
+
+    it('should leave stale agent as active when session is still alive', async () => {
+      mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue(['orchestrator']);
+      mockAgentHeartbeatService.getAllAgentHeartbeats.mockResolvedValue({
+        orchestrator: {
+          agentId: 'orchestrator',
+          sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          agentStatus: 'active',
+          lastActiveTime: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+        teamMembers: {},
+        metadata: { lastUpdated: new Date().toISOString(), version: '1.0.0' },
+      });
+      // Session is alive — agent is just idle, leave it
+      mockSessionBackend.sessionExists.mockReturnValue(true);
+
+      await (service as any).performActivityCheck();
+
+      expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalled();
+    });
+
+    it('should handle errors during stale agent cleanup gracefully', async () => {
+      mockAgentHeartbeatService.detectStaleAgents.mockResolvedValue(['orchestrator']);
+      mockAgentHeartbeatService.getAllAgentHeartbeats.mockRejectedValue(new Error('Heartbeat file error'));
+
+      await (service as any).performActivityCheck();
+
+      expect(mockLogger.error).toHaveBeenCalledWith('Error during stale agent cleanup', {
+        error: 'Heartbeat file error'
+      });
+      expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalled();
     });
 
     it('should check orchestrator working status and update teamWorkingStatus.json', async () => {
