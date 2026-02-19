@@ -354,6 +354,166 @@ describe('SlackService', () => {
     });
   });
 
+  describe('uploadFile', () => {
+    it('should throw when client is not initialized', async () => {
+      const service = new SlackService();
+      await expect(
+        service.uploadFile({ channelId: 'C123', filePath: '/tmp/test.pdf' })
+      ).rejects.toThrow('Slack client not initialized');
+    });
+
+    describe('retry behavior with mocked client', () => {
+      let service: SlackService;
+      let mockUploadV2: jest.Mock;
+
+      beforeEach(() => {
+        service = new SlackService();
+        mockUploadV2 = jest.fn();
+        (service as any).client = {
+          chat: { postMessage: jest.fn(), update: jest.fn() },
+          reactions: { add: jest.fn() },
+          users: { info: jest.fn() },
+          files: { uploadV2: mockUploadV2 },
+        };
+      });
+
+      it('should succeed on first attempt and return fileId', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F100' }] });
+
+        const result = await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+          title: 'Test File',
+          initialComment: 'Here is the file',
+        });
+
+        expect(result.fileId).toBe('F100');
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+        // Verify correct args passed to uploadV2
+        const callArgs = mockUploadV2.mock.calls[0][0];
+        expect(callArgs.channel_id).toBe('C123');
+        expect(callArgs.title).toBe('Test File');
+        expect(callArgs.initial_comment).toBe('Here is the file');
+      });
+
+      it('should use basename when filename is not provided', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F101' }] });
+
+        await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename, // e.g. slack.service.test.ts
+        });
+
+        const callArgs = mockUploadV2.mock.calls[0][0];
+        // basename of __filename (the test file itself)
+        expect(callArgs.filename).toMatch(/slack\.service\.test\./);
+      });
+
+      it('should use provided filename over basename', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F102' }] });
+
+        await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+          filename: 'custom-name.pdf',
+        });
+
+        const callArgs = mockUploadV2.mock.calls[0][0];
+        expect(callArgs.filename).toBe('custom-name.pdf');
+      });
+
+      it('should pass threadTs to uploadV2 when provided', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F103' }] });
+
+        await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+          threadTs: '1707.123456',
+        });
+
+        const callArgs = mockUploadV2.mock.calls[0][0];
+        expect(callArgs.thread_ts).toBe('1707.123456');
+      });
+
+      it('should retry on 429 and succeed on subsequent attempt', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0,
+        });
+        mockUploadV2
+          .mockRejectedValueOnce(rateLimitError)
+          .mockResolvedValueOnce({ files: [{ id: 'F104' }] });
+
+        const result = await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(result.fileId).toBe('F104');
+        expect(mockUploadV2).toHaveBeenCalledTimes(2);
+      });
+
+      it('should throw after exhausting all retry attempts', async () => {
+        const rateLimitError = Object.assign(new Error('rate limited'), {
+          code: 'slack_webapi_rate_limited_error',
+          retryAfter: 0,
+        });
+        mockUploadV2.mockRejectedValue(rateLimitError);
+
+        await expect(
+          service.uploadFile({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('rate limited');
+
+        // 1 initial + 3 retries = 4 total calls
+        expect(mockUploadV2).toHaveBeenCalledTimes(4);
+      });
+
+      it('should throw immediately for non-rate-limit errors', async () => {
+        mockUploadV2.mockRejectedValue(new Error('channel_not_found'));
+
+        await expect(
+          service.uploadFile({ channelId: 'C123', filePath: __filename })
+        ).rejects.toThrow('channel_not_found');
+
+        expect(mockUploadV2).toHaveBeenCalledTimes(1);
+      });
+
+      it('should return undefined fileId when Slack returns empty files array', async () => {
+        mockUploadV2.mockResolvedValue({ files: [] });
+
+        const result = await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(result.fileId).toBeUndefined();
+      });
+
+      it('should return undefined fileId when Slack returns no files property', async () => {
+        mockUploadV2.mockResolvedValue({ ok: true });
+
+        const result = await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(result.fileId).toBeUndefined();
+      });
+
+      it('should increment messagesSent on successful upload', async () => {
+        mockUploadV2.mockResolvedValue({ files: [{ id: 'F105' }] });
+        const statusBefore = service.getStatus().messagesSent;
+
+        await service.uploadFile({
+          channelId: 'C123',
+          filePath: __filename,
+        });
+
+        expect(service.getStatus().messagesSent).toBe(statusBefore + 1);
+      });
+    });
+  });
+
   describe('rate limit helpers', () => {
     it('should detect slack_webapi_rate_limited_error as rate limit', () => {
       const service = new SlackService();
