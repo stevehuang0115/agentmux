@@ -193,8 +193,10 @@ export class SlackService extends EventEmitter {
     this.config = config;
 
     try {
-      // Dynamic import of @slack/bolt
-      const { App, LogLevel } = await import('@slack/bolt');
+      // Dynamic import of @slack/bolt (CJS module requires default import handling)
+      const boltModule = await import('@slack/bolt') as any;
+      const App = boltModule.App ?? boltModule.default?.App;
+      const LogLevel = boltModule.LogLevel ?? boltModule.default?.LogLevel;
 
       this.app = new App({
         token: config.botToken,

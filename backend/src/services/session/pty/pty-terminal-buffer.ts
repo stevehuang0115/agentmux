@@ -7,7 +7,9 @@
  * @module pty-terminal-buffer
  */
 
-import { Terminal } from '@xterm/headless';
+import type { Terminal as TerminalType } from '@xterm/headless';
+import pkg from '@xterm/headless';
+const { Terminal } = pkg;
 import {
 	DEFAULT_TERMINAL_COLS,
 	DEFAULT_TERMINAL_ROWS,
@@ -42,7 +44,7 @@ export class PtyTerminalBuffer {
 	/**
 	 * The @xterm/headless Terminal instance
 	 */
-	private terminal: Terminal;
+	private terminal: TerminalType;
 
 	/**
 	 * Raw output history as buffer chunks
