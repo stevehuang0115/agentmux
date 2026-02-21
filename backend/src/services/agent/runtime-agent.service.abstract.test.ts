@@ -414,6 +414,65 @@ echo "second command"
 			);
 		});
 
+		it('should silently skip prompt file injection when command lacks --dangerously-skip-permissions', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'custom_script.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'echo "no flag marker here"',
+			]);
+			// Force settings to not return a command, so it falls through to loadInitScript
+			jest.spyOn(settingsServiceModule, 'getSettingsService').mockImplementation(() => {
+				throw new Error('Settings unavailable');
+			});
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript(
+				'test-session',
+				'/test/path',
+				undefined,
+				'/home/test/.crewly/prompts/test-session-init.md'
+			);
+
+			// Command should be unchanged — no --dangerously-skip-permissions to anchor on
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['echo "no flag marker here"'],
+				'/test/path',
+			);
+		});
+
+		it('should handle promptFilePath with spaces', async () => {
+			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
+				initScript: 'initialize_claude.sh',
+				displayName: 'Claude Code',
+				welcomeMessage: 'Welcome',
+				timeout: 120000,
+				description: 'Claude Code CLI',
+			});
+			jest.spyOn(service as any, 'loadInitScript').mockResolvedValue([
+				'claude --dangerously-skip-permissions',
+			]);
+			const sendCommandsSpy = jest.spyOn(service as any, 'sendShellCommandsToSession').mockResolvedValue(undefined);
+
+			await service.executeRuntimeInitScript(
+				'test-session',
+				'/test/path',
+				undefined,
+				'/home/test user/.crewly/prompts/my session-init.md'
+			);
+
+			expect(sendCommandsSpy).toHaveBeenCalledWith(
+				'test-session',
+				['claude --dangerously-skip-permissions --append-system-prompt-file "/home/test user/.crewly/prompts/my session-init.md"'],
+				'/test/path',
+			);
+		});
+
 		it('should not append --append-system-prompt-file when promptFilePath is undefined', async () => {
 			jest.spyOn(service as any, 'getRuntimeConfig').mockReturnValue({
 				initScript: 'initialize_claude.sh',

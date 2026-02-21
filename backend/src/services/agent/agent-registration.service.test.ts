@@ -459,6 +459,55 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.createSession).toHaveBeenCalledTimes(1);
 		});
 
+		it('should allow a subsequent call to succeed after a previous concurrent call fails', async () => {
+			// First call: createSession throws
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+			mockSessionHelper.createSession.mockRejectedValueOnce(new Error('PTY creation failed'));
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			const result1 = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(result1.success).toBe(false);
+
+			// Lock should be cleaned up after failure
+			const locks = (service as any).sessionCreationLocks;
+			expect(locks.has('test-session')).toBe(false);
+
+			// Second call succeeds (lock cleared, no contention)
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)
+				.mockReturnValueOnce(true);
+			mockSessionHelper.createSession.mockResolvedValueOnce({ pid: 5678, cwd: '/test', name: 'test-session' });
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+
+			const result2 = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(result2.success).toBe(true);
+		});
+
+		it('should clean up lock in finally block even if implementation throws', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+			mockSessionHelper.createSession.mockRejectedValue(new Error('Crash'));
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'crash-session',
+				role: 'developer',
+			});
+
+			expect(result.success).toBe(false);
+
+			// Lock should be cleaned up
+			const locks = (service as any).sessionCreationLocks;
+			expect(locks.has('crash-session')).toBe(false);
+		});
+
 		it('should not lock different session names against each other', async () => {
 			// Verify the lock map is keyed by session name
 			// Access the private sessionCreationLocks to verify isolation
