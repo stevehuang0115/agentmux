@@ -12,6 +12,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { getSlackService } from '../../services/slack/slack.service.js';
 import { getSlackOrchestratorBridge } from '../../services/slack/slack-orchestrator-bridge.js';
+import { saveSlackCredentials, deleteSlackCredentials, hasSavedCredentials } from '../../services/slack/slack-credentials.service.js';
 import { SlackConfig, SlackNotification, SlackNotificationType } from '../../types/slack.types.js';
 import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../constants.js';
 
@@ -108,6 +109,9 @@ router.post('/connect', async (req: Request, res: Response, next: NextFunction) 
     const bridge = getSlackOrchestratorBridge();
     await bridge.initialize();
 
+    // Persist credentials to disk so they survive server restarts
+    await saveSlackCredentials(config);
+
     res.json({
       success: true,
       message: 'Slack connection established',
@@ -129,6 +133,9 @@ router.post('/disconnect', async (req: Request, res: Response, next: NextFunctio
   try {
     const slackService = getSlackService();
     await slackService.disconnect();
+
+    // Remove saved credentials so Slack doesn't auto-reconnect on restart
+    await deleteSlackCredentials();
 
     res.json({
       success: true,
@@ -432,12 +439,15 @@ router.post('/upload-file', async (req: Request, res: Response, next: NextFuncti
  */
 router.get('/config', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const hasSaved = await hasSavedCredentials();
+
     res.json({
       success: true,
       data: {
         hasToken: !!process.env.SLACK_BOT_TOKEN,
         hasAppToken: !!process.env.SLACK_APP_TOKEN,
         hasSigningSecret: !!process.env.SLACK_SIGNING_SECRET,
+        hasSavedConfig: hasSaved,
         defaultChannel: process.env.SLACK_DEFAULT_CHANNEL || null,
         allowedUsers: process.env.SLACK_ALLOWED_USERS?.split(',').filter(Boolean).length || 0,
       },

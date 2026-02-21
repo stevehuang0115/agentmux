@@ -9,6 +9,7 @@
 
 import { getSlackService } from './slack.service.js';
 import { getSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
+import { loadSlackCredentials } from './slack-credentials.service.js';
 import { SlackConfig } from '../../types/slack.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import { LoggerService } from '../core/logger.service.js';
@@ -65,6 +66,35 @@ export function getSlackConfigFromEnv(): SlackConfig | null {
 }
 
 /**
+ * Get Slack configuration from environment variables or saved credentials.
+ * Environment variables take priority over saved credentials.
+ *
+ * @returns SlackConfig object or null if not configured
+ */
+export async function getSlackConfig(): Promise<SlackConfig | null> {
+  // Env vars take priority
+  const envConfig = getSlackConfigFromEnv();
+  if (envConfig) {
+    return envConfig;
+  }
+
+  // Fall back to saved credentials
+  try {
+    const savedConfig = await loadSlackCredentials();
+    if (savedConfig) {
+      logger.info('Loaded Slack credentials from saved config');
+      return savedConfig;
+    }
+  } catch (error) {
+    logger.warn('Failed to load saved Slack credentials', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  return null;
+}
+
+/**
  * Options for Slack initialization
  */
 export interface SlackInitOptions {
@@ -73,7 +103,8 @@ export interface SlackInitOptions {
 }
 
 /**
- * Initialize Slack integration if environment variables are set
+ * Initialize Slack integration if configured via environment variables
+ * or saved credentials.
  *
  * This function is designed to be called during application startup.
  * It safely handles cases where Slack is not configured.
@@ -98,7 +129,7 @@ export interface SlackInitOptions {
 export async function initializeSlackIfConfigured(
   options?: SlackInitOptions
 ): Promise<SlackInitResult> {
-  const config = getSlackConfigFromEnv();
+  const config = await getSlackConfig();
 
   if (!config) {
     logger.info('Not configured - skipping initialization');

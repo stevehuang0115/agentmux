@@ -8,11 +8,13 @@
 import {
   isSlackConfigured,
   getSlackConfigFromEnv,
+  getSlackConfig,
   initializeSlackIfConfigured,
   shutdownSlack,
 } from './slack-initializer.js';
 import { resetSlackService, getSlackService, SlackService } from './slack.service.js';
 import { resetSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
+import * as slackCredentials from './slack-credentials.service.js';
 
 describe('Slack Initializer', () => {
   const originalEnv = process.env;
@@ -134,8 +136,68 @@ describe('Slack Initializer', () => {
     });
   });
 
+  describe('getSlackConfig', () => {
+    it('should return env config when env vars are set', async () => {
+      process.env.SLACK_BOT_TOKEN = 'xoxb-env';
+      process.env.SLACK_APP_TOKEN = 'xapp-env';
+      process.env.SLACK_SIGNING_SECRET = 'secret-env';
+
+      const config = await getSlackConfig();
+      expect(config).not.toBeNull();
+      expect(config!.botToken).toBe('xoxb-env');
+    });
+
+    it('should fall back to saved credentials when env vars are not set', async () => {
+      jest.spyOn(slackCredentials, 'loadSlackCredentials').mockResolvedValue({
+        botToken: 'xoxb-saved',
+        appToken: 'xapp-saved',
+        signingSecret: 'secret-saved',
+        socketMode: true,
+      });
+
+      const config = await getSlackConfig();
+      expect(config).not.toBeNull();
+      expect(config!.botToken).toBe('xoxb-saved');
+    });
+
+    it('should prefer env vars over saved credentials', async () => {
+      process.env.SLACK_BOT_TOKEN = 'xoxb-env';
+      process.env.SLACK_APP_TOKEN = 'xapp-env';
+      process.env.SLACK_SIGNING_SECRET = 'secret-env';
+
+      jest.spyOn(slackCredentials, 'loadSlackCredentials').mockResolvedValue({
+        botToken: 'xoxb-saved',
+        appToken: 'xapp-saved',
+        signingSecret: 'secret-saved',
+        socketMode: true,
+      });
+
+      const config = await getSlackConfig();
+      expect(config!.botToken).toBe('xoxb-env');
+      // Should not even call loadSlackCredentials
+      expect(slackCredentials.loadSlackCredentials).not.toHaveBeenCalled();
+    });
+
+    it('should return null when neither env vars nor saved credentials exist', async () => {
+      jest.spyOn(slackCredentials, 'loadSlackCredentials').mockResolvedValue(null);
+
+      const config = await getSlackConfig();
+      expect(config).toBeNull();
+    });
+
+    it('should return null when loading saved credentials throws', async () => {
+      jest.spyOn(slackCredentials, 'loadSlackCredentials').mockRejectedValue(
+        new Error('disk error')
+      );
+
+      const config = await getSlackConfig();
+      expect(config).toBeNull();
+    });
+  });
+
   describe('initializeSlackIfConfigured', () => {
     it('should return not attempted when not configured', async () => {
+      jest.spyOn(slackCredentials, 'loadSlackCredentials').mockResolvedValue(null);
       const result = await initializeSlackIfConfigured();
 
       expect(result.attempted).toBe(false);

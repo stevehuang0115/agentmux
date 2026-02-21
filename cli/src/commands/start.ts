@@ -13,6 +13,7 @@ import {
   CREWLY_HOME_DIR
 } from '../constants.js';
 import { checkForUpdate, printUpdateNotification } from '../utils/version-check.js';
+import { killZombieProcesses } from '../utils/process-cleanup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +82,9 @@ export async function startCommand(options: StartOptions) {
 			return;
 		}
 
+		// 2b. Kill any zombie processes from previous runs
+		killZombieProcesses(webPort, (msg) => console.log(chalk.yellow(msg)));
+
 		// 3. Start backend server
 		console.log(chalk.blue('📡 Starting backend server...'));
 		const backendProcess = await startBackendServer(webPort);
@@ -143,8 +147,16 @@ export async function startCommand(options: StartOptions) {
 		// 7. Monitor for shutdown signals
 		setupShutdownHandlers([backendProcess]);
 
-		// Keep process alive
-		await new Promise(() => {}); // Wait forever
+		// Keep process alive until backend exits
+		await new Promise<void>((resolve) => {
+			backendProcess.on('exit', (code, signal) => {
+				console.log(chalk.yellow(`\nBackend process exited (code: ${code}, signal: ${signal})`));
+				resolve();
+			});
+		});
+
+		// Backend died — exit CLI with the same code
+		process.exit(1);
 	} catch (error) {
 		console.error(
 			chalk.red('❌ Failed to start Crewly:'),
