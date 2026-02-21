@@ -39,6 +39,8 @@ export interface PersistedSessionInfo {
 	role?: string;
 	/** Team ID if part of a team */
 	teamId?: string;
+	/** Member ID if this is a team member session */
+	memberId?: string;
 	/** Environment variables */
 	env?: Record<string, string>;
 	/** Claude session ID for resuming conversations on restart */
@@ -108,13 +110,15 @@ export class SessionStatePersistence {
 	 * @param runtimeType - Type of runtime (claude-code, gemini-cli, codex-cli)
 	 * @param role - Optional role for the agent
 	 * @param teamId - Optional team ID
+	 * @param memberId - Optional member ID for team member sessions
 	 */
 	registerSession(
 		name: string,
 		options: SessionOptions,
 		runtimeType: RuntimeType,
 		role?: string,
-		teamId?: string
+		teamId?: string,
+		memberId?: string
 	): void {
 		this.sessionMetadata.set(name, {
 			name,
@@ -124,6 +128,7 @@ export class SessionStatePersistence {
 			runtimeType,
 			role,
 			teamId,
+			memberId,
 			env: options.env,
 		});
 

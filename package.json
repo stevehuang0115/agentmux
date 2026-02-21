@@ -1,12 +1,27 @@
 {
   "name": "crewly",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "type": "module",
-  "description": "Crewly orchestrates multiple Claude Code instances via tmux sessions",
-  "main": "dist/cli/index.js",
+  "description": "Crewly orchestrates multiple Claude Code instances as AI development teams",
+  "main": "dist/cli/cli/src/index.js",
   "bin": {
-    "crewly": "./dist/cli/index.js"
+    "crewly": "./dist/cli/cli/src/index.js"
   },
+  "files": [
+    "dist/backend/",
+    "dist/cli/",
+    "config/",
+    "!config/skills/agent/",
+    "!config/**/.env",
+    "!config/**/.env.*",
+    "!config/**/*.test.ts",
+    "frontend/dist/index.html",
+    "frontend/dist/assets/*.js",
+    "frontend/dist/assets/*.css",
+    "frontend/dist/logo/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "npm run build:backend && npm run build:frontend && npm run build:cli",
     "build:server": "npm run build:backend && npm run build:cli",
@@ -14,10 +29,11 @@
     "build:frontend": "cd frontend && npm run build",
     "build:cli": "tsc -p cli/tsconfig.json",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "npx tsx watch backend/src/index.ts",
+    "dev:backend": "npx tsx backend/src/index.ts",
+    "dev:backend:watch": "npx tsx watch backend/src/index.ts",
     "dev:backend:debug": "node --inspect --import tsx backend/src/index.ts",
     "dev:frontend": "cd frontend && npm run dev",
-    "start": "node dist/cli/index.js start",
+    "start": "node dist/cli/cli/src/index.js start",
     "start:pm2": "pm2 start ecosystem.config.js",
     "stop:pm2": "pm2 stop ecosystem.config.js",
     "restart:pm2": "pm2 restart ecosystem.config.js",
@@ -40,7 +56,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "lint": "eslint . --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.5.0",
@@ -58,6 +75,7 @@
     "node-pty": "^1.0.0",
     "open": "^9.1.0",
     "socket.io": "^4.7.2",
+    "tar": "^7.5.9",
     "uuid": "^9.0.0",
     "ws": "^8.14.2",
     "yaml": "^2.3.2"
@@ -70,6 +88,7 @@
     "@types/node": "^20.5.1",
     "@types/socket.io-client": "^1.4.36",
     "@types/supertest": "^6.0.3",
+    "@types/tar": "^6.1.13",
     "@types/uuid": "^9.0.2",
     "@types/ws": "^8.5.5",
     "@typescript-eslint/eslint-plugin": "^6.4.0",
@@ -88,11 +107,22 @@
   },
   "keywords": [
     "claude-code",
-    "tmux",
+    "pty",
     "automation",
     "orchestration",
     "mcp"
   ],
-  "author": "",
-  "license": "MIT"
+  "author": "Steve Huang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stevehuang0115/crewly.git"
+  },
+  "homepage": "https://github.com/stevehuang0115/crewly#readme",
+  "bugs": {
+    "url": "https://github.com/stevehuang0115/crewly/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

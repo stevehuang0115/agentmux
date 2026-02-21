@@ -94,7 +94,7 @@ start_test_server() {
     
     MCP_HTTP=true \
     CREWLY_MCP_PORT="$TEST_PORT" \
-    TMUX_SESSION_NAME="test-session" \
+    CREWLY_SESSION_NAME="test-session" \
     PROJECT_PATH="/tmp/test-project" \
     AGENT_ROLE="test" \
     nohup node dist/mcp-server/index.js > /tmp/mcp-test-server.log 2>&1 &

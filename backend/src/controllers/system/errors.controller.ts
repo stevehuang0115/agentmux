@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
 import { ErrorTrackingService } from '../../services/index.js';
 import { ApiResponse } from '../../types/index.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('ErrorsController');
 
 export async function trackError(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
@@ -29,7 +32,7 @@ export async function trackError(this: ApiContext, req: Request, res: Response):
 			message: 'Error tracked successfully',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error tracking error:', error);
+		logger.error('Error tracking error', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to track error' } as ApiResponse);
 	}
 }
@@ -40,7 +43,7 @@ export async function getErrorStats(this: ApiContext, req: Request, res: Respons
 		const stats = errorTracker.getErrorStats();
 		res.json({ success: true, data: stats } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting error stats:', error);
+		logger.error('Error getting error stats', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get error statistics',
@@ -63,7 +66,7 @@ export async function getErrors(this: ApiContext, req: Request, res: Response): 
 		});
 		res.json({ success: true, data: errors } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting errors:', error);
+		logger.error('Error getting errors', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to get errors' } as ApiResponse);
 	}
 }
@@ -79,7 +82,7 @@ export async function getError(this: ApiContext, req: Request, res: Response): P
 		}
 		res.json({ success: true, data: errorEvent } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting error:', error);
+		logger.error('Error getting error', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to get error' } as ApiResponse);
 	}
 }
@@ -95,7 +98,7 @@ export async function clearErrors(this: ApiContext, req: Request, res: Response)
 			message: `Cleared ${removedCount} error records`,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error clearing errors:', error);
+		logger.error('Error clearing errors', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to clear errors' } as ApiResponse);
 	}
 }

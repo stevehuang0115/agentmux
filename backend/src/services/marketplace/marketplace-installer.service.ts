@@ -2,15 +2,23 @@
  * Marketplace Installer Service
  *
  * Handles downloading, installing, uninstalling, and updating
- * marketplace items. Manages asset downloads with checksum verification
- * and updates the local installed-items manifest.
+ * marketplace items. Manages asset downloads with checksum verification,
+ * tar.gz extraction, and updates the local installed-items manifest.
+ *
+ * For skill items, also ensures the shared _common/lib.sh files are
+ * present in the marketplace directory so installed skills can source them.
  *
  * @module services/marketplace/marketplace-installer.service
  */
 
 import path from 'path';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { homedir } from 'os';
+import { mkdir, rm, copyFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { createHash } from 'crypto';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
+import * as tar from 'tar';
 import {
   MarketplaceItem,
   MarketplaceOperationResult,
@@ -21,6 +29,7 @@ import {
   saveManifest,
   getInstallPath,
 } from './marketplace.service.js';
+import { findPackageRoot } from '../../utils/package-root.js';
 
 const MARKETPLACE_BASE_URL = 'https://crewly.stevesprompt.com';
 const ASSETS_ENDPOINT = '/api/assets';
@@ -32,8 +41,10 @@ const ASSETS_ENDPOINT = '/api/assets';
  * 1. Resolves the downloadable asset (archive or model)
  * 2. Downloads the asset from the Crewly CDN
  * 3. Verifies the SHA-256 checksum if provided
- * 4. Writes the asset to the local install directory
- * 5. Updates the installed-items manifest
+ * 4. Extracts tar.gz archives to the install directory (skills),
+ *    or writes raw files for non-archive assets (models)
+ * 5. Ensures _common/lib.sh files exist for skill items
+ * 6. Updates the installed-items manifest
  *
  * @param item - The marketplace item to install
  * @returns Operation result indicating success or failure with a message
@@ -72,8 +83,22 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
 
     // Write to install path
     await mkdir(installPath, { recursive: true });
-    const filename = path.basename(assetPath);
-    await writeFile(path.join(installPath, filename), data);
+
+    if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+      // Extract tar.gz archive contents into install directory
+      const readable = Readable.from(data);
+      await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+    } else {
+      // Non-archive asset (e.g., model file) — write raw
+      const filename = path.basename(assetPath);
+      const { writeFile } = await import('fs/promises');
+      await writeFile(path.join(installPath, filename), data);
+    }
+
+    // Ensure _common/lib.sh files are present for skill items
+    if (item.type === 'skill') {
+      await ensureCommonLibs();
+    }
 
     // Update manifest
     const record: InstalledItemRecord = {
@@ -146,4 +171,50 @@ export async function updateItem(item: MarketplaceItem): Promise<MarketplaceOper
     return { success: false, message: `Update failed during uninstall: ${uninstallResult.message}` };
   }
   return installItem(item);
+}
+
+/**
+ * Ensures the shared _common/lib.sh files exist in the marketplace directory.
+ *
+ * Marketplace-installed skills source _common/lib.sh relative to their directory.
+ * This function copies both the agent-level and root-level _common/lib.sh from
+ * the bundled package into the marketplace directory structure:
+ *
+ * ```
+ * ~/.crewly/marketplace/
+ * ├── skills/
+ * │   └── _common/
+ * │       └── lib.sh    ← agent _common (delegates to root _common)
+ * └── _common/
+ *     └── lib.sh        ← root shared library
+ * ```
+ *
+ * Safe to call multiple times — only copies if source files exist.
+ */
+export async function ensureCommonLibs(): Promise<void> {
+  let packageRoot: string;
+  try {
+    packageRoot = findPackageRoot(__dirname);
+  } catch {
+    // In compiled mode, __dirname may not resolve — try from cwd
+    packageRoot = findPackageRoot(process.cwd());
+  }
+
+  const mpBase = path.join(homedir(), '.crewly', 'marketplace');
+
+  // Copy agent _common/lib.sh
+  const agentCommonSrc = path.join(packageRoot, 'config', 'skills', 'agent', '_common', 'lib.sh');
+  const agentCommonDest = path.join(mpBase, 'skills', '_common');
+  if (existsSync(agentCommonSrc)) {
+    await mkdir(agentCommonDest, { recursive: true });
+    await copyFile(agentCommonSrc, path.join(agentCommonDest, 'lib.sh'));
+  }
+
+  // Copy root _common/lib.sh
+  const rootCommonSrc = path.join(packageRoot, 'config', 'skills', '_common', 'lib.sh');
+  const rootCommonDest = path.join(mpBase, '_common');
+  if (existsSync(rootCommonSrc)) {
+    await mkdir(rootCommonDest, { recursive: true });
+    await copyFile(rootCommonSrc, path.join(rootCommonDest, 'lib.sh'));
+  }
 }

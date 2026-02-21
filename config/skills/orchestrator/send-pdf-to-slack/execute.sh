@@ -105,7 +105,7 @@ trap cleanup EXIT
 
 # Convert markdown to PDF using weasyprint
 if ! "$PYTHON" -c "
-import sys, markdown, weasyprint
+import sys, os, re, markdown, weasyprint
 
 md_file = sys.argv[1]
 pdf_file = sys.argv[2]
@@ -113,28 +113,51 @@ pdf_file = sys.argv[2]
 with open(md_file, 'r', encoding='utf-8') as f:
     md_content = f.read()
 
+# Resolve the base directory for relative image paths
+base_dir = os.path.dirname(os.path.abspath(md_file))
+
+# Convert local absolute image paths to file:// URLs so weasyprint can load them
+def fix_image_paths(content):
+    # Match markdown image syntax: ![alt](path)
+    def replace_path(match):
+        alt = match.group(1)
+        path = match.group(2)
+        if os.path.isabs(path) and os.path.exists(path):
+            return '![' + alt + '](file://' + path + ')'
+        elif not path.startswith(('http://', 'https://', 'file://')) and os.path.exists(os.path.join(base_dir, path)):
+            full = os.path.join(base_dir, path)
+            return '![' + alt + '](file://' + full + ')'
+        return match.group(0)
+    return re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', replace_path, content)
+
+md_content = fix_image_paths(md_content)
+
 html = markdown.markdown(md_content, extensions=['tables', 'fenced_code', 'codehilite', 'toc', 'meta'])
 
 styled_html = '''<!DOCTYPE html>
 <html><head><meta charset=\"utf-8\">
 <style>
+  @page { size: A4; margin: 20mm 15mm; }
   body { font-family: -apple-system, \"Noto Sans SC\", \"PingFang SC\", \"Microsoft YaHei\", sans-serif;
-         max-width: 800px; margin: 40px auto; padding: 0 20px; line-height: 1.8;
+         max-width: 800px; margin: 0 auto; padding: 0; line-height: 1.8;
          font-size: 14px; color: #333; }
   h1 { font-size: 24px; border-bottom: 2px solid #333; padding-bottom: 8px; }
   h2 { font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 6px; margin-top: 28px; }
   h3 { font-size: 16px; margin-top: 20px; }
-  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
-  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  img { max-width: 100%; height: auto; display: block; margin: 16px auto;
+        border: 1px solid #e0e0e0; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
   th { background-color: #f5f5f5; font-weight: 600; }
   code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
   pre { background: #f4f4f4; padding: 16px; border-radius: 6px; overflow-x: auto; }
   blockquote { border-left: 4px solid #ddd; margin: 16px 0; padding: 8px 16px; color: #666; }
   ul, ol { padding-left: 24px; }
   li { margin: 4px 0; }
+  hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
 </style></head><body>''' + html + '</body></html>'
 
-weasyprint.HTML(string=styled_html).write_pdf(pdf_file)
+weasyprint.HTML(string=styled_html, base_url='file://' + base_dir + '/').write_pdf(pdf_file)
 " "$MD_FILE" "$PDF_FILE" 2>/tmp/weasyprint-err-$$.log; then
   WP_ERR="$(cat /tmp/weasyprint-err-$$.log 2>/dev/null || echo 'unknown error')"
   error_exit "weasyprint conversion failed: ${WP_ERR}"

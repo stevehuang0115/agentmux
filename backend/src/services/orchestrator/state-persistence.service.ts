@@ -11,6 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { atomicWriteJson } from '../../utils/file-io.utils.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
   OrchestratorState,
   ConversationState,
@@ -59,6 +60,7 @@ export class StatePersistenceService {
   private startTime: Date;
   private restartCount: number = 0;
   private initialized: boolean = false;
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('StatePersistence');
 
   /**
    * Create a new StatePersistenceService
@@ -92,10 +94,8 @@ export class StatePersistenceService {
 
     if (previousState) {
       this.restartCount = (previousState.metadata.restartCount || 0) + 1;
-      console.log(
-        `[StatePersistence] Loaded state from ${previousState.checkpointedAt}`
-      );
-      console.log(`[StatePersistence] Restart count: ${this.restartCount}`);
+      this.logger.info('Loaded state', { checkpointedAt: previousState.checkpointedAt });
+      this.logger.info('Restart count', { restartCount: this.restartCount });
     }
 
     // Initialize current state
@@ -168,9 +168,7 @@ export class StatePersistenceService {
 
       // Version check
       if (state.version !== STATE_VERSION) {
-        console.log(
-          `[StatePersistence] State version mismatch, migration needed`
-        );
+        this.logger.info('State version mismatch, migration needed');
         return await this.migrateState(state);
       }
 
@@ -179,7 +177,7 @@ export class StatePersistenceService {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null; // No previous state
       }
-      console.error('[StatePersistence] Error loading state:', error);
+      this.logger.error('Error loading state', { error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }
@@ -201,7 +199,7 @@ export class StatePersistenceService {
     const statePath = path.join(this.stateDir, STATE_PATHS.CURRENT_STATE);
     await atomicWriteJson(statePath, this.currentState);
 
-    console.log(`[StatePersistence] Checkpointed state (${reason})`);
+    this.logger.info('Checkpointed state', { reason });
   }
 
   /**
@@ -224,7 +222,7 @@ export class StatePersistenceService {
     const statePath = path.join(this.stateDir, STATE_PATHS.CURRENT_STATE);
     await fs.copyFile(statePath, backupPath);
 
-    console.log(`[StatePersistence] Created backup: ${backupId}`);
+    this.logger.info('Created backup', { backupId });
     return backupId;
   }
 
@@ -248,10 +246,10 @@ export class StatePersistenceService {
       // Save restored state as current
       await this.saveState('error_recovery');
 
-      console.log(`[StatePersistence] Restored from backup: ${backupId}`);
+      this.logger.info('Restored from backup', { backupId });
       return true;
     } catch (error) {
-      console.error('[StatePersistence] Failed to restore backup:', error);
+      this.logger.error('Failed to restore backup', { error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -544,7 +542,7 @@ export class StatePersistenceService {
   async prepareForShutdown(): Promise<void> {
     this.stopPeriodicCheckpoint();
     await this.saveState('before_restart');
-    console.log('[StatePersistence] State saved before shutdown');
+    this.logger.info('State saved before shutdown');
   }
 
   /**
@@ -558,7 +556,7 @@ export class StatePersistenceService {
   ): Promise<OrchestratorState | null> {
     // For now, just return the state as-is
     // Add migration logic as versions evolve
-    console.log(`[StatePersistence] Migrating from version ${oldState.version}`);
+    this.logger.info('Migrating state from older version', { version: oldState.version });
     return oldState;
   }
 
@@ -579,10 +577,10 @@ export class StatePersistenceService {
       // Delete oldest backups beyond keepCount
       for (const file of backupFiles.slice(keepCount)) {
         await fs.unlink(path.join(backupDir, file));
-        console.log(`[StatePersistence] Deleted old backup: ${file}`);
+        this.logger.info('Deleted old backup', { file });
       }
     } catch (error) {
-      console.error('[StatePersistence] Error cleaning backups:', error);
+      this.logger.error('Error cleaning backups', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

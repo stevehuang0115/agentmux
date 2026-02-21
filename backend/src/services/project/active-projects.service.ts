@@ -7,6 +7,7 @@ import { ScheduledMessage } from '../../types/index.js';
 import { ScheduledMessageModel } from '../../models/ScheduledMessage.js';
 import { StorageService } from '../core/storage.service.js';
 import { PromptTemplateService, CheckinData } from '../ai/prompt-template.service.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export interface ActiveProject {
   projectId: string;
@@ -27,6 +28,7 @@ export class ActiveProjectsService {
   private readonly activeProjectsPath: string;
   private storageService?: StorageService;
   private promptTemplateService: PromptTemplateService;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('ActiveProjectsService');
 
   constructor(storageService?: StorageService) {
     this.activeProjectsPath = path.join(os.homedir(), '.crewly', 'active_projects.json');
@@ -49,7 +51,7 @@ export class ActiveProjectsService {
       const content = await fs.readFile(this.activeProjectsPath, 'utf-8');
       return JSON.parse(content);
     } catch (error) {
-      console.error('Error loading active projects data:', error);
+      this.logger.error('Error loading active projects data', { error: error instanceof Error ? error.message : String(error) });
       return {
         activeProjects: [],
         lastUpdated: new Date().toISOString(),
@@ -68,7 +70,7 @@ export class ActiveProjectsService {
       
       await fs.writeFile(this.activeProjectsPath, JSON.stringify(data, null, 2), 'utf-8');
     } catch (error) {
-      console.error('Error saving active projects data:', error);
+      this.logger.error('Error saving active projects data', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -116,7 +118,7 @@ export class ActiveProjectsService {
         projectEntry.gitCommitScheduleId = gitCommitScheduleId;
 
       } catch (scheduleError) {
-        console.warn('Failed to create scheduled messages for project:', scheduleError);
+        this.logger.warn('Failed to create scheduled messages for project', { error: scheduleError instanceof Error ? scheduleError.message : String(scheduleError) });
         // Continue without scheduled messages
       }
     }
@@ -160,7 +162,7 @@ export class ActiveProjectsService {
           messageSchedulerService.cancelMessage(project.gitCommitScheduleId);
         }
       } catch (scheduleError) {
-        console.warn('Failed to cancel scheduled messages for project:', scheduleError);
+        this.logger.warn('Failed to cancel scheduled messages for project', { error: scheduleError instanceof Error ? scheduleError.message : String(scheduleError) });
         // Continue with stopping project
       }
     }
@@ -190,7 +192,7 @@ export class ActiveProjectsService {
       await this.stopProject(projectId, messageSchedulerService);
     } catch (error) {
       // Project might not be running, continue with restart
-      console.log('Project was not running, starting fresh:', error);
+      this.logger.info('Project was not running, starting fresh', { error: error instanceof Error ? error.message : String(error) });
     }
 
     return await this.startProject(projectId, messageSchedulerService);
@@ -277,7 +279,7 @@ Use: \`check_team_progress { "projectId": "${projectId}" }\``;
 Use: \`check_team_progress { "projectId": "${projectId}" }\``;
       }
     } catch (error) {
-      console.warn('Failed to load unified check-in template, using fallback:', error);
+      this.logger.warn('Failed to load unified check-in template, using fallback', { error: error instanceof Error ? error.message : String(error) });
       // Fallback message
       checkInMessage = `🔄 **15-Minute Project Check-in & Auto-Assignment**
 

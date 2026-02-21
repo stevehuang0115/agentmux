@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useAlert, useConfirm } from '../../UI/Dialog';
-import { ScheduledMessage, ScheduledMessageFormData, MessageDeliveryLog, TeamOption, DEFAULT_FORM_DATA } from '../types';
+import { ScheduledMessage, ScheduledMessageFormData, MessageDeliveryLog, TeamOption, ScheduledCheck, DEFAULT_FORM_DATA } from '../types';
 
 export const useScheduledMessages = () => {
   const [scheduledMessages, setScheduledMessages] = useState<ScheduledMessage[]>([]);
+  const [scheduledChecks, setScheduledChecks] = useState<ScheduledCheck[]>([]);
   const [deliveryLogs, setDeliveryLogs] = useState<MessageDeliveryLog[]>([]);
   const [teamOptions, setTeamOptions] = useState<TeamOption[]>([{ value: 'orchestrator', label: 'Orchestrator' }]);
   const [loading, setLoading] = useState(true);
@@ -15,6 +16,7 @@ export const useScheduledMessages = () => {
 
   useEffect(() => {
     loadScheduledMessages();
+    loadScheduledChecks();
     loadDeliveryLogs();
     loadTeamOptions();
   }, []);
@@ -32,6 +34,50 @@ export const useScheduledMessages = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  /**
+   * Loads scheduled checks from the SchedulerService (/api/schedule).
+   * These are orchestrator-created check-ins (recurring or one-time).
+   */
+  const loadScheduledChecks = async () => {
+    try {
+      const response = await fetch('/api/schedule');
+      if (response.ok) {
+        const result = await response.json();
+        setScheduledChecks(result.data || []);
+      }
+    } catch (error) {
+      console.error('Error loading scheduled checks:', error);
+    }
+  };
+
+  /**
+   * Cancel a scheduled check by ID via DELETE /api/schedule/:id,
+   * then refresh the list.
+   */
+  const handleCancelCheck = async (id: string, message: string) => {
+    const doCancel = async () => {
+      try {
+        const response = await fetch(`/api/schedule/${id}`, { method: 'DELETE' });
+        if (response.ok) {
+          showSuccess('Scheduled check cancelled');
+          await loadScheduledChecks();
+        } else {
+          const error = await response.text();
+          showError('Failed to cancel scheduled check: ' + error);
+        }
+      } catch (error) {
+        console.error('Error cancelling scheduled check:', error);
+        showError('Failed to cancel scheduled check: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      }
+    };
+    const preview = message.length > 60 ? message.slice(0, 60) + '...' : message;
+    showConfirm(
+      `Cancel this scheduled check?\n\n"${preview}"`,
+      doCancel,
+      { type: 'warning', title: 'Cancel Scheduled Check', confirmText: 'Cancel Check' }
+    );
   };
 
   const loadDeliveryLogs = async () => {
@@ -233,6 +279,7 @@ export const useScheduledMessages = () => {
   return {
     // State
     scheduledMessages,
+    scheduledChecks,
     deliveryLogs,
     teamOptions,
     loading,
@@ -248,6 +295,7 @@ export const useScheduledMessages = () => {
     handleEdit,
     handleCreate,
     handleCloseModal,
+    handleCancelCheck,
     clearDeliveryLogs,
     // Utils
     formatDate,

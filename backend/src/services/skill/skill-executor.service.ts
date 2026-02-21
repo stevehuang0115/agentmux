@@ -22,6 +22,7 @@ import {
 } from '../../types/skill.types.js';
 import { getSkillService } from './skill.service.js';
 import { getSettingsService } from '../settings/settings.service.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Result of process execution
@@ -43,6 +44,7 @@ interface ProcessResult {
  */
 export class SkillExecutorService {
   private readonly defaultTimeoutMs: number = SKILL_CONSTANTS.DEFAULTS.SCRIPT_TIMEOUT_MS;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('SkillExecutorService');
 
   /**
    * Execute a skill by ID
@@ -127,7 +129,7 @@ export class SkillExecutorService {
       }
     } catch (error) {
       // If settings can't be loaded, continue with defaults (allow execution)
-      console.warn('Failed to load settings, continuing with defaults:', error);
+      this.logger.warn('Failed to load settings, continuing with defaults', { error: error instanceof Error ? error.message : String(error) });
     }
 
     const executionType = skill.execution?.type ?? 'prompt-only';
@@ -393,7 +395,7 @@ export class SkillExecutorService {
         const parsed = this.parseEnvFile(envContent);
         Object.assign(env, parsed);
       } catch (error) {
-        console.warn(`Failed to load env file: ${envFilePath}`);
+        this.logger.warn('Failed to load env file', { envFilePath });
       }
     }
 

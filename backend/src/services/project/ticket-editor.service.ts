@@ -12,6 +12,7 @@ import {
 } from '../../types/task-tracking.types.js';
 import { CONTINUATION_CONSTANTS } from '../../constants.js';
 import { v4 as uuidv4 } from 'uuid';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export interface Subtask {
   id: string;
@@ -50,6 +51,7 @@ export interface TicketTemplate {
 
 export class TicketEditorService {
   private ticketsDir: string;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TicketEditorService');
 
   constructor(projectPath?: string) {
     this.ticketsDir = projectPath 
@@ -130,7 +132,7 @@ export class TicketEditorService {
       const content = await fs.readFile(filePath, 'utf-8');
       return parseYAML(content) as ExtendedTicket;
     } catch (error) {
-      console.error(`Error reading ticket ${ticketId}:`, error);
+      this.logger.error('Error reading ticket', { ticketId, error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }
@@ -162,7 +164,7 @@ export class TicketEditorService {
         
         tickets.push(ticket);
       } catch (error) {
-        console.error(`Error reading ticket file ${file}:`, error);
+        this.logger.error('Error reading ticket file', { file, error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -192,7 +194,7 @@ export class TicketEditorService {
       await fs.unlink(filePath);
       return true;
     } catch (error) {
-      console.error(`Error deleting ticket ${ticketId}:`, error);
+      this.logger.error('Error deleting ticket', { ticketId, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -272,7 +274,7 @@ export class TicketEditorService {
       const content = await fs.readFile(templatePath, 'utf-8');
       return parseYAML(content) as TicketTemplate;
     } catch (error) {
-      console.error(`Error reading template ${name}:`, error);
+      this.logger.error('Error reading template', { name, error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }

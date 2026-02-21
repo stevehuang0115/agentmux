@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
 import { TicketEditorService } from '../../services/index.js';
 import { ApiResponse } from '../../types/index.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('TicketsController');
 
 export async function createTicket(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
@@ -14,7 +17,7 @@ export async function createTicket(this: ApiContext, req: Request, res: Response
     const ticket = await svc.createTicket(ticketData);
     res.json({ success: true, data: ticket } as ApiResponse);
   } catch (error) {
-    console.error('Error creating ticket:', error);
+    logger.error('Error creating ticket', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to create ticket' } as ApiResponse);
   }
 }
@@ -31,7 +34,7 @@ export async function getTickets(this: ApiContext, req: Request, res: Response):
     const tickets = await svc.getAllTickets(filter);
     res.json({ success: true, data: tickets } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching tickets:', error);
+    logger.error('Error fetching tickets', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch tickets' } as ApiResponse);
   }
 }
@@ -47,7 +50,7 @@ export async function getTicket(this: ApiContext, req: Request, res: Response): 
     if (!ticket) { res.status(404).json({ success: false, error: 'Ticket not found' } as ApiResponse); return; }
     res.json({ success: true, data: ticket } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching ticket:', error);
+    logger.error('Error fetching ticket', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch ticket' } as ApiResponse);
   }
 }
@@ -64,7 +67,7 @@ export async function updateTicket(this: ApiContext, req: Request, res: Response
     if (!ticket) { res.status(404).json({ success: false, error: 'Ticket not found' } as ApiResponse); return; }
     res.json({ success: true, data: ticket } as ApiResponse);
   } catch (error) {
-    console.error('Error updating ticket:', error);
+    logger.error('Error updating ticket', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: (error as Error).message || 'Failed to update ticket' } as ApiResponse);
   }
 }
@@ -80,7 +83,7 @@ export async function deleteTicket(this: ApiContext, req: Request, res: Response
     if (!deleted) { res.status(404).json({ success: false, error: 'Ticket not found' } as ApiResponse); return; }
     res.json({ success: true, data: { deleted: true } } as ApiResponse);
   } catch (error) {
-    console.error('Error deleting ticket:', error);
+    logger.error('Error deleting ticket', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to delete ticket' } as ApiResponse);
   }
 }
@@ -97,7 +100,7 @@ export async function addSubtask(this: ApiContext, req: Request, res: Response):
     if (!ticket) { res.status(404).json({ success: false, error: 'Ticket not found' } as ApiResponse); return; }
     res.json({ success: true, data: ticket } as ApiResponse);
   } catch (error) {
-    console.error('Error adding subtask:', error);
+    logger.error('Error adding subtask', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to add subtask' } as ApiResponse);
   }
 }
@@ -113,7 +116,7 @@ export async function toggleSubtask(this: ApiContext, req: Request, res: Respons
     if (!ticket) { res.status(404).json({ success: false, error: 'Ticket or subtask not found' } as ApiResponse); return; }
     res.json({ success: true, data: ticket } as ApiResponse);
   } catch (error) {
-    console.error('Error toggling subtask:', error);
+    logger.error('Error toggling subtask', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to toggle subtask' } as ApiResponse);
   }
 }
@@ -129,7 +132,7 @@ export async function createTicketTemplate(this: ApiContext, req: Request, res: 
     await svc.createTicketTemplate(templateName, templateData);
     res.json({ success: true, data: { templateName, created: true } } as ApiResponse);
   } catch (error) {
-    console.error('Error creating ticket template:', error);
+    logger.error('Error creating ticket template', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to create ticket template' } as ApiResponse);
   }
 }
@@ -144,7 +147,7 @@ export async function getTicketTemplates(this: ApiContext, req: Request, res: Re
     const templates = await svc.getAllTemplates();
     res.json({ success: true, data: templates } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching ticket templates:', error);
+    logger.error('Error fetching ticket templates', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch ticket templates' } as ApiResponse);
   }
 }
@@ -160,7 +163,7 @@ export async function getTicketTemplate(this: ApiContext, req: Request, res: Res
     if (!template) { res.status(404).json({ success: false, error: 'Template not found' } as ApiResponse); return; }
     res.json({ success: true, data: template } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching ticket template:', error);
+    logger.error('Error fetching ticket template', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch ticket template' } as ApiResponse);
   }
 }

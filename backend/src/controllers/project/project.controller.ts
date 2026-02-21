@@ -25,6 +25,9 @@ import { ContextLoaderService, TicketEditorService, TaskService } from '../../se
 import { ApiResponse, Project, TeamMember } from '../../types/index.js';
 import { getFileIcon, countFiles } from '../utils/file-utils.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('ProjectController');
 
 const execAsync = promisify(exec);
 
@@ -85,13 +88,10 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 				orchestratorStatus?.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
 
 			if (isGeminiOrchestrator && isOrchestratorActive) {
-				console.log(
-					'Orchestrator is running with Gemini CLI, adding new project to allowlist...',
-					{
+				logger.info('Orchestrator is running with Gemini CLI, adding new project to allowlist', {
 						projectPath: finalProject.path,
 						projectName: finalProject.name,
-					}
-				);
+					});
 
 				// Import RuntimeServiceFactory dynamically to avoid circular dependency
 				const { RuntimeServiceFactory } = await import(
@@ -118,19 +118,17 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 					finalProject.path
 				);
 
-				console.log('Gemini CLI allowlist update result for new project:', {
+				logger.info('Gemini CLI allowlist update result for new project', {
 					projectPath: finalProject.path,
 					success: allowlistResult.success,
 					message: allowlistResult.message,
 				});
 			} else if (isGeminiOrchestrator && !isOrchestratorActive) {
-				console.log(
-					'Orchestrator uses Gemini CLI but is not active, project allowlist will be updated when orchestrator starts'
-				);
+				logger.info('Orchestrator uses Gemini CLI but is not active, project allowlist will be updated when orchestrator starts');
 			}
 		} catch (error) {
 			// Log error but continue - as per requirement, don't fail project creation
-			console.warn('Failed to add new project to Gemini CLI allowlist (continuing anyway):', {
+			logger.warn('Failed to add new project to Gemini CLI allowlist (continuing anyway)', {
 				projectPath: finalProject.path,
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -142,7 +140,7 @@ export async function createProject(this: ApiContext, req: Request, res: Respons
 			message: 'Project added successfully',
 		} as ApiResponse<Project>);
 	} catch (error) {
-		console.error('Error creating project:', error);
+		logger.error('Error creating project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to create project' } as ApiResponse);
 	}
 }
@@ -152,7 +150,7 @@ export async function getProjects(this: ApiContext, req: Request, res: Response)
 		const projects = await this.storageService.getProjects();
 		res.json({ success: true, data: projects } as ApiResponse<Project[]>);
 	} catch (error) {
-		console.error('Error getting projects:', error);
+		logger.error('Error getting projects', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to retrieve projects',
@@ -171,7 +169,7 @@ export async function getProject(this: ApiContext, req: Request, res: Response):
 		}
 		res.json({ success: true, data: project } as ApiResponse<Project>);
 	} catch (error) {
-		console.error('Error getting project:', error);
+		logger.error('Error getting project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to retrieve project',
@@ -204,7 +202,7 @@ export async function getProjectStatus(
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error getting project status:', error);
+		logger.error('Error getting project status', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get project status',
@@ -298,7 +296,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 				// Save the scheduled message ID to the project for stop functionality
 				project.scheduledMessageId = checkinScheduleId;
 			} catch (e) {
-				console.warn('Failed to create check-in scheduled message:', e);
+				logger.warn('Failed to create check-in scheduled message', { error: e instanceof Error ? e.message : String(e) });
 			}
 		}
 
@@ -310,7 +308,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 				this.messageSchedulerService
 			);
 		} catch (e) {
-			console.warn('Failed to start project lifecycle management:', e);
+			logger.warn('Failed to start project lifecycle management', { error: e instanceof Error ? e.message : String(e) });
 		}
 		res.json({
 			success: true,
@@ -325,7 +323,7 @@ export async function startProject(this: ApiContext, req: Request, res: Response
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error starting project:', error);
+		logger.error('Error starting project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to start project' } as ApiResponse);
 	}
 }
@@ -346,16 +344,16 @@ export async function stopProject(this: ApiContext, req: Request, res: Response)
 			cleanupProjectScheduledMessages.call(this, id));
 
 		if (cleanupResult.errors.length > 0) {
-			console.warn(`${cleanupResult.errors.length} errors occurred during message cleanup:`, cleanupResult.errors);
+			logger.warn('Errors occurred during message cleanup', { errorCount: cleanupResult.errors.length, errors: cleanupResult.errors });
 		}
 
-		console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages for project ${id}`);
+		logger.info('Successfully cleaned up scheduled messages for project', { cancelled: cleanupResult.cancelled, found: cleanupResult.found, projectId: id });
 		project.scheduledMessageId = undefined; // Clear the schedule ID
 
 		try {
 			await this.activeProjectsService.stopProject(id, this.messageSchedulerService);
 		} catch (e) {
-			console.warn('Failed to stop project lifecycle management:', e);
+			logger.warn('Failed to stop project lifecycle management', { error: e instanceof Error ? e.message : String(e) });
 		}
 		project.status = 'stopped';
 		await this.storageService.saveProject(project);
@@ -365,7 +363,7 @@ export async function stopProject(this: ApiContext, req: Request, res: Response)
 			data: { projectId: id, status: 'stopped' },
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error stopping project:', error);
+		logger.error('Error stopping project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to stop project' } as ApiResponse);
 	}
 }
@@ -386,7 +384,7 @@ export async function restartProject(this: ApiContext, req: Request, res: Respon
 				this.messageSchedulerService
 			);
 		} catch (e) {
-			console.warn('Failed to restart project lifecycle management:', e);
+			logger.warn('Failed to restart project lifecycle management', { error: e instanceof Error ? e.message : String(e) });
 		}
 		project.status = 'active';
 		await this.storageService.saveProject(project);
@@ -401,7 +399,7 @@ export async function restartProject(this: ApiContext, req: Request, res: Respon
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error restarting project:', error);
+		logger.error('Error restarting project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to restart project' } as ApiResponse);
 	}
 }
@@ -483,10 +481,7 @@ export async function assignTeamsToProject(
 					await this.tmuxService.sendMessage(orchestratorSession, orchestratorPrompt);
 				}
 			} catch (notificationError) {
-				console.warn(
-					'Failed to notify orchestrator about team assignment:',
-					notificationError
-				);
+				logger.warn('Failed to notify orchestrator about team assignment', { error: notificationError instanceof Error ? notificationError.message : String(notificationError) });
 			}
 		}
 		res.json({
@@ -495,7 +490,7 @@ export async function assignTeamsToProject(
 			message: 'Teams assigned to project successfully',
 		} as ApiResponse<Project>);
 	} catch (error) {
-		console.error('Error assigning teams to project:', error);
+		logger.error('Error assigning teams to project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to assign teams to project',
@@ -566,10 +561,7 @@ export async function unassignTeamFromProject(
 				await this.tmuxService.sendMessage(orchestratorSession, notificationMessage);
 			}
 		} catch (notificationError) {
-			console.warn(
-				'Failed to notify orchestrator about team unassignment:',
-				notificationError
-			);
+			logger.warn('Failed to notify orchestrator about team unassignment', { error: notificationError instanceof Error ? notificationError.message : String(notificationError) });
 		}
 		res.json({
 			success: true,
@@ -577,7 +569,7 @@ export async function unassignTeamFromProject(
 			message: `Team "${team.name}" unassigned from project "${project.name}" successfully`,
 		} as ApiResponse<Project>);
 	} catch (error) {
-		console.error('Error unassigning team from project:', error);
+		logger.error('Error unassigning team from project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to unassign team from project',
@@ -685,7 +677,7 @@ export async function getProjectFiles(
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error getting project files:', error);
+		logger.error('Error getting project files', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get project files',
@@ -746,7 +738,7 @@ export async function getFileContent(this: ApiContext, req: Request, res: Respon
 			else throw fileError;
 		}
 	} catch (error) {
-		console.error('Error reading file content:', error);
+		logger.error('Error reading file content', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to read file content',
@@ -790,7 +782,7 @@ export async function getAgentmuxMarkdownFiles(
 		await scanDirectory(crewlyPath);
 		res.json({ success: true, data: { files } } as ApiResponse<{ files: string[] }>);
 	} catch (error) {
-		console.error('Error scanning .crewly files:', error);
+		logger.error('Error scanning .crewly files', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to scan .crewly files',
@@ -826,7 +818,7 @@ export async function saveMarkdownFile(
 		await fs.writeFile(fullFilePath, content, 'utf8');
 		res.json({ success: true, message: 'File saved successfully' } as ApiResponse);
 	} catch (error) {
-		console.error('Error saving markdown file:', error);
+		logger.error('Error saving markdown file', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to save file' } as ApiResponse);
 	}
 }
@@ -858,7 +850,7 @@ export async function getProjectCompletion(
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error getting project completion:', error);
+		logger.error('Error getting project completion', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get project completion',
@@ -882,10 +874,10 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 			cleanupProjectScheduledMessages.call(this, id));
 
 		if (cleanupResult.errors.length > 0) {
-			console.warn(`${cleanupResult.errors.length} errors occurred during message cleanup before deletion:`, cleanupResult.errors);
+			logger.warn('Errors occurred during message cleanup before deletion', { errorCount: cleanupResult.errors.length, errors: cleanupResult.errors });
 		}
 
-		console.log(`Successfully cleaned up ${cleanupResult.cancelled}/${cleanupResult.found} scheduled messages before deleting project ${id}`);
+		logger.info('Successfully cleaned up scheduled messages before deleting project', { cancelled: cleanupResult.cancelled, found: cleanupResult.found, projectId: id });
 
 		const teams = await this.storageService.getTeams();
 		const activeTeams = teams.filter((t) => t.projectIds.includes(id));
@@ -902,7 +894,7 @@ export async function deleteProject(this: ApiContext, req: Request, res: Respons
 			message: `Project deleted successfully. ${activeTeams.length} teams were unassigned and ${cleanupResult.cancelled} scheduled messages were cancelled.`,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error deleting project:', error);
+		logger.error('Error deleting project', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to delete project' } as ApiResponse);
 	}
 }
@@ -974,7 +966,7 @@ export async function getProjectStats(
 			message: 'Project stats retrieved successfully',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error getting project stats:', error);
+		logger.error('Error getting project stats', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get project stats',
@@ -1011,11 +1003,11 @@ export async function openProjectInFinder(
 			await execAsync(`open "${resolvedProjectPath}"`);
 			res.json({ success: true, message: 'Project folder opened in Finder' } as ApiResponse);
 		} catch (e) {
-			console.error('Error opening Finder:', e);
+			logger.error('Error opening Finder', { error: e instanceof Error ? e.message : String(e) });
 			res.status(500).json({ success: false, error: 'Failed to open Finder' } as ApiResponse);
 		}
 	} catch (error) {
-		console.error('Error opening project in Finder:', error);
+		logger.error('Error opening project in Finder', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to open project in Finder',
@@ -1054,14 +1046,14 @@ export async function createSpecFile(this: ApiContext, req: Request, res: Respon
 				message: `${fileName} saved successfully`,
 			} as ApiResponse);
 		} catch (error) {
-			console.error('Error creating spec file:', error);
+			logger.error('Error creating spec file', { error: error instanceof Error ? error.message : String(error) });
 			res.status(500).json({
 				success: false,
 				error: 'Failed to create spec file',
 			} as ApiResponse);
 		}
 	} catch (error) {
-		console.error('Error creating spec file:', error);
+		logger.error('Error creating spec file', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to create spec file',
@@ -1109,7 +1101,7 @@ export async function getSpecFileContent(
 			} as ApiResponse);
 		}
 	} catch (error) {
-		console.error('Error getting spec file content:', error);
+		logger.error('Error getting spec file content', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get spec file content',
@@ -1143,7 +1135,7 @@ export async function getProjectContext(
 		});
 		res.json({ success: true, data: context } as ApiResponse);
 	} catch (error) {
-		console.error('Error loading project context:', error);
+		logger.error('Error loading project context', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to load project context',
@@ -1177,7 +1169,7 @@ export async function getAlignmentStatus(
 
 		res.json({ success: true, data: alignmentStatus } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting alignment status:', error);
+		logger.error('Error getting alignment status', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get alignment status',
@@ -1204,16 +1196,14 @@ export async function continueWithMisalignment(
 		}
 
 		// Log the decision to continue with misalignment
-		console.log(
-			`User chose to continue with misalignment for project: ${project.name} (${id})`
-		);
+		logger.info('User chose to continue with misalignment for project', { projectName: project.name, projectId: id });
 
 		res.json({
 			success: true,
 			message: 'Continuing with misalignment acknowledged',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error handling continue with misalignment:', error);
+		logger.error('Error handling continue with misalignment', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to handle continue with misalignment',
@@ -1239,17 +1229,17 @@ export async function cleanupProjectScheduledMessages(
 	};
 
 	try {
-		console.log(`Starting scheduled message cleanup for project ${projectId}...`);
+		logger.info('Starting scheduled message cleanup for project', { projectId });
 
 		// Get all scheduled messages for this project
 		const allMessages = await this.storageService.getScheduledMessages();
 		const projectMessages = allMessages.filter((msg) => msg.targetProject === projectId);
 
 		result.found = projectMessages.length;
-		console.log(`Found ${result.found} scheduled messages to clean up for project ${projectId}`);
+		logger.info('Found scheduled messages to clean up for project', { count: result.found, projectId });
 
 		if (result.found === 0) {
-			console.log('No scheduled messages found for this project');
+			logger.info('No scheduled messages found for this project');
 			return result;
 		}
 
@@ -1259,19 +1249,19 @@ export async function cleanupProjectScheduledMessages(
 				// Cancel from scheduler if messageSchedulerService is available
 				if (this.messageSchedulerService) {
 					this.messageSchedulerService.cancelMessage(message.id);
-					console.log(`Cancelled message "${message.name}" from scheduler`);
+					logger.info('Cancelled message from scheduler', { messageName: message.name });
 				}
 
 				// Delete from storage
 				await this.storageService.deleteScheduledMessage(message.id);
-				console.log(`Deleted message "${message.name}" from storage`);
+				logger.info('Deleted message from storage', { messageName: message.name });
 
 				result.cancelled++;
 
 			} catch (msgError) {
 				const errorMsg = `Failed to cleanup message "${message.name}" (${message.id}): ${msgError instanceof Error ? msgError.message : 'Unknown error'}`;
 				result.errors.push(errorMsg);
-				console.error(errorMsg);
+				logger.error(errorMsg);
 
 				// Try to at least deactivate the message if we can't delete it
 				try {
@@ -1281,23 +1271,23 @@ export async function cleanupProjectScheduledMessages(
 						updatedAt: new Date().toISOString()
 					};
 					await this.storageService.saveScheduledMessage(deactivatedMessage);
-					console.log(`Deactivated message "${message.name}" as fallback`);
+					logger.info('Deactivated message as fallback', { messageName: message.name });
 				} catch (deactivateError) {
-					console.error(`Failed to deactivate message "${message.name}":`, deactivateError);
+					logger.error('Failed to deactivate message', { messageName: message.name, error: deactivateError instanceof Error ? deactivateError.message : String(deactivateError) });
 				}
 			}
 		}
 
-		console.log(`Message cleanup complete: ${result.cancelled}/${result.found} messages cleaned up successfully`);
+		logger.info('Message cleanup complete', { cancelled: result.cancelled, found: result.found });
 
 		if (result.errors.length > 0) {
-			console.warn(`${result.errors.length} errors occurred during cleanup`);
+			logger.warn('Errors occurred during cleanup', { errorCount: result.errors.length });
 		}
 
 	} catch (error) {
 		const errorMsg = `Failed to cleanup scheduled messages for project ${projectId}: ${error instanceof Error ? error.message : 'Unknown error'}`;
 		result.errors.push(errorMsg);
-		console.error(errorMsg);
+		logger.error(errorMsg);
 	}
 
 	return result;

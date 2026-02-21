@@ -6,7 +6,9 @@ import { writeFile, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { CREWLY_CONSTANTS, type WorkingStatus } from '../../constants.js';
+import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, AGENT_IDENTITY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, type WorkingStatus } from '../../constants.js';
+import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
+import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 
 /**
  * Team Working Status File Structure
@@ -163,45 +165,77 @@ export class ActivityMonitorService {
 
     try {
       // Step 1: Detect stale agents and mark dead ones as inactive
-      const staleAgents = await this.agentHeartbeatService.detectStaleAgents(30);
+      const staleThreshold = CONTINUATION_CONSTANTS.DETECTION.STALE_THRESHOLD_MINUTES;
+      const staleAgents = await this.agentHeartbeatService.detectStaleAgents(staleThreshold);
       if (staleAgents.length > 0) {
         this.logger.info('Detected stale agents for potential inactivity', {
           staleAgents,
-          thresholdMinutes: 30
+          thresholdMinutes: staleThreshold
         });
 
-        // Check each stale agent's PTY session; if dead, mark as inactive
+        // Batch-check stale agents and mark dead ones as inactive.
+        // We read teams ONCE, update all dead members in memory, and save
+        // each modified team ONCE — instead of calling updateAgentStatus()
+        // per agent which does a full getTeams()+saveTeam() each time,
+        // flooding the libuv thread pool with I/O.
         try {
           const backend = await this.getBackend();
           const heartbeats = await this.agentHeartbeatService.getAllAgentHeartbeats();
 
+          // Collect dead session names first
+          const deadSessions = new Set<string>();
           for (const agentId of staleAgents) {
-            try {
-              // Resolve session name from heartbeat data
-              let sessionName: string | undefined;
-              if (agentId === 'orchestrator') {
-                sessionName = heartbeats.orchestrator?.sessionName;
-              } else {
-                sessionName = heartbeats.teamMembers[agentId]?.sessionName;
-              }
+            let sessionName: string | undefined;
+            if (agentId === 'orchestrator') {
+              sessionName = heartbeats.orchestrator?.sessionName;
+            } else {
+              sessionName = heartbeats.teamMembers[agentId]?.sessionName;
+            }
+            if (!sessionName) continue;
 
-              if (!sessionName) {
-                continue;
-              }
-
-              const sessionAlive = backend.sessionExists(sessionName);
-              if (!sessionAlive) {
-                this.logger.info('Marking stale agent as inactive (session dead)', {
-                  agentId,
-                  sessionName
-                });
-                await this.storageService.updateAgentStatus(sessionName, CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
-              }
-            } catch (agentError) {
-              this.logger.error('Error checking stale agent session', {
+            const sessionAlive = backend.sessionExists(sessionName);
+            if (!sessionAlive) {
+              this.logger.info('Marking stale agent as inactive (session dead)', {
                 agentId,
-                error: agentError instanceof Error ? agentError.message : String(agentError)
+                sessionName
               });
+              deadSessions.add(sessionName);
+            } else if (agentId === AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID) {
+              this.logger.debug('Orchestrator is stale but auto-restart is disabled', {
+                sessionName,
+              });
+            }
+          }
+
+          // Update orchestrator if dead
+          if (deadSessions.has(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME)) {
+            await this.storageService.updateAgentStatus(
+              CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+              CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+            );
+            deadSessions.delete(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+          }
+
+          // Batch-update team members: read teams once, save each modified team once
+          if (deadSessions.size > 0) {
+            const teams = await this.storageService.getTeams();
+            const modifiedTeams = new Set<string>();
+
+            for (const team of teams) {
+              for (const member of team.members || []) {
+                if (deadSessions.has(member.sessionName)) {
+                  member.agentStatus = CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as any;
+                  member.updatedAt = new Date().toISOString();
+                  modifiedTeams.add(team.id);
+                }
+              }
+            }
+
+            // Save each modified team once (sequentially to avoid lock contention)
+            for (const team of teams) {
+              if (modifiedTeams.has(team.id)) {
+                await this.storageService.saveTeam(team);
+              }
             }
           }
         } catch (cleanupError) {
@@ -228,6 +262,13 @@ export class ActivityMonitorService {
         const orchestratorOutput = await this.getTerminalOutput(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
         const previousOutput = this.lastTerminalOutputs.get('orchestrator') || '';
         const outputChanged = orchestratorOutput !== previousOutput && orchestratorOutput.trim() !== '';
+
+        // Bridge to PtyActivityTracker so idle/heartbeat checks detect activity
+        // even when no WebSocket clients are connected
+        if (outputChanged) {
+          PtyActivityTrackerService.getInstance().recordActivity(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME);
+        }
+
         const newWorkingStatus: WorkingStatus = outputChanged ? 'in_progress' : 'idle';
 
         if (workingStatusData.orchestrator.workingStatus !== newWorkingStatus) {

@@ -59,6 +59,7 @@ describe('Settings Types', () => {
           'gemini-cli': 'gemini --yolo',
           'codex-cli': 'codex --full-auto',
         },
+        agentIdleTimeoutMinutes: 10,
       };
 
       expect(settings.defaultRuntime).toBe('claude-code');
@@ -68,6 +69,7 @@ describe('Settings Types', () => {
       expect(settings.verboseLogging).toBe(false);
       expect(settings.autoResumeOnRestart).toBe(true);
       expect(settings.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
+      expect(settings.agentIdleTimeoutMinutes).toBe(10);
     });
 
     it('should allow custom runtime commands for all runtimes', () => {
@@ -83,6 +85,7 @@ describe('Settings Types', () => {
           'gemini-cli': '/custom/gemini --custom-flag',
           'codex-cli': '/custom/codex --custom-flag',
         },
+        agentIdleTimeoutMinutes: 15,
       };
 
       expect(settings.runtimeCommands['claude-code']).toContain('/custom/path');
@@ -140,6 +143,7 @@ describe('Settings Types', () => {
             'gemini-cli': 'gemini --yolo',
             'codex-cli': 'codex --full-auto',
           },
+          agentIdleTimeoutMinutes: 10,
         },
         chat: {
           showRawTerminalOutput: false,

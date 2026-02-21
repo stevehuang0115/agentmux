@@ -37,6 +37,7 @@ export function createTeamRouter(context: ApiContext): Router {
   router.get('/', getTeams.bind(context));
   router.get('/:id', getTeam.bind(context));
   router.put('/:id', updateTeam.bind(context));
+  router.patch('/:id', updateTeam.bind(context));
   router.delete('/:id', deleteTeam.bind(context));
 
   // Team lifecycle management

@@ -1,6 +1,16 @@
 # Send PDF to Slack
 
-Converts a markdown file to PDF using `weasyprint` (Python) and uploads it to a Slack channel via the `/api/slack/upload-file` endpoint.
+Converts a markdown file to a styled PDF and uploads it to a Slack channel via the `/api/slack/upload-file` endpoint. Supports embedding local images referenced in the markdown.
+
+## Image Support
+
+The skill automatically handles local images referenced in markdown:
+
+- **Absolute paths**: `![alt](/Users/me/images/photo.png)` — converted to `file://` URLs
+- **Relative paths**: `![alt](./images/photo.png)` — resolved relative to the markdown file's directory
+- **Remote URLs**: `![alt](https://example.com/photo.png)` — passed through as-is
+
+Images are rendered at full width (max 100% of page) with auto height scaling, centered with a subtle border.
 
 ## Prerequisites
 
@@ -10,7 +20,12 @@ Converts a markdown file to PDF using `weasyprint` (Python) and uploads it to a 
 ## Usage
 
 ```bash
-bash config/skills/orchestrator/send-pdf-to-slack/execute.sh --channel C0123ABC --file /path/to/document.md --title "Weekly Report"
+bash config/skills/orchestrator/send-pdf-to-slack/execute.sh \
+  --channel C0123ABC \
+  --file /path/to/document.md \
+  --title "Weekly Report" \
+  --text "Here is the report" \
+  --thread 1707123456.789000
 ```
 
 ## Parameters
@@ -23,18 +38,42 @@ bash config/skills/orchestrator/send-pdf-to-slack/execute.sh --channel C0123ABC 
 | `--text`, `-t` | No | Initial comment to include with the upload |
 | `--thread`, `-r` | No | Slack thread timestamp for threaded upload |
 
-## Examples
+## Example: Daily Report with Infographics
+
+Create a markdown file with embedded images:
+
+```markdown
+# AI Daily Report - 2026-02-21
+
+## 1. Paper Title
+Summary of the paper.
+
+![Paper Infographic](/path/to/output/infographic-1.png)
+
+## 2. Another Paper
+Summary here.
+
+![Another Infographic](/path/to/output/infographic-2.png)
+```
+
+Then send it:
 
 ```bash
-# Basic upload
-bash execute.sh --channel C0123ABC --file report.md
-
-# Upload with title and comment
-bash execute.sh --channel C0123ABC --file report.md --title "Q4 Report" --text "Here is the quarterly report"
-
-# Upload in a thread
-bash execute.sh --channel C0123ABC --file notes.md --thread 1707123456.789000
+bash config/skills/orchestrator/send-pdf-to-slack/execute.sh \
+  --channel D0AC7NF5N7L \
+  --file /path/to/daily-report.md \
+  --title "AI Daily Report 2026-02-21" \
+  --text "Today's AI report with infographics" \
+  --thread 1771651155.079579
 ```
+
+## PDF Styling
+
+- A4 page size with 20mm/15mm margins
+- System fonts with CJK support (PingFang SC, Noto Sans SC)
+- Images: max-width 100%, centered, with subtle border
+- Tables: full width, bordered cells
+- Code blocks: gray background with monospace font
 
 ## Output
 

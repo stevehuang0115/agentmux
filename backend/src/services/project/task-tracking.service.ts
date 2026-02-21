@@ -6,9 +6,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { EventEmitter } from 'events';
 import { InProgressTask, TaskTrackingData, TaskFileInfo } from '../../types/task-tracking.types.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export class TaskTrackingService extends EventEmitter {
   private readonly taskTrackingPath: string;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TaskTrackingService');
 
   constructor() {
     super();
@@ -30,7 +32,7 @@ export class TaskTrackingService extends EventEmitter {
       const content = await fs.readFile(this.taskTrackingPath, 'utf-8');
       return JSON.parse(content);
     } catch (error) {
-      console.error('Error loading task tracking data:', error);
+      this.logger.error('Error loading task tracking data', { error: error instanceof Error ? error.message : String(error) });
       return {
         tasks: [],
         lastUpdated: new Date().toISOString(),
@@ -44,7 +46,7 @@ export class TaskTrackingService extends EventEmitter {
       data.lastUpdated = new Date().toISOString();
       await fs.writeFile(this.taskTrackingPath, JSON.stringify(data, null, 2), 'utf-8');
     } catch (error) {
-      console.error('Error saving task tracking data:', error);
+      this.logger.error('Error saving task tracking data', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -267,18 +269,18 @@ export class TaskTrackingService extends EventEmitter {
     };
 
     try {
-      console.log('[RECOVERY] 🔍 Starting task recovery check...');
+      this.logger.info('Starting task recovery check');
 
       const data = await this.loadTaskData();
       const inProgressTasks = data.tasks.filter(t => t.status === 'assigned' || t.status === 'active');
       report.totalInProgress = inProgressTasks.length;
 
       if (inProgressTasks.length === 0) {
-        console.log('[RECOVERY] ✅ No in-progress tasks found to recover');
+        this.logger.info('No in-progress tasks found to recover');
         return report;
       }
 
-      console.log(`[RECOVERY] 📋 Found ${inProgressTasks.length} in-progress tasks to check`);
+      this.logger.info('Found in-progress tasks to check', { count: inProgressTasks.length });
 
       // Get current team status
       const teams = await getTeamStatus();
@@ -293,7 +295,7 @@ export class TaskTrackingService extends EventEmitter {
         });
       });
 
-      console.log(`[RECOVERY] 👥 Found ${activeMembers.size} active working members`);
+      this.logger.info('Found active working members', { count: activeMembers.size });
 
       // Check each in-progress task
       for (const task of inProgressTasks) {
@@ -302,12 +304,12 @@ export class TaskTrackingService extends EventEmitter {
                               activeMembers.has(task.assignedTeamMemberId);
 
           if (isAgentActive) {
-            console.log(`[RECOVERY] ✅ Agent ${task.assignedSessionName} is still active, keeping task: ${task.taskName}`);
+            this.logger.info('Agent is still active, keeping task', { sessionName: task.assignedSessionName, taskName: task.taskName });
             report.skipped++;
             continue;
           }
 
-          console.log(`[RECOVERY] ⚠️ Agent ${task.assignedSessionName} is inactive, recovering task: ${task.taskName}`);
+          this.logger.warn('Agent is inactive, recovering task', { sessionName: task.assignedSessionName, taskName: task.taskName });
 
           // Move task back to open folder and clean metadata
           const recovered = await this.moveTaskBackToOpen(task);
@@ -316,25 +318,25 @@ export class TaskTrackingService extends EventEmitter {
             await this.removeTask(task.id);
             report.recovered++;
             report.recoveredTasks.push(task.taskName);
-            console.log(`[RECOVERY] ✅ Successfully recovered task: ${task.taskName}`);
+            this.logger.info('Successfully recovered task', { taskName: task.taskName });
           } else {
             report.errors.push(`Failed to move task back to open: ${task.taskName}`);
-            console.log(`[RECOVERY] ❌ Failed to recover task: ${task.taskName}`);
+            this.logger.error('Failed to recover task', { taskName: task.taskName });
           }
 
         } catch (error) {
           const errorMsg = `Error processing task ${task.taskName}: ${error instanceof Error ? error.message : String(error)}`;
           report.errors.push(errorMsg);
-          console.error(`[RECOVERY] ❌ ${errorMsg}`);
+          this.logger.error('Error processing task during recovery', { taskName: task.taskName, error: error instanceof Error ? error.message : String(error) });
         }
       }
 
-      console.log(`[RECOVERY] 📊 Recovery complete - Recovered: ${report.recovered}, Skipped: ${report.skipped}, Errors: ${report.errors.length}`);
+      this.logger.info('Recovery complete', { recovered: report.recovered, skipped: report.skipped, errors: report.errors.length });
 
     } catch (error) {
       const errorMsg = `Task recovery failed: ${error instanceof Error ? error.message : String(error)}`;
       report.errors.push(errorMsg);
-      console.error(`[RECOVERY] ❌ ${errorMsg}`);
+      this.logger.error('Task recovery failed', { error: error instanceof Error ? error.message : String(error) });
     }
 
     return report;
@@ -347,7 +349,7 @@ export class TaskTrackingService extends EventEmitter {
     try {
       // Check if task file still exists in in_progress
       if (!fsSync.existsSync(task.taskFilePath)) {
-        console.log(`[RECOVERY] ⚠️ Task file not found in in_progress: ${task.taskFilePath}`);
+        this.logger.warn('Task file not found in in_progress', { taskFilePath: task.taskFilePath });
         return false;
       }
 
@@ -372,11 +374,11 @@ export class TaskTrackingService extends EventEmitter {
       // Remove from in_progress folder
       await fs.unlink(task.taskFilePath);
 
-      console.log(`[RECOVERY] 📁 Moved task from ${task.taskFilePath} to ${openPath}`);
+      this.logger.info('Moved task back to open', { from: task.taskFilePath, to: openPath });
       return true;
 
     } catch (error) {
-      console.error(`[RECOVERY] ❌ Failed to move task back to open:`, error);
+      this.logger.error('Failed to move task back to open', { error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }

@@ -9,7 +9,7 @@
  */
 
 import type { Request, Response } from 'express';
-import { getSessionBackendSync, getSessionBackend, getSessionStatePersistence } from '../../services/session/index.js';
+import { getSessionBackendSync, getSessionBackend, getSessionStatePersistence, createSessionCommandHelper } from '../../services/session/index.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 
@@ -154,7 +154,7 @@ export async function writeToSession(
 ): Promise<void> {
 	try {
 		const { name } = req.params;
-		const { data } = req.body;
+		const { data, mode } = req.body;
 
 		if (!data) {
 			res.status(400).json({ error: 'Data is required' });
@@ -168,12 +168,20 @@ export async function writeToSession(
 			return;
 		}
 
-		const session = backend.getSession(name);
-		if (session) {
-			session.write(data);
-			res.json({ success: true, message: `Data written to session '${name}'` });
+		if (mode === 'message') {
+			// Use SessionCommandHelper.sendMessage() which writes text then sends Enter key
+			const helper = createSessionCommandHelper(backend);
+			await helper.sendMessage(name, data);
+			res.json({ success: true, message: `Message sent to session '${name}'` });
 		} else {
-			res.status(404).json({ error: `Session '${name}' not found` });
+			// Raw write preserved for control sequences and backwards compatibility
+			const session = backend.getSession(name);
+			if (session) {
+				session.write(data);
+				res.json({ success: true, message: `Data written to session '${name}'` });
+			} else {
+				res.status(404).json({ error: `Session '${name}' not found` });
+			}
 		}
 	} catch (error) {
 		logger.error('Failed to write to session', { name: req.params.name, error: error instanceof Error ? error.message : String(error) });

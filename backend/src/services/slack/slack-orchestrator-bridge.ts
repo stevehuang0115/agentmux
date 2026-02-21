@@ -27,6 +27,7 @@ import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.j
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
 import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_BRIDGE_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../core/logger.service.js';
 
 /**
  * Bridge configuration
@@ -79,6 +80,7 @@ let bridgeInstance: SlackOrchestratorBridge | null = null;
  * ```
  */
 export class SlackOrchestratorBridge extends EventEmitter {
+  private logger = LoggerService.getInstance().createComponentLogger('SlackBridge');
   private slackService: SlackService;
   private chatService: ChatService;
   private messageQueueService: MessageQueueService | null = null;
@@ -123,7 +125,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
     this.slackService.on('message', this.handleSlackMessage.bind(this));
 
     this.initialized = true;
-    console.log('[SlackBridge] Initialized');
+    this.logger.info('Initialized');
   }
 
   /**
@@ -172,7 +174,11 @@ export class SlackOrchestratorBridge extends EventEmitter {
    * @param message - Incoming Slack message
    */
   private async handleSlackMessage(message: SlackIncomingMessage): Promise<void> {
-    console.log(`[SlackBridge] Received message: ${(message.text || '').substring(0, 50)}${message.hasImages ? ` [+${message.files?.length || 0} image(s)]` : ''}...`);
+    this.logger.info('Received message', {
+      preview: (message.text || '').substring(0, 50),
+      hasImages: message.hasImages,
+      imageCount: message.files?.length || 0,
+    });
 
     try {
       // Download images if present
@@ -203,7 +209,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
             message.images
           );
         } catch (err) {
-          console.warn('[SlackBridge] Failed to store thread message:', err instanceof Error ? err.message : String(err));
+          this.logger.warn('Failed to store thread message', { error: err instanceof Error ? err.message : String(err) });
         }
       }
 
@@ -251,7 +257,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
 
       this.emit('message_handled', { message, response });
     } catch (error) {
-      console.error('[SlackBridge] Error handling message:', error);
+      this.logger.error('Error handling message', { error: error instanceof Error ? (error as Error).message : String(error) });
       await this.sendErrorResponse(message, error as Error);
       this.emit('error', error);
     }
@@ -409,13 +415,13 @@ Just type naturally to chat with the orchestrator!`;
       // Check if orchestrator is active before attempting to send
       const isActive = await isOrchestratorActive();
       if (!isActive) {
-        console.log('[SlackBridge] Orchestrator is not active, returning offline message');
+        this.logger.info('Orchestrator is not active, returning offline message');
         return getOrchestratorOfflineMessage(true);
       }
 
       // Check if message queue service is available
       if (!this.messageQueueService) {
-        console.error('[SlackBridge] Message queue service not configured');
+        this.logger.error('Message queue service not configured');
         return 'The Slack bridge is not properly configured. Please restart the server.';
       }
 
@@ -467,7 +473,7 @@ Just type naturally to chat with the orchestrator!`;
 
       return response;
     } catch (error) {
-      console.error('[SlackBridge] Error sending to orchestrator:', error);
+      this.logger.error('Error sending to orchestrator', { error: error instanceof Error ? (error as Error).message : String(error) });
       throw error;
     }
   }
@@ -482,7 +488,7 @@ Just type naturally to chat with the orchestrator!`;
   private async downloadMessageImages(message: SlackIncomingMessage): Promise<void> {
     const botToken = this.slackService.getBotToken();
     if (!botToken) {
-      console.warn('[SlackBridge] Cannot download images: no bot token available');
+      this.logger.warn('Cannot download images: no bot token available');
       return;
     }
 
@@ -512,14 +518,11 @@ Just type naturally to chat with the orchestrator!`;
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
-          console.error(
-            '[SlackBridge] Bot token lacks files:read scope — cannot download images. ' +
-            'Please add the "files:read" scope to your Slack app at https://api.slack.com/apps and reinstall.'
-          );
+          this.logger.error('Bot token lacks files:read scope — cannot download images. Please add the "files:read" scope to your Slack app at https://api.slack.com/apps and reinstall.');
           return; // Skip all downloads — scope is missing for all files
         }
         // For other errors (e.g. file_not_found), continue with original URL
-        console.warn(`[SlackBridge] Could not refresh URL for ${file.name} via files.info:`, errMsg);
+        this.logger.warn('Could not refresh URL via files.info', { fileName: file.name, error: errMsg });
       }
     }
 
@@ -536,7 +539,7 @@ Just type naturally to chat with the orchestrator!`;
         } else {
           const fileName = batch[j].name;
           const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
-          console.warn(`[SlackBridge] Failed to download image ${fileName}:`, reason);
+          this.logger.warn('Failed to download image', { fileName, reason });
           // Track files rejected due to validation (size/type) to warn the Slack user.
           // These match the error prefixes from SlackImageService.downloadImage().
           if (reason.startsWith('File too large:') || reason.startsWith('Unsupported image type:')) {
@@ -562,7 +565,7 @@ Just type naturally to chat with the orchestrator!`;
           threadTs: message.threadTs || message.ts,
         });
       } catch (err) {
-        console.warn('[SlackBridge] Failed to send rejection warning to Slack:', err instanceof Error ? err.message : String(err));
+        this.logger.warn('Failed to send rejection warning to Slack', { error: err instanceof Error ? err.message : String(err) });
       }
     }
   }
@@ -601,11 +604,11 @@ Just type naturally to chat with the orchestrator!`;
       if (errorMessage.includes('missing_scope')) {
         // Only log once about missing scope, not on every message
         if (!this.loggedMissingScope) {
-          console.warn('[SlackBridge] Reactions disabled - add reactions:write scope to Slack app for typing indicators');
+          this.logger.warn('Reactions disabled - add reactions:write scope to Slack app for typing indicators');
           this.loggedMissingScope = true;
         }
       } else {
-        console.warn('[SlackBridge] Could not add typing indicator:', errorMessage);
+        this.logger.warn('Could not add typing indicator', { error: errorMessage });
       }
     }
   }
@@ -622,7 +625,7 @@ Just type naturally to chat with the orchestrator!`;
       // Non-critical - reactions require 'reactions:write' scope which is optional
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (!errorMessage.includes('missing_scope')) {
-        console.warn('[SlackBridge] Could not add completion indicator:', errorMessage);
+        this.logger.warn('Could not add completion indicator', { error: errorMessage });
       }
       // Silent fail for missing_scope since we already logged about it
     }
@@ -658,20 +661,20 @@ Just type naturally to chat with the orchestrator!`;
     // Check if the reply-slack skill already delivered to this thread
     const threadTs = originalMessage.threadTs || originalMessage.ts;
     if (this.wasDeliveredBySkill(originalMessage.channelId, threadTs)) {
-      console.log('[SlackBridge] Slack reply already delivered by skill, skipping fallback');
+      this.logger.info('Slack reply already delivered by skill, skipping fallback');
       return;
     }
 
     // Fallback: send the response directly to Slack
     try {
-      console.log('[SlackBridge] reply-slack skill did not deliver, sending fallback response to Slack');
+      this.logger.info('reply-slack skill did not deliver, sending fallback response to Slack');
       await this.slackService.sendMessage({
         channelId: originalMessage.channelId,
         text: trimmed,
         threadTs,
       });
     } catch (err) {
-      console.error('[SlackBridge] Fallback Slack delivery failed', {
+      this.logger.error('Fallback Slack delivery failed', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -811,7 +814,7 @@ Just type naturally to chat with the orchestrator!`;
     try {
       await this.threadStore.appendOrchestratorReply(originalMessage.channelId, threadTs, trimmed);
     } catch (err) {
-      console.warn('[SlackBridge] Failed to store thread reply:', err instanceof Error ? err.message : String(err));
+      this.logger.warn('Failed to store thread reply', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

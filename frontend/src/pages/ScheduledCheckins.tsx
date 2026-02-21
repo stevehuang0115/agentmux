@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
   ScheduledMessageCard,
+  ScheduledCheckCard,
   TabNavigation,
   EmptyState,
   MessageForm,
@@ -12,10 +13,11 @@ import {
 
 export const ScheduledCheckins: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('active');
-  
+
   const {
     // State
     scheduledMessages,
+    scheduledChecks,
     deliveryLogs,
     teamOptions,
     loading,
@@ -31,10 +33,13 @@ export const ScheduledCheckins: React.FC = () => {
     handleEdit,
     handleCreate,
     handleCloseModal,
+    handleCancelCheck,
     clearDeliveryLogs,
     // Utils
-    formatDate
-     , AlertComponent, ConfirmComponent } = useScheduledMessages();
+    formatDate,
+    AlertComponent,
+    ConfirmComponent
+  } = useScheduledMessages();
 
 
   // Filter messages based on active/completed status
@@ -116,6 +121,26 @@ export const ScheduledCheckins: React.FC = () => {
           )
         )}
       </div>
+
+      {/* System Scheduled Checks (from /api/schedule) */}
+      {scheduledChecks.length > 0 && (
+        <div className="mb-10">
+          <h3 className="text-xl font-semibold mb-1">System Checks</h3>
+          <p className="text-sm text-text-secondary-dark mb-4">
+            Orchestrator-created check-ins and recurring schedules
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {scheduledChecks.map((check) => (
+              <ScheduledCheckCard
+                key={check.id}
+                check={check}
+                onCancel={handleCancelCheck}
+                formatDate={formatDate}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <DeliveryLogsTable
         deliveryLogs={deliveryLogs}

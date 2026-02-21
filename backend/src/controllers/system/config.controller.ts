@@ -3,6 +3,9 @@ import type { ApiContext } from '../types.js';
 import * as path from 'path';
 import * as fsSync from 'fs';
 import { ApiResponse } from '../../types/index.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('ConfigController');
 
 export async function getConfigFile(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
@@ -31,7 +34,7 @@ export async function getConfigFile(this: ApiContext, req: Request, res: Respons
       res.json({ success: true, data: { content: fileContent }, message: `Config file ${fileName} retrieved successfully` } as ApiResponse);
     }
   } catch (error) {
-    console.error('Error getting config file:', error);
+    logger.error('Error getting config file', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get config file' } as ApiResponse);
   }
 }

@@ -5,7 +5,7 @@ export interface TeamMember {
   role: 'orchestrator' | 'tpm' | 'architect' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'fullstack-dev' | 'qa' | 'qa-engineer' | 'tester' | 'designer' | 'product-manager' | 'sales' | 'support';
   avatar?: string; // URL or emoji for member avatar
   systemPrompt: string;
-  agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'activating'; // Connection/registration status (activating is deprecated)
+  agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'suspended' | 'activating'; // Connection/registration status (activating is deprecated)
   workingStatus: 'idle' | 'in_progress'; // Activity level status
   runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli'; // AI runtime to use
   skillOverrides?: string[]; // Additional skill IDs beyond what the role provides
@@ -69,6 +69,8 @@ export interface ScheduledCheck {
   intervalMinutes?: number;
   isRecurring: boolean;
   createdAt: string;
+  /** Optional session name of the agent being monitored (for status enrichment) */
+  watchedSession?: string;
 }
 
 export interface ScheduledMessage {

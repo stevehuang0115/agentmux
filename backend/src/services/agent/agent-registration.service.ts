@@ -30,6 +30,7 @@ import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
+import { AgentSuspendService } from './agent-suspend.service.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -102,7 +103,10 @@ export class AgentRegistrationService {
 			(sessionName: string) => {
 				this.cancelPendingRegistration(sessionName);
 				this.unregisterTuiSession(sessionName);
-				SubAgentMessageQueue.getInstance().clear(sessionName);
+				// Preserve queued messages for suspended agents (they'll be delivered on rehydrate)
+				if (!AgentSuspendService.getInstance().isSuspended(sessionName)) {
+					SubAgentMessageQueue.getInstance().clear(sessionName);
+				}
 			}
 		);
 	}
@@ -325,7 +329,7 @@ export class AgentRegistrationService {
 			const step1Success = await this.tryCleanupAndReinit(
 				sessionName,
 				role,
-				40000, // 40 seconds for cleanup and reinit
+				70000, // 70 seconds for cleanup and reinit (allows 60s for runtime ready)
 				projectPath,
 				memberId,
 				runtimeType,
@@ -482,9 +486,9 @@ export class AgentRegistrationService {
 		const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000; // Check every 1-2 seconds
 		const isReady = await runtimeService2.waitForRuntimeReady(
 			sessionName,
-			30000,
+			60000,
 			checkInterval
-		); // 30s timeout
+		); // 60s timeout — Claude Code cold starts can take 30-60s
 		if (!isReady) {
 			throw new Error(`Failed to reinitialize ${runtimeType} within timeout`);
 		}
@@ -907,6 +911,10 @@ export class AgentRegistrationService {
 			const agentSkillsPath = path.join(this.projectRoot, 'config', 'skills', 'agent');
 			prompt = prompt.replace(/\{\{AGENT_SKILLS_PATH\}\}/g, agentSkillsPath);
 
+			// Replace marketplace skills path placeholder
+			const marketplaceSkillsPath = path.join(os.homedir(), '.crewly', 'marketplace', 'skills');
+			prompt = prompt.replace(/\{\{MARKETPLACE_SKILLS_PATH\}\}/g, marketplaceSkillsPath);
+
 			// Generate and inject startup briefing from session memory
 			try {
 				const sessionMemoryService = SessionMemoryService.getInstance();
@@ -1172,7 +1180,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		this.logger.error('All runtime registration attempts failed', {
+		this.logger.warn('Background MCP registration did not complete within timeout (agent still running)', {
 			sessionName,
 			role,
 			runtimeType,
@@ -1256,6 +1264,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		memberId?: string;
 		runtimeType?: RuntimeType;
 		teamId?: string;
+		/**
+		 * Skip intelligent recovery and force immediate session kill + recreation.
+		 * Use during server startup to avoid expensive recovery on stale sessions.
+		 * @default false
+		 */
+		forceRecreate?: boolean;
 	}): Promise<{
 		success: boolean;
 		sessionName?: string;
@@ -1263,6 +1277,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		error?: string;
 	}> {
 		const { sessionName, role, projectPath = process.cwd(), windowName, memberId } = config;
+		const forceRecreate = config.forceRecreate ?? false;
 
 		// Get runtime type from config or default to claude-code
 		let runtimeType = config.runtimeType || RUNTIME_TYPES.CLAUDE_CODE;
@@ -1361,6 +1376,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			if (!sessionExists) {
 				// Session doesn't exist, go directly to creating a new session
 				this.logger.info('Session does not exist, will create new session', { sessionName });
+			} else if (forceRecreate) {
+				// Skip recovery, kill immediately (used during server startup for stale sessions)
+				this.logger.info('Session exists but forceRecreate is set, killing for clean restart', { sessionName });
+				try {
+					const runtimeService = this.createRuntimeService(runtimeType);
+					runtimeService.clearDetectionCache(sessionName);
+					await (await this.getSessionHelper()).killSession(sessionName);
+					await delay(1000);
+				} catch (killError) {
+					this.logger.warn('Failed to kill session during forceRecreate, continuing with recreation', {
+						sessionName,
+						error: killError instanceof Error ? killError.message : String(killError),
+					});
+				}
 			} else {
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
@@ -1460,7 +1489,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							cwd: projectPath || process.cwd(),
 							command: process.env.SHELL || '/bin/bash',
 							args: [],
-						}, runtimeType, role, config.teamId);
+						}, runtimeType, role, config.teamId, config.memberId);
 					} catch (persistError) {
 						this.logger.warn('Failed to register recovered session for persistence (non-critical)', {
 							sessionName,
@@ -1528,7 +1557,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					cwd: cwdToUse,
 					command: process.env.SHELL || '/bin/bash',
 					args: [],
-				}, runtimeType, role, config.teamId);
+				}, runtimeType, role, config.teamId, config.memberId);
 			} catch (persistError) {
 				this.logger.warn('Failed to register session for persistence (non-critical)', {
 					sessionName,
@@ -1539,7 +1568,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Set environment variables for MCP connection
 			await sessionHelper.setEnvironmentVariable(
 				sessionName,
-				ENV_CONSTANTS.TMUX_SESSION_NAME,
+				ENV_CONSTANTS.CREWLY_SESSION_NAME,
 				sessionName
 			);
 			await sessionHelper.setEnvironmentVariable(
@@ -2186,9 +2215,22 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
 				if (!this.isClaudeAtPrompt(output, runtimeType)) {
-					this.logger.debug('Not at prompt, waiting before retry', { sessionName, attempt });
-					await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
-					continue;
+					// On the final attempt, fall back to direct delivery rather than
+					// returning a 502 error. The agent may be at a prompt that doesn't
+					// match our detection patterns, or the terminal buffer may be stale.
+					// This mirrors what the /write endpoint does successfully.
+					if (attempt === maxAttempts) {
+						this.logger.warn('Prompt detection failed on final attempt, delivering message directly', {
+							sessionName,
+							attempt,
+							runtimeType,
+						});
+						// Fall through to message delivery below
+					} else {
+						this.logger.debug('Not at prompt, waiting before retry', { sessionName, attempt });
+						await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+						continue;
+					}
 				}
 
 				// Gemini CLI shell mode guard: if the prompt shows `!` instead of `>`,
@@ -3281,7 +3323,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		abortSignal?: AbortSignal
 	): Promise<boolean> {
 			const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-			const maxAttempts = isClaudeCode ? 1 : 3;
+			const maxAttempts = isClaudeCode ? 2 : 3;
 		const sessionHelper = await this.getSessionHelper();
 
 		// Step 1: Write prompt to a file.
@@ -3305,16 +3347,24 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				promptLength: prompt.length,
 			});
 		} catch (error) {
-			this.logger.error('Failed to write init prompt file', {
+			this.logger.warn('Failed to write init prompt file (non-fatal)', {
 				sessionName,
 				promptFilePath,
 				error: error instanceof Error ? error.message : String(error),
 			});
-			return false;
+			// File write failure is non-fatal — file is kept for debugging only.
+			// Claude Code receives the prompt directly; Gemini CLI needs the file.
+			if (!isClaudeCode) {
+				return false;
+			}
 		}
 
-		// Step 2: Send a short instruction to read the file
-		const instruction = `Read the file at ${promptFilePath} and follow all instructions in it.`;
+		// Step 2: Build the message to send.
+		// Claude Code: send prompt directly as user input to bypass file-read security check.
+		// Other runtimes: keep file-read approach (Gemini CLI has workspace restrictions).
+		const messageToSend = isClaudeCode
+			? prompt
+			: `Read the file at ${promptFilePath} and follow all instructions in it.`;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			// Check abort before each attempt
@@ -3324,11 +3374,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 
 			try {
-				this.logger.debug('Sending file-based prompt instruction', {
+				this.logger.debug('Sending prompt to agent', {
 					sessionName,
 					attempt,
 					runtimeType,
 					promptFilePath,
+					deliveryMethod: isClaudeCode ? 'direct' : 'file-read',
 				});
 
 				// Capture state before sending
@@ -3363,8 +3414,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					return false;
 				}
 
-				// Send the short instruction
-				await sessionHelper.sendMessage(sessionName, instruction);
+				// Send the prompt (direct content for Claude Code, file-read instruction for others)
+				await sessionHelper.sendMessage(sessionName, messageToSend);
 
 				if (isClaudeCode) {
 					// Claude Code may need an extra Enter after bracketed paste
@@ -3373,8 +3424,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					await sessionHelper.sendEnter(sessionName);
 				}
 
-				// Wait for agent to start processing
-				await delay(3000);
+				// Wait for agent to start processing.
+				// Claude Code needs more time for large prompts (37KB+) to be
+				// ingested and show visible output changes.
+				const verifyDelay = isClaudeCode ? 5000 : 3000;
+				await delay(verifyDelay);
 
 				if (abortSignal?.aborted) return false;
 
@@ -3393,19 +3447,26 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				const promptGone = isClaudeCode
 					&& !this.isClaudeAtPrompt(sessionHelper.capturePane(sessionName), RUNTIME_TYPES.CLAUDE_CODE);
 
-				if (lengthIncrease > 20 || hasProcessingIndicators || promptGone) {
+				// Claude Code UI redraws can cause negative lengthIncrease even on
+				// successful delivery. If the output changed at all (positive or
+				// negative) and Claude is no longer at the prompt, consider it delivered.
+				const outputChanged = lengthIncrease !== 0;
+				const likelyDelivered = isClaudeCode && outputChanged && promptGone;
+
+				if (lengthIncrease > 20 || hasProcessingIndicators || promptGone || likelyDelivered) {
 					this.logger.debug('Prompt instruction delivered successfully', {
 						sessionName,
 						attempt,
 						lengthIncrease,
 						hasProcessingIndicators,
 						promptGone,
+						likelyDelivered,
 						runtimeType,
 					});
 					return true;
 				}
 
-				this.logger.warn('Prompt instruction delivery may have failed - retrying', {
+				this.logger.debug('Prompt instruction delivery unconfirmed - retrying', {
 					sessionName,
 					attempt,
 					lengthIncrease,
@@ -3429,7 +3490,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		this.logger.error('Failed to deliver prompt instruction after all attempts', {
+		this.logger.warn('Prompt instruction delivery unconfirmed after all attempts (agent may still process it)', {
 			sessionName,
 			maxAttempts,
 			runtimeType,

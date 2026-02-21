@@ -19,6 +19,7 @@ import {
 } from '../../utils/security.js';
 import { StorageService } from '../../services/core/storage.service.js';
 import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
+import { AgentSuspendService } from '../../services/agent/agent-suspend.service.js';
 import type { ApiContext } from '../types.js';
 
 /** Logger instance for terminal controller */
@@ -293,6 +294,21 @@ export async function writeToSession(req: Request, res: Response): Promise<void>
 					const memberResult = await StorageService.getInstance().findMemberBySessionName(sessionName);
 					if (memberResult && memberResult.member.agentStatus !== CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
 						SubAgentMessageQueue.getInstance().enqueue(sessionName, dataStr);
+
+						// If agent is suspended, trigger auto-rehydration
+						if (memberResult.member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.SUSPENDED) {
+							const suspendService = AgentSuspendService.getInstance();
+							if (!suspendService.isRehydrating(sessionName)) {
+								// Fire-and-forget: rehydration happens in background
+								suspendService.rehydrateAgent(sessionName).catch(err => {
+									logger.error('Auto-rehydration failed', {
+										sessionName,
+										error: err instanceof Error ? err.message : String(err),
+									});
+								});
+							}
+						}
+
 						logger.info('Message queued until agent is ready', {
 							sessionName,
 							agentStatus: memberResult.member.agentStatus,

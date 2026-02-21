@@ -33,6 +33,9 @@ export class StorageService {
   private logger: ComponentLogger;
   /** Flag to track if migration has been performed */
   private migrationDone: boolean = false;
+  /** Debounce timer for teams backup to avoid I/O storms */
+  private backupDebounceTimer: NodeJS.Timeout | null = null;
+  private readonly BACKUP_DEBOUNCE_MS = 2000;
 
   constructor(crewlyHome?: string) {
     this.logger = LoggerService.getInstance().createComponentLogger('StorageService');
@@ -668,7 +671,7 @@ export class StorageService {
       await this.saveProject(project.toJSON());
       return project.toJSON();
     } catch (error) {
-      console.error('Error adding project:', error);
+      this.logger.error('Error adding project', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -712,7 +715,7 @@ export class StorageService {
       const filteredProjects = projects.filter(p => p.id !== id);
       await atomicWriteFile(this.projectsFile, JSON.stringify(filteredProjects, null, 2));
     } catch (error) {
-      console.error('Error deleting project:', error);
+      this.logger.error('Error deleting project', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -739,7 +742,7 @@ export class StorageService {
           const ticket = this.parseTicketYAML(content);
           tickets.push(ticket);
         } catch (error) {
-          console.error(`Error parsing ticket file ${file}:`, error);
+          this.logger.error('Error parsing ticket file', { file, error: error instanceof Error ? error.message : String(error) });
         }
       }
 
@@ -762,7 +765,7 @@ export class StorageService {
 
       return filteredTickets.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     } catch (error) {
-      console.error('Error reading tickets:', error);
+      this.logger.error('Error reading tickets', { error: error instanceof Error ? error.message : String(error) });
       return [];
     }
   }
@@ -782,7 +785,7 @@ export class StorageService {
       
       await fs.writeFile(filePath, ticketModel.toYAML());
     } catch (error) {
-      console.error('Error saving ticket:', error);
+      this.logger.error('Error saving ticket', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -798,7 +801,7 @@ export class StorageService {
         await fs.unlink(filePath);
       }
     } catch (error) {
-      console.error('Error deleting ticket:', error);
+      this.logger.error('Error deleting ticket', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -852,7 +855,7 @@ export class StorageService {
     
     return watch(crewlyDir, { recursive: true }, (eventType, filename) => {
       if (filename) {
-        console.log(`File ${eventType}: ${filename} in project ${resolvedProjectPath}`);
+        this.logger.info('File change detected', { eventType, filename: filename || 'unknown', projectPath: resolvedProjectPath });
         // Emit events that can be handled by WebSocket gateway
       }
     });
@@ -865,7 +868,7 @@ export class StorageService {
       const content = await fs.readFile(this.runtimeFile, 'utf-8');
       return JSON.parse(content);
     } catch (error) {
-      console.error('Error reading runtime state:', error);
+      this.logger.error('Error reading runtime state', { error: error instanceof Error ? error.message : String(error) });
       return {};
     }
   }
@@ -874,7 +877,7 @@ export class StorageService {
     try {
       await atomicWriteFile(this.runtimeFile, JSON.stringify(state, null, 2));
     } catch (error) {
-      console.error('Error saving runtime state:', error);
+      this.logger.error('Error saving runtime state', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1000,9 +1003,9 @@ This is a foundational task that should be completed first before other developm
 
       await fs.writeFile(sampleTicketPath, ticketTemplate, 'utf8');
 
-      console.log(`Created Crewly template files for project: ${projectName}`);
+      this.logger.info('Created Crewly template files for project', { projectName });
     } catch (error) {
-      console.error('Error creating project template files:', error);
+      this.logger.error('Error creating project template files', { error: error instanceof Error ? error.message : String(error) });
       // Don't throw - project can still work without template files
     }
   }
@@ -1022,13 +1025,13 @@ This is a foundational task that should be completed first before other developm
       try {
         return JSON.parse(content) as ScheduledMessage[];
       } catch (parseError) {
-        console.error('Error parsing scheduled messages JSON, resetting file:', parseError);
+        this.logger.error('Error parsing scheduled messages JSON, resetting file', { error: parseError instanceof Error ? parseError.message : String(parseError) });
         // Reset the file with empty array if JSON is corrupted
         await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify([], null, 2));
         return [];
       }
     } catch (error) {
-      console.error('Error reading scheduled messages:', error);
+      this.logger.error('Error reading scheduled messages', { error: error instanceof Error ? error.message : String(error) });
       return [];
     }
   }
@@ -1046,7 +1049,7 @@ This is a foundational task that should be completed first before other developm
 
       await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(messages, null, 2));
     } catch (error) {
-      console.error('Error saving scheduled message:', error);
+      this.logger.error('Error saving scheduled message', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1056,7 +1059,7 @@ This is a foundational task that should be completed first before other developm
       const messages = await this.getScheduledMessages();
       return messages.find(m => m.id === id);
     } catch (error) {
-      console.error('Error getting scheduled message:', error);
+      this.logger.error('Error getting scheduled message', { error: error instanceof Error ? error.message : String(error) });
       return undefined;
     }
   }
@@ -1073,7 +1076,7 @@ This is a foundational task that should be completed first before other developm
       await atomicWriteFile(this.scheduledMessagesFile, JSON.stringify(filteredMessages, null, 2));
       return true;
     } catch (error) {
-      console.error('Error deleting scheduled message:', error);
+      this.logger.error('Error deleting scheduled message', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1281,7 +1284,7 @@ This is a foundational task that should be completed first before other developm
       // Sort by sentAt (newest first)
       return logs.sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
     } catch (error) {
-      console.error('Error reading delivery logs:', error);
+      this.logger.error('Error reading delivery logs', { error: error instanceof Error ? error.message : String(error) });
       return [];
     }
   }
@@ -1296,7 +1299,7 @@ This is a foundational task that should be completed first before other developm
       
       await atomicWriteFile(this.deliveryLogsFile, JSON.stringify(trimmedLogs, null, 2));
     } catch (error) {
-      console.error('Error saving delivery log:', error);
+      this.logger.error('Error saving delivery log', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1305,7 +1308,7 @@ This is a foundational task that should be completed first before other developm
     try {
       await atomicWriteFile(this.deliveryLogsFile, JSON.stringify([], null, 2));
     } catch (error) {
-      console.error('Error clearing delivery logs:', error);
+      this.logger.error('Error clearing delivery logs', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1401,7 +1404,9 @@ This is a foundational task that should be completed first before other developm
       }
 
       if (!memberFound) {
-        this.logger.warn('Agent not found in teams data', { sessionName });
+        // DEBUG: This is expected for orphaned sessions from deleted/reconfigured teams.
+        // Monitors (RuntimeExitMonitor, ActivityMonitor) may still track stale tmux sessions.
+        this.logger.debug('Agent session not found in any team (likely orphaned)', { sessionName });
       }
     } catch (error) {
       this.logger.error('Error updating agent status', {
@@ -1434,7 +1439,7 @@ This is a foundational task that should be completed first before other developm
       
       await this.saveTeam(team);
     } catch (error) {
-      console.error('Error updating team member runtime type:', error);
+      this.logger.error('Error updating team member runtime type', { teamId, memberId, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }
@@ -1471,17 +1476,28 @@ This is a foundational task that should be completed first before other developm
 
 
   /**
-   * Update the teams backup file asynchronously.
-   * Reads current teams and writes backup. Errors are logged but not thrown.
+   * Update the teams backup file asynchronously with debouncing.
+   *
+   * When many teams are saved in rapid succession (e.g. ActivityMonitor
+   * marking 14 stale agents), each saveTeam() call used to trigger a
+   * full getTeams() + backup, flooding the libuv thread pool with I/O
+   * and starving other requests. Debouncing collapses the burst into a
+   * single backup operation.
    */
   private updateTeamsBackup(): void {
-    this.getTeams()
-      .then((teams) => TeamsBackupService.getInstance().updateBackup(teams))
-      .catch((error) => {
-        this.logger.warn('Failed to update teams backup', {
-          error: error instanceof Error ? error.message : String(error),
+    if (this.backupDebounceTimer) {
+      clearTimeout(this.backupDebounceTimer);
+    }
+    this.backupDebounceTimer = setTimeout(() => {
+      this.backupDebounceTimer = null;
+      this.getTeams()
+        .then((teams) => TeamsBackupService.getInstance().updateBackup(teams))
+        .catch((error) => {
+          this.logger.warn('Failed to update teams backup', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    }, this.BACKUP_DEBOUNCE_MS);
   }
 
   /**

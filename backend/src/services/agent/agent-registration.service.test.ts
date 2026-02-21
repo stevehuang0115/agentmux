@@ -227,7 +227,7 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendRegistrationPromptAsync', () => {
-		it('should send registration prompt without blocking', async () => {
+		it('should send prompt directly for Claude Code (no file-read instruction)', async () => {
 			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register {{SESSION_ID}} as {{ROLE}}');
 
@@ -235,14 +235,41 @@ describe('AgentRegistrationService', () => {
 				'test-session',
 				'developer',
 				'/test/path',
-				90000
+				90000,
+				undefined,
+				RUNTIME_TYPES.CLAUDE_CODE
 			);
 
 			// Give time for async operation to complete (file write + delays in sendPromptRobustly)
 			await new Promise(resolve => setTimeout(resolve, 1000));
 
-			// Should have called sendMessage with the instruction to read the prompt file
+			// Should have called sendMessage with direct prompt content (not file-read instruction)
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
+			const sentMessage = mockSessionHelper.sendMessage.mock.calls[0][1];
+			expect(sentMessage).toContain('Register');
+			expect(sentMessage).not.toContain('Read the file at');
+		});
+
+		it('should send file-read instruction for Gemini CLI', async () => {
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}} as {{ROLE}}');
+
+			await service.initializeAgentWithRegistration(
+				'test-session',
+				'developer',
+				'/test/path',
+				90000,
+				undefined,
+				RUNTIME_TYPES.GEMINI_CLI
+			);
+
+			// Give time for async operation to complete
+			await new Promise(resolve => setTimeout(resolve, 1000));
+
+			// Should have called sendMessage with file-read instruction for Gemini
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
+			const sentMessage = mockSessionHelper.sendMessage.mock.calls[0][1];
+			expect(sentMessage).toContain('Read the file at');
 		});
 	});
 
@@ -289,7 +316,7 @@ describe('AgentRegistrationService', () => {
 			// Environment variables should be set
 			expect(mockSessionHelper.setEnvironmentVariable).toHaveBeenCalledWith(
 				'test-session',
-				'TMUX_SESSION_NAME',
+				'CREWLY_SESSION_NAME',
 				'test-session'
 			);
 			expect(mockSessionHelper.setEnvironmentVariable).toHaveBeenCalledWith(
@@ -340,6 +367,56 @@ describe('AgentRegistrationService', () => {
 			});
 
 			expect(mockSessionHelper.killSession).toHaveBeenCalled();
+			expect(result.success).toBe(true);
+		});
+
+		it('should skip recovery and kill immediately when forceRecreate is true', async () => {
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(true)  // Initial check: session exists
+				.mockReturnValueOnce(true); // After kill, verify session created
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				forceRecreate: true,
+			});
+
+			// Should kill session immediately without attempting recovery
+			expect(mockSessionHelper.killSession).toHaveBeenCalledWith('test-session');
+			expect(mockRuntimeService.clearDetectionCache).toHaveBeenCalledWith('test-session');
+
+			// Should NOT attempt intelligent recovery steps
+			expect(mockRuntimeService.detectRuntimeWithCommand).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+
+			expect(result.success).toBe(true);
+		});
+
+		it('should attempt recovery when forceRecreate is not set and session exists', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(true);
+			mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}');
+			mockSessionHelper.capturePane.mockReturnValue('⠋ Thinking... registering agent');
+
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-1',
+				members: [{
+					sessionName: 'test-session',
+					role: 'developer',
+					agentStatus: 'active',
+				}],
+			}] as any);
+
+			const result = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				// forceRecreate not set - should use default recovery behavior
+			});
+
+			// Should attempt intelligent recovery
+			expect(mockRuntimeService.detectRuntimeWithCommand).toHaveBeenCalled();
 			expect(result.success).toBe(true);
 		});
 	});
@@ -483,16 +560,16 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
 		});
 
-		it('should fail gracefully when agent is not at prompt', async () => {
+		it('should fall through to direct delivery when agent is not at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			// capturePane shows non-prompt content (agent is busy/modal)
 			mockSessionHelper.capturePane.mockReturnValue('Some modal text...');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
-			// Should fail — message never sent since agent was never at prompt
-			expect(result.success).toBe(false);
-			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+			// On final attempt, prompt detection failure falls through to direct delivery
+			// rather than returning a 502 error
+			expect(result.success).toBe(true);
 		});
 
 		it('should fail if session does not exist', async () => {
@@ -511,7 +588,7 @@ describe('AgentRegistrationService', () => {
 			expect(result.error).toContain('Message is required');
 		});
 
-		it('should fail after max retries when event-driven delivery times out', async () => {
+		it('should fall through to direct delivery when event-driven delivery times out', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			// Configure session that never shows any recognizable pattern
 			const mockSession = {
@@ -529,13 +606,13 @@ describe('AgentRegistrationService', () => {
 			};
 			mockSessionHelper.getSession.mockReturnValue(mockSession);
 			// IMPORTANT: Return non-prompt output so immediate check fails
-			// This tests the scenario where Claude is not at prompt
+			// On final attempt, falls through to direct delivery instead of failing
 			mockSessionHelper.capturePane.mockReturnValue('Loading...\nPlease wait');
 
 			const result = await service.sendMessageToAgent('test-session', 'Hello');
 
-			expect(result.success).toBe(false);
-			expect(result.error).toContain('Failed to deliver message');
+			// On final attempt, prompt detection failure falls through to direct delivery
+			expect(result.success).toBe(true);
 		}, 40000);  // Increase timeout for event-driven retry test
 	});
 
@@ -708,7 +785,40 @@ describe('AgentRegistrationService', () => {
 				}),
 				'claude-code',
 				'developer',
-				'team-123'
+				'team-123',
+				undefined
+			);
+		});
+
+		it('should pass memberId to persistence registration', async () => {
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)
+				.mockReturnValueOnce(true);
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+
+			mockReadFile
+				.mockResolvedValueOnce('{"roles": [{"key": "developer", "promptFile": "dev-prompt.md"}]}')
+				.mockResolvedValueOnce('Register {{SESSION_ID}}');
+
+			await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+				teamId: 'team-123',
+				memberId: 'member-xyz',
+			});
+
+			const mockPersistence = (sessionModule.getSessionStatePersistence as jest.Mock).mock.results[0]?.value;
+			expect(mockPersistence.registerSession).toHaveBeenCalledWith(
+				'test-session',
+				expect.objectContaining({
+					cwd: '/test/project',
+					args: [],
+				}),
+				'claude-code',
+				'developer',
+				'team-123',
+				'member-xyz'
 			);
 		});
 
@@ -745,7 +855,8 @@ describe('AgentRegistrationService', () => {
 				}),
 				expect.any(String),
 				'developer',
-				'team-456'
+				'team-456',
+				undefined
 			);
 		});
 

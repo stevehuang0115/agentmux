@@ -16,6 +16,7 @@ import os from 'os';
 import { pipeline } from 'stream/promises';
 import { SLACK_IMAGE_CONSTANTS } from '../../constants.js';
 import type { SlackFile, SlackImageInfo } from '../../types/slack.types.js';
+import { LoggerService } from '../core/logger.service.js';
 
 /**
  * SlackImageService manages downloading and lifecycle of images
@@ -31,6 +32,7 @@ import type { SlackFile, SlackImageInfo } from '../../types/slack.types.js';
  * ```
  */
 export class SlackImageService {
+  private logger = LoggerService.getInstance().createComponentLogger('SlackImageService');
   private tempDir: string;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -153,10 +155,10 @@ export class SlackImageService {
       try {
         const count = await this.cleanupExpired();
         if (count > 0) {
-          console.log(`[SlackImageService] Cleaned up ${count} expired image(s)`);
+          this.logger.info('Cleaned up expired images', { count });
         }
       } catch (err) {
-        console.warn('[SlackImageService] Cleanup error:', err instanceof Error ? err.message : String(err));
+        this.logger.warn('Cleanup error', { error: err instanceof Error ? err.message : String(err) });
       }
     }, SLACK_IMAGE_CONSTANTS.CLEANUP_INTERVAL);
 
@@ -217,7 +219,7 @@ export class SlackImageService {
   async cleanupOnStartup(): Promise<void> {
     const count = await this.cleanupExpired();
     if (count > 0) {
-      console.log(`[SlackImageService] Startup cleanup: removed ${count} expired image(s)`);
+      this.logger.info('Startup cleanup: removed expired images', { count });
     }
   }
 
@@ -321,7 +323,7 @@ export class SlackImageService {
       if (totalSize > SLACK_IMAGE_CONSTANTS.MAX_TEMP_DIR_SIZE) {
         const sizeMB = Math.round(totalSize / (1024 * 1024));
         const thresholdMB = Math.round(SLACK_IMAGE_CONSTANTS.MAX_TEMP_DIR_SIZE / (1024 * 1024));
-        console.warn(`[SlackImageService] Temp directory size (${sizeMB} MB) exceeds ${thresholdMB} MB threshold`);
+        this.logger.warn('Temp directory size exceeds threshold', { sizeMB, thresholdMB });
       }
     } catch {
       // Non-critical — skip size check

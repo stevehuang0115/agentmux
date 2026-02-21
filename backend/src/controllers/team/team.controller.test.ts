@@ -26,6 +26,15 @@ jest.mock('../../services/session/index.js', () => ({
   })),
 }));
 
+const mockGetTeamWorkingStatus = jest.fn<any>();
+jest.mock('../../services/monitoring/activity-monitor.service.js', () => ({
+  ActivityMonitorService: {
+    getInstance: jest.fn(() => ({
+      getTeamWorkingStatus: mockGetTeamWorkingStatus,
+    })),
+  },
+}));
+
 describe('Teams Handlers', () => {
   let mockApiContext: ApiContext;
   let mockRequest: Partial<Request>;
@@ -49,6 +58,12 @@ describe('Teams Handlers', () => {
     const { getSessionStatePersistence } = require('../../services/session/index.js');
     (getSessionStatePersistence as jest.Mock).mockReturnValue({
       updateSessionId: mockUpdateSessionId,
+    });
+
+    // Re-setup the ActivityMonitorService mock implementation after clearAllMocks
+    const { ActivityMonitorService } = require('../../services/monitoring/activity-monitor.service.js');
+    (ActivityMonitorService.getInstance as jest.Mock).mockReturnValue({
+      getTeamWorkingStatus: mockGetTeamWorkingStatus,
     });
 
     // Create response mock
@@ -114,6 +129,11 @@ describe('Teams Handlers', () => {
     // Setup default mock returns
     mockStorageService.getTeams.mockResolvedValue([]);
     mockStorageService.saveTeam.mockResolvedValue(undefined);
+    mockGetTeamWorkingStatus.mockResolvedValue({
+      orchestrator: { sessionName: 'crewly-orc', workingStatus: 'idle', lastActivityCheck: '', updatedAt: '' },
+      teamMembers: {},
+      metadata: { lastUpdated: '', version: '1' },
+    });
   });
 
   afterEach(() => {
@@ -327,6 +347,53 @@ describe('Teams Handlers', () => {
       );
     });
 
+    it('should merge workingStatus from ActivityMonitorService', async () => {
+      const mockTeams = [
+        {
+          id: 'team-1',
+          name: 'Team 1',
+          description: 'First team',
+          members: [
+            {
+              id: 'member-1',
+              name: 'Alice',
+              sessionName: 'team-1-alice',
+              role: 'developer',
+              runtimeType: 'claude-code',
+              systemPrompt: 'Test',
+              agentStatus: 'active',
+              workingStatus: 'idle',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString()
+            }
+          ],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }
+      ];
+
+      mockStorageService.getTeams.mockResolvedValue(mockTeams);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue(null);
+      mockGetTeamWorkingStatus.mockResolvedValue({
+        orchestrator: { sessionName: 'crewly-orc', workingStatus: 'idle', lastActivityCheck: '', updatedAt: '' },
+        teamMembers: {
+          'team-1-alice': { sessionName: 'team-1-alice', teamMemberId: 'member-1', workingStatus: 'in_progress', lastActivityCheck: '', updatedAt: '' }
+        },
+        metadata: { lastUpdated: '', version: '1' },
+      });
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as any;
+      // The second team (index 1) is the regular team (index 0 is orchestrator)
+      const regularTeam = responseData.data[1];
+      expect(regularTeam.members[0].workingStatus).toBe('in_progress');
+    });
+
     it('should handle storage service errors when getting teams', async () => {
       mockStorageService.getTeams.mockRejectedValue(new Error('Database connection failed'));
 
@@ -383,6 +450,55 @@ describe('Teams Handlers', () => {
         success: false,
         error: 'Team not found'
       });
+    });
+
+    it('should merge workingStatus from ActivityMonitorService for single team', async () => {
+      const mockTeam = {
+        id: 'team-123',
+        name: 'Test Team',
+        description: 'Test description',
+        members: [
+          {
+            id: 'member-1',
+            name: 'Alice',
+            sessionName: 'team-123-alice',
+            role: 'developer',
+            runtimeType: 'claude-code',
+            systemPrompt: 'Test',
+            agentStatus: 'active',
+            workingStatus: 'idle',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      mockRequest.params = { id: 'team-123' };
+      mockStorageService.getTeams.mockResolvedValue([mockTeam]);
+      mockGetTeamWorkingStatus.mockResolvedValue({
+        orchestrator: { sessionName: 'crewly-orc', workingStatus: 'idle', lastActivityCheck: '', updatedAt: '' },
+        teamMembers: {
+          'team-123-alice': { sessionName: 'team-123-alice', teamMemberId: 'member-1', workingStatus: 'in_progress', lastActivityCheck: '', updatedAt: '' }
+        },
+        metadata: { lastUpdated: '', version: '1' },
+      });
+
+      // Mock session backend so the backend block executes and merges working status
+      const { getSessionBackendSync } = require('../../services/session/index.js');
+      (getSessionBackendSync as jest.Mock).mockReturnValue({
+        sessionExists: jest.fn<any>().mockReturnValue(true),
+      });
+
+      await teamsHandlers.getTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as any;
+      expect(responseData.data.members[0].workingStatus).toBe('in_progress');
     });
 
     it('should handle storage service errors when getting single team', async () => {

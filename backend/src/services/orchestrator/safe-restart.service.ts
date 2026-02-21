@@ -11,8 +11,9 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { getStatePersistenceService } from './state-persistence.service.js';
-import { getSlackOrchestratorBridge } from '../slack/slack-orchestrator-bridge.js';
+import { getSlackBridgeLazy } from './slack-bridge-lazy.js';
 import { ResumeInstructions } from '../../types/orchestrator-state.types.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Restart configuration
@@ -95,6 +96,7 @@ export class SafeRestartService {
     (instructions: ResumeInstructions) => Promise<void>
   > = [];
   private signalHandlersRegistered: boolean = false;
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('SafeRestart');
 
   /**
    * Create a new SafeRestartService
@@ -117,9 +119,7 @@ export class SafeRestartService {
 
     // Handle graceful shutdown signals
     const shutdownHandler = async (signal: string): Promise<void> => {
-      console.log(
-        `[SafeRestart] Received ${signal}, initiating graceful shutdown...`
-      );
+      this.logger.info('Received signal, initiating graceful shutdown...', { signal });
       await this.gracefulShutdown(`signal:${signal}`);
       process.exit(0);
     };
@@ -129,18 +129,18 @@ export class SafeRestartService {
 
     // Handle uncaught errors
     process.on('uncaughtException', async (error) => {
-      console.error('[SafeRestart] Uncaught exception:', error);
+      this.logger.error('Uncaught exception', { error: error instanceof Error ? error.message : String(error) });
       await this.emergencyShutdown(error.message);
       process.exit(1);
     });
 
     process.on('unhandledRejection', async (reason) => {
-      console.error('[SafeRestart] Unhandled rejection:', reason);
+      this.logger.error('Unhandled rejection', { reason: reason instanceof Error ? reason.message : String(reason) });
       // Don't exit, just log and try to recover
     });
 
     this.signalHandlersRegistered = true;
-    console.log('[SafeRestart] Process handlers registered');
+    this.logger.info('Process handlers registered');
   }
 
   /**
@@ -176,7 +176,7 @@ export class SafeRestartService {
     const previousState = await statePersistence.initialize();
 
     if (!previousState) {
-      console.log('[SafeRestart] Fresh start - no previous state');
+      this.logger.info('Fresh start - no previous state');
       return null;
     }
 
@@ -186,7 +186,7 @@ export class SafeRestartService {
 
     // Notify via Slack if available
     try {
-      const slackBridge = getSlackOrchestratorBridge();
+      const slackBridge = await getSlackBridgeLazy();
       for (const notification of instructions.notifications) {
         if (notification.type === 'slack') {
           await slackBridge.sendNotification({
@@ -200,7 +200,7 @@ export class SafeRestartService {
       }
     } catch {
       // Slack not available, continue without notification
-      console.log('[SafeRestart] Slack notification skipped (not connected)');
+      this.logger.info('Slack notification skipped (not connected)');
     }
 
     // Run startup callbacks
@@ -208,7 +208,7 @@ export class SafeRestartService {
       try {
         await callback(instructions);
       } catch (error) {
-        console.error('[SafeRestart] Startup callback error:', error);
+        this.logger.error('Startup callback error', { error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -226,14 +226,14 @@ export class SafeRestartService {
     if (this.isRestartingFlag) return;
     this.isRestartingFlag = true;
 
-    console.log(`[SafeRestart] Graceful shutdown: ${reason}`);
+    this.logger.info('Graceful shutdown', { reason });
 
     // Run shutdown callbacks
     for (const callback of this.shutdownCallbacks) {
       try {
         await callback();
       } catch (error) {
-        console.error('[SafeRestart] Shutdown callback error:', error);
+        this.logger.error('Shutdown callback error', { error: error instanceof Error ? error.message : String(error) });
       }
     }
 
@@ -242,12 +242,12 @@ export class SafeRestartService {
       const statePersistence = getStatePersistenceService();
       await statePersistence.prepareForShutdown();
     } catch (error) {
-      console.error('[SafeRestart] Failed to save state:', error);
+      this.logger.error('Failed to save state', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Notify Slack
     try {
-      const slackBridge = getSlackOrchestratorBridge();
+      const slackBridge = await getSlackBridgeLazy();
       await slackBridge.sendNotification({
         type: 'alert',
         title: 'Crewly Shutting Down',
@@ -256,10 +256,10 @@ export class SafeRestartService {
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Slack not available
+      this.logger.info('Slack notification skipped (not connected)');
     }
 
-    console.log('[SafeRestart] Shutdown complete');
+    this.logger.info('Shutdown complete');
   }
 
   /**
@@ -270,13 +270,13 @@ export class SafeRestartService {
    * @param reason - Reason for emergency shutdown
    */
   async emergencyShutdown(reason: string): Promise<void> {
-    console.error(`[SafeRestart] Emergency shutdown: ${reason}`);
+    this.logger.error('Emergency shutdown', { reason });
 
     try {
       const statePersistence = getStatePersistenceService();
       await statePersistence.saveState('error_recovery');
     } catch (error) {
-      console.error('[SafeRestart] Failed to save state in emergency:', error);
+      this.logger.error('Failed to save state in emergency', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -290,9 +290,7 @@ export class SafeRestartService {
   scheduleRestart(config: RestartConfig): void {
     const delayMs = config.delayMs ?? 5000;
 
-    console.log(
-      `[SafeRestart] Restart scheduled in ${delayMs}ms: ${config.reason}`
-    );
+    this.logger.info('Restart scheduled', { delayMs, reason: config.reason });
 
     this.scheduledRestartReason = config.reason;
     this.scheduledRestartTime = new Date(Date.now() + delayMs);
@@ -318,7 +316,7 @@ export class SafeRestartService {
       this.restartTimer = null;
       this.scheduledRestartReason = null;
       this.scheduledRestartTime = null;
-      console.log('[SafeRestart] Scheduled restart cancelled');
+      this.logger.info('Scheduled restart cancelled');
       return true;
     }
     return false;
@@ -334,7 +332,7 @@ export class SafeRestartService {
       await this.gracefulShutdown(config.reason);
     }
 
-    console.log('[SafeRestart] Restarting process...');
+    this.logger.info('Restarting process...');
 
     // Write restart marker file
     const markerPath = path.join(process.cwd(), '.restart-marker');
@@ -374,7 +372,7 @@ export class SafeRestartService {
     delayMs: number
   ): Promise<void> {
     try {
-      const slackBridge = getSlackOrchestratorBridge();
+      const slackBridge = await getSlackBridgeLazy();
       await slackBridge.sendNotification({
         type: 'alert',
         title: 'Crewly Restart Scheduled',
@@ -385,7 +383,7 @@ export class SafeRestartService {
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Slack not available
+      this.logger.info('Slack notification skipped (not connected)');
     }
   }
 
@@ -445,9 +443,7 @@ export class SafeRestartService {
       await fs.unlink(markerPath);
 
       if (marker.postRestartCommand) {
-        console.log(
-          `[SafeRestart] Post-restart command found: ${marker.postRestartCommand}`
-        );
+        this.logger.info('Post-restart command found', { command: marker.postRestartCommand });
         // Note: Actual command execution would be implemented here
         // For safety, we just log for now
       }

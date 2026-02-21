@@ -8,6 +8,7 @@
  */
 
 import * as pty from 'node-pty';
+import { execSync } from 'child_process';
 import type { ISession, SessionOptions } from '../session-backend.interface.js';
 import {
 	DEFAULT_TERMINAL_COLS,
@@ -346,6 +347,31 @@ export class PtySession implements ISession {
 	 */
 	isKilled(): boolean {
 		return this.killed;
+	}
+
+	/**
+	 * Check if a child process (e.g. Claude Code) is alive inside this PTY shell.
+	 *
+	 * Uses `pgrep -P <shellPid>` to detect child processes of the shell.
+	 * Returns false if the shell has no children (Claude Code exited) or if
+	 * the check itself fails (shell already dead).
+	 *
+	 * @returns true if at least one child process is running inside the shell
+	 */
+	isChildProcessAlive(): boolean {
+		if (this.killed) {
+			return false;
+		}
+
+		try {
+			const pid = this.ptyProcess.pid;
+			// pgrep -P <pid> lists child PIDs; exits 0 if found, 1 if none
+			execSync(`pgrep -P ${pid}`, { stdio: 'pipe', timeout: 3000 });
+			return true;
+		} catch {
+			// pgrep exits with code 1 when no children found, or command fails
+			return false;
+		}
 	}
 
 	/**

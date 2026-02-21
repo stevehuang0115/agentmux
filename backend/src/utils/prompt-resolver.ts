@@ -1,6 +1,9 @@
 import { readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { existsSync } from 'fs';
+import { LoggerService } from '../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('PromptResolver');
 
 /**
  * Interface for step configuration that may have either prompts array or prompt_file reference
@@ -63,7 +66,7 @@ export async function resolveStepPrompts(
   }
 
   // If neither prompt_file nor prompts are available, return empty array
-  console.warn(`Step ${step.id} (${step.name}) has no prompt_file or prompts array`);
+  logger.warn('Step has no prompt_file or prompts array', { stepId: step.id, stepName: step.name });
   return [];
 }
 

@@ -67,6 +67,15 @@ import { setMessageQueueService as setChatMessageQueueService } from './controll
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
+import { agentHeartbeatMiddleware } from './middleware/agent-heartbeat.middleware.js';
+import { OrchestratorRestartService } from './services/orchestrator/orchestrator-restart.service.js';
+import { IdleDetectionService } from './services/agent/idle-detection.service.js';
+import { AgentSuspendService } from './services/agent/agent-suspend.service.js';
+import { AgentHeartbeatMonitorService } from './services/agent/agent-heartbeat-monitor.service.js';
+import { OrchestratorHeartbeatMonitorService } from './services/orchestrator/orchestrator-heartbeat-monitor.service.js';
+import { RuntimeExitMonitorService } from './services/agent/runtime-exit-monitor.service.js';
+import { findPackageRoot } from './utils/package-root.js';
+import { VersionCheckService } from './services/system/version-check.service.js';
 
 // ESM __dirname equivalent using import.meta.url
 const __filename = fileURLToPath(import.meta.url);
@@ -228,7 +237,9 @@ export class CrewlyServer {
 		// Initialize ChatGateway for chat message forwarding
 		// This sets up the event listeners that forward chat messages to WebSocket clients
 		initializeChatGateway(this.io).catch((error) => {
-			console.error('[CrewlyServer] Failed to initialize ChatGateway:', error);
+			this.logger.error('Failed to initialize ChatGateway', {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		});
 
 		// Connect WebSocket service to terminal gateway for broadcasting
@@ -322,23 +333,31 @@ export class CrewlyServer {
 	}
 
 	private configureRoutes(): void {
+		// Agent heartbeat middleware - any API call with X-Agent-Session header updates heartbeat
+		this.app.use('/api', agentHeartbeatMiddleware);
+
 		// API routes
 		this.app.use('/api', createApiRoutes(this.apiController));
 
 		// Health check
 		this.app.get('/health', (req, res) => {
+			const versionService = VersionCheckService.getInstance();
+			const cachedCheck = versionService.getCachedCheckResult();
+
 			res.json({
 				status: 'healthy',
 				timestamp: new Date().toISOString(),
 				uptime: process.uptime(),
-				version: process.env.npm_package_version || '1.0.0',
+				version: cachedCheck?.currentVersion ?? versionService.getLocalVersion(),
+				latestVersion: cachedCheck?.latestVersion ?? null,
+				updateAvailable: cachedCheck?.updateAvailable ?? false,
 			});
 		});
 
 		// Static files for frontend (after API routes)
-		// __dirname is backend/src/ in dev mode (tsx) or backend/dist/ in compiled mode
-		// We need to go up 2 levels to reach the project root (crewly/)
-		const projectRoot = path.resolve(__dirname, '../..');
+		// Use findPackageRoot() so this works both in dev mode (backend/src/)
+		// and in compiled/npm-installed mode (dist/backend/backend/src/)
+		const projectRoot = findPackageRoot(__dirname);
 		const frontendPath = path.join(projectRoot, 'frontend/dist');
 		this.app.use(express.static(frontendPath));
 
@@ -472,6 +491,86 @@ export class CrewlyServer {
 			this.logger.info('Starting activity monitoring...');
 			this.activityMonitorService.startPolling();
 
+			// Start idle detection for agent suspension
+			this.logger.info('Starting idle detection service...');
+			IdleDetectionService.getInstance().start();
+
+			// Wire OrchestratorRestartService with dependencies for auto-restart
+			try {
+				const sessionBackend = getSessionBackendSync();
+				if (sessionBackend) {
+					const restartService = OrchestratorRestartService.getInstance();
+					restartService.setDependencies(
+						this.apiController.agentRegistrationService,
+						sessionBackend,
+						this.io
+					);
+					this.logger.info('OrchestratorRestartService wired with dependencies');
+				}
+			} catch (error) {
+				this.logger.warn('Failed to wire OrchestratorRestartService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wire and start OrchestratorHeartbeatMonitorService for auto-restart
+			try {
+				const orchHbSessionBackend = getSessionBackendSync();
+				if (orchHbSessionBackend) {
+					const orchHeartbeatMonitor = OrchestratorHeartbeatMonitorService.getInstance();
+					orchHeartbeatMonitor.setDependencies(orchHbSessionBackend);
+					orchHeartbeatMonitor.start();
+					this.logger.info('OrchestratorHeartbeatMonitorService started');
+				}
+			} catch (error) {
+				this.logger.warn('Failed to start OrchestratorHeartbeatMonitorService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wire AgentSuspendService with registration service for rehydration
+			try {
+				AgentSuspendService.getInstance().setDependencies(
+					this.apiController.agentRegistrationService
+				);
+				this.logger.info('AgentSuspendService wired with dependencies');
+			} catch (error) {
+				this.logger.warn('Failed to wire AgentSuspendService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wire and start AgentHeartbeatMonitorService
+			try {
+				const agentHbSessionBackend = getSessionBackendSync();
+				if (agentHbSessionBackend) {
+					const agentHeartbeatMonitor = AgentHeartbeatMonitorService.getInstance();
+					agentHeartbeatMonitor.setDependencies(
+						agentHbSessionBackend,
+						this.apiController.agentRegistrationService,
+						this.storageService,
+						this.taskTrackingService
+					);
+					agentHeartbeatMonitor.start();
+					this.logger.info('AgentHeartbeatMonitorService started');
+				}
+			} catch (error) {
+				this.logger.warn('Failed to start AgentHeartbeatMonitorService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wire RuntimeExitMonitorService dependencies for task-aware restart
+			try {
+				const runtimeExitMonitor = RuntimeExitMonitorService.getInstance();
+				runtimeExitMonitor.setAgentRegistrationService(this.apiController.agentRegistrationService);
+				runtimeExitMonitor.setTaskTrackingService(this.taskTrackingService);
+			} catch (error) {
+				this.logger.warn('Failed to wire RuntimeExitMonitorService dependencies (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
 			// Start team activity WebSocket service
 			this.logger.info('Starting team activity WebSocket service...');
 			this.teamActivityWebSocketService.start();
@@ -483,7 +582,7 @@ export class CrewlyServer {
 
 			// Generate orchestrator skills catalog
 			try {
-				const skillCatalogProjectRoot = path.resolve(__dirname, '../..');
+				const skillCatalogProjectRoot = findPackageRoot(__dirname);
 				const catalogService = SkillCatalogService.getInstance(skillCatalogProjectRoot);
 				const catalogResult = await catalogService.generateCatalog();
 				this.logger.info('Orchestrator skills catalog generated', {
@@ -544,6 +643,11 @@ export class CrewlyServer {
 			// Start system resource alert monitoring (proactive disk/memory/CPU alerts)
 			this.systemResourceAlertService.startMonitoring();
 
+			// Fire-and-forget background version check (populates cache for /health)
+			VersionCheckService.getInstance().checkForUpdate().catch(() => {
+				// Silently ignore — version check is non-critical
+			});
+
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
 
@@ -555,6 +659,9 @@ export class CrewlyServer {
 
 			// Auto-start orchestrator if enabled in settings
 			await this.autoStartOrchestratorIfEnabled();
+
+			// Auto-restore agent sessions that were running before the last shutdown
+			await this.autoRestoreAgentSessionsIfEnabled();
 
 		} catch (error) {
 			this.logger.error('Failed to start server', { error: error instanceof Error ? error.message : String(error) });
@@ -634,6 +741,7 @@ export class CrewlyServer {
 				projectPath: process.cwd(),
 				windowName: ORCHESTRATOR_WINDOW_NAME,
 				runtimeType,
+				forceRecreate: true,
 			});
 
 			if (!result.success) {
@@ -668,6 +776,99 @@ export class CrewlyServer {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			// Don't fail startup if auto-start fails
+		}
+	}
+
+	/**
+	 * Auto-restore agent sessions that were running before the last shutdown.
+	 * Loads persisted session state and calls createAgentSession() for each
+	 * non-orchestrator session. Gated by the autoResumeOnRestart setting.
+	 * Runs after orchestrator auto-start so the orchestrator is available.
+	 */
+	private async autoRestoreAgentSessionsIfEnabled(): Promise<void> {
+		try {
+			const settingsService = getSettingsService();
+			const settings = await settingsService.getSettings();
+
+			if (!settings.general.autoResumeOnRestart) {
+				this.logger.info('Auto-resume on restart is disabled, skipping agent session restore');
+				return;
+			}
+
+			const persistence = getSessionStatePersistence();
+			const state = await persistence.loadState();
+
+			if (!state || state.sessions.length === 0) {
+				this.logger.debug('No persisted agent sessions to restore');
+				return;
+			}
+
+			// Filter out orchestrator sessions (already auto-started separately)
+			const agentSessions = state.sessions.filter(
+				(s) => s.role !== ORCHESTRATOR_ROLE
+			);
+
+			if (agentSessions.length === 0) {
+				this.logger.debug('No non-orchestrator sessions to restore');
+				return;
+			}
+
+			this.logger.info('Auto-restoring agent sessions from persisted state', {
+				count: agentSessions.length,
+				sessions: agentSessions.map((s) => s.name),
+			});
+
+			let restored = 0;
+			const failed: string[] = [];
+
+			for (const session of agentSessions) {
+				try {
+					const result = await this.apiController.agentRegistrationService.createAgentSession({
+						sessionName: session.name,
+						role: session.role || 'developer',
+						projectPath: session.cwd || process.cwd(),
+						runtimeType: session.runtimeType,
+						teamId: session.teamId,
+						memberId: session.memberId,
+						forceRecreate: true,
+					});
+
+					if (result.success) {
+						restored++;
+						this.logger.info('Restored agent session', {
+							name: session.name,
+							role: session.role,
+							runtimeType: session.runtimeType,
+						});
+					} else {
+						failed.push(session.name);
+						this.logger.warn('Failed to restore agent session', {
+							name: session.name,
+							error: result.error,
+						});
+					}
+				} catch (error) {
+					failed.push(session.name);
+					this.logger.error('Error restoring agent session', {
+						name: session.name,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+
+			this.logger.info('Agent session restore complete', {
+				restored,
+				total: agentSessions.length,
+				failed: failed.length > 0 ? failed : undefined,
+			});
+
+			// Clear persisted state after restore attempt to avoid double-restore
+			await persistence.clearState();
+		} catch (error) {
+			this.logger.error('Failed to auto-restore agent sessions', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Don't fail startup if auto-restore fails
 		}
 	}
 
@@ -930,6 +1131,15 @@ export class CrewlyServer {
 
 			// Stop activity monitoring
 			this.activityMonitorService.stopPolling();
+
+			// Stop idle detection
+			IdleDetectionService.getInstance().stop();
+
+			// Stop agent heartbeat monitor
+			AgentHeartbeatMonitorService.getInstance().stop();
+
+			// Stop orchestrator heartbeat monitor
+			OrchestratorHeartbeatMonitorService.getInstance().stop();
 
 			// Stop team activity WebSocket service
 			this.teamActivityWebSocketService.stop();

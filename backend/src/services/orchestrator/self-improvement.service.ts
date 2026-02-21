@@ -16,7 +16,8 @@ import {
   ImprovementMarker,
   FileBackupRecord,
 } from './improvement-marker.service.js';
-import { getSlackOrchestratorBridge } from '../slack/slack-orchestrator-bridge.js';
+import { getSlackBridgeLazy } from './slack-bridge-lazy.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Improvement request configuration
@@ -108,6 +109,7 @@ let selfImprovementInstance: SelfImprovementService | null = null;
  */
 export class SelfImprovementService {
   private projectRoot: string;
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('SelfImprovement');
 
   /**
    * Create a new SelfImprovementService.
@@ -160,7 +162,7 @@ export class SelfImprovementService {
       'normal'
     );
 
-    console.log(`[SelfImprovement] Task ${taskId} planned`);
+    this.logger.info('Task planned', { taskId });
 
     return {
       id: taskId,
@@ -207,11 +209,11 @@ export class SelfImprovementService {
 
     try {
       // Step 1: Create git checkpoint
-      console.log('[SelfImprovement] Creating git checkpoint...');
+      this.logger.info('Creating git checkpoint...');
       const gitInfo = await this.createGitCheckpoint();
 
       // Step 2: Create file backups
-      console.log('[SelfImprovement] Creating file backups...');
+      this.logger.info('Creating file backups...');
       const backups = await this.createFileBackups(request.targetFiles);
 
       // Step 3: Record backup in marker (CRITICAL: do this before changes)
@@ -231,7 +233,7 @@ export class SelfImprovementService {
       );
 
       // Step 4: Apply changes (this will trigger hot-reload!)
-      console.log('[SelfImprovement] Applying changes...');
+      this.logger.info('Applying changes...');
       const appliedChanges = await this.applyChanges(request.changes);
 
       // Step 5: Record that changes were applied
@@ -249,7 +251,7 @@ export class SelfImprovementService {
       };
 
     } catch (error) {
-      console.error('[SelfImprovement] Error during execution:', error);
+      this.logger.error('Error during execution', { error: error instanceof Error ? error.message : String(error) });
 
       await markerService.recordError(
         (error as Error).message,
@@ -292,7 +294,7 @@ export class SelfImprovementService {
       'normal'
     );
 
-    console.log(`[SelfImprovement] Task ${marker.id} cancelled`);
+    this.logger.info('Task cancelled', { taskId: marker.id });
   }
 
   /**
@@ -327,7 +329,7 @@ export class SelfImprovementService {
       const branch = (await this.runCommand('git', ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
       return { commit, branch };
     } catch {
-      console.warn('[SelfImprovement] Git checkpoint failed, using file backups only');
+      this.logger.warn('Git checkpoint failed, using file backups only');
       return {};
     }
   }
@@ -424,7 +426,7 @@ export class SelfImprovementService {
         description: change.description,
       });
 
-      console.log(`[SelfImprovement] Applied: ${change.type} ${change.file}`);
+      this.logger.info('Applied change', { type: change.type, file: change.file });
     }
 
     return applied;
@@ -524,7 +526,7 @@ export class SelfImprovementService {
    */
   private async notifySlack(message: string, urgency: 'low' | 'normal' | 'high' | 'critical'): Promise<void> {
     try {
-      const slackBridge = getSlackOrchestratorBridge();
+      const slackBridge = await getSlackBridgeLazy();
       await slackBridge.sendNotification({
         type: 'alert',
         title: 'Self-Improvement',

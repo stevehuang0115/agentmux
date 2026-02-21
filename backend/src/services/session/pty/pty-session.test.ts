@@ -367,4 +367,25 @@ describe('PtySession integration', () => {
 			session!.write(command);
 		}, 500);
 	}, 15000);
+
+	describe('isChildProcessAlive', () => {
+		it('should return true when shell has child processes', async () => {
+			// A fresh shell session should have at least a login shell child
+			session = new PtySession('test-child', TEST_CWD, createTestOptions());
+
+			// Start a long-running child process inside the shell
+			session.write('sleep 60 &\n');
+			// Wait for the command to spawn
+			await new Promise((r) => setTimeout(r, 500));
+
+			expect(session.isChildProcessAlive()).toBe(true);
+		}, 10000);
+
+		it('should return false after session is killed', () => {
+			session = new PtySession('test-child-killed', TEST_CWD, createTestOptions());
+			session.kill();
+
+			expect(session.isChildProcessAlive()).toBe(false);
+		});
+	});
 });

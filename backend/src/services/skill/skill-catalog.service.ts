@@ -104,6 +104,9 @@ interface LoadedSkill {
   instructions: string;
   /** Directory name (basename) of the skill folder */
   dirName: string;
+  /** Optional absolute base path override for the usage command. When set, the
+   *  skill's usage line will use this path instead of the catalog-level skillsRelativePath. */
+  basePath?: string;
 }
 
 /**
@@ -303,12 +306,21 @@ export class SkillCatalogService {
 
       this.ensureCatalogDirectory();
 
-      const skills = await this.scanSkillDirectoriesAt(AGENT_SKILLS_RELATIVE_PATH);
+      // Scan bundled agent skills
+      const bundledSkills = await this.scanSkillDirectoriesAt(AGENT_SKILLS_RELATIVE_PATH);
 
       // Use absolute path for agent skills because agents run in their target
       // project directory (e.g. ~/projects/business_os), NOT the Crewly root.
       // Relative paths like config/skills/agent/ won't resolve from there.
       const absoluteSkillsPath = path.join(this.projectRoot, AGENT_SKILLS_RELATIVE_PATH);
+
+      // Also scan marketplace-installed skills
+      const marketplacePath = path.join(os.homedir(), '.crewly', 'marketplace', 'skills');
+      const marketplaceSkills = existsSync(marketplacePath)
+        ? await this.scanSkillDirectoriesAtAbsolute(marketplacePath)
+        : [];
+
+      const skills = [...bundledSkills, ...marketplaceSkills];
 
       if (skills.length === 0) {
         this.logger.warn('No agent skills found during catalog generation');
@@ -338,6 +350,7 @@ export class SkillCatalogService {
         skillCount: skills.length,
         categoryCount,
         catalogPath,
+        marketplaceSkillCount: marketplaceSkills.length,
       });
 
       return {
@@ -452,6 +465,45 @@ export class SkillCatalogService {
     // Sort skills alphabetically by name within their categories
     skills.sort((a, b) => a.definition.name.localeCompare(b.definition.name));
 
+    return skills;
+  }
+
+  /**
+   * Scan a skills directory at an absolute path for valid skill subdirectories.
+   *
+   * Works the same as scanSkillDirectoriesAt() but uses the path directly
+   * instead of joining with this.projectRoot. Each loaded skill gets its
+   * basePath set so the catalog uses the correct absolute path in usage commands.
+   *
+   * @param absolutePath - Absolute path to the skills directory
+   * @returns Array of loaded skills with their definitions and instructions
+   */
+  private async scanSkillDirectoriesAtAbsolute(absolutePath: string): Promise<LoadedSkill[]> {
+    if (!existsSync(absolutePath)) {
+      return [];
+    }
+
+    const entries = await fs.readdir(absolutePath, { withFileTypes: true });
+    const skills: LoadedSkill[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      if ((SKIP_DIRECTORIES as readonly string[]).includes(entry.name)) {
+        continue;
+      }
+
+      const skill = await this.loadSkillFromDirectory(absolutePath, entry.name);
+      if (skill) {
+        // Set basePath so the catalog renders the correct absolute path for marketplace skills
+        skill.basePath = absolutePath;
+        skills.push(skill);
+      }
+    }
+
+    skills.sort((a, b) => a.definition.name.localeCompare(b.definition.name));
     return skills;
   }
 
@@ -639,9 +691,11 @@ export class SkillCatalogService {
     lines.push(skill.definition.description);
     lines.push('');
 
-    // Usage line
+    // Usage line — use the skill's basePath if it has one (marketplace skills),
+    // otherwise fall back to the catalog-level skillsRelativePath (bundled skills)
+    const effectivePath = skill.basePath || skillsRelativePath;
     lines.push(
-      `**Usage:** \`bash ${skillsRelativePath}/${skill.dirName}/execute.sh '{}'\``
+      `**Usage:** \`bash ${effectivePath}/${skill.dirName}/execute.sh '{}'\``
     );
     lines.push('');
 

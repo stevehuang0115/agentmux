@@ -114,10 +114,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     const container = terminalContainerRef.current;
     if (!container) return;
 
+    const isMobile = window.innerWidth < 640;
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
-      fontSize: 14,
+      fontSize: isMobile ? 12 : 14,
       fontFamily: '"Fira Code", Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: '#111721',
@@ -649,19 +650,19 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
       ref={terminalPanelRef}
       className={`fixed top-0 right-0 h-full bg-surface-dark border-l border-border-dark flex flex-col z-50 transition-transform duration-300 ${
         isOpen ? 'translate-x-0' : 'translate-x-full'
-      } w-[600px]`}
+      } w-full sm:w-[600px]`}
     >
-      <div className="flex items-center justify-between p-4 border-b border-border-dark">
-        <div className="flex items-center space-x-3">
-          <TerminalIcon className="w-5 h-5 text-text-secondary-dark" />
-          <span className="font-medium text-text-primary-dark">Terminal</span>
-          <div className="flex items-center space-x-2">
+      <div className="flex items-center justify-between p-3 sm:p-4 border-b border-border-dark">
+        <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+          <TerminalIcon className="w-5 h-5 text-text-secondary-dark shrink-0" />
+          <span className="font-medium text-text-primary-dark truncate">Terminal</span>
+          <div className="flex items-center space-x-1.5 shrink-0">
             <div className={`w-2 h-2 rounded-full ${
               connectionStatus === 'connected' ? 'bg-green-400' :
               connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? 'bg-yellow-400' :
               connectionStatus === 'error' ? 'bg-red-400' : 'bg-gray-400'
             }`}></div>
-            <span className="text-sm text-text-secondary-dark">
+            <span className="text-xs sm:text-sm text-text-secondary-dark">
               {connectionStatus === 'connected' ? 'Live' :
                connectionStatus === 'connecting' ? 'Connecting...' :
                connectionStatus === 'reconnecting' ? 'Reconnecting...' :
@@ -672,23 +673,23 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
         <button
           onClick={onClose}
-          className="p-1 text-text-secondary-dark hover:text-text-primary-dark hover:bg-background-dark rounded transition-colors"
+          className="p-1 text-text-secondary-dark hover:text-text-primary-dark hover:bg-background-dark rounded transition-colors shrink-0"
           aria-label="Close Terminal"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="px-4 py-3 border-b border-border-dark">
-        <div className="flex items-center space-x-3">
-          <label htmlFor="session-select" className="text-sm font-medium text-text-secondary-dark">
+      <div className="px-3 sm:px-4 py-2 sm:py-3 border-b border-border-dark">
+        <div className="flex items-center space-x-2 sm:space-x-3">
+          <label htmlFor="session-select" className="text-xs sm:text-sm font-medium text-text-secondary-dark shrink-0">
             Session:
           </label>
           <select
             id="session-select"
             value={selectedSession}
             onChange={(e) => setSelectedSession(e.target.value)}
-            className="flex-1 px-3 py-1 bg-background-dark border border-border-dark rounded text-sm text-text-primary-dark focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50"
+            className="flex-1 min-w-0 px-2 sm:px-3 py-1 bg-background-dark border border-border-dark rounded text-xs sm:text-sm text-text-primary-dark focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50"
             disabled={connectionStatus !== 'connected'}
           >
             {availableSessions.map((session) => (

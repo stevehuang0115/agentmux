@@ -1,0 +1,47 @@
+# 3D models and large assets (too large for npm)
+**/*.glb
+**/*.fbx
+frontend/dist/models/
+frontend/dist/build-kits/
+
+# Agent skills (install via marketplace: crewly install --all)
+config/skills/agent/
+
+# Source and dev files (only dist/ is needed)
+backend/src/
+cli/src/
+frontend/src/
+frontend/public/
+mcp-server/
+
+# Test files
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/__tests__/
+
+# Dev configuration
+.github/
+.vscode/
+.crewly/
+.gemini/
+docs/
+specs/
+tests/
+
+# TypeScript source maps and declaration maps
+**/*.d.ts.map
+
+# Build configs
+tsconfig*.json
+jest.config.*
+eslint*
+.eslintrc*
+.prettierrc*
+playwright.config.*
+ecosystem.config.*
+Dockerfile
+docker-compose*
+.dockerignore
+.env*
+nodemon.json

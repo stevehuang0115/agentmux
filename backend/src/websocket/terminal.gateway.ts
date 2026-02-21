@@ -22,6 +22,7 @@ import { getChatService } from '../services/chat/chat.service.js';
 import type { SlackNotification } from '../types/slack.types.js';
 import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from '../utils/terminal-output.utils.js';
 import { parseNotifyContent, type NotifyPayload } from '../types/chat.types.js';
+import { PtyActivityTrackerService } from '../services/agent/pty-activity-tracker.service.js';
 
 /**
  * Terminal Gateway class for WebSocket-based terminal streaming.
@@ -205,6 +206,9 @@ export class TerminalGateway {
 
 		// Subscribe to PTY onData events - real-time streaming
 		const unsubscribeData = session.onData((data: string) => {
+			// Record activity for idle detection
+			PtyActivityTrackerService.getInstance().recordActivity(sessionName);
+
 			const terminalOutput: TerminalOutput = {
 				sessionName,
 				content: data,

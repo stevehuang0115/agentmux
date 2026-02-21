@@ -3,6 +3,9 @@ import type { ApiContext } from '../types.js';
 import { ScheduledMessageModel, MessageDeliveryLogModel } from '../../models/index.js';
 import { ApiResponse } from '../../types/index.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('ScheduledMessagesController');
 
 export async function createScheduledMessage(
 	this: ApiContext,
@@ -37,7 +40,7 @@ export async function createScheduledMessage(
 			message: 'Scheduled message created successfully',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error creating scheduled message:', error);
+		logger.error('Error creating scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to create scheduled message',
@@ -54,7 +57,7 @@ export async function getScheduledMessages(
 		const scheduledMessages = await this.storageService.getScheduledMessages();
 		res.json({ success: true, data: scheduledMessages } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting scheduled messages:', error);
+		logger.error('Error getting scheduled messages', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get scheduled messages',
@@ -79,7 +82,7 @@ export async function getScheduledMessage(
 		}
 		res.json({ success: true, data: scheduledMessage } as ApiResponse);
 	} catch (error) {
-		console.error('Error getting scheduled message:', error);
+		logger.error('Error getting scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to get scheduled message',
@@ -130,7 +133,7 @@ export async function updateScheduledMessage(
 			message: 'Scheduled message updated successfully',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error updating scheduled message:', error);
+		logger.error('Error updating scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to update scheduled message',
@@ -159,7 +162,7 @@ export async function deleteScheduledMessage(
 			message: 'Scheduled message deleted successfully',
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error deleting scheduled message:', error);
+		logger.error('Error deleting scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to delete scheduled message',
@@ -195,7 +198,7 @@ export async function toggleScheduledMessage(
 			message: `Scheduled message ${updatedMessage.isActive ? 'activated' : 'deactivated'}`,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error toggling scheduled message:', error);
+		logger.error('Error toggling scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to toggle scheduled message',
@@ -230,7 +233,7 @@ export async function runScheduledMessage(
 		} catch (sendError: any) {
 			success = false;
 			error = sendError?.message || 'Failed to send message';
-			console.error('Error sending message to session:', sendError);
+			logger.error('Error sending message to session', { error: sendError instanceof Error ? sendError.message : String(sendError) });
 		}
 		const deliveryLog = MessageDeliveryLogModel.create({
 			scheduledMessageId: scheduledMessage.id,
@@ -255,7 +258,7 @@ export async function runScheduledMessage(
 				: `Failed to send message: ${error}`,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error running scheduled message:', error);
+		logger.error('Error running scheduled message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to run scheduled message',

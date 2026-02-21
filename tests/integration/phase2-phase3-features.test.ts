@@ -207,7 +207,7 @@ function createEnhancedTestApp() {
 
     // Mock terminal output
     const mockOutput = `
-export TMUX_SESSION_NAME="${member.sessionName}"
+export CREWLY_SESSION_NAME="${member.sessionName}"
 export CREWLY_ROLE="${member.role}"
 
 $ echo "Hello from ${member.name} session"
@@ -623,7 +623,7 @@ describe('Phase 2 & 3 Features Integration Tests', () => {
       expect(response.body.data).toHaveProperty('timestamp');
 
       // Verify output contains expected terminal content
-      expect(response.body.data.output).toContain('TMUX_SESSION_NAME');
+      expect(response.body.data.output).toContain('CREWLY_SESSION_NAME');
       expect(response.body.data.output).toContain('CREWLY_ROLE');
       expect(response.body.data.output).toContain('git status');
       expect(response.body.data.output).toContain('npm test');

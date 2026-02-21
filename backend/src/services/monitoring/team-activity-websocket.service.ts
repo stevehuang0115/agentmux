@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { StorageService } from '../core/storage.service.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { TmuxService } from '../agent/tmux.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { TerminalGateway } from '../../websocket/terminal.gateway.js';
@@ -40,6 +41,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
   private terminalGateway: TerminalGateway | null = null;
   private backgroundTimer: NodeJS.Timeout | null = null;
   private cachedActivityData: TeamActivityData | null = null;
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TeamActivityWebSocketService');
   private readonly BACKGROUND_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
   private readonly MAX_OUTPUT_SIZE = 1024; // 1KB max per output
   private readonly SESSION_CHECK_TIMEOUT = 8000; // 8 second timeout (increased for reliability)
@@ -69,14 +71,14 @@ export class TeamActivityWebSocketService extends EventEmitter {
    * Start the event-driven activity monitoring with background refresh
    */
   start(): void {
-    console.log('Starting event-driven team activity monitoring...');
+    this.logger.info('Starting event-driven team activity monitoring');
     
     // Perform initial activity check
     this.performActivityCheck();
     
     // Set up background refresh every 5 minutes
     this.backgroundTimer = setInterval(() => {
-      console.log('Background team activity refresh...');
+      this.logger.info('Background team activity refresh');
       this.performActivityCheck();
     }, this.BACKGROUND_REFRESH_INTERVAL);
   }
@@ -89,7 +91,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
       clearInterval(this.backgroundTimer);
       this.backgroundTimer = null;
     }
-    console.log('Team activity monitoring stopped');
+    this.logger.info('Team activity monitoring stopped');
   }
 
   /**
@@ -101,12 +103,12 @@ export class TeamActivityWebSocketService extends EventEmitter {
 
     // Listen for task tracking events
     this.taskTrackingService.on('task_assigned', () => {
-      console.log('Task assigned - triggering activity check');
+      this.logger.info('Task assigned - triggering activity check');
       this.performActivityCheck();
     });
 
     this.taskTrackingService.on('task_completed', () => {
-      console.log('Task completed - triggering activity check');
+      this.logger.info('Task completed - triggering activity check');
       this.performActivityCheck();
     });
   }
@@ -120,21 +122,27 @@ export class TeamActivityWebSocketService extends EventEmitter {
       
       // Check if data has meaningfully changed
       if (this.hasActivityChanged(activityData)) {
-        console.log('Team activity changes detected, broadcasting updates...');
-        
+        this.logger.info('Team activity changes detected, broadcasting updates');
+
+        const prevData = this.cachedActivityData;
+
         // Cache the new data
         this.cachedActivityData = activityData;
-        
-        // Broadcast individual events
-        this.broadcastOrchestratorUpdate(activityData.orchestrator);
+
+        // Only broadcast orchestrator update when orchestrator status actually changed.
+        // Broadcasting it on every member change sends a payload that the frontend
+        // interprets as "orchestrator inactive" (wrong shape / stale data).
+        if (!prevData || prevData.orchestrator.running !== activityData.orchestrator.running) {
+          this.broadcastOrchestratorUpdate(activityData.orchestrator);
+        }
         this.broadcastMemberUpdates(activityData.members);
-        
+
         // Broadcast comprehensive update
         this.broadcastTeamActivityUpdate(activityData);
       }
       
     } catch (error) {
-      console.error('Error performing activity check:', error);
+      this.logger.error('Error performing activity check', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -245,7 +253,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
       }
     }
 
-    console.log(`🚀 Optimized session check completed: checked ${allSessionNames.length} sessions with ${sessionExistenceMap.has(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) ? 'bulk' : 'individual'} method`);
+    this.logger.info('Optimized session check completed', { sessionCount: allSessionNames.length, method: sessionExistenceMap.has(CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME) ? 'bulk' : 'individual' });
 
     return {
       orchestrator: orchestratorData,
@@ -264,7 +272,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
       }
       return backend.sessionExists(sessionName);
     } catch (error) {
-      console.warn(`Session check failed for ${sessionName}:`, error);
+      this.logger.warn('Session check failed', { sessionName, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }
@@ -318,11 +326,18 @@ export class TeamActivityWebSocketService extends EventEmitter {
   }
 
   /**
-   * Broadcast orchestrator status update
+   * Broadcast orchestrator status update.
+   * Maps the internal `running` boolean to the `agentStatus` string that
+   * the frontend useOrchestratorStatus hook expects.
    */
   private broadcastOrchestratorUpdate(orchestratorData: any): void {
     if (this.terminalGateway) {
-      this.terminalGateway!.broadcastOrchestratorStatus(orchestratorData);
+      this.terminalGateway!.broadcastOrchestratorStatus({
+        sessionName: orchestratorData.sessionName,
+        agentStatus: orchestratorData.running
+          ? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
+          : CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+      });
     }
   }
 
@@ -357,7 +372,7 @@ export class TeamActivityWebSocketService extends EventEmitter {
    * Force refresh activity data (for manual triggers)
    */
   async forceRefresh(): Promise<void> {
-    console.log('Force refreshing team activity data...');
+    this.logger.info('Force refreshing team activity data');
     await this.performActivityCheck();
   }
 }

@@ -25,6 +25,7 @@ import {
   roleToStorageFormat,
   storageFormatToRole,
 } from '../../types/role.types.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 // ============================================================================
 // Custom Error Classes
@@ -110,6 +111,7 @@ export class RoleService {
   private rolesCache: Map<string, Role> = new Map();
   private promptCache: Map<string, string> = new Map();
   private initialized = false;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('RoleService');
 
   /**
    * Create a new RoleService instance
@@ -673,7 +675,7 @@ export class RoleService {
           const role = storageFormatToRole(stored, false);
           roles.push(role);
         } catch (err) {
-          console.warn(`Failed to load user role from ${file}:`, err);
+          this.logger.warn('Failed to load user role', { file, error: err instanceof Error ? err.message : String(err) });
         }
       }
     } catch {

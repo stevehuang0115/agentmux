@@ -77,6 +77,8 @@ export const CREWLY_CONSTANTS = {
 		STARTED: 'started',
 		/** Agent has registered and is fully operational */
 		ACTIVE: 'active',
+		/** Agent was active but has been suspended to free resources (idle timeout) */
+		SUSPENDED: 'suspended',
 		/** @deprecated Use STARTING instead - kept for backward compatibility */
 		ACTIVATING: 'activating',
 	},
@@ -344,8 +346,8 @@ export const MESSAGE_CONSTANTS = {
  * Environment variable names used across domains
  */
 export const ENV_CONSTANTS = {
-	/** Session name (legacy: kept for compatibility with older agents) */
-	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
+	/** PTY session name used for agent identity and heartbeat tracking */
+	CREWLY_SESSION_NAME: 'CREWLY_SESSION_NAME',
 	/** Crewly role identifier */
 	CREWLY_ROLE: 'CREWLY_ROLE',
 	/** API server port */
@@ -661,7 +663,7 @@ export const CONTINUATION_CONSTANTS = {
     /** Number of idle poll cycles before triggering continuation check */
     IDLE_CYCLES_BEFORE_CHECK: 2,
     /** Minutes without MCP calls before heartbeat is considered stale */
-    STALE_THRESHOLD_MINUTES: 30,
+    STALE_THRESHOLD_MINUTES: 20,
     /** Milliseconds between activity poll checks */
     ACTIVITY_POLL_INTERVAL_MS: 120000, // 2 minutes
   },
@@ -748,6 +750,98 @@ export const CONTINUATION_CONSTANTS = {
     /** Low confidence threshold */
     LOW: 0.3,
   },
+} as const;
+
+// ========================= ORCHESTRATOR RESTART SYSTEM =========================
+
+/**
+ * Orchestrator auto-restart configuration.
+ * Used by OrchestratorRestartService to automatically restart the orchestrator
+ * when it becomes unresponsive (child process dies inside PTY shell).
+ */
+export const ORCHESTRATOR_RESTART_CONSTANTS = {
+  /** Maximum number of restarts allowed within the cooldown window */
+  MAX_RESTARTS_PER_WINDOW: 3,
+  /** Cooldown window in milliseconds (1 hour) */
+  COOLDOWN_WINDOW_MS: 3600000,
+  /** Delay before attempting restart (ms) - allows cleanup */
+  RESTART_DELAY_MS: 5000,
+} as const;
+
+// ========================= ORCHESTRATOR HEARTBEAT MONITOR =========================
+
+/**
+ * Orchestrator heartbeat monitoring configuration.
+ * Used by OrchestratorHeartbeatMonitorService to detect unresponsive orchestrators,
+ * send proactive heartbeat requests, and trigger auto-restart with resume.
+ */
+export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = {
+	/** Interval between heartbeat checks in milliseconds (30 seconds) */
+	CHECK_INTERVAL_MS: 30_000,
+	/** Time without API activity before sending a heartbeat request to orchestrator (5 minutes) */
+	HEARTBEAT_REQUEST_THRESHOLD_MS: 300_000,
+	/** Time after heartbeat request before triggering auto-restart (1 minute) */
+	RESTART_THRESHOLD_MS: 60_000,
+	/** Message sent to orchestrator PTY to request a heartbeat */
+	HEARTBEAT_REQUEST_MESSAGE: 'Please run your heartbeat skill now: bash config/skills/orchestrator/heartbeat/execute.sh',
+	/** Grace period after server start before monitoring begins (30 seconds) */
+	STARTUP_GRACE_PERIOD_MS: 30_000,
+} as const;
+
+/**
+ * Agent heartbeat monitor configuration.
+ * Used by AgentHeartbeatMonitorService to detect crashed/unresponsive agents
+ * and auto-restart them with task re-delivery.
+ */
+export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = {
+	/** Interval between heartbeat checks in milliseconds (30 seconds) */
+	CHECK_INTERVAL_MS: 30_000,
+	/** Time without activity (both PTY and API) before checking process liveness (5 minutes) */
+	HEARTBEAT_REQUEST_THRESHOLD_MS: 300_000,
+	/** Grace period after server start before monitoring begins (1 minute) */
+	STARTUP_GRACE_PERIOD_MS: 60_000,
+	/** Maximum restarts per cooldown window per agent */
+	MAX_RESTARTS_PER_WINDOW: 3,
+	/** Cooldown window for restart tracking (1 hour) */
+	COOLDOWN_WINDOW_MS: 3_600_000,
+} as const;
+
+// ========================= AGENT SUSPEND SYSTEM =========================
+
+/**
+ * Agent suspend/rehydrate configuration.
+ * Used by AgentSuspendService, IdleDetectionService, and DiskCleanupService
+ * to automatically suspend idle agents and transparently rehydrate them.
+ */
+export const AGENT_SUSPEND_CONSTANTS = {
+	/** Default idle timeout in minutes before an agent is suspended (0 = disabled) */
+	DEFAULT_IDLE_TIMEOUT_MINUTES: 10,
+	/** Interval between idle checks in milliseconds (2 minutes) */
+	IDLE_CHECK_INTERVAL_MS: 120_000,
+	/** Maximum age of debug log files eligible for cleanup on suspend (hours) */
+	DEBUG_LOG_MAX_AGE_HOURS: 24,
+	/** Timeout for rehydration to complete in milliseconds (45 seconds) */
+	REHYDRATION_TIMEOUT_MS: 45_000,
+	/** Roles that are exempt from suspension */
+	EXEMPT_ROLES: ['orchestrator'] as const,
+} as const;
+
+// ========================= VERSION CHECK SYSTEM =========================
+
+/**
+ * Version check configuration for CLI and web update notifications.
+ * Used by VersionCheckService (backend) and version-check utilities (CLI)
+ * to query the npm registry and cache the result.
+ */
+export const VERSION_CHECK_CONSTANTS = {
+	/** npm registry URL for fetching the latest published version */
+	NPM_REGISTRY_URL: 'https://registry.npmjs.org/crewly/latest',
+	/** Cache file name stored under CREWLY_HOME */
+	CHECK_CACHE_FILE: '.update-check',
+	/** Time-to-live for cached check result (24 hours) */
+	CACHE_TTL_MS: 24 * 60 * 60 * 1000,
+	/** HTTP request timeout for npm registry calls (5 seconds) */
+	REQUEST_TIMEOUT_MS: 5000,
 } as const;
 
 /** Shorthand for debounce value */

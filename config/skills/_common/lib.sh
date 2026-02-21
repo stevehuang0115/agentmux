@@ -18,6 +18,9 @@ api_call() {
   local method="$1" endpoint="$2" body="${3:-}"
   local url="${CREWLY_API_URL}/api${endpoint}"
   local args=(-s -w '\n%{http_code}' -X "$method" -H "Content-Type: application/json")
+  # Include agent session identity header for heartbeat tracking
+  # Use ${VAR:-} pattern to avoid 'unbound variable' error under set -u (nounset)
+  [ -n "${CREWLY_SESSION_NAME:-}" ] && args+=(-H "X-Agent-Session: $CREWLY_SESSION_NAME")
   [ -n "$body" ] && args+=(-d "$body")
 
   local response

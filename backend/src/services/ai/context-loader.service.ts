@@ -3,6 +3,7 @@ import * as path from 'path';
 import { existsSync } from 'fs';
 import { parse as parseYAML } from 'yaml';
 import { Project, TeamMember } from '../../types/index.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export interface ProjectContext {
   specifications: string;
@@ -31,6 +32,7 @@ export interface ContextLoadOptions {
 export class ContextLoaderService {
   private projectPath: string;
   private crewlyPath: string;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('ContextLoaderService');
 
   constructor(projectPath: string) {
     this.projectPath = path.resolve(projectPath);
@@ -85,7 +87,7 @@ export class ContextLoaderService {
           const content = await fs.readFile(specPath, 'utf-8');
           specifications += `\n\n## ${specFile}\n\n${content}`;
         } catch (error) {
-          console.error(`Error reading spec file ${specFile}:`, error);
+          this.logger.error('Error reading spec file', { specFile, error: error instanceof Error ? error.message : String(error) });
         }
       }
     }
@@ -105,7 +107,7 @@ export class ContextLoaderService {
         try {
           return await fs.readFile(readmePath, 'utf-8');
         } catch (error) {
-          console.error(`Error reading README at ${readmePath}:`, error);
+          this.logger.error('Error reading README', { readmePath, error: error instanceof Error ? error.message : String(error) });
         }
       }
     }
@@ -119,7 +121,7 @@ export class ContextLoaderService {
     try {
       await this.traverseDirectory(this.projectPath, structure, options);
     } catch (error) {
-      console.error('Error loading file structure:', error);
+      this.logger.error('Error loading file structure', { error: error instanceof Error ? error.message : String(error) });
     }
 
     return structure;
@@ -220,13 +222,13 @@ export class ContextLoaderService {
           const ticket = parseYAML(content);
           tickets.push(`## ${ticket.title}\n**Status:** ${ticket.status}\n**Priority:** ${ticket.priority}\n**Assigned to:** ${ticket.assignedTo || 'Unassigned'}\n\n${ticket.description}`);
         } catch (error) {
-          console.error(`Error reading ticket ${file}:`, error);
+          this.logger.error('Error reading ticket', { file, error: error instanceof Error ? error.message : String(error) });
         }
       }
 
       return tickets;
     } catch (error) {
-      console.error('Error loading tickets:', error);
+      this.logger.error('Error loading tickets', { error: error instanceof Error ? error.message : String(error) });
       return [];
     }
   }
@@ -261,7 +263,7 @@ export class ContextLoaderService {
         ...packageJson.devDependencies || {}
       };
     } catch (error) {
-      console.error('Error loading dependencies:', error);
+      this.logger.error('Error loading dependencies', { error: error instanceof Error ? error.message : String(error) });
       return {};
     }
   }
@@ -370,7 +372,7 @@ export class ContextLoaderService {
 
       return true;
     } catch (error) {
-      console.error(`Error injecting context into session ${sessionName}:`, error);
+      this.logger.error('Error injecting context into session', { sessionName, error: error instanceof Error ? error.message : String(error) });
       return false;
     }
   }

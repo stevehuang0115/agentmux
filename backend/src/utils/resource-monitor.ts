@@ -3,6 +3,7 @@
 import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 import os from 'os';
+import { LoggerService, ComponentLogger } from '../services/core/logger.service.js';
 
 /**
  * Resource monitoring thresholds
@@ -62,7 +63,7 @@ interface ResourceMetrics {
  * });
  *
  * monitor.on('warning', (metrics) => {
- *   console.warn('Resource warning:', metrics);
+ *   // Handle resource warning
  * });
  *
  * monitor.start();
@@ -77,6 +78,7 @@ export class ResourceMonitor extends EventEmitter {
 	private memoryHistory: number[] = [];
 	private cpuHistory: number[] = [];
 	private isMonitoring: boolean = false;
+	private logger: ComponentLogger;
 
 	private readonly DEFAULT_THRESHOLDS: ResourceThresholds = {
 		memoryMB: 500,        // 500MB memory warning
@@ -87,9 +89,10 @@ export class ResourceMonitor extends EventEmitter {
 
 	constructor(thresholds?: Partial<ResourceThresholds>) {
 		super();
+		this.logger = LoggerService.getInstance().createComponentLogger('ResourceMonitor');
 		this.thresholds = { ...this.DEFAULT_THRESHOLDS, ...thresholds };
 
-		console.log('📊 Resource Monitor initialized with thresholds:', this.thresholds);
+		this.logger.info('Resource Monitor initialized', { thresholds: this.thresholds });
 	}
 
 	/**
@@ -99,11 +102,11 @@ export class ResourceMonitor extends EventEmitter {
 	 */
 	start(intervalMs: number = 30000): void {
 		if (this.isMonitoring) {
-			console.warn('⚠️ Resource monitoring is already running');
+			this.logger.warn('Resource monitoring is already running');
 			return;
 		}
 
-		console.log(`🔍 Starting resource monitoring (interval: ${intervalMs}ms)`);
+		this.logger.info('Starting resource monitoring', { intervalMs });
 		this.isMonitoring = true;
 
 		// Initial measurement
@@ -126,7 +129,7 @@ export class ResourceMonitor extends EventEmitter {
 			return;
 		}
 
-		console.log('🛑 Stopping resource monitoring');
+		this.logger.info('Stopping resource monitoring');
 		this.isMonitoring = false;
 
 		if (this.monitoringInterval) {
@@ -189,7 +192,7 @@ export class ResourceMonitor extends EventEmitter {
 			this.emit('metrics', metrics);
 
 		} catch (error) {
-			console.error('❌ Error measuring resources:', error);
+			this.logger.error('Error measuring resources', { error: error instanceof Error ? error.message : String(error) });
 			this.emit('error', error);
 		}
 	}
@@ -200,13 +203,14 @@ export class ResourceMonitor extends EventEmitter {
 	 * @param metrics - Current resource metrics
 	 */
 	private logMetrics(metrics: ResourceMetrics): void {
-		console.log('📊 Resource Metrics:');
-		console.log(`   💾 Memory: ${metrics.memoryUsageMB}MB`);
-		console.log(`   🖥️  CPU: ${metrics.cpuUsagePercent.toFixed(1)}%`);
-		console.log(`   ⏱️  Event Loop Lag: ${metrics.eventLoopLagMs.toFixed(1)}ms`);
-		console.log(`   📁 Open Files: ${metrics.openFiles}`);
-		console.log(`   🆓 Free Memory: ${metrics.freeMemoryPercent.toFixed(1)}%`);
-		console.log(`   ⚖️  Load Average: [${metrics.loadAverage.map(l => l.toFixed(2)).join(', ')}]`);
+		this.logger.debug('Resource Metrics', {
+			memoryMB: metrics.memoryUsageMB,
+			cpuPercent: parseFloat(metrics.cpuUsagePercent.toFixed(1)),
+			eventLoopLagMs: parseFloat(metrics.eventLoopLagMs.toFixed(1)),
+			openFiles: metrics.openFiles,
+			freeMemoryPercent: parseFloat(metrics.freeMemoryPercent.toFixed(1)),
+			loadAverage: metrics.loadAverage.map(l => parseFloat(l.toFixed(2))),
+		});
 	}
 
 	/**
@@ -238,8 +242,7 @@ export class ResourceMonitor extends EventEmitter {
 		}
 
 		if (warnings.length > 0) {
-			console.warn('⚠️ Resource Warnings:');
-			warnings.forEach(warning => console.warn(`   ${warning}`));
+			this.logger.warn('Resource warnings detected', { warnings });
 
 			this.emit('warning', {
 				warnings,
@@ -259,7 +262,10 @@ export class ResourceMonitor extends EventEmitter {
 		if (this.memoryHistory.length >= 5) {
 			const avgGrowth = this.calculateAverageGrowth(this.memoryHistory);
 			if (avgGrowth > 10) { // Growing by more than 10MB per measurement
-				console.warn(`⚠️ Potential memory leak detected: +${avgGrowth.toFixed(1)}MB/measurement`);
+				this.logger.warn('Potential memory leak detected', {
+					averageGrowthMB: parseFloat(avgGrowth.toFixed(1)),
+					currentMemoryMB: metrics.memoryUsageMB,
+				});
 				this.emit('memory_leak_warning', {
 					averageGrowth: avgGrowth,
 					currentMemory: metrics.memoryUsageMB,
@@ -273,7 +279,10 @@ export class ResourceMonitor extends EventEmitter {
 			const recentCpu = this.cpuHistory.slice(-3);
 			const avgCpu = recentCpu.reduce((a, b) => a + b, 0) / recentCpu.length;
 			if (avgCpu > this.thresholds.cpuPercent) {
-				console.warn(`⚠️ Sustained high CPU usage: ${avgCpu.toFixed(1)}% (3 measurements)`);
+				this.logger.warn('Sustained high CPU usage', {
+					averageCpuPercent: parseFloat(avgCpu.toFixed(1)),
+					measurements: 3,
+				});
 				this.emit('cpu_spike_warning', {
 					averageCpu: avgCpu,
 					recentReadings: recentCpu
@@ -383,7 +392,7 @@ export class ResourceMonitor extends EventEmitter {
 
 			const lag = await this.measureEventLoopLag();
 			if (lag > this.thresholds.eventLoopLagMs) {
-				console.warn(`⚠️ High event loop lag: ${lag.toFixed(1)}ms`);
+				this.logger.warn('High event loop lag', { lagMs: parseFloat(lag.toFixed(1)) });
 				this.emit('event_loop_lag', { lag });
 			}
 		}, 5000);
@@ -457,7 +466,7 @@ export class ResourceMonitor extends EventEmitter {
 	 */
 	updateThresholds(newThresholds: Partial<ResourceThresholds>): void {
 		this.thresholds = { ...this.thresholds, ...newThresholds };
-		console.log('📊 Updated resource monitoring thresholds:', this.thresholds);
+		this.logger.info('Updated resource monitoring thresholds', { thresholds: this.thresholds });
 	}
 
 	/**
@@ -476,18 +485,19 @@ export type { ResourceThresholds, ResourceMetrics };
 // If this script is run directly, start monitoring
 const _isMainModule = process.argv[1]?.endsWith('resource-monitor.ts') || process.argv[1]?.endsWith('resource-monitor.js');
 if (_isMainModule) {
+	const logger = LoggerService.getInstance().createComponentLogger('ResourceMonitor');
 	const monitor = new ResourceMonitor();
 
 	monitor.on('warning', (data) => {
-		console.warn('🚨 Resource Warning:', data);
+		logger.warn('Resource Warning', { data });
 	});
 
 	monitor.on('memory_leak_warning', (data) => {
-		console.warn('🚨 Memory Leak Warning:', data);
+		logger.warn('Memory Leak Warning', { data });
 	});
 
 	monitor.on('cpu_spike_warning', (data) => {
-		console.warn('🚨 CPU Spike Warning:', data);
+		logger.warn('CPU Spike Warning', { data });
 	});
 
 	monitor.start();
@@ -495,12 +505,12 @@ if (_isMainModule) {
 	// Generate health report every 5 minutes
 	setInterval(async () => {
 		const report = await monitor.generateHealthReport();
-		console.log('📋 Health Report:', report);
+		logger.info('Health Report', { report });
 	}, 300000);
 
 	// Graceful shutdown
 	process.on('SIGINT', () => {
-		console.log('🛑 Shutting down resource monitor...');
+		logger.info('Shutting down resource monitor');
 		monitor.stop();
 		process.exit(0);
 	});

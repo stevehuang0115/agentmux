@@ -104,6 +104,33 @@ describe('SessionStatePersistence', () => {
 				env: { NODE_ENV: 'development' },
 			});
 		});
+
+		it('should store memberId when provided', () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: 'claude',
+				args: [],
+			};
+
+			persistence.registerSession('member-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev', 'team-1', 'member-abc');
+
+			const metadata = persistence.getSessionMetadata('member-session');
+			expect(metadata?.memberId).toBe('member-abc');
+			expect(metadata?.teamId).toBe('team-1');
+		});
+
+		it('should leave memberId undefined when not provided', () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: 'claude',
+				args: [],
+			};
+
+			persistence.registerSession('no-member-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev', 'team-1');
+
+			const metadata = persistence.getSessionMetadata('no-member-session');
+			expect(metadata?.memberId).toBeUndefined();
+		});
 	});
 
 	describe('unregisterSession', () => {
@@ -369,6 +396,21 @@ describe('SessionStatePersistence', () => {
 			// Verify the saved state includes claudeSessionId
 			const loaded = await persistence.loadState();
 			expect(loaded?.sessions[0].claudeSessionId).toBe('session-uuid-456');
+		});
+
+		it('should persist memberId through save/load cycle', async () => {
+			const options: SessionOptions = {
+				cwd: '/home/user/project',
+				command: '/bin/zsh',
+			};
+
+			persistence.registerSession('member-session', options, RUNTIME_TYPES.CLAUDE_CODE, 'dev', 'team-1', 'member-abc');
+
+			(mockBackend.listSessions as jest.Mock).mockReturnValue(['member-session']);
+			await persistence.saveState(mockBackend);
+
+			const loaded = await persistence.loadState();
+			expect(loaded?.sessions[0].memberId).toBe('member-abc');
 		});
 
 		it('should restore sessions with claudeSessionId metadata', async () => {

@@ -16,6 +16,7 @@ import { PtySession } from './pty-session.js';
 import { PtyTerminalBuffer } from './pty-terminal-buffer.js';
 import { LoggerService, ComponentLogger } from '../../core/logger.service.js';
 import { PTY_CONSTANTS } from '../../../constants.js';
+import { PtyActivityTrackerService } from '../../agent/pty-activity-tracker.service.js';
 
 /**
  * PTY Session Backend implementation.
@@ -109,9 +110,12 @@ export class PtySessionBackend implements ISessionBackend {
 		const rows = options.rows ?? DEFAULT_TERMINAL_ROWS;
 		const terminalBuffer = new PtyTerminalBuffer(cols, rows);
 
-		// Pipe session output to terminal buffer
+		// Pipe session output to terminal buffer and record activity for idle detection.
+		// Recording here (at session creation) ensures activity is tracked even when
+		// no WebSocket client is viewing the terminal UI.
 		session.onData((data) => {
 			terminalBuffer.write(data);
+			PtyActivityTrackerService.getInstance().recordActivity(name);
 		});
 
 		// Clean up on session exit
@@ -396,6 +400,23 @@ export class PtySessionBackend implements ISessionBackend {
 		this.terminalBuffers.clear();
 
 		this.logger.info('Force-destroyed all PTY sessions');
+	}
+
+	/**
+	 * Check if a child process is alive inside a session's PTY shell.
+	 *
+	 * Delegates to PtySession.isChildProcessAlive() to detect whether
+	 * the runtime (e.g. Claude Code) is still running inside the shell.
+	 *
+	 * @param name - Name of the session to check
+	 * @returns true if the session exists and has a living child process
+	 */
+	isChildProcessAlive(name: string): boolean {
+		const session = this.sessions.get(name);
+		if (!session) {
+			return false;
+		}
+		return session.isChildProcessAlive();
 	}
 
 	/**

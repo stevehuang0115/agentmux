@@ -14,6 +14,20 @@ export interface ScheduledMessage {
   updatedAt: string;
 }
 
+/**
+ * A scheduled check created by the orchestrator's schedule-check skill.
+ * These are stored in the SchedulerService and served via /api/schedule.
+ */
+export interface ScheduledCheck {
+  id: string;
+  targetSession: string;
+  message: string;
+  scheduledFor: string;
+  intervalMinutes?: number;
+  isRecurring: boolean;
+  createdAt: string;
+}
+
 export interface ScheduledMessageFormData {
   name: string;
   targetTeam: string;

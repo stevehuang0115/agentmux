@@ -17,6 +17,7 @@ import {
   ImprovementPhase,
   ValidationResult,
 } from './improvement-marker.service.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Startup result indicating what action was taken
@@ -81,6 +82,7 @@ const MAX_RESTART_COUNT = 3;
  */
 export class ImprovementStartupService {
   private projectRoot: string;
+  private logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('ImprovementStartup');
 
   /**
    * Creates an instance of ImprovementStartupService.
@@ -110,15 +112,15 @@ export class ImprovementStartupService {
       return { hadPendingImprovement: false };
     }
 
-    console.log(`[ImprovementStartup] Found pending improvement: ${marker.id}`);
-    console.log(`[ImprovementStartup] Phase: ${marker.phase}, Restarts: ${marker.restartCount}`);
+    this.logger.info('Found pending improvement', { id: marker.id });
+    this.logger.info('Improvement state', { phase: marker.phase, restartCount: marker.restartCount });
 
     // Increment restart count
     const restartCount = await markerService.incrementRestartCount();
 
     // Check for too many restarts (possible infinite loop)
     if (restartCount > MAX_RESTART_COUNT) {
-      console.error(`[ImprovementStartup] Too many restarts (${restartCount}), forcing rollback`);
+      this.logger.error('Too many restarts, forcing rollback', { restartCount });
       return await this.handleTooManyRestarts(marker);
     }
 
@@ -152,7 +154,7 @@ export class ImprovementStartupService {
         return { hadPendingImprovement: true, action: 'cleaned_up' };
 
       default:
-        console.warn(`[ImprovementStartup] Unknown phase: ${marker.phase}`);
+        this.logger.warn('Unknown phase', { phase: marker.phase });
         return { hadPendingImprovement: true, action: 'none' };
     }
   }
@@ -164,7 +166,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleInterruptedPlanning(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Improvement interrupted during planning, cleaning up');
+    this.logger.info('Improvement interrupted during planning, cleaning up');
 
     const markerService = getImprovementMarkerService();
     await markerService.deleteMarker();
@@ -190,7 +192,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleChangesApplied(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Changes applied, running validation...');
+    this.logger.info('Changes applied, running validation...');
 
     const markerService = getImprovementMarkerService();
     await markerService.updatePhase('validating');
@@ -218,7 +220,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleValidating(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Continuing validation...');
+    this.logger.info('Continuing validation...');
 
     // Check which validations have already passed
     const passedChecks = marker.validation.results
@@ -251,11 +253,11 @@ export class ImprovementStartupService {
 
     for (const check of DEFAULT_VALIDATIONS) {
       if (skipChecks.includes(check.name)) {
-        console.log(`[ImprovementStartup] Skipping ${check.name} (already passed)`);
+        this.logger.info('Skipping check (already passed)', { check: check.name });
         continue;
       }
 
-      console.log(`[ImprovementStartup] Running ${check.name}...`);
+      this.logger.info('Running validation check', { check: check.name });
       const startTime = Date.now();
 
       try {
@@ -268,7 +270,7 @@ export class ImprovementStartupService {
         };
 
         await markerService.recordValidationResult(result);
-        console.log(`[ImprovementStartup] ${check.name} passed (${result.duration}ms)`);
+        this.logger.info('Validation check passed', { check: check.name, duration: result.duration });
 
       } catch (error) {
         const result: ValidationResult = {
@@ -279,7 +281,7 @@ export class ImprovementStartupService {
         };
 
         await markerService.recordValidationResult(result);
-        console.error(`[ImprovementStartup] ${check.name} FAILED: ${result.output}`);
+        this.logger.error('Validation check FAILED', { check: check.name, output: result.output });
 
         if (check.required) {
           allPassed = false;
@@ -298,7 +300,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleValidationSuccess(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] All validation passed!');
+    this.logger.info('All validation passed!');
 
     const markerService = getImprovementMarkerService();
     await markerService.completeImprovement(true);
@@ -325,7 +327,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleValidationFailure(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Validation failed, initiating rollback...');
+    this.logger.info('Validation failed, initiating rollback...');
 
     const markerService = getImprovementMarkerService();
 
@@ -386,7 +388,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleRollingBack(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Continuing rollback...');
+    this.logger.info('Continuing rollback...');
 
     const markerService = getImprovementMarkerService();
     const rollbackResult = await this.performRollback(marker);
@@ -414,7 +416,7 @@ export class ImprovementStartupService {
    * @returns Startup result
    */
   private async handleRolledBack(marker: ImprovementMarker): Promise<StartupResult> {
-    console.log('[ImprovementStartup] Rollback already complete, cleaning up');
+    this.logger.info('Rollback already complete, cleaning up');
 
     const markerService = getImprovementMarkerService();
     await markerService.completeImprovement(false);
@@ -452,7 +454,7 @@ export class ImprovementStartupService {
       };
     }
 
-    console.log(`[ImprovementStartup] Manual rollback requested: ${reason}`);
+    this.logger.info('Manual rollback requested', { reason });
 
     await markerService.recordRollbackStarted(reason);
 
@@ -533,10 +535,10 @@ export class ImprovementStartupService {
       try {
         await this.runCommand('git', ['reset', '--hard', marker.backup.gitCommit], 30000);
         gitReset = true;
-        console.log(`[ImprovementStartup] Git reset to ${marker.backup.gitCommit}`);
+        this.logger.info('Git reset successful', { commit: marker.backup.gitCommit });
         return { success: true, filesRestored: marker.targetFiles, gitReset: true };
       } catch (error) {
-        console.warn('[ImprovementStartup] Git reset failed, using file backups');
+        this.logger.warn('Git reset failed, using file backups');
       }
     }
 
@@ -556,9 +558,9 @@ export class ImprovementStartupService {
           await fs.unlink(path.join(this.projectRoot, backup.originalPath));
         }
         filesRestored.push(backup.originalPath);
-        console.log(`[ImprovementStartup] Restored: ${backup.originalPath}`);
+        this.logger.info('Restored file', { path: backup.originalPath });
       } catch (error) {
-        console.error(`[ImprovementStartup] Failed to restore ${backup.originalPath}:`, error);
+        this.logger.error('Failed to restore file', { path: backup.originalPath, error: error instanceof Error ? error.message : String(error) });
       }
     }
 
