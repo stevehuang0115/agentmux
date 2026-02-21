@@ -1,6 +1,6 @@
 {
   "name": "crewly",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "type": "module",
   "description": "Crewly orchestrates multiple Claude Code instances as AI development teams",
   "main": "dist/cli/cli/src/index.js",
@@ -57,6 +57,7 @@
     "test:e2e:headed": "playwright test --headed",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit",
+    "postinstall": "npm rebuild node-pty 2>/dev/null || true",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

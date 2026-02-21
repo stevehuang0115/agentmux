@@ -16,6 +16,7 @@ export default {
         "border-dark": "#313a48",
       },
       fontFamily: {
+        "sans": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
         "display": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
         "logo": ["Nunito", "system-ui", "sans-serif"],
         "mono": ["SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
