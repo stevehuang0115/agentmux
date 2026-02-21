@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type StatusType = 'active' | 'inactive' | 'stopped' | 'running' | 'paused' | 'completed' | 'blocked' | 'pending' | 'error';
+export type StatusType = 'active' | 'inactive' | 'stopped' | 'running' | 'paused' | 'completed' | 'blocked' | 'pending' | 'error' | 'suspended';
 
 interface StatusBadgeProps {
   status: StatusType;
@@ -18,6 +18,7 @@ const statusStyles: Record<StatusType, string> = {
   blocked: 'bg-red-500/10 text-red-400 border-red-500/20',
   pending: 'bg-gray-500/10 text-gray-400 border-gray-500/20',
   error: 'bg-red-500/10 text-red-400 border-red-500/20',
+  suspended: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
 };
 
 export const StatusBadge: React.FC<StatusBadgeProps> = ({

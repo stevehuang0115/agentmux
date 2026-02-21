@@ -191,6 +191,11 @@
 
 /* Responsive adjustments */
 @media (max-width: 640px) {
+	.terminal-container {
+		min-height: 200px;
+		border-radius: 0;
+	}
+
 	.terminal-header {
 		padding: 6px 10px;
 	}
@@ -205,11 +210,19 @@
 	}
 
 	.terminal-title {
-		font-size: 12px;
+		font-size: 11px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 120px;
 	}
 
 	.terminal-content {
-		padding: 4px;
+		padding: 2px;
+	}
+
+	.terminal-content .xterm-viewport {
+		overflow-x: auto !important;
 	}
 }
 

@@ -20,6 +20,9 @@ import type {
   SkillCategory,
   SkillExecutionType,
 } from '../../types/skill.types.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('SkillController');
 
 /**
  * MCP server configuration structure
@@ -201,7 +204,7 @@ router.get('/mcp-status', async (req: Request, res: Response, next: NextFunction
       const configContent = await fs.readFile(claudeJsonPath, 'utf-8');
       claudeConfig = JSON.parse(configContent);
     } catch (error) {
-      console.log('Could not read ~/.claude.json:', (error as Error).message);
+      logger.info('Could not read ~/.claude.json', { error: (error as Error).message });
     }
 
     // Also read ~/.claude/settings.json for User MCPs (legacy location)

@@ -52,3 +52,8 @@ export {
   getOrchestratorOfflineMessage,
   type OrchestratorStatusResult,
 } from './orchestrator-status.service.js';
+
+export {
+  OrchestratorRestartService,
+  type RestartStats,
+} from './orchestrator-restart.service.js';

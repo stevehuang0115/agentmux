@@ -44,19 +44,58 @@ jest.mock('../../websocket/terminal.gateway.js', () => ({
 
 // Mock session/PTY infrastructure
 const mockOnData = jest.fn();
+const mockWrite = jest.fn();
 const mockCapturePane = jest.fn().mockReturnValue('user@host:~$');
 const mockGetSession = jest.fn().mockReturnValue({
 	onData: mockOnData,
+	write: mockWrite,
 });
+const mockSessionExists = jest.fn().mockReturnValue(true);
+const mockKillSession = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('../session/index.js', () => ({
 	getSessionBackendSync: () => ({
 		getSession: mockGetSession,
+		sessionExists: mockSessionExists,
+		killSession: mockKillSession,
 	}),
 	createSessionCommandHelper: () => ({
 		getSession: mockGetSession,
 		capturePane: mockCapturePane,
 	}),
+}));
+
+const mockGetSessionId = jest.fn();
+const mockGetSessionMetadata = jest.fn();
+const mockUpdateSessionId = jest.fn();
+jest.mock('../session/session-state-persistence.js', () => ({
+	getSessionStatePersistence: () => ({
+		getSessionId: mockGetSessionId,
+		getSessionMetadata: mockGetSessionMetadata,
+		updateSessionId: mockUpdateSessionId,
+	}),
+}));
+
+const mockClearSession = jest.fn();
+jest.mock('./pty-activity-tracker.service.js', () => ({
+	PtyActivityTrackerService: {
+		getInstance: () => ({
+			clearSession: mockClearSession,
+		}),
+	},
+}));
+
+const mockGetTasksForTeamMember = jest.fn().mockResolvedValue([]);
+jest.mock('../project/task-tracking.service.js', () => ({
+	TaskTrackingService: {
+		getInstance: () => ({
+			getTasksForTeamMember: mockGetTasksForTeamMember,
+		}),
+	},
+}));
+
+jest.mock('fs/promises', () => ({
+	readFile: jest.fn().mockResolvedValue('Task content here'),
 }));
 
 const mockGetExitPatterns = jest.fn().mockReturnValue([
@@ -317,7 +356,7 @@ describe('RuntimeExitMonitorService', () => {
 			expect(mockBroadcastTeamMemberStatus).toHaveBeenCalledWith(
 				expect.objectContaining({
 					sessionName: 'dev-agent',
-					status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				})
 			);
@@ -340,7 +379,7 @@ describe('RuntimeExitMonitorService', () => {
 			expect(mockBroadcastOrchestratorStatus).toHaveBeenCalledWith(
 				expect.objectContaining({
 					sessionName: 'crewly-orc',
-					status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				})
 			);
@@ -391,6 +430,133 @@ describe('RuntimeExitMonitorService', () => {
 			const callback = jest.fn();
 			service.setOnExitDetectedCallback(callback);
 			expect((service as any).onExitDetectedCallback).toBe(callback);
+		});
+	});
+
+	describe('task-aware restart on exit', () => {
+		const mockCreateAgentSession = jest.fn().mockResolvedValue({ success: true, sessionName: 'test-agent' });
+		const mockAgentRegistrationService = {
+			createAgentSession: mockCreateAgentSession,
+		};
+		const mockTaskTrackingServiceInstance = {
+			getTasksForTeamMember: mockGetTasksForTeamMember,
+		};
+
+		beforeEach(() => {
+			mockCreateAgentSession.mockClear();
+			mockGetTasksForTeamMember.mockReset();
+			mockClearSession.mockClear();
+			mockKillSession.mockClear();
+			mockWrite.mockClear();
+			mockSessionExists.mockReturnValue(true);
+			// Inject both dependencies so the restart path activates
+			service.setAgentRegistrationService(mockAgentRegistrationService as any);
+			service.setTaskTrackingService(mockTaskTrackingServiceInstance as any);
+		});
+
+		it('should restart agent when exit detected with in-progress tasks', async () => {
+			jest.useFakeTimers();
+
+			mockGetTasksForTeamMember.mockResolvedValue([
+				{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'assigned', assignedTeamMemberId: 'member-1' },
+			]);
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Should have triggered restart instead of setting inactive
+			expect(mockCreateAgentSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sessionName: 'test-agent',
+					role: 'developer',
+					teamId: 'team-1',
+					memberId: 'member-1',
+				})
+			);
+			// Should NOT have set status to inactive (restart took over)
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should set inactive when exit detected with no in-progress tasks', async () => {
+			jest.useFakeTimers();
+
+			mockGetTasksForTeamMember.mockResolvedValue([]);
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Should have set status to inactive (no tasks to restart for)
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+			expect(mockCreateAgentSession).not.toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should always set orchestrator to inactive even with tasks', async () => {
+			jest.useFakeTimers();
+
+			mockGetTasksForTeamMember.mockResolvedValue([
+				{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'assigned', assignedTeamMemberId: 'orc-1' },
+			]);
+
+			service.startMonitoring('crewly-orc', RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator', undefined, 'orc-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Should NOT restart orchestrator, should set inactive
+			expect(mockCreateAgentSession).not.toHaveBeenCalled();
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'crewly-orc',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should fall back to inactive when restart fails', async () => {
+			jest.useFakeTimers();
+
+			mockCreateAgentSession.mockResolvedValueOnce({ success: false, error: 'Session creation failed' });
+			mockGetTasksForTeamMember.mockResolvedValue([
+				{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'active', assignedTeamMemberId: 'member-1' },
+			]);
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Restart was attempted
+			expect(mockCreateAgentSession).toHaveBeenCalled();
+			// Restart failed, so should fall back to setting inactive
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
 		});
 	});
 });

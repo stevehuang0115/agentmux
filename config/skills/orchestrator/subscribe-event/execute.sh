@@ -10,9 +10,9 @@ INPUT="${1:-}"
 EVENT_TYPE=$(echo "$INPUT" | jq -r '.eventType // empty')
 require_param "eventType" "$EVENT_TYPE"
 
-# Inject subscriberSession from env (set by Crewly on each tmux session)
+# Inject subscriberSession from env (set by Crewly on each PTY session)
 # The API requires subscriberSession and filter but the agent doesn't need to provide them
-SUBSCRIBER_SESSION="${TMUX_SESSION_NAME:-crewly-orc}"
+SUBSCRIBER_SESSION="${CREWLY_SESSION_NAME:-crewly-orc}"
 BODY=$(echo "$INPUT" | jq --arg ss "$SUBSCRIBER_SESSION" \
   '. + {subscriberSession: $ss} | if .filter == null then .filter = {} else . end')
 

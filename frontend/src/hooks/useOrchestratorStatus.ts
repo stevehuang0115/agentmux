@@ -168,19 +168,27 @@ export function useOrchestratorStatus(): UseOrchestratorStatusResult {
     const handleOrchestratorStatusChange = (payload: {
       sessionName?: string;
       agentStatus?: string;
+      status?: string;
       workingStatus?: string;
+      running?: boolean;
     }) => {
       // Only update if component is still mounted
       if (!isMountedRef.current) return;
 
+      // Normalize: different broadcasters use different field names.
+      // Prefer agentStatus, fall back to status, then derive from running.
+      const resolvedStatus = payload.agentStatus
+        ?? payload.status
+        ?? (payload.running === true ? 'active' : payload.running === false ? 'inactive' : undefined);
+
       // Map the WebSocket payload to our OrchestratorStatus format
-      const isActive = payload.agentStatus === 'active';
+      const isActive = resolvedStatus === 'active';
       setStatus({
         isActive,
-        agentStatus: payload.agentStatus || null,
+        agentStatus: resolvedStatus || null,
         message: isActive
           ? 'Orchestrator is active and ready.'
-          : payload.agentStatus === 'starting' || payload.agentStatus === 'started'
+          : resolvedStatus === 'starting' || resolvedStatus === 'started'
           ? 'Orchestrator is starting up. Please wait a moment and try again.'
           : 'Orchestrator is not running. Please start the orchestrator from the Dashboard.',
         offlineMessage: isActive

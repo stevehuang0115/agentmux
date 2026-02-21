@@ -45,6 +45,9 @@ export interface GeneralSettings {
 
   /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
   runtimeCommands: Record<AIRuntime, string>;
+
+  /** Minutes of inactivity before an agent is automatically suspended (0 = disabled) */
+  agentIdleTimeoutMinutes: number;
 }
 
 /**
@@ -183,6 +186,7 @@ export function getDefaultSettings(): CrewlySettings {
         'gemini-cli': 'gemini --yolo',
         'codex-cli': 'codex --full-auto',
       },
+      agentIdleTimeoutMinutes: 10,
     },
     chat: {
       showRawTerminalOutput: false,
@@ -236,6 +240,10 @@ export function validateSettings(settings: CrewlySettings): SettingsValidationRe
 
   if (settings.general.maxConcurrentAgents < SETTINGS_CONSTRAINTS.MIN_MAX_CONCURRENT_AGENTS) {
     errors.push(`Max concurrent agents must be at least ${SETTINGS_CONSTRAINTS.MIN_MAX_CONCURRENT_AGENTS}`);
+  }
+
+  if (typeof settings.general.agentIdleTimeoutMinutes === 'number' && settings.general.agentIdleTimeoutMinutes < 0) {
+    errors.push('agentIdleTimeoutMinutes must be >= 0 (0 disables idle suspension)');
   }
 
   // Validate runtimeCommands

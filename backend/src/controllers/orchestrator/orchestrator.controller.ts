@@ -14,6 +14,9 @@ import {
 } from '../../services/orchestrator/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('OrchestratorController');
 
 // Delegate to existing ApiController methods to preserve complex logic without duplication
 export async function getOrchestratorCommands(
@@ -40,7 +43,7 @@ export async function getOrchestratorCommands(
 		];
 		res.json(mockCommands);
 	} catch (error) {
-		console.error('Error fetching orchestrator commands:', error);
+		logger.error('Error fetching orchestrator commands', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json([]);
 	}
 }
@@ -129,7 +132,7 @@ help - Show this help message`;
 
 		res.json({ success: true, output, timestamp: new Date().toISOString() });
 	} catch (error) {
-		console.error('Error executing orchestrator command:', error);
+		logger.error('Error executing orchestrator command', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to execute command',
@@ -167,7 +170,7 @@ export async function sendOrchestratorMessage(
 			timestamp: new Date().toISOString(),
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error sending orchestrator message:', error);
+		logger.error('Error sending orchestrator message', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to send message',
@@ -201,7 +204,7 @@ export async function sendOrchestratorEnter(
 			timestamp: new Date().toISOString(),
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error sending Enter to orchestrator:', error);
+		logger.error('Error sending Enter to orchestrator', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to send Enter key',
@@ -214,7 +217,7 @@ export async function setupOrchestrator(
 	req: Request,
 	res: Response
 ): Promise<void> {
-	console.log('[OrchestratorController] setupOrchestrator called');
+	logger.info('setupOrchestrator called');
 	try {
 		// Get orchestrator's runtime type from storage
 		let runtimeType = 'claude-code'; // Default fallback
@@ -222,22 +225,15 @@ export async function setupOrchestrator(
 			const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 			if (orchestratorStatus?.runtimeType) {
 				runtimeType = orchestratorStatus.runtimeType;
-				console.log('[OrchestratorController] Using orchestrator runtime type from storage:', runtimeType);
+				logger.info('Using orchestrator runtime type from storage', { runtimeType });
 			} else {
-				console.warn(
-					'[OrchestratorController] No runtime type found in orchestrator status, using default:',
-					runtimeType
-				);
+				logger.warn('No runtime type found in orchestrator status, using default', { runtimeType });
 			}
 		} catch (error) {
-			console.warn(
-				'[OrchestratorController] Failed to get orchestrator runtime type from storage, using default:',
-				runtimeType,
-				error
-			);
+			logger.warn('Failed to get orchestrator runtime type from storage, using default', { runtimeType, error: error instanceof Error ? error.message : String(error) });
 		}
 
-		console.log('[OrchestratorController] Calling agentRegistrationService.createAgentSession', {
+		logger.info('Calling agentRegistrationService.createAgentSession', {
 			sessionName: ORCHESTRATOR_SESSION_NAME,
 			role: ORCHESTRATOR_ROLE,
 			runtimeType,
@@ -252,7 +248,7 @@ export async function setupOrchestrator(
 			runtimeType: runtimeType as any, // Pass the runtime type from teams.json
 		});
 
-		console.log('[OrchestratorController] createAgentSession result:', {
+		logger.info('createAgentSession result', {
 			success: result.success,
 			sessionName: result.sessionName,
 			message: result.message,
@@ -260,7 +256,7 @@ export async function setupOrchestrator(
 		});
 
 		if (!result.success) {
-			console.error('[OrchestratorController] Failed to create orchestrator session:', result.error);
+			logger.error('Failed to create orchestrator session', { error: result.error });
 			res.status(500).json({
 				success: false,
 				error: result.error || 'Failed to create orchestrator session',
@@ -268,7 +264,7 @@ export async function setupOrchestrator(
 			return;
 		}
 
-		console.log('[OrchestratorController] Orchestrator session created successfully');
+		logger.info('Orchestrator session created successfully');
 
 		// Initialize orchestrator memory so remember/recall MCP tools work
 		try {
@@ -278,9 +274,9 @@ export async function setupOrchestrator(
 				ORCHESTRATOR_ROLE,
 				process.cwd()
 			);
-			console.log('[OrchestratorController] Orchestrator memory initialized successfully');
+			logger.info('Orchestrator memory initialized successfully');
 		} catch (memoryError) {
-			console.warn('[OrchestratorController] Failed to initialize orchestrator memory:', memoryError);
+			logger.warn('Failed to initialize orchestrator memory', { error: memoryError instanceof Error ? memoryError.message : String(memoryError) });
 		}
 
 		// Start persistent chat monitoring for the orchestrator
@@ -289,20 +285,20 @@ export async function setupOrchestrator(
 		if (terminalGateway) {
 			terminalGateway.startOrchestratorChatMonitoring(ORCHESTRATOR_SESSION_NAME);
 		} else {
-			console.warn('[OrchestratorController] Terminal gateway not available, chat monitoring disabled');
+			logger.warn('Terminal gateway not available, chat monitoring disabled');
 		}
 
 		// For Gemini CLI orchestrator, add all existing project paths to allowlist
 		if (runtimeType === 'gemini-cli') {
 			try {
-				console.log('Orchestrator uses Gemini CLI, adding existing projects to allowlist...');
+				logger.info('Orchestrator uses Gemini CLI, adding existing projects to allowlist');
 				
 				// Get all existing projects
 				const projects = await this.storageService.getProjects();
 				const projectPaths = projects.map(project => project.path);
 				
 				if (projectPaths.length > 0) {
-					console.log('Found projects to add to Gemini CLI allowlist:', projectPaths);
+					logger.info('Found projects to add to Gemini CLI allowlist', { projectPaths });
 					
 					// Import RuntimeServiceFactory dynamically to avoid circular dependency
 					const { RuntimeServiceFactory } = await import('../../services/agent/runtime-service.factory.js');
@@ -321,18 +317,18 @@ export async function setupOrchestrator(
 						projectPaths
 					);
 					
-					console.log('Gemini CLI allowlist update result:', {
+					logger.info('Gemini CLI allowlist update result', {
 						success: allowlistResult.success,
 						message: allowlistResult.message,
 						successCount: allowlistResult.results.filter((r: any) => r.success).length,
 						totalCount: allowlistResult.results.length
 					});
 				} else {
-					console.log('No existing projects found to add to Gemini CLI allowlist');
+					logger.info('No existing projects found to add to Gemini CLI allowlist');
 				}
 			} catch (error) {
 				// Log error but continue - as per requirement, don't fail orchestrator startup
-				console.warn('Failed to add existing projects to Gemini CLI allowlist (continuing anyway):', {
+				logger.warn('Failed to add existing projects to Gemini CLI allowlist (continuing anyway)', {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -347,7 +343,7 @@ export async function setupOrchestrator(
 			sessionName: result.sessionName,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error setting up orchestrator session:', error);
+		logger.error('Error setting up orchestrator session', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to setup orchestrator session',
@@ -391,7 +387,7 @@ export async function getOrchestratorHealth(
 			data: responseData,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error checking orchestrator health:', error);
+		logger.error('Error checking orchestrator health', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to check orchestrator health',
@@ -425,7 +421,7 @@ export async function stopOrchestrator(
 			sessionName: ORCHESTRATOR_SESSION_NAME,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error stopping orchestrator:', error);
+		logger.error('Error stopping orchestrator', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to stop orchestrator',
@@ -509,7 +505,7 @@ export async function assignTaskToOrchestrator(
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error assigning task to orchestrator:', error);
+		logger.error('Error assigning task to orchestrator', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to assign task to orchestrator',
@@ -552,7 +548,7 @@ export async function updateOrchestratorRuntime(
 			message: `Orchestrator runtime updated to ${runtimeType}`,
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error updating orchestrator runtime:', error);
+		logger.error('Error updating orchestrator runtime', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to update orchestrator runtime',
@@ -587,7 +583,7 @@ export async function getOrchestratorStatus(
 			},
 		} as ApiResponse);
 	} catch (error) {
-		console.error('Error getting orchestrator status:', error);
+		logger.error('Error getting orchestrator status', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: error instanceof Error ? error.message : 'Failed to get orchestrator status',

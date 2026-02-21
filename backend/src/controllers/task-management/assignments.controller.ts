@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
 import type { ApiController } from '../api.controller.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('AssignmentsController');
 
 export async function getAssignments(this: ApiController, req: Request, res: Response): Promise<void> {
   try {
@@ -28,7 +31,7 @@ export async function getAssignments(this: ApiController, req: Request, res: Res
     }
     res.json(assignments);
   } catch (error) {
-    console.error('Error fetching assignments:', error);
+    logger.error('Error fetching assignments', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch assignments' });
   }
 }
@@ -49,7 +52,7 @@ export async function updateAssignment(this: ApiController, req: Request, res: R
     }
     res.json({ success: true, message: 'Assignment updated successfully' });
   } catch (error) {
-    console.error('Error updating assignment:', error);
+    logger.error('Error updating assignment', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to update assignment' });
   }
 }

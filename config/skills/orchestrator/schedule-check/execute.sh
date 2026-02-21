@@ -16,7 +16,7 @@ require_param "minutes" "$MINUTES"
 require_param "message" "$MESSAGE"
 
 # Default target to the caller's own session (orchestrator sends reminders to itself)
-TARGET_SESSION="${TARGET:-${TMUX_SESSION_NAME:-crewly-orc}}"
+TARGET_SESSION="${TARGET:-${CREWLY_SESSION_NAME:-crewly-orc}}"
 
 # API expects: targetSession, minutes, message
 # When recurring, also send isRecurring, intervalMinutes, and optional maxOccurrences

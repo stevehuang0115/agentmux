@@ -41,6 +41,24 @@ export interface EnhancedScheduledMessage {
   metadata?: ScheduledMessageMetadata;
   /** ISO timestamp of creation */
   createdAt: string;
+  /** Optional session name of the agent being monitored for status enrichment */
+  watchedSession?: string;
+}
+
+/**
+ * Information emitted when a stuck agent is detected by the scheduler
+ */
+export interface StuckAgentAlert {
+  /** Session name of the stuck agent */
+  watchedSession: string;
+  /** Reason for the stuck detection */
+  reason: 'session_dead' | 'not_yet_active' | 'idle_too_long';
+  /** Current agent lifecycle status */
+  agentStatus: string;
+  /** Current working status */
+  workingStatus: string;
+  /** Number of consecutive checks where agent was idle */
+  consecutiveIdleChecks: number;
 }
 
 /**

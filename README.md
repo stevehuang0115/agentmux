@@ -1,5 +1,7 @@
 # Crewly
 
+**Website:** [crewly.stevesprompt.com](https://crewly.stevesprompt.com/)
+
 Crewly is a multi-agent orchestration platform that coordinates AI coding agents (Claude Code, Gemini CLI, Codex) to work together as a team. It provides a web dashboard for real-time monitoring, task management, and team coordination — all running locally on your machine.
 
 ## Prerequisites

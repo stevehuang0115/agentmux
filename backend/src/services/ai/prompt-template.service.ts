@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises';
 import path from 'path';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export interface TaskAssignmentData {
   projectName: string;
@@ -33,6 +34,7 @@ export interface CheckinData extends Record<string, string> {
 
 export class PromptTemplateService {
   private templatesPath: string;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('PromptTemplateService');
 
   constructor(templatesPath?: string) {
     this.templatesPath = templatesPath || path.join(process.cwd(), 'config', 'orchestrator_tasks', 'prompts');
@@ -57,7 +59,7 @@ export class PromptTemplateService {
 
     // Log warning if critical orchestrator template values are missing
     if (!data.projectPath || !data.taskMilestone || !data.taskId) {
-      console.warn('⚠️  Orchestrator template missing critical values:', {
+      this.logger.warn('Orchestrator template missing critical values', {
         projectPath: data.projectPath || 'MISSING',
         taskMilestone: data.taskMilestone || 'MISSING',
         taskId: data.taskId || 'MISSING',
@@ -131,10 +133,10 @@ CRITICAL: Read the actual task file, not this summary!`;
     if (template.includes('**Task File Location:**')) {
       const { projectPath, taskMilestone, taskId } = data;
       if (!projectPath || !taskMilestone || !taskId) {
-        console.warn('Orchestrator template missing critical path components:', {
-          projectPath: !!projectPath,
-          taskMilestone: !!taskMilestone,
-          taskId: !!taskId
+        this.logger.warn('Orchestrator template missing critical path components', {
+          hasProjectPath: !!projectPath,
+          hasTaskMilestone: !!taskMilestone,
+          hasTaskId: !!taskId
         });
       }
     }

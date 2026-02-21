@@ -8,6 +8,8 @@ import { getSessionBackendSync, getSessionStatePersistence } from '../../service
 import { ApiResponse } from '../../types/index.js';
 import { SOPService } from '../../services/sop/sop.service.js';
 
+const logger = LoggerService.getInstance().createComponentLogger('SystemController');
+
 /**
  * Directory entry for filesystem browsing
  */
@@ -29,7 +31,7 @@ export async function getSystemHealth(this: ApiContext, req: Request, res: Respo
     const environmentInfo = config.getEnvironmentInfo();
     res.json({ success: true, data: { status: overallHealth, timestamp: new Date().toISOString(), services: Object.fromEntries(healthStatus), metrics: { system: systemMetrics, performance: performanceMetrics }, environment: environmentInfo } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting system health:', error);
+    logger.error('Error getting system health', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get system health' } as ApiResponse);
   }
 }
@@ -45,7 +47,7 @@ export async function getSystemMetrics(this: ApiContext, req: Request, res: Resp
     const performanceMetrics = monitoring.getPerformanceMetrics();
     res.json({ success: true, data: { current: { system: currentMetrics, performance: performanceMetrics }, history: metricsHistory, period: `${hoursToFetch} hours` } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting system metrics:', error);
+    logger.error('Error getting system metrics', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get system metrics' } as ApiResponse);
   }
 }
@@ -58,7 +60,7 @@ export async function getSystemConfiguration(this: ApiContext, req: Request, res
     const environmentInfo = config.getEnvironmentInfo();
     res.json({ success: true, data: { config: appConfig, validation, environment: environmentInfo } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting system configuration:', error);
+    logger.error('Error getting system configuration', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get system configuration' } as ApiResponse);
   }
 }
@@ -71,7 +73,7 @@ export async function updateSystemConfiguration(this: ApiContext, req: Request, 
     const validation = config.validateConfig();
     res.json({ success: true, data: { updated: true, validation, timestamp: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error updating system configuration:', error);
+    logger.error('Error updating system configuration', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to update system configuration' } as ApiResponse);
   }
 }
@@ -83,7 +85,7 @@ export async function getSystemLogs(this: ApiContext, req: Request, res: Respons
     const logs = await logger.getRecentLogs(level, limit ? parseInt(limit) : 100);
     res.json({ success: true, data: { logs, count: logs.length, level: level || 'all', limit: limit || 100 } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting system logs:', error);
+    logger.error('Error getting system logs', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get system logs' } as ApiResponse);
   }
 }
@@ -95,7 +97,7 @@ export async function getAlerts(this: ApiContext, req: Request, res: Response): 
     const alertConditions = monitoring.getAlertConditions();
     res.json({ success: true, data: { active: activeAlerts, conditions: alertConditions, count: activeAlerts.length } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting alerts:', error);
+    logger.error('Error getting alerts', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get alerts' } as ApiResponse);
   }
 }
@@ -109,7 +111,7 @@ export async function updateAlertCondition(this: ApiContext, req: Request, res: 
     if (!success) { res.status(404).json({ success: false, error: 'Alert condition not found' } as ApiResponse); return; }
     res.json({ success: true, data: { conditionId, updated: true, timestamp: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error updating alert condition:', error);
+    logger.error('Error updating alert condition', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to update alert condition' } as ApiResponse);
   }
 }
@@ -120,7 +122,7 @@ export async function createDefaultConfig(this: ApiContext, req: Request, res: R
     await config.createDefaultConfigFile();
     res.json({ success: true, data: { message: 'Default configuration file created', timestamp: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error creating default configuration:', error);
+    logger.error('Error creating default configuration', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to create default configuration' } as ApiResponse);
   }
 }
@@ -133,7 +135,7 @@ export async function healthCheck(this: ApiContext, req: Request, res: Response)
     const statusCode = overallHealth === 'unhealthy' ? 503 : 200;
     res.status(statusCode).json({ success: overallHealth !== 'unhealthy', data: { status: overallHealth, uptime: Math.round(uptime), timestamp: new Date().toISOString(), version: process.env.npm_package_version || '1.0.0' } } as ApiResponse);
   } catch (error) {
-    console.error('Error in health check:', error);
+    logger.error('Error in health check', { error: error instanceof Error ? error.message : String(error) });
     res.status(503).json({ success: false, error: 'Health check failed' } as ApiResponse);
   }
 }
@@ -143,7 +145,7 @@ export async function getClaudeStatus(this: ApiContext, req: Request, res: Respo
     const claudeStatus = await this.tmuxService.checkClaudeInstallation();
     res.json({ success: true, data: claudeStatus } as ApiResponse);
   } catch (error) {
-    console.error('Error checking Claude status:', error);
+    logger.error('Error checking Claude status', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: (error as Error).message || 'Failed to check Claude status' } as ApiResponse);
   }
 }
@@ -189,7 +191,7 @@ export async function getLocalIpAddress(this: ApiContext, req: Request, res: Res
       }
     } as ApiResponse);
   } catch (error) {
-    console.error('Error getting local IP address:', error);
+    logger.error('Error getting local IP address', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to get local IP address'
@@ -287,7 +289,7 @@ export async function browseDirectories(
       },
     } as ApiResponse);
   } catch (error) {
-    console.error('Error browsing directories:', error);
+    logger.error('Error browsing directories', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to browse directories',
@@ -320,7 +322,7 @@ export async function restartServer(
         savedCount = await persistence.saveState(sessionBackend);
       }
     } catch (saveError) {
-      console.warn('Failed to save session state before restart:', saveError);
+      logger.warn('Failed to save session state before restart', { error: saveError instanceof Error ? saveError.message : String(saveError) });
     }
 
     res.json({
@@ -337,30 +339,30 @@ export async function restartServer(
     // - Development (tsx watch): touch a source file to trigger file-watcher restart
     // - Production (pm2/Docker/ECS): process.exit(0) and supervisor restarts
     setTimeout(async () => {
-      console.log('Restarting Crewly server...');
+      logger.info('Restarting Crewly server');
 
       // Try tsx watch restart: touch the entry file to trigger file-watcher
       const entryFile = path.resolve(process.cwd(), 'backend/src/index.ts');
       try {
         await fs.utimes(entryFile, new Date(), new Date());
-        console.log('Touched entry file to trigger tsx watch restart');
+        logger.info('Touched entry file to trigger tsx watch restart');
         // tsx watch should pick up the mtime change and restart.
         // If not running under tsx watch (production), fall through to process.exit.
         // Give tsx watch 2 seconds to detect the change.
         setTimeout(() => {
           // If we're still alive, the file watcher didn't restart us.
           // Fall back to process.exit for production environments.
-          console.log('File watcher did not restart — falling back to process.exit(0)');
+          logger.info('File watcher did not restart, falling back to process.exit(0)');
           process.exit(0);
         }, 2000);
       } catch {
         // Can't touch the file (e.g., running from dist/), use process.exit
-        console.log('Cannot touch entry file, using process.exit(0)');
+        logger.info('Cannot touch entry file, using process.exit(0)');
         process.exit(0);
       }
     }, 1000);
   } catch (error) {
-    console.error('Error initiating server restart:', error);
+    logger.error('Error initiating server restart', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to initiate server restart',
@@ -416,7 +418,7 @@ export async function querySOPs(
       data: { sopContext },
     } as ApiResponse);
   } catch (error) {
-    console.error('Error querying SOPs:', error);
+    logger.error('Error querying SOPs', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to query SOPs',

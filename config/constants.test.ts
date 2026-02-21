@@ -384,7 +384,7 @@ describe('Crewly Cross-Domain Constants', () => {
   describe('ENV_CONSTANTS', () => {
     test('should have all required environment variables', () => {
       const expectedEnvVars = [
-        'TMUX_SESSION_NAME',
+        'CREWLY_SESSION_NAME',
         'CREWLY_ROLE',
         'API_PORT',
         'CREWLY_MCP_PORT',

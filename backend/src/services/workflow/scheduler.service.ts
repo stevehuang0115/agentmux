@@ -115,6 +115,7 @@ interface IActivityMonitorLike {
  */
 export class SchedulerService extends EventEmitter {
   private scheduledChecks: Map<string, NodeJS.Timeout> = new Map();
+  private oneTimeChecksData: Map<string, ScheduledCheck> = new Map();
   private recurringChecks: Map<string, ScheduledCheck> = new Map();
   private recurringTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private continuationChecks: Map<string, NodeJS.Timeout> = new Map();

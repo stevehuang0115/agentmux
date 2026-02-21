@@ -14,8 +14,10 @@ import { Router, Request, Response } from 'express';
 import { randomUUID } from 'crypto';
 import { FactoryService } from '../services/factory.service.js';
 import { factorySSEService } from '../services/factory/factory-sse.service.js';
+import { LoggerService } from '../services/core/logger.service.js';
 
 const factoryService = new FactoryService();
+const logger = LoggerService.getInstance().createComponentLogger('FactoryRoutes');
 
 /**
  * Create the factory routes
@@ -34,7 +36,7 @@ export function createFactoryRoutes(): Router {
 			const data = await factoryService.getClaudeInstances();
 			res.json(data);
 		} catch (error) {
-			console.error('Error in /api/factory/claude-instances:', error);
+			logger.error('Error in /api/factory/claude-instances', { error: error instanceof Error ? error.message : String(error) });
 			res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
 		}
 	});
@@ -48,7 +50,7 @@ export function createFactoryRoutes(): Router {
 			const data = await factoryService.getUsageStats();
 			res.json(data);
 		} catch (error) {
-			console.error('Error in /api/factory/usage:', error);
+			logger.error('Error in /api/factory/usage', { error: error instanceof Error ? error.message : String(error) });
 			res.json({
 				timestamp: new Date().toISOString(),
 				today: { messages: 0, sessions: 0, toolCalls: 0, tokens: 0 },

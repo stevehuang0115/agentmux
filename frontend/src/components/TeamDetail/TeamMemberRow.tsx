@@ -34,6 +34,9 @@ export const TeamMemberRow: React.FC<TeamMemberRowProps> = ({ member, teamId, on
   if (isStopping) {
     statusText = 'Stopping...';
     statusColor = 'bg-orange-500/10 text-orange-400';
+  } else if (member.agentStatus === 'suspended') {
+    statusText = 'Suspended';
+    statusColor = 'bg-purple-500/10 text-purple-400';
   } else if (isActive) {
     statusText = 'Active';
     statusColor = 'bg-emerald-500/10 text-emerald-400';

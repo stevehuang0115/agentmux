@@ -30,6 +30,8 @@ export interface GeneralSettings {
   autoResumeOnRestart: boolean;
   /** Per-runtime CLI init commands. Key = runtime type, value = CLI command string */
   runtimeCommands: Record<AIRuntime, string>;
+  /** Minutes of inactivity before an agent is automatically suspended (0 = disabled) */
+  agentIdleTimeoutMinutes: number;
 }
 
 /**

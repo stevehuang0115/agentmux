@@ -1,6 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { existsSync } from 'fs';
+import { LoggerService, ComponentLogger } from './logger.service.js';
 
 export interface AppConfig {
 	// Server Configuration
@@ -85,6 +86,18 @@ export class ConfigService {
 	private static instance: ConfigService;
 	private config: AppConfig;
 	private configPath: string;
+	private _logger: ComponentLogger | null = null;
+
+	/**
+	 * Gets the component logger, lazily initializing it to avoid circular
+	 * dependency with LoggerService (which depends on ConfigService).
+	 */
+	private getLogger(): ComponentLogger {
+		if (!this._logger) {
+			this._logger = LoggerService.getInstance().createComponentLogger('ConfigService');
+		}
+		return this._logger;
+	}
 
 	private constructor() {
 		this.configPath = this.resolveConfigPath();
@@ -192,6 +205,10 @@ export class ConfigService {
 	}
 
 	private loadConfig(): AppConfig {
+		// NOTE: This method is called from the constructor, before LoggerService
+		// is available. Using this.getLogger() here causes infinite recursion:
+		// LoggerService() → ConfigService.getInstance() → loadConfig() → getLogger() → LoggerService()
+		// Use console.log/console.error for constructor-time logging instead.
 		try {
 			const defaultConfig = this.getDefaultConfig();
 
@@ -243,16 +260,18 @@ export class ConfigService {
 		try {
 			const configData = JSON.stringify(this.config, null, 2);
 			await fs.writeFile(this.configPath, configData, 'utf-8');
-			console.log(`Configuration updated and saved to ${this.configPath}`);
+			this.getLogger().info('Configuration updated and saved', { configPath: this.configPath });
 		} catch (error) {
-			console.error('Failed to save configuration:', error);
+			this.getLogger().error('Failed to save configuration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw new Error('Failed to save configuration');
 		}
 	}
 
 	public async createDefaultConfigFile(): Promise<void> {
 		if (existsSync(this.configPath)) {
-			console.log(`Configuration file already exists at ${this.configPath}`);
+			this.getLogger().info('Configuration file already exists', { configPath: this.configPath });
 			return;
 		}
 
@@ -265,9 +284,11 @@ export class ConfigService {
 			await fs.mkdir(configDir, { recursive: true });
 
 			await fs.writeFile(this.configPath, configData, 'utf-8');
-			console.log(`Default configuration file created at ${this.configPath}`);
+			this.getLogger().info('Default configuration file created', { configPath: this.configPath });
 		} catch (error) {
-			console.error('Failed to create default configuration file:', error);
+			this.getLogger().error('Failed to create default configuration file', {
+				error: error instanceof Error ? error.message : String(error),
+			});
 			throw new Error('Failed to create configuration file');
 		}
 	}

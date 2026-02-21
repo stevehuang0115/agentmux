@@ -21,6 +21,7 @@ import type {
 } from '../../types/slack.types.js';
 import { isUserAllowed } from '../../types/slack.types.js';
 import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../core/logger.service.js';
 
 /**
  * Events emitted by SlackService
@@ -172,6 +173,7 @@ let slackServiceInstance: SlackService | null = null;
  * SlackService class for managing Slack bot operations
  */
 export class SlackService extends EventEmitter {
+  private logger = LoggerService.getInstance().createComponentLogger('SlackService');
   private app: SlackApp | null = null;
   private client: SlackWebClient | null = null;
   private config: SlackConfig | null = null;
@@ -221,7 +223,7 @@ export class SlackService extends EventEmitter {
         this.setupConnectionMonitoring();
 
         this.emit('connected');
-        console.log('[SlackService] Connected in Socket Mode');
+        this.logger.info('Connected in Socket Mode');
       }
     } catch (error) {
       this.status.lastError = (error as Error).message;
@@ -247,7 +249,7 @@ export class SlackService extends EventEmitter {
 
       // Check user permissions
       if (!isUserAllowed(message.user, config)) {
-        console.log(`[SlackService] Unauthorized user: ${message.user}`);
+        this.logger.info('Unauthorized user', { userId: message.user });
         return;
       }
 
@@ -276,7 +278,7 @@ export class SlackService extends EventEmitter {
     // Handle @mentions
     this.app.event('app_mention', async ({ event }) => {
       if (!isUserAllowed(event.user, config)) {
-        console.log(`[SlackService] Unauthorized user mention: ${event.user}`);
+        this.logger.info('Unauthorized user mention', { userId: event.user });
         return;
       }
 
@@ -299,7 +301,7 @@ export class SlackService extends EventEmitter {
 
     // Handle errors
     this.app.error(async (error) => {
-      console.error('[SlackService] Error:', error);
+      this.logger.error('Error', { error: error.message });
       this.status.lastError = error.message;
       this.status.lastErrorAt = new Date().toISOString();
       this.emit('error', error);
@@ -322,7 +324,7 @@ export class SlackService extends EventEmitter {
       const receiver = (this.app as unknown as { receiver?: { client?: EventEmitter } })?.receiver;
       const socketClient = receiver?.client;
       if (!socketClient) {
-        console.warn('[SlackService] Could not access SocketModeClient for connection monitoring');
+        this.logger.warn('Could not access SocketModeClient for connection monitoring');
         return;
       }
 
@@ -330,18 +332,18 @@ export class SlackService extends EventEmitter {
         this.status.connected = false;
         this.status.lastError = 'Socket Mode connection lost';
         this.status.lastErrorAt = new Date().toISOString();
-        console.warn('[SlackService] Socket Mode disconnected');
+        this.logger.warn('Socket Mode disconnected');
         this.emit('disconnected');
       });
 
       socketClient.on('reconnecting', () => {
         this.status.connected = false;
-        console.log('[SlackService] Socket Mode reconnecting...');
+        this.logger.info('Socket Mode reconnecting...');
       });
 
       socketClient.on('connected', () => {
         this.status.connected = true;
-        console.log('[SlackService] Socket Mode reconnected');
+        this.logger.info('Socket Mode reconnected');
         this.emit('connected');
       });
 
@@ -349,14 +351,13 @@ export class SlackService extends EventEmitter {
         // 'close' fires on WebSocket close before reconnection kicks in
         if (this.status.connected) {
           this.status.connected = false;
-          console.warn('[SlackService] Socket Mode WebSocket closed, awaiting reconnect...');
+          this.logger.warn('Socket Mode WebSocket closed, awaiting reconnect...');
         }
       });
     } catch (err) {
-      console.warn(
-        '[SlackService] Failed to set up connection monitoring:',
-        err instanceof Error ? err.message : String(err)
-      );
+      this.logger.warn('Failed to set up connection monitoring', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -385,7 +386,7 @@ export class SlackService extends EventEmitter {
       this.status.messagesSent++;
       return result.ts || '';
     } catch (error) {
-      console.error('[SlackService] Send message error:', error);
+      this.logger.error('Send message error', { error: error instanceof Error ? (error as Error).message : String(error) });
       throw error;
     }
   }
@@ -398,7 +399,7 @@ export class SlackService extends EventEmitter {
   async sendNotification(notification: SlackNotification): Promise<void> {
     const targetChannelId = notification.channelId || this.config?.defaultChannelId;
     if (!targetChannelId) {
-      console.warn('[SlackService] No channel configured for notification');
+      this.logger.warn('No channel configured for notification');
       return;
     }
 
@@ -644,12 +645,12 @@ export class SlackService extends EventEmitter {
         if (isRateLimit && attempt < maxRetries) {
           const rawMs = this.extractRetryAfterMs(error) || constants.UPLOAD_DEFAULT_BACKOFF_MS;
           const retryAfterMs = Math.min(rawMs, MAX_BACKOFF_MS);
-          console.warn(`[SlackService] Upload rate-limited (429), retrying in ${retryAfterMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+          this.logger.warn('Upload rate-limited (429), retrying', { retryAfterMs, attempt: attempt + 1, maxRetries });
           await new Promise(resolve => setTimeout(resolve, retryAfterMs));
           continue;
         }
 
-        console.error('[SlackService] Upload error:', error);
+        this.logger.error('Upload error', { error: error instanceof Error ? (error as Error).message : String(error) });
         throw error;
       }
     }
@@ -705,7 +706,7 @@ export class SlackService extends EventEmitter {
       await this.app.stop();
       this.status.connected = false;
       this.emit('disconnected');
-      console.log('[SlackService] Disconnected');
+      this.logger.info('Disconnected');
     }
   }
 

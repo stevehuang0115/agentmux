@@ -109,6 +109,14 @@ fi
 
 require_param "channelId" "$CHANNEL_ID"
 
+# Convert literal \n sequences to real newlines.
+# This fixes a common issue where callers pass text through JSON.stringify()
+# which escapes newlines to literal \n characters that Slack displays as text.
+if [ -n "$TEXT" ]; then
+  _NL=$'\n'
+  TEXT="${TEXT//\\n/$_NL}"
+fi
+
 # When uploading an image, text is optional (serves as initial_comment)
 if [ -z "$IMAGE_PATH" ] && [ -z "$TEXT" ]; then
   error_exit "Slack message text is required. Pass --text, --text-file, pipe stdin, or include it in the JSON payload."

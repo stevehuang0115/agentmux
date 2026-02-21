@@ -8,14 +8,18 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import type { Request, Response } from 'express';
-import { getPreviousSessions, dismissPreviousSessions } from './session.controller.js';
+import { getPreviousSessions, dismissPreviousSessions, writeToSession } from './session.controller.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 
 // Mock dependencies
+const mockSendMessage = jest.fn<any>();
 jest.mock('../../services/session/index.js', () => ({
 	getSessionBackendSync: jest.fn(),
 	getSessionBackend: jest.fn(),
 	getSessionStatePersistence: jest.fn(),
+	createSessionCommandHelper: jest.fn(() => ({
+		sendMessage: mockSendMessage,
+	})),
 }));
 
 jest.mock('../../services/core/logger.service.js', () => ({
@@ -179,5 +183,83 @@ describe('Session Controller - Previous Sessions', () => {
 
 			expect(res.status).toHaveBeenCalledWith(500);
 		});
+	});
+});
+
+describe('Session Controller - writeToSession', () => {
+	let mockWrite: jest.Mock<any>;
+
+	beforeEach(() => {
+		jest.clearAllMocks();
+		mockWrite = jest.fn();
+		mockSendMessage.mockResolvedValue(undefined);
+	});
+
+	it('should use raw write by default (no mode)', async () => {
+		const mockSession = { write: mockWrite };
+		mockGetBackend.mockReturnValue({
+			sessionExists: jest.fn(() => true),
+			getSession: jest.fn(() => mockSession),
+		} as any);
+
+		const req = createMockReq({
+			params: { name: 'test-session' },
+			body: { data: 'hello world' },
+		} as any);
+		const res = createMockRes();
+
+		await writeToSession.call(undefined, req, res);
+
+		expect(mockWrite).toHaveBeenCalledWith('hello world');
+		expect(mockSendMessage).not.toHaveBeenCalled();
+		expect(res.json).toHaveBeenCalledWith({ success: true, message: "Data written to session 'test-session'" });
+	});
+
+	it('should use sendMessage when mode is "message"', async () => {
+		mockGetBackend.mockReturnValue({
+			sessionExists: jest.fn(() => true),
+			getSession: jest.fn(() => ({ write: mockWrite })),
+		} as any);
+
+		const req = createMockReq({
+			params: { name: 'test-session' },
+			body: { data: 'hello world', mode: 'message' },
+		} as any);
+		const res = createMockRes();
+
+		await writeToSession.call(undefined, req, res);
+
+		expect(mockSendMessage).toHaveBeenCalledWith('test-session', 'hello world');
+		expect(mockWrite).not.toHaveBeenCalled();
+		expect(res.json).toHaveBeenCalledWith({ success: true, message: "Message sent to session 'test-session'" });
+	});
+
+	it('should return 400 when data is missing', async () => {
+		const req = createMockReq({
+			params: { name: 'test-session' },
+			body: {},
+		} as any);
+		const res = createMockRes();
+
+		await writeToSession.call(undefined, req, res);
+
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.json).toHaveBeenCalledWith({ error: 'Data is required' });
+	});
+
+	it('should return 404 when session does not exist', async () => {
+		mockGetBackend.mockReturnValue({
+			sessionExists: jest.fn(() => false),
+		} as any);
+
+		const req = createMockReq({
+			params: { name: 'missing-session' },
+			body: { data: 'hello' },
+		} as any);
+		const res = createMockRes();
+
+		await writeToSession.call(undefined, req, res);
+
+		expect(res.status).toHaveBeenCalledWith(404);
 	});
 });

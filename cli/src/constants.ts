@@ -21,6 +21,7 @@ export {
   MESSAGE_CONSTANTS,
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
+  VERSION_CHECK_CONSTANTS,
 } from '../../config/index.js';
 
 // Import for creating convenience aliases
@@ -42,9 +43,6 @@ import {
 export const CLI_CONSTANTS = {
   /** CLI tool name for display */
   TOOL_NAME: 'crewly',
-
-  /** CLI version (should match package.json) */
-  VERSION: '1.0.0',
 
   /** Default output format */
   DEFAULT_OUTPUT_FORMAT: 'text' as const,

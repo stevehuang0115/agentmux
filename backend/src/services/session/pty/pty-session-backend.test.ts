@@ -522,4 +522,28 @@ describe('PtySessionBackend integration', () => {
 
 		expect(backend!.getSessionCount()).toBe(3);
 	});
+
+	describe('isChildProcessAlive', () => {
+		it('should return false for non-existent session', () => {
+			expect(backend!.isChildProcessAlive('nonexistent')).toBe(false);
+		});
+
+		it('should return true for session with running child process', async () => {
+			await backend!.createSession('child-test', createTestOptions());
+
+			// Spawn a long-running child so pgrep finds something
+			const session = backend!.getSession('child-test');
+			session!.write('sleep 60 &\n');
+			await new Promise((r) => setTimeout(r, 500));
+
+			expect(backend!.isChildProcessAlive('child-test')).toBe(true);
+		}, 10000);
+
+		it('should return false after session is killed', async () => {
+			await backend!.createSession('child-killed', createTestOptions());
+			await backend!.killSession('child-killed');
+
+			expect(backend!.isChildProcessAlive('child-killed')).toBe(false);
+		});
+	});
 });

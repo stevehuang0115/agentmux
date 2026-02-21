@@ -26,10 +26,14 @@ import { CREWLY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
+import { ActivityMonitorService } from '../../services/monitoring/activity-monitor.service.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
 import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
 import { SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('TeamController');
 
 /**
  * Module-level EventBusService instance, injected at startup.
@@ -229,7 +233,7 @@ async function _startTeamMemberCore(
               };
             } else {
               // Session exists but appears zombie - kill it and proceed with new creation
-              console.warn(`Cleaning up zombie session: ${member.sessionName}`);
+              logger.warn('Cleaning up zombie session', { sessionName: member.sessionName });
               await context.tmuxService.killSession(member.sessionName).catch(() => {
                 // Ignore errors if session doesn't exist
               });
@@ -239,7 +243,7 @@ async function _startTeamMemberCore(
             }
           } catch (error) {
             // If we can't check the session, assume it's zombie and clean it up
-            console.warn(`Error checking session ${member.sessionName}, treating as zombie:`, error);
+            logger.warn('Error checking session, treating as zombie', { sessionName: member.sessionName, error: error instanceof Error ? error.message : String(error) });
             await context.tmuxService.killSession(member.sessionName).catch(() => {
               // Ignore errors if session doesn't exist
             });
@@ -351,7 +355,7 @@ async function _startTeamMemberCore(
           projectPath || process.cwd()
         );
       } catch (memError) {
-        console.warn(`[TeamController] Failed to initialize memory for ${sessionName}:`, memError);
+        logger.warn('Failed to initialize memory', { sessionName, error: memError instanceof Error ? memError.message : String(memError) });
       }
 
       // CRITICAL: Load fresh data again after session creation to preserve MCP registration updates
@@ -378,7 +382,7 @@ async function _startTeamMemberCore(
           status: finalMember.agentStatus
         };
       } else {
-        console.error(`Team or member not found after session creation: teamId=${team.id}, memberId=${member.id}`);
+        logger.error('Team or member not found after session creation', { teamId: team.id, memberId: member.id });
         return {
           success: false,
           memberName: member.name,
@@ -402,7 +406,7 @@ async function _startTeamMemberCore(
         await context.storageService.saveTeam(failureTeam);
       }
 
-      console.error(`All ${MAX_CREATION_RETRIES} session creation attempts failed for ${member.name}: ${lastError}`);
+      logger.error('All session creation attempts failed', { retries: MAX_CREATION_RETRIES, memberName: member.name, lastError });
       return {
         success: false,
         memberName: member.name,
@@ -426,7 +430,7 @@ async function _startTeamMemberCore(
       await context.storageService.saveTeam(errorTeam);
     }
 
-    console.error('Error starting team member:', error);
+    logger.error('Error starting team member', { error: error instanceof Error ? error.message : String(error) });
     return {
       success: false,
       memberName: member.name,
@@ -459,7 +463,7 @@ async function _stopTeamMemberCore(
       );
 
       if (!stopResult.success) {
-        console.error('Failed to terminate team member session:', stopResult.error);
+        logger.error('Failed to terminate team member session', { error: stopResult.error });
         return {
           success: false,
           memberName: member.name,
@@ -488,7 +492,7 @@ async function _stopTeamMemberCore(
       status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
     };
   } catch (error) {
-    console.error('Error stopping team member:', error);
+    logger.error('Error stopping team member', { error: error instanceof Error ? error.message : String(error) });
     return {
       success: false,
       memberName: member.name,
@@ -609,7 +613,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
     } as ApiResponse<Team>);
 
   } catch (error) {
-    console.error('Error creating team:', error);
+    logger.error('Error creating team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to create team'
@@ -633,15 +637,27 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
 
     const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
 
+    // Load working status data from ActivityMonitorService
+    let workingStatusData;
+    try {
+      const activityMonitor = ActivityMonitorService.getInstance();
+      workingStatusData = await activityMonitor.getTeamWorkingStatus();
+    } catch {
+      // Non-fatal: fall back to teams.json workingStatus values
+      workingStatusData = null;
+    }
+
     // Also update status for team members based on actual session existence
     const teamsWithActualStatus = teams.map(team => ({
       ...team,
       members: team.members.map(member => {
         const memberSessionExists = backend?.sessionExists(member.sessionName) || false;
         const resolvedStatus = resolveAgentStatus(member.agentStatus, memberSessionExists);
+        const resolvedWorkingStatus = workingStatusData?.teamMembers[member.sessionName]?.workingStatus || member.workingStatus || 'idle';
         return {
           ...member,
           agentStatus: resolvedStatus,
+          workingStatus: resolvedWorkingStatus,
         };
       })
     }));
@@ -656,7 +672,7 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       }
   } as ApiResponse<Team[]>);
   } catch (error) {
-    console.error('Error getting teams:', error);
+    logger.error('Error getting teams', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to retrieve teams'
@@ -691,6 +707,15 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
       return;
     }
 
+    // Load working status data from ActivityMonitorService
+    let workingStatusData;
+    try {
+      const activityMonitor = ActivityMonitorService.getInstance();
+      workingStatusData = await activityMonitor.getTeamWorkingStatus();
+    } catch {
+      workingStatusData = null;
+    }
+
     // Verify actual session existence for each member to avoid stale status
     const backend = getSessionBackendSync();
     if (backend) {
@@ -703,12 +728,17 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
             (member as MutableTeamMember).sessionName = '';
           }
         }
+        // Merge working status from ActivityMonitorService
+        const liveWorkingStatus = workingStatusData?.teamMembers[member.sessionName]?.workingStatus;
+        if (liveWorkingStatus) {
+          (member as MutableTeamMember).workingStatus = liveWorkingStatus;
+        }
       }
     }
 
     res.json({ success: true, data: team } as ApiResponse<Team>);
   } catch (error) {
-    console.error('Error getting team:', error);
+    logger.error('Error getting team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to retrieve team' } as ApiResponse);
   }
 }
@@ -806,7 +836,7 @@ export async function startTeam(this: ApiContext, req: Request, res: Response): 
       data: { sessionsCreated, sessionsAlreadyRunning, projectName: assignedProject.name, projectPath: assignedProject.path, results }
     } as ApiResponse);
   } catch (error) {
-    console.error('Error starting team:', error);
+    logger.error('Error starting team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to start team' } as ApiResponse);
   }
 }
@@ -872,12 +902,12 @@ export async function stopTeam(this: ApiContext, req: Request, res: Response): P
           this.messageSchedulerService.cancelMessage(message.id);
         }
       } catch (error) {
-        console.error('Error cancelling team scheduled messages:', error);
+        logger.error('Error cancelling team scheduled messages', { error: error instanceof Error ? error.message : String(error) });
       }
     }
     res.json({ success: true, message: `Team stopped. Stopped ${sessionsStopped} sessions, ${sessionsNotFound} were already stopped.`, data: { sessionsStopped, sessionsNotFound, results } } as ApiResponse);
   } catch (error) {
-    console.error('Error stopping team:', error);
+    logger.error('Error stopping team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to stop team' } as ApiResponse);
   }
 }
@@ -897,7 +927,7 @@ export async function getTeamWorkload(this: ApiContext, req: Request, res: Respo
     }
     res.json({ success: true, data: { teamId: id, teamName: team.name, assignedTickets, completedTickets, workloadPercentage: assignedTickets > 0 ? Math.round((completedTickets / assignedTickets) * 100) : 0 } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting team workload:', error);
+    logger.error('Error getting team workload', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to retrieve team workload' } as ApiResponse);
   }
 }
@@ -922,7 +952,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
         await this.tmuxService.sendMessage(orchestratorSession, orchestratorPrompt);
       }
     } catch (notificationError) {
-      console.warn('Failed to notify orchestrator about team deletion:', notificationError);
+      logger.warn('Failed to notify orchestrator about team deletion', { error: notificationError instanceof Error ? notificationError.message : String(notificationError) });
     }
 
     if (team.members && team.members.length > 0) {
@@ -932,7 +962,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
             await this.tmuxService.killSession(member.sessionName);
             this.schedulerService.cancelAllChecksForSession(member.sessionName);
           } catch (error) {
-            console.warn(`Failed to kill session for member ${member.name}:`, error);
+            logger.warn('Failed to kill session for member', { memberName: member.name, error: error instanceof Error ? error.message : String(error) });
           }
         }
       }
@@ -940,7 +970,7 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
     await this.storageService.deleteTeam(id);
     res.json({ success: true, message: 'Team terminated successfully' } as ApiResponse);
   } catch (error) {
-    console.error('Error deleting team:', error);
+    logger.error('Error deleting team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to terminate team' } as ApiResponse);
   }
 }
@@ -958,7 +988,7 @@ export async function getTeamMemberSession(this: ApiContext, req: Request, res: 
     const output = await this.tmuxService.capturePane(member.sessionName, Number(lines));
     res.json({ success: true, data: { memberId: member.id, memberName: member.name, sessionName: member.sessionName, output, timestamp: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting team member session:', error);
+    logger.error('Error getting team member session', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get team member session' } as ApiResponse);
   }
 }
@@ -989,7 +1019,7 @@ export async function addTeamMember(this: ApiContext, req: Request, res: Respons
     await this.storageService.saveTeam(team);
     res.json({ success: true, data: newMember, message: 'Team member added successfully' } as ApiResponse<TeamMember>);
   } catch (error) {
-    console.error('Error adding team member:', error);
+    logger.error('Error adding team member', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to add team member' } as ApiResponse);
   }
 }
@@ -1009,7 +1039,7 @@ export async function updateTeamMember(this: ApiContext, req: Request, res: Resp
     await this.storageService.saveTeam(team);
     res.json({ success: true, data: updatedMember, message: 'Team member updated successfully' } as ApiResponse<TeamMember>);
   } catch (error) {
-    console.error('Error updating team member:', error);
+    logger.error('Error updating team member', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to update team member' } as ApiResponse);
   }
 }
@@ -1024,14 +1054,14 @@ export async function deleteTeamMember(this: ApiContext, req: Request, res: Resp
     if (memberIndex === -1) { res.status(404).json({ success: false, error: 'Team member not found' } as ApiResponse); return; }
     const member = team.members[memberIndex];
     if (member.sessionName) {
-      try { await this.tmuxService.killSession(member.sessionName); } catch (error) { console.warn(`Failed to kill tmux session ${member.sessionName}:`, error); }
+      try { await this.tmuxService.killSession(member.sessionName); } catch (error) { logger.warn('Failed to kill tmux session', { sessionName: member.sessionName, error: error instanceof Error ? error.message : String(error) }); }
     }
     team.members.splice(memberIndex, 1);
     team.updatedAt = new Date().toISOString();
     await this.storageService.saveTeam(team);
     res.json({ success: true, message: 'Team member removed successfully' } as ApiResponse);
   } catch (error) {
-    console.error('Error deleting team member:', error);
+    logger.error('Error deleting team member', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to delete team member' } as ApiResponse);
   }
 }
@@ -1111,7 +1141,7 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
       }
     }
   } catch (error) {
-    console.error('Error starting team member:', error);
+    logger.error('Error starting team member', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to start team member' } as ApiResponse);
   }
 }
@@ -1152,7 +1182,7 @@ export async function stopTeamMember(this: ApiContext, req: Request, res: Respon
       } as ApiResponse);
     }
   } catch (error) {
-    console.error('Error stopping team member:', error);
+    logger.error('Error stopping team member', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to stop team member' } as ApiResponse);
   }
 }
@@ -1179,10 +1209,10 @@ export async function reportMemberReady(this: ApiContext, req: Request, res: Res
         break;
       }
     }
-    if (!memberFound) { console.warn(`Session ${sessionName} not found in any team, but reporting ready anyway`); }
+    if (!memberFound) { logger.warn('Session not found in any team, but reporting ready anyway', { sessionName }); }
     res.json({ success: true, message: `Agent ${sessionName} reported ready with role ${role}`, data: { sessionName, role, capabilities, readyAt } } as ApiResponse);
   } catch (error) {
-    console.error('Error reporting member ready:', error);
+    logger.error('Error reporting member ready', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to report member ready' } as ApiResponse);
   }
 }
@@ -1224,7 +1254,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
         res.json({ success: true, message: `Orchestrator ${sessionName} registered as active`, sessionName } as ApiResponse);
         return;
       } catch (error) {
-        console.error('Error updating orchestrator status:', error);
+        logger.error('Error updating orchestrator status', { error: error instanceof Error ? error.message : String(error) });
         res.status(500).json({ success: false, error: 'Failed to update orchestrator status' } as ApiResponse);
         return;
       }
@@ -1250,7 +1280,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
 
     // Load fresh team data and apply registration changes to avoid race conditions
     if (!targetTeamId || !targetMemberId) {
-      console.warn(`registerMemberStatus: agent not found in any team`, { sessionName, role, memberId });
+      logger.warn('registerMemberStatus: agent not found in any team', { sessionName, role, memberId });
       res.status(404).json({ success: false, error: `Agent with sessionName '${sessionName}' not found in any team` } as ApiResponse);
       return;
     }
@@ -1280,7 +1310,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
         persistence.updateSessionId(sessionName, claudeSessionId);
       } catch (persistError) {
         // Non-fatal: resume just won't work on next restart
-        console.warn('Failed to persist claudeSessionId:', persistError);
+        logger.warn('Failed to persist claudeSessionId', { error: persistError instanceof Error ? persistError.message : String(persistError) });
       }
     }
 
@@ -1291,16 +1321,16 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     if (subAgentQueue.hasPending(sessionName)) {
       const runtimeType = (freshTeam?.members.find(m => m.id === targetMemberId)?.runtimeType || RUNTIME_TYPES.CLAUDE_CODE) as import('../../constants.js').RuntimeType;
       const queuedMessages = subAgentQueue.dequeueAll(sessionName);
-      console.log(`[registerMemberStatus] Flushing ${queuedMessages.length} queued message(s) to ${sessionName}`);
+      logger.info('Flushing queued messages', { count: queuedMessages.length, sessionName });
 
       // Deliver sequentially in the background
       (async () => {
         for (const queuedMsg of queuedMessages) {
           try {
             await this.agentRegistrationService.sendMessageToAgent(sessionName, queuedMsg.data, runtimeType);
-            console.log(`[registerMemberStatus] Delivered queued message to ${sessionName} (queued at ${new Date(queuedMsg.queuedAt).toISOString()})`);
+            logger.info('Delivered queued message', { sessionName, queuedAt: new Date(queuedMsg.queuedAt).toISOString() });
           } catch (flushError) {
-            console.error(`[registerMemberStatus] Failed to deliver queued message to ${sessionName}:`, flushError);
+            logger.error('Failed to deliver queued message', { sessionName, error: flushError instanceof Error ? flushError.message : String(flushError) });
           }
           // Delay between messages to let the agent process each one
           if (queuedMessages.indexOf(queuedMsg) < queuedMessages.length - 1) {
@@ -1308,11 +1338,11 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
           }
         }
       })().catch(err => {
-        console.error(`[registerMemberStatus] Queue flush failed for ${sessionName}:`, err);
+        logger.error('Queue flush failed', { sessionName, error: err instanceof Error ? err.message : String(err) });
       });
     }
   } catch (error) {
-    console.error('Error in registerMemberStatus:', error);
+    logger.error('Error in registerMemberStatus', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to register member status' } as ApiResponse);
   }
 }
@@ -1337,7 +1367,7 @@ export async function generateMemberContext(this: ApiContext, req: Request, res:
     });
     res.json({ success: true, data: { teamId, memberId, memberName: member.name, contextPrompt, generatedAt: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error generating member context:', error);
+    logger.error('Error generating member context', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to generate member context' } as ApiResponse);
   }
 }
@@ -1359,7 +1389,7 @@ export async function injectContextIntoSession(this: ApiContext, req: Request, r
     if (!success) { res.status(500).json({ success: false, error: 'Failed to inject context into session' } as ApiResponse); return; }
     res.json({ success: true, data: { teamId, memberId, memberName: member.name, sessionName: member.sessionName, contextInjected: true, injectedAt: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error injecting context into session:', error);
+    logger.error('Error injecting context into session', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to inject context into session' } as ApiResponse);
   }
 }
@@ -1380,7 +1410,7 @@ export async function refreshMemberContext(this: ApiContext, req: Request, res: 
     const contextPath = await contextLoader.refreshContext(member);
     res.json({ success: true, data: { teamId, memberId, memberName: member.name, contextPath, refreshedAt: new Date().toISOString() } } as ApiResponse);
   } catch (error) {
-    console.error('Error refreshing member context:', error);
+    logger.error('Error refreshing member context', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to refresh member context' } as ApiResponse);
   }
 }
@@ -1495,7 +1525,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
               });
 
             } catch (error) {
-              console.error(`Error checking activity for member ${member.id}:`, error);
+              logger.error('Error checking activity for member', { memberId: member.id, error: error instanceof Error ? error.message : String(error) });
               // Clear terminal output on error to prevent memory leak
               delete mutableMember.lastTerminalOutput;
 
@@ -1565,7 +1595,7 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
     } as ApiResponse);
 
   } catch (error) {
-    console.error('Error checking team activity status:', error);
+    logger.error('Error checking team activity status', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to check team activity status' } as ApiResponse);
   }
 }
@@ -1659,7 +1689,7 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     } as ApiResponse<TeamMember>);
 
   } catch (error) {
-    console.error('Error updating team member runtime:', error);
+    logger.error('Error updating team member runtime', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to update team member runtime'
@@ -1794,7 +1824,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     } as ApiResponse<Team>);
 
   } catch (error) {
-    console.error('Error updating team:', error);
+    logger.error('Error updating team', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to update team'

@@ -1,7 +1,7 @@
 {
   "id": "orc-send-pdf-to-slack",
   "name": "Send PDF to Slack",
-  "description": "Convert a markdown file to PDF and upload it to a Slack channel.",
+  "description": "Convert a markdown file to a styled PDF (with embedded local images) and upload it to a Slack channel. Supports markdown image syntax ![alt](/path/to/image.png) — local absolute and relative image paths are automatically resolved and embedded in the PDF.",
   "category": "communication",
   "skillType": "claude-skill",
   "promptFile": "instructions.md",

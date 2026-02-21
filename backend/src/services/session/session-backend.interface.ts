@@ -340,6 +340,18 @@ export interface ISessionBackend {
 	getRawHistory(name: string): string;
 
 	/**
+	 * Check if a child process is alive inside a session's PTY shell.
+	 *
+	 * This is optional because not all backends may support process tree
+	 * inspection. When available, it uses pgrep to detect whether the
+	 * runtime (e.g. Claude Code) is still running inside the shell.
+	 *
+	 * @param name - Name of the session to check
+	 * @returns true if the session has a living child process
+	 */
+	isChildProcessAlive?(name: string): boolean;
+
+	/**
 	 * Destroy the backend and clean up all resources.
 	 * Kills all active sessions and releases any held resources.
 	 *

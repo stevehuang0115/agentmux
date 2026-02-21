@@ -13,11 +13,18 @@ bash config/skills/orchestrator/remember/execute.sh '{"content":"TypeScript stri
 | Parameter | Required | Description |
 |-----------|----------|-------------|
 | `content` | Yes | The knowledge to store |
-| `category` | Yes | Category: `pattern`, `decision`, `gotcha`, `fact`, `preference`, `relationship` |
+| `category` | Yes | See valid categories per scope below |
 | `scope` | No | Scope: `agent` or `project` (default: `agent`) |
 | `title` | No | Optional title for the knowledge |
 | `teamMemberId` | No | Your session name |
 | `projectPath` | No | Current project path |
+
+## Valid Categories by Scope
+
+- **Agent scope** (`scope: "agent"`): `fact`, `pattern`, `preference`
+- **Project scope** (`scope: "project"`): `pattern`, `decision`, `gotcha`, `relationship`
+
+Using a category that doesn't match the scope will return an error.
 
 ## Output
 

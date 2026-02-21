@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import type { ApiContext } from '../types.js';
 import { TaskService } from '../../services/index.js';
 import { ApiResponse } from '../../types/index.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('TasksController');
 
 export async function getAllTasks(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
@@ -14,7 +17,7 @@ export async function getAllTasks(this: ApiContext, req: Request, res: Response)
     const tasks = await svc.getAllTasks();
     res.json({ success: true, data: tasks } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching tasks:', error);
+    logger.error('Error fetching tasks', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch tasks' } as ApiResponse);
   }
 }
@@ -30,7 +33,7 @@ export async function getMilestones(this: ApiContext, req: Request, res: Respons
     const milestones = await svc.getMilestones();
     res.json({ success: true, data: milestones } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching milestones:', error);
+    logger.error('Error fetching milestones', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch milestones' } as ApiResponse);
   }
 }
@@ -46,7 +49,7 @@ export async function getTasksByStatus(this: ApiContext, req: Request, res: Resp
     const tasks = await svc.getTasksByStatus(status);
     res.json({ success: true, data: tasks } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching tasks by status:', error);
+    logger.error('Error fetching tasks by status', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch tasks by status' } as ApiResponse);
   }
 }
@@ -62,7 +65,7 @@ export async function getTasksByMilestone(this: ApiContext, req: Request, res: R
     const tasks = await svc.getTasksByMilestone(milestoneId);
     res.json({ success: true, data: tasks } as ApiResponse);
   } catch (error) {
-    console.error('Error fetching tasks by milestone:', error);
+    logger.error('Error fetching tasks by milestone', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to fetch tasks by milestone' } as ApiResponse);
   }
 }
@@ -83,7 +86,7 @@ export async function getProjectTasksStatus(this: ApiContext, req: Request, res:
     const byStatus = all.reduce((acc: any, t: any) => { acc[t.status] = (acc[t.status]||0)+1; return acc; }, {});
     res.json({ success: true, data: { totals: { all: all.length, ...byStatus }, milestones } } as ApiResponse);
   } catch (error) {
-    console.error('Error getting project task status:', error);
+    logger.error('Error getting project task status', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({ success: false, error: 'Failed to get project task status' } as ApiResponse);
   }
 }

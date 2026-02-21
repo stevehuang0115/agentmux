@@ -11,6 +11,9 @@ import { getSlackService } from './slack.service.js';
 import { getSlackOrchestratorBridge } from './slack-orchestrator-bridge.js';
 import { SlackConfig } from '../../types/slack.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
+import { LoggerService } from '../core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('SlackInitializer');
 
 /**
  * Result of initialization attempt
@@ -98,7 +101,7 @@ export async function initializeSlackIfConfigured(
   const config = getSlackConfigFromEnv();
 
   if (!config) {
-    console.log('[Slack] Not configured - skipping initialization');
+    logger.info('Not configured - skipping initialization');
     return { attempted: false, success: false };
   }
 
@@ -115,11 +118,11 @@ export async function initializeSlackIfConfigured(
 
     await bridge.initialize();
 
-    console.log('[Slack] Successfully connected');
+    logger.info('Successfully connected');
     return { attempted: true, success: true };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error('[Slack] Failed to initialize:', errorMessage);
+    logger.error('Failed to initialize', { error: errorMessage });
     return { attempted: true, success: false, error: errorMessage };
   }
 }
@@ -134,9 +137,9 @@ export async function shutdownSlack(): Promise<void> {
     const slackService = getSlackService();
     if (slackService.isConnected()) {
       await slackService.disconnect();
-      console.log('[Slack] Disconnected');
+      logger.info('Disconnected');
     }
   } catch (error) {
-    console.error('[Slack] Error during shutdown:', error);
+    logger.error('Error during shutdown', { error: error instanceof Error ? (error as Error).message : String(error) });
   }
 }

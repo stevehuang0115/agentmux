@@ -17,7 +17,7 @@ import {
 export interface AgentHeartbeat {
 	/** Agent identifier (e.g., 'orchestrator' or team member ID) */
 	agentId: string;
-	/** Tmux session name */
+	/** PTY session name */
 	sessionName: string;
 	/** Team member ID (only for team members, not orchestrator) */
 	teamMemberId?: string;
@@ -52,7 +52,7 @@ export interface TeamAgentStatusFile {
 export interface BatchedStatusUpdate {
 	/** Agent identifier */
 	agentId: string;
-	/** Tmux session name */
+	/** PTY session name */
 	sessionName: string;
 	/** Team member ID (optional, only for team members) */
 	teamMemberId?: string;
@@ -85,7 +85,7 @@ export class AgentStatusBatcher {
 	 * Add an agent status update to the batch queue
 	 *
 	 * @param agentId - Agent identifier
-	 * @param sessionName - Tmux session name
+	 * @param sessionName - PTY session name
 	 * @param agentStatus - New agent status
 	 * @param teamMemberId - Team member ID (optional, only for team members)
 	 */
@@ -257,7 +257,7 @@ export class AgentHeartbeatService {
 	 * This is the main entry point that transforms API calls into agent heartbeats.
 	 * Uses batching for efficiency and error resilience.
 	 *
-	 * @param sessionName - Tmux session name from API call
+	 * @param sessionName - PTY session name from API call
 	 * @param teamMemberId - Team member ID from API call (optional)
 	 * @param agentStatus - Current agent status (defaults to 'active')
 	 *
@@ -633,7 +633,7 @@ export class AgentHeartbeatService {
  *
  * This is the main function that all API handlers should call.
  *
- * @param sessionName - Tmux session name from API call
+ * @param sessionName - PTY session name from API call
  * @param teamMemberId - Team member ID from API call (optional)
  * @param agentStatus - Current agent status (defaults to 'active')
  *

@@ -9,7 +9,12 @@ import {
   AGENT_IDENTITY_CONSTANTS as CONFIG_AGENT_IDENTITY_CONSTANTS,
   TIMING_CONSTANTS as CONFIG_TIMING_CONSTANTS,
   MEMORY_CONSTANTS as CONFIG_MEMORY_CONSTANTS,
-  CONTINUATION_CONSTANTS as CONFIG_CONTINUATION_CONSTANTS
+  CONTINUATION_CONSTANTS as CONFIG_CONTINUATION_CONSTANTS,
+  ORCHESTRATOR_RESTART_CONSTANTS as CONFIG_ORCHESTRATOR_RESTART_CONSTANTS,
+  AGENT_SUSPEND_CONSTANTS as CONFIG_AGENT_SUSPEND_CONSTANTS,
+  VERSION_CHECK_CONSTANTS as CONFIG_VERSION_CHECK_CONSTANTS,
+  AGENT_HEARTBEAT_MONITOR_CONSTANTS as CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS,
+  ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS
 } from '../../config/constants.js';
 
 // Re-export the cross-domain constants for backend use
@@ -17,6 +22,11 @@ export const AGENT_IDENTITY_CONSTANTS = CONFIG_AGENT_IDENTITY_CONSTANTS;
 export const TIMING_CONSTANTS = CONFIG_TIMING_CONSTANTS;
 export const MEMORY_CONSTANTS = CONFIG_MEMORY_CONSTANTS;
 export const CONTINUATION_CONSTANTS = CONFIG_CONTINUATION_CONSTANTS;
+export const ORCHESTRATOR_RESTART_CONSTANTS = CONFIG_ORCHESTRATOR_RESTART_CONSTANTS;
+export const AGENT_SUSPEND_CONSTANTS = CONFIG_AGENT_SUSPEND_CONSTANTS;
+export const VERSION_CHECK_CONSTANTS = CONFIG_VERSION_CHECK_CONSTANTS;
+export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS;
+export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
 export const ORCHESTRATOR_SESSION_NAME = 'crewly-orc';
@@ -36,8 +46,8 @@ export const CREWLY_CONSTANTS = {
 
 // Environment variable names (duplicated from config/constants.ts for backend use)
 export const ENV_CONSTANTS = {
-	/** Session name (legacy: kept for compatibility with older agents) */
-	TMUX_SESSION_NAME: 'TMUX_SESSION_NAME',
+	/** PTY session name used for agent identity and heartbeat tracking */
+	CREWLY_SESSION_NAME: 'CREWLY_SESSION_NAME',
 	CREWLY_ROLE: 'CREWLY_ROLE',
 	/** Base URL for the Crewly backend API (used by orchestrator bash skills) */
 	CREWLY_API_URL: 'CREWLY_API_URL',
@@ -404,6 +414,14 @@ export const RUNTIME_EXIT_CONSTANTS = {
 	 * normal runtime initialization output.
 	 */
 	STARTUP_GRACE_PERIOD_MS: 0,
+	/**
+	 * Grace period for API activity before confirming a runtime exit (ms).
+	 * If the agent made an API call within this window, the exit detection
+	 * is treated as a false positive and skipped. This prevents false
+	 * restarts when agents are actively calling skills/APIs but happen to
+	 * produce PTY output that matches exit patterns.
+	 */
+	API_ACTIVITY_GRACE_PERIOD_MS: 120_000,
 } as const;
 
 /**

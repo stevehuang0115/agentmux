@@ -1,0 +1,25 @@
+appId: com.crewly.desktop
+productName: Crewly
+directories:
+  output: release
+files:
+  - dist/**/*
+  - resources/**/*
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - universal
+  hardenedRuntime: true
+  icon: resources/icon.icns
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+publish:
+  provider: github
+  owner: stevehuang0115
+  repo: crewly

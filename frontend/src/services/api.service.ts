@@ -170,7 +170,7 @@ class ApiService {
     // Create new fetch promise
     this.teamsCachePromise = (async () => {
       try {
-        const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`);
+        const response = await axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`, { timeout: 15000 });
         const teams = response.data.data || [];
 
         // Update cache

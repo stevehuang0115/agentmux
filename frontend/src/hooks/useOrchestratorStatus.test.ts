@@ -233,6 +233,72 @@ describe('useOrchestratorStatus', () => {
       vi.useRealTimers();
     });
 
+    it('should handle WebSocket event with status field (fallback for agentStatus)', async () => {
+      mockedAxios.get.mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            isActive: true,
+            agentStatus: 'active',
+            message: 'Active',
+            offlineMessage: null,
+          },
+        },
+      });
+
+      const { result } = renderHook(() => useOrchestratorStatus());
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      // Simulate WebSocket event using 'status' field instead of 'agentStatus'
+      const statusChangeHandler = mockOn.mock.calls.find(
+        (call) => call[0] === 'orchestrator_status_changed'
+      )?.[1];
+
+      act(() => {
+        statusChangeHandler({ status: 'inactive', reason: 'runtime_exited' });
+      });
+
+      expect(result.current.status?.isActive).toBe(false);
+      expect(result.current.status?.agentStatus).toBe('inactive');
+    });
+
+    it('should handle WebSocket event with running boolean (fallback)', async () => {
+      mockedAxios.get.mockResolvedValueOnce({
+        data: {
+          success: true,
+          data: {
+            isActive: false,
+            agentStatus: 'inactive',
+            message: 'Not running',
+            offlineMessage: 'Offline',
+          },
+        },
+      });
+
+      const { result } = renderHook(() => useOrchestratorStatus());
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.status?.isActive).toBe(false);
+
+      // Simulate WebSocket event using 'running' boolean
+      const statusChangeHandler = mockOn.mock.calls.find(
+        (call) => call[0] === 'orchestrator_status_changed'
+      )?.[1];
+
+      act(() => {
+        statusChangeHandler({ sessionName: 'crewly-orc', running: true });
+      });
+
+      expect(result.current.status?.isActive).toBe(true);
+      expect(result.current.status?.agentStatus).toBe('active');
+    });
+
     it('should unsubscribe from WebSocket events on unmount', () => {
       mockedAxios.get.mockImplementation(() => new Promise(() => {}));
 

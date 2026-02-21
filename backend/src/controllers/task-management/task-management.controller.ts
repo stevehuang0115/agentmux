@@ -7,6 +7,9 @@ import { existsSync } from 'fs';
 import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('TaskManagementController');
 
 /**
  * Creates a new task MD file in the project's .crewly/tasks/ directory.
@@ -93,7 +96,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 					}
 				}
 			} catch (trackingError) {
-				console.log('[TASK-MGMT] Warning: Failed to track task assignment:', trackingError);
+				logger.warn('Failed to track task assignment', { error: trackingError instanceof Error ? trackingError.message : String(trackingError) });
 				// Non-fatal - the file was still created
 			}
 		}
@@ -107,7 +110,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 			milestone,
 		});
 	} catch (error) {
-		console.error('Error creating task:', error);
+		logger.error('Error creating task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to create task' });
 	}
 }
@@ -126,7 +129,7 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 		try {
 			await updateAgentHeartbeat(sessionName, undefined, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		} catch (error) {
-			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
+			logger.warn('Failed to update agent heartbeat', { error: error instanceof Error ? error.message : String(error) });
 			// Continue execution - heartbeat failures shouldn't break task assignment
 		}
 
@@ -237,7 +240,7 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 			status: 'in_progress',
 		});
 	} catch (error) {
-		console.error('Error assigning task:', error);
+		logger.error('Error assigning task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to assign task' });
 	}
 }
@@ -260,7 +263,7 @@ export async function completeTask(
 		try {
 			await updateAgentHeartbeat(sessionName, undefined, CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
 		} catch (error) {
-			console.log(`[TASK-MGMT] ⚠️ Failed to update agent heartbeat:`, error);
+			logger.warn('Failed to update agent heartbeat', { error: error instanceof Error ? error.message : String(error) });
 			// Continue execution - heartbeat failures shouldn't break task completion
 		}
 
@@ -326,7 +329,7 @@ export async function completeTask(
 			completedAt: new Date().toISOString(),
 		});
 	} catch (error) {
-		console.error('Error completing task:', error);
+		logger.error('Error completing task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to complete task' });
 	}
 }
@@ -397,7 +400,7 @@ export async function blockTask(this: ApiController, req: Request, res: Response
 			blockedAt: new Date().toISOString(),
 		});
 	} catch (error) {
-		console.error('Error blocking task:', error);
+		logger.error('Error blocking task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to block task' });
 	}
 }
@@ -465,7 +468,7 @@ export async function unblockTask(this: ApiController, req: Request, res: Respon
 			unblockedAt: new Date().toISOString(),
 		});
 	} catch (error) {
-		console.error('Error unblocking task:', error);
+		logger.error('Error unblocking task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to unblock task' });
 	}
 }
@@ -535,7 +538,7 @@ export async function takeNextTask(
 			openTasksPath,
 		});
 	} catch (error) {
-		console.error('Error getting next task:', error);
+		logger.error('Error getting next task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to get next task' });
 	}
 }
@@ -610,7 +613,7 @@ export async function syncTaskStatus(
 			progressPercentage,
 		});
 	} catch (error) {
-		console.error('Error syncing task status:', error);
+		logger.error('Error syncing task status', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to sync task status' });
 	}
 }
@@ -714,7 +717,7 @@ export async function getTeamProgress(
 			taskGroups: progressData,
 		});
 	} catch (error) {
-		console.error('Error getting team progress:', error);
+		logger.error('Error getting team progress', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to get team progress' });
 	}
 }
@@ -834,7 +837,7 @@ export async function startTaskExecution(
 			timeoutSeconds,
 		});
 	} catch (error) {
-		console.error('Error starting task execution:', error);
+		logger.error('Error starting task execution', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to start task execution',
@@ -851,7 +854,7 @@ export async function startTaskExecution(
  */
 export async function recoverAbandonedTasks(this: ApiController, req: Request, res: Response): Promise<void> {
 	try {
-		console.log('[RECOVERY] 🔄 Starting abandoned task recovery...');
+		logger.info('Starting abandoned task recovery');
 
 		// Function to get current team status from storage
 		const getTeamStatus = async () => {
@@ -862,7 +865,7 @@ export async function recoverAbandonedTasks(this: ApiController, req: Request, r
 		// Run recovery
 		const report = await this.taskTrackingService.recoverAbandonedTasks(getTeamStatus);
 
-		console.log('[RECOVERY] 📊 Recovery completed:', report);
+		logger.info('Recovery completed', { report });
 
 		res.json({
 			success: true,
@@ -871,7 +874,7 @@ export async function recoverAbandonedTasks(this: ApiController, req: Request, r
 		});
 
 	} catch (error) {
-		console.error('[RECOVERY] ❌ Recovery failed:', error);
+		logger.error('Recovery failed', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to recover abandoned tasks',
@@ -907,31 +910,23 @@ export async function createTasksFromConfig(
 		try {
 			if (existsSync(goalFilePath)) {
 				initialGoal = await readFile(goalFilePath, 'utf-8');
-				console.log(`Loaded initial goal from: ${goalFilePath}`);
+				logger.info('Loaded initial goal', { goalFilePath });
 			} else {
-				console.warn(`Initial goal file not found at: ${goalFilePath}`);
+				logger.warn('Initial goal file not found', { goalFilePath });
 			}
 		} catch (error) {
-			console.warn(
-				`Failed to read initial goal file: ${
-					error instanceof Error ? error.message : error
-				}`
-			);
+			logger.warn('Failed to read initial goal file', { error: error instanceof Error ? error.message : String(error) });
 		}
 
 		try {
 			if (existsSync(journeyFilePath)) {
 				userJourney = await readFile(journeyFilePath, 'utf-8');
-				console.log(`Loaded user journey from: ${journeyFilePath}`);
+				logger.info('Loaded user journey', { journeyFilePath });
 			} else {
-				console.warn(`Initial user journey file not found at: ${journeyFilePath}`);
+				logger.warn('Initial user journey file not found', { journeyFilePath });
 			}
 		} catch (error) {
-			console.warn(
-				`Failed to read initial user journey file: ${
-					error instanceof Error ? error.message : error
-				}`
-			);
+			logger.warn('Failed to read initial user journey file', { error: error instanceof Error ? error.message : String(error) });
 		}
 
 		// Load the configuration based on configType
@@ -941,7 +936,7 @@ export async function createTasksFromConfig(
 		try {
 			configContent = JSON.parse(await readFile(configPath, 'utf-8'));
 		} catch (error) {
-			console.error(`Error loading ${configType} config:`, error);
+			logger.error('Error loading config', { configType, error: error instanceof Error ? error.message : String(error) });
 			res.status(500).json({
 				success: false,
 				error: `Failed to load ${configType} configuration`,
@@ -964,7 +959,7 @@ export async function createTasksFromConfig(
 		try {
 			await ensureDirectoryExists(tasksDir);
 		} catch (error) {
-			console.error('Error creating tasks directory:', error);
+			logger.error('Error creating tasks directory', { error: error instanceof Error ? error.message : String(error) });
 			res.status(500).json({ success: false, error: 'Failed to create tasks directory' });
 			return;
 		}
@@ -999,7 +994,7 @@ export async function createTasksFromConfig(
 					delayMinutes: step.delayMinutes || 0,
 				});
 			} catch (error) {
-				console.error(`Error creating task file ${fileName}:`, error);
+				logger.error('Error creating task file', { fileName, error: error instanceof Error ? error.message : String(error) });
 				res.status(500).json({
 					success: false,
 					error: `Failed to create task file: ${fileName}`,
@@ -1016,7 +1011,7 @@ export async function createTasksFromConfig(
 			totalSteps: configContent.steps.length,
 		});
 	} catch (error) {
-		console.error('Error creating tasks from config:', error);
+		logger.error('Error creating tasks from config', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to create tasks from configuration',
@@ -1206,7 +1201,7 @@ export async function readTask(this: ApiController, req: Request, res: Response)
 			fileSize: content.length,
 		});
 	} catch (error) {
-		console.error('Error reading task:', error);
+		logger.error('Error reading task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to read task file' });
 	}
 }
@@ -1237,7 +1232,7 @@ export async function requestReview(
 			return;
 		}
 
-		console.log('[TASK-MGMT] Review requested', {
+		logger.info('Review requested', {
 			ticketId,
 			reviewer: reviewer || 'any',
 			branch: branch || 'current',
@@ -1255,7 +1250,7 @@ export async function requestReview(
 			},
 		});
 	} catch (error) {
-		console.error('Error requesting review:', error);
+		logger.error('Error requesting review', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({
 			success: false,
 			error: 'Failed to request review',

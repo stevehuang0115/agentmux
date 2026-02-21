@@ -4,6 +4,9 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import * as os from 'os';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('InProgressTasksController');
 
 /**
  * Gets in-progress tasks data from ~/.crewly/in_progress_tasks.json
@@ -35,7 +38,7 @@ export async function getInProgressTasks(this: ApiController, req: Request, res:
       ...data
     });
   } catch (error) {
-    console.error('Error reading in-progress tasks:', error);
+    logger.error('Error reading in-progress tasks', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: 'Failed to read in-progress tasks data',

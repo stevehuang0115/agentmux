@@ -11,6 +11,9 @@
 import { Request, Response } from 'express';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { getSlackThreadStore } from '../../services/slack/slack-thread-store.service.js';
+import { LoggerService } from '../../services/core/logger.service.js';
+
+const logger = LoggerService.getInstance().createComponentLogger('SlackThreadController');
 
 /**
  * Register an agent's association with the current active Slack thread.
@@ -58,7 +61,7 @@ export async function registerAgentThread(req: Request, res: Response): Promise<
     await threadStore.registerAgent(agentSession, agentName || agentSession, channelId, threadTs);
     res.json({ success: true, registered: true, channelId, threadTs });
   } catch (error) {
-    console.error('[SlackThreadController] Failed to register agent thread:', error);
+    logger.error('Failed to register agent thread', { error: error instanceof Error ? error.message : String(error) });
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Registration failed',

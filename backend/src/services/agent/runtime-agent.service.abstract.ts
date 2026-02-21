@@ -277,14 +277,27 @@ export abstract class RuntimeAgentService {
 			await new Promise((resolve) => setTimeout(resolve, checkInterval));
 		}
 
-		// Timeout reached
-		this.logger.warn('Timeout waiting for runtime ready signal', {
-			sessionName,
-			runtimeType: this.getRuntimeType(),
-			timeout,
-			checkInterval,
-			totalElapsed: Date.now() - startTime,
-		});
+		// Timeout reached - log last captured output for debugging
+		try {
+			const lastOutput = this.sessionHelper.capturePane(sessionName);
+			const lastLines = lastOutput.split('\n').slice(-10).join('\n');
+			this.logger.warn('Timeout waiting for runtime ready signal', {
+				sessionName,
+				runtimeType: this.getRuntimeType(),
+				timeout,
+				checkInterval,
+				totalElapsed: Date.now() - startTime,
+				lastTerminalLines: lastLines,
+			});
+		} catch {
+			this.logger.warn('Timeout waiting for runtime ready signal', {
+				sessionName,
+				runtimeType: this.getRuntimeType(),
+				timeout,
+				checkInterval,
+				totalElapsed: Date.now() - startTime,
+			});
+		}
 		return false;
 	}
 

@@ -12,13 +12,51 @@ import {
   API_ENDPOINTS,
   CREWLY_HOME_DIR
 } from '../constants.js';
+import { checkForUpdate, printUpdateNotification } from '../utils/version-check.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/**
+ * Finds the Crewly package root by walking up from a starting directory,
+ * looking for a package.json with `"name": "crewly"`.
+ *
+ * Works in both dev mode (cli/src/commands/) and compiled mode (dist/cli/cli/src/commands/).
+ *
+ * @param startDir - Directory to start searching from.
+ * @returns The absolute path to the package root directory.
+ * @throws Error if no matching package.json is found.
+ */
+function findPackageRoot(startDir: string): string {
+	let current = path.resolve(startDir);
+
+	while (true) {
+		const pkgPath = path.join(current, 'package.json');
+		if (fs.existsSync(pkgPath)) {
+			try {
+				const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+				if (pkg.name === 'crewly') {
+					return current;
+				}
+			} catch {
+				// Malformed package.json — keep searching
+			}
+		}
+
+		const parent = path.dirname(current);
+		if (parent === current) {
+			throw new Error(
+				'Could not find Crewly package root (no package.json with name "crewly" found in any parent directory)'
+			);
+		}
+		current = parent;
+	}
+}
+
 interface StartOptions {
 	port?: string;
 	browser?: boolean;
+	autoUpgrade?: boolean;
 }
 
 export async function startCommand(options: StartOptions) {
@@ -60,12 +98,47 @@ export async function startCommand(options: StartOptions) {
 			await open(`http://localhost:${webPort}`);
 		}
 
+		// Check if any agent skills are available (bundled or marketplace)
+		const projectRoot = findPackageRoot(__dirname);
+		const bundledSkillsDir = path.join(projectRoot, 'config', 'skills', 'agent');
+		const marketplaceSkillsDir = path.join(os.homedir(), '.crewly', 'marketplace', 'skills');
+		const hasBundledSkills = fs.existsSync(bundledSkillsDir) &&
+			fs.readdirSync(bundledSkillsDir).some(d => d !== '_common' && fs.statSync(path.join(bundledSkillsDir, d)).isDirectory());
+		const hasMarketplaceSkills = fs.existsSync(marketplaceSkillsDir) &&
+			fs.readdirSync(marketplaceSkillsDir).some(d => d !== '_common' && fs.statSync(path.join(marketplaceSkillsDir, d)).isDirectory());
+
+		if (!hasBundledSkills && !hasMarketplaceSkills) {
+			console.log(chalk.yellow('⚠  No agent skills installed. Run \'crewly install --all\' to get started.'));
+		}
+
 		console.log(chalk.green('✅ Crewly started successfully!'));
 		console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
 		console.log(chalk.cyan(`⚡ WebSocket: ws://localhost:${webPort}`));
 		console.log(chalk.gray(`🎯 Orchestrator: Setting up in background...`));
 		console.log('');
 		console.log(chalk.yellow('Press Ctrl+C to stop all services'));
+
+		// Non-blocking version check
+		checkForUpdate().then(result => {
+			if (result.updateAvailable && result.latestVersion) {
+				if (options.autoUpgrade) {
+					console.log(chalk.blue('Auto-upgrading Crewly...'));
+					const upgradeChild = spawn('npm', ['install', '-g', 'crewly@latest'], {
+						stdio: 'inherit',
+						shell: true,
+					});
+					upgradeChild.on('exit', (code: number | null) => {
+						if (code === 0) {
+							console.log(chalk.green('Crewly auto-upgraded successfully! Restart to use the new version.'));
+						} else {
+							console.error(chalk.red('Auto-upgrade failed. Run `crewly upgrade` manually.'));
+						}
+					});
+				} else {
+					printUpdateNotification(result.currentVersion, result.latestVersion);
+				}
+			}
+		}).catch(() => { /* silently ignore version check errors */ });
 
 		// 7. Monitor for shutdown signals
 		setupShutdownHandlers([backendProcess]);
@@ -160,8 +233,8 @@ async function checkIfRunning(port: number): Promise<boolean> {
 }
 
 async function startBackendServer(webPort: number): Promise<ChildProcess> {
-	// Get the project root directory (go up from dist/cli/commands to the root)
-	const projectRoot = path.resolve(__dirname, '../../../');
+	// Get the project root directory — works in both dev and compiled mode
+	const projectRoot = findPackageRoot(__dirname);
 
 	const env = {
 		...process.env,

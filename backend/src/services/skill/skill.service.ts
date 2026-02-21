@@ -28,6 +28,7 @@ import {
   validateUpdateSkillInput,
   matchesSkillFilter,
 } from '../../types/skill.types.js';
+import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**
  * Options for initializing the SkillService
@@ -55,6 +56,7 @@ export class SkillService {
   private readonly userSkillsDir: string;
   private skillsCache: Map<string, Skill> = new Map();
   private initialized = false;
+  private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('SkillService');
 
   /**
    * Create a new SkillService instance
@@ -381,7 +383,7 @@ export class SkillService {
       }
     } catch (error) {
       // Log warning but don't fail - built-in skills may not exist yet
-      console.warn('Failed to load built-in skills:', error);
+      this.logger.warn('Failed to load built-in skills', { error: error instanceof Error ? error.message : String(error) });
     }
 
     // Load user skills
@@ -394,7 +396,7 @@ export class SkillService {
       }
     } catch (error) {
       // Log warning but don't fail - user skills may not exist yet
-      console.warn('Failed to load user skills:', error);
+      this.logger.warn('Failed to load user skills', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -462,7 +464,7 @@ export class SkillService {
         }
       }
     } catch (error) {
-      console.warn(`Failed to load nested skills from ${categoryDir}:`, error);
+      this.logger.warn('Failed to load nested skills', { categoryDir, error: error instanceof Error ? error.message : String(error) });
     }
 
     return skills;
@@ -494,7 +496,7 @@ export class SkillService {
 
       return skill;
     } catch (error) {
-      console.warn(`Failed to load skill from ${skillDir}:`, error);
+      this.logger.warn('Failed to load skill', { skillDir, error: error instanceof Error ? error.message : String(error) });
       return null;
     }
   }
@@ -510,7 +512,7 @@ export class SkillService {
       return await fs.readFile(skill.promptFile, 'utf-8');
     } catch (error) {
       // Return empty string if prompt file doesn't exist
-      console.warn(`Failed to load prompt for skill ${skill.id}:`, error);
+      this.logger.warn('Failed to load prompt for skill', { skillId: skill.id, error: error instanceof Error ? error.message : String(error) });
       return '';
     }
   }

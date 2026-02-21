@@ -7,7 +7,7 @@ import { readFile, writeFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { CREWLY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('node-pty', () => ({ spawn: jest.fn() }));
@@ -15,6 +15,13 @@ jest.mock('../core/storage.service.js');
 jest.mock('../session/index.js');
 jest.mock('../agent/agent-heartbeat.service.js');
 jest.mock('../core/logger.service.js');
+jest.mock('../orchestrator/orchestrator-restart.service.js', () => ({
+  OrchestratorRestartService: {
+    getInstance: () => ({
+      attemptRestart: jest.fn().mockResolvedValue(true),
+    }),
+  },
+}));
 jest.mock('fs/promises');
 jest.mock('fs');
 jest.mock('path');
@@ -283,10 +290,11 @@ describe('ActivityMonitorService', () => {
 
       await (service as any).performActivityCheck();
 
-      expect(mockAgentHeartbeatService.detectStaleAgents).toHaveBeenCalledWith(30);
+      const expectedThreshold = CONTINUATION_CONSTANTS.DETECTION.STALE_THRESHOLD_MINUTES;
+      expect(mockAgentHeartbeatService.detectStaleAgents).toHaveBeenCalledWith(expectedThreshold);
       expect(mockLogger.info).toHaveBeenCalledWith('Detected stale agents for potential inactivity', {
         staleAgents,
-        thresholdMinutes: 30
+        thresholdMinutes: expectedThreshold
       });
       // Both dead sessions should be marked inactive
       expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith('test-session-1', 'inactive');

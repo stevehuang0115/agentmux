@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "jsx": "react-jsx",
+    "outDir": "dist/main"
+  },
+  "include": ["src/main/**/*", "src/preload/**/*"]
+}
