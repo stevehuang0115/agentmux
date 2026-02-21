@@ -16,16 +16,7 @@ import {
   ImprovementMarker,
   FileBackupRecord,
 } from './improvement-marker.service.js';
-// Lazy-imported to break circular dependency:
-// slack-orchestrator-bridge → orchestrator/index → self-improvement → slack-orchestrator-bridge
-let _getSlackOrchestratorBridge: typeof import('../slack/slack-orchestrator-bridge.js').getSlackOrchestratorBridge | null = null;
-async function getSlackBridgeLazy() {
-  if (!_getSlackOrchestratorBridge) {
-    const mod = await import('../slack/slack-orchestrator-bridge.js');
-    _getSlackOrchestratorBridge = mod.getSlackOrchestratorBridge;
-  }
-  return _getSlackOrchestratorBridge();
-}
+import { getSlackBridgeLazy } from './slack-bridge-lazy.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 /**

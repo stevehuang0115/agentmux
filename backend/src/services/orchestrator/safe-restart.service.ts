@@ -11,16 +11,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { getStatePersistenceService } from './state-persistence.service.js';
-// Lazy-imported to break circular dependency:
-// slack-orchestrator-bridge → orchestrator/index → safe-restart → slack-orchestrator-bridge
-let _getSlackOrchestratorBridge: typeof import('../slack/slack-orchestrator-bridge.js').getSlackOrchestratorBridge | null = null;
-async function getSlackBridgeLazy() {
-  if (!_getSlackOrchestratorBridge) {
-    const mod = await import('../slack/slack-orchestrator-bridge.js');
-    _getSlackOrchestratorBridge = mod.getSlackOrchestratorBridge;
-  }
-  return _getSlackOrchestratorBridge();
-}
+import { getSlackBridgeLazy } from './slack-bridge-lazy.js';
 import { ResumeInstructions } from '../../types/orchestrator-state.types.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 

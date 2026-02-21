@@ -1264,6 +1264,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		memberId?: string;
 		runtimeType?: RuntimeType;
 		teamId?: string;
+		/**
+		 * Skip intelligent recovery and force immediate session kill + recreation.
+		 * Use during server startup to avoid expensive recovery on stale sessions.
+		 * @default false
+		 */
 		forceRecreate?: boolean;
 	}): Promise<{
 		success: boolean;
