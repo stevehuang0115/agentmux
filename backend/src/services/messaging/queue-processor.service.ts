@@ -21,8 +21,10 @@ import {
   CHAT_CONSTANTS,
   EVENT_DELIVERY_CONSTANTS,
   RUNTIME_TYPES,
+  ORCHESTRATOR_HEARTBEAT_CONSTANTS,
   type RuntimeType,
 } from '../../constants.js';
+import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { StorageService } from '../core/storage.service.js';
 import type { ChatMessage } from '../../types/chat.types.js';
 
@@ -173,6 +175,15 @@ export class QueueProcessorService extends EventEmitter {
 
     this.processing = true;
 
+    // Keep the orchestrator's activity tracker alive while processing so the
+    // heartbeat monitor doesn't falsely declare it idle and auto-restart it.
+    // Interval is half the heartbeat request threshold to guarantee at least
+    // one activity ping before the monitor considers the orchestrator idle.
+    const KEEPALIVE_INTERVAL_MS = ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS / 2;
+    const keepaliveInterval = setInterval(() => {
+      PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+    }, KEEPALIVE_INTERVAL_MS);
+
     try {
       this.logger.info('Processing message', {
         messageId: message.id,
@@ -190,13 +201,12 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
-      // Look up the orchestrator's runtime type early so it can be used for
-      // runtime-aware prompt detection in waitForAgentReady. Without this,
+      // Reuse the orchestrator status fetched above to determine runtime type
+      // for prompt detection in waitForAgentReady. Without runtime-aware detection,
       // the generic PROMPT_STREAM regex can false-positive on markdown `> `
       // lines in Claude Code output, causing premature delivery attempts.
-      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
       const runtimeType: RuntimeType =
-        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+        (orchestratorInfo?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
 
       // Wait for orchestrator to be at prompt before attempting delivery.
       // After processing a previous message the orchestrator may still be busy
@@ -347,6 +357,7 @@ export class QueueProcessorService extends EventEmitter {
       this.queueService.markFailed(message.id, errorMsg);
       this.responseRouter.routeError(message, errorMsg);
     } finally {
+      clearInterval(keepaliveInterval);
       this.processing = false;
       if (this.nextAlreadyScheduled) {
         this.nextAlreadyScheduled = false;

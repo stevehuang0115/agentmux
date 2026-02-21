@@ -227,7 +227,7 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendRegistrationPromptAsync', () => {
-		it('should send prompt directly for Claude Code (no file-read instruction)', async () => {
+		it('should send kickoff instruction for Claude Code (not raw prompt or file-read)', async () => {
 			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register {{SESSION_ID}} as {{ROLE}}');
 
@@ -243,11 +243,14 @@ describe('AgentRegistrationService', () => {
 			// Give time for async operation to complete (file write + delays in sendPromptRobustly)
 			await new Promise(resolve => setTimeout(resolve, 1000));
 
-			// Should have called sendMessage with direct prompt content (not file-read instruction)
+			// Should have called sendMessage with kickoff instruction (not raw prompt or file-read)
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
-			const sentMessage = mockSessionHelper.sendMessage.mock.calls[0][1];
-			expect(sentMessage).toContain('Register');
-			expect(sentMessage).not.toContain('Read the file at');
+			const allCalls = mockSessionHelper.sendMessage.mock.calls.map((c: any[]) => c[1]);
+			const kickoffCall = allCalls.find((msg: string) => msg && msg.includes('Begin your work now'));
+			expect(kickoffCall).toBeDefined();
+			expect(kickoffCall).toContain('initial assessment');
+			// Should NOT contain file path (prompt loaded via --append-system-prompt-file)
+			expect(kickoffCall).not.toContain('Read the file at');
 		});
 
 		it('should send file-read instruction for Gemini CLI', async () => {
@@ -268,8 +271,10 @@ describe('AgentRegistrationService', () => {
 
 			// Should have called sendMessage with file-read instruction for Gemini
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
-			const sentMessage = mockSessionHelper.sendMessage.mock.calls[0][1];
-			expect(sentMessage).toContain('Read the file at');
+			const allCalls = mockSessionHelper.sendMessage.mock.calls.map((c: any[]) => c[1]);
+			const fileReadCall = allCalls.find((msg: string) => msg && msg.includes('Read the file at'));
+			expect(fileReadCall).toBeDefined();
+			expect(fileReadCall).toContain('Read the file at');
 		});
 	});
 
@@ -418,6 +423,119 @@ describe('AgentRegistrationService', () => {
 			// Should attempt intelligent recovery
 			expect(mockRuntimeService.detectRuntimeWithCommand).toHaveBeenCalled();
 			expect(result.success).toBe(true);
+		});
+	});
+
+	describe('session creation lock', () => {
+		it('should prevent concurrent createAgentSession calls for the same session', async () => {
+			// First call takes time to complete (runtime init + ready wait)
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)  // First call: session doesn't exist
+				.mockReturnValueOnce(true)   // First call: after creation check
+				.mockReturnValueOnce(false)  // Second call would check - but should wait
+				.mockReturnValueOnce(true);  // Second call: after creation check
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			// Launch two concurrent createAgentSession calls for the same session
+			const promise1 = service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+			});
+			const promise2 = service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+				projectPath: '/test/project',
+			});
+
+			const [result1, result2] = await Promise.all([promise1, promise2]);
+
+			// Both should succeed (second one waits for first and returns same result)
+			expect(result1.success).toBe(true);
+			expect(result2.success).toBe(true);
+
+			// createSession should only be called once (second call reused first's result)
+			expect(mockSessionHelper.createSession).toHaveBeenCalledTimes(1);
+		});
+
+		it('should allow a subsequent call to succeed after a previous concurrent call fails', async () => {
+			// First call: createSession throws
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+			mockSessionHelper.createSession.mockRejectedValueOnce(new Error('PTY creation failed'));
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			const result1 = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(result1.success).toBe(false);
+
+			// Lock should be cleaned up after failure
+			const locks = (service as any).sessionCreationLocks;
+			expect(locks.has('test-session')).toBe(false);
+
+			// Second call succeeds (lock cleared, no contention)
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)
+				.mockReturnValueOnce(true);
+			mockSessionHelper.createSession.mockResolvedValueOnce({ pid: 5678, cwd: '/test', name: 'test-session' });
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+
+			const result2 = await service.createAgentSession({
+				sessionName: 'test-session',
+				role: 'developer',
+			});
+
+			expect(result2.success).toBe(true);
+		});
+
+		it('should clean up lock in finally block even if implementation throws', async () => {
+			mockSessionHelper.sessionExists.mockReturnValue(false);
+			mockSessionHelper.createSession.mockRejectedValue(new Error('Crash'));
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			const result = await service.createAgentSession({
+				sessionName: 'crash-session',
+				role: 'developer',
+			});
+
+			expect(result.success).toBe(false);
+
+			// Lock should be cleaned up
+			const locks = (service as any).sessionCreationLocks;
+			expect(locks.has('crash-session')).toBe(false);
+		});
+
+		it('should not lock different session names against each other', async () => {
+			// Verify the lock map is keyed by session name
+			// Access the private sessionCreationLocks to verify isolation
+			const locks = (service as any).sessionCreationLocks;
+			expect(locks).toBeInstanceOf(Map);
+			expect(locks.size).toBe(0);
+
+			// After a session creation starts, only that session name is locked
+			mockSessionHelper.sessionExists
+				.mockReturnValueOnce(false)
+				.mockReturnValueOnce(true);
+			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
+			mockReadFile.mockResolvedValue('Register {{SESSION_ID}}');
+
+			const promise = service.createAgentSession({
+				sessionName: 'session-a',
+				role: 'developer',
+			});
+
+			// While session-a is in progress, the lock should exist for session-a only
+			// (We check immediately; the async operation is in flight)
+			expect(locks.has('session-a')).toBe(true);
+			expect(locks.has('session-b')).toBe(false);
+
+			await promise;
+
+			// After completion, lock is cleared
+			expect(locks.has('session-a')).toBe(false);
 		});
 	});
 

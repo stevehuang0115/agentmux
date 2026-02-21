@@ -4,6 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  html, body {
+    font-family: 'Nunito', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+}
+
 /* Hide scrollbars for horizontal scrolling */
 .scrollbar-hide {
   -ms-overflow-style: none;  /* Internet Explorer 10+ */

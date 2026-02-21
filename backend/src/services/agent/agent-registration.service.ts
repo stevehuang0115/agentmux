@@ -57,6 +57,9 @@ export class AgentRegistrationService {
 	// Prompt file caching to eliminate file I/O contention during concurrent session creation
 	private promptCache = new Map<string, string>();
 
+	// Session creation locks to prevent concurrent createAgentSession calls for the same session
+	private sessionCreationLocks = new Map<string, Promise<{ success: boolean; sessionName?: string; message?: string; error?: string }>>();
+
 	// AbortControllers for pending registration prompts (keyed by session name)
 	private registrationAbortControllers = new Map<string, AbortController>();
 
@@ -475,15 +478,29 @@ export class AgentRegistrationService {
 			}
 		}
 
+		// Write prompt file before launching runtime so --append-system-prompt-file works
+		let promptFilePath: string | undefined;
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+				promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+			} catch (promptError) {
+				this.logger.warn('Failed to pre-write prompt file (non-fatal, will fall back to direct delivery)', {
+					sessionName,
+					error: promptError instanceof Error ? promptError.message : String(promptError),
+				});
+			}
+		}
+
 		// Reinitialize runtime using the appropriate initialization script (always fresh start)
 		// runtimeService2: Fresh instance for runtime reinitialization after cleanup
 		// New instance ensures clean state without cached detection results
 		const runtimeService2 = this.createRuntimeService(runtimeType);
-		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags);
+		await runtimeService2.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags, promptFilePath);
 
 		// Wait for runtime to be ready (simplified detection)
 		// Use shorter check interval in test environment, and reasonable interval in production
-		const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000; // Check every 1-2 seconds
+		const checkInterval = this.getCheckInterval();
 		const isReady = await runtimeService2.waitForRuntimeReady(
 			sessionName,
 			60000,
@@ -701,6 +718,20 @@ export class AgentRegistrationService {
 			}
 		}
 
+		// Write prompt file before launching runtime so --append-system-prompt-file works
+		let promptFilePath: string | undefined;
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			try {
+				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+				promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+			} catch (promptError) {
+				this.logger.warn('Failed to pre-write prompt file in full recreation (non-fatal)', {
+					sessionName,
+					error: promptError instanceof Error ? promptError.message : String(promptError),
+				});
+			}
+		}
+
 		// Recreate session based on role
 		if (role === ORCHESTRATOR_ROLE) {
 			await this.createOrchestratorSession({
@@ -710,7 +741,7 @@ export class AgentRegistrationService {
 
 			// Initialize runtime for orchestrator using script (always fresh start)
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), effectiveFlags);
+			await runtimeService.executeRuntimeInitScript(sessionName, process.cwd(), effectiveFlags, promptFilePath);
 
 			// Wait for runtime to be ready
 			const checkInterval = this.getCheckInterval();
@@ -764,7 +795,7 @@ export class AgentRegistrationService {
 			await (await this.getSessionHelper()).createSession(sessionName, projectPath || process.cwd());
 
 			const runtimeService = this.createRuntimeService(runtimeType);
-			await runtimeService.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags);
+			await runtimeService.executeRuntimeInitScript(sessionName, projectPath, effectiveFlags, promptFilePath);
 
 			// Wait for runtime to be ready (simplified detection)
 			const checkInterval = this.getCheckInterval();
@@ -968,6 +999,45 @@ bash ${skillsPath}/register-self/execute.sh '{"role":"${role}","sessionName":"${
 All it does is update a local status flag so the web UI shows you as online - nothing more.
 
 After checking in, just say "Ready for tasks" and wait for me to send you work.`;
+		}
+	}
+
+	/**
+	 * Write the registration prompt to a file on disk.
+	 * Returns the file path on success, or undefined on failure.
+	 *
+	 * @param sessionName - Session name (used for filename)
+	 * @param prompt - The full prompt content
+	 * @param runtimeType - Runtime type (determines directory)
+	 * @returns The absolute path to the written file, or undefined on error
+	 */
+	private async writePromptFile(
+		sessionName: string,
+		prompt: string,
+		runtimeType: RuntimeType
+	): Promise<string | undefined> {
+		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
+		const promptsDir = isClaudeCode
+			? path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, 'prompts')
+			: path.join(this.projectRoot, '.crewly', 'prompts');
+		const promptFilePath = path.join(promptsDir, `${sessionName}-init.md`);
+
+		try {
+			await mkdir(promptsDir, { recursive: true });
+			await writeFile(promptFilePath, prompt, 'utf8');
+			this.logger.debug('Wrote init prompt to file', {
+				sessionName,
+				promptFilePath,
+				promptLength: prompt.length,
+			});
+			return promptFilePath;
+		} catch (error) {
+			this.logger.warn('Failed to write init prompt file', {
+				sessionName,
+				promptFilePath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
 		}
 	}
 
@@ -1269,6 +1339,53 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		 * Use during server startup to avoid expensive recovery on stale sessions.
 		 * @default false
 		 */
+		forceRecreate?: boolean;
+	}): Promise<{
+		success: boolean;
+		sessionName?: string;
+		message?: string;
+		error?: string;
+	}> {
+		// If another creation is in progress for this session, wait for it
+		const existingLock = this.sessionCreationLocks.get(config.sessionName);
+		if (existingLock) {
+			this.logger.info('Waiting for existing session creation to complete', { sessionName: config.sessionName });
+			try {
+				return await existingLock;
+			} catch {
+				// Previous creation failed, proceed with our own attempt
+				this.logger.info('Previous session creation failed, proceeding with new attempt', { sessionName: config.sessionName });
+			}
+		}
+
+		// Create and store the lock promise
+		const creationPromise = this._createAgentSessionImpl(config);
+		this.sessionCreationLocks.set(config.sessionName, creationPromise);
+		try {
+			const result = await creationPromise;
+			return result;
+		} finally {
+			// Only delete lock if it's still ours — a concurrent caller may have
+			// replaced it with a new promise after our catch path above.
+			if (this.sessionCreationLocks.get(config.sessionName) === creationPromise) {
+				this.sessionCreationLocks.delete(config.sessionName);
+			}
+		}
+	}
+
+	/**
+	 * Internal implementation of createAgentSession, guarded by sessionCreationLocks.
+	 * @param config Session configuration
+	 * @returns Promise with success/error information
+	 */
+	private async _createAgentSessionImpl(config: {
+		sessionName: string;
+		role: string;
+		projectPath?: string;
+		windowName?: string;
+		memberId?: string;
+		runtimeType?: RuntimeType;
+		teamId?: string;
 		forceRecreate?: boolean;
 	}): Promise<{
 		success: boolean;
@@ -3322,49 +3439,32 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
 		abortSignal?: AbortSignal
 	): Promise<boolean> {
-			const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-			const maxAttempts = isClaudeCode ? 2 : 3;
+		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
 		const sessionHelper = await this.getSessionHelper();
 
-		// Step 1: Write prompt to a file.
-		// Claude Code: write to ~/.crewly/prompts/ (always accessible).
-		// Gemini CLI / other TUI runtimes: write INSIDE the project directory
-		// so the file is within the workspace allowlist. Gemini CLI restricts
-		// file reads to workspace directories, and the /directory add command
-		// to add ~/.crewly may fail (e.g., auto-update notification
-		// interferes during postInitialize).
-		const promptsDir = isClaudeCode
-			? path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, 'prompts')
-			: path.join(this.projectRoot, '.crewly', 'prompts');
-		const promptFilePath = path.join(promptsDir, `${sessionName}-init.md`);
-
-		try {
-			await mkdir(promptsDir, { recursive: true });
-			await writeFile(promptFilePath, prompt, 'utf8');
-			this.logger.debug('Wrote init prompt to file', {
-				sessionName,
-				promptFilePath,
-				promptLength: prompt.length,
-			});
-		} catch (error) {
-			this.logger.warn('Failed to write init prompt file (non-fatal)', {
-				sessionName,
-				promptFilePath,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			// File write failure is non-fatal — file is kept for debugging only.
-			// Claude Code receives the prompt directly; Gemini CLI needs the file.
-			if (!isClaudeCode) {
-				return false;
-			}
+		// Step 1: Write prompt to a file (idempotent — may already exist from pre-launch write).
+		const promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+		if (!promptFilePath) {
+			// File write failure is fatal — all runtimes use the file-read approach.
+			return false;
 		}
 
 		// Step 2: Build the message to send.
-		// Claude Code: send prompt directly as user input to bypass file-read security check.
-		// Other runtimes: keep file-read approach (Gemini CLI has workspace restrictions).
+		// Claude Code: prompt was already loaded via --append-system-prompt-file at launch,
+		// so the agent already has all instructions as a system prompt. Just send a short
+		// kickoff trigger — no need to ask it to read the file again.
+		// Gemini CLI / other runtimes: need the file-read instruction since the prompt
+		// was NOT loaded via system prompt.
 		const messageToSend = isClaudeCode
-			? prompt
+			? 'Begin your work now. Follow the instructions you were given and start by doing an initial assessment of the project.'
 			: `Read the file at ${promptFilePath} and follow all instructions in it.`;
+
+		// Claude Code: single attempt only. The full prompt is loaded via
+		// --append-system-prompt-file, so the kickoff is just a short trigger.
+		// Retrying causes duplicates because Claude returns to its prompt between
+		// tool calls, making retry checks think the first message wasn't received.
+		// Gemini CLI / other runtimes: up to 3 attempts (prompt loaded via file-read).
+		const maxAttempts = isClaudeCode ? 1 : 3;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			// Check abort before each attempt
@@ -3379,12 +3479,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					attempt,
 					runtimeType,
 					promptFilePath,
-					deliveryMethod: isClaudeCode ? 'direct' : 'file-read',
+					deliveryMethod: isClaudeCode ? 'system-prompt-kickoff' : 'file-read',
 				});
-
-				// Capture state before sending
-				const beforeOutput = sessionHelper.capturePane(sessionName, 10);
-				const beforeLength = beforeOutput.length;
 
 				// Check abort before sending to terminal
 				if (abortSignal?.aborted) {
@@ -3392,16 +3488,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					return false;
 				}
 
-				// Clear any pending input before sending the instruction.
+				// Clear any pending input before sending the instruction (first attempt only).
 				// Claude Code: Escape closes slash menus + Ctrl+U clears line.
 				// Gemini CLI (Ink TUI): Do NOT send any cleanup keystrokes.
-				// - Escape defocuses the Ink TUI input permanently (no recovery).
-				// - Ctrl+C at empty prompt triggers /quit and exits the CLI.
-				// - Ctrl+U is ignored by the TUI's custom key handling.
-				// - Shift+Tab toggles safety modes, not focus.
-				// The prompt should be clean at this point (just initialized or
-				// addProjectToAllowlist just ran without defocusing).
-				if (isClaudeCode) {
+				if (isClaudeCode && attempt === 1) {
 					await sessionHelper.sendEscape(sessionName);
 					await delay(200);
 					await sessionHelper.sendKey(sessionName, 'C-u');
@@ -3414,63 +3504,69 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					return false;
 				}
 
-				// Send the prompt (direct content for Claude Code, file-read instruction for others)
+				// Send the kickoff / file-read instruction
 				await sessionHelper.sendMessage(sessionName, messageToSend);
 
+				// Claude Code: rapid-check verification.
+				// Check every 1s for up to 8s whether Claude started processing.
+				// If Claude leaves the prompt at any point, the message was received.
+				// This avoids the old length-comparison approach which was unreliable
+				// (Claude's TUI redraws change output length unpredictably).
 				if (isClaudeCode) {
-					// Claude Code may need an extra Enter after bracketed paste
-					await delay(1000);
-					if (abortSignal?.aborted) return false;
-					await sessionHelper.sendEnter(sessionName);
+					for (let i = 0; i < 8; i++) {
+						await delay(1000);
+						if (abortSignal?.aborted) return false;
+
+						const currentOutput = sessionHelper.capturePane(sessionName);
+
+						// Processing indicators (spinners) = definitive success
+						if (TERMINAL_PATTERNS.PROCESSING.test(currentOutput)) {
+							this.logger.debug('Kickoff delivered — processing indicators detected', {
+								sessionName, checkIndex: i,
+							});
+							return true;
+						}
+
+						// Claude left the prompt = started working on the message
+						if (!this.isClaudeAtPrompt(currentOutput, RUNTIME_TYPES.CLAUDE_CODE)) {
+							this.logger.debug('Kickoff delivered — Claude left prompt', {
+								sessionName, checkIndex: i,
+							});
+							return true;
+						}
+					}
+
+					// Claude still at prompt after 8s — message likely not received.
+					// For Claude Code with --append-system-prompt-file, don't retry
+					// (would cause duplicate). Log warning and return false.
+					this.logger.warn('Kickoff delivery unconfirmed — Claude still at prompt after 8s (not retrying)', {
+						sessionName, runtimeType,
+					});
+					return false;
 				}
 
-				// Wait for agent to start processing.
-				// Claude Code needs more time for large prompts (37KB+) to be
-				// ingested and show visible output changes.
-				const verifyDelay = isClaudeCode ? 5000 : 3000;
+				// Gemini CLI / other runtimes: original verification with length comparison
+				// Capture state before sending was skipped for Claude Code path above,
+				// so capture it here for non-Claude runtimes on retry.
+				const verifyDelay = 3000;
 				await delay(verifyDelay);
 
 				if (abortSignal?.aborted) return false;
 
-				// Verify delivery
 				const afterOutput = sessionHelper.capturePane(sessionName, 20);
-				const afterLength = afterOutput.length;
-				const lengthIncrease = afterLength - beforeLength;
 				const hasProcessingIndicators = /thinking|processing|analyzing|registering|reading/i.test(
 					afterOutput
 				);
 
-				// For Claude Code, also check if the prompt disappeared (meaning
-				// Claude accepted the input and is processing). Claude's UI often
-				// collapses/redraws, making the output shorter — a negative
-				// lengthIncrease does NOT mean delivery failed.
-				const promptGone = isClaudeCode
-					&& !this.isClaudeAtPrompt(sessionHelper.capturePane(sessionName), RUNTIME_TYPES.CLAUDE_CODE);
-
-				// Claude Code UI redraws can cause negative lengthIncrease even on
-				// successful delivery. If the output changed at all (positive or
-				// negative) and Claude is no longer at the prompt, consider it delivered.
-				const outputChanged = lengthIncrease !== 0;
-				const likelyDelivered = isClaudeCode && outputChanged && promptGone;
-
-				if (lengthIncrease > 20 || hasProcessingIndicators || promptGone || likelyDelivered) {
+				if (hasProcessingIndicators) {
 					this.logger.debug('Prompt instruction delivered successfully', {
-						sessionName,
-						attempt,
-						lengthIncrease,
-						hasProcessingIndicators,
-						promptGone,
-						likelyDelivered,
-						runtimeType,
+						sessionName, attempt, runtimeType,
 					});
 					return true;
 				}
 
 				this.logger.debug('Prompt instruction delivery unconfirmed - retrying', {
-					sessionName,
-					attempt,
-					lengthIncrease,
-					runtimeType,
+					sessionName, attempt, runtimeType,
 				});
 
 				if (attempt < maxAttempts) {

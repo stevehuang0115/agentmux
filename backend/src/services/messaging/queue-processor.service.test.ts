@@ -9,6 +9,16 @@ import { QueueProcessorService } from './queue-processor.service.js';
 import { MessageQueueService } from './message-queue.service.js';
 import { ResponseRouterService } from './response-router.service.js';
 
+// Mock PtyActivityTrackerService
+const mockRecordActivity = jest.fn();
+jest.mock('../agent/pty-activity-tracker.service.js', () => ({
+  PtyActivityTrackerService: {
+    getInstance: () => ({
+      recordActivity: mockRecordActivity,
+    }),
+  },
+}));
+
 // Mock constants
 jest.mock('../../constants.js', () => ({
   MESSAGE_QUEUE_CONSTANTS: {
@@ -42,6 +52,13 @@ jest.mock('../../constants.js', () => ({
     CLAUDE_CODE: 'claude-code',
     GEMINI_CLI: 'gemini-cli',
     CODEX_CLI: 'codex-cli',
+  },
+  ORCHESTRATOR_HEARTBEAT_CONSTANTS: {
+    CHECK_INTERVAL_MS: 30_000,
+    HEARTBEAT_REQUEST_THRESHOLD_MS: 300_000,
+    RESTART_THRESHOLD_MS: 60_000,
+    HEARTBEAT_REQUEST_MESSAGE: 'heartbeat',
+    STARTUP_GRACE_PERIOD_MS: 30_000,
   },
 }));
 
@@ -704,6 +721,71 @@ describe('QueueProcessorService', () => {
         'conv-1',
         expect.stringContaining('Message delivery failed')
       );
+    });
+
+    it('should keep heartbeat alive while processing and clear on completion', async () => {
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Long task',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Keepalive interval is HEARTBEAT_REQUEST_THRESHOLD_MS / 2 = 150000ms
+      // Advance past one keepalive tick
+      mockRecordActivity.mockClear();
+      jest.advanceTimersByTime(150_000);
+
+      expect(mockRecordActivity).toHaveBeenCalledWith('crewly-orc');
+      const callCountDuringProcessing = mockRecordActivity.mock.calls.length;
+      expect(callCountDuringProcessing).toBeGreaterThanOrEqual(1);
+
+      // Simulate response to complete processing
+      mockChatService.emit('message', {
+        conversationId: 'conv-1',
+        from: { type: 'orchestrator' },
+        content: 'Done',
+      });
+
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Clear mock and advance another keepalive period — should NOT fire again
+      mockRecordActivity.mockClear();
+      jest.advanceTimersByTime(150_000);
+      expect(mockRecordActivity).not.toHaveBeenCalled();
+    });
+
+    it('should clear keepalive interval even on processing error', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValue(
+        new Error('Crash')
+      );
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Test',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Processing should be done (error path). Verify keepalive is cleared.
+      mockRecordActivity.mockClear();
+      jest.advanceTimersByTime(150_000);
+      expect(mockRecordActivity).not.toHaveBeenCalled();
     });
 
     it('should increment retryCount on each requeue', async () => {
