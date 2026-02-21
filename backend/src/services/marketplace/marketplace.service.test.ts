@@ -140,6 +140,14 @@ describe('loadManifest', () => {
     expect(manifest).toEqual({ schemaVersion: 1, items: [] });
   });
 
+  it('should return empty manifest when JSON is invalid', async () => {
+    readFile.mockResolvedValue('{ invalid json }');
+
+    const manifest = await loadManifest();
+
+    expect(manifest).toEqual({ schemaVersion: 1, items: [] });
+  });
+
   it('should parse manifest from disk', async () => {
     readFile.mockResolvedValue(JSON.stringify(sampleManifest));
 

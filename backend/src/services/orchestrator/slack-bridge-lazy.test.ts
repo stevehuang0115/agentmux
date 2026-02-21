@@ -27,8 +27,8 @@ describe('getSlackBridgeLazy', () => {
 		await getSlackBridgeLazy();
 		await getSlackBridgeLazy();
 
-		// The module import is cached, so getSlackOrchestratorBridge is called each time
-		// but the dynamic import() itself only happens once (verified by module-level caching)
-		expect(mockGetBridge).toHaveBeenCalled();
+		// getSlackOrchestratorBridge is called each time (returns the bridge instance),
+		// but the dynamic import() itself only happens once (module-level caching)
+		expect(mockGetBridge).toHaveBeenCalledTimes(2);
 	});
 });

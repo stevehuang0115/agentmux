@@ -1379,10 +1379,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			} else if (forceRecreate) {
 				// Skip recovery, kill immediately (used during server startup for stale sessions)
 				this.logger.info('Session exists but forceRecreate is set, killing for clean restart', { sessionName });
-				const runtimeService = this.createRuntimeService(runtimeType);
-				runtimeService.clearDetectionCache(sessionName);
-				await (await this.getSessionHelper()).killSession(sessionName);
-				await delay(1000);
+				try {
+					const runtimeService = this.createRuntimeService(runtimeType);
+					runtimeService.clearDetectionCache(sessionName);
+					await (await this.getSessionHelper()).killSession(sessionName);
+					await delay(1000);
+				} catch (killError) {
+					this.logger.warn('Failed to kill session during forceRecreate, continuing with recreation', {
+						sessionName,
+						error: killError instanceof Error ? killError.message : String(killError),
+					});
+				}
 			} else {
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
