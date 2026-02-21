@@ -307,7 +307,6 @@ export async function setupOrchestrator(
 					
 					// Import RuntimeServiceFactory dynamically to avoid circular dependency
 					const { RuntimeServiceFactory } = await import('../../services/agent/runtime-service.factory.js');
-					const { RUNTIME_TYPES } = await import('../../constants.js');
 
 					// Get Gemini runtime service instance (uses PTY session backend)
 					const geminiService = RuntimeServiceFactory.create(

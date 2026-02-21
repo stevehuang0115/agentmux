@@ -201,13 +201,12 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
-      // Look up the orchestrator's runtime type early so it can be used for
-      // runtime-aware prompt detection in waitForAgentReady. Without this,
+      // Reuse the orchestrator status fetched above to determine runtime type
+      // for prompt detection in waitForAgentReady. Without runtime-aware detection,
       // the generic PROMPT_STREAM regex can false-positive on markdown `> `
       // lines in Claude Code output, causing premature delivery attempts.
-      const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
       const runtimeType: RuntimeType =
-        (orchestratorStatus?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+        (orchestratorInfo?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
 
       // Wait for orchestrator to be at prompt before attempting delivery.
       // After processing a previous message the orchestrator may still be busy

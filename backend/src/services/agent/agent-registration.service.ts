@@ -1365,7 +1365,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			const result = await creationPromise;
 			return result;
 		} finally {
-			this.sessionCreationLocks.delete(config.sessionName);
+			// Only delete lock if it's still ours — a concurrent caller may have
+			// replaced it with a new promise after our catch path above.
+			if (this.sessionCreationLocks.get(config.sessionName) === creationPromise) {
+				this.sessionCreationLocks.delete(config.sessionName);
+			}
 		}
 	}
 
