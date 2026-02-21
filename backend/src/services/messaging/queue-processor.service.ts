@@ -179,9 +179,10 @@ export class QueueProcessorService extends EventEmitter {
     // heartbeat monitor doesn't falsely declare it idle and auto-restart it.
     // Interval is half the heartbeat request threshold to guarantee at least
     // one activity ping before the monitor considers the orchestrator idle.
+    const KEEPALIVE_INTERVAL_MS = ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS / 2;
     const keepaliveInterval = setInterval(() => {
       PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
-    }, ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS / 2);
+    }, KEEPALIVE_INTERVAL_MS);
 
     try {
       this.logger.info('Processing message', {

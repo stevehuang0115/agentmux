@@ -6,6 +6,7 @@ import { SessionCommandHelper } from '../session/index.js';
 import { RuntimeType } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
+import { delay } from '../../utils/async.utils.js';
 import type { AIRuntime } from '../../types/settings.types.js';
 
 /**
@@ -196,7 +197,7 @@ export abstract class RuntimeAgentService {
 
 				let attempts = 0;
 				while (this.detectionInProgress.get(cacheKey) && attempts < 30) {
-					await new Promise((resolve) => setTimeout(resolve, 500));
+					await delay(500);
 					attempts++;
 				}
 
@@ -291,7 +292,7 @@ export abstract class RuntimeAgentService {
 			}
 
 			// Wait for next check interval
-			await new Promise((resolve) => setTimeout(resolve, checkInterval));
+			await delay(checkInterval);
 		}
 
 		// Timeout reached - log last captured output for debugging
@@ -528,7 +529,7 @@ export abstract class RuntimeAgentService {
 
 		// Send cd command (includes Enter automatically)
 		await this.sessionHelper.sendMessage(sessionName, `cd "${cdPath}"`);
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		await delay(500);
 
 		// Send each command
 		for (const command of commands) {
@@ -540,7 +541,7 @@ export abstract class RuntimeAgentService {
 
 			// Send command (includes Enter automatically)
 			await this.sessionHelper.sendMessage(sessionName, command);
-			await new Promise((resolve) => setTimeout(resolve, 500));
+			await delay(500);
 		}
 	}
 }

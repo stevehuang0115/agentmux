@@ -6,6 +6,8 @@ import {
 	ORCHESTRATOR_WINDOW_NAME,
 	AGENT_INITIALIZATION_TIMEOUT,
 	ORCHESTRATOR_ROLE,
+	RUNTIME_TYPES,
+	type RuntimeType,
 } from '../../constants.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import {
@@ -220,7 +222,7 @@ export async function setupOrchestrator(
 	logger.info('setupOrchestrator called');
 	try {
 		// Get orchestrator's runtime type from storage
-		let runtimeType = 'claude-code'; // Default fallback
+		let runtimeType: string = RUNTIME_TYPES.CLAUDE_CODE; // Default fallback
 		try {
 			const orchestratorStatus = await this.storageService.getOrchestratorStatus();
 			if (orchestratorStatus?.runtimeType) {
@@ -247,7 +249,7 @@ export async function setupOrchestrator(
 			role: ORCHESTRATOR_ROLE,
 			projectPath: process.cwd(),
 			windowName: ORCHESTRATOR_WINDOW_NAME,
-			runtimeType: runtimeType as any, // Pass the runtime type from teams.json
+			runtimeType: runtimeType as RuntimeType,
 			forceRecreate: true,
 		});
 
@@ -533,7 +535,7 @@ export async function updateOrchestratorRuntime(
 		}
 
 		// Validate runtime type
-		const validRuntimeTypes = ['claude-code', 'gemini-cli', 'codex-cli'];
+		const validRuntimeTypes: string[] = Object.values(RUNTIME_TYPES);
 		if (!validRuntimeTypes.includes(runtimeType)) {
 			res.status(400).json({
 				success: false,
@@ -543,7 +545,7 @@ export async function updateOrchestratorRuntime(
 		}
 
 		// Update orchestrator runtime type
-		await this.storageService.updateOrchestratorRuntimeType(runtimeType as any);
+		await this.storageService.updateOrchestratorRuntimeType(runtimeType as RuntimeType);
 
 		res.json({
 			success: true,

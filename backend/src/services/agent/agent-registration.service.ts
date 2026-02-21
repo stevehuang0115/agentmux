@@ -500,7 +500,7 @@ export class AgentRegistrationService {
 
 		// Wait for runtime to be ready (simplified detection)
 		// Use shorter check interval in test environment, and reasonable interval in production
-		const checkInterval = process.env.NODE_ENV === 'test' ? 1000 : 2000; // Check every 1-2 seconds
+		const checkInterval = this.getCheckInterval();
 		const isReady = await runtimeService2.waitForRuntimeReady(
 			sessionName,
 			60000,
