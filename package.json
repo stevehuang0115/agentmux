@@ -1,6 +1,6 @@
 {
   "name": "crewly",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "type": "module",
   "description": "Crewly orchestrates multiple Claude Code instances as AI development teams",
   "main": "dist/cli/cli/src/index.js",
