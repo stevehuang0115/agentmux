@@ -256,7 +256,7 @@ export class SafeRestartService {
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Slack not available
+      this.logger.info('Slack notification skipped (not connected)');
     }
 
     this.logger.info('Shutdown complete');
@@ -383,7 +383,7 @@ export class SafeRestartService {
         timestamp: new Date().toISOString(),
       });
     } catch {
-      // Slack not available
+      this.logger.info('Slack notification skipped (not connected)');
     }
   }
 

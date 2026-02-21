@@ -18,8 +18,15 @@ let cachedGetBridge: typeof import('../slack/slack-orchestrator-bridge.js').getS
  */
 export async function getSlackBridgeLazy() {
 	if (!cachedGetBridge) {
-		const mod = await import('../slack/slack-orchestrator-bridge.js');
-		cachedGetBridge = mod.getSlackOrchestratorBridge;
+		try {
+			const mod = await import('../slack/slack-orchestrator-bridge.js');
+			cachedGetBridge = mod.getSlackOrchestratorBridge;
+		} catch (error) {
+			// Don't cache the failure so the next call can retry
+			throw new Error(
+				`Failed to load Slack bridge: ${error instanceof Error ? error.message : String(error)}`
+			);
+		}
 	}
 	return cachedGetBridge();
 }
