@@ -495,6 +495,7 @@ describe('Orchestrator Handlers', () => {
         projectPath: process.cwd(),
         windowName: expect.any(String),
         runtimeType: 'claude-code',
+        forceRecreate: true,
       });
       expect(mockResponse.json).toHaveBeenCalledWith({
         success: true,

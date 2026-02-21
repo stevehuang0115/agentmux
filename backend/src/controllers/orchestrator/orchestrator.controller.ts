@@ -240,12 +240,15 @@ export async function setupOrchestrator(
 		});
 
 		// Use the unified agent registration service for orchestrator creation
+		// forceRecreate: true because this is an explicit user action (Setup button),
+		// so skip expensive intelligent recovery and do a clean restart
 		const result = await this.agentRegistrationService.createAgentSession({
 			sessionName: ORCHESTRATOR_SESSION_NAME,
 			role: ORCHESTRATOR_ROLE,
 			projectPath: process.cwd(),
 			windowName: ORCHESTRATOR_WINDOW_NAME,
 			runtimeType: runtimeType as any, // Pass the runtime type from teams.json
+			forceRecreate: true,
 		});
 
 		logger.info('createAgentSession result', {

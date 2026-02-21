@@ -6,6 +6,12 @@ export default {
   ],
   darkMode: "class",
   theme: {
+    fontFamily: {
+      "sans": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
+      "display": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
+      "logo": ["Nunito", "system-ui", "sans-serif"],
+      "mono": ["SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
+    },
     extend: {
       colors: {
         "primary": "#2a73ea",
@@ -14,12 +20,6 @@ export default {
         "text-primary-dark": "#f6f7f8",
         "text-secondary-dark": "#9ab0d9",
         "border-dark": "#313a48",
-      },
-      fontFamily: {
-        "sans": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        "display": ["Nunito", "system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        "logo": ["Nunito", "system-ui", "sans-serif"],
-        "mono": ["SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", "Courier New", "monospace"]
       },
       borderRadius: {
         "DEFAULT": "0.5rem",
