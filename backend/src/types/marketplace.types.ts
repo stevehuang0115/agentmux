@@ -102,7 +102,7 @@ export interface MarketplaceSubmission {
   description: string;
   author: string;
   version: string;
-  category: string;
+  category: MarketplaceCategory;
   tags: string[];
   license: string;
   /** Review status */

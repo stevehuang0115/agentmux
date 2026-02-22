@@ -19,15 +19,12 @@ import {
   InstalledItemsManifest,
   InstalledItemRecord,
 } from '../../types/marketplace.types.js';
-
-const MARKETPLACE_BASE_URL = 'https://crewly.stevesprompt.com';
-const REGISTRY_ENDPOINT = '/api/registry';
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 const CREWLY_HOME = path.join(homedir(), '.crewly');
-const MARKETPLACE_DIR = path.join(CREWLY_HOME, 'marketplace');
-const MANIFEST_PATH = path.join(MARKETPLACE_DIR, 'manifest.json');
-const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, 'local-registry.json');
+const MARKETPLACE_DIR = path.join(CREWLY_HOME, MARKETPLACE_CONSTANTS.DIR_NAME);
+const MANIFEST_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.MANIFEST_FILE);
+const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 
 let cachedRegistry: MarketplaceRegistry | null = null;
 let cacheTimestamp = 0;
@@ -45,24 +42,24 @@ let cacheTimestamp = 0;
  */
 export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRegistry> {
   const now = Date.now();
-  if (!forceRefresh && cachedRegistry && now - cacheTimestamp < CACHE_TTL) {
+  if (!forceRefresh && cachedRegistry && now - cacheTimestamp < MARKETPLACE_CONSTANTS.CACHE_TTL) {
     return cachedRegistry;
   }
 
   let remoteRegistry: MarketplaceRegistry;
   try {
-    const url = `${MARKETPLACE_BASE_URL}${REGISTRY_ENDPOINT}`;
+    const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.REGISTRY_ENDPOINT}`;
     const res = await fetch(url);
     if (!res.ok) {
       if (cachedRegistry) return cachedRegistry;
       // Fall through to local-only registry
-      remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_BASE_URL, items: [] };
+      remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
     } else {
       remoteRegistry = (await res.json()) as MarketplaceRegistry;
     }
   } catch {
     if (cachedRegistry) return cachedRegistry;
-    remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_BASE_URL, items: [] };
+    remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
   }
 
   // Merge locally published skills into the registry

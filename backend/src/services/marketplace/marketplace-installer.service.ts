@@ -13,7 +13,7 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { mkdir, rm, copyFile, readFile } from 'fs/promises';
+import { mkdir, rm, copyFile, readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
@@ -32,9 +32,7 @@ import {
 import { findPackageRoot } from '../../utils/package-root.js';
 import { getSkillService } from '../skill/skill.service.js';
 import { SkillCatalogService } from '../skill/skill-catalog.service.js';
-
-const MARKETPLACE_BASE_URL = 'https://crewly.stevesprompt.com';
-const ASSETS_ENDPOINT = '/api/assets';
+import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 /**
  * Downloads and installs a marketplace item.
@@ -63,7 +61,7 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     }
 
     // Check local assets first (for locally published/seeded skills)
-    const localAssetsDir = path.join(homedir(), '.crewly', 'marketplace', 'assets');
+    const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
     const localAssetPath = path.join(localAssetsDir, assetPath);
 
     let data: Buffer;
@@ -71,7 +69,7 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
       data = await readFile(localAssetPath);
     } else {
       // Fall back to remote download
-      const url = `${MARKETPLACE_BASE_URL}${ASSETS_ENDPOINT}/${assetPath}`;
+      const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
       const res = await fetch(url);
       if (!res.ok) {
         return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
@@ -103,7 +101,6 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     } else {
       // Non-archive asset (e.g., model file) — write raw
       const filename = path.basename(assetPath);
-      const { writeFile } = await import('fs/promises');
       await writeFile(path.join(installPath, filename), data);
     }
 
@@ -222,7 +219,7 @@ export async function ensureCommonLibs(): Promise<void> {
     packageRoot = findPackageRoot(process.cwd());
   }
 
-  const mpBase = path.join(homedir(), '.crewly', 'marketplace');
+  const mpBase = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 
   // Copy agent _common/lib.sh
   const agentCommonSrc = path.join(packageRoot, 'config', 'skills', 'agent', '_common', 'lib.sh');

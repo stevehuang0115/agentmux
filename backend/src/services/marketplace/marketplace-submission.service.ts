@@ -13,12 +13,9 @@
 import path from 'path';
 import { homedir } from 'os';
 import { mkdir, readFile, writeFile, copyFile, rm } from 'fs/promises';
-import { existsSync, createReadStream } from 'fs';
-import { createHash } from 'crypto';
-import { Readable } from 'stream';
-import { pipeline } from 'stream/promises';
+import { existsSync } from 'fs';
+import { createHash, randomUUID } from 'crypto';
 import * as tar from 'tar';
-import { randomUUID } from 'crypto';
 import type {
   MarketplaceSubmission,
   SubmissionsManifest,
@@ -26,14 +23,11 @@ import type {
   MarketplaceItem,
   MarketplaceOperationResult,
 } from '../../types/marketplace.types.js';
-import { fetchRegistry } from './marketplace.service.js';
+import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
-const MARKETPLACE_DIR = path.join(homedir(), '.crewly', 'marketplace');
-const SUBMISSIONS_DIR = path.join(MARKETPLACE_DIR, 'submissions');
+const MARKETPLACE_DIR = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
+const SUBMISSIONS_DIR = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.SUBMISSIONS_DIR);
 const SUBMISSIONS_MANIFEST_PATH = path.join(SUBMISSIONS_DIR, 'manifest.json');
-
-/** Required files in a submitted skill package */
-const REQUIRED_SKILL_FILES = ['skill.json', 'execute.sh', 'instructions.md'];
 
 /** Kebab-case pattern for skill IDs */
 const KEBAB_CASE_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -183,7 +177,7 @@ export async function submitSkill(archivePath: string): Promise<MarketplaceOpera
       description: skillManifest.description as string,
       author: (skillManifest.author as string) || 'Community',
       version: skillManifest.version as string,
-      category: skillManifest.category as string,
+      category: skillManifest.category as MarketplaceSubmission['category'],
       tags: skillManifest.tags as string[],
       license: (skillManifest.license as string) || 'MIT',
       status: 'pending',
@@ -311,7 +305,7 @@ async function addToLocalRegistry(
   submission: MarketplaceSubmission,
   archiveFilename: string
 ): Promise<void> {
-  const localRegistryPath = path.join(MARKETPLACE_DIR, 'local-registry.json');
+  const localRegistryPath = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 
   let registry: { items: MarketplaceItem[] };
   try {

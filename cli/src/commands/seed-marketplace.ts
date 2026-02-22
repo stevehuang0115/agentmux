@@ -13,7 +13,7 @@
 import path from 'path';
 import { homedir } from 'os';
 import { readFileSync, existsSync, mkdirSync } from 'fs';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, copyFile, rm } from 'fs/promises';
 import chalk from 'chalk';
 import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../utils/archive-creator.js';
 import { validatePackage } from '../utils/package-validator.js';
@@ -133,7 +133,6 @@ export async function seedMarketplaceCommand(options?: SeedOptions): Promise<voi
 
       const archiveName = path.basename(archivePath);
       const assetPath = path.join(assetDir, archiveName);
-      const { copyFile } = await import('fs/promises');
       await copyFile(archivePath, assetPath);
 
       // Update entry to use local asset path
@@ -159,7 +158,6 @@ export async function seedMarketplaceCommand(options?: SeedOptions): Promise<voi
   }
 
   // Cleanup tmp
-  const { rm } = await import('fs/promises');
   await rm(tmpDir, { recursive: true, force: true });
 
   console.log(chalk.blue(`\nSummary: ${published} published, ${skipped} skipped, ${failed} failed`));
