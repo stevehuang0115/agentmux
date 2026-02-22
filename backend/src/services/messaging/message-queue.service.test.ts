@@ -13,6 +13,11 @@ import { PERSISTED_QUEUE_VERSION } from '../../types/messaging.types.js';
 
 // Mock constants
 jest.mock('../../constants.js', () => ({
+  MESSAGE_SOURCES: {
+    SLACK: 'slack',
+    WEB_CHAT: 'web_chat',
+    SYSTEM_EVENT: 'system_event',
+  },
   MESSAGE_QUEUE_CONSTANTS: {
     MAX_QUEUE_SIZE: 5,
     DEFAULT_MESSAGE_TIMEOUT: 120000,
