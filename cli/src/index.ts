@@ -10,6 +10,8 @@ import { upgradeCommand } from './commands/upgrade.js';
 import { installCommand } from './commands/install.js';
 import { searchCommand } from './commands/search.js';
 import { onboardCommand } from './commands/onboard.js';
+import { mcpServerCommand } from './commands/mcp-server.js';
+import { publishCommand } from './commands/publish.js';
 import { DEFAULT_WEB_PORT } from './constants.js';
 import { getLocalVersion } from './utils/version-check.js';
 
@@ -75,7 +77,21 @@ program
 program
   .command('onboard')
   .description('Interactive setup wizard for new Crewly users')
+  .option('-y, --yes', 'Non-interactive mode: use all defaults (CI-friendly)')
+  .option('--template <id>', 'Select a team template by ID (e.g. web-dev-team)')
   .action(onboardCommand);
+
+program
+  .command('mcp-server')
+  .description('Start Crewly MCP server (for Claude Code, Cursor, etc. integration)')
+  .action(mcpServerCommand);
+
+program
+  .command('publish <path>')
+  .description('Validate and package a skill for the Crewly marketplace')
+  .option('--dry-run', 'Validate only, do not create archive')
+  .option('-o, --output <dir>', 'Output directory for the archive')
+  .action(publishCommand);
 
 // Error handling
 program.exitOverride();

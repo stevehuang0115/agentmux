@@ -9,6 +9,7 @@ export { CodexRuntimeService } from './agent/codex-runtime.service.js';
 export { AgentRegistrationService } from './agent/agent-registration.service.js';
 export { GitIntegrationService } from './agent/git-integration.service.js';
 export { FileWatcherService, FileChangeEvent } from './agent/file-watcher.service.js';
+export { ContextWindowMonitorService } from './agent/context-window-monitor.service.js';
 
 // Project Services  
 export { ActiveProjectsService } from './project/active-projects.service.js';
@@ -116,3 +117,21 @@ export {
   getImprovementStartupService,
   resetImprovementStartupService,
 } from './orchestrator/index.js';
+
+// MCP Client Services
+export {
+  McpClientService,
+  MCP_CLIENT_CONSTANTS,
+  type McpServerConfig,
+  type McpToolInfo,
+  type McpToolResult,
+  type McpContentBlock,
+  type McpServerStatus,
+} from './mcp-client.js';
+
+// MCP Server Services
+export {
+  CrewlyMcpServer,
+  MCP_SERVER_CONSTANTS,
+  type CrewlyMcpServerConfig,
+} from './mcp-server.js';

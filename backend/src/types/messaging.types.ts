@@ -111,6 +111,9 @@ export interface QueuedMessage {
 
   /** Number of times this message has been re-queued due to agent-not-ready */
   retryCount?: number;
+
+  /** ISO timestamp when the message was delivered to the orchestrator terminal */
+  deliveredAt?: string;
 }
 
 /**
@@ -203,6 +206,9 @@ export interface PersistedMessage {
 
   /** Number of times this message has been re-queued due to agent-not-ready */
   retryCount?: number;
+
+  /** ISO timestamp when the message was delivered to the orchestrator terminal */
+  deliveredAt?: string;
 }
 
 /**
@@ -266,6 +272,9 @@ export function toPersistedMessage(msg: QueuedMessage): PersistedMessage {
   }
   if (msg.retryCount !== undefined && msg.retryCount > 0) {
     persisted.retryCount = msg.retryCount;
+  }
+  if (msg.deliveredAt !== undefined) {
+    persisted.deliveredAt = msg.deliveredAt;
   }
 
   if (msg.sourceMetadata) {

@@ -176,8 +176,16 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	MIN_BUFFER_FOR_PROCESSING_DETECTION: 50,
 	/** Timeout for waiting for agent to return to prompt before delivery (ms) */
 	AGENT_READY_TIMEOUT: 120000,
+	/** Shorter timeout for user messages (Slack/web chat) to reduce delivery delay (ms) */
+	USER_MESSAGE_TIMEOUT: 30000,
+	/** Whether to force-deliver user messages after timeout instead of re-queuing */
+	USER_MESSAGE_FORCE_DELIVER: true,
 	/** Interval for polling agent prompt readiness (ms) */
 	AGENT_READY_POLL_INTERVAL: 2000,
+	/** Interval for deep-scan polling with larger buffer when fast poll misses prompt (ms) */
+	DEEP_SCAN_INTERVAL: 5000,
+	/** Number of lines to capture for deep-scan prompt detection */
+	DEEP_SCAN_LINES: 500,
 } as const;
 
 /**
@@ -283,6 +291,9 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	INTER_MESSAGE_DELAY: 500,
 	/** Maximum number of requeue retries before permanently failing a message */
 	MAX_REQUEUE_RETRIES: 5,
+	/** Early ACK check timeout — if no terminal output within this window after
+	 *  delivery, the orchestrator is likely context-exhausted (ms) */
+	ACK_TIMEOUT: 15000,
 	/** Queue persistence file name (stored under crewly home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -422,6 +433,34 @@ export const RUNTIME_EXIT_CONSTANTS = {
 	 * produce PTY output that matches exit patterns.
 	 */
 	API_ACTIVITY_GRACE_PERIOD_MS: 120_000,
+} as const;
+
+/**
+ * Constants for context window monitoring and auto-recovery.
+ * Used by ContextWindowMonitorService to detect when an agent's Claude Code
+ * session is running low on context and trigger proactive warnings or recovery.
+ */
+export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
+	/** Interval for periodic stale detection and cleanup (ms) */
+	CHECK_INTERVAL_MS: 30_000,
+	/** Context usage threshold for yellow (warning) level (%) */
+	YELLOW_THRESHOLD_PERCENT: 70,
+	/** Context usage threshold for red (danger) level (%) */
+	RED_THRESHOLD_PERCENT: 85,
+	/** Context usage threshold for critical level (%) — triggers auto-recovery */
+	CRITICAL_THRESHOLD_PERCENT: 95,
+	/** Whether auto-recovery is enabled at critical threshold */
+	AUTO_RECOVERY_ENABLED: true,
+	/** Maximum recovery attempts within the cooldown window */
+	MAX_RECOVERIES_PER_WINDOW: 2,
+	/** Cooldown window for recovery rate limiting (30 minutes) */
+	COOLDOWN_WINDOW_MS: 30 * 60 * 1000,
+	/** Grace period after monitoring start to ignore early readings (ms) */
+	STARTUP_GRACE_PERIOD_MS: 60_000,
+	/** Maximum rolling buffer size for PTY output (bytes) */
+	MAX_BUFFER_SIZE: 4096,
+	/** Threshold for considering a context state stale (5 minutes) */
+	STALE_DETECTION_THRESHOLD_MS: 5 * 60 * 1000,
 } as const;
 
 /**

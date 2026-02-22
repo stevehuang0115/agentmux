@@ -17,6 +17,8 @@ import {
   refreshMarketplaceRegistry,
 } from '../services/marketplace.service';
 import type { MarketplaceItemWithStatus, MarketplaceItemType, SortOption } from '../types/marketplace.types';
+import { useToast } from '../hooks/useToast';
+import ToastContainer from '../components/Toast';
 
 /** Tab options for filtering by item type */
 const tabs: { label: string; value: MarketplaceItemType | 'all' }[] = [
@@ -69,6 +71,7 @@ export default function Marketplace() {
   const [sortBy, setSortBy] = useState<SortOption>('popular');
   const [operatingOn, setOperatingOn] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { toasts, addToast, dismissToast } = useToast();
 
   /**
    * Load marketplace items from the API with current filter/sort state.
@@ -100,10 +103,12 @@ export default function Marketplace() {
   const handleInstall = async (id: string) => {
     setOperatingOn(id);
     try {
-      await installMarketplaceItem(id);
+      const result = await installMarketplaceItem(id);
+      addToast(result.message || `Installed ${id}`, result.success ? 'success' : 'error');
       await loadItems();
-    } catch {
-      /* Operation error is visible via item status on reload */
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Install failed';
+      addToast(msg, 'error');
     }
     setOperatingOn(null);
   };
@@ -116,10 +121,12 @@ export default function Marketplace() {
   const handleUninstall = async (id: string) => {
     setOperatingOn(id);
     try {
-      await uninstallMarketplaceItem(id);
+      const result = await uninstallMarketplaceItem(id);
+      addToast(result.message || `Uninstalled ${id}`, result.success ? 'success' : 'error');
       await loadItems();
-    } catch {
-      /* Operation error is visible via item status on reload */
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Uninstall failed';
+      addToast(msg, 'error');
     }
     setOperatingOn(null);
   };
@@ -132,10 +139,12 @@ export default function Marketplace() {
   const handleUpdate = async (id: string) => {
     setOperatingOn(id);
     try {
-      await updateMarketplaceItem(id);
+      const result = await updateMarketplaceItem(id);
+      addToast(result.message || `Updated ${id}`, result.success ? 'success' : 'error');
       await loadItems();
-    } catch {
-      /* Operation error is visible via item status on reload */
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      addToast(msg, 'error');
     }
     setOperatingOn(null);
   };
@@ -146,9 +155,10 @@ export default function Marketplace() {
   const handleRefresh = async () => {
     try {
       await refreshMarketplaceRegistry();
+      addToast('Registry refreshed', 'success');
       await loadItems();
     } catch {
-      /* Refresh error is non-critical */
+      addToast('Failed to refresh registry', 'error');
     }
   };
 
@@ -308,6 +318,8 @@ export default function Marketplace() {
           ))}
         </div>
       )}
+
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

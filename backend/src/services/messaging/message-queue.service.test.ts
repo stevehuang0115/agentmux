@@ -153,6 +153,57 @@ describe('MessageQueueService', () => {
 
       expect(queue.pendingCount).toBe(0);
     });
+
+    it('should prioritize user messages (slack) over system events', () => {
+      queue.enqueue({ content: 'system 1', conversationId: 'conv-sys-1', source: 'system_event' });
+      queue.enqueue({ content: 'system 2', conversationId: 'conv-sys-2', source: 'system_event' });
+      queue.enqueue({ content: 'user slack', conversationId: 'conv-slack', source: 'slack' });
+
+      const msg = queue.dequeue();
+      expect(msg).not.toBeNull();
+      expect(msg!.content).toBe('user slack');
+      expect(msg!.source).toBe('slack');
+    });
+
+    it('should prioritize user messages (web_chat) over system events', () => {
+      queue.enqueue({ content: 'system 1', conversationId: 'conv-sys-1', source: 'system_event' });
+      queue.enqueue({ content: 'user chat', conversationId: 'conv-chat', source: 'web_chat' });
+      queue.enqueue({ content: 'system 2', conversationId: 'conv-sys-2', source: 'system_event' });
+
+      const msg = queue.dequeue();
+      expect(msg).not.toBeNull();
+      expect(msg!.content).toBe('user chat');
+      expect(msg!.source).toBe('web_chat');
+    });
+
+    it('should return first user message when multiple user messages exist', () => {
+      queue.enqueue({ content: 'system', conversationId: 'conv-sys', source: 'system_event' });
+      queue.enqueue({ content: 'slack msg', conversationId: 'conv-s', source: 'slack' });
+      queue.enqueue({ content: 'chat msg', conversationId: 'conv-c', source: 'web_chat' });
+
+      const msg = queue.dequeue();
+      expect(msg).not.toBeNull();
+      expect(msg!.content).toBe('slack msg');
+    });
+
+    it('should fall back to FIFO when only system events are queued', () => {
+      queue.enqueue({ content: 'sys first', conversationId: 'conv-1', source: 'system_event' });
+      queue.enqueue({ content: 'sys second', conversationId: 'conv-2', source: 'system_event' });
+
+      const msg = queue.dequeue();
+      expect(msg).not.toBeNull();
+      expect(msg!.content).toBe('sys first');
+    });
+
+    it('should maintain FIFO among user messages', () => {
+      queue.enqueue({ content: 'chat 1', conversationId: 'conv-1', source: 'web_chat' });
+      queue.enqueue({ content: 'chat 2', conversationId: 'conv-2', source: 'web_chat' });
+
+      const first = queue.dequeue();
+      const second = queue.dequeue();
+      expect(first!.content).toBe('chat 1');
+      expect(second!.content).toBe('chat 2');
+    });
   });
 
   describe('markCompleted', () => {

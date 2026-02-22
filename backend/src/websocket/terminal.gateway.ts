@@ -1081,6 +1081,26 @@ export class TerminalGateway {
 	}
 
 	/**
+	 * Broadcast context window status updates to all connected clients.
+	 *
+	 * @param contextData - Context window status data
+	 */
+	broadcastContextWindowStatus(contextData: {
+		sessionName: string;
+		memberId?: string;
+		teamId?: string;
+		contextPercent: number;
+		level: string;
+		timestamp: string;
+	}): void {
+		this.io.emit('context_window_status', {
+			type: 'context_window_status',
+			payload: contextData,
+			timestamp: contextData.timestamp,
+		});
+	}
+
+	/**
 	 * Broadcast comprehensive team activity updates.
 	 *
 	 * @param activityData - Activity data

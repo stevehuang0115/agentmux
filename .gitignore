@@ -111,8 +111,6 @@ frontend_prototype/
 # Development and documentation files
 specs/
 TODO.md
-docker-compose.yml
-Dockerfile
 
 # 3D Models - Only include optimized *-fixed.glb files and RobotExpressive.glb
 # Exclude original, animated, and intermediate files

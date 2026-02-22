@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question / Help
+    url: https://github.com/stevehuang0115/crewly/discussions/categories/q-a
+    about: Ask usage questions in GitHub Discussions instead of filing an issue.
+  - name: Discord Community
+    url: https://discord.gg/crewly
+    about: Chat with the community and get real-time help.

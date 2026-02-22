@@ -21,6 +21,8 @@ export const EVENT_TYPES = [
   'agent:busy',
   'agent:active',
   'agent:inactive',
+  'agent:context_warning',
+  'agent:context_critical',
 ] as const;
 
 /**
@@ -31,7 +33,7 @@ export type EventType = (typeof EVENT_TYPES)[number];
 /**
  * Fields that can trigger events when changed
  */
-export type ChangedField = 'agentStatus' | 'workingStatus';
+export type ChangedField = 'agentStatus' | 'workingStatus' | 'contextUsage';
 
 // =============================================================================
 // Event Interfaces

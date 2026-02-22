@@ -203,3 +203,6 @@ export * from './skill.types.js';
 
 // Re-export chat types
 export * from './chat.types.js';
+
+// Re-export task output types
+export * from './task-output.types.js';

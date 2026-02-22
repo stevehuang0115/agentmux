@@ -1,98 +1,84 @@
-# Dependencies
+# Dependencies (rebuilt inside container)
 node_modules/
 */node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
-# Development files
+# Build artifacts (rebuilt inside container)
+dist/
+*/dist/
+build/
+*.tsbuildinfo
+
+# Version control
 .git/
 .gitignore
-*.md
-README.md
-CHANGELOG.md
-LICENSE
+
+# Environment files (passed via docker-compose env_file)
+.env
+.env.*
 
 # Test files
-tests/
 coverage/
-*.test.js
+test-results/
+playwright-report/
 *.test.ts
-*.spec.js
+*.test.tsx
 *.spec.ts
+*.spec.js
 jest.config.js
+jest.unit.config.js
+playwright.config.ts
+mcp-test-report.json
+test.sh
+test-claude.sh
+test-mcp-registration.js
 
-# Development tools
+# Documentation (not needed in container)
+*.md
+!config/**/*.md
+CLAUDE.md
+CONTRIBUTING.md
+DEPLOYMENT.md
+
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+
+# OS files
 .DS_Store
 Thumbs.db
 
-# Logs
+# Development files
+specs/
+tests/
+improvement_plans/
+desktop/
+avatar-3d/
+docs/
+examples/
+scripts/
+.crewly/
+.agentmux/
+.claude/
+.gemini/
+.github/
+
+# Logs and temp files
 logs/
 *.log
-
-# Runtime data
-pids/
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-.nyc_output/
-
-# Environment files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Build artifacts (will be built in container)
-dist/
-build/
-
-# Development docker files
-docker-compose.dev.yml
-Dockerfile.dev
-
-# Temporary files
 tmp/
 temp/
-.tmp/
+output.log
 
-# OS generated files
-.DS_Store?
-ehthumbs.db
-Icon?
-Thumbs.db
-
-# Backup files
-*~
-*.backup
-*.bak
-
-# IDE files
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-
-# Optional npm cache directory
-.npm
-
-# Optional eslint cache
-.eslintcache
-
-# Output of 'npm pack'
+# Misc
 *.tgz
-
-# Yarn integrity file
-.yarn-integrity
-
-# parcel-bundler cache (https://parceljs.org/)
-.cache/
-.parcel-cache/
+*.tar.gz
+.eslintcache
+.eslintrc.js
+.npmignore
+.mcp.json
+ecosystem.config.js
+kill-vibecoder.sh
+restart-backend.sh

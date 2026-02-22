@@ -12,3 +12,7 @@ export {
   type IQualityGateService,
   type RunOptions,
 } from './quality-gate.service.js';
+
+export {
+  TaskOutputValidatorService,
+} from './task-output-validator.service.js';

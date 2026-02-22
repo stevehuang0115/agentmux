@@ -8,6 +8,8 @@ import { resolveStepConfig } from '../../utils/prompt-resolver.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../../services/core/logger.service.js';
+import { TaskOutputValidatorService } from '../../services/quality/task-output-validator.service.js';
+import { TASK_OUTPUT_CONSTANTS, type TaskOutputRetryInfo } from '../../types/task-output.types.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TaskManagementController');
 
@@ -26,6 +28,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 			priority = 'medium',
 			sessionName,
 			milestone = 'delegated',
+			outputSchema,
 		} = req.body;
 
 		if (!projectPath) {
@@ -63,6 +66,12 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 		}
 
 		taskContent += `\n## Task Description\n\n${task}\n`;
+
+		// Embed output schema if provided
+		if (outputSchema && typeof outputSchema === 'object') {
+			const validator = TaskOutputValidatorService.getInstance();
+			taskContent += validator.generateSchemaMarkdown(outputSchema);
+		}
 
 		await writeFile(taskPath, taskContent, 'utf-8');
 
@@ -257,7 +266,7 @@ export async function completeTask(
 	res: Response
 ): Promise<void> {
 	try {
-		const { taskPath, sessionName } = req.body;
+		const { taskPath, sessionName, output } = req.body;
 
 		// Update agent heartbeat (proof of life)
 		try {
@@ -298,7 +307,146 @@ export async function completeTask(
 			return;
 		}
 
-		// Create target path in done/ folder
+		// Read task content to check for output schema
+		const taskContent = await readFile(taskPath, 'utf-8');
+		const validator = TaskOutputValidatorService.getInstance();
+		const schema = validator.extractSchemaFromMarkdown(taskContent);
+
+		// If task has an output schema, validate the output
+		if (schema) {
+			if (!output || typeof output !== 'object') {
+				res.status(200).json({
+					success: false,
+					error: 'Task requires structured output but none was provided',
+					details: 'This task has an output schema. Provide an "output" object matching the schema.',
+					taskPath,
+				});
+				return;
+			}
+
+			// Check output size
+			const sizeCheck = validator.validateOutputSize(output);
+			if (!sizeCheck.valid) {
+				res.status(200).json({
+					success: false,
+					error: 'Output size exceeds maximum',
+					details: sizeCheck.error,
+					taskPath,
+				});
+				return;
+			}
+
+			// Validate output against schema
+			const validationResult = validator.validate(output, schema);
+
+			if (!validationResult.valid) {
+				// Check retry info
+				const existingRetryInfo = validator.extractRetryInfoFromMarkdown(taskContent);
+				const retryCount = existingRetryInfo ? existingRetryInfo.retryCount + 1 : 1;
+				const maxRetries = TASK_OUTPUT_CONSTANTS.MAX_RETRIES;
+
+				if (retryCount > maxRetries) {
+					// Max retries exceeded - move to blocked
+					const blockedPath = taskPath.replace('/in_progress/', '/blocked/');
+					const blockedDir = dirname(blockedPath);
+					await ensureDirectoryExists(blockedDir);
+
+					const failureInfo = `\n\n${TASK_OUTPUT_CONSTANTS.SECTION_HEADERS.VALIDATION_FAILURE}\n- **Status**: Blocked (max validation retries exceeded)\n- **Retry count**: ${retryCount}/${maxRetries}\n- **Errors**: ${validationResult.errors.join('; ')}\n- **Blocked at**: ${new Date().toISOString()}\n`;
+					const blockedContent = taskContent + failureInfo;
+
+					await writeFile(blockedPath, blockedContent, 'utf-8');
+					await unlinkFile(taskPath);
+
+					res.status(200).json({
+						success: false,
+						validationFailed: true,
+						maxRetriesExceeded: true,
+						errors: validationResult.errors,
+						retryCount,
+						maxRetries,
+						message: `Task moved to blocked/ after ${maxRetries} failed validation attempts`,
+						taskPath: blockedPath,
+					});
+					return;
+				}
+
+				// Retries remaining - update retry info in task file
+				const retryInfo: TaskOutputRetryInfo = {
+					retryCount,
+					maxRetries,
+					lastErrors: validationResult.errors,
+					lastAttemptAt: new Date().toISOString(),
+				};
+
+				// Remove existing retry info section if present, then append new one
+				const retryHeader = TASK_OUTPUT_CONSTANTS.SECTION_HEADERS.RETRY_INFO;
+				let updatedTaskContent = taskContent;
+				const retryHeaderIdx = updatedTaskContent.indexOf(retryHeader);
+				if (retryHeaderIdx !== -1) {
+					// Find the end of the retry section (next ## header or end of file)
+					const afterRetry = updatedTaskContent.substring(retryHeaderIdx + retryHeader.length);
+					const nextSectionMatch = afterRetry.match(/\n## /);
+					if (nextSectionMatch && nextSectionMatch.index !== undefined) {
+						updatedTaskContent = updatedTaskContent.substring(0, retryHeaderIdx) +
+							updatedTaskContent.substring(retryHeaderIdx + retryHeader.length + nextSectionMatch.index);
+					} else {
+						updatedTaskContent = updatedTaskContent.substring(0, retryHeaderIdx);
+					}
+				}
+
+				updatedTaskContent += validator.generateRetryMarkdown(retryInfo);
+				await writeFile(taskPath, updatedTaskContent, 'utf-8');
+
+				res.status(200).json({
+					success: false,
+					validationFailed: true,
+					errors: validationResult.errors,
+					retryCount,
+					maxRetries,
+					message: `Output validation failed. ${maxRetries - retryCount} retries remaining.`,
+					taskPath,
+				});
+				return;
+			}
+
+			// Validation passed - store output file alongside the done task
+			const doneTargetPath = taskPath.replace('/in_progress/', '/done/');
+			const outputFilePath = doneTargetPath.replace(/\.md$/, TASK_OUTPUT_CONSTANTS.OUTPUT_FILE_EXTENSION);
+			const doneDir = dirname(doneTargetPath);
+			await ensureDirectoryExists(doneDir);
+
+			const outputData = {
+				output,
+				producedAt: new Date().toISOString(),
+				sessionName: sessionName || 'unknown',
+			};
+			await writeFile(outputFilePath, JSON.stringify(outputData, null, 2), 'utf-8');
+
+			// Move task to done
+			const updatedContent = addTaskCompletionInfo(taskContent);
+			await writeFile(doneTargetPath, updatedContent, 'utf-8');
+			await unlinkFile(taskPath);
+
+			// Remove from task tracking
+			const allTasksWithSchema = await this.taskTrackingService.getAllInProgressTasks();
+			const taskToRemoveWithSchema = allTasksWithSchema.find(t => t.taskFilePath === taskPath);
+			if (taskToRemoveWithSchema) {
+				await this.taskTrackingService.removeTask(taskToRemoveWithSchema.id);
+			}
+
+			res.json({
+				success: true,
+				message: `Task ${basename(taskPath)} marked as completed with validated output`,
+				originalPath: taskPath,
+				newPath: doneTargetPath,
+				outputPath: outputFilePath,
+				status: 'done',
+				completedAt: new Date().toISOString(),
+			});
+			return;
+		}
+
+		// No schema - original behavior (backward compatible)
 		const fileName = basename(taskPath);
 		const targetPath = taskPath.replace('/in_progress/', '/done/');
 		const targetDir = dirname(targetPath);
@@ -307,12 +455,11 @@ export async function completeTask(
 		await ensureDirectoryExists(targetDir);
 
 		// Read, update, and move task file
-		const taskContent = await readFile(taskPath, 'utf-8');
 		const updatedContent = addTaskCompletionInfo(taskContent);
 
 		await writeFile(targetPath, updatedContent, 'utf-8');
 		await unlinkFile(taskPath);
-		
+
 		// Remove from task tracking (find task by file path and remove it)
 		const allTasks = await this.taskTrackingService.getAllInProgressTasks();
 		const taskToRemove = allTasks.find(t => t.taskFilePath === taskPath);
@@ -1086,6 +1233,12 @@ ${
 *Task can be assigned to orchestrator for execution when ready*
 `;
 
+	// Embed output schema if present in step config
+	if (step.outputSchema && typeof step.outputSchema === 'object') {
+		const validator = TaskOutputValidatorService.getInstance();
+		return markdown + validator.generateSchemaMarkdown(step.outputSchema);
+	}
+
 	return markdown;
 }
 
@@ -1203,6 +1356,48 @@ export async function readTask(this: ApiController, req: Request, res: Response)
 	} catch (error) {
 		logger.error('Error reading task', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to read task file' });
+	}
+}
+
+/**
+ * Retrieves the stored output JSON for a completed task.
+ *
+ * @param req - Request containing taskPath (path to the .md file in done/)
+ * @param res - Response with the parsed output data
+ */
+export async function getTaskOutput(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { taskPath } = req.body;
+
+		if (!taskPath) {
+			res.status(400).json({ success: false, error: 'taskPath is required' });
+			return;
+		}
+
+		// Derive the output file path from the task file path
+		const outputFilePath = taskPath.replace(/\.md$/, TASK_OUTPUT_CONSTANTS.OUTPUT_FILE_EXTENSION);
+
+		if (!existsSync(outputFilePath)) {
+			res.status(200).json({
+				success: false,
+				error: 'No output file found for this task',
+				details: `Expected output at: ${outputFilePath}`,
+				taskPath,
+			});
+			return;
+		}
+
+		const rawContent = await readFile(outputFilePath, 'utf-8');
+		const outputData = JSON.parse(rawContent);
+
+		res.json({
+			success: true,
+			data: outputData,
+			outputPath: outputFilePath,
+		});
+	} catch (error) {
+		logger.error('Error getting task output', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to get task output' });
 	}
 }
 

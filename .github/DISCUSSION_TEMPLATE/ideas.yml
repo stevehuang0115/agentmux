@@ -1,0 +1,30 @@
+title: "[Idea]: "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share your idea for Crewly! Describe the use case and how it would work.
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: Describe your idea
+      description: What would you like Crewly to do? What problem does it solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example usage
+      description: Show how this would work from a user's perspective.
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this to you?
+      options:
+        - Nice to have
+        - Would use regularly
+        - Blocking my use case

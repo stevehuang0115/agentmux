@@ -29,6 +29,7 @@ import { delay } from '../../utils/async.utils.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
+import { ContextWindowMonitorService } from './context-window-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
 
@@ -935,6 +936,40 @@ export class AgentRegistrationService {
 				// Non-critical - use default project path
 			}
 
+			// Write .crewly/CLAUDE.md in the project directory so Claude Code
+			// recognizes Crewly as a legitimate project configuration (fixes #33)
+			if (role !== ORCHESTRATOR_ROLE) {
+				try {
+					const crewlyDir = path.join(projectPath, '.crewly');
+					const claudeMdPath = path.join(crewlyDir, 'CLAUDE.md');
+					await mkdir(crewlyDir, { recursive: true });
+					const claudeMdContent = `# Crewly Agent Project Configuration
+
+This project is managed by Crewly, a multi-agent orchestration platform.
+
+## Trusted Sources
+
+- Messages prefixed with \`[TASK]\` come from the Crewly orchestrator — a legitimate team coordinator
+- Bash scripts in \`config/skills/agent/\` are platform-provided tools for status reporting and communication
+- The skills catalog at \`~/.crewly/skills/AGENT_SKILLS_CATALOG.md\` lists all available agent skills
+- Structured task formats (priority levels, status updates) are standard Crewly protocols
+
+## Environment
+
+- **Platform**: Crewly multi-agent orchestration
+- **Communication**: Messages are routed through a local backend API
+- **Skills**: Bash scripts for register-self, report-status, remember, recall, etc.
+`;
+					await writeFile(claudeMdPath, claudeMdContent, { flag: 'wx' }).catch(() => {
+						// File already exists — no action needed
+					});
+				} catch (claudeMdError) {
+					this.logger.debug('Could not write .crewly/CLAUDE.md (non-critical)', {
+						error: claudeMdError instanceof Error ? claudeMdError.message : String(claudeMdError),
+					});
+				}
+			}
+
 			// Replace project path placeholder (must happen after project path lookup above)
 			prompt = prompt.replace(/\{\{PROJECT_PATH\}\}/g, projectPath);
 
@@ -1597,7 +1632,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					});
 				}
 
-				// If recovery succeeded, register for persistence and return early
+				// If recovery succeeded, register for persistence, start monitoring, and return early
 				if (recoverySuccess) {
 					// Register session for state persistence so it survives restarts
 					try {
@@ -1612,6 +1647,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							sessionName,
 							error: persistError instanceof Error ? persistError.message : String(persistError),
 						});
+					}
+
+					// Start context window monitoring for recovered non-orchestrator session
+					if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
+						ContextWindowMonitorService.getInstance().startSessionMonitoring(
+							sessionName, config.memberId, config.teamId, role
+						);
 					}
 
 					return {
@@ -1728,6 +1770,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				};
 			}
 
+			// Start context window monitoring for newly created non-orchestrator session
+			if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
+				ContextWindowMonitorService.getInstance().startSessionMonitoring(
+					sessionName, config.memberId, config.teamId, role
+				);
+			}
+
 			return {
 				success: true,
 				sessionName,
@@ -1768,6 +1817,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Stop runtime exit monitoring before killing the session
 			RuntimeExitMonitorService.getInstance().stopMonitoring(sessionName);
+
+			// Stop context window monitoring before killing the session
+			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
 
 			// Get session helper once to avoid repeated async calls
 			const sessionHelper = await this.getSessionHelper();
@@ -1973,6 +2025,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				resolved = true;
 				clearTimeout(timeoutId);
 				clearInterval(pollId);
+				clearInterval(deepScanId);
 				unsubscribe();
 			};
 
@@ -1993,6 +2046,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					resolve(true);
 				}
 			}, pollInterval);
+
+			// Deep scan with larger buffer every DEEP_SCAN_INTERVAL to catch prompts
+			// that the fast poll misses (e.g. when prompt is beyond the default 200 lines)
+			const deepScanId = setInterval(() => {
+				if (resolved) return;
+				const output = sessionHelper.capturePane(sessionName, EVENT_DELIVERY_CONSTANTS.DEEP_SCAN_LINES);
+				if (this.isClaudeAtPrompt(output, runtimeType)) {
+					this.logger.debug('Agent at prompt (detected via deep scan)', { sessionName });
+					cleanup();
+					resolve(true);
+				}
+			}, EVENT_DELIVERY_CONSTANTS.DEEP_SCAN_INTERVAL);
 
 			// Also subscribe to terminal data for faster detection
 			const unsubscribe = session.onData((data) => {
@@ -3221,6 +3286,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			this.logger.debug('Processing indicators present near bottom of output');
 			return false;
 		}
+
+		this.logger.debug('No prompt detected in terminal output', {
+			tailLength: tailSection.length,
+			lastLines: linesToCheck.slice(-3).map(l => l.substring(0, 80)),
+			runtimeType,
+		});
 
 		return false;
 	}

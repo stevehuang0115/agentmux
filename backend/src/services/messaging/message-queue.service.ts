@@ -207,6 +207,8 @@ export class MessageQueueService extends EventEmitter {
 
   /**
    * Dequeue the next pending message for processing.
+   * Prioritizes user messages (slack, web_chat) over system events so that
+   * real user conversations are never blocked behind internal notifications.
    * Returns null if the queue is empty.
    *
    * @returns The next QueuedMessage or null
@@ -216,7 +218,12 @@ export class MessageQueueService extends EventEmitter {
       return null;
     }
 
-    const message = this.queue.shift()!;
+    // Prioritize user messages over system events
+    const userIdx = this.queue.findIndex(
+      (m) => m.source === 'slack' || m.source === 'web_chat'
+    );
+    const idx = userIdx >= 0 ? userIdx : 0;
+    const [message] = this.queue.splice(idx, 1);
     message.status = 'processing';
     message.processingStartedAt = new Date().toISOString();
     this.currentMessage = message;
