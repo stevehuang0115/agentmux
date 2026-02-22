@@ -4,8 +4,9 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import * as taskManagementHandlers from './task-management.controller.js';
-import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask } from './task-management.controller.js';
+import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput } from './task-management.controller.js';
 import type { ApiController } from '../api.controller.js';
+import { TASK_OUTPUT_CONSTANTS } from '../../types/task-output.types.js';
 
 // Mock filesystem modules
 jest.mock('fs');
@@ -16,6 +17,27 @@ jest.mock('../../utils/prompt-resolver.js', () => ({
 }));
 jest.mock('../../services/agent/agent-heartbeat.service.js', () => ({
   updateAgentHeartbeat: jest.fn<any>().mockResolvedValue(undefined),
+}));
+
+// Mock the TaskOutputValidatorService
+const mockValidate = jest.fn<any>();
+const mockExtractSchemaFromMarkdown = jest.fn<any>();
+const mockExtractRetryInfoFromMarkdown = jest.fn<any>();
+const mockGenerateSchemaMarkdown = jest.fn<any>();
+const mockGenerateRetryMarkdown = jest.fn<any>();
+const mockValidateOutputSize = jest.fn<any>();
+
+jest.mock('../../services/quality/task-output-validator.service.js', () => ({
+  TaskOutputValidatorService: {
+    getInstance: () => ({
+      validate: mockValidate,
+      extractSchemaFromMarkdown: mockExtractSchemaFromMarkdown,
+      extractRetryInfoFromMarkdown: mockExtractRetryInfoFromMarkdown,
+      generateSchemaMarkdown: mockGenerateSchemaMarkdown,
+      generateRetryMarkdown: mockGenerateRetryMarkdown,
+      validateOutputSize: mockValidateOutputSize,
+    }),
+  },
 }));
 
 describe('Task Management Handlers', () => {
@@ -68,6 +90,7 @@ describe('Task Management Handlers', () => {
       expect(typeof taskManagementHandlers.getTeamProgress).toBe('function');
       expect(typeof taskManagementHandlers.createTasksFromConfig).toBe('function');
       expect(typeof taskManagementHandlers.createTask).toBe('function');
+      expect(typeof taskManagementHandlers.getTaskOutput).toBe('function');
     });
   });
 
@@ -548,6 +571,220 @@ describe('Task Management Handlers', () => {
         expect(info.title).toBeUndefined();
         expect(info.fileName).toBe(fileName);
       });
+    });
+  });
+
+  describe('completeTask with output validation', () => {
+    let mockReq: Partial<Request>;
+    let mockRes: any;
+    let jsonSpy: jest.Mock<any>;
+    let statusSpy: jest.Mock<any>;
+
+    const validTaskPath = '/project/.crewly/tasks/delegated/in_progress/task.md';
+
+    beforeEach(() => {
+      jsonSpy = jest.fn<any>();
+      statusSpy = jest.fn<any>().mockReturnValue({ json: jsonSpy });
+      mockRes = { status: statusSpy, json: jsonSpy };
+      mockReq = {
+        body: {
+          taskPath: validTaskPath,
+          sessionName: 'dev-1',
+        },
+      };
+      jest.clearAllMocks();
+
+      // Default: task exists and is in in_progress
+      (existsSync as jest.Mock<any>).mockReturnValue(true);
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([]);
+    });
+
+    it('should complete task without schema (backward compatible)', async () => {
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task\n\nNo schema here');
+      mockExtractSchemaFromMarkdown.mockReturnValue(null);
+      (basename as jest.Mock<any>).mockReturnValue('task.md');
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/done');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          status: 'done',
+        })
+      );
+    });
+
+    it('should reject completion when schema exists but no output provided', async () => {
+      const schema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] };
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task\n\n## Output Schema\n\n```json\n{}\n```');
+      mockExtractSchemaFromMarkdown.mockReturnValue(schema);
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(200);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Task requires structured output but none was provided',
+        })
+      );
+    });
+
+    it('should reject completion when output size exceeds limit', async () => {
+      const schema = { type: 'object', properties: { summary: { type: 'string' } } };
+      mockReq.body!.output = { summary: 'too big' };
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task with schema');
+      mockExtractSchemaFromMarkdown.mockReturnValue(schema);
+      mockValidateOutputSize.mockReturnValue({ valid: false, sizeBytes: 2_000_000, error: 'Output size 2000000 bytes exceeds maximum' });
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(200);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Output size exceeds maximum',
+        })
+      );
+    });
+
+    it('should return validation errors with retry count when output is invalid', async () => {
+      const schema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] };
+      mockReq.body!.output = { wrong: 'field' };
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task with schema');
+      mockExtractSchemaFromMarkdown.mockReturnValue(schema);
+      mockValidateOutputSize.mockReturnValue({ valid: true, sizeBytes: 50 });
+      mockValidate.mockReturnValue({ valid: false, errors: ['Missing: summary'] });
+      mockExtractRetryInfoFromMarkdown.mockReturnValue(null);
+      mockGenerateRetryMarkdown.mockReturnValue('\n\n## Output Validation Retry Info\n\n```json\n{}\n```\n');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(200);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          validationFailed: true,
+          retryCount: 1,
+          maxRetries: TASK_OUTPUT_CONSTANTS.MAX_RETRIES,
+        })
+      );
+    });
+
+    it('should move task to blocked when max retries exceeded', async () => {
+      const schema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] };
+      mockReq.body!.output = { wrong: 'field' };
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task with schema');
+      mockExtractSchemaFromMarkdown.mockReturnValue(schema);
+      mockValidateOutputSize.mockReturnValue({ valid: true, sizeBytes: 50 });
+      mockValidate.mockReturnValue({ valid: false, errors: ['Missing: summary'] });
+      // Already at max retries
+      mockExtractRetryInfoFromMarkdown.mockReturnValue({
+        retryCount: TASK_OUTPUT_CONSTANTS.MAX_RETRIES,
+        maxRetries: TASK_OUTPUT_CONSTANTS.MAX_RETRIES,
+        lastErrors: ['Previous error'],
+        lastAttemptAt: '2026-01-01T00:00:00.000Z',
+      });
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/blocked');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(200);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          validationFailed: true,
+          maxRetriesExceeded: true,
+        })
+      );
+    });
+
+    it('should complete with validated output and store output file', async () => {
+      const schema = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'] };
+      mockReq.body!.output = { summary: 'Done' };
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task with schema');
+      mockExtractSchemaFromMarkdown.mockReturnValue(schema);
+      mockValidateOutputSize.mockReturnValue({ valid: true, sizeBytes: 50 });
+      mockValidate.mockReturnValue({ valid: true, errors: [] });
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/done');
+      (basename as jest.Mock<any>).mockReturnValue('task.md');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          status: 'done',
+          outputPath: expect.stringContaining('.output.json'),
+        })
+      );
+      // Should have written both the task file and the output file
+      expect(writeFile).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('getTaskOutput', () => {
+    let mockReq: Partial<Request>;
+    let mockRes: any;
+    let jsonSpy: jest.Mock<any>;
+    let statusSpy: jest.Mock<any>;
+
+    beforeEach(() => {
+      jsonSpy = jest.fn<any>();
+      statusSpy = jest.fn<any>().mockReturnValue({ json: jsonSpy });
+      mockRes = { status: statusSpy, json: jsonSpy };
+      mockReq = {
+        body: {
+          taskPath: '/project/.crewly/tasks/delegated/done/task.md',
+        },
+      };
+      jest.clearAllMocks();
+    });
+
+    it('should return 400 when taskPath is missing', async () => {
+      mockReq.body!.taskPath = undefined;
+
+      await getTaskOutput.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(400);
+      expect(jsonSpy).toHaveBeenCalledWith({
+        success: false,
+        error: 'taskPath is required',
+      });
+    });
+
+    it('should return success=false when output file does not exist', async () => {
+      (existsSync as jest.Mock<any>).mockReturnValue(false);
+
+      await getTaskOutput.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(200);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'No output file found for this task',
+        })
+      );
+    });
+
+    it('should return output data when file exists', async () => {
+      const outputData = { output: { summary: 'Done' }, producedAt: '2026-01-01T00:00:00.000Z', sessionName: 'dev-1' };
+      (existsSync as jest.Mock<any>).mockReturnValue(true);
+      (readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(outputData));
+
+      await getTaskOutput.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: outputData,
+        })
+      );
     });
   });
 });

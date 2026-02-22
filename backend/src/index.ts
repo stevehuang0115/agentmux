@@ -74,6 +74,7 @@ import { AgentSuspendService } from './services/agent/agent-suspend.service.js';
 import { AgentHeartbeatMonitorService } from './services/agent/agent-heartbeat-monitor.service.js';
 import { OrchestratorHeartbeatMonitorService } from './services/orchestrator/orchestrator-heartbeat-monitor.service.js';
 import { RuntimeExitMonitorService } from './services/agent/runtime-exit-monitor.service.js';
+import { ContextWindowMonitorService } from './services/agent/context-window-monitor.service.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { VersionCheckService } from './services/system/version-check.service.js';
 
@@ -487,6 +488,22 @@ export class CrewlyServer {
 			this.logger.info('Starting message scheduler...');
 			await this.messageSchedulerService.start();
 
+			// Restore persisted scheduled checks (non-critical — don't block startup)
+			try {
+				this.logger.info('Restoring persisted scheduled checks...');
+				const [recurringRestored, oneTimeRestored] = await Promise.all([
+					this.schedulerService.restoreRecurringChecks(),
+					this.schedulerService.restoreOneTimeChecks(),
+				]);
+				if (recurringRestored > 0 || oneTimeRestored > 0) {
+					this.logger.info('Restored scheduled checks', { recurringRestored, oneTimeRestored });
+				}
+			} catch (restoreError) {
+				this.logger.warn('Failed to restore scheduled checks (non-critical)', {
+					error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+				});
+			}
+
 			// Start activity monitoring
 			this.logger.info('Starting activity monitoring...');
 			this.activityMonitorService.startPolling();
@@ -556,6 +573,27 @@ export class CrewlyServer {
 				}
 			} catch (error) {
 				this.logger.warn('Failed to start AgentHeartbeatMonitorService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Wire and start ContextWindowMonitorService
+			try {
+				const ctxSessionBackend = getSessionBackendSync();
+				if (ctxSessionBackend) {
+					const contextWindowMonitor = ContextWindowMonitorService.getInstance();
+					contextWindowMonitor.setDependencies(
+						ctxSessionBackend,
+						this.apiController.agentRegistrationService,
+						this.storageService,
+						this.taskTrackingService,
+						this.eventBusService
+					);
+					contextWindowMonitor.start();
+					this.logger.info('ContextWindowMonitorService started');
+				}
+			} catch (error) {
+				this.logger.warn('Failed to start ContextWindowMonitorService (non-critical)', {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
@@ -1137,6 +1175,9 @@ export class CrewlyServer {
 
 			// Stop agent heartbeat monitor
 			AgentHeartbeatMonitorService.getInstance().stop();
+
+			// Stop context window monitor
+			ContextWindowMonitorService.getInstance().stop();
 
 			// Stop orchestrator heartbeat monitor
 			OrchestratorHeartbeatMonitorService.getInstance().stop();

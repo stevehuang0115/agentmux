@@ -1,0 +1,46 @@
+# =============================================================================
+# Crewly Docker Compose
+#
+# Quick start:
+#   1. Copy .env.example to .env and add your API keys
+#   2. docker compose up
+#   3. Open http://localhost:8787
+# =============================================================================
+
+services:
+  crewly:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crewly
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      # Persist Crewly configuration, teams, memory, and queue state
+      - crewly_data:/home/node/.crewly
+      # Mount your project directory for agents to work on (uncomment and edit):
+      # - /path/to/your/project:/home/node/project
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - WEB_PORT=8787
+      # API keys — set in .env file or uncomment below:
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Optional Slack integration:
+      # - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      # - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
+      # - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  crewly_data:
+    driver: local

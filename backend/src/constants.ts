@@ -29,7 +29,7 @@ export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = CONFIG_AGENT_HEARTBEAT_MONITOR_
 export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
-export const ORCHESTRATOR_SESSION_NAME = 'crewly-orc';
+export const ORCHESTRATOR_SESSION_NAME = CONFIG_CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
 export const ORCHESTRATOR_ROLE = 'orchestrator';
 export const ORCHESTRATOR_WINDOW_NAME = 'Crewly Orchestrator';
 export const AGENT_INITIALIZATION_TIMEOUT = 90000;
@@ -176,8 +176,16 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	MIN_BUFFER_FOR_PROCESSING_DETECTION: 50,
 	/** Timeout for waiting for agent to return to prompt before delivery (ms) */
 	AGENT_READY_TIMEOUT: 120000,
+	/** Shorter timeout for user messages (Slack/web chat) to reduce delivery delay (ms) */
+	USER_MESSAGE_TIMEOUT: 30000,
+	/** Whether to force-deliver user messages after timeout instead of re-queuing */
+	USER_MESSAGE_FORCE_DELIVER: true,
 	/** Interval for polling agent prompt readiness (ms) */
 	AGENT_READY_POLL_INTERVAL: 2000,
+	/** Interval for deep-scan polling with larger buffer when fast poll misses prompt (ms) */
+	DEEP_SCAN_INTERVAL: 5000,
+	/** Number of lines to capture for deep-scan prompt detection */
+	DEEP_SCAN_LINES: 500,
 } as const;
 
 /**
@@ -283,6 +291,9 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	INTER_MESSAGE_DELAY: 500,
 	/** Maximum number of requeue retries before permanently failing a message */
 	MAX_REQUEUE_RETRIES: 5,
+	/** Early ACK check timeout — if no terminal output within this window after
+	 *  delivery, the orchestrator is likely context-exhausted (ms) */
+	ACK_TIMEOUT: 15000,
 	/** Queue persistence file name (stored under crewly home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -425,6 +436,34 @@ export const RUNTIME_EXIT_CONSTANTS = {
 } as const;
 
 /**
+ * Constants for context window monitoring and auto-recovery.
+ * Used by ContextWindowMonitorService to detect when an agent's Claude Code
+ * session is running low on context and trigger proactive warnings or recovery.
+ */
+export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
+	/** Interval for periodic stale detection and cleanup (ms) */
+	CHECK_INTERVAL_MS: 30_000,
+	/** Context usage threshold for yellow (warning) level (%) */
+	YELLOW_THRESHOLD_PERCENT: 70,
+	/** Context usage threshold for red (danger) level (%) */
+	RED_THRESHOLD_PERCENT: 85,
+	/** Context usage threshold for critical level (%) — triggers auto-recovery */
+	CRITICAL_THRESHOLD_PERCENT: 95,
+	/** Whether auto-recovery is enabled at critical threshold */
+	AUTO_RECOVERY_ENABLED: true,
+	/** Maximum recovery attempts within the cooldown window */
+	MAX_RECOVERIES_PER_WINDOW: 2,
+	/** Cooldown window for recovery rate limiting (30 minutes) */
+	COOLDOWN_WINDOW_MS: 30 * 60 * 1000,
+	/** Grace period after monitoring start to ignore early readings (ms) */
+	STARTUP_GRACE_PERIOD_MS: 60_000,
+	/** Maximum rolling buffer size for PTY output (bytes) */
+	MAX_BUFFER_SIZE: 4096,
+	/** Threshold for considering a context state stale (5 minutes) */
+	STALE_DETECTION_THRESHOLD_MS: 5 * 60 * 1000,
+} as const;
+
+/**
  * Constants for sub-agent message queue.
  * Used by SubAgentMessageQueue to buffer messages for agents that haven't
  * completed initialization (status !== 'active') yet.
@@ -458,6 +497,18 @@ export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
 } as const;
 
 /**
+ * Shared Slack API limits used by both image and file upload services.
+ */
+export const SLACK_API_LIMITS = {
+	/** Maximum allowed file size (20 MB — Slack limit) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/** Maximum number of retry attempts for Slack API 429 responses */
+	UPLOAD_MAX_RETRIES: 3,
+	/** Default backoff delay (ms) when no Retry-After header is present */
+	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+} as const;
+
+/**
  * Constants for Slack image download and temporary storage.
  * Used by SlackImageService to validate, download, and manage
  * images sent by users in Slack messages.
@@ -466,7 +517,7 @@ export const SLACK_IMAGE_CONSTANTS = {
 	/** Temp directory for downloaded images (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-images',
 	/** Maximum allowed file size for image downloads (20 MB) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** Supported image MIME types for download (SVG excluded — not accepted by LLM vision APIs) */
 	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const,
 	/**
@@ -497,9 +548,9 @@ export const SLACK_IMAGE_CONSTANTS = {
 	/** Maximum redirect hops to follow during file download */
 	MAX_DOWNLOAD_REDIRECTS: 5,
 	/** Maximum number of retry attempts for Slack API 429 responses */
-	UPLOAD_MAX_RETRIES: 3,
+	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
 	/** Default backoff delay (ms) when no Retry-After header is present */
-	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
 } as const;
 
 /**
@@ -511,16 +562,16 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	/** Temp directory for generated PDFs (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-pdfs',
 	/** Maximum allowed file size for uploads (20 MB — Slack limit) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** File extensions accepted for upload */
 	SUPPORTED_EXTENSIONS: [
 		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
 	] as const,
 	/** Maximum number of retry attempts for Slack API 429 responses */
-	UPLOAD_MAX_RETRIES: 3,
+	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
 	/** Default backoff delay (ms) when no Retry-After header is present */
-	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
 } as const;
 
 /**
@@ -539,6 +590,19 @@ export const EMBEDDING_CONSTANTS = {
 	/** Expected embedding vector dimensions */
 	EMBEDDING_DIMENSIONS: 768,
 } as const;
+
+/**
+ * Message source identifiers for the queue processor.
+ * Determines delivery strategy (timeouts, retry behavior).
+ */
+export const MESSAGE_SOURCES = {
+	SLACK: 'slack',
+	WEB_CHAT: 'web_chat',
+	SYSTEM_EVENT: 'system_event',
+} as const;
+
+/** Typed message source value */
+export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
 
 // Type helpers
 export type AgentStatus =

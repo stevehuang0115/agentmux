@@ -1,0 +1,54 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make Crewly better? We'd love to hear it. Please describe the problem you're trying to solve and the solution you'd like.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What problem does this feature solve? What are you trying to do that you can't today?
+      placeholder: "I want to use Ollama as an agent runtime, but Crewly only supports Claude Code, Gemini CLI, and Codex..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe what you'd like to happen. Be as specific as you can.
+      placeholder: "Add a way to configure custom runtime commands in the dashboard settings, so any CLI tool that accepts stdin/stdout can be used as an agent."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you tried any workarounds or alternative approaches?
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Crewly does this affect?
+      options:
+        - Dashboard (UI)
+        - CLI
+        - Agent behavior
+        - Skills / Marketplace
+        - Memory / Knowledge
+        - Configuration
+        - Documentation
+        - Other
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, links to similar features in other tools, or anything else.

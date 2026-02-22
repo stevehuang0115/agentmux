@@ -1,15 +1,48 @@
 # Crewly
 
+[![GitHub stars](https://img.shields.io/github/stars/stevehuang0115/crewly.svg?style=social)](https://github.com/stevehuang0115/crewly)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/crewly.svg)](https://www.npmjs.com/package/crewly)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
+
 **Website:** [crewly.stevesprompt.com](https://crewly.stevesprompt.com/)
 
-Crewly is a multi-agent orchestration platform that coordinates AI coding agents (Claude Code, Gemini CLI, Codex) to work together as a team. It provides a web dashboard for real-time monitoring, task management, and team coordination — all running locally on your machine.
+Crewly is an open-source multi-agent orchestration platform that coordinates AI coding agents (Claude Code, Gemini CLI, Codex) to work together as a team. It provides a web dashboard for real-time monitoring, task management, and team coordination — all running locally on your machine.
+
+## Features
+
+- **Multi-agent teams** — Create teams with different roles (developer, QA, PM, orchestrator) and watch them collaborate
+- **Multi-runtime support** — Use Claude Code, Gemini CLI, or OpenAI Codex — mix and match per agent
+- **Real-time dashboard** — Monitor all agents through live terminal streams, task boards, and activity feeds
+- **Skill system** — Agents coordinate through bash skills (report status, delegate tasks, manage memory)
+- **Agent memory** — Persistent knowledge that agents build and share across sessions
+- **Slack integration** — Optional two-way Slack bridge for team notifications
+- **Local-first** — Everything runs on your machine. No data leaves your environment.
+
+## Quick Start
+
+```bash
+# Try it instantly (no global install needed)
+npx crewly onboard
+
+# Or install globally
+npm install -g crewly
+crewly onboard
+
+# Start the platform
+crewly start
+```
+
+This starts the backend server and opens the web dashboard in your browser. From there:
+
+1. Create a **team** with agents assigned to roles
+2. Assign the team to a **project** (any local code directory)
+3. Watch agents work in real time through live terminal streams
 
 ## Prerequisites
 
-Before using Crewly, you need:
-
 - **Node.js** v20+ and **npm** v9+
-- **At least one** of the following AI coding CLIs installed:
+- **At least one** AI coding CLI installed:
 
 | Runtime | Install | Verify |
 |---------|---------|--------|
@@ -17,27 +50,49 @@ Before using Crewly, you need:
 | **Gemini CLI** | `npm install -g @google/gemini-cli` | `gemini --version` |
 | **Codex (OpenAI)** | `npm install -g @openai/codex` | `codex --version` |
 
-**API keys:** Gemini CLI requires `GEMINI_API_KEY` set in your environment. Codex CLI requires an OpenAI API key configured via its own setup. Claude Code authenticates through its own login flow.
+**API keys:** Gemini CLI requires `GEMINI_API_KEY`. Codex requires an OpenAI API key. Claude Code authenticates through its own login flow.
 
-## Quick Start
+## Architecture
 
-```bash
-# Install Crewly
-npm install -g crewly
+```
+┌─────────────────────────────────────────────────────┐
+│                   Web Dashboard                      │
+│              (React + xterm.js + WebSocket)          │
+└───────────────────────┬─────────────────────────────┘
+                        │
+┌───────────────────────▼─────────────────────────────┐
+│                 Backend Server                       │
+│           (Express + Socket.IO + PTY)                │
+│                                                      │
+│  ┌──────────┐ ┌──────────┐ ┌───────────────────┐   │
+│  │ Services │ │ Scheduler│ │ Agent Registration │   │
+│  │ (Storage,│ │ (Check-  │ │ (Heartbeat, Idle   │   │
+│  │  Memory) │ │  ins)    │ │  Detection, Resume)│   │
+│  └──────────┘ └──────────┘ └───────────────────┘   │
+└───────────────────────┬─────────────────────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+┌──────────────┐ ┌─────────────┐ ┌─────────────┐
+│  Agent PTY   │ │  Agent PTY  │ │  Agent PTY  │
+│  (Claude)    │ │  (Gemini)   │ │  (Codex)    │
+│              │ │             │ │             │
+│  Skills ◄────┤ │  Skills ◄───┤ │  Skills ◄───┤
+│  Memory ◄────┤ │  Memory ◄───┤ │  Memory ◄───┤
+└──────────────┘ └─────────────┘ └─────────────┘
 
-# Start Crewly
-npx crewly start
+Storage: ~/.crewly/ (global) + project/.crewly/ (per-project)
 ```
 
-That's it. This starts the backend server and opens the web dashboard in your browser. From there you can:
+### How It Works
 
-1. Create a **team** with agents assigned to roles (developer, QA, PM, etc.)
-2. Assign the team to a **project** (any local code directory)
-3. Watch agents work in real time through live terminal streams
+1. You create a **team** in the dashboard with agents assigned to roles
+2. You assign the team to a **project** (any local code directory)
+3. Crewly launches each agent as a CLI process in its own PTY session
+4. Agents receive role-specific prompts and use **skills** (bash scripts) to communicate, report progress, and manage tasks
+5. You monitor everything in real time through the web dashboard
 
 ## Agent Runtimes
-
-Crewly launches AI agents as CLI processes in terminal sessions. Each agent can use a different runtime:
 
 | Runtime | Default Command | Notes |
 |---------|-----------------|-------|
@@ -45,29 +100,24 @@ Crewly launches AI agents as CLI processes in terminal sessions. Each agent can 
 | **Gemini CLI** | `gemini --yolo` | Requires `GEMINI_API_KEY` |
 | **Codex (OpenAI)** | `codex --full-auto` | Requires OpenAI API key |
 
-- The default runtime is **Claude Code**. You can change it in the dashboard under **Settings**.
-- You can select a different runtime per team or per agent when creating them.
-- You can customize the launch command for any runtime under **Settings > Runtime Commands**.
+You can change the default runtime or customize launch commands in **Settings**.
 
-## How It Works
+## CLI Commands
 
+```bash
+crewly onboard       # Interactive setup wizard
+crewly start         # Start backend + open dashboard
+crewly stop          # Stop all services and sessions
+crewly status        # Show running services
+crewly logs          # View aggregated logs
+crewly upgrade       # Upgrade to latest version
+crewly install [id]  # Install a skill from marketplace
+crewly search [q]    # Search skill marketplace
 ```
-You (Dashboard) → Crewly Backend → PTY Sessions (AI agents)
-                       ↓
-                  Agent Skills ← Agents call bash skills to coordinate
-                       ↓
-                  File Storage (~/.crewly/ & project/.crewly/)
-```
-
-1. You create a **team** in the dashboard with agents assigned to roles
-2. You assign the team to a **project** (any local code directory)
-3. Crewly launches each agent as a CLI process in its own terminal session
-4. Agents receive role-specific prompts and use **skills** (bash scripts) to communicate, report progress, and manage tasks
-5. You monitor everything in real time through the web dashboard
 
 ## Configuration
 
-Optional environment variables (set in `.env` at project root or in your shell):
+Optional environment variables (`.env` file or shell):
 
 ```bash
 GEMINI_API_KEY=your_key_here       # Required for Gemini CLI runtime
@@ -77,20 +127,76 @@ SLACK_APP_TOKEN=xapp-...
 SLACK_SIGNING_SECRET=...
 
 LOG_LEVEL=info                     # debug, info, warn, error
+WEB_PORT=8787                      # Dashboard port (default: 8787)
 ```
 
-## Development (From Source)
+## Docker
 
-For contributors who want to work on Crewly itself:
+Run Crewly with a single command using Docker:
 
 ```bash
-git clone https://github.com/your-org/crewly.git
+# 1. Clone the repo
+git clone https://github.com/stevehuang0115/crewly.git
 cd crewly
-npm install
-npm run build
-npm run dev          # Starts backend + frontend with hot-reload
+
+# 2. Add your API keys to .env
+cp .env.example .env
+# Edit .env and add ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.
+
+# 3. Start Crewly
+docker compose up
+
+# Dashboard available at http://localhost:8787
 ```
+
+To mount a project directory for agents to work on, edit `docker-compose.yml` and uncomment the volume mount:
+
+```yaml
+volumes:
+  - crewly_data:/home/node/.crewly
+  - /path/to/your/project:/home/node/project  # <-- uncomment and edit
+```
+
+Build the image manually:
+
+```bash
+# On Apple Silicon, use --platform linux/amd64
+docker build --platform linux/amd64 -t crewly .
+docker run -p 8787:8787 --env-file .env crewly
+```
+
+## Development
+
+```bash
+# Clone the repository
+git clone https://github.com/stevehuang0115/crewly.git
+cd crewly
+
+# Install dependencies
+npm install
+
+# Build all components (backend + frontend + CLI)
+npm run build
+
+# Start in dev mode (backend + frontend with hot-reload)
+npm run dev
+
+# Run tests
+npm run test:unit
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed development guidelines.
+
+## Demo
+
+> Screenshots and demo video coming soon. Star the repo to get notified!
+
+## Community
+
+- **Bug reports & feature requests** — [GitHub Issues](https://github.com/stevehuang0115/crewly/issues)
+- **Questions & discussions** — [GitHub Discussions](https://github.com/stevehuang0115/crewly/discussions)
+- **Contributing** — See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
 
-MIT
+[MIT](LICENSE)

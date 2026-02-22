@@ -16,5 +16,5 @@
   "assignableRoles": ["developer", "qa", "tpm", "designer", "frontend-developer", "backend-developer", "fullstack-dev", "qa-engineer", "product-manager", "architect", "generalist", "sales", "support"],
   "triggers": ["complete task", "finish task", "mark done", "task done"],
   "tags": ["task", "completion", "status"],
-  "version": "1.0.0"
+  "version": "1.1.0"
 }

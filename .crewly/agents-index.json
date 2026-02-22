@@ -1,0 +1,29 @@
+{
+  "agents": [
+    {
+      "agentId": "crewly-orc",
+      "role": "orchestrator",
+      "lastActive": "2026-02-21T22:34:04.305Z"
+    },
+    {
+      "agentId": "crewly-dev-sam-217bfbbf",
+      "role": "developer",
+      "lastActive": "2026-02-21T05:41:50.432Z"
+    },
+    {
+      "agentId": "crewly-dev-mia-member-1",
+      "role": "product-manager",
+      "lastActive": "2026-02-21T05:41:42.614Z"
+    },
+    {
+      "agentId": "crewly-core-mia-member-1",
+      "role": "product-manager",
+      "lastActive": "2026-02-21T23:32:19.136Z"
+    },
+    {
+      "agentId": "crewly-core-sam-217bfbbf",
+      "role": "developer",
+      "lastActive": "2026-02-22T02:30:23.284Z"
+    }
+  ]
+}

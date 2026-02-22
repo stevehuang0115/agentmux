@@ -24,6 +24,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Task Creation Routes
   router.post('/tasks/create-from-config', (req, res) => taskMgmtHandlers.createTasksFromConfig.call(apiController, req, res));
 
+  // Task output retrieval endpoint
+  router.post('/task-management/get-output', (req, res) => taskMgmtHandlers.getTaskOutput.call(apiController, req, res));
+
   // Review request endpoint (for agents to request code reviews)
   router.post('/task-management/request-review', (req, res) => taskMgmtHandlers.requestReview.call(apiController, req, res));
 

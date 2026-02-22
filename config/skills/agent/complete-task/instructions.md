@@ -1,6 +1,6 @@
 # Complete Task
 
-Mark a task as complete with a summary of the work done. Optionally skip quality gates if they have already been verified separately.
+Mark a task as complete with a summary of the work done. If the task has an output schema, provide structured output that will be validated against the schema. Optionally skip quality gates if they have already been verified separately.
 
 ## Parameters
 
@@ -9,6 +9,7 @@ Mark a task as complete with a summary of the work done. Optionally skip quality
 | `absoluteTaskPath` | Yes | Absolute filesystem path to the task file |
 | `sessionName` | Yes | Your agent session name |
 | `summary` | Yes | Summary of the work completed |
+| `output` | No | Structured output object (required if task has an output schema) |
 | `skipGates` | No | Set to `true` to skip quality gate checks |
 
 ## Example
@@ -17,6 +18,26 @@ Mark a task as complete with a summary of the work done. Optionally skip quality
 bash config/skills/agent/complete-task/execute.sh '{"absoluteTaskPath":"/projects/app/tasks/implement-login.md","sessionName":"dev-1","summary":"Implemented login form with validation and tests"}'
 ```
 
+### With structured output
+
+```bash
+bash config/skills/agent/complete-task/execute.sh '{"absoluteTaskPath":"/projects/app/tasks/implement-login.md","sessionName":"dev-1","summary":"Implemented login","output":{"summary":"Login form with validation","filesChanged":["src/login.tsx","src/login.test.tsx"],"testsAdded":2}}'
+```
+
+## Output Schema
+
+If the task markdown contains an `## Output Schema` section with a JSON Schema definition, your `output` object must validate against that schema. If validation fails, the response will include the errors and you can retry (up to 2 retries). After max retries, the task will be moved to blocked/.
+
 ## Output
 
-JSON confirmation of task completion status.
+JSON confirmation of task completion status. If validation fails:
+```json
+{
+  "success": false,
+  "validationFailed": true,
+  "errors": ["error details"],
+  "retryCount": 1,
+  "maxRetries": 2,
+  "message": "Output validation failed. 1 retries remaining."
+}
+```

@@ -22,6 +22,7 @@ import {
   EVENT_DELIVERY_CONSTANTS,
   RUNTIME_TYPES,
   ORCHESTRATOR_HEARTBEAT_CONSTANTS,
+  MESSAGE_SOURCES,
   type RuntimeType,
 } from '../../constants.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
@@ -191,7 +192,7 @@ export class QueueProcessorService extends EventEmitter {
         conversationId: message.conversationId,
       });
 
-      const isSystemEvent = message.source === 'system_event';
+      const isSystemEvent = message.source === MESSAGE_SOURCES.SYSTEM_EVENT;
 
       // Set active conversation ID for response routing (skip for system events)
       if (!isSystemEvent) {
@@ -205,15 +206,27 @@ export class QueueProcessorService extends EventEmitter {
       // for prompt detection in waitForAgentReady. Without runtime-aware detection,
       // the generic PROMPT_STREAM regex can false-positive on markdown `> `
       // lines in Claude Code output, causing premature delivery attempts.
-      const runtimeType: RuntimeType =
-        (orchestratorInfo?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+      const storedRuntimeType = orchestratorInfo?.runtimeType as RuntimeType | undefined;
+      if (!storedRuntimeType) {
+        this.logger.warn('No runtimeType stored for orchestrator, defaulting to CLAUDE_CODE', {
+          messageId: message.id,
+        });
+      }
+      const runtimeType: RuntimeType = storedRuntimeType || RUNTIME_TYPES.CLAUDE_CODE;
+
+      // Determine if this is a user message (Slack/web chat) vs system event.
+      // User messages get shorter timeouts and force-delivery to reduce delay.
+      const isUserMessage = message.source === MESSAGE_SOURCES.SLACK || message.source === MESSAGE_SOURCES.WEB_CHAT;
+      const readyTimeout = isUserMessage
+        ? EVENT_DELIVERY_CONSTANTS.USER_MESSAGE_TIMEOUT
+        : EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT;
 
       // Wait for orchestrator to be at prompt before attempting delivery.
       // After processing a previous message the orchestrator may still be busy
       // (managing agents, running commands) before returning to the input prompt.
       const isReady = await this.agentRegistrationService.waitForAgentReady(
         ORCHESTRATOR_SESSION_NAME,
-        EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
+        readyTimeout,
         runtimeType
       );
 
@@ -226,54 +239,68 @@ export class QueueProcessorService extends EventEmitter {
       }
 
       if (!isReady) {
-        const currentRetries = message.retryCount || 0;
-        const maxRetries = MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES;
-
-        if (currentRetries >= maxRetries) {
-          // Exceeded max retries — permanently fail the message
-          const errorMsg = `Orchestrator not available after ${currentRetries} retries (~${Math.round(currentRetries * EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT / 60000)} minutes). The orchestrator may be busy or unresponsive.`;
-          this.logger.error('Message exceeded max requeue retries, marking as failed', {
+        // For user messages: force-deliver immediately instead of re-queuing
+        // to avoid the 120s × 5 retry loop that causes ~6 min delays
+        if (isUserMessage && EVENT_DELIVERY_CONSTANTS.USER_MESSAGE_FORCE_DELIVER) {
+          this.logger.warn('Agent not ready but force-delivering user message to reduce delay', {
             messageId: message.id,
-            retryCount: currentRetries,
+            source: message.source,
+            timeoutMs: readyTimeout,
+          });
+          // Fall through to delivery below — the message will be sent even though
+          // the orchestrator may not be at prompt. This is acceptable because:
+          // 1. The user expects a timely response
+          // 2. The orchestrator will process the input when it returns to prompt
+        } else {
+          const currentRetries = message.retryCount || 0;
+          const maxRetries = MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES;
+
+          if (currentRetries >= maxRetries) {
+            // Exceeded max retries — permanently fail the message
+            const errorMsg = `Orchestrator not available after ${currentRetries} retries (~${Math.round(currentRetries * EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT / 60000)} minutes). The orchestrator may be busy or unresponsive.`;
+            this.logger.error('Message exceeded max requeue retries, marking as failed', {
+              messageId: message.id,
+              retryCount: currentRetries,
+              maxRetries,
+            });
+
+            this.queueService.markFailed(message.id, errorMsg);
+            this.responseRouter.routeError(message, errorMsg);
+
+            // Notify user in conversation
+            if (message.source !== MESSAGE_SOURCES.SYSTEM_EVENT) {
+              try {
+                const chatService = getChatService();
+                await chatService.addSystemMessage(
+                  message.conversationId,
+                  `Message delivery failed: ${errorMsg} Please try again later.`
+                );
+              } catch (sysErr) {
+                this.logger.warn('Failed to send max-retry failure system message', {
+                  error: sysErr instanceof Error ? sysErr.message : String(sysErr),
+                });
+              }
+            }
+            return;
+          }
+
+          this.logger.warn('Agent not ready, re-queuing message for retry', {
+            messageId: message.id,
+            timeoutMs: readyTimeout,
+            retryCount: currentRetries + 1,
             maxRetries,
           });
 
-          this.queueService.markFailed(message.id, errorMsg);
-          this.responseRouter.routeError(message, errorMsg);
+          // Re-enqueue the message so it gets retried instead of permanently failing
+          this.queueService.requeue(message);
 
-          // Notify user in conversation
-          if (message.source !== 'system_event') {
-            try {
-              const chatService = getChatService();
-              await chatService.addSystemMessage(
-                message.conversationId,
-                `Message delivery failed: ${errorMsg} Please try again later.`
-              );
-            } catch (sysErr) {
-              this.logger.warn('Failed to send max-retry failure system message', {
-                error: sysErr instanceof Error ? sysErr.message : String(sysErr),
-              });
-            }
-          }
+          // Use a longer delay before retrying to give the orchestrator more time.
+          // Mark as already scheduled so the finally block doesn't overwrite with
+          // a shorter INTER_MESSAGE_DELAY.
+          this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
+          this.nextAlreadyScheduled = true;
           return;
         }
-
-        this.logger.warn('Agent not ready, re-queuing message for retry', {
-          messageId: message.id,
-          timeoutMs: EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
-          retryCount: currentRetries + 1,
-          maxRetries,
-        });
-
-        // Re-enqueue the message so it gets retried instead of permanently failing
-        this.queueService.requeue(message);
-
-        // Use a longer delay before retrying to give the orchestrator more time.
-        // Mark as already scheduled so the finally block doesn't overwrite with
-        // a shorter INTER_MESSAGE_DELAY.
-        this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
-        this.nextAlreadyScheduled = true;
-        return;
       }
 
       // Format message: system events use raw content, chat uses [CHAT:id] prefix
@@ -286,6 +313,9 @@ export class QueueProcessorService extends EventEmitter {
         deliveryContent,
         runtimeType
       );
+
+      // Record delivery timestamp for ACK detection
+      message.deliveredAt = new Date().toISOString();
 
       if (!deliveryResult.success) {
         const errorMsg = deliveryResult.error || 'Failed to deliver message to orchestrator';
@@ -371,6 +401,16 @@ export class QueueProcessorService extends EventEmitter {
    * Wait for an orchestrator response on a given conversation.
    * Listens to ChatService 'message' events for matching orchestrator messages.
    *
+   * Includes an early ACK check: if the orchestrator terminal produces zero
+   * output within ACK_TIMEOUT (15s) of delivery, the context is likely
+   * exhausted and we resolve immediately with an actionable error message
+   * instead of waiting the full timeout.
+   *
+   * NOTE: This method intentionally resolves (not rejects) with error messages
+   * for timeout/unresponsive cases. The caller marks the message as "completed"
+   * with the error text as the response, so the user sees the error in their
+   * conversation rather than having it silently swallowed by a catch block.
+   *
    * @param conversationId - Conversation to monitor
    * @param timeoutMs - Timeout in milliseconds
    * @returns Response content
@@ -394,8 +434,28 @@ export class QueueProcessorService extends EventEmitter {
         resolve('The orchestrator is taking longer than expected. Please try again.');
       }, timeoutMs);
 
+      // Early ACK check: if no terminal output within ACK_TIMEOUT after
+      // delivery, the orchestrator is likely context-exhausted.
+      const ackTimeoutId = setTimeout(() => {
+        const tracker = PtyActivityTrackerService.getInstance();
+        const idleMs = tracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
+        if (idleMs >= MESSAGE_QUEUE_CONSTANTS.ACK_TIMEOUT) {
+          this.logger.warn('No orchestrator output within ACK window, likely context exhausted', {
+            conversationId,
+            idleMs,
+            ackTimeout: MESSAGE_QUEUE_CONSTANTS.ACK_TIMEOUT,
+          });
+          cleanup();
+          resolve(
+            'The orchestrator appears to be unresponsive (no output detected). ' +
+            'Its context may be exhausted. Please restart the orchestrator and try again.'
+          );
+        }
+      }, MESSAGE_QUEUE_CONSTANTS.ACK_TIMEOUT);
+
       const cleanup = (): void => {
         clearTimeout(timeoutId);
+        clearTimeout(ackTimeoutId);
         chatService.removeListener('message', onMessage);
       };
 

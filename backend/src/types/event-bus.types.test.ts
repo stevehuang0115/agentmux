@@ -23,6 +23,8 @@ describe('Event Bus Types', () => {
         'agent:busy',
         'agent:active',
         'agent:inactive',
+        'agent:context_warning',
+        'agent:context_critical',
       ]);
     });
   });
@@ -34,6 +36,8 @@ describe('Event Bus Types', () => {
       expect(isValidEventType('agent:busy')).toBe(true);
       expect(isValidEventType('agent:active')).toBe(true);
       expect(isValidEventType('agent:inactive')).toBe(true);
+      expect(isValidEventType('agent:context_warning')).toBe(true);
+      expect(isValidEventType('agent:context_critical')).toBe(true);
     });
 
     it('should return false for invalid event types', () => {

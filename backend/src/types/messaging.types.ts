@@ -9,14 +9,20 @@
  * @module types/messaging
  */
 
+import { MESSAGE_SOURCES, type MessageSource } from '../constants.js';
+
+// Re-export for backwards compatibility
+export { MESSAGE_SOURCES, type MessageSource };
+
 // =============================================================================
 // Enums and Constants
 // =============================================================================
 
 /**
- * Valid message sources for queue entries
+ * Valid message source values as a tuple (for .includes() validation).
+ * Derived from the canonical MESSAGE_SOURCES object in constants.ts.
  */
-export const MESSAGE_SOURCES = ['web_chat', 'slack', 'system_event'] as const;
+export const MESSAGE_SOURCE_VALUES = Object.values(MESSAGE_SOURCES) as readonly MessageSource[];
 
 /**
  * Valid queue message statuses
@@ -27,10 +33,7 @@ export const QUEUE_MESSAGE_STATUSES = ['pending', 'processing', 'completed', 'fa
 // Type Definitions
 // =============================================================================
 
-/**
- * Source of an enqueued message
- */
-export type MessageSource = (typeof MESSAGE_SOURCES)[number];
+// MessageSource type is re-exported from constants.ts above
 
 /**
  * Status of a message in the queue
@@ -111,6 +114,9 @@ export interface QueuedMessage {
 
   /** Number of times this message has been re-queued due to agent-not-ready */
   retryCount?: number;
+
+  /** ISO timestamp when the message was delivered to the orchestrator terminal */
+  deliveredAt?: string;
 }
 
 /**
@@ -203,6 +209,9 @@ export interface PersistedMessage {
 
   /** Number of times this message has been re-queued due to agent-not-ready */
   retryCount?: number;
+
+  /** ISO timestamp when the message was delivered to the orchestrator terminal */
+  deliveredAt?: string;
 }
 
 /**
@@ -267,6 +276,9 @@ export function toPersistedMessage(msg: QueuedMessage): PersistedMessage {
   if (msg.retryCount !== undefined && msg.retryCount > 0) {
     persisted.retryCount = msg.retryCount;
   }
+  if (msg.deliveredAt !== undefined) {
+    persisted.deliveredAt = msg.deliveredAt;
+  }
 
   if (msg.sourceMetadata) {
     const cleaned: Record<string, string | number | boolean | null | undefined> = {};
@@ -296,7 +308,7 @@ export function toPersistedMessage(msg: QueuedMessage): PersistedMessage {
  * @returns True if value is a valid MessageSource
  */
 export function isValidMessageSource(value: unknown): value is MessageSource {
-  return typeof value === 'string' && MESSAGE_SOURCES.includes(value as MessageSource);
+  return typeof value === 'string' && MESSAGE_SOURCE_VALUES.includes(value as MessageSource);
 }
 
 /**

@@ -1,0 +1,130 @@
+/**
+ * Publish Command Tests
+ *
+ * Tests for the crewly publish CLI command including validation,
+ * dry-run mode, and archive creation.
+ *
+ * @module cli/commands/publish.test
+ */
+
+import { publishCommand } from './publish.js';
+
+// Mock chalk to pass through strings
+jest.mock('chalk', () => ({
+  default: {
+    red: (s: string) => s,
+    blue: (s: string) => s,
+    green: (s: string) => s,
+    yellow: (s: string) => s,
+    gray: (s: string) => s,
+  },
+  red: (s: string) => s,
+  blue: (s: string) => s,
+  green: (s: string) => s,
+  yellow: (s: string) => s,
+  gray: (s: string) => s,
+}));
+
+// Mock package-validator
+const mockValidate = jest.fn();
+jest.mock('../utils/package-validator.js', () => ({
+  validatePackage: (...args: unknown[]) => mockValidate(...args),
+}));
+
+// Mock archive-creator
+const mockCreateArchive = jest.fn();
+const mockGenerateChecksum = jest.fn();
+const mockGenerateRegistryEntry = jest.fn();
+jest.mock('../utils/archive-creator.js', () => ({
+  createSkillArchive: (...args: unknown[]) => mockCreateArchive(...args),
+  generateChecksum: (...args: unknown[]) => mockGenerateChecksum(...args),
+  generateRegistryEntry: (...args: unknown[]) => mockGenerateRegistryEntry(...args),
+}));
+
+// Mock fs
+jest.mock('fs', () => {
+  const actual = jest.requireActual('fs');
+  return {
+    ...actual,
+    mkdirSync: jest.fn(),
+    readFileSync: jest.fn().mockReturnValue('{"id":"test","name":"Test","description":"Test","version":"1.0.0","category":"development","assignableRoles":["developer"],"tags":["test"]}'),
+  };
+});
+
+describe('publishCommand', () => {
+  const mockExit = jest.spyOn(process, 'exit').mockImplementation(() => {
+    throw new Error('process.exit');
+  });
+  const mockConsole = jest.spyOn(console, 'log').mockImplementation();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  afterAll(() => {
+    mockExit.mockRestore();
+    mockConsole.mockRestore();
+  });
+
+  it('should exit with error when no path is provided', async () => {
+    await expect(publishCommand()).rejects.toThrow('process.exit');
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('should exit with error when validation fails', async () => {
+    mockValidate.mockReturnValue({
+      valid: false,
+      errors: ['Missing required file: skill.json'],
+      warnings: [],
+    });
+
+    await expect(publishCommand('/some/path')).rejects.toThrow('process.exit');
+    expect(mockExit).toHaveBeenCalledWith(1);
+  });
+
+  it('should print warnings during validation', async () => {
+    mockValidate.mockReturnValue({
+      valid: false,
+      errors: ['Missing file'],
+      warnings: ['No author'],
+    });
+
+    await expect(publishCommand('/some/path')).rejects.toThrow('process.exit');
+    expect(mockConsole).toHaveBeenCalledWith(expect.stringContaining('No author'));
+  });
+
+  it('should stop at validation in dry-run mode', async () => {
+    mockValidate.mockReturnValue({
+      valid: true,
+      errors: [],
+      warnings: [],
+    });
+
+    await publishCommand('/some/path', { dryRun: true });
+
+    expect(mockCreateArchive).not.toHaveBeenCalled();
+    expect(mockConsole).toHaveBeenCalledWith(expect.stringContaining('Dry run'));
+  });
+
+  it('should create archive and print registry entry in normal mode', async () => {
+    mockValidate.mockReturnValue({
+      valid: true,
+      errors: [],
+      warnings: [],
+    });
+    mockCreateArchive.mockResolvedValue('/output/test-1.0.0.tar.gz');
+    mockGenerateChecksum.mockReturnValue('sha256:abc123');
+    mockGenerateRegistryEntry.mockReturnValue({
+      id: 'test',
+      type: 'skill',
+      name: 'Test',
+      version: '1.0.0',
+    });
+
+    await publishCommand('/some/path');
+
+    expect(mockCreateArchive).toHaveBeenCalled();
+    expect(mockGenerateChecksum).toHaveBeenCalledWith('/output/test-1.0.0.tar.gz');
+    expect(mockConsole).toHaveBeenCalledWith(expect.stringContaining('Done'));
+  });
+});

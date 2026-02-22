@@ -24,6 +24,7 @@ vi.mock('lucide-react', () => ({
   Package: () => <svg data-testid="package-icon" />,
   Check: () => <svg data-testid="check-icon" />,
   ArrowUp: () => <svg data-testid="arrow-up-icon" />,
+  X: () => <svg data-testid="x-icon" />,
 }));
 
 // Mock marketplace service
@@ -671,6 +672,113 @@ describe('Marketplace Page', () => {
 
       await waitFor(() => {
         expect(screen.getByRole('alert')).toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('Toast Notifications', () => {
+    it('should show success toast after successful install', async () => {
+      mockFetchItems.mockResolvedValue([createMockItem({ id: 'item-1', installStatus: 'not_installed' })]);
+      mockInstall.mockResolvedValue({ success: true, message: 'Installed Test Skill v1.0.0' });
+
+      render(
+        <TestWrapper>
+          <Marketplace />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Install')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Install'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Installed Test Skill v1.0.0')).toBeInTheDocument();
+      });
+    });
+
+    it('should show error toast when install fails', async () => {
+      mockFetchItems.mockResolvedValue([createMockItem({ id: 'item-1', installStatus: 'not_installed' })]);
+      mockInstall.mockRejectedValue(new Error('Network error'));
+
+      render(
+        <TestWrapper>
+          <Marketplace />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Install')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Install'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Network error')).toBeInTheDocument();
+      });
+    });
+
+    it('should show error toast when uninstall fails', async () => {
+      mockFetchItems.mockResolvedValue([createMockItem({ id: 'item-2', installStatus: 'installed' })]);
+      mockUninstall.mockRejectedValue(new Error('Uninstall error'));
+
+      render(
+        <TestWrapper>
+          <Marketplace />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Uninstall')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('Uninstall'));
+
+      await waitFor(() => {
+        expect(screen.getByText('Uninstall error')).toBeInTheDocument();
+      });
+    });
+
+    it('should show success toast after refresh', async () => {
+      mockFetchItems.mockResolvedValue([]);
+      mockRefresh.mockResolvedValue(undefined);
+
+      render(
+        <TestWrapper>
+          <Marketplace />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('No items found.')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh marketplace/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Registry refreshed')).toBeInTheDocument();
+      });
+    });
+
+    it('should show error toast when refresh fails', async () => {
+      mockFetchItems.mockResolvedValue([]);
+      mockRefresh.mockRejectedValue(new Error('fail'));
+
+      render(
+        <TestWrapper>
+          <Marketplace />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('No items found.')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh marketplace/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Failed to refresh registry')).toBeInTheDocument();
       });
     });
   });

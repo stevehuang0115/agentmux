@@ -11,10 +11,12 @@ import { ResponseRouterService } from './response-router.service.js';
 
 // Mock PtyActivityTrackerService
 const mockRecordActivity = jest.fn();
+let mockIdleTimeMs = 0;
 jest.mock('../agent/pty-activity-tracker.service.js', () => ({
   PtyActivityTrackerService: {
     getInstance: () => ({
       recordActivity: mockRecordActivity,
+      getIdleTimeMs: jest.fn().mockImplementation(() => mockIdleTimeMs),
     }),
   },
 }));
@@ -27,6 +29,7 @@ jest.mock('../../constants.js', () => ({
     MAX_HISTORY_SIZE: 50,
     INTER_MESSAGE_DELAY: 10,
     MAX_REQUEUE_RETRIES: 3,
+    ACK_TIMEOUT: 1000,
     PERSISTENCE_FILE: 'message-queue.json',
     PERSISTENCE_DIR: 'queue',
     SOCKET_EVENTS: {
@@ -47,6 +50,8 @@ jest.mock('../../constants.js', () => ({
     AGENT_READY_POLL_INTERVAL: 500,
     PROMPT_DETECTION_TIMEOUT: 5000,
     TOTAL_DELIVERY_TIMEOUT: 10000,
+    USER_MESSAGE_TIMEOUT: 2000,
+    USER_MESSAGE_FORCE_DELIVER: true,
   },
   RUNTIME_TYPES: {
     CLAUDE_CODE: 'claude-code',
@@ -59,6 +64,11 @@ jest.mock('../../constants.js', () => ({
     RESTART_THRESHOLD_MS: 60_000,
     HEARTBEAT_REQUEST_MESSAGE: 'heartbeat',
     STARTUP_GRACE_PERIOD_MS: 30_000,
+  },
+  MESSAGE_SOURCES: {
+    SLACK: 'slack',
+    WEB_CHAT: 'web_chat',
+    SYSTEM_EVENT: 'system_event',
   },
 }));
 
@@ -132,6 +142,9 @@ describe('QueueProcessorService', () => {
       agentStatus: 'active',
       runtimeType: 'claude-code',
     };
+
+    // Default: orchestrator has recent activity (not idle)
+    mockIdleTimeMs = 0;
 
     processor = new QueueProcessorService(
       queueService,
@@ -541,6 +554,8 @@ describe('QueueProcessorService', () => {
     });
 
     it('should re-queue message when agent is not ready', async () => {
+      // Use system_event source because user messages (web_chat/slack) now
+      // force-deliver instead of re-queuing
       mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
 
       processor.start();
@@ -548,7 +563,7 @@ describe('QueueProcessorService', () => {
       queueService.enqueue({
         content: 'Test',
         conversationId: 'conv-1',
-        source: 'web_chat',
+        source: 'system_event',
       });
 
       jest.advanceTimersByTime(0);
@@ -564,6 +579,8 @@ describe('QueueProcessorService', () => {
 
     it('should retry after re-queue when agent becomes ready', async () => {
       // First attempt: not ready; second attempt: ready
+      // Use system_event source because user messages (web_chat/slack) now
+      // force-deliver instead of re-queuing
       mockAgentRegistrationService.waitForAgentReady
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true);
@@ -573,7 +590,7 @@ describe('QueueProcessorService', () => {
       queueService.enqueue({
         content: 'Retry me',
         conversationId: 'conv-1',
-        source: 'web_chat',
+        source: 'system_event',
       });
 
       // First attempt
@@ -589,10 +606,10 @@ describe('QueueProcessorService', () => {
       await flushPromises();
       await flushPromises();
 
-      // Second attempt should succeed
+      // Second attempt should succeed (system events use raw content, no prefix)
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'crewly-orc',
-        '[CHAT:conv-1] Retry me',
+        'Retry me',
         'claude-code'
       );
     });
@@ -668,16 +685,18 @@ describe('QueueProcessorService', () => {
       await flushPromises();
       await flushPromises();
 
-      // waitForAgentReady should receive the runtimeType
+      // waitForAgentReady should receive the runtimeType with USER_MESSAGE_TIMEOUT
+      // for web_chat source (shorter timeout for user messages)
       expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
         'crewly-orc',
-        5000,
+        2000,
         'claude-code'
       );
     });
 
     it('should permanently fail message after exceeding max requeue retries', async () => {
-      // Agent never becomes ready
+      // Agent never becomes ready — use system_event source which retains the
+      // requeue behavior (user messages force-deliver instead of re-queuing)
       mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
 
       const routeErrorSpy = jest.spyOn(responseRouter, 'routeError');
@@ -687,7 +706,7 @@ describe('QueueProcessorService', () => {
       queueService.enqueue({
         content: 'Will fail eventually',
         conversationId: 'conv-1',
-        source: 'web_chat',
+        source: 'system_event',
       });
 
       // Simulate retry loop: MAX_REQUEUE_RETRIES is 3 in mock constants
@@ -715,12 +734,6 @@ describe('QueueProcessorService', () => {
       // Queue should be empty (not still re-queuing)
       expect(queueService.hasPending()).toBe(false);
       expect(queueService.getStatus().totalFailed).toBe(1);
-
-      // System message should have been sent to the conversation
-      expect((mockChatService as any).addSystemMessage).toHaveBeenCalledWith(
-        'conv-1',
-        expect.stringContaining('Message delivery failed')
-      );
     });
 
     it('should keep heartbeat alive while processing and clear on completion', async () => {
@@ -790,6 +803,7 @@ describe('QueueProcessorService', () => {
 
     it('should increment retryCount on each requeue', async () => {
       // Agent not ready for first 2 attempts, then ready
+      // Use system_event source because user messages now force-deliver
       mockAgentRegistrationService.waitForAgentReady
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(false)
@@ -800,7 +814,7 @@ describe('QueueProcessorService', () => {
       queueService.enqueue({
         content: 'Retry test',
         conversationId: 'conv-1',
-        source: 'web_chat',
+        source: 'system_event',
       });
 
       // First attempt: retryCount 0 -> requeue sets to 1
@@ -824,9 +838,184 @@ describe('QueueProcessorService', () => {
       await flushPromises();
       await flushPromises();
 
+      // system_event uses raw content (no prefix)
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
         'crewly-orc',
-        '[CHAT:conv-1] Retry test',
+        'Retry test',
+        'claude-code'
+      );
+    });
+
+    it('should resolve early with error when orchestrator has no output within ACK window', async () => {
+      // Simulate orchestrator being idle (context exhausted)
+      mockIdleTimeMs = 2000; // >= ACK_TIMEOUT (1000ms in mock)
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Process message — delivery succeeds
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Advance past ACK_TIMEOUT (1000ms in mock constants)
+      jest.advanceTimersByTime(1100);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Message should be completed (with the error response)
+      const status = queueService.getStatus();
+      expect(status.totalProcessed).toBe(1);
+
+      // The response should contain the context-exhaustion message
+      const history = queueService.getHistory();
+      expect(history[0].response).toContain('unresponsive');
+      expect(history[0].response).toContain('context may be exhausted');
+    });
+
+    it('should NOT resolve early when orchestrator has output within ACK window', async () => {
+      // Simulate orchestrator actively producing output
+      mockIdleTimeMs = 500; // < ACK_TIMEOUT (1000ms in mock)
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      // Process message
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Advance past ACK_TIMEOUT
+      jest.advanceTimersByTime(1100);
+      await flushPromises();
+      await flushPromises();
+
+      // Message should still be processing (waiting for real response)
+      const status = queueService.getStatus();
+      expect(status.totalProcessed).toBe(0);
+      expect(status.isProcessing).toBe(true);
+
+      // Now simulate the real response arriving
+      mockChatService.emit('message', {
+        conversationId: 'conv-1',
+        from: { type: 'orchestrator' },
+        content: 'Real response',
+      });
+
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      const finalStatus = queueService.getStatus();
+      expect(finalStatus.totalProcessed).toBe(1);
+      expect(queueService.getHistory()[0].response).toBe('Real response');
+    });
+
+    it('should force-deliver web_chat messages when agent is not ready', async () => {
+      // Agent never becomes ready
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Urgent user message',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // web_chat messages should force-deliver even when agent is not ready
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-orc',
+        '[CHAT:conv-1] Urgent user message',
+        'claude-code'
+      );
+      // Should NOT be re-queued
+      expect(queueService.hasPending()).toBe(false);
+    });
+
+    it('should force-deliver slack messages when agent is not ready', async () => {
+      // Agent never becomes ready
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Slack message',
+        conversationId: 'conv-1',
+        source: 'slack',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // slack messages should force-deliver even when agent is not ready
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-orc',
+        '[CHAT:conv-1] Slack message',
+        'claude-code'
+      );
+      // Should NOT be re-queued
+      expect(queueService.hasPending()).toBe(false);
+    });
+
+    it('should use USER_MESSAGE_TIMEOUT for slack source', async () => {
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello from Slack',
+        conversationId: 'conv-1',
+        source: 'slack',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // waitForAgentReady should use USER_MESSAGE_TIMEOUT (2000ms in mock) for slack
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'crewly-orc',
+        2000,
+        'claude-code'
+      );
+    });
+
+    it('should use AGENT_READY_TIMEOUT for system_event source', async () => {
+      processor.start();
+
+      queueService.enqueue({
+        content: 'System event',
+        conversationId: 'conv-1',
+        source: 'system_event',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // waitForAgentReady should use AGENT_READY_TIMEOUT (5000ms in mock) for system events
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'crewly-orc',
+        5000,
         'claude-code'
       );
     });

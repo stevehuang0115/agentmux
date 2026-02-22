@@ -29,6 +29,7 @@ import { delay } from '../../utils/async.utils.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
+import { ContextWindowMonitorService } from './context-window-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
 
@@ -935,6 +936,31 @@ export class AgentRegistrationService {
 				// Non-critical - use default project path
 			}
 
+			// Write .crewly/CLAUDE.md in the project directory so Claude Code
+			// recognizes Crewly as a legitimate project configuration (fixes #33)
+			if (role !== ORCHESTRATOR_ROLE) {
+				try {
+					const crewlyDir = path.join(projectPath, '.crewly');
+					const claudeMdPath = path.join(crewlyDir, 'CLAUDE.md');
+					await mkdir(crewlyDir, { recursive: true });
+					const templatePath = path.join(this.projectRoot, 'config', 'templates', 'agent-claude-md.md');
+					let claudeMdContent = this.promptCache.get(templatePath);
+					if (!claudeMdContent) {
+						claudeMdContent = await readFile(templatePath, 'utf8');
+						this.promptCache.set(templatePath, claudeMdContent);
+					}
+					await writeFile(claudeMdPath, claudeMdContent, { flag: 'wx' }).catch(() => {
+						// File already exists — no action needed
+					});
+				} catch (claudeMdError) {
+					this.logger.warn('Could not provision .crewly/CLAUDE.md for agent trust (non-critical)', {
+						templatePath: path.join(this.projectRoot, 'config', 'templates', 'agent-claude-md.md'),
+						projectPath,
+						error: claudeMdError instanceof Error ? claudeMdError.message : String(claudeMdError),
+					});
+				}
+			}
+
 			// Replace project path placeholder (must happen after project path lookup above)
 			prompt = prompt.replace(/\{\{PROJECT_PATH\}\}/g, projectPath);
 
@@ -1597,7 +1623,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					});
 				}
 
-				// If recovery succeeded, register for persistence and return early
+				// If recovery succeeded, register for persistence, start monitoring, and return early
 				if (recoverySuccess) {
 					// Register session for state persistence so it survives restarts
 					try {
@@ -1612,6 +1638,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							sessionName,
 							error: persistError instanceof Error ? persistError.message : String(persistError),
 						});
+					}
+
+					// Start context window monitoring for recovered non-orchestrator session
+					if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
+						ContextWindowMonitorService.getInstance().startSessionMonitoring(
+							sessionName, config.memberId, config.teamId, role
+						);
 					}
 
 					return {
@@ -1728,6 +1761,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				};
 			}
 
+			// Start context window monitoring for newly created non-orchestrator session
+			if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
+				ContextWindowMonitorService.getInstance().startSessionMonitoring(
+					sessionName, config.memberId, config.teamId, role
+				);
+			}
+
 			return {
 				success: true,
 				sessionName,
@@ -1768,6 +1808,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Stop runtime exit monitoring before killing the session
 			RuntimeExitMonitorService.getInstance().stopMonitoring(sessionName);
+
+			// Stop context window monitoring before killing the session
+			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
 
 			// Get session helper once to avoid repeated async calls
 			const sessionHelper = await this.getSessionHelper();
@@ -1956,13 +1999,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		// Use runtime-specific pattern for stream detection to avoid false positives
 		// (e.g. Gemini's `> ` pattern matching markdown blockquotes in Claude Code output)
-		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
-		const streamPattern = isClaudeCode
-			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
-			: isGemini
-				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
-				: TERMINAL_PATTERNS.PROMPT_STREAM;
+		const streamPattern = this.getPromptPatternForRuntime(runtimeType);
 
 		return new Promise<boolean>((resolve) => {
 			let resolved = false;
@@ -1973,6 +2010,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				resolved = true;
 				clearTimeout(timeoutId);
 				clearInterval(pollId);
+				clearInterval(deepScanId);
 				unsubscribe();
 			};
 
@@ -1993,6 +2031,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					resolve(true);
 				}
 			}, pollInterval);
+
+			// Deep scan with larger buffer every DEEP_SCAN_INTERVAL to catch prompts
+			// that the fast poll misses (e.g. when prompt is beyond the default 200 lines)
+			const deepScanId = setInterval(() => {
+				if (resolved) return;
+				const output = sessionHelper.capturePane(sessionName, EVENT_DELIVERY_CONSTANTS.DEEP_SCAN_LINES);
+				if (this.isClaudeAtPrompt(output, runtimeType)) {
+					this.logger.debug('Agent at prompt (detected via deep scan)', { sessionName });
+					cleanup();
+					resolve(true);
+				}
+			}, EVENT_DELIVERY_CONSTANTS.DEEP_SCAN_INTERVAL);
 
 			// Also subscribe to terminal data for faster detection
 			const unsubscribe = session.onData((data) => {
@@ -3142,6 +3192,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
+	 * Get the runtime-specific prompt regex pattern.
+	 * Avoids false positives by using narrow patterns when runtime is known.
+	 *
+	 * @param runtimeType - The runtime type (claude-code, gemini-cli, etc.)
+	 * @returns The appropriate prompt detection regex
+	 */
+	private getPromptPatternForRuntime(runtimeType?: RuntimeType): RegExp {
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) return TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT;
+		if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) return TERMINAL_PATTERNS.GEMINI_CLI_PROMPT;
+		return TERMINAL_PATTERNS.PROMPT_STREAM;
+	}
+
+	/**
 	 * Check if Claude Code appears to be at an input prompt.
 	 * Looks for common prompt indicators in terminal output.
 	 *
@@ -3149,10 +3212,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 * @returns true if Claude Code appears to be at a prompt
 	 */
 	private isClaudeAtPrompt(terminalOutput: string, runtimeType?: RuntimeType): boolean {
-		// Handle null/undefined/empty input gracefully
+		// Handle null/undefined/empty input — return false since an empty buffer
+		// may indicate a crashed session or one that hasn't started yet
 		if (!terminalOutput || typeof terminalOutput !== 'string') {
-			this.logger.debug('Terminal output is empty or invalid, assuming at prompt');
-			return true; // Assume at prompt if no output (safer for message delivery)
+			this.logger.debug('Terminal output is empty or invalid, cannot detect prompt', { runtimeType });
+			return false;
 		}
 
 		// Only analyze the tail of the buffer to avoid matching historical prompts
@@ -3160,13 +3224,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-
-		// Use runtime-specific regex when runtime is known, combined pattern otherwise
-		const streamPattern = isClaudeCode
-			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
-			: isGemini
-				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
-				: TERMINAL_PATTERNS.PROMPT_STREAM;
+		const streamPattern = this.getPromptPatternForRuntime(runtimeType);
 
 		// Check for prompt FIRST. Processing indicators like "thinking" or "analyzing"
 		// can appear in the agent's previous response text and persist in the terminal
@@ -3221,6 +3279,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			this.logger.debug('Processing indicators present near bottom of output');
 			return false;
 		}
+
+		this.logger.debug('No prompt detected in terminal output', {
+			tailLength: tailSection.length,
+			lastLines: linesToCheck.slice(-3).map(l => l.substring(0, 80)),
+			runtimeType,
+		});
 
 		return false;
 	}
