@@ -6,6 +6,7 @@
 
 import {
   MESSAGE_SOURCES,
+  MESSAGE_SOURCE_VALUES,
   QUEUE_MESSAGE_STATUSES,
   PERSISTED_QUEUE_VERSION,
   isValidMessageSource,
@@ -27,7 +28,9 @@ import type {
 describe('Messaging Types', () => {
   describe('Constants', () => {
     it('should have correct message sources', () => {
-      expect(MESSAGE_SOURCES).toEqual(['web_chat', 'slack', 'system_event']);
+      expect(MESSAGE_SOURCES).toEqual({ SLACK: 'slack', WEB_CHAT: 'web_chat', SYSTEM_EVENT: 'system_event' });
+      expect(MESSAGE_SOURCE_VALUES).toEqual(expect.arrayContaining(['web_chat', 'slack', 'system_event']));
+      expect(MESSAGE_SOURCE_VALUES).toHaveLength(3);
     });
 
     it('should have correct queue message statuses', () => {

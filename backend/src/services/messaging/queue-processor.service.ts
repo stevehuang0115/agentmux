@@ -406,6 +406,11 @@ export class QueueProcessorService extends EventEmitter {
    * exhausted and we resolve immediately with an actionable error message
    * instead of waiting the full timeout.
    *
+   * NOTE: This method intentionally resolves (not rejects) with error messages
+   * for timeout/unresponsive cases. The caller marks the message as "completed"
+   * with the error text as the response, so the user sees the error in their
+   * conversation rather than having it silently swallowed by a catch block.
+   *
    * @param conversationId - Conversation to monitor
    * @param timeoutMs - Timeout in milliseconds
    * @returns Response content

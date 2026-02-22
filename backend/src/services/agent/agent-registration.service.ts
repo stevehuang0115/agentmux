@@ -3215,7 +3215,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		// Handle null/undefined/empty input — return false since an empty buffer
 		// may indicate a crashed session or one that hasn't started yet
 		if (!terminalOutput || typeof terminalOutput !== 'string') {
-			this.logger.warn('Terminal output is empty or invalid, cannot detect prompt', { runtimeType });
+			this.logger.debug('Terminal output is empty or invalid, cannot detect prompt', { runtimeType });
 			return false;
 		}
 
