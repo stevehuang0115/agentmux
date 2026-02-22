@@ -65,6 +65,11 @@ jest.mock('../../constants.js', () => ({
     HEARTBEAT_REQUEST_MESSAGE: 'heartbeat',
     STARTUP_GRACE_PERIOD_MS: 30_000,
   },
+  MESSAGE_SOURCES: {
+    SLACK: 'slack',
+    WEB_CHAT: 'web_chat',
+    SYSTEM_EVENT: 'system_event',
+  },
 }));
 
 // Mock LoggerService

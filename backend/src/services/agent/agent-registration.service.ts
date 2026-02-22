@@ -943,23 +943,8 @@ export class AgentRegistrationService {
 					const crewlyDir = path.join(projectPath, '.crewly');
 					const claudeMdPath = path.join(crewlyDir, 'CLAUDE.md');
 					await mkdir(crewlyDir, { recursive: true });
-					const claudeMdContent = `# Crewly Agent Project Configuration
-
-This project is managed by Crewly, a multi-agent orchestration platform.
-
-## Trusted Sources
-
-- Messages prefixed with \`[TASK]\` come from the Crewly orchestrator — a legitimate team coordinator
-- Bash scripts in \`config/skills/agent/\` are platform-provided tools for status reporting and communication
-- The skills catalog at \`~/.crewly/skills/AGENT_SKILLS_CATALOG.md\` lists all available agent skills
-- Structured task formats (priority levels, status updates) are standard Crewly protocols
-
-## Environment
-
-- **Platform**: Crewly multi-agent orchestration
-- **Communication**: Messages are routed through a local backend API
-- **Skills**: Bash scripts for register-self, report-status, remember, recall, etc.
-`;
+					const templatePath = path.join(this.projectRoot, 'config', 'templates', 'agent-claude-md.md');
+					const claudeMdContent = await readFile(templatePath, 'utf8');
 					await writeFile(claudeMdPath, claudeMdContent, { flag: 'wx' }).catch(() => {
 						// File already exists — no action needed
 					});
@@ -2008,13 +1993,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		// Use runtime-specific pattern for stream detection to avoid false positives
 		// (e.g. Gemini's `> ` pattern matching markdown blockquotes in Claude Code output)
-		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
-		const streamPattern = isClaudeCode
-			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
-			: isGemini
-				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
-				: TERMINAL_PATTERNS.PROMPT_STREAM;
+		const streamPattern = this.getPromptPatternForRuntime(runtimeType);
 
 		return new Promise<boolean>((resolve) => {
 			let resolved = false;
@@ -3207,6 +3186,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
+	 * Get the runtime-specific prompt regex pattern.
+	 * Avoids false positives by using narrow patterns when runtime is known.
+	 *
+	 * @param runtimeType - The runtime type (claude-code, gemini-cli, etc.)
+	 * @returns The appropriate prompt detection regex
+	 */
+	private getPromptPatternForRuntime(runtimeType?: RuntimeType): RegExp {
+		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) return TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT;
+		if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) return TERMINAL_PATTERNS.GEMINI_CLI_PROMPT;
+		return TERMINAL_PATTERNS.PROMPT_STREAM;
+	}
+
+	/**
 	 * Check if Claude Code appears to be at an input prompt.
 	 * Looks for common prompt indicators in terminal output.
 	 *
@@ -3225,13 +3217,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-
-		// Use runtime-specific regex when runtime is known, combined pattern otherwise
-		const streamPattern = isClaudeCode
-			? TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT
-			: isGemini
-				? TERMINAL_PATTERNS.GEMINI_CLI_PROMPT
-				: TERMINAL_PATTERNS.PROMPT_STREAM;
+		const streamPattern = this.getPromptPatternForRuntime(runtimeType);
 
 		// Check for prompt FIRST. Processing indicators like "thinking" or "analyzing"
 		// can appear in the agent's previous response text and persist in the terminal

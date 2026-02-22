@@ -22,6 +22,7 @@ import {
   EVENT_DELIVERY_CONSTANTS,
   RUNTIME_TYPES,
   ORCHESTRATOR_HEARTBEAT_CONSTANTS,
+  MESSAGE_SOURCES,
   type RuntimeType,
 } from '../../constants.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
@@ -191,7 +192,7 @@ export class QueueProcessorService extends EventEmitter {
         conversationId: message.conversationId,
       });
 
-      const isSystemEvent = message.source === 'system_event';
+      const isSystemEvent = message.source === MESSAGE_SOURCES.SYSTEM_EVENT;
 
       // Set active conversation ID for response routing (skip for system events)
       if (!isSystemEvent) {
@@ -210,7 +211,7 @@ export class QueueProcessorService extends EventEmitter {
 
       // Determine if this is a user message (Slack/web chat) vs system event.
       // User messages get shorter timeouts and force-delivery to reduce delay.
-      const isUserMessage = message.source === 'slack' || message.source === 'web_chat';
+      const isUserMessage = message.source === MESSAGE_SOURCES.SLACK || message.source === MESSAGE_SOURCES.WEB_CHAT;
       const readyTimeout = isUserMessage
         ? EVENT_DELIVERY_CONSTANTS.USER_MESSAGE_TIMEOUT
         : EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT;
@@ -262,7 +263,7 @@ export class QueueProcessorService extends EventEmitter {
             this.responseRouter.routeError(message, errorMsg);
 
             // Notify user in conversation
-            if (message.source !== 'system_event') {
+            if (message.source !== MESSAGE_SOURCES.SYSTEM_EVENT) {
               try {
                 const chatService = getChatService();
                 await chatService.addSystemMessage(

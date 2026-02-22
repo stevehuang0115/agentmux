@@ -29,7 +29,7 @@ export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = CONFIG_AGENT_HEARTBEAT_MONITOR_
 export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
-export const ORCHESTRATOR_SESSION_NAME = 'crewly-orc';
+export const ORCHESTRATOR_SESSION_NAME = CONFIG_CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
 export const ORCHESTRATOR_ROLE = 'orchestrator';
 export const ORCHESTRATOR_WINDOW_NAME = 'Crewly Orchestrator';
 export const AGENT_INITIALIZATION_TIMEOUT = 90000;
@@ -497,6 +497,18 @@ export const SYSTEM_RESOURCE_ALERT_CONSTANTS = {
 } as const;
 
 /**
+ * Shared Slack API limits used by both image and file upload services.
+ */
+export const SLACK_API_LIMITS = {
+	/** Maximum allowed file size (20 MB — Slack limit) */
+	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	/** Maximum number of retry attempts for Slack API 429 responses */
+	UPLOAD_MAX_RETRIES: 3,
+	/** Default backoff delay (ms) when no Retry-After header is present */
+	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+} as const;
+
+/**
  * Constants for Slack image download and temporary storage.
  * Used by SlackImageService to validate, download, and manage
  * images sent by users in Slack messages.
@@ -505,7 +517,7 @@ export const SLACK_IMAGE_CONSTANTS = {
 	/** Temp directory for downloaded images (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-images',
 	/** Maximum allowed file size for image downloads (20 MB) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** Supported image MIME types for download (SVG excluded — not accepted by LLM vision APIs) */
 	SUPPORTED_MIMES: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const,
 	/**
@@ -536,9 +548,9 @@ export const SLACK_IMAGE_CONSTANTS = {
 	/** Maximum redirect hops to follow during file download */
 	MAX_DOWNLOAD_REDIRECTS: 5,
 	/** Maximum number of retry attempts for Slack API 429 responses */
-	UPLOAD_MAX_RETRIES: 3,
+	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
 	/** Default backoff delay (ms) when no Retry-After header is present */
-	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
 } as const;
 
 /**
@@ -550,16 +562,16 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	/** Temp directory for generated PDFs (relative to ~/.crewly/) */
 	TEMP_DIR: 'tmp/slack-pdfs',
 	/** Maximum allowed file size for uploads (20 MB — Slack limit) */
-	MAX_FILE_SIZE: 20 * 1024 * 1024,
+	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** File extensions accepted for upload */
 	SUPPORTED_EXTENSIONS: [
 		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
 	] as const,
 	/** Maximum number of retry attempts for Slack API 429 responses */
-	UPLOAD_MAX_RETRIES: 3,
+	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
 	/** Default backoff delay (ms) when no Retry-After header is present */
-	UPLOAD_DEFAULT_BACKOFF_MS: 5000,
+	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
 } as const;
 
 /**
@@ -578,6 +590,19 @@ export const EMBEDDING_CONSTANTS = {
 	/** Expected embedding vector dimensions */
 	EMBEDDING_DIMENSIONS: 768,
 } as const;
+
+/**
+ * Message source identifiers for the queue processor.
+ * Determines delivery strategy (timeouts, retry behavior).
+ */
+export const MESSAGE_SOURCES = {
+	SLACK: 'slack',
+	WEB_CHAT: 'web_chat',
+	SYSTEM_EVENT: 'system_event',
+} as const;
+
+/** Typed message source value */
+export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
 
 // Type helpers
 export type AgentStatus =

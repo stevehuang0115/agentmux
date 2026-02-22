@@ -488,12 +488,18 @@ export class CrewlyServer {
 			this.logger.info('Starting message scheduler...');
 			await this.messageSchedulerService.start();
 
-			// Restore persisted scheduled checks
-			this.logger.info('Restoring persisted scheduled checks...');
-			const recurringRestored = await this.schedulerService.restoreRecurringChecks();
-			const oneTimeRestored = await this.schedulerService.restoreOneTimeChecks();
-			if (recurringRestored > 0 || oneTimeRestored > 0) {
-				this.logger.info('Restored scheduled checks', { recurringRestored, oneTimeRestored });
+			// Restore persisted scheduled checks (non-critical — don't block startup)
+			try {
+				this.logger.info('Restoring persisted scheduled checks...');
+				const recurringRestored = await this.schedulerService.restoreRecurringChecks();
+				const oneTimeRestored = await this.schedulerService.restoreOneTimeChecks();
+				if (recurringRestored > 0 || oneTimeRestored > 0) {
+					this.logger.info('Restored scheduled checks', { recurringRestored, oneTimeRestored });
+				}
+			} catch (restoreError) {
+				this.logger.warn('Failed to restore scheduled checks (non-critical)', {
+					error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+				});
 			}
 
 			// Start activity monitoring
