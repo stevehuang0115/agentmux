@@ -944,12 +944,18 @@ export class AgentRegistrationService {
 					const claudeMdPath = path.join(crewlyDir, 'CLAUDE.md');
 					await mkdir(crewlyDir, { recursive: true });
 					const templatePath = path.join(this.projectRoot, 'config', 'templates', 'agent-claude-md.md');
-					const claudeMdContent = await readFile(templatePath, 'utf8');
+					let claudeMdContent = this.promptCache.get(templatePath);
+					if (!claudeMdContent) {
+						claudeMdContent = await readFile(templatePath, 'utf8');
+						this.promptCache.set(templatePath, claudeMdContent);
+					}
 					await writeFile(claudeMdPath, claudeMdContent, { flag: 'wx' }).catch(() => {
 						// File already exists — no action needed
 					});
 				} catch (claudeMdError) {
-					this.logger.debug('Could not write .crewly/CLAUDE.md (non-critical)', {
+					this.logger.warn('Could not provision .crewly/CLAUDE.md for agent trust (non-critical)', {
+						templatePath: path.join(this.projectRoot, 'config', 'templates', 'agent-claude-md.md'),
+						projectPath,
 						error: claudeMdError instanceof Error ? claudeMdError.message : String(claudeMdError),
 					});
 				}
@@ -3206,10 +3212,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 * @returns true if Claude Code appears to be at a prompt
 	 */
 	private isClaudeAtPrompt(terminalOutput: string, runtimeType?: RuntimeType): boolean {
-		// Handle null/undefined/empty input gracefully
+		// Handle null/undefined/empty input — return false since an empty buffer
+		// may indicate a crashed session or one that hasn't started yet
 		if (!terminalOutput || typeof terminalOutput !== 'string') {
-			this.logger.debug('Terminal output is empty or invalid, assuming at prompt');
-			return true; // Assume at prompt if no output (safer for message delivery)
+			this.logger.warn('Terminal output is empty or invalid, cannot detect prompt', { runtimeType });
+			return false;
 		}
 
 		// Only analyze the tail of the buffer to avoid matching historical prompts

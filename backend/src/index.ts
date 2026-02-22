@@ -491,8 +491,10 @@ export class CrewlyServer {
 			// Restore persisted scheduled checks (non-critical — don't block startup)
 			try {
 				this.logger.info('Restoring persisted scheduled checks...');
-				const recurringRestored = await this.schedulerService.restoreRecurringChecks();
-				const oneTimeRestored = await this.schedulerService.restoreOneTimeChecks();
+				const [recurringRestored, oneTimeRestored] = await Promise.all([
+					this.schedulerService.restoreRecurringChecks(),
+					this.schedulerService.restoreOneTimeChecks(),
+				]);
 				if (recurringRestored > 0 || oneTimeRestored > 0) {
 					this.logger.info('Restored scheduled checks', { recurringRestored, oneTimeRestored });
 				}

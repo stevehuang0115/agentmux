@@ -206,8 +206,13 @@ export class QueueProcessorService extends EventEmitter {
       // for prompt detection in waitForAgentReady. Without runtime-aware detection,
       // the generic PROMPT_STREAM regex can false-positive on markdown `> `
       // lines in Claude Code output, causing premature delivery attempts.
-      const runtimeType: RuntimeType =
-        (orchestratorInfo?.runtimeType as RuntimeType) || RUNTIME_TYPES.CLAUDE_CODE;
+      const storedRuntimeType = orchestratorInfo?.runtimeType as RuntimeType | undefined;
+      if (!storedRuntimeType) {
+        this.logger.warn('No runtimeType stored for orchestrator, defaulting to CLAUDE_CODE', {
+          messageId: message.id,
+        });
+      }
+      const runtimeType: RuntimeType = storedRuntimeType || RUNTIME_TYPES.CLAUDE_CODE;
 
       // Determine if this is a user message (Slack/web chat) vs system event.
       // User messages get shorter timeouts and force-delivery to reduce delay.
