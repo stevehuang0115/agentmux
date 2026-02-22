@@ -88,3 +88,43 @@ export interface MarketplaceOperationResult {
   message: string;
   item?: InstalledItemRecord;
 }
+
+/** Status of a marketplace submission */
+export type SubmissionStatus = 'pending' | 'approved' | 'rejected';
+
+/** A skill submission awaiting review */
+export interface MarketplaceSubmission {
+  /** Unique submission ID */
+  id: string;
+  /** Skill metadata from skill.json */
+  skillId: string;
+  name: string;
+  description: string;
+  author: string;
+  version: string;
+  category: MarketplaceCategory;
+  tags: string[];
+  license: string;
+  /** Review status */
+  status: SubmissionStatus;
+  /** Path to the uploaded archive on disk */
+  archivePath: string;
+  /** SHA-256 checksum of the archive */
+  checksum: string;
+  /** Archive size in bytes */
+  sizeBytes: number;
+  /** Metadata from skill.json */
+  metadata?: Record<string, unknown>;
+  /** ISO timestamp of submission */
+  submittedAt: string;
+  /** ISO timestamp of review */
+  reviewedAt?: string;
+  /** Review notes (for rejections) */
+  reviewNotes?: string;
+}
+
+/** Local submissions store */
+export interface SubmissionsManifest {
+  schemaVersion: number;
+  submissions: MarketplaceSubmission[];
+}

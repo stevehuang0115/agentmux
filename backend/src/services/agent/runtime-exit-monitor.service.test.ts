@@ -433,6 +433,104 @@ describe('RuntimeExitMonitorService', () => {
 		});
 	});
 
+	describe('process-based exit detection', () => {
+		let mockIsChildProcessAlive: jest.Mock;
+
+		beforeEach(() => {
+			mockIsChildProcessAlive = jest.fn().mockReturnValue(true);
+			// Patch the session backend mock to include isChildProcessAlive
+			const sessionModule = jest.requireMock('../session/index.js');
+			sessionModule.getSessionBackendSync = () => ({
+				getSession: mockGetSession,
+				sessionExists: mockSessionExists,
+				killSession: mockKillSession,
+				isChildProcessAlive: mockIsChildProcessAlive,
+			});
+			sessionModule.createSessionCommandHelper = () => ({
+				getSession: mockGetSession,
+				capturePane: mockCapturePane,
+			});
+
+			// Re-create the service so it picks up the patched mocks
+			RuntimeExitMonitorService.resetInstance();
+			service = RuntimeExitMonitorService.getInstance();
+		});
+
+		it('should detect exit when child process is not alive', async () => {
+			jest.useFakeTimers();
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+
+			// Advance past the process poll grace period
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_GRACE_PERIOD_MS);
+
+			// Child process dies
+			mockIsChildProcessAlive.mockReturnValue(false);
+
+			// Advance to next poll interval tick
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_INTERVAL_MS);
+
+			// Flush async confirmAndReact
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			service.stopMonitoring('test-agent');
+			jest.useRealTimers();
+		});
+
+		it('should not detect exit during grace period', () => {
+			jest.useFakeTimers();
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+
+			// Child process not alive, but still in grace period
+			mockIsChildProcessAlive.mockReturnValue(false);
+
+			// Only advance one poll interval (within 30s grace)
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_INTERVAL_MS);
+
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('test-agent');
+			jest.useRealTimers();
+		});
+
+		it('should not fire when child process is alive', () => {
+			jest.useFakeTimers();
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+
+			mockIsChildProcessAlive.mockReturnValue(true);
+
+			// Advance past grace period + one poll
+			jest.advanceTimersByTime(
+				RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_GRACE_PERIOD_MS +
+				RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_INTERVAL_MS
+			);
+
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('test-agent');
+			jest.useRealTimers();
+		});
+
+		it('should clear process polling interval on stopMonitoring', () => {
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+
+			const monitored = (service as any).sessions.get('test-agent');
+			expect(monitored.processPollingInterval).toBeDefined();
+
+			service.stopMonitoring('test-agent');
+
+			expect(service.isMonitoring('test-agent')).toBe(false);
+		});
+	});
+
 	describe('task-aware restart on exit', () => {
 		const mockCreateAgentSession = jest.fn().mockResolvedValue({ success: true, sessionName: 'test-agent' });
 		const mockAgentRegistrationService = {

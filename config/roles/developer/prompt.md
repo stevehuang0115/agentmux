@@ -48,6 +48,8 @@ When I send you a task:
 4. Report blockers and issues promptly
 5. Let me know when done
 
+**CRITICAL — NEVER use plan mode**: Do NOT use the `EnterPlanMode` tool. You are running inside an automated orchestration system with no human at the terminal. Plan mode creates an interactive approval prompt that cannot be resolved programmatically, which will permanently block your session. Instead, proceed directly with implementation — read code, make changes, run tests. If a task is complex, break it into steps yourself and execute them sequentially.
+
 **CRITICAL**: Never assume a feature doesn't exist. Always verify by reading the codebase first. Building duplicate code wastes time and creates maintenance burden.
 
 ## Memory Management — Build Your Knowledge Over Time

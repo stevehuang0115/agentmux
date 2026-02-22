@@ -20,6 +20,10 @@ jest.mock('./marketplace.controller.js', () => ({
   handleInstall: jest.fn(),
   handleUninstall: jest.fn(),
   handleUpdate: jest.fn(),
+  handleSubmit: jest.fn(),
+  handleListSubmissions: jest.fn(),
+  handleGetSubmission: jest.fn(),
+  handleReviewSubmission: jest.fn(),
 }));
 
 describe('Marketplace Routes', () => {
@@ -104,12 +108,44 @@ describe('Marketplace Routes', () => {
   });
 
   // ---------------------------------------------------------------
+  // Submission routes
+  // ---------------------------------------------------------------
+
+  it('should have POST route for /submit', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/submit' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have GET route for /submissions', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/submissions' && layer.route?.methods?.get
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have GET route for /submissions/:id', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/submissions/:id' && layer.route?.methods?.get
+    );
+    expect(route).toBeDefined();
+  });
+
+  it('should have POST route for /submissions/:id/review', () => {
+    const route = (router.stack as any[]).find(
+      (layer: any) => layer.route?.path === '/submissions/:id/review' && layer.route?.methods?.post
+    );
+    expect(route).toBeDefined();
+  });
+
+  // ---------------------------------------------------------------
   // Route count and method restrictions
   // ---------------------------------------------------------------
 
-  it('should register exactly 8 routes', () => {
+  it('should register exactly 12 routes', () => {
     const routes = (router.stack as any[]).filter((layer: any) => layer.route);
-    expect(routes).toHaveLength(8);
+    expect(routes).toHaveLength(12);
   });
 
   it('should only use GET or POST methods', () => {
@@ -121,12 +157,12 @@ describe('Marketplace Routes', () => {
     }
   });
 
-  it('should have 4 GET routes and 4 POST routes', () => {
+  it('should have 6 GET routes and 6 POST routes', () => {
     const routes = (router.stack as any[]).filter((layer: any) => layer.route);
     const getRoutes = routes.filter((r: any) => r.route.methods.get);
     const postRoutes = routes.filter((r: any) => r.route.methods.post);
-    expect(getRoutes).toHaveLength(4);
-    expect(postRoutes).toHaveLength(4);
+    expect(getRoutes).toHaveLength(6);
+    expect(postRoutes).toHaveLength(6);
   });
 
   // ---------------------------------------------------------------
@@ -139,9 +175,13 @@ describe('Marketplace Routes', () => {
 
     const installedIndex = paths.indexOf('/installed');
     const updatesIndex = paths.indexOf('/updates');
+    const submitIndex = paths.indexOf('/submit');
+    const submissionsIndex = paths.indexOf('/submissions');
     const idIndex = paths.indexOf('/:id');
 
     expect(installedIndex).toBeLessThan(idIndex);
     expect(updatesIndex).toBeLessThan(idIndex);
+    expect(submitIndex).toBeLessThan(idIndex);
+    expect(submissionsIndex).toBeLessThan(idIndex);
   });
 });

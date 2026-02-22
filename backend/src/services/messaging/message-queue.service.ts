@@ -236,6 +236,41 @@ export class MessageQueueService extends EventEmitter {
   }
 
   /**
+   * Dequeue additional pending system_event messages (up to maxCount).
+   * Used by the queue processor to batch multiple system events into a
+   * single delivery, reducing context consumption on the orchestrator.
+   *
+   * Does NOT set currentMessage — the caller is responsible for marking
+   * all returned messages as completed/failed.
+   *
+   * @param maxCount - Maximum additional system events to dequeue
+   * @returns Array of dequeued system event messages
+   */
+  dequeueSystemEventBatch(maxCount: number): QueuedMessage[] {
+    const batch: QueuedMessage[] = [];
+    let found = 0;
+
+    for (let i = 0; i < this.queue.length && found < maxCount; ) {
+      if (this.queue[i].source === 'system_event') {
+        const [msg] = this.queue.splice(i, 1);
+        msg.status = 'processing';
+        msg.processingStartedAt = new Date().toISOString();
+        batch.push(msg);
+        found++;
+      } else {
+        i++;
+      }
+    }
+
+    if (batch.length > 0) {
+      this.emitStatusUpdate();
+      this.schedulePersist();
+    }
+
+    return batch;
+  }
+
+  /**
    * Re-queue a message that was dequeued but could not be delivered.
    * Resets the message status to pending and places it back at the front
    * of the queue so it will be the next message processed.
@@ -284,6 +319,52 @@ export class MessageQueueService extends EventEmitter {
     this.emit('completed', completed);
     this.emitStatusUpdate();
     this.schedulePersist();
+  }
+
+  /**
+   * Mark a batch of messages as completed.
+   * Used for system event batching where multiple messages are dequeued
+   * via dequeueSystemEventBatch() and delivered together.
+   *
+   * @param messages - Array of messages to mark as completed
+   */
+  markBatchCompleted(messages: QueuedMessage[]): void {
+    const now = new Date().toISOString();
+    for (const msg of messages) {
+      msg.status = 'completed';
+      msg.completedAt = now;
+      msg.response = '';
+      this.totalProcessed++;
+      this.addToHistory(msg);
+      this.emit('completed', msg);
+    }
+    if (messages.length > 0) {
+      this.emitStatusUpdate();
+      this.schedulePersist();
+    }
+  }
+
+  /**
+   * Mark a batch of messages as failed.
+   * Used for system event batching when delivery of the combined batch fails.
+   *
+   * @param messages - Array of messages to mark as failed
+   * @param error - Error message describing the failure
+   */
+  markBatchFailed(messages: QueuedMessage[], error: string): void {
+    const now = new Date().toISOString();
+    for (const msg of messages) {
+      msg.status = 'failed';
+      msg.completedAt = now;
+      msg.error = error;
+      this.totalFailed++;
+      this.addToHistory(msg);
+      this.emit('failed', msg);
+    }
+    if (messages.length > 0) {
+      this.emitStatusUpdate();
+      this.schedulePersist();
+    }
   }
 
   /**
@@ -486,8 +567,8 @@ export class MessageQueueService extends EventEmitter {
   }
 
   /**
-   * Schedule a debounced persistence write. Uses setTimeout(0) to batch
-   * multiple synchronous mutations into a single disk write.
+   * Schedule a debounced persistence write. Uses a 50ms debounce to batch
+   * multiple rapid mutations into a single disk write.
    * No-op when persistence is disabled.
    */
   private schedulePersist(): void {
@@ -504,7 +585,7 @@ export class MessageQueueService extends EventEmitter {
       this.persistPromise = this.persistState().finally(() => {
         this.persistPromise = null;
       });
-    }, 0);
+    }, 50);
   }
 
   /**

@@ -18,22 +18,23 @@ import {
   MarketplaceFilter,
   InstalledItemsManifest,
   InstalledItemRecord,
+  type MarketplaceItemType,
 } from '../../types/marketplace.types.js';
-
-const MARKETPLACE_BASE_URL = 'https://crewly.stevesprompt.com';
-const REGISTRY_ENDPOINT = '/api/registry';
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 const CREWLY_HOME = path.join(homedir(), '.crewly');
-const MARKETPLACE_DIR = path.join(CREWLY_HOME, 'marketplace');
-const MANIFEST_PATH = path.join(MARKETPLACE_DIR, 'manifest.json');
+const MARKETPLACE_DIR = path.join(CREWLY_HOME, MARKETPLACE_CONSTANTS.DIR_NAME);
+const MANIFEST_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.MANIFEST_FILE);
+const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 
 let cachedRegistry: MarketplaceRegistry | null = null;
 let cacheTimestamp = 0;
+let fetchInFlight: Promise<MarketplaceRegistry> | null = null;
 
 /**
  * Fetches the marketplace registry from the Crewly webapp API.
- * Uses in-memory caching with a 1-hour TTL.
+ * Uses in-memory caching with a 1-hour TTL. Concurrent callers share
+ * the same in-flight request to avoid duplicate network fetches.
  *
  * On network failure, falls back to the previously cached registry
  * if one is available. Throws only when no cached data exists.
@@ -44,20 +45,77 @@ let cacheTimestamp = 0;
  */
 export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRegistry> {
   const now = Date.now();
-  if (!forceRefresh && cachedRegistry && now - cacheTimestamp < CACHE_TTL) {
+  if (!forceRefresh && cachedRegistry && now - cacheTimestamp < MARKETPLACE_CONSTANTS.CACHE_TTL) {
     return cachedRegistry;
   }
 
-  const url = `${MARKETPLACE_BASE_URL}${REGISTRY_ENDPOINT}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    if (cachedRegistry) return cachedRegistry;
-    throw new Error(`Failed to fetch registry: ${res.status} ${res.statusText}`);
+  // Deduplicate concurrent requests
+  if (fetchInFlight) {
+    return fetchInFlight;
   }
 
-  cachedRegistry = (await res.json()) as MarketplaceRegistry;
+  fetchInFlight = doFetchRegistry(now).finally(() => {
+    fetchInFlight = null;
+  });
+
+  return fetchInFlight;
+}
+
+/**
+ * Internal fetch implementation. Separated to enable in-flight deduplication.
+ */
+async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
+  let remoteRegistry: MarketplaceRegistry;
+  try {
+    const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.REGISTRY_ENDPOINT}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (cachedRegistry) return cachedRegistry;
+      // Fall through to local-only registry
+      remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
+    } else {
+      remoteRegistry = (await res.json()) as MarketplaceRegistry;
+    }
+  } catch {
+    if (cachedRegistry) return cachedRegistry;
+    remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
+  }
+
+  // Merge locally published skills into the registry
+  const localItems = await loadLocalRegistry();
+  if (localItems.length > 0) {
+    const remoteIds = new Set(remoteRegistry.items.map((i) => i.id));
+    for (const localItem of localItems) {
+      if (!remoteIds.has(localItem.id)) {
+        remoteRegistry.items.push(localItem);
+      }
+    }
+  }
+
+  cachedRegistry = remoteRegistry;
   cacheTimestamp = now;
   return cachedRegistry;
+}
+
+/**
+ * Loads locally published marketplace items from the local registry file.
+ *
+ * These are skills that were submitted and approved through the local
+ * submission workflow.
+ *
+ * @returns Array of locally published marketplace items
+ */
+async function loadLocalRegistry(): Promise<MarketplaceItem[]> {
+  try {
+    const data = await readFile(LOCAL_REGISTRY_PATH, 'utf-8');
+    const registry = JSON.parse(data) as { items?: unknown };
+    if (!Array.isArray(registry.items)) {
+      return [];
+    }
+    return registry.items as MarketplaceItem[];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -114,7 +172,8 @@ export async function getItem(id: string): Promise<MarketplaceItemWithStatus | n
  */
 export async function listItems(filter?: MarketplaceFilter): Promise<MarketplaceItemWithStatus[]> {
   const registry = await fetchRegistry();
-  let items = registry.items;
+  // Shallow copy to avoid mutating the cached registry's items array via .sort()
+  let items = [...registry.items];
 
   if (filter?.type) {
     items = items.filter((i) => i.type === filter.type);
@@ -147,7 +206,9 @@ export async function listItems(filter?: MarketplaceFilter): Promise<Marketplace
   }
 
   const manifest = await loadManifest();
-  return items.map((i) => enrichWithStatus(i, manifest));
+  // Use Map for O(n+m) enrichment instead of O(n*m) linear scan per item
+  const installedMap = new Map(manifest.items.map((r) => [r.id, r]));
+  return items.map((i) => enrichWithStatusFromMap(i, installedMap));
 }
 
 /**
@@ -186,10 +247,31 @@ export async function searchItems(query: string): Promise<MarketplaceItemWithSta
 }
 
 /**
+ * Enriches a marketplace item with its local install status using a pre-built Map.
+ *
+ * @param item - The marketplace item from the registry
+ * @param installedMap - Map of installed item ID to record for O(1) lookup
+ * @returns The item enriched with installStatus and optional installedVersion
+ */
+function enrichWithStatusFromMap(
+  item: MarketplaceItem,
+  installedMap: Map<string, InstalledItemRecord>
+): MarketplaceItemWithStatus {
+  const installed = installedMap.get(item.id);
+  if (!installed) {
+    return { ...item, installStatus: 'not_installed' };
+  }
+  if (installed.version !== item.version) {
+    return { ...item, installStatus: 'update_available', installedVersion: installed.version };
+  }
+  return { ...item, installStatus: 'installed', installedVersion: installed.version };
+}
+
+/**
  * Enriches a marketplace item with its local install status.
  *
- * Compares the registry item against the local manifest to determine
- * whether the item is not installed, installed, or has an update available.
+ * Uses a linear scan for single-item lookups. For bulk operations,
+ * use enrichWithStatusFromMap with a pre-built Map instead.
  *
  * @param item - The marketplace item from the registry
  * @param manifest - The local installed items manifest
@@ -221,8 +303,14 @@ function enrichWithStatus(
  * @param id - The marketplace item ID
  * @returns Absolute path to the item's install directory
  */
-export function getInstallPath(type: string, id: string): string {
-  const typeDir = type === 'skill' ? 'skills' : type === 'model' ? 'models' : 'roles';
+const TYPE_DIR_MAP: Record<MarketplaceItemType, string> = {
+  skill: 'skills',
+  model: 'models',
+  role: 'roles',
+};
+
+export function getInstallPath(type: MarketplaceItemType, id: string): string {
+  const typeDir = TYPE_DIR_MAP[type];
   return path.join(MARKETPLACE_DIR, typeDir, id);
 }
 
@@ -234,4 +322,5 @@ export function getInstallPath(type: string, id: string): string {
 export function resetRegistryCache(): void {
   cachedRegistry = null;
   cacheTimestamp = 0;
+  fetchInFlight = null;
 }

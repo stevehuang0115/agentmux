@@ -5,6 +5,7 @@ import {
 	SessionCommandHelper,
 	getSessionBackendSync,
 	createSessionCommandHelper,
+	type ISessionBackend,
 } from '../session/index.js';
 import { getSessionStatePersistence } from '../session/session-state-persistence.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
@@ -39,6 +40,8 @@ interface MonitoredSession {
 	startedAt: number;
 	exitDetected: boolean;
 	debounceTimer?: ReturnType<typeof setTimeout>;
+	/** Interval handle for periodic process-alive polling */
+	processPollingInterval?: ReturnType<typeof setInterval>;
 }
 
 /**
@@ -188,6 +191,14 @@ export class RuntimeExitMonitorService {
 		});
 
 		monitored.unsubscribe = unsubscribe;
+
+		// Start periodic process-alive polling as a fallback.
+		// This catches exits that don't produce recognizable text patterns
+		// (e.g. context window exhaustion, SIGKILL, unexpected crashes).
+		monitored.processPollingInterval = setInterval(() => {
+			this.checkProcessAlive(sessionName, backend, helper);
+		}, RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_INTERVAL_MS);
+
 		this.sessions.set(sessionName, monitored);
 
 		this.logger.info('Started runtime exit monitoring', {
@@ -212,6 +223,9 @@ export class RuntimeExitMonitorService {
 		if (monitored.debounceTimer) {
 			clearTimeout(monitored.debounceTimer);
 		}
+		if (monitored.processPollingInterval) {
+			clearInterval(monitored.processPollingInterval);
+		}
 
 		monitored.unsubscribe();
 		this.sessions.delete(sessionName);
@@ -230,7 +244,8 @@ export class RuntimeExitMonitorService {
 	 * Destroy all monitoring subscriptions.
 	 */
 	destroy(): void {
-		for (const [sessionName] of this.sessions) {
+		const sessionNames = [...this.sessions.keys()];
+		for (const sessionName of sessionNames) {
 			this.stopMonitoring(sessionName);
 		}
 		this.logger.debug('All runtime exit monitors destroyed');
@@ -569,6 +584,57 @@ export class RuntimeExitMonitorService {
 			sessionName,
 			tasksDelivered: activeTasks.length,
 		});
+	}
+
+	/**
+	 * Periodic check: is the runtime child process still alive?
+	 *
+	 * Uses the session backend's isChildProcessAlive() (pgrep -P <pid>)
+	 * to determine if the CLI process has exited. This is a version-agnostic
+	 * fallback that doesn't depend on any text the CLI prints.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param backend - Session backend for process checks
+	 * @param helper - Session command helper for shell prompt verification
+	 */
+	private checkProcessAlive(
+		sessionName: string,
+		backend: ISessionBackend,
+		helper: SessionCommandHelper
+	): void {
+		const monitored = this.sessions.get(sessionName);
+		if (!monitored || monitored.exitDetected) {
+			return;
+		}
+
+		// Skip during startup grace period (CLI may not have spawned yet)
+		if (Date.now() - monitored.startedAt < RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_GRACE_PERIOD_MS) {
+			return;
+		}
+
+		// Check if the backend supports process-alive checks
+		if (!backend.isChildProcessAlive) {
+			return;
+		}
+
+		const isAlive = backend.isChildProcessAlive(sessionName);
+		if (isAlive) {
+			return;
+		}
+
+		// Process is not alive — verify with shell prompt before confirming
+		if (!this.verifyExitWithShellPrompt(sessionName, helper)) {
+			this.logger.debug('Process not alive but shell prompt not confirmed, skipping', { sessionName });
+			return;
+		}
+
+		this.logger.info('Runtime exit detected via process check (no child process)', {
+			sessionName,
+			runtimeType: monitored.runtimeType,
+		});
+
+		// Trigger the same exit flow as pattern-based detection
+		this.confirmAndReact(sessionName, helper);
 	}
 
 	/**

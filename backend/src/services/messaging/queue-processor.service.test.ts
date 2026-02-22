@@ -30,6 +30,7 @@ jest.mock('../../constants.js', () => ({
     INTER_MESSAGE_DELAY: 10,
     MAX_REQUEUE_RETRIES: 3,
     ACK_TIMEOUT: 1000,
+    MAX_SYSTEM_EVENT_BATCH: 5,
     PERSISTENCE_FILE: 'message-queue.json',
     PERSISTENCE_DIR: 'queue',
     SOCKET_EVENTS: {
@@ -1018,6 +1019,98 @@ describe('QueueProcessorService', () => {
         5000,
         'claude-code'
       );
+    });
+  });
+
+  describe('system event batching', () => {
+    it('should batch multiple system events into one delivery', async () => {
+      processor.start();
+
+      // Enqueue multiple system events
+      queueService.enqueue({
+        content: '[EVENT:agent_status] Agent Sam started',
+        conversationId: 'sys-1',
+        source: 'system_event',
+      });
+      queueService.enqueue({
+        content: '[EVENT:agent_status] Agent Mia active',
+        conversationId: 'sys-2',
+        source: 'system_event',
+      });
+      queueService.enqueue({
+        content: '[EVENT:agent_status] Agent Sam active',
+        conversationId: 'sys-3',
+        source: 'system_event',
+      });
+
+      // Trigger processing
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Should only send ONE combined message
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+      const deliveredContent = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0][1];
+      expect(deliveredContent).toContain('Agent Sam started');
+      expect(deliveredContent).toContain('Agent Mia active');
+      expect(deliveredContent).toContain('Agent Sam active');
+
+      // All 3 messages should be completed
+      const status = queueService.getStatus();
+      expect(status.pendingCount).toBe(0);
+    });
+
+    it('should not batch user messages with system events', async () => {
+      processor.start();
+
+      // Enqueue a user message and system events
+      queueService.enqueue({
+        content: 'Hello',
+        conversationId: 'conv-1',
+        source: 'web_chat',
+      });
+      queueService.enqueue({
+        content: '[EVENT:status] Agent started',
+        conversationId: 'sys-1',
+        source: 'system_event',
+      });
+
+      // First processing: user message prioritized
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // The first call should be the user message (prioritized)
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+      const firstContent = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0][1];
+      expect(firstContent).toContain('[CHAT:conv-1]');
+      expect(firstContent).not.toContain('[EVENT:status]');
+    });
+
+    it('should respect MAX_SYSTEM_EVENT_BATCH limit', async () => {
+      processor.start();
+
+      // Enqueue more than MAX_SYSTEM_EVENT_BATCH system events (limit is 5)
+      for (let i = 0; i < 8; i++) {
+        queueService.enqueue({
+          content: `[EVENT:${i}] event ${i}`,
+          conversationId: `sys-${i}`,
+          source: 'system_event',
+        });
+      }
+
+      // Process first batch
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      const firstContent = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0][1];
+      // Should contain exactly 5 events (1 primary + 4 batched)
+      const eventCount = (firstContent.match(/\[EVENT:/g) || []).length;
+      expect(eventCount).toBe(5);
+
+      // 3 events should remain pending
+      expect(queueService.pendingCount).toBe(3);
     });
   });
 });

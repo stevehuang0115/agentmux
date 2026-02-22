@@ -2,14 +2,18 @@
  * Context Window Monitor Service
  *
  * Monitors PTY session output for context window usage percentages and triggers
- * proactive warnings and auto-recovery when thresholds are exceeded.
+ * proactive warnings and runtime-native compaction when thresholds are exceeded.
  *
- * When an agent's Claude Code session reports context usage (e.g., "85% context"),
+ * When an agent's session reports context usage (e.g., "85% context"),
  * this service detects the percentage, evaluates it against configured thresholds,
  * and takes action:
  * - Yellow (70%): Publishes a warning event
- * - Red (85%): Publishes a warning event
- * - Critical (95%): Triggers auto-recovery (kill + restart session with task re-delivery)
+ * - Red (85%): Publishes a warning + triggers runtime compact (/compact or /compress)
+ * - Critical (95%): Retries compact with cooldown; auto-recovery disabled by default
+ *
+ * Strategy: prefer runtime-native compact/compress commands which preserve session
+ * state over session kill + restart which loses all context. Auto-recovery is
+ * available as a last resort via AUTO_RECOVERY_ENABLED constant.
  *
  * Follows the PTY subscription pattern from RuntimeExitMonitorService and the
  * lifecycle/restart pattern from AgentHeartbeatMonitorService.
@@ -33,9 +37,12 @@ import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import {
 	CONTEXT_WINDOW_MONITOR_CONSTANTS,
+	RUNTIME_COMPACT_COMMANDS,
+	RUNTIME_TYPES,
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
+import type { RuntimeType } from '../../constants.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
 import type { EventBusService } from '../event-bus/event-bus.service.js';
@@ -62,6 +69,8 @@ export interface ContextWindowState {
 	teamId: string;
 	/** Agent role */
 	role: string;
+	/** Runtime type for this session (determines compact command) */
+	runtimeType: RuntimeType;
 	/** Last detected context usage percentage (0-100) */
 	contextPercent: number;
 	/** Current severity level */
@@ -74,6 +83,12 @@ export interface ContextWindowState {
 	recoveryCount: number;
 	/** Timestamps of recent recoveries for cooldown tracking */
 	recoveryTimestamps: number[];
+	/** Number of compact attempts for current high-usage episode */
+	compactAttempts: number;
+	/** Whether a compact is currently in progress */
+	compactInProgress: boolean;
+	/** Timestamp of the last compact attempt */
+	lastCompactAt: number;
 }
 
 /**
@@ -237,12 +252,14 @@ export class ContextWindowMonitorService {
 	 * @param memberId - Team member ID
 	 * @param teamId - Team ID
 	 * @param role - Agent role
+	 * @param runtimeType - Runtime type (defaults to 'claude-code')
 	 */
 	startSessionMonitoring(
 		sessionName: string,
 		memberId: string,
 		teamId: string,
-		role: string
+		role: string,
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): void {
 		// Stop any existing monitoring for this session
 		if (this.sessionSubscriptions.has(sessionName)) {
@@ -267,12 +284,16 @@ export class ContextWindowMonitorService {
 			memberId,
 			teamId,
 			role,
+			runtimeType,
 			contextPercent: 0,
 			level: 'normal',
 			lastDetectedAt: Date.now(),
 			recoveryTriggered: false,
 			recoveryCount: 0,
 			recoveryTimestamps: [],
+			compactAttempts: 0,
+			compactInProgress: false,
+			lastCompactAt: 0,
 		};
 		this.contextStates.set(sessionName, state);
 
@@ -405,6 +426,11 @@ export class ContextWindowMonitorService {
 			state.level = 'yellow';
 		} else {
 			state.level = 'normal';
+			// Reset compact tracking when context drops back to normal
+			if (previousLevel !== 'normal') {
+				state.compactAttempts = 0;
+				state.compactInProgress = false;
+			}
 		}
 
 		// Only fire events on level transitions (not repeated at same level)
@@ -415,7 +441,12 @@ export class ContextWindowMonitorService {
 
 	/**
 	 * Evaluate threshold transitions and take appropriate actions.
-	 * Fires events and triggers auto-recovery at critical level.
+	 *
+	 * Strategy (compact-first):
+	 * 1. Yellow (70%): Publish warning event only
+	 * 2. Red (85%): Publish warning + trigger runtime-native compact/compress
+	 * 3. Critical (95%): Retry compact; periodic checks will continue retrying
+	 *    with cooldown. Auto-recovery (kill + restart) only if enabled.
 	 *
 	 * @param state - Current context window state
 	 * @param previousLevel - The level before this update
@@ -433,20 +464,52 @@ export class ContextWindowMonitorService {
 			this.publishContextEvent(state, 'agent:context_warning');
 		}
 
-		// Publish event and trigger recovery for critical level
+		// At red level: try compact before things get critical
+		if (state.level === 'red' && !state.compactInProgress) {
+			if (state.compactAttempts < CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS) {
+				this.triggerCompact(state).catch((err) => {
+					this.logger.error('Compact failed', {
+						sessionName: state.sessionName,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				});
+			}
+		}
+
+		// Critical level: try compact, or fall back to recovery if enabled
 		if (state.level === 'critical') {
 			this.publishContextEvent(state, 'agent:context_critical');
 
+			// Try compact if we haven't hit the limit yet
 			if (
+				!state.compactInProgress &&
+				state.compactAttempts < CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS
+			) {
+				this.triggerCompact(state).catch((err) => {
+					this.logger.error('Compact at critical failed', {
+						sessionName: state.sessionName,
+						error: err instanceof Error ? err.message : String(err),
+					});
+				});
+			} else if (
 				CONTEXT_WINDOW_MONITOR_CONSTANTS.AUTO_RECOVERY_ENABLED &&
 				!state.recoveryTriggered
 			) {
+				// Auto-recovery enabled and compact exhausted — kill + restart
 				state.recoveryTriggered = true;
 				this.triggerAutoRecovery(state).catch((err) => {
 					this.logger.error('Auto-recovery failed', {
 						sessionName: state.sessionName,
 						error: err instanceof Error ? err.message : String(err),
 					});
+				});
+			} else if (!CONTEXT_WINDOW_MONITOR_CONSTANTS.AUTO_RECOVERY_ENABLED) {
+				// Auto-recovery disabled — periodic checks will retry compact
+				// after COMPACT_RETRY_COOLDOWN_MS via performCheck()
+				this.logger.warn('Context critical, compact exhausted, auto-recovery disabled. Periodic retry will continue.', {
+					sessionName: state.sessionName,
+					contextPercent: state.contextPercent,
+					compactAttempts: state.compactAttempts,
 				});
 			}
 		}
@@ -509,6 +572,78 @@ export class ContextWindowMonitorService {
 			level: state.level,
 			timestamp: new Date().toISOString(),
 		});
+	}
+
+	/**
+	 * Trigger context compaction by sending the runtime's native compact command.
+	 *
+	 * Writes the appropriate slash command (e.g., `/compact` for Claude Code,
+	 * `/compress` for Gemini CLI) to the PTY session stdin. The runtime handles
+	 * the actual compression — typically via LLM-based summarization.
+	 *
+	 * @param state - Context window state for the session to compact
+	 */
+	private async triggerCompact(state: ContextWindowState): Promise<void> {
+		const backend = this.sessionBackend || getSessionBackendSync();
+		if (!backend) {
+			this.logger.warn('Cannot trigger compact: session backend not available', {
+				sessionName: state.sessionName,
+			});
+			return;
+		}
+
+		const session = backend.getSession(state.sessionName);
+		if (!session) {
+			this.logger.warn('Cannot trigger compact: session not found', {
+				sessionName: state.sessionName,
+			});
+			return;
+		}
+
+		const command = RUNTIME_COMPACT_COMMANDS[state.runtimeType];
+		if (!command) {
+			this.logger.warn('No compact command for runtime type', {
+				sessionName: state.sessionName,
+				runtimeType: state.runtimeType,
+			});
+			return;
+		}
+
+		state.compactInProgress = true;
+		state.compactAttempts++;
+		state.lastCompactAt = Date.now();
+
+		this.logger.info('Triggering context compaction', {
+			sessionName: state.sessionName,
+			runtimeType: state.runtimeType,
+			command,
+			attempt: state.compactAttempts,
+			contextPercent: state.contextPercent,
+		});
+
+		// Send Escape first to clear any in-progress input, then the compact command
+		session.write('\x1b');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		session.write(command + '\r');
+
+		// After COMPACT_WAIT_MS, mark compact as no longer in progress
+		// so further threshold evaluations can proceed
+		setTimeout(() => {
+			state.compactInProgress = false;
+		}, CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_WAIT_MS);
+
+		// Broadcast compact status to frontend
+		const terminalGateway = getTerminalGateway();
+		if (terminalGateway) {
+			terminalGateway.broadcastContextWindowStatus({
+				sessionName: state.sessionName,
+				memberId: state.memberId,
+				teamId: state.teamId,
+				contextPercent: state.contextPercent,
+				level: state.level,
+				timestamp: new Date().toISOString(),
+			});
+		}
 	}
 
 	/**
@@ -735,8 +870,11 @@ export class ContextWindowMonitorService {
 	}
 
 	/**
-	 * Periodic check for stale states and cleanup.
-	 * Removes states for sessions that haven't reported context usage recently.
+	 * Periodic check for stale states, cleanup, and compact retries.
+	 *
+	 * For stale sessions (no context % detected recently), resets to normal.
+	 * For critical sessions with exhausted compacts, retries compact after
+	 * COMPACT_RETRY_COOLDOWN_MS has elapsed since the last attempt.
 	 */
 	private performCheck(): void {
 		const now = Date.now();
@@ -753,6 +891,36 @@ export class ContextWindowMonitorService {
 				});
 				state.level = 'normal';
 				state.recoveryTriggered = false;
+				state.compactAttempts = 0;
+				state.compactInProgress = false;
+				continue;
+			}
+
+			// Retry compact for critical sessions after cooldown
+			if (
+				state.level === 'critical' &&
+				!state.compactInProgress &&
+				!state.recoveryTriggered &&
+				state.compactAttempts >= CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS
+			) {
+				const timeSinceLastCompact = now - state.lastCompactAt;
+				if (timeSinceLastCompact >= CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_RETRY_COOLDOWN_MS) {
+					this.logger.info('Retrying compact after cooldown for critical session', {
+						sessionName,
+						contextPercent: state.contextPercent,
+						compactAttempts: state.compactAttempts,
+						timeSinceLastCompactMs: timeSinceLastCompact,
+					});
+
+					// Reset attempts to allow one more try
+					state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS - 1;
+					this.triggerCompact(state).catch((err) => {
+						this.logger.error('Compact retry failed', {
+							sessionName: state.sessionName,
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				}
 			}
 		}
 	}

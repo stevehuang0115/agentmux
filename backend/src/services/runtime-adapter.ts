@@ -11,7 +11,7 @@
  * @module services/runtime-adapter
  */
 
-import { RUNTIME_TYPES, type RuntimeType } from '../constants.js';
+import { RUNTIME_TYPES, RUNTIME_COMPACT_COMMANDS, type RuntimeType } from '../constants.js';
 import { RuntimeAgentService } from './agent/runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './agent/runtime-service.factory.js';
 import {
@@ -140,6 +140,20 @@ export interface RuntimeAdapter {
 	 * @returns True if the runtime is detected as running
 	 */
 	detectRuntime(sessionName: string): Promise<boolean>;
+
+	/**
+	 * Trigger context window compaction for a session.
+	 *
+	 * Sends the runtime-specific compact/compress command to reduce context usage.
+	 * Each runtime handles this differently:
+	 * - Claude Code: `/compact` — LLM-based summarization
+	 * - Gemini CLI: `/compress` — summarizer persona with context snapshots
+	 * - Codex CLI: `/compact` — server-side opaque compaction
+	 *
+	 * @param sessionName - Name of the session to compact
+	 * @returns True if the compact command was sent successfully
+	 */
+	compact(sessionName: string): Promise<boolean>;
 }
 
 // ========================= Base Adapter =========================
@@ -227,6 +241,31 @@ abstract class BaseRuntimeAdapter implements RuntimeAdapter {
 	/** @inheritdoc */
 	async detectRuntime(sessionName: string): Promise<boolean> {
 		return this.runtimeService.detectRuntimeWithCommand(sessionName, true);
+	}
+
+	/**
+	 * Send the runtime-specific compact command to the session.
+	 *
+	 * @param sessionName - Name of the session to compact
+	 * @returns True if the compact command was sent successfully
+	 */
+	async compact(sessionName: string): Promise<boolean> {
+		if (!this.sessionBackend.sessionExists(sessionName)) {
+			return false;
+		}
+
+		const command = RUNTIME_COMPACT_COMMANDS[this.runtimeType];
+		if (!command) {
+			return false;
+		}
+
+		const session = this.sessionBackend.getSession(sessionName);
+		if (!session) {
+			return false;
+		}
+
+		session.write(command + '\r');
+		return true;
 	}
 }
 

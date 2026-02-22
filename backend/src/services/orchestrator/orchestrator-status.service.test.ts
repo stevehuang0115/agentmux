@@ -10,9 +10,9 @@ import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockOrchestratorData: { value: any | null | Error } = { value: null };
 
-// Whether the mock session backend reports the session as existing
-// and whether the backend itself is available
-const mockSessionState: { exists: boolean; backendAvailable: boolean } = { exists: false, backendAvailable: true };
+// Whether the mock session backend reports the session as existing,
+// whether the backend itself is available, and whether child process is alive
+const mockSessionState: { exists: boolean; backendAvailable: boolean; childProcessAlive: boolean } = { exists: false, backendAvailable: true, childProcessAlive: false };
 
 // Track calls to updateAgentStatus for assertions
 const mockUpdateAgentStatus = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
@@ -41,6 +41,7 @@ jest.mock('../session/index', () => ({
     }
     return {
       sessionExists: () => mockSessionState.exists,
+      isChildProcessAlive: () => mockSessionState.childProcessAlive,
     };
   },
 }));
@@ -109,6 +110,7 @@ describe('OrchestratorStatusService', () => {
     mockOrchestratorData.value = null;
     mockSessionState.exists = false;
     mockSessionState.backendAvailable = true;
+    mockSessionState.childProcessAlive = false;
     mockUpdateAgentStatus.mockClear();
   });
 
@@ -116,6 +118,7 @@ describe('OrchestratorStatusService', () => {
     mockOrchestratorData.value = null;
     mockSessionState.exists = false;
     mockSessionState.backendAvailable = true;
+    mockSessionState.childProcessAlive = false;
     mockUpdateAgentStatus.mockClear();
   });
 
@@ -359,6 +362,42 @@ describe('OrchestratorStatusService', () => {
       const result = await getOrchestratorStatus();
       expect(result.isActive).toBe(false);
       expect(mockUpdateAgentStatus).toHaveBeenCalledWith('crewly-orc', 'inactive');
+    });
+
+    it('should self-heal to active when status is inactive but session and child process are alive', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('inactive');
+      mockSessionState.exists = true;
+      mockSessionState.childProcessAlive = true;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(true);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('status recovered');
+      expect(mockUpdateAgentStatus).toHaveBeenCalledWith('crewly-orc', 'active');
+    });
+
+    it('should not self-heal when session exists but child process is not alive', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('inactive');
+      mockSessionState.exists = true;
+      mockSessionState.childProcessAlive = false;
+
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(false);
+      // Should show starting message since session exists but status isn't active
+      expect(result.message).toContain('starting up');
+    });
+
+    it('should handle self-healing errors gracefully', async () => {
+      mockOrchestratorData.value = createMockOrchestratorStatus('inactive');
+      mockSessionState.exists = true;
+      mockSessionState.childProcessAlive = true;
+      mockUpdateAgentStatus.mockRejectedValueOnce(new Error('Storage write error'));
+
+      // Should still return active even if the storage write fails
+      const result = await getOrchestratorStatus();
+      expect(result.isActive).toBe(true);
+      expect(result.agentStatus).toBe('active');
+      expect(result.message).toContain('status recovered');
     });
   });
 

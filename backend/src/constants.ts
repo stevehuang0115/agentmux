@@ -294,6 +294,8 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	/** Early ACK check timeout — if no terminal output within this window after
 	 *  delivery, the orchestrator is likely context-exhausted (ms) */
 	ACK_TIMEOUT: 15000,
+	/** Maximum number of system events to batch into a single delivery */
+	MAX_SYSTEM_EVENT_BATCH: 5,
 	/** Queue persistence file name (stored under crewly home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -433,6 +435,18 @@ export const RUNTIME_EXIT_CONSTANTS = {
 	 * produce PTY output that matches exit patterns.
 	 */
 	API_ACTIVITY_GRACE_PERIOD_MS: 120_000,
+	/**
+	 * Interval for polling child process liveness (ms).
+	 * Used as a fallback when pattern-based exit detection misses an exit.
+	 * Checks if the runtime process (e.g. claude) is still alive via pgrep.
+	 */
+	PROCESS_POLL_INTERVAL_MS: 10_000,
+	/**
+	 * Grace period after monitoring starts before process polling begins (ms).
+	 * Prevents false positives during startup when the CLI process hasn't
+	 * spawned yet.
+	 */
+	PROCESS_POLL_GRACE_PERIOD_MS: 30_000,
 } as const;
 
 /**
@@ -447,10 +461,14 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	YELLOW_THRESHOLD_PERCENT: 70,
 	/** Context usage threshold for red (danger) level (%) */
 	RED_THRESHOLD_PERCENT: 85,
-	/** Context usage threshold for critical level (%) — triggers auto-recovery */
+	/** Context usage threshold for critical level (%) — triggers compact retry */
 	CRITICAL_THRESHOLD_PERCENT: 95,
-	/** Whether auto-recovery is enabled at critical threshold */
-	AUTO_RECOVERY_ENABLED: true,
+	/**
+	 * Whether auto-recovery (session kill + restart) is enabled at critical threshold.
+	 * Disabled by default — prefer runtime-native compact/compress commands which
+	 * preserve session state. Auto-recovery is a last resort that loses all context.
+	 */
+	AUTO_RECOVERY_ENABLED: false,
 	/** Maximum recovery attempts within the cooldown window */
 	MAX_RECOVERIES_PER_WINDOW: 2,
 	/** Cooldown window for recovery rate limiting (30 minutes) */
@@ -461,6 +479,26 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	MAX_BUFFER_SIZE: 4096,
 	/** Threshold for considering a context state stale (5 minutes) */
 	STALE_DETECTION_THRESHOLD_MS: 5 * 60 * 1000,
+	/** Time to wait after sending compact command before checking result (ms) */
+	COMPACT_WAIT_MS: 30_000,
+	/** Maximum compact attempts per threshold episode before giving up */
+	MAX_COMPACT_ATTEMPTS: 3,
+	/** Cooldown between compact retries during periodic checks (ms) */
+	COMPACT_RETRY_COOLDOWN_MS: 60_000,
+} as const;
+
+/**
+ * Compact commands per runtime type.
+ *
+ * Each AI runtime has its own slash command to trigger context compression:
+ * - Claude Code: `/compact`
+ * - Gemini CLI: `/compress`
+ * - Codex CLI: `/compact`
+ */
+export const RUNTIME_COMPACT_COMMANDS: Record<RuntimeType, string> = {
+	'claude-code': '/compact',
+	'gemini-cli': '/compress',
+	'codex-cli': '/compact',
 } as const;
 
 /**
@@ -599,6 +637,30 @@ export const MESSAGE_SOURCES = {
 	SLACK: 'slack',
 	WEB_CHAT: 'web_chat',
 	SYSTEM_EVENT: 'system_event',
+} as const;
+
+/**
+ * Constants for marketplace registry, installation, and submission management.
+ * Used by marketplace services to resolve API endpoints, cache settings,
+ * and local file paths.
+ */
+export const MARKETPLACE_CONSTANTS = {
+	/** Base URL for the Crewly marketplace webapp */
+	BASE_URL: 'https://crewly.stevesprompt.com',
+	/** API endpoint for the marketplace skill/item registry */
+	REGISTRY_ENDPOINT: '/api/registry',
+	/** API endpoint for downloading marketplace assets */
+	ASSETS_ENDPOINT: '/api/assets',
+	/** In-memory registry cache time-to-live (1 hour in ms) */
+	CACHE_TTL: 3600000,
+	/** Directory name under ~/.crewly/ for marketplace data */
+	DIR_NAME: 'marketplace',
+	/** File name for the installed-items manifest */
+	MANIFEST_FILE: 'manifest.json',
+	/** File name for the local registry of published skills */
+	LOCAL_REGISTRY_FILE: 'local-registry.json',
+	/** Subdirectory for skill submission archives */
+	SUBMISSIONS_DIR: 'submissions',
 } as const;
 
 /** Typed message source value */

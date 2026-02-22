@@ -18,6 +18,10 @@ import {
   handleInstall,
   handleUninstall,
   handleUpdate,
+  handleSubmit,
+  handleListSubmissions,
+  handleGetSubmission,
+  handleReviewSubmission,
 } from './marketplace.controller.js';
 
 /**
@@ -41,11 +45,17 @@ import {
 export function createMarketplaceRouter(): Router {
   const router = Router();
 
-  // Static routes first to avoid /:id matching "installed", "updates", "refresh"
+  // Static routes first to avoid /:id matching "installed", "updates", "refresh", "submissions"
   router.get('/', handleListItems);
   router.get('/installed', handleListInstalled);
   router.get('/updates', handleListUpdates);
   router.post('/refresh', handleRefresh);
+
+  // Submission routes (static paths, must come before /:id)
+  router.post('/submit', handleSubmit);
+  router.get('/submissions', handleListSubmissions);
+  router.get('/submissions/:id', handleGetSubmission);
+  router.post('/submissions/:id/review', handleReviewSubmission);
 
   // Parameterized routes after static routes
   router.get('/:id', handleGetItem);

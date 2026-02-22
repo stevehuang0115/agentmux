@@ -144,6 +144,40 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
       };
     }
 
+    // Self-healing: if the session is alive AND has a running child process
+    // (e.g. claude), but status says inactive, restore to active.
+    // This handles cases where the status got stale due to a transient false
+    // positive in exit detection while the runtime was actually still running.
+    if (sessionExists && sessionCheckPerformed) {
+      let childProcessAlive = false;
+      try {
+        const sessionBackend = getSessionBackendSync();
+        const sessionName = orchestratorStatus?.sessionName || CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+        childProcessAlive = !!sessionBackend?.isChildProcessAlive?.(sessionName);
+      } catch {
+        // Ignore check errors
+      }
+
+      if (childProcessAlive) {
+        // Best-effort: persist the recovered status but return active regardless
+        try {
+          const storageServiceForRecovery = StorageService.getInstance();
+          const recoverySessionName = orchestratorStatus?.sessionName || CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
+          await storageServiceForRecovery.updateAgentStatus(
+            recoverySessionName,
+            CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE
+          );
+        } catch {
+          // Best-effort — don't let persist failure block recovery
+        }
+        return {
+          isActive: true,
+          agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+          message: 'Orchestrator is active and ready (status recovered).',
+        };
+      }
+    }
+
     // If session exists but status is not active/started, it may be initializing
     if (sessionExists) {
       return {

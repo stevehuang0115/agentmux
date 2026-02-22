@@ -1925,6 +1925,21 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				};
 			}
 
+			// Guard: refuse to deliver if the runtime process has exited.
+			// When Claude Code exits (e.g. context exhaustion), the PTY shell
+			// stays alive. Writing to it would execute garbage as shell commands.
+			const backend = sessionHelper.getBackend();
+			if (backend.isChildProcessAlive && !backend.isChildProcessAlive(sessionName)) {
+				this.logger.error('Runtime process not alive, refusing to deliver message', {
+					sessionName,
+					messageLength: message.length,
+				});
+				return {
+					success: false,
+					error: 'Runtime has exited — no child process in session',
+				};
+			}
+
 			// Use robust message delivery with proper waiting mechanism
 			const delivered = await this.sendMessageWithRetry(sessionName, message, 3, runtimeType);
 

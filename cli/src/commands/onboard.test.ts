@@ -2,8 +2,8 @@
  * Tests for the CLI onboard command.
  *
  * Validates the interactive setup wizard: banner output, provider selection,
- * tool detection/installation, skills check, the full flow, and the new
- * --yes (non-interactive) and --template flags.
+ * tool detection/installation, skills check, team creation, the full flow,
+ * and the --yes (non-interactive) and --template flags.
  */
 
 // ---------------------------------------------------------------------------
@@ -27,9 +27,11 @@ jest.mock('child_process', () => ({
 
 const mockCheckSkillsInstalled = jest.fn();
 const mockInstallAllSkills = jest.fn();
+const mockCountBundledSkills = jest.fn();
 jest.mock('../utils/marketplace.js', () => ({
   checkSkillsInstalled: (...args: unknown[]) => mockCheckSkillsInstalled(...args),
   installAllSkills: (...args: unknown[]) => mockInstallAllSkills(...args),
+  countBundledSkills: (...args: unknown[]) => mockCountBundledSkills(...args),
 }));
 
 const mockListTemplates = jest.fn();
@@ -76,6 +78,7 @@ import {
   ensureTools,
   ensureSkills,
   selectTemplate,
+  createTeamFromTemplate,
   scaffoldCrewlyDirectory,
   printSummary,
   onboardCommand,
@@ -119,6 +122,11 @@ const sampleTemplate: TeamTemplate = {
   ],
 };
 
+/** Helper: make tmux appear as not found (consumes 1 mockExecSync call) */
+function mockTmuxNotFound(): void {
+  mockExecSync.mockImplementationOnce(() => { throw new Error('not found'); });
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -131,6 +139,8 @@ describe('onboard command', () => {
     mockExecSync.mockReset();
     mockCheckSkillsInstalled.mockReset();
     mockInstallAllSkills.mockReset();
+    mockCountBundledSkills.mockReset();
+    mockCountBundledSkills.mockReturnValue(0);
     mockListTemplates.mockReset();
     mockGetTemplate.mockReset();
     mockMkdirSync.mockReset();
@@ -164,8 +174,9 @@ describe('onboard command', () => {
     it.each([
       ['1', 'claude'],
       ['2', 'gemini'],
-      ['3', 'both'],
-      ['4', 'skip'],
+      ['3', 'codex'],
+      ['4', 'both'],
+      ['5', 'skip'],
     ] as [string, ProviderChoice][])('returns "%s" when user enters %s', async (input, expected) => {
       const rl = createMockReadline([input]);
       const result = await selectProvider(rl);
@@ -178,7 +189,7 @@ describe('onboard command', () => {
       expect(result).toBe('gemini');
       // Should have printed a warning for bad inputs
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
-      expect(output).toContain('Please enter 1, 2, 3, or 4');
+      expect(output).toContain('Please enter 1, 2, 3, 4, or 5');
     });
   });
 
@@ -235,10 +246,12 @@ describe('onboard command', () => {
       );
     });
 
-    it('returns false on failure', () => {
+    it('returns false on failure and suggests sudo', () => {
       mockExecSync.mockImplementation(() => { throw new Error('permission denied'); });
       const result = installTool('Claude Code', '@anthropic-ai/claude-code');
       expect(result).toBe(false);
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('sudo npm install -g');
     });
   });
 
@@ -247,7 +260,32 @@ describe('onboard command', () => {
   // -----------------------------------------------------------------------
 
   describe('ensureTools', () => {
+    it('checks for tmux before provider tools', async () => {
+      mockExecSync
+        .mockReturnValueOnce(Buffer.from('/usr/bin/tmux'))   // which tmux
+        .mockReturnValueOnce(Buffer.from('tmux 3.4'));        // tmux -V
+
+      const rl = createMockReadline([]);
+      await ensureTools(rl, 'skip');
+
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('tmux detected');
+    });
+
+    it('warns when tmux is not found', async () => {
+      mockTmuxNotFound();
+
+      const rl = createMockReadline([]);
+      await ensureTools(rl, 'skip');
+
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('tmux not found');
+      expect(output).toContain('brew install tmux');
+    });
+
     it('skips tool installation when provider is skip', async () => {
+      mockTmuxNotFound();
+
       const rl = createMockReadline([]);
       await ensureTools(rl, 'skip');
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
@@ -255,7 +293,8 @@ describe('onboard command', () => {
     });
 
     it('detects an already-installed tool', async () => {
-      // First call: which claude → found; second call: claude --version
+      // tmux → not found; which claude → found; claude --version
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -268,11 +307,10 @@ describe('onboard command', () => {
     });
 
     it('prompts to install a missing tool and installs on Y', async () => {
-      // which claude → fails (not found)
-      // ask user → 'Y'
-      // npm install → succeeds
+      // tmux → not found; which claude → not found; npm install → succeeds
+      mockTmuxNotFound();
       mockExecSync
-        .mockImplementationOnce(() => { throw new Error('not found'); })  // which
+        .mockImplementationOnce(() => { throw new Error('not found'); })  // which claude
         .mockReturnValueOnce(Buffer.from(''))  // npm install
         ;
 
@@ -295,8 +333,10 @@ describe('onboard command', () => {
     });
 
     it('auto-installs missing tools when autoYes is true', async () => {
+      // tmux → not found; which claude → not found; npm install → succeeds
+      mockTmuxNotFound();
       mockExecSync
-        .mockImplementationOnce(() => { throw new Error('not found'); }) // which
+        .mockImplementationOnce(() => { throw new Error('not found'); }) // which claude
         .mockReturnValueOnce(Buffer.from('')) // npm install
         ;
 
@@ -332,15 +372,34 @@ describe('onboard command', () => {
       expect(output).toContain('5 skills installed');
     });
 
-    it('handles zero marketplace skills', async () => {
+    it('shows bundled skills when marketplace has zero', async () => {
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 0, total: 0 });
+      mockCountBundledSkills.mockReturnValue(15);
+      await ensureSkills();
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('15 bundled skills available');
+    });
+
+    it('handles zero marketplace skills with no bundled fallback', async () => {
+      mockCheckSkillsInstalled.mockResolvedValue({ installed: 0, total: 0 });
+      mockCountBundledSkills.mockReturnValue(0);
       await ensureSkills();
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
       expect(output).toContain('No skills available');
     });
 
-    it('handles errors gracefully', async () => {
+    it('falls back to bundled skills on network error', async () => {
       mockCheckSkillsInstalled.mockRejectedValue(new Error('network error'));
+      mockCountBundledSkills.mockReturnValue(12);
+      await ensureSkills();
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('12 bundled skills available');
+      expect(output).toContain('marketplace offline');
+    });
+
+    it('handles errors gracefully when no bundled skills', async () => {
+      mockCheckSkillsInstalled.mockRejectedValue(new Error('network error'));
+      mockCountBundledSkills.mockReturnValue(0);
       await ensureSkills();
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
       expect(output).toContain('Could not install skills');
@@ -409,6 +468,55 @@ describe('onboard command', () => {
       const rl = createMockReadline(['x', '0', '1']);
       const result = await selectTemplate(rl);
       expect(result).toBeDefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // createTeamFromTemplate
+  // -----------------------------------------------------------------------
+
+  describe('createTeamFromTemplate', () => {
+    it('creates team directory and config file', () => {
+      const result = createTeamFromTemplate(sampleTemplate);
+
+      expect(result).toBe(true);
+      expect(mockMkdirSync).toHaveBeenCalledWith(
+        expect.stringContaining('teams/web-dev-team'),
+        expect.objectContaining({ recursive: true }),
+      );
+      expect(mockWriteFileSync).toHaveBeenCalledWith(
+        expect.stringContaining('teams/web-dev-team/config.json'),
+        expect.stringContaining('"name": "Web Dev Team"'),
+      );
+    });
+
+    it('includes all members with required fields', () => {
+      createTeamFromTemplate(sampleTemplate);
+
+      const writeCall = mockWriteFileSync.mock.calls[0];
+      const config = JSON.parse(writeCall[1] as string);
+
+      expect(config.members).toHaveLength(2);
+      expect(config.members[0]).toEqual(expect.objectContaining({
+        name: 'Frontend Dev',
+        role: 'frontend-developer',
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
+        runtimeType: 'claude-code',
+      }));
+      expect(config.members[0].id).toBeDefined();
+      expect(config.members[0].sessionName).toBeDefined();
+      expect(config.members[0].createdAt).toBeDefined();
+    });
+
+    it('returns false when filesystem operation fails', () => {
+      mockMkdirSync.mockImplementation(() => { throw new Error('permission denied'); });
+
+      const result = createTeamFromTemplate(sampleTemplate);
+
+      expect(result).toBe(false);
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('Failed to create team');
     });
   });
 
@@ -506,13 +614,13 @@ describe('onboard command', () => {
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
       expect(output).toContain('Test Team');
       expect(output).toContain('Dev, QA');
-      expect(output).toContain('Setup complete');
+      expect(output).toContain('Your team is ready');
     });
 
     it('does not include template info when null', () => {
       printSummary(null);
       const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
-      expect(output).not.toContain('template');
+      expect(output).not.toContain('Your team is ready');
       expect(output).toContain('Setup complete');
     });
 
@@ -536,7 +644,7 @@ describe('onboard command', () => {
     });
 
     it('runs the full wizard selecting skip provider', async () => {
-      mockReadlineAnswers = ['4']; // skip provider; template auto-skips (no templates)
+      mockReadlineAnswers = ['5']; // skip provider; template auto-skips (no templates)
       mockReadlineAnswerIndex = 0;
 
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
@@ -560,8 +668,8 @@ describe('onboard command', () => {
         },
       ]);
 
-      // Answer '4' for provider (skip), '1' for template selection
-      mockReadlineAnswers = ['4', '1'];
+      // Answer '5' for provider (skip), '1' for template selection
+      mockReadlineAnswers = ['5', '1'];
       mockReadlineAnswerIndex = 0;
 
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
@@ -575,11 +683,26 @@ describe('onboard command', () => {
       expect(mockRlClose).toHaveBeenCalled();
     });
 
+    it('creates team when template is selected', async () => {
+      mockListTemplates.mockReturnValue([sampleTemplate]);
+
+      mockReadlineAnswers = ['5', '1']; // skip provider, select first template
+      mockReadlineAnswerIndex = 0;
+
+      mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
+
+      await onboardCommand();
+
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('Team "Web Dev Team" created');
+    });
+
     it('closes readline even if an error occurs in skills', async () => {
       mockReadlineAnswers = ['1']; // claude provider; template auto-skips (no templates)
       mockReadlineAnswerIndex = 0;
 
-      // which claude → found
+      // tmux → not found; which claude → found; claude --version
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -594,7 +717,7 @@ describe('onboard command', () => {
     });
 
     it('scaffolds .crewly/ directory during interactive flow', async () => {
-      mockReadlineAnswers = ['4']; // skip provider
+      mockReadlineAnswers = ['5']; // skip provider
       mockReadlineAnswerIndex = 0;
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
 
@@ -618,7 +741,8 @@ describe('onboard command', () => {
 
     it('runs non-interactive with defaults', async () => {
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
-      // which claude → found
+      // tmux → not found; which claude → found; claude --version
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -633,7 +757,8 @@ describe('onboard command', () => {
 
     it('auto-installs missing tools in --yes mode', async () => {
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
-      // which claude → not found, then npm install succeeds
+      // tmux → not found; which claude → not found; npm install succeeds
+      mockTmuxNotFound();
       mockExecSync
         .mockImplementationOnce(() => { throw new Error('not found'); })
         .mockReturnValueOnce(Buffer.from(''));
@@ -648,6 +773,7 @@ describe('onboard command', () => {
     it('uses first available template when no --template specified', async () => {
       mockListTemplates.mockReturnValue([sampleTemplate]);
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -660,6 +786,7 @@ describe('onboard command', () => {
 
     it('scaffolds .crewly/ directory in --yes mode', async () => {
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -686,7 +813,7 @@ describe('onboard command', () => {
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
 
       // Skip provider (step 1)
-      mockReadlineAnswers = ['4'];
+      mockReadlineAnswers = ['5'];
       mockReadlineAnswerIndex = 0;
 
       await onboardCommand({ template: 'web-dev-team' });
@@ -700,6 +827,7 @@ describe('onboard command', () => {
     it('uses specified template in --yes mode', async () => {
       mockGetTemplate.mockReturnValue(sampleTemplate);
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
+      mockTmuxNotFound();
       mockExecSync
         .mockReturnValueOnce(Buffer.from('/usr/local/bin/claude'))
         .mockReturnValueOnce(Buffer.from('1.0.17'));
@@ -715,7 +843,7 @@ describe('onboard command', () => {
       mockListTemplates.mockReturnValue([sampleTemplate]);
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
 
-      mockReadlineAnswers = ['4', '']; // skip provider, skip template
+      mockReadlineAnswers = ['5', '']; // skip provider, skip template
       mockReadlineAnswerIndex = 0;
 
       await onboardCommand({ template: 'nonexistent' });
@@ -730,7 +858,7 @@ describe('onboard command', () => {
       mockListTemplates.mockReturnValue([]);
       mockCheckSkillsInstalled.mockResolvedValue({ installed: 10, total: 10 });
 
-      mockReadlineAnswers = ['4'];
+      mockReadlineAnswers = ['5'];
       mockReadlineAnswerIndex = 0;
 
       await onboardCommand({ template: 'nonexistent' });

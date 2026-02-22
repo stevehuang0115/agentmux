@@ -8,7 +8,7 @@
  */
 
 import { ContextWindowMonitorService, type ContextLevel, type ContextWindowState } from './context-window-monitor.service.js';
-import { CONTEXT_WINDOW_MONITOR_CONSTANTS } from '../../constants.js';
+import { CONTEXT_WINDOW_MONITOR_CONSTANTS, RUNTIME_COMPACT_COMMANDS } from '../../constants.js';
 
 // =============================================================================
 // Mocks
@@ -473,14 +473,17 @@ describe('ContextWindowMonitorService', () => {
 			expect(state!.level).toBe('normal');
 		});
 
-		it('should handle 100% context (triggers recovery which clears state)', () => {
+		it('should handle 100% context at critical level (compact attempted, no auto-recovery)', async () => {
 			const { service, mockSession } = setupWithSession();
 			mockSession.emit('100% context');
+			await jest.advanceTimersByTimeAsync(300);
 
-			// At 100%, auto-recovery fires which calls stopSessionMonitoring,
-			// clearing the state. Verify the state was consumed (recovery triggered).
+			// Auto-recovery is disabled, so state should still exist
+			// and compact should have been attempted
 			const state = service.getContextState('test-agent');
-			expect(state).toBeUndefined();
+			expect(state).toBeDefined();
+			expect(state!.level).toBe('critical');
+			expect(state!.compactAttempts).toBe(1);
 		});
 
 		it('should cap buffer at MAX_BUFFER_SIZE', () => {
@@ -680,11 +683,192 @@ describe('ContextWindowMonitorService', () => {
 	});
 
 	// =========================================================================
-	// Auto-recovery
+	// Context compaction
 	// =========================================================================
 
-	describe('auto-recovery', () => {
-		it('should trigger recovery at critical threshold', async () => {
+	describe('context compaction', () => {
+		function setupWithCompact() {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+			const regService = createMockAgentRegistrationService();
+
+			service.setDependencies(
+				backend as any,
+				regService as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+			return { service, mockSession, eventBus, regService };
+		}
+
+		it('should trigger compact at red level (85%)', async () => {
+			const { service, mockSession } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// Compact command should have been written to session
+			const writeCalls = mockSession.session.write.mock.calls.map((c: string[]) => c[0]);
+			expect(writeCalls).toContain('/compact\r');
+		});
+
+		it('should set compactInProgress during compact', () => {
+			const { service } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 86);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactInProgress).toBe(true);
+			expect(state!.compactAttempts).toBe(1);
+		});
+
+		it('should clear compactInProgress after COMPACT_WAIT_MS', async () => {
+			const { service } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 86);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactInProgress).toBe(true);
+
+			// triggerCompact has a 200ms internal await before scheduling the
+			// COMPACT_WAIT_MS timeout, so we need to advance past both:
+			// 200ms (internal delay) + COMPACT_WAIT_MS (clear timer)
+			await jest.advanceTimersByTimeAsync(200);
+			await jest.advanceTimersByTimeAsync(CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_WAIT_MS);
+
+			expect(state!.compactInProgress).toBe(false);
+		});
+
+		it('should not trigger compact twice while compactInProgress', () => {
+			const { service, mockSession } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 70); // yellow
+			service.updateContextUsage('test-agent', 86); // red -> compact
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactAttempts).toBe(1);
+
+			// Going back to yellow and then red again should NOT trigger
+			// compact because compactInProgress is still true
+			state!.level = 'yellow'; // simulate drop
+			service.updateContextUsage('test-agent', 87); // red again
+
+			expect(state!.compactAttempts).toBe(1); // still 1
+		});
+
+		it('should reset compact state when context drops to normal', () => {
+			const { service } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 86); // red -> triggers compact
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactAttempts).toBe(1);
+
+			// Simulate context dropping to normal (compact worked!)
+			service.updateContextUsage('test-agent', 40);
+
+			expect(state!.compactAttempts).toBe(0);
+			expect(state!.compactInProgress).toBe(false);
+		});
+
+		it('should prefer compact over recovery at critical when under max attempts', async () => {
+			const { service, mockSession, regService } = setupWithCompact();
+
+			// Go straight to critical
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// Should have sent compact, NOT triggered recovery
+			const writeCalls = mockSession.session.write.mock.calls.map((c: string[]) => c[0]);
+			expect(writeCalls).toContain('/compact\r');
+			expect(regService.createAgentSession).not.toHaveBeenCalled();
+		});
+
+		it('should NOT fall back to recovery when compact exhausted and AUTO_RECOVERY_ENABLED is false', async () => {
+			const { service, regService } = setupWithCompact();
+
+			// Manually exhaust compact attempts
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// AUTO_RECOVERY_ENABLED is false — recovery should NOT be triggered
+			// even when compact attempts are exhausted
+			expect(regService.createAgentSession).not.toHaveBeenCalled();
+		});
+
+		it('should send escape before compact command', async () => {
+			const { service, mockSession } = setupWithCompact();
+
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			const writeCalls = mockSession.session.write.mock.calls.map((c: string[]) => c[0]);
+			// Escape (0x1b) should be sent before compact
+			const escapeIndex = writeCalls.indexOf('\x1b');
+			const compactIndex = writeCalls.indexOf('/compact\r');
+			expect(escapeIndex).toBeGreaterThanOrEqual(0);
+			expect(compactIndex).toBeGreaterThan(escapeIndex);
+		});
+
+		it('should track lastCompactAt timestamp', () => {
+			const { service } = setupWithCompact();
+			const before = Date.now();
+
+			service.updateContextUsage('test-agent', 86);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.lastCompactAt).toBeGreaterThanOrEqual(before);
+		});
+	});
+
+	// =========================================================================
+	// Auto-recovery (disabled by default — compact-first strategy)
+	// =========================================================================
+
+	describe('auto-recovery (disabled by default)', () => {
+		it('should NOT trigger recovery at critical when AUTO_RECOVERY_ENABLED is false', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+			const regService = createMockAgentRegistrationService();
+
+			service.setDependencies(
+				backend as any,
+				regService as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Exhaust compact attempts first
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(100);
+
+			// AUTO_RECOVERY_ENABLED is false — should NOT trigger recovery
+			expect(regService.createAgentSession).not.toHaveBeenCalled();
+			// State should still exist (not cleared by recovery)
+			expect(service.getContextState('test-agent')).toBeDefined();
+		});
+
+		it('should prefer compact over recovery at critical', async () => {
 			const service = ContextWindowMonitorService.getInstance();
 			const mockSession = createMockSession();
 			const sessions = new Map([['test-agent', mockSession.session]]);
@@ -702,94 +886,41 @@ describe('ContextWindowMonitorService', () => {
 
 			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
 			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(300);
 
-			// Allow the async recovery to run
-			await jest.advanceTimersByTimeAsync(100);
+			// Should have sent compact, NOT triggered recovery
+			const writeCalls = mockSession.session.write.mock.calls.map((c: string[]) => c[0]);
+			expect(writeCalls).toContain('/compact\r');
+			expect(regService.createAgentSession).not.toHaveBeenCalled();
+		});
 
-			expect(regService.createAgentSession).toHaveBeenCalledWith(
+		it('should publish critical event at critical even without recovery', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Transition through red to critical
+			service.updateContextUsage('test-agent', 86); // red
+			service.updateContextUsage('test-agent', 96); // critical
+
+			expect(eventBus.publish).toHaveBeenCalledWith(
 				expect.objectContaining({
-					sessionName: 'test-agent',
-					role: 'developer',
-					teamId: 'team-1',
-					memberId: 'member-1',
+					type: 'agent:context_critical',
+					newValue: 'critical',
 				})
 			);
-		});
-
-		it('should set recoveryTriggered flag to prevent double recovery', async () => {
-			const service = ContextWindowMonitorService.getInstance();
-			const mockSession = createMockSession();
-			const sessions = new Map([['test-agent', mockSession.session]]);
-			const backend = createMockSessionBackend(sessions as any);
-			const eventBus = createMockEventBus();
-			const regService = createMockAgentRegistrationService();
-
-			service.setDependencies(
-				backend as any,
-				regService as any,
-				{} as any,
-				createMockTaskTrackingService() as any,
-				eventBus as any
-			);
-
-			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
-
-			// First critical triggers recovery
-			service.updateContextUsage('test-agent', 96);
-			await jest.advanceTimersByTimeAsync(100);
-
-			// Re-create the session state (simulating monitoring restart)
-			// to demonstrate the recoveryTriggered flag
-			// Note: in practice, stopSessionMonitoring is called during recovery,
-			// which clears the state, so a second update wouldn't hit the same state.
-			// But if the state persists, the flag prevents double-trigger.
-			expect(regService.createAgentSession).toHaveBeenCalledTimes(1);
-		});
-
-		it('should stop exit monitoring before recovery kill', async () => {
-			const service = ContextWindowMonitorService.getInstance();
-			const mockSession = createMockSession();
-			const sessions = new Map([['test-agent', mockSession.session]]);
-			const backend = createMockSessionBackend(sessions as any);
-			const eventBus = createMockEventBus();
-
-			service.setDependencies(
-				backend as any,
-				createMockAgentRegistrationService() as any,
-				{} as any,
-				createMockTaskTrackingService() as any,
-				eventBus as any
-			);
-
-			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
-			service.updateContextUsage('test-agent', 96);
-
-			await jest.advanceTimersByTimeAsync(100);
-
-			expect(mockStopMonitoring).toHaveBeenCalledWith('test-agent');
-		});
-
-		it('should clear PTY activity tracker during recovery', async () => {
-			const service = ContextWindowMonitorService.getInstance();
-			const mockSession = createMockSession();
-			const sessions = new Map([['test-agent', mockSession.session]]);
-			const backend = createMockSessionBackend(sessions as any);
-			const eventBus = createMockEventBus();
-
-			service.setDependencies(
-				backend as any,
-				createMockAgentRegistrationService() as any,
-				{} as any,
-				createMockTaskTrackingService() as any,
-				eventBus as any
-			);
-
-			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
-			service.updateContextUsage('test-agent', 96);
-
-			await jest.advanceTimersByTimeAsync(100);
-
-			expect(mockClearSession).toHaveBeenCalledWith('test-agent');
 		});
 	});
 
@@ -829,7 +960,7 @@ describe('ContextWindowMonitorService', () => {
 			expect(regService.createAgentSession).not.toHaveBeenCalled();
 		});
 
-		it('should allow recovery after cooldown window expires', async () => {
+		it('should NOT allow recovery after cooldown window expires when AUTO_RECOVERY_ENABLED is false', async () => {
 			const service = ContextWindowMonitorService.getInstance();
 			const mockSession = createMockSession();
 			const sessions = new Map([['test-agent', mockSession.session]]);
@@ -856,8 +987,9 @@ describe('ContextWindowMonitorService', () => {
 			service.updateContextUsage('test-agent', 96);
 			await jest.advanceTimersByTimeAsync(100);
 
-			// Recovery SHOULD be triggered because old timestamps are expired
-			expect(regService.createAgentSession).toHaveBeenCalled();
+			// AUTO_RECOVERY_ENABLED is false — recovery should NOT be triggered
+			// regardless of cooldown window state
+			expect(regService.createAgentSession).not.toHaveBeenCalled();
 		});
 	});
 
@@ -990,6 +1122,430 @@ describe('ContextWindowMonitorService', () => {
 			mockSession.emit('95% context');
 
 			expect(service.getContextState('test-agent')).toBeUndefined();
+		});
+
+		it('should not start monitoring when no backend is available', () => {
+			const service = ContextWindowMonitorService.getInstance();
+			// Don't call setDependencies — getSessionBackendSync() mock returns null
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			expect(service.getContextState('test-agent')).toBeUndefined();
+		});
+	});
+
+	// =========================================================================
+	// triggerCompact error branches
+	// =========================================================================
+
+	describe('triggerCompact error branches', () => {
+		it('should handle compact when session no longer exists', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Remove the session from the backend so getSession returns null
+			sessions.delete('test-agent');
+
+			// Trigger red level → compact
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// triggerCompact returns early before incrementing compactAttempts
+			const state = service.getContextState('test-agent');
+			expect(state!.compactAttempts).toBe(0);
+			// Session.write not called for /compact since session was deleted
+			expect(mockSession.session.write).not.toHaveBeenCalled();
+		});
+
+		it('should handle compact when backend is null', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Null out the backend after monitoring started
+			(service as any).sessionBackend = null;
+
+			// Trigger red level → compact
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// triggerCompact returns early before incrementing — should not throw
+			const state = service.getContextState('test-agent');
+			expect(state!.compactAttempts).toBe(0);
+		});
+
+		it('should handle compact when runtime type has no compact command', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			// Start monitoring with an unknown runtime type
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer', 'unknown-runtime' as any);
+
+			// Trigger red level → compact
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			// Compact attempted but no command for runtime — write not called
+			expect(mockSession.session.write).not.toHaveBeenCalled();
+		});
+	});
+
+	// =========================================================================
+	// performCheck compact retry
+	// =========================================================================
+
+	describe('performCheck compact retry', () => {
+		it('should retry compact after cooldown for critical sessions with exhausted attempts', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Set up state: critical, compacts exhausted, cooldown expired
+			const state = service.getContextState('test-agent')!;
+			state.level = 'critical';
+			state.contextPercent = 96;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+			state.recoveryTriggered = false;
+			state.lastCompactAt = Date.now() - CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_RETRY_COOLDOWN_MS - 1000;
+			state.lastDetectedAt = Date.now(); // Not stale
+
+			// Start the service (periodic check) and advance to trigger performCheck
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			// After retry, compactAttempts should be reset to MAX - 1 then incremented
+			expect(state.compactAttempts).toBe(CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS);
+			expect(state.compactInProgress).toBe(true);
+
+			// Clean up
+			await jest.advanceTimersByTimeAsync(300);
+		});
+
+		it('should NOT retry compact if cooldown has not expired', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Set up state: critical, compacts exhausted, cooldown NOT expired
+			const state = service.getContextState('test-agent')!;
+			state.level = 'critical';
+			state.contextPercent = 96;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+			state.recoveryTriggered = false;
+			state.lastCompactAt = Date.now(); // Just happened
+			state.lastDetectedAt = Date.now();
+
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			// Should NOT retry — compactAttempts unchanged
+			expect(state.compactAttempts).toBe(CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS);
+			expect(state.compactInProgress).toBe(false);
+		});
+	});
+
+	// =========================================================================
+	// Auto-recovery (when enabled)
+	// =========================================================================
+
+	describe('auto-recovery when enabled', () => {
+		const originalAutoRecovery = CONTEXT_WINDOW_MONITOR_CONSTANTS.AUTO_RECOVERY_ENABLED;
+
+		beforeEach(() => {
+			Object.defineProperty(CONTEXT_WINDOW_MONITOR_CONSTANTS, 'AUTO_RECOVERY_ENABLED', {
+				value: true,
+				writable: true,
+				configurable: true,
+			});
+		});
+
+		afterEach(() => {
+			Object.defineProperty(CONTEXT_WINDOW_MONITOR_CONSTANTS, 'AUTO_RECOVERY_ENABLED', {
+				value: originalAutoRecovery,
+				writable: true,
+				configurable: true,
+			});
+		});
+
+		it('should trigger auto-recovery at critical when compact exhausted', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(true);
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Exhaust compact attempts
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			// Hit critical → triggers auto-recovery
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(500);
+
+			expect(state.recoveryTriggered).toBe(true);
+			expect(mockAgentReg.createAgentSession).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sessionName: 'test-agent',
+					memberId: 'member-1',
+					teamId: 'team-1',
+				})
+			);
+		});
+
+		it('should handle auto-recovery when backend is missing', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Exhaust compact, null out backend
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+			(service as any).sessionBackend = null;
+
+			// Hit critical → triggerAutoRecovery but no backend
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(500);
+
+			// Should not throw, recoveryTriggered is set but early return
+			expect(state.recoveryTriggered).toBe(true);
+		});
+
+		it('should handle createAgentSession failure during recovery', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(false); // fail
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(500);
+
+			expect(state.recoveryTriggered).toBe(true);
+			// Recovery count should NOT increase on failure
+			expect(state.recoveryCount).toBe(0);
+		});
+
+		it('should re-deliver active tasks after successful recovery', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(true);
+			const activeTasks = [
+				{ taskName: 'task-1', taskFilePath: '/tmp/task-1.md', status: 'assigned' },
+			];
+			const mockTaskTracking = createMockTaskTrackingService(activeTasks);
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				mockTaskTracking as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+
+			// Advance enough for recovery + rehydration delay + task re-delivery
+			await jest.advanceTimersByTimeAsync(60_000);
+
+			expect(state.recoveryTriggered).toBe(true);
+			expect(state.recoveryCount).toBe(1);
+			expect(mockTaskTracking.getTasksForTeamMember).toHaveBeenCalledWith('member-1');
+		});
+
+		it('should skip re-delivery when no taskTrackingService', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(true);
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				null as any, // no task tracking
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(60_000);
+
+			// Should recover without throwing
+			expect(state.recoveryTriggered).toBe(true);
+			expect(state.recoveryCount).toBe(1);
+		});
+
+		it('should respect recovery cooldown window', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(true);
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Fill up recovery timestamps at the max
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+			state.recoveryTimestamps = Array(CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_RECOVERIES_PER_WINDOW)
+				.fill(0)
+				.map(() => Date.now());
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(500);
+
+			// recoveryTriggered should be set but createAgentSession should not be called
+			// because cooldown prevents the actual recovery
+			expect(state.recoveryTriggered).toBe(true);
+			expect(mockAgentReg.createAgentSession).not.toHaveBeenCalled();
+		});
+
+		it('should save and restore Claude session ID during recovery', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegistrationService(true);
+
+			mockGetSessionId.mockReturnValue('claude-session-abc');
+			mockGetSessionMetadata.mockReturnValue({ sessionName: 'test-agent' });
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			const state = service.getContextState('test-agent')!;
+			state.compactAttempts = CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS;
+			state.compactInProgress = false;
+
+			service.updateContextUsage('test-agent', 96);
+			await jest.advanceTimersByTimeAsync(60_000);
+
+			expect(mockGetSessionId).toHaveBeenCalledWith('test-agent');
+			expect(mockUpdateSessionId).toHaveBeenCalledWith('test-agent', 'claude-session-abc');
 		});
 	});
 });

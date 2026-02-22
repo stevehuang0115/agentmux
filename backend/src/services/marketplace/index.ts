@@ -27,3 +27,13 @@ export {
   uninstallItem,
   updateItem,
 } from './marketplace-installer.service.js';
+
+// Marketplace submission operations
+export {
+  submitSkill,
+  listSubmissions,
+  getSubmission,
+  reviewSubmission,
+  loadSubmissionsManifest,
+  saveSubmissionsManifest,
+} from './marketplace-submission.service.js';

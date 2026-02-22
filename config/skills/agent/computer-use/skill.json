@@ -1,7 +1,7 @@
 {
   "id": "computer-use",
   "name": "Desktop Automation (Computer Use)",
-  "description": "Control the macOS desktop: take screenshots, move/click the mouse, and type text. Uses native macOS APIs (screencapture, CoreGraphics via JXA, System Events) with zero external dependencies.",
+  "description": "Control the macOS desktop: take screenshots, move/click the mouse, type text, and read app content via Accessibility API. Uses native macOS APIs (screencapture, CoreGraphics, System Events, Accessibility) with zero external dependencies.",
   "category": "automation",
   "skillType": "claude-skill",
   "promptFile": "instructions.md",
@@ -13,10 +13,10 @@
       "timeoutMs": 30000
     }
   },
-  "triggers": ["screenshot", "click", "mouse", "type text", "desktop automation", "computer use"],
-  "tags": ["automation", "desktop", "screenshot", "mouse", "keyboard", "macos"],
+  "triggers": ["screenshot", "click", "mouse", "type text", "desktop automation", "computer use", "read app", "scroll", "accessibility", "ui elements"],
+  "tags": ["automation", "desktop", "screenshot", "mouse", "keyboard", "macos", "accessibility", "ui-reading"],
   "assignableRoles": ["generalist", "designer", "qa"],
-  "version": "1.0.0",
+  "version": "2.0.0",
   "createdAt": "2026-02-20T00:00:00.000Z",
   "updatedAt": "2026-02-20T00:00:00.000Z"
 }

@@ -404,3 +404,178 @@ Marketplace install flow debug + publish + skills: (1) Added Toast notification 
 
 ---
 
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 04:29:32
+GTM strategy document completed at .crewly/docs/gtm-strategy.md. Key decisions: (1) HN as anchor launch event, staggered Reddit/Twitter/Dev.to. (2) 3-week sprint: prep → launch → amplify. (3) Freemium: 2 agents free, Pro $49/mo 10 agents, Team $199/mo 50 agents. (4) 3 existing example templates (web-app, research-project, startup-mvp) serve as preset team templates. (5) Sustainable post-launch: 5 hrs/week combined for 2-person team. (6) Critical blocker: smoke test npx crewly start on clean machines before any public launch.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 04:30:52
+Marketplace implementation complete (Phases A+B+C). Key architecture: (1) SkillService loads from 3 dirs: builtin (config/skills/), user (~/.crewly/skills/), marketplace (~/.crewly/marketplace/skills/). (2) Post-install refreshSkillRegistrations() reloads SkillService + regenerates SkillCatalog. (3) Submission workflow in marketplace-submission.service.ts: submit->pending->approve/reject. On approve, archive copies to assets dir and entry added to local-registry.json. (4) fetchRegistry() merges remote + local registries, gracefully handles network failures. (5) chalk ESM mock needed in Jest tests. (6) seed-marketplace CLI packages 9 built-in skills. (7) 146 marketplace tests across 9 suites.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 04:58:45
+Business Model v2 completed. Key decisions: (1) Route A (local BYOK) first for fastest revenue with $0 infra cost, Pro tier at $29/mo + consulting at $500 setup + $200-500/mo managed ops. (2) Route C (cloud VM) added at month 3-6, pricing $149-499/mo with API credit caps. (3) Route B (self-built agent) SKIPPED - requires full-time commitment incompatible with Steves day job. (4) Steve 5hrs/week model - AI team handles all execution. (5) API costs: Sonnet $1.80/session, Haiku $0.60/session - Route C must use hard caps + overage billing. (6) Key risk: Claude Code adds native multi-agent, but Crewly shifts to management console role. Report at .crewly/docs/business-model-v2.md
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 05:07:24
+Docs deliverables completed. (1) Getting Started guide at .crewly/docs/getting-started-guide.md - covers full npx crewly onboard flow (5-step wizard: provider selection, tool detection, skill install, template selection, scaffolding), crewly start, first team creation, CLI reference, troubleshooting, directory structure. (2) 3 Use Cases at .crewly/docs/use-cases.md - Dev Team Automation (bug fix pipeline with PM+Dev+QA agents, quality gates), SMB Operations (content pipeline with Writer+Strategist+Analyst, Slack integration), Personal Productivity (research team with Researcher+Analyst+Writer). Each has workflow, comparison table, results metrics. (3) Discord plan at .crewly/docs/discord-community-plan.md - 14 channels across 5 categories, roles, welcome flow, bot config (MEE6 + GitHub webhook), moderation plan, growth strategy (3 phases), metrics, launch checklist. Total cost: $0/mo. Note: crewly.stevesprompt.com/docs returned 403 (Cloudflare protection) - could not review existing site content.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 05:19:36
+Phase 1 marketing content completed. All at .crewly/docs/: (1) pricing-page-content.md - Community free ($0, 2 agents, 1 team) vs Pro ($29/mo, 10 agents, 5 teams, Slack, semantic search, all quality gates) vs Enterprise (custom). Full feature comparison table, FAQ (13 questions covering general/pricing/technical/enterprise), CTA sections, design notes, A/B test ideas. (2) competitor-comparison-page.md - 4 comparison pages: Crewly vs CrewAI (price + dashboard advantage), vs Manus (multi-agent + privacy + open source), vs AutoGen (active dev + DX), vs LangGraph (teams vs graphs). Each has quick summary table, feature comparison, where each wins, who should choose what. Cross-comparison summary table at end. (3) demo-video-script.md v2.0 - Updated from 4min to 2min version. 8 scenes: Hook, Install, Dashboard, Terminal Streaming (money shot), Quality Gates, Budget+Slack, Power Moment (3 agents parallel), CTA. Includes social media clip cuts, recording checklist, YouTube metadata.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 05:20:18
+Marketplace install flow fix: installItem() in marketplace-installer.service.ts previously always downloaded from remote CDN. For locally published/seeded skills, assets exist at ~/.crewly/marketplace/assets/ but were never checked. Fixed by adding local asset check before remote download. Barrel export in controllers/marketplace/index.ts was also missing submission handler exports (handleSubmit, handleListSubmissions, handleGetSubmission, handleReviewSubmission). Full submission path was already implemented end-to-end: CLI publish --submit → backend submitSkill → frontend review UI → approval → local-registry.json → fetchRegistry merges → install from local assets.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 05:30:58
+F13 Context Window Monitor test fixes: 3 tests failed because AUTO_RECOVERY_ENABLED was changed from true to false but tests still expected recovery. Fixes: (1) compactInProgress timer test needed jest.advanceTimersByTimeAsync in two steps (200ms for internal await + COMPACT_WAIT_MS for clear timer) instead of sync advanceTimersByTime. (2) Two recovery expectation tests updated to assert createAgentSession NOT called when AUTO_RECOVERY_ENABLED=false. Key pattern: when triggerCompact has internal awaits, timer tests must account for microtask flushing between timer advances.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 05:49:18
+Onboarding audit completed. Critical bugs found: (1) Gemini CLI npm package wrong (@anthropic-ai/gemini-cli should be @google/gemini-cli) at onboard.ts:199,203. (2) Template selection during onboard does NOT create team - user arrives at empty dashboard. (3) Skills install requires network with no offline fallback to bundled skills. (4) tmux not checked during onboard but required for agents. (5) No auth verification after tool detection. (6) Research team template uses wrong roles (developer/designer instead of researcher/writer). Docs at .crewly/docs/onboarding-experience-report.md, onboarding-checklist.md, faq.md.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 05:53:12
+Marketplace skills pattern: each skill in config/skills/agent/<id>/ with execute.sh, skill.json, instructions.md. execute.sh uses _common/lib.sh (api_call, error_exit, require_param). JSON in, JSON out. Key gotcha: set -euo pipefail + grep returns exit 1 on no match — use grep -c with || true to avoid pipefail killing the script. CLI publish validates skill.json and creates tar.gz archives. Categories content and analytics are not in the standard list but validation still passes with a warning.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 06:00:10
+Launch content suite completed. 3 docs at .crewly/docs/: show-hn-post.md (3 title options, full post body, 6 HN Q&As, posting checklist), blog-multi-agent-orchestration.md (1800 words, technical blog with code examples and SEO metadata), twitter-launch-thread.md (10-tweet thread, 3 alt hooks, engagement plan). Key HN pattern: technical depth over polish, honesty about limitations, immediate access via npx.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 06:09:18
+Website content package completed at .crewly/docs/website-content-package.md. Consolidated all marketing content for crewly.stevesprompt.com. Key facts about the site: Next.js 16 App Router, Tailwind v4 (no config file, uses @theme directive), dark-mode-only, Nunito font, Lucide icons. Current pages: /, /download, /blog, /marketplace, /docs. New pages needed: /pricing, /compare, /compare/[slug]. 5 existing blog posts in content/blog/. Nav links defined in src/lib/constants.ts. Card pattern: bg-gray-900/50 border border-gray-800 rounded-xl. Accent: indigo-400/500. Site code at /Users/yellowsunhy/Desktop/projects/stevesprompt/apps/crewly/.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 06:24:15
+Task 9 - SMB Zero-Install Product Design: Created comprehensive product design at .crewly/docs/smb-zero-install-product-design.md. Key findings: (1) Current codebase has NO auth, NO database, NO multi-user - SMB mode requires building all from scratch. (2) Slack integration currently uses manual token paste (Socket Mode) - needs full OAuth flow for SMB. (3) Progressive OAuth permission model recommended - request scopes on-demand not upfront. (4) Content Team template recommended as MVP starting point (least risky, most demonstrable). (5) 12-week development timeline with PostgreSQL, Stripe, Docker containers per customer. (6) Google OAuth verification is critical path risk (2-6 weeks review). (7) Pricing: Free trial 14 days/$15 credit, Starter $99, Team $299, Department $799. (8) Hybrid codebase recommended - shared packages between open-source CLI and cloud platform.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 06:37:38
+Test coverage improvement session: context-window-monitor.service.ts went from 62.8% to 93.7% lines by adding auto-recovery tests with Object.defineProperty to override as-const AUTO_RECOVERY_ENABLED. Key pattern: Object.defineProperty(CONTEXT_WINDOW_MONITOR_CONSTANTS, "AUTO_RECOVERY_ENABLED", { value: true, writable: true, configurable: true }) in beforeEach, restore in afterEach. triggerCompact returns early before incrementing compactAttempts when backend/session is null — test must assert 0 not 1. seed-marketplace.ts: use jest.spyOn(process, "exit").mockImplementation(() => throw) to test process.exit branches.
+
+---
+
+## 2026-02-22
+
+### [product-manager/crewly-core-mia-member-1] 06:38:42
+Docs audit completed. 31 total docs in .crewly/docs/. Key findings: (1) 12 production-ready, 9 need Steve review, 5 superseded (should delete: launch-hn-post.md, launch-social-posts.md, discord-setup-guide.md, roadmap-v2.md, commercialization-research-report.md), 5 internal reference only. (2) Critical pricing inconsistency across docs: v1 said $49/$199, pricing-page says $29, business-model-v2 says $29 BYOK, SMB design says $99-$799 cloud. Resolution: $29 is Route A (open-source), $99-$799 is Route C (cloud) - different products. (3) Phase 1 launch needs 11 P0 blockers resolved: 3 Steve decisions, 6 Sam tasks, 2 Mia tasks. Estimated 5-7 days from Steves green light. (4) Minimum viable launch: LICENSE file + committed code + fixed onboarding + clean README + repo public + HN post approved.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 06:45:11
+2-hour autonomous session: Sam+Mia produced 19 docs + 36 code files +3005 lines across 7 task cycles. Pattern: ~10 min per cycle, assign immediately on idle. Diminishing returns after 7 cycles without user strategic input.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 07:15:27
+用户确认 Model C 方向（SMB Zero-Install AI Workforce）。优先级：(1) 稳定 Crewly — marketplace/skills 全链路调通 (2) 为 Model C 打基础 — auth、OAuth、skills/template (3) 测试多 runtime — Gemini CLI、Codex 等非 Claude Code runtime 混合团队。护城河 = 深度绑定客户业务流程。明天白天启动执行。
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 07:26:41
+Computer-use skill v2.0.0 Accessibility API findings: (1) list-apps, focus-app, scroll, screenshot, move, click, type all work WITHOUT Accessibility permission. (2) read-ui and get-text REQUIRE Accessibility permission (AXIsProcessTrusted=true) — they access the AX element tree via System Events. (3) Error -25211 (kAXErrorAPIDisabled) occurs when permission is missing. (4) Added check-accessibility action and require_ax_permission() guard to give clear error messages. (5) iPad apps (discover/rednote/小红书) DO show up in CGWindowList and list-apps, but text content requires AX tree access. (6) To grant permission: System Settings > Privacy & Security > Accessibility > enable Terminal, then restart terminal.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 07:32:06
+Computer-use skill v2.0 tested by Sam. list-apps, focus-app, scroll all work. read-ui and get-text blocked by Accessibility permission (AXIsProcessTrusted=false, error -25211). Fix: grant Terminal accessibility in System Settings > Privacy & Security > Accessibility, restart Terminal. Sam added check-accessibility action and require_ax_permission guard. iPad app discover (com.xingin.discover) was successfully detected and focused. Once permission is granted, the Accessibility API actions should work — need to verify iPad app AX tree exposure next.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 13:03:24
+小红书 (RedNote) iPad app on macOS: process name is discover, bundle ID com.xingin.discover. Accessibility API works but UI is deeply nested (25+ levels). Text content is in AXDescription attributes (not AXValue). Feed posts start at position y>=270. Navigation at y<260. Pattern: AXStaticText(title) then AXStaticText(author) then AXButton(likes). Created dedicated rednote-reader skill at config/skills/agent/rednote-reader/.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 13:35:43
+iPad apps on macOS (like 小红书/discover) have a known issue: when the window is closed, the app process stays running but has 0 windows. Restarting via activate, open -b, Dock click, force kill+relaunch all fail to create a new window. Need manual user intervention (double-click dock icon or Launchpad). Consider adding a window-recovery mechanism to the rednote-reader skill, or deleting ~/Library/Saved Application State/com.xingin.discover.savedState/ before relaunch.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 14:28:11
+CRITICAL: Never use killall -9 on iPad apps (like rednote/discover) on macOS. It permanently destroys the window and no programmatic method can recreate it. Only physical user interaction restores the window. iPad apps use iOS UIScene lifecycle which macOS cannot trigger programmatically.
+
+---
+
+## 2026-02-22
+
+### [orchestrator/crewly-orc] 15:30:20
+Steve new product vision: Crewly as HIRING experience. User gets a phone number, can text/call to assign tasks — like hiring a real human assistant. Key insight: SaaS = user learns your UI; Hiring = AI adapts to user habits (SMS, phone, WeChat). Zero learning curve. Cloud-first SaaS + optional Desktop extension. Provision 1-person team + orchestrator on signup. All tasks via API (OAuth Google Workspace etc). This is a potential pivot from Model C (local install) to cloud-native.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 16:01:12
+SMB capability audit completed. 34 agent skills + 38 orchestrator skills. Only external API integrations: Slack (bot token), Gemini (API key for images). All content skills (seo-blog-writer, social-media-post, email-responder, feedback-analyzer) are template generators using bash/jq — no actual AI/ML. No OAuth infrastructure for end-users. No email/social/calendar/payment APIs. Strongest value: dev automation + content drafts + Slack ops. Biggest gap: email (critical for any SMB). Quick wins: SendGrid skill (2d), GitHub Issues skill (2d).
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 16:42:15
+Two-layer SMB architecture: Layer 1 (OAuth+API) for services with APIs, Layer 2 (VNC browser actuation with Puppeteer+noVNC+Xvfb in Docker) for services without APIs. Crewly already has Playwright (@playwright/test in devDeps) and Docker pipeline. VNC adds ~500MB to image, ~400-800MB RAM per browser session. DigitalOcean 4GB droplet ($24/mo) handles 2-3 concurrent sessions. User flow: agent sends VNC link → user logs in → cookies saved encrypted → agent uses saved session. noVNC latency: 100-200ms same datacenter (excellent). Security: WSS + one-time tokens + AES-256-GCM cookie encryption. This architecture turns most months-long integrations into weeks.
+
+---
+
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 17:40:20
+Marketplace feature implementation: Agent skills (marketplace-search, marketplace-publish) follow standard pattern in config/skills/agent/<name>/ with execute.sh+skill.json+instructions.md. Skills use _common/lib.sh api_call to talk to local backend /api/marketplace endpoints. Remote registry at stevesprompt app uses content/registry.json as source of truth, updated by POST /api/registry/skills route. The fetchRegistry in lib/registry.ts reads static file at SSR time. Marketplace page at /marketplace already has FilterBar, ItemCard, ItemDetail components with search/filter/sort. Pre-existing build error in stevesprompt /_global-error (useContext null) is unrelated to marketplace.
+
+---
+

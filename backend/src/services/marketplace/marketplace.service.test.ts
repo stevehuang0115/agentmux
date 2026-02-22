@@ -124,10 +124,14 @@ describe('fetchRegistry', () => {
     expect(registry.items).toHaveLength(3);
   });
 
-  it('should throw when fetch fails with no cache', async () => {
+  it('should return empty registry when fetch fails with no cache', async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
+    // Also mock readFile for local-registry.json to return nothing
+    readFile.mockRejectedValue(new Error('ENOENT'));
 
-    await expect(fetchRegistry()).rejects.toThrow('Failed to fetch registry: 500');
+    const registry = await fetchRegistry();
+    expect(registry.schemaVersion).toBe(1);
+    expect(registry.items).toHaveLength(0);
   });
 });
 

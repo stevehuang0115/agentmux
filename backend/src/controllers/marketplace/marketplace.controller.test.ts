@@ -16,6 +16,10 @@ import {
   handleInstall,
   handleUninstall,
   handleUpdate,
+  handleSubmit,
+  handleListSubmissions,
+  handleGetSubmission,
+  handleReviewSubmission,
 } from './marketplace.controller.js';
 
 // Mock marketplace service
@@ -27,6 +31,10 @@ const mockFetchRegistry = jest.fn();
 const mockInstallItem = jest.fn();
 const mockUninstallItem = jest.fn();
 const mockUpdateItem = jest.fn();
+const mockSubmitSkill = jest.fn();
+const mockListSubmissions = jest.fn();
+const mockGetSubmission = jest.fn();
+const mockReviewSubmission = jest.fn();
 
 jest.mock('../../services/marketplace/index.js', () => ({
   listItems: (...args: unknown[]) => mockListItems(...args),
@@ -37,6 +45,10 @@ jest.mock('../../services/marketplace/index.js', () => ({
   installItem: (...args: unknown[]) => mockInstallItem(...args),
   uninstallItem: (...args: unknown[]) => mockUninstallItem(...args),
   updateItem: (...args: unknown[]) => mockUpdateItem(...args),
+  submitSkill: (...args: unknown[]) => mockSubmitSkill(...args),
+  listSubmissions: (...args: unknown[]) => mockListSubmissions(...args),
+  getSubmission: (...args: unknown[]) => mockGetSubmission(...args),
+  reviewSubmission: (...args: unknown[]) => mockReviewSubmission(...args),
 }));
 
 describe('MarketplaceController', () => {
@@ -72,6 +84,7 @@ describe('MarketplaceController', () => {
 
       expect(mockListItems).toHaveBeenCalledWith({
         type: undefined,
+        category: undefined,
         search: undefined,
         sortBy: undefined,
       });
@@ -82,15 +95,34 @@ describe('MarketplaceController', () => {
       mockListItems.mockResolvedValue([]);
 
       await handleListItems(
-        { query: { type: 'skill', search: 'deploy', sort: 'popular' } } as any,
+        { query: { type: 'skill', category: 'development', search: 'deploy', sort: 'popular' } } as any,
         mockRes as any,
       );
 
       expect(mockListItems).toHaveBeenCalledWith({
         type: 'skill',
+        category: 'development',
         search: 'deploy',
         sortBy: 'popular',
       });
+    });
+
+    it('should return 400 for invalid type parameter', async () => {
+      await handleListItems(
+        { query: { type: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+    });
+
+    it('should return 400 for invalid sort parameter', async () => {
+      await handleListItems(
+        { query: { sort: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
     });
 
     it('should return 500 on service error', async () => {
@@ -442,6 +474,192 @@ describe('MarketplaceController', () => {
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
       expect(mockUpdateItem).not.toHaveBeenCalled();
+    });
+  });
+
+  // ========================= handleSubmit =========================
+
+  describe('handleSubmit', () => {
+    it('should submit skill and return result', async () => {
+      const result = { success: true, message: 'Submitted', submission: { id: 'sub-1' } };
+      mockSubmitSkill.mockResolvedValue(result);
+
+      // Use process.cwd()-relative path which is always in the allowed dirs
+      const archivePath = require('path').join(process.cwd(), 'test-archive.tar.gz');
+      await handleSubmit(
+        { body: { archivePath } } as any,
+        mockRes as any,
+      );
+
+      expect(mockSubmitSkill).toHaveBeenCalledWith(archivePath);
+      expect(mockRes.json).toHaveBeenCalledWith(result);
+    });
+
+    it('should return 400 when archivePath is missing', async () => {
+      await handleSubmit(
+        { body: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'archivePath is required',
+      });
+    });
+
+    it('should return 400 when archivePath is outside allowed directories', async () => {
+      await handleSubmit(
+        { body: { archivePath: '/etc/passwd' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'archivePath must be within the project directory, ~/.crewly, or /tmp',
+      });
+    });
+
+    it('should return 500 on service error', async () => {
+      mockSubmitSkill.mockRejectedValue(new Error('IO error'));
+
+      const archivePath = require('path').join(process.cwd(), 'test-archive.tar.gz');
+      await handleSubmit(
+        { body: { archivePath } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+    });
+  });
+
+  // ========================= handleListSubmissions =========================
+
+  describe('handleListSubmissions', () => {
+    it('should list all submissions', async () => {
+      const submissions = [{ id: 'sub-1' }, { id: 'sub-2' }];
+      mockListSubmissions.mockResolvedValue(submissions);
+
+      await handleListSubmissions(
+        { query: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockListSubmissions).toHaveBeenCalledWith(undefined);
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: submissions });
+    });
+
+    it('should filter by status', async () => {
+      mockListSubmissions.mockResolvedValue([]);
+
+      await handleListSubmissions(
+        { query: { status: 'pending' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockListSubmissions).toHaveBeenCalledWith('pending');
+    });
+
+    it('should return 400 for invalid status', async () => {
+      await handleListSubmissions(
+        { query: { status: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+    });
+
+    it('should return 500 on error', async () => {
+      mockListSubmissions.mockRejectedValue(new Error('IO'));
+
+      await handleListSubmissions(
+        { query: {} } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(500);
+    });
+  });
+
+  // ========================= handleGetSubmission =========================
+
+  describe('handleGetSubmission', () => {
+    it('should return submission by ID', async () => {
+      const submission = { id: 'sub-1', skillId: 'test' };
+      mockGetSubmission.mockResolvedValue(submission);
+
+      await handleGetSubmission(
+        { params: { id: 'sub-1' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockGetSubmission).toHaveBeenCalledWith('sub-1');
+      expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: submission });
+    });
+
+    it('should return 404 when not found', async () => {
+      mockGetSubmission.mockResolvedValue(null);
+
+      await handleGetSubmission(
+        { params: { id: 'nonexistent' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  // ========================= handleReviewSubmission =========================
+
+  describe('handleReviewSubmission', () => {
+    it('should approve a submission', async () => {
+      const result = { success: true, message: 'Approved' };
+      mockReviewSubmission.mockResolvedValue(result);
+
+      await handleReviewSubmission(
+        { params: { id: 'sub-1' }, body: { action: 'approve' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockReviewSubmission).toHaveBeenCalledWith('sub-1', 'approve', undefined);
+      expect(mockRes.json).toHaveBeenCalledWith(result);
+    });
+
+    it('should reject a submission with notes', async () => {
+      const result = { success: true, message: 'Rejected' };
+      mockReviewSubmission.mockResolvedValue(result);
+
+      await handleReviewSubmission(
+        { params: { id: 'sub-1' }, body: { action: 'reject', notes: 'Needs work' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockReviewSubmission).toHaveBeenCalledWith('sub-1', 'reject', 'Needs work');
+    });
+
+    it('should return 400 for invalid action', async () => {
+      await handleReviewSubmission(
+        { params: { id: 'sub-1' }, body: { action: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'action must be "approve" or "reject"',
+      });
+    });
+
+    it('should return 404 when submission not found', async () => {
+      mockReviewSubmission.mockResolvedValue({ success: false, message: 'Submission not found: x' });
+
+      await handleReviewSubmission(
+        { params: { id: 'x' }, body: { action: 'approve' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(404);
     });
   });
 });

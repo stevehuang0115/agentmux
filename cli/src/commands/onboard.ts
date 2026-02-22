@@ -18,10 +18,13 @@ import { createInterface, type Interface as ReadlineInterface } from 'readline';
 import { execSync } from 'child_process';
 import { mkdirSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { homedir } from 'os';
+import { randomUUID } from 'crypto';
 import chalk from 'chalk';
 import {
   checkSkillsInstalled,
   installAllSkills,
+  countBundledSkills,
 } from '../utils/marketplace.js';
 import {
   listTemplates,
@@ -30,7 +33,7 @@ import {
 } from '../utils/templates.js';
 
 /** Provider choice returned by the selection step */
-export type ProviderChoice = 'claude' | 'gemini' | 'both' | 'skip';
+export type ProviderChoice = 'claude' | 'gemini' | 'codex' | 'both' | 'skip';
 
 /** Options passed from Commander.js for the onboard command */
 export interface OnboardOptions {
@@ -99,26 +102,31 @@ function ask(rl: ReadlineInterface, question: string): Promise<string> {
 export async function selectProvider(rl: ReadlineInterface): Promise<ProviderChoice> {
   console.log(chalk.bold('  Step 1/5: AI Provider'));
   console.log('  Which AI coding assistant do you use?\n');
-  console.log('    1. Claude Code (Anthropic)');
+  console.log('    1. Claude Code (Anthropic) ' + chalk.green('(recommended)'));
+  console.log(chalk.gray('       Best code quality, strong reasoning'));
   console.log('    2. Gemini CLI (Google)');
-  console.log('    3. Both');
-  console.log('    4. Skip\n');
+  console.log(chalk.gray('       Free tier available, fast responses'));
+  console.log('    3. Codex CLI (OpenAI)');
+  console.log(chalk.gray('       GPT-powered coding assistant'));
+  console.log('    4. All providers');
+  console.log('    5. Skip\n');
 
   const choices: Record<string, ProviderChoice> = {
     '1': 'claude',
     '2': 'gemini',
-    '3': 'both',
-    '4': 'skip',
+    '3': 'codex',
+    '4': 'both',
+    '5': 'skip',
   };
 
   while (true) {
-    const answer = await ask(rl, '  Enter choice (1-4): ');
+    const answer = await ask(rl, '  Enter choice (1-5): ');
     const choice = choices[answer];
     if (choice) {
       console.log('');
       return choice;
     }
-    console.log(chalk.yellow('  Please enter 1, 2, 3, or 4.'));
+    console.log(chalk.yellow('  Please enter 1, 2, 3, 4, or 5.'));
   }
 }
 
@@ -179,6 +187,7 @@ export function installTool(displayName: string, npmPackage: string): boolean {
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.log(chalk.red(`  ✗ Failed to install ${displayName}: ${msg}`));
+    console.log(chalk.gray(`  Try: sudo npm install -g ${npmPackage}`));
     return false;
   }
 }
@@ -196,11 +205,15 @@ const PROVIDER_TOOLS: Record<string, ToolInfo[]> = {
     { displayName: 'Claude Code', command: 'claude', npmPackage: '@anthropic-ai/claude-code' },
   ],
   gemini: [
-    { displayName: 'Gemini CLI', command: 'gemini', npmPackage: '@anthropic-ai/gemini-cli' },
+    { displayName: 'Gemini CLI', command: 'gemini', npmPackage: '@google/gemini-cli' },
+  ],
+  codex: [
+    { displayName: 'Codex CLI', command: 'codex', npmPackage: '@openai/codex' },
   ],
   both: [
     { displayName: 'Claude Code', command: 'claude', npmPackage: '@anthropic-ai/claude-code' },
-    { displayName: 'Gemini CLI', command: 'gemini', npmPackage: '@anthropic-ai/gemini-cli' },
+    { displayName: 'Gemini CLI', command: 'gemini', npmPackage: '@google/gemini-cli' },
+    { displayName: 'Codex CLI', command: 'codex', npmPackage: '@openai/codex' },
   ],
   skip: [],
 };
@@ -219,10 +232,20 @@ const PROVIDER_TOOLS: Record<string, ToolInfo[]> = {
 export async function ensureTools(rl: ReadlineInterface, provider: ProviderChoice, autoYes = false): Promise<void> {
   console.log(chalk.bold('  Step 2/5: Tool Installation'));
 
+  // Check for tmux (required for agent PTY sessions)
+  if (checkToolInstalled('tmux')) {
+    const tmuxVersion = getToolVersion('tmux', '-V');
+    const versionStr = tmuxVersion ? ` (${tmuxVersion})` : '';
+    console.log(chalk.green(`  ✓ tmux detected${versionStr}`));
+  } else {
+    console.log(chalk.yellow('  ⚠ tmux not found — required for running agents'));
+    console.log(chalk.gray('  Install: brew install tmux (macOS) or apt install tmux (Linux)'));
+  }
+
   const tools = PROVIDER_TOOLS[provider] || [];
 
   if (tools.length === 0) {
-    console.log(chalk.gray('  Skipped tool installation.\n'));
+    console.log(chalk.gray('  Skipped AI provider installation.\n'));
     return;
   }
 
@@ -259,6 +282,7 @@ export async function ensureTools(rl: ReadlineInterface, provider: ProviderChoic
  */
 export async function ensureSkills(): Promise<void> {
   console.log(chalk.bold('  Step 3/5: Agent Skills'));
+  console.log(chalk.gray('  Skills let agents communicate, manage memory, and coordinate tasks.\n'));
 
   try {
     const { installed, total } = await checkSkillsInstalled();
@@ -269,7 +293,13 @@ export async function ensureSkills(): Promise<void> {
     }
 
     if (total === 0) {
-      console.log(chalk.yellow('  No skills available in the marketplace.\n'));
+      // Check for bundled skills as fallback
+      const bundled = countBundledSkills();
+      if (bundled > 0) {
+        console.log(chalk.green(`  ✓ ${bundled} bundled skills available\n`));
+      } else {
+        console.log(chalk.yellow('  No skills available in the marketplace.\n'));
+      }
       return;
     }
 
@@ -281,9 +311,16 @@ export async function ensureSkills(): Promise<void> {
 
     console.log(chalk.green(`  ✓ ${count} skills installed\n`));
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.log(chalk.yellow(`  ⚠ Could not install skills: ${msg}`));
-    console.log(chalk.gray('  Run \'crewly install --all\' later to install skills.\n'));
+    // Offline fallback: count bundled skills
+    const bundled = countBundledSkills();
+    if (bundled > 0) {
+      console.log(chalk.green(`  ✓ ${bundled} bundled skills available (marketplace offline)`));
+      console.log(chalk.gray('  Run \'crewly install --all\' later for additional marketplace skills.\n'));
+    } else {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.log(chalk.yellow(`  ⚠ Could not install skills: ${msg}`));
+      console.log(chalk.gray('  Run \'crewly install --all\' later to install skills.\n'));
+    }
   }
 }
 
@@ -333,6 +370,62 @@ export async function selectTemplate(rl: ReadlineInterface): Promise<TeamTemplat
       return null;
     }
     console.log(chalk.yellow(`  Please enter 1-${maxChoice}.`));
+  }
+}
+
+// ========================= Team Creation =========================
+
+/**
+ * Creates a team from a template by writing it to ~/.crewly/teams/{team-id}/config.json.
+ *
+ * Converts template members into full TeamMember objects with UUIDs, session names,
+ * and default status fields. The team is immediately available when `crewly start` runs.
+ *
+ * @param template - The team template to create from
+ * @returns True if the team was created successfully
+ */
+export function createTeamFromTemplate(template: TeamTemplate): boolean {
+  const now = new Date().toISOString();
+  const teamsDir = join(homedir(), '.crewly', 'teams', template.id);
+
+  try {
+    mkdirSync(teamsDir, { recursive: true });
+
+    const members = template.members.map((m) => {
+      const memberId = randomUUID().split('-')[0]; // short id
+      const sessionName = `${template.id}-${m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${memberId}`;
+      return {
+        id: randomUUID(),
+        name: m.name,
+        role: m.role,
+        sessionName,
+        systemPrompt: m.systemPrompt,
+        runtimeType: 'claude-code',
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
+        skillOverrides: m.skillOverrides || [],
+        excludedRoleSkills: m.excludedRoleSkills || [],
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+
+    const teamConfig = {
+      id: template.id,
+      name: template.name,
+      description: template.description,
+      members,
+      projectIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    writeFileSync(join(teamsDir, 'config.json'), JSON.stringify(teamConfig, null, 2) + '\n');
+    return true;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.log(chalk.red(`  ✗ Failed to create team: ${msg}`));
+    return false;
   }
 }
 
@@ -398,7 +491,7 @@ export function printSummary(selectedTemplate: TeamTemplate | null = null, proje
   console.log(chalk.green('  ✓ Setup complete!\n'));
 
   if (selectedTemplate) {
-    console.log(`  Your team template: ${chalk.bold(selectedTemplate.name)}`);
+    console.log(`  Team: ${chalk.bold(selectedTemplate.name)}`);
     console.log(`  Members: ${selectedTemplate.members.map(m => m.name).join(', ')}\n`);
   }
 
@@ -410,8 +503,8 @@ export function printSummary(selectedTemplate: TeamTemplate | null = null, proje
   console.log(chalk.cyan('    crewly start\n'));
 
   if (selectedTemplate) {
-    console.log('  The dashboard will offer to create your team from the');
-    console.log(`  "${selectedTemplate.name}" template when you start.\n`);
+    console.log('  Your team is ready. Open the dashboard to assign a project');
+    console.log('  and start your agents.\n');
   }
 }
 
@@ -475,6 +568,10 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
     const selectedTemplate = preselectedTemplate ?? listTemplates()[0] ?? null;
     if (selectedTemplate) {
       console.log(chalk.green(`  ✓ Using template: ${selectedTemplate.name}\n`));
+      const created = createTeamFromTemplate(selectedTemplate);
+      if (created) {
+        console.log(chalk.green(`  ✓ Team "${selectedTemplate.name}" created\n`));
+      }
     } else {
       console.log(chalk.gray('  No templates available.\n'));
     }
@@ -508,6 +605,14 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
       selectedTemplate = preselectedTemplate;
     } else {
       selectedTemplate = await selectTemplate(rl);
+    }
+
+    // Create team from selected template
+    if (selectedTemplate) {
+      const created = createTeamFromTemplate(selectedTemplate);
+      if (created) {
+        console.log(chalk.green(`  ✓ Team "${selectedTemplate.name}" created\n`));
+      }
     }
 
     // Scaffold .crewly/ directory

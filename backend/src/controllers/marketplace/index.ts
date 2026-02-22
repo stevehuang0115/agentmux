@@ -17,4 +17,8 @@ export {
   handleInstall,
   handleUninstall,
   handleUpdate,
+  handleSubmit,
+  handleListSubmissions,
+  handleGetSubmission,
+  handleReviewSubmission,
 } from './marketplace.controller.js';

@@ -266,6 +266,40 @@ describe('RuntimeAdapter', () => {
 				);
 			});
 		});
+
+		describe('compact', () => {
+			it('sends /compact command to session', async () => {
+				const mockSession = {
+					write: jest.fn(),
+					onData: jest.fn(),
+					onExit: jest.fn(),
+				};
+				mockBackend.sessionExists.mockReturnValue(true);
+				mockBackend.getSession.mockReturnValue(mockSession as any);
+
+				const result = await adapter.compact('test-agent');
+
+				expect(result).toBe(true);
+				expect(mockSession.write).toHaveBeenCalledWith('/compact\r');
+			});
+
+			it('returns false when session does not exist', async () => {
+				mockBackend.sessionExists.mockReturnValue(false);
+
+				const result = await adapter.compact('test-agent');
+
+				expect(result).toBe(false);
+			});
+
+			it('returns false when session is null', async () => {
+				mockBackend.sessionExists.mockReturnValue(true);
+				mockBackend.getSession.mockReturnValue(undefined);
+
+				const result = await adapter.compact('test-agent');
+
+				expect(result).toBe(false);
+			});
+		});
 	});
 
 	// -----------------------------------------------------------------------
@@ -299,6 +333,21 @@ describe('RuntimeAdapter', () => {
 
 			expect(typeof adapter.isRunning('s1')).toBe('boolean');
 		});
+
+		it('sends /compress command for compact', async () => {
+			const mockSession = {
+				write: jest.fn(),
+				onData: jest.fn(),
+				onExit: jest.fn(),
+			};
+			mockBackend.sessionExists.mockReturnValue(true);
+			mockBackend.getSession.mockReturnValue(mockSession as any);
+
+			const result = await adapter.compact('s1');
+
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenCalledWith('/compress\r');
+		});
 	});
 
 	// -----------------------------------------------------------------------
@@ -329,6 +378,21 @@ describe('RuntimeAdapter', () => {
 
 			const output = await adapter.getOutput('s1');
 			expect(typeof output).toBe('string');
+		});
+
+		it('sends /compact command for compact', async () => {
+			const mockSession = {
+				write: jest.fn(),
+				onData: jest.fn(),
+				onExit: jest.fn(),
+			};
+			mockBackend.sessionExists.mockReturnValue(true);
+			mockBackend.getSession.mockReturnValue(mockSession as any);
+
+			const result = await adapter.compact('s1');
+
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenCalledWith('/compact\r');
 		});
 	});
 

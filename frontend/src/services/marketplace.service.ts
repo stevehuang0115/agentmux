@@ -117,6 +117,55 @@ export async function refreshMarketplaceRegistry(): Promise<void> {
   await axios.post(`${API_BASE}/refresh`);
 }
 
+/** Submission record shape from the API */
+export interface MarketplaceSubmission {
+  id: string;
+  skillId: string;
+  name: string;
+  description: string;
+  author: string;
+  version: string;
+  category: string;
+  tags: string[];
+  license: string;
+  status: 'pending' | 'approved' | 'rejected';
+  archivePath: string;
+  checksum: string;
+  sizeBytes: number;
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewNotes?: string;
+}
+
+/**
+ * Fetch marketplace submissions with optional status filter.
+ *
+ * @param status - Optional status filter (pending, approved, rejected)
+ * @returns Promise resolving to array of submissions
+ */
+export async function fetchSubmissions(status?: string): Promise<MarketplaceSubmission[]> {
+  const params = status ? `?status=${status}` : '';
+  const response = await axios.get(`${API_BASE}/submissions${params}`);
+  return response.data.data;
+}
+
+/**
+ * Review a marketplace submission (approve or reject).
+ *
+ * @param id - Submission ID
+ * @param action - 'approve' or 'reject'
+ * @param notes - Optional review notes
+ * @returns Promise resolving to operation result
+ */
+export async function reviewMarketplaceSubmission(
+  id: string,
+  action: 'approve' | 'reject',
+  notes?: string
+): Promise<MarketplaceOperationResult> {
+  const response = await axios.post(`${API_BASE}/submissions/${id}/review`, { action, notes });
+  return response.data;
+}
+
 /**
  * Marketplace service object for convenience.
  */
@@ -127,6 +176,8 @@ export const marketplaceService = {
   uninstall: uninstallMarketplaceItem,
   update: updateMarketplaceItem,
   refresh: refreshMarketplaceRegistry,
+  getSubmissions: fetchSubmissions,
+  reviewSubmission: reviewMarketplaceSubmission,
 };
 
 export default marketplaceService;

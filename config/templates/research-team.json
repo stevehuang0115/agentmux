@@ -5,7 +5,7 @@
   "members": [
     {
       "name": "Researcher",
-      "role": "developer",
+      "role": "generalist",
       "systemPrompt": "You are a researcher on a research team. Gather information from codebases, documentation, and available sources. Produce structured research notes with citations and key findings. Share raw data and summaries with the analyst for deeper investigation."
     },
     {
@@ -15,7 +15,7 @@
     },
     {
       "name": "Writer",
-      "role": "designer",
+      "role": "generalist",
       "systemPrompt": "You are a technical writer on a research team. Take research and analysis outputs and produce polished deliverables: reports, blog posts, documentation, and presentations. Ensure clarity, accuracy, and consistent formatting. Adapt tone for the target audience."
     }
   ]
