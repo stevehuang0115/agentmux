@@ -26,7 +26,11 @@ import {
   getSubmission,
   reviewSubmission,
 } from '../../services/marketplace/index.js';
-import type { MarketplaceItemType, SortOption, SubmissionStatus } from '../../types/marketplace.types.js';
+import type { MarketplaceItemType, MarketplaceCategory, SortOption, SubmissionStatus } from '../../types/marketplace.types.js';
+
+const VALID_TYPES: MarketplaceItemType[] = ['skill', 'model', 'role'];
+const VALID_SORTS: SortOption[] = ['popular', 'rating', 'newest'];
+const VALID_SUBMISSION_STATUSES: SubmissionStatus[] = ['pending', 'approved', 'rejected'];
 
 /**
  * Wraps an async route handler with a standard try/catch that returns
@@ -63,10 +67,23 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
  * ```
  */
 export const handleListItems = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const typeParam = req.query.type as string | undefined;
+  if (typeParam && !VALID_TYPES.includes(typeParam as MarketplaceItemType)) {
+    res.status(400).json({ success: false, error: `Invalid type "${typeParam}". Must be one of: ${VALID_TYPES.join(', ')}` });
+    return;
+  }
+
+  const sortParam = req.query.sort as string | undefined;
+  if (sortParam && !VALID_SORTS.includes(sortParam as SortOption)) {
+    res.status(400).json({ success: false, error: `Invalid sort "${sortParam}". Must be one of: ${VALID_SORTS.join(', ')}` });
+    return;
+  }
+
   const items = await listItems({
-    type: req.query.type as MarketplaceItemType | undefined,
+    type: typeParam as MarketplaceItemType | undefined,
+    category: req.query.category as MarketplaceCategory | undefined,
     search: req.query.search as string | undefined,
-    sortBy: (req.query.sort as SortOption) || undefined,
+    sortBy: sortParam as SortOption | undefined,
   });
   res.json({ success: true, data: items });
 });
@@ -248,11 +265,14 @@ export const handleSubmit = asyncHandler(async (req: Request, res: Response): Pr
   // Validate archivePath is within allowed directories to prevent path traversal
   const resolvedPath = path.resolve(archivePath);
   const allowedDirs = [
-    path.join(homedir(), '.crewly'),
-    process.cwd(),
-    '/tmp',
+    path.resolve(homedir(), '.crewly'),
+    path.resolve(process.cwd()),
+    path.resolve('/tmp'),
   ];
-  const isAllowed = allowedDirs.some((dir) => resolvedPath.startsWith(dir + path.sep));
+  const isAllowed = allowedDirs.some((dir) => {
+    const normalizedDir = dir.endsWith(path.sep) ? dir : dir + path.sep;
+    return resolvedPath === dir || resolvedPath.startsWith(normalizedDir);
+  });
   if (!isAllowed) {
     res.status(400).json({
       success: false,
@@ -279,8 +299,15 @@ export const handleSubmit = asyncHandler(async (req: Request, res: Response): Pr
  * ```
  */
 export const handleListSubmissions = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  const status = req.query.status as SubmissionStatus | undefined;
-  const submissions = await listSubmissions(status);
+  const statusParam = req.query.status as string | undefined;
+  if (statusParam && !VALID_SUBMISSION_STATUSES.includes(statusParam as SubmissionStatus)) {
+    res.status(400).json({
+      success: false,
+      error: `Invalid status "${statusParam}". Must be one of: ${VALID_SUBMISSION_STATUSES.join(', ')}`,
+    });
+    return;
+  }
+  const submissions = await listSubmissions(statusParam as SubmissionStatus | undefined);
   res.json({ success: true, data: submissions });
 });
 

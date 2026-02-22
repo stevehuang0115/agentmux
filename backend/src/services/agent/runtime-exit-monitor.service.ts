@@ -244,7 +244,8 @@ export class RuntimeExitMonitorService {
 	 * Destroy all monitoring subscriptions.
 	 */
 	destroy(): void {
-		for (const [sessionName] of this.sessions) {
+		const sessionNames = [...this.sessions.keys()];
+		for (const sessionName of sessionNames) {
 			this.stopMonitoring(sessionName);
 		}
 		this.logger.debug('All runtime exit monitors destroyed');

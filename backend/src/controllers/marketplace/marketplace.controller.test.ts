@@ -84,6 +84,7 @@ describe('MarketplaceController', () => {
 
       expect(mockListItems).toHaveBeenCalledWith({
         type: undefined,
+        category: undefined,
         search: undefined,
         sortBy: undefined,
       });
@@ -94,15 +95,34 @@ describe('MarketplaceController', () => {
       mockListItems.mockResolvedValue([]);
 
       await handleListItems(
-        { query: { type: 'skill', search: 'deploy', sort: 'popular' } } as any,
+        { query: { type: 'skill', category: 'development', search: 'deploy', sort: 'popular' } } as any,
         mockRes as any,
       );
 
       expect(mockListItems).toHaveBeenCalledWith({
         type: 'skill',
+        category: 'development',
         search: 'deploy',
         sortBy: 'popular',
       });
+    });
+
+    it('should return 400 for invalid type parameter', async () => {
+      await handleListItems(
+        { query: { type: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+    });
+
+    it('should return 400 for invalid sort parameter', async () => {
+      await handleListItems(
+        { query: { sort: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
     });
 
     it('should return 500 on service error', async () => {
@@ -464,12 +484,14 @@ describe('MarketplaceController', () => {
       const result = { success: true, message: 'Submitted', submission: { id: 'sub-1' } };
       mockSubmitSkill.mockResolvedValue(result);
 
+      // Use process.cwd()-relative path which is always in the allowed dirs
+      const archivePath = require('path').join(process.cwd(), 'test-archive.tar.gz');
       await handleSubmit(
-        { body: { archivePath: '/tmp/archive.tar.gz' } } as any,
+        { body: { archivePath } } as any,
         mockRes as any,
       );
 
-      expect(mockSubmitSkill).toHaveBeenCalledWith('/tmp/archive.tar.gz');
+      expect(mockSubmitSkill).toHaveBeenCalledWith(archivePath);
       expect(mockRes.json).toHaveBeenCalledWith(result);
     });
 
@@ -502,8 +524,9 @@ describe('MarketplaceController', () => {
     it('should return 500 on service error', async () => {
       mockSubmitSkill.mockRejectedValue(new Error('IO error'));
 
+      const archivePath = require('path').join(process.cwd(), 'test-archive.tar.gz');
       await handleSubmit(
-        { body: { archivePath: '/tmp/archive.tar.gz' } } as any,
+        { body: { archivePath } } as any,
         mockRes as any,
       );
 
@@ -536,6 +559,15 @@ describe('MarketplaceController', () => {
       );
 
       expect(mockListSubmissions).toHaveBeenCalledWith('pending');
+    });
+
+    it('should return 400 for invalid status', async () => {
+      await handleListSubmissions(
+        { query: { status: 'invalid' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
     });
 
     it('should return 500 on error', async () => {

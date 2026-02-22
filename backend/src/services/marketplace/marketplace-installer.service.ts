@@ -79,15 +79,21 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
 
     // Verify checksum if provided
     if (item.assets.checksum) {
-      const [algo, expected] = item.assets.checksum.split(':');
-      if (algo === 'sha256') {
-        const actual = createHash('sha256').update(data).digest('hex');
-        if (actual !== expected) {
-          return {
-            success: false,
-            message: `Checksum mismatch: expected ${expected}, got ${actual}`,
-          };
-        }
+      const colonIdx = item.assets.checksum.indexOf(':');
+      if (colonIdx === -1) {
+        return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
+      }
+      const algo = item.assets.checksum.slice(0, colonIdx);
+      const expected = item.assets.checksum.slice(colonIdx + 1);
+      if (algo !== 'sha256') {
+        return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
+      }
+      const actual = createHash('sha256').update(data).digest('hex');
+      if (actual !== expected) {
+        return {
+          success: false,
+          message: `Checksum mismatch: expected ${expected}, got ${actual}`,
+        };
       }
     }
 

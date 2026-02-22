@@ -38,6 +38,7 @@ import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import {
 	CONTEXT_WINDOW_MONITOR_CONSTANTS,
 	RUNTIME_COMPACT_COMMANDS,
+	RUNTIME_TYPES,
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
@@ -258,7 +259,7 @@ export class ContextWindowMonitorService {
 		memberId: string,
 		teamId: string,
 		role: string,
-		runtimeType: RuntimeType = 'claude-code' as RuntimeType
+		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
 	): void {
 		// Stop any existing monitoring for this session
 		if (this.sessionSubscriptions.has(sessionName)) {

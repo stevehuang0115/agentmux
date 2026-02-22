@@ -18,6 +18,7 @@ import {
   MarketplaceFilter,
   InstalledItemsManifest,
   InstalledItemRecord,
+  type MarketplaceItemType,
 } from '../../types/marketplace.types.js';
 import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
@@ -107,8 +108,11 @@ async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
 async function loadLocalRegistry(): Promise<MarketplaceItem[]> {
   try {
     const data = await readFile(LOCAL_REGISTRY_PATH, 'utf-8');
-    const registry = JSON.parse(data) as { items: MarketplaceItem[] };
-    return registry.items || [];
+    const registry = JSON.parse(data) as { items?: unknown };
+    if (!Array.isArray(registry.items)) {
+      return [];
+    }
+    return registry.items as MarketplaceItem[];
   } catch {
     return [];
   }
@@ -266,8 +270,8 @@ function enrichWithStatusFromMap(
 /**
  * Enriches a marketplace item with its local install status.
  *
- * Compares the registry item against the local manifest to determine
- * whether the item is not installed, installed, or has an update available.
+ * Uses a linear scan for single-item lookups. For bulk operations,
+ * use enrichWithStatusFromMap with a pre-built Map instead.
  *
  * @param item - The marketplace item from the registry
  * @param manifest - The local installed items manifest
@@ -277,8 +281,14 @@ function enrichWithStatus(
   item: MarketplaceItem,
   manifest: InstalledItemsManifest
 ): MarketplaceItemWithStatus {
-  const installedMap = new Map(manifest.items.map((r) => [r.id, r]));
-  return enrichWithStatusFromMap(item, installedMap);
+  const installed = manifest.items.find((r) => r.id === item.id);
+  if (!installed) {
+    return { ...item, installStatus: 'not_installed' };
+  }
+  if (installed.version !== item.version) {
+    return { ...item, installStatus: 'update_available', installedVersion: installed.version };
+  }
+  return { ...item, installStatus: 'installed', installedVersion: installed.version };
 }
 
 /**
@@ -293,8 +303,14 @@ function enrichWithStatus(
  * @param id - The marketplace item ID
  * @returns Absolute path to the item's install directory
  */
-export function getInstallPath(type: string, id: string): string {
-  const typeDir = type === 'skill' ? 'skills' : type === 'model' ? 'models' : 'roles';
+const TYPE_DIR_MAP: Record<MarketplaceItemType, string> = {
+  skill: 'skills',
+  model: 'models',
+  role: 'roles',
+};
+
+export function getInstallPath(type: MarketplaceItemType, id: string): string {
+  const typeDir = TYPE_DIR_MAP[type];
   return path.join(MARKETPLACE_DIR, typeDir, id);
 }
 
