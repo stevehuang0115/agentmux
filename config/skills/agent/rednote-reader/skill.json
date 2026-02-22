@@ -1,0 +1,23 @@
+{
+  "id": "rednote-reader",
+  "name": "RedNote (小红书) Reader",
+  "description": "Read content from the 小红书 (RedNote) macOS iPad app via Accessibility API. Extracts feed posts, titles, authors, like counts, and navigation structure without screenshots.",
+  "category": "automation",
+  "skillType": "claude-skill",
+  "promptFile": "instructions.md",
+  "execution": {
+    "type": "script",
+    "script": {
+      "file": "execute.sh",
+      "interpreter": "bash",
+      "timeoutMs": 60000
+    }
+  },
+  "triggers": ["rednote", "小红书", "xiaohongshu", "red note", "discover app", "read rednote"],
+  "dependsOn": ["computer-use"],
+  "tags": ["automation", "rednote", "xiaohongshu", "accessibility", "content-reading", "macos"],
+  "assignableRoles": ["generalist", "product-manager"],
+  "version": "1.0.0",
+  "createdAt": "2026-02-22T00:00:00.000Z",
+  "updatedAt": "2026-02-22T00:00:00.000Z"
+}

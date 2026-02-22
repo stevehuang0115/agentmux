@@ -303,10 +303,30 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
+      // Batch system events: if the current message is a system event and more
+      // are pending, combine up to MAX_SYSTEM_EVENT_BATCH into one delivery.
+      // This reduces context window consumption on the orchestrator when many
+      // events fire in quick succession (agent status changes, etc.).
+      let batchedMessages: import('../../types/messaging.types.js').QueuedMessage[] = [];
+      if (isSystemEvent) {
+        const maxAdditional = MESSAGE_QUEUE_CONSTANTS.MAX_SYSTEM_EVENT_BATCH - 1;
+        batchedMessages = this.queueService.dequeueSystemEventBatch(maxAdditional);
+        if (batchedMessages.length > 0) {
+          this.logger.info('Batched system events for delivery', {
+            primaryId: message.id,
+            batchSize: 1 + batchedMessages.length,
+          });
+        }
+      }
+
       // Format message: system events use raw content, chat uses [CHAT:id] prefix
-      const deliveryContent = isSystemEvent
-        ? message.content
-        : `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
+      let deliveryContent: string;
+      if (isSystemEvent) {
+        const allContents = [message.content, ...batchedMessages.map(m => m.content)];
+        deliveryContent = allContents.join('\n');
+      } else {
+        deliveryContent = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
+      }
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
         ORCHESTRATOR_SESSION_NAME,
@@ -325,6 +345,10 @@ export class QueueProcessorService extends EventEmitter {
         });
 
         this.queueService.markFailed(message.id, errorMsg);
+        // Also fail any batched system event messages
+        if (batchedMessages.length > 0) {
+          this.queueService.markBatchFailed(batchedMessages, errorMsg);
+        }
         this.responseRouter.routeError(message, errorMsg);
 
         // Post a system message to the conversation so the user sees the error
@@ -349,9 +373,14 @@ export class QueueProcessorService extends EventEmitter {
       if (isSystemEvent) {
         // Fire-and-forget: no response expected for system events
         this.queueService.markCompleted(message.id, '');
+        // Mark all batched messages as completed too
+        if (batchedMessages.length > 0) {
+          this.queueService.markBatchCompleted(batchedMessages);
+        }
 
         this.logger.info('System event delivered successfully', {
           messageId: message.id,
+          batchSize: 1 + batchedMessages.length,
         });
       } else {
         // Wait for orchestrator response

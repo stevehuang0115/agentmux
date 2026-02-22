@@ -13,7 +13,7 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { mkdir, rm, copyFile } from 'fs/promises';
+import { mkdir, rm, copyFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
@@ -30,6 +30,8 @@ import {
   getInstallPath,
 } from './marketplace.service.js';
 import { findPackageRoot } from '../../utils/package-root.js';
+import { getSkillService } from '../skill/skill.service.js';
+import { SkillCatalogService } from '../skill/skill-catalog.service.js';
 
 const MARKETPLACE_BASE_URL = 'https://crewly.stevesprompt.com';
 const ASSETS_ENDPOINT = '/api/assets';
@@ -39,7 +41,8 @@ const ASSETS_ENDPOINT = '/api/assets';
  *
  * Performs the following steps:
  * 1. Resolves the downloadable asset (archive or model)
- * 2. Downloads the asset from the Crewly CDN
+ * 2. Loads the asset from local assets directory if available,
+ *    otherwise downloads from the Crewly CDN
  * 3. Verifies the SHA-256 checksum if provided
  * 4. Extracts tar.gz archives to the install directory (skills),
  *    or writes raw files for non-archive assets (models)
@@ -59,13 +62,22 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
       return { success: false, message: `No downloadable asset for ${item.id}` };
     }
 
-    const url = `${MARKETPLACE_BASE_URL}${ASSETS_ENDPOINT}/${assetPath}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-    }
+    // Check local assets first (for locally published/seeded skills)
+    const localAssetsDir = path.join(homedir(), '.crewly', 'marketplace', 'assets');
+    const localAssetPath = path.join(localAssetsDir, assetPath);
 
-    const data = Buffer.from(await res.arrayBuffer());
+    let data: Buffer;
+    if (existsSync(localAssetPath)) {
+      data = await readFile(localAssetPath);
+    } else {
+      // Fall back to remote download
+      const url = `${MARKETPLACE_BASE_URL}${ASSETS_ENDPOINT}/${assetPath}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+      }
+      data = Buffer.from(await res.arrayBuffer());
+    }
 
     // Verify checksum if provided
     if (item.assets.checksum) {
@@ -116,6 +128,11 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     manifest.items.push(record);
     await saveManifest(manifest);
 
+    // Refresh skill service and catalog so the new skill is immediately discoverable
+    if (item.type === 'skill') {
+      await refreshSkillRegistrations();
+    }
+
     return { success: true, message: `Installed ${item.name} v${item.version}`, item: record };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -148,6 +165,11 @@ export async function uninstallItem(id: string): Promise<MarketplaceOperationRes
     // Update manifest
     manifest.items = manifest.items.filter((r) => r.id !== id);
     await saveManifest(manifest);
+
+    // Refresh skill service and catalog after removal
+    if (record.type === 'skill') {
+      await refreshSkillRegistrations();
+    }
 
     return { success: true, message: `Uninstalled ${record.name}` };
   } catch (error) {
@@ -216,5 +238,28 @@ export async function ensureCommonLibs(): Promise<void> {
   if (existsSync(rootCommonSrc)) {
     await mkdir(rootCommonDest, { recursive: true });
     await copyFile(rootCommonSrc, path.join(rootCommonDest, 'lib.sh'));
+  }
+}
+
+/**
+ * Refreshes the SkillService cache and regenerates the agent skill catalog
+ * after a marketplace install or uninstall operation.
+ *
+ * This ensures newly installed skills are immediately available to agents
+ * without requiring a server restart.
+ */
+async function refreshSkillRegistrations(): Promise<void> {
+  try {
+    const skillService = getSkillService();
+    await skillService.refresh();
+  } catch {
+    // Skill service may not be initialized yet (e.g., during CLI usage)
+  }
+
+  try {
+    const catalogService = SkillCatalogService.getInstance();
+    await catalogService.generateAgentCatalog();
+  } catch {
+    // Catalog service may not be available in all contexts
   }
 }

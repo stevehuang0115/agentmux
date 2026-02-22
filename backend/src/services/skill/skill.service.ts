@@ -39,6 +39,9 @@ export interface SkillServiceOptions {
 
   /** Directory for user-created skills */
   userSkillsDir?: string;
+
+  /** Directory for marketplace-installed skills */
+  marketplaceSkillsDir?: string;
 }
 
 /**
@@ -54,6 +57,7 @@ export interface SkillServiceOptions {
 export class SkillService {
   private readonly builtinSkillsDir: string;
   private readonly userSkillsDir: string;
+  private readonly marketplaceSkillsDir: string;
   private skillsCache: Map<string, Skill> = new Map();
   private initialized = false;
   private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('SkillService');
@@ -69,6 +73,9 @@ export class SkillService {
     this.userSkillsDir =
       options?.userSkillsDir ??
       path.join(process.env.HOME || '~', '.crewly', SKILL_CONSTANTS.PATHS.SKILLS_DIR);
+    this.marketplaceSkillsDir =
+      options?.marketplaceSkillsDir ??
+      path.join(process.env.HOME || '~', '.crewly', 'marketplace', 'skills');
   }
 
   /**
@@ -397,6 +404,19 @@ export class SkillService {
     } catch (error) {
       // Log warning but don't fail - user skills may not exist yet
       this.logger.warn('Failed to load user skills', { error: error instanceof Error ? error.message : String(error) });
+    }
+
+    // Load marketplace-installed skills
+    try {
+      if (existsSync(this.marketplaceSkillsDir)) {
+        const marketplaceSkills = await this.loadSkillsFromDir(this.marketplaceSkillsDir, false);
+        for (const skill of marketplaceSkills) {
+          skill.isMarketplace = true;
+          this.skillsCache.set(skill.id, skill);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Failed to load marketplace skills', { error: error instanceof Error ? error.message : String(error) });
     }
   }
 

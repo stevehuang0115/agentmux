@@ -18,6 +18,10 @@ jest.mock('../../services/marketplace/index.js', () => ({
   installItem: jest.fn(),
   uninstallItem: jest.fn(),
   updateItem: jest.fn(),
+  submitSkill: jest.fn(),
+  listSubmissions: jest.fn(),
+  getSubmission: jest.fn(),
+  reviewSubmission: jest.fn(),
 }));
 
 describe('Marketplace Controller index exports', () => {
@@ -64,5 +68,25 @@ describe('Marketplace Controller index exports', () => {
   it('should export handleUpdate handler', () => {
     expect(marketplaceIndex.handleUpdate).toBeDefined();
     expect(typeof marketplaceIndex.handleUpdate).toBe('function');
+  });
+
+  it('should export handleSubmit handler', () => {
+    expect(marketplaceIndex.handleSubmit).toBeDefined();
+    expect(typeof marketplaceIndex.handleSubmit).toBe('function');
+  });
+
+  it('should export handleListSubmissions handler', () => {
+    expect(marketplaceIndex.handleListSubmissions).toBeDefined();
+    expect(typeof marketplaceIndex.handleListSubmissions).toBe('function');
+  });
+
+  it('should export handleGetSubmission handler', () => {
+    expect(marketplaceIndex.handleGetSubmission).toBeDefined();
+    expect(typeof marketplaceIndex.handleGetSubmission).toBe('function');
+  });
+
+  it('should export handleReviewSubmission handler', () => {
+    expect(marketplaceIndex.handleReviewSubmission).toBeDefined();
+    expect(typeof marketplaceIndex.handleReviewSubmission).toBe('function');
   });
 });

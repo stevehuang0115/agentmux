@@ -27,6 +27,7 @@ const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const CREWLY_HOME = path.join(homedir(), '.crewly');
 const MARKETPLACE_DIR = path.join(CREWLY_HOME, 'marketplace');
 const MANIFEST_PATH = path.join(MARKETPLACE_DIR, 'manifest.json');
+const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, 'local-registry.json');
 
 let cachedRegistry: MarketplaceRegistry | null = null;
 let cacheTimestamp = 0;
@@ -48,16 +49,54 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
     return cachedRegistry;
   }
 
-  const url = `${MARKETPLACE_BASE_URL}${REGISTRY_ENDPOINT}`;
-  const res = await fetch(url);
-  if (!res.ok) {
+  let remoteRegistry: MarketplaceRegistry;
+  try {
+    const url = `${MARKETPLACE_BASE_URL}${REGISTRY_ENDPOINT}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      if (cachedRegistry) return cachedRegistry;
+      // Fall through to local-only registry
+      remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_BASE_URL, items: [] };
+    } else {
+      remoteRegistry = (await res.json()) as MarketplaceRegistry;
+    }
+  } catch {
     if (cachedRegistry) return cachedRegistry;
-    throw new Error(`Failed to fetch registry: ${res.status} ${res.statusText}`);
+    remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_BASE_URL, items: [] };
   }
 
-  cachedRegistry = (await res.json()) as MarketplaceRegistry;
+  // Merge locally published skills into the registry
+  const localItems = await loadLocalRegistry();
+  if (localItems.length > 0) {
+    const remoteIds = new Set(remoteRegistry.items.map((i) => i.id));
+    for (const localItem of localItems) {
+      if (!remoteIds.has(localItem.id)) {
+        remoteRegistry.items.push(localItem);
+      }
+    }
+  }
+
+  cachedRegistry = remoteRegistry;
   cacheTimestamp = now;
   return cachedRegistry;
+}
+
+/**
+ * Loads locally published marketplace items from the local registry file.
+ *
+ * These are skills that were submitted and approved through the local
+ * submission workflow.
+ *
+ * @returns Array of locally published marketplace items
+ */
+async function loadLocalRegistry(): Promise<MarketplaceItem[]> {
+  try {
+    const data = await readFile(LOCAL_REGISTRY_PATH, 'utf-8');
+    const registry = JSON.parse(data) as { items: MarketplaceItem[] };
+    return registry.items || [];
+  } catch {
+    return [];
+  }
 }
 
 /**

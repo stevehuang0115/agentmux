@@ -19,8 +19,12 @@ import {
   installItem,
   uninstallItem,
   updateItem,
+  submitSkill,
+  listSubmissions,
+  getSubmission,
+  reviewSubmission,
 } from '../../services/marketplace/index.js';
-import type { MarketplaceItemType, SortOption } from '../../types/marketplace.types.js';
+import type { MarketplaceItemType, SortOption, SubmissionStatus } from '../../types/marketplace.types.js';
 
 /**
  * GET /api/marketplace - List marketplace items with optional filters.
@@ -231,6 +235,117 @@ export async function handleUpdate(req: Request, res: Response): Promise<void> {
       return;
     }
     const result = await updateItem(item);
+    res.json(result);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, error: msg });
+  }
+}
+
+/**
+ * POST /api/marketplace/submit - Submit a skill for marketplace review.
+ *
+ * Accepts a JSON body with `archivePath` pointing to a local tar.gz archive.
+ * Validates the archive contents, stores a copy, and creates a pending
+ * submission record.
+ *
+ * @param req - Express request with body: { archivePath: string }
+ * @param res - Express response returning submission result
+ *
+ * @example
+ * ```
+ * POST /api/marketplace/submit
+ * { "archivePath": "/path/to/my-skill-1.0.0.tar.gz" }
+ * ```
+ */
+export async function handleSubmit(req: Request, res: Response): Promise<void> {
+  try {
+    const { archivePath } = req.body as { archivePath?: string };
+    if (!archivePath) {
+      res.status(400).json({ success: false, error: 'archivePath is required' });
+      return;
+    }
+    const result = await submitSkill(archivePath);
+    res.json(result);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, error: msg });
+  }
+}
+
+/**
+ * GET /api/marketplace/submissions - List all submissions.
+ *
+ * Accepts an optional `status` query parameter to filter by submission status.
+ *
+ * @param req - Express request with optional query: status (pending|approved|rejected)
+ * @param res - Express response returning { success, data: MarketplaceSubmission[] }
+ *
+ * @example
+ * ```
+ * GET /api/marketplace/submissions?status=pending
+ * ```
+ */
+export async function handleListSubmissions(req: Request, res: Response): Promise<void> {
+  try {
+    const status = req.query.status as SubmissionStatus | undefined;
+    const submissions = await listSubmissions(status);
+    res.json({ success: true, data: submissions });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, error: msg });
+  }
+}
+
+/**
+ * GET /api/marketplace/submissions/:id - Get a single submission.
+ *
+ * @param req - Express request with params.id
+ * @param res - Express response returning { success, data: MarketplaceSubmission } or 404
+ *
+ * @example
+ * ```
+ * GET /api/marketplace/submissions/abc-123
+ * ```
+ */
+export async function handleGetSubmission(req: Request, res: Response): Promise<void> {
+  try {
+    const submission = await getSubmission(req.params.id);
+    if (!submission) {
+      res.status(404).json({ success: false, error: 'Submission not found' });
+      return;
+    }
+    res.json({ success: true, data: submission });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ success: false, error: msg });
+  }
+}
+
+/**
+ * POST /api/marketplace/submissions/:id/review - Approve or reject a submission.
+ *
+ * @param req - Express request with params.id and body: { action: 'approve'|'reject', notes?: string }
+ * @param res - Express response returning operation result
+ *
+ * @example
+ * ```
+ * POST /api/marketplace/submissions/abc-123/review
+ * { "action": "approve" }
+ * ```
+ */
+export async function handleReviewSubmission(req: Request, res: Response): Promise<void> {
+  try {
+    const { action, notes } = req.body as { action?: string; notes?: string };
+    if (action !== 'approve' && action !== 'reject') {
+      res.status(400).json({ success: false, error: 'action must be "approve" or "reject"' });
+      return;
+    }
+    const result = await reviewSubmission(req.params.id, action, notes);
+    if (result.message.includes('not found')) {
+      res.status(404).json(result);
+      return;
+    }
     res.json(result);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

@@ -12,6 +12,7 @@ import { searchCommand } from './commands/search.js';
 import { onboardCommand } from './commands/onboard.js';
 import { mcpServerCommand } from './commands/mcp-server.js';
 import { publishCommand } from './commands/publish.js';
+import { seedMarketplaceCommand } from './commands/seed-marketplace.js';
 import { DEFAULT_WEB_PORT } from './constants.js';
 import { getLocalVersion } from './utils/version-check.js';
 
@@ -91,7 +92,16 @@ program
   .description('Validate and package a skill for the Crewly marketplace')
   .option('--dry-run', 'Validate only, do not create archive')
   .option('-o, --output <dir>', 'Output directory for the archive')
+  .option('--submit', 'Submit the skill to the marketplace for review')
+  .option('--url <url>', 'Backend URL for submission (default: http://localhost:3000)')
   .action(publishCommand);
+
+program
+  .command('seed-marketplace')
+  .description('Publish built-in skills to the local marketplace registry')
+  .option('--dry-run', 'Validate only, do not publish')
+  .option('--skills-dir <dir>', 'Skills directory to package from')
+  .action(seedMarketplaceCommand);
 
 // Error handling
 program.exitOverride();

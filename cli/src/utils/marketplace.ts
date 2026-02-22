@@ -11,7 +11,7 @@
 import path from 'path';
 import os from 'os';
 import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
@@ -321,6 +321,29 @@ export async function installAllSkills(
   }
 
   return installed;
+}
+
+// ========================= Bundled Skills =========================
+
+/**
+ * Counts the number of bundled agent skills shipped with the Crewly package.
+ *
+ * Looks in config/skills/agent/ for subdirectories that aren't _common.
+ * Used as a fallback when the marketplace is unreachable.
+ *
+ * @returns The number of bundled skill directories
+ */
+export function countBundledSkills(): number {
+  const packageRoot = findPackageRoot(__dirname) || findPackageRoot(process.cwd());
+  if (!packageRoot) return 0;
+
+  const agentSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent');
+  try {
+    const entries = readdirSync(agentSkillsDir, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory() && !e.name.startsWith('_')).length;
+  } catch {
+    return 0;
+  }
 }
 
 // ========================= Formatting =========================

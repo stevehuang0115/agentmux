@@ -912,4 +912,94 @@ describe('MessageQueueService', () => {
       await memoryQueue.flushPersist(); // Should not throw
     });
   });
+
+  describe('dequeueSystemEventBatch', () => {
+    it('should dequeue only system_event messages', () => {
+      queue.enqueue({ content: 'user msg', conversationId: 'c1', source: 'web_chat' });
+      queue.enqueue({ content: 'event 1', conversationId: 'c2', source: 'system_event' });
+      queue.enqueue({ content: 'event 2', conversationId: 'c3', source: 'system_event' });
+
+      const batch = queue.dequeueSystemEventBatch(5);
+
+      expect(batch).toHaveLength(2);
+      expect(batch[0].content).toBe('event 1');
+      expect(batch[1].content).toBe('event 2');
+      expect(batch[0].status).toBe('processing');
+      // The user message should remain in the queue
+      expect(queue.pendingCount).toBe(1);
+    });
+
+    it('should respect maxCount limit', () => {
+      queue.enqueue({ content: 'event 1', conversationId: 'c1', source: 'system_event' });
+      queue.enqueue({ content: 'event 2', conversationId: 'c2', source: 'system_event' });
+      queue.enqueue({ content: 'event 3', conversationId: 'c3', source: 'system_event' });
+
+      const batch = queue.dequeueSystemEventBatch(2);
+
+      expect(batch).toHaveLength(2);
+      expect(queue.pendingCount).toBe(1);
+    });
+
+    it('should return empty array when no system events', () => {
+      queue.enqueue({ content: 'user msg', conversationId: 'c1', source: 'web_chat' });
+
+      const batch = queue.dequeueSystemEventBatch(5);
+
+      expect(batch).toHaveLength(0);
+      expect(queue.pendingCount).toBe(1);
+    });
+
+    it('should return empty array when queue is empty', () => {
+      const batch = queue.dequeueSystemEventBatch(5);
+      expect(batch).toHaveLength(0);
+    });
+  });
+
+  describe('markBatchCompleted', () => {
+    it('should mark all messages in batch as completed', () => {
+      queue.enqueue({ content: 'event 1', conversationId: 'c1', source: 'system_event' });
+      queue.enqueue({ content: 'event 2', conversationId: 'c2', source: 'system_event' });
+
+      // Dequeue the primary message first (required by queue invariant)
+      const primary = queue.dequeue()!;
+      const batch = queue.dequeueSystemEventBatch(5);
+
+      const completedSpy = jest.fn();
+      queue.on('completed', completedSpy);
+
+      queue.markBatchCompleted(batch);
+
+      expect(batch[0].status).toBe('completed');
+      expect(batch[0].completedAt).toBeDefined();
+      expect(completedSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should be a no-op for empty array', () => {
+      const completedSpy = jest.fn();
+      queue.on('completed', completedSpy);
+
+      queue.markBatchCompleted([]);
+
+      expect(completedSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('markBatchFailed', () => {
+    it('should mark all messages in batch as failed', () => {
+      queue.enqueue({ content: 'event 1', conversationId: 'c1', source: 'system_event' });
+      queue.enqueue({ content: 'event 2', conversationId: 'c2', source: 'system_event' });
+
+      const primary = queue.dequeue()!;
+      const batch = queue.dequeueSystemEventBatch(5);
+
+      const failedSpy = jest.fn();
+      queue.on('failed', failedSpy);
+
+      queue.markBatchFailed(batch, 'delivery failed');
+
+      expect(batch[0].status).toBe('failed');
+      expect(batch[0].error).toBe('delivery failed');
+      expect(failedSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });

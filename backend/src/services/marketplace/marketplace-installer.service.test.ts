@@ -7,7 +7,7 @@
 
 import path from 'path';
 import { mkdtemp, rm, readdir, readFile, mkdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import * as tar from 'tar';
@@ -39,6 +39,17 @@ jest.mock('./marketplace.service.js', () => {
 // Mock findPackageRoot so ensureCommonLibs copies from our temp fixtures
 jest.mock('../../utils/package-root.js', () => ({
   findPackageRoot: () => tempDir,
+}));
+
+// Mock skill service and catalog service used by refreshSkillRegistrations
+jest.mock('../skill/skill.service.js', () => ({
+  getSkillService: () => ({ refresh: jest.fn().mockResolvedValue(undefined) }),
+}));
+
+jest.mock('../skill/skill-catalog.service.js', () => ({
+  SkillCatalogService: {
+    getInstance: () => ({ generateAgentCatalog: jest.fn().mockResolvedValue(undefined) }),
+  },
 }));
 
 // We import after mocks are set up
@@ -280,6 +291,73 @@ describe('marketplace-installer.service', () => {
       const result = await updateItem(itemV2);
       expect(result.success).toBe(true);
       expect(result.message).toContain('v2.0.0');
+    });
+  });
+
+  describe('installItem — local asset loading', () => {
+    const localAssetsBase = path.join(homedir(), '.crewly', 'marketplace', 'assets');
+    const localAssetDir = path.join(localAssetsBase, 'skills', 'local-skill');
+    const localAssetFile = path.join(localAssetDir, 'local-skill-1.0.0.tar.gz');
+
+    afterEach(async () => {
+      await rm(localAssetDir, { recursive: true, force: true });
+    });
+
+    it('installs from local assets when file exists on disk', async () => {
+      // Create a tar.gz archive and place it in the local assets directory
+      const archiveBuffer = await createTarGz({
+        'execute.sh': '#!/bin/bash\necho local',
+        'skill.json': '{"id":"local-skill"}',
+      });
+
+      await mkdir(localAssetDir, { recursive: true });
+      await writeFile(localAssetFile, archiveBuffer);
+
+      const item = makeFakeItem({
+        id: 'local-skill',
+        name: 'Local Skill',
+        assets: { archive: 'skills/local-skill/local-skill-1.0.0.tar.gz' },
+      });
+
+      // Set up fetch to fail — should NOT be called
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Installed Local Skill');
+
+      // Verify fetch was NOT called (asset loaded from local disk)
+      expect(global.fetch).not.toHaveBeenCalled();
+
+      // Verify files were extracted
+      const installDir = path.join(tempDir, 'marketplace', 'skills', 'local-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('execute.sh');
+    });
+
+    it('falls back to remote download when local asset does not exist', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo remote' });
+      const item = makeFakeItem({
+        assets: { archive: 'skills/test-skill/test-skill-1.0.0.tar.gz' },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(archiveBuffer.buffer.slice(
+          archiveBuffer.byteOffset,
+          archiveBuffer.byteOffset + archiveBuffer.byteLength
+        )),
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+
+      // Verify fetch WAS called (no local asset)
+      expect(global.fetch).toHaveBeenCalled();
     });
   });
 

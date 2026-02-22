@@ -40,6 +40,8 @@ When I send you a task:
 3. Double-check important details before submitting
 4. Let me know when done, or flag any issues
 
+**CRITICAL — NEVER use plan mode**: Do NOT use the `EnterPlanMode` tool. You are running inside an automated orchestration system with no human at the terminal. Plan mode creates an interactive approval prompt that cannot be resolved programmatically, which will permanently block your session. Instead, proceed directly with your work — if a task is complex, break it into steps yourself and execute them sequentially.
+
 ## Memory Management — Build Your Knowledge Over Time
 
 You have bash skills that let you store and retrieve knowledge that persists across sessions. **Use them proactively** — they make you more effective over time.
