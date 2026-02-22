@@ -235,6 +235,7 @@ export class QueueProcessorService extends EventEmitter {
         this.logger.info('Message was cancelled during processing, skipping delivery', {
           messageId: message.id,
         });
+        clearInterval(keepaliveInterval);
         return;
       }
 
@@ -281,6 +282,7 @@ export class QueueProcessorService extends EventEmitter {
                 });
               }
             }
+            clearInterval(keepaliveInterval);
             return;
           }
 
@@ -299,6 +301,7 @@ export class QueueProcessorService extends EventEmitter {
           // a shorter INTER_MESSAGE_DELAY.
           this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
           this.nextAlreadyScheduled = true;
+          clearInterval(keepaliveInterval);
           return;
         }
       }

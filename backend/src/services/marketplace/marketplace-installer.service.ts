@@ -138,17 +138,16 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
 }
 
 /**
- * Uninstalls a marketplace item by removing its directory and manifest entry.
- *
- * Performs the following steps:
- * 1. Looks up the item in the local manifest
- * 2. Removes the item's install directory from disk
- * 3. Removes the item's entry from the manifest
+ * Internal uninstall with options. Used by updateItem to skip redundant refreshes.
  *
  * @param id - The ID of the marketplace item to uninstall
+ * @param options - Optional flags (skipRefresh: skip skill registration refresh)
  * @returns Operation result indicating success or failure with a message
  */
-export async function uninstallItem(id: string): Promise<MarketplaceOperationResult> {
+async function uninstallItemInternal(
+  id: string,
+  options?: { skipRefresh?: boolean }
+): Promise<MarketplaceOperationResult> {
   try {
     const manifest = await loadManifest();
     const record = manifest.items.find((r) => r.id === id);
@@ -163,8 +162,8 @@ export async function uninstallItem(id: string): Promise<MarketplaceOperationRes
     manifest.items = manifest.items.filter((r) => r.id !== id);
     await saveManifest(manifest);
 
-    // Refresh skill service and catalog after removal
-    if (record.type === 'skill') {
+    // Refresh skill service and catalog after removal (unless skipped)
+    if (record.type === 'skill' && !options?.skipRefresh) {
       await refreshSkillRegistrations();
     }
 
@@ -173,6 +172,21 @@ export async function uninstallItem(id: string): Promise<MarketplaceOperationRes
     const msg = error instanceof Error ? error.message : String(error);
     return { success: false, message: `Uninstall failed: ${msg}` };
   }
+}
+
+/**
+ * Uninstalls a marketplace item by removing its directory and manifest entry.
+ *
+ * Performs the following steps:
+ * 1. Looks up the item in the local manifest
+ * 2. Removes the item's install directory from disk
+ * 3. Removes the item's entry from the manifest
+ *
+ * @param id - The ID of the marketplace item to uninstall
+ * @returns Operation result indicating success or failure with a message
+ */
+export async function uninstallItem(id: string): Promise<MarketplaceOperationResult> {
+  return uninstallItemInternal(id);
 }
 
 /**
@@ -185,10 +199,11 @@ export async function uninstallItem(id: string): Promise<MarketplaceOperationRes
  * @returns Operation result indicating success or failure with a message
  */
 export async function updateItem(item: MarketplaceItem): Promise<MarketplaceOperationResult> {
-  const uninstallResult = await uninstallItem(item.id);
+  const uninstallResult = await uninstallItemInternal(item.id, { skipRefresh: true });
   if (!uninstallResult.success) {
     return { success: false, message: `Update failed during uninstall: ${uninstallResult.message}` };
   }
+  // installItem handles the refresh, so we only refresh once total
   return installItem(item);
 }
 

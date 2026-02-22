@@ -567,8 +567,8 @@ export class MessageQueueService extends EventEmitter {
   }
 
   /**
-   * Schedule a debounced persistence write. Uses setTimeout(0) to batch
-   * multiple synchronous mutations into a single disk write.
+   * Schedule a debounced persistence write. Uses a 50ms debounce to batch
+   * multiple rapid mutations into a single disk write.
    * No-op when persistence is disabled.
    */
   private schedulePersist(): void {
@@ -585,7 +585,7 @@ export class MessageQueueService extends EventEmitter {
       this.persistPromise = this.persistState().finally(() => {
         this.persistPromise = null;
       });
-    }, 0);
+    }, 50);
   }
 
   /**

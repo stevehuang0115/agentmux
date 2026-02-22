@@ -28,10 +28,12 @@ const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOC
 
 let cachedRegistry: MarketplaceRegistry | null = null;
 let cacheTimestamp = 0;
+let fetchInFlight: Promise<MarketplaceRegistry> | null = null;
 
 /**
  * Fetches the marketplace registry from the Crewly webapp API.
- * Uses in-memory caching with a 1-hour TTL.
+ * Uses in-memory caching with a 1-hour TTL. Concurrent callers share
+ * the same in-flight request to avoid duplicate network fetches.
  *
  * On network failure, falls back to the previously cached registry
  * if one is available. Throws only when no cached data exists.
@@ -46,6 +48,22 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
     return cachedRegistry;
   }
 
+  // Deduplicate concurrent requests
+  if (fetchInFlight) {
+    return fetchInFlight;
+  }
+
+  fetchInFlight = doFetchRegistry(now).finally(() => {
+    fetchInFlight = null;
+  });
+
+  return fetchInFlight;
+}
+
+/**
+ * Internal fetch implementation. Separated to enable in-flight deduplication.
+ */
+async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
   let remoteRegistry: MarketplaceRegistry;
   try {
     const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.REGISTRY_ENDPOINT}`;
@@ -150,7 +168,8 @@ export async function getItem(id: string): Promise<MarketplaceItemWithStatus | n
  */
 export async function listItems(filter?: MarketplaceFilter): Promise<MarketplaceItemWithStatus[]> {
   const registry = await fetchRegistry();
-  let items = registry.items;
+  // Shallow copy to avoid mutating the cached registry's items array via .sort()
+  let items = [...registry.items];
 
   if (filter?.type) {
     items = items.filter((i) => i.type === filter.type);
@@ -183,7 +202,9 @@ export async function listItems(filter?: MarketplaceFilter): Promise<Marketplace
   }
 
   const manifest = await loadManifest();
-  return items.map((i) => enrichWithStatus(i, manifest));
+  // Use Map for O(n+m) enrichment instead of O(n*m) linear scan per item
+  const installedMap = new Map(manifest.items.map((r) => [r.id, r]));
+  return items.map((i) => enrichWithStatusFromMap(i, installedMap));
 }
 
 /**
@@ -222,6 +243,27 @@ export async function searchItems(query: string): Promise<MarketplaceItemWithSta
 }
 
 /**
+ * Enriches a marketplace item with its local install status using a pre-built Map.
+ *
+ * @param item - The marketplace item from the registry
+ * @param installedMap - Map of installed item ID to record for O(1) lookup
+ * @returns The item enriched with installStatus and optional installedVersion
+ */
+function enrichWithStatusFromMap(
+  item: MarketplaceItem,
+  installedMap: Map<string, InstalledItemRecord>
+): MarketplaceItemWithStatus {
+  const installed = installedMap.get(item.id);
+  if (!installed) {
+    return { ...item, installStatus: 'not_installed' };
+  }
+  if (installed.version !== item.version) {
+    return { ...item, installStatus: 'update_available', installedVersion: installed.version };
+  }
+  return { ...item, installStatus: 'installed', installedVersion: installed.version };
+}
+
+/**
  * Enriches a marketplace item with its local install status.
  *
  * Compares the registry item against the local manifest to determine
@@ -235,14 +277,8 @@ function enrichWithStatus(
   item: MarketplaceItem,
   manifest: InstalledItemsManifest
 ): MarketplaceItemWithStatus {
-  const installed = manifest.items.find((r) => r.id === item.id);
-  if (!installed) {
-    return { ...item, installStatus: 'not_installed' };
-  }
-  if (installed.version !== item.version) {
-    return { ...item, installStatus: 'update_available', installedVersion: installed.version };
-  }
-  return { ...item, installStatus: 'installed', installedVersion: installed.version };
+  const installedMap = new Map(manifest.items.map((r) => [r.id, r]));
+  return enrichWithStatusFromMap(item, installedMap);
 }
 
 /**
@@ -270,4 +306,5 @@ export function getInstallPath(type: string, id: string): string {
 export function resetRegistryCache(): void {
   cachedRegistry = null;
   cacheTimestamp = 0;
+  fetchInFlight = null;
 }

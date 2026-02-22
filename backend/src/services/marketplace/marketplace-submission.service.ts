@@ -130,14 +130,7 @@ export async function submitSkill(archivePath: string): Promise<MarketplaceOpera
       return { success: false, message: 'Archive must be a .tar.gz file' };
     }
 
-    // Extract and validate skill.json from the archive
-    const archiveData = await readFile(archivePath);
-
-    // Compute checksum
-    const hash = createHash('sha256').update(archiveData).digest('hex');
-    const checksum = `sha256:${hash}`;
-
-    // Extract skill.json from the archive to validate
+    // Extract skill.json first, then read archive for checksum (avoids reading file twice)
     let skillManifest: Record<string, unknown>;
     try {
       skillManifest = await extractSkillJson(archivePath);
@@ -145,6 +138,11 @@ export async function submitSkill(archivePath: string): Promise<MarketplaceOpera
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, message: `Invalid skill archive: ${msg}` };
     }
+
+    // Compute checksum
+    const archiveData = await readFile(archivePath);
+    const hash = createHash('sha256').update(archiveData).digest('hex');
+    const checksum = `sha256:${hash}`;
 
     // Validate skill.json
     const validationErrors = validateSkillManifest(skillManifest);
@@ -357,7 +355,7 @@ async function addToLocalRegistry(
  */
 async function extractSkillJson(archivePath: string): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
-    let found = false;
+    let settled = false;
     const chunks: Buffer[] = [];
 
     const extract = tar.t({
@@ -365,8 +363,8 @@ async function extractSkillJson(archivePath: string): Promise<Record<string, unk
       onReadEntry: (entry) => {
         const entryPath = entry.path;
         // Match skill.json at any level
-        if (entryPath.endsWith('skill.json') && !found) {
-          found = true;
+        if (entryPath.endsWith('skill.json') && !settled) {
+          settled = true;
           entry.on('data', (chunk: Buffer) => chunks.push(chunk));
           entry.on('end', () => {
             try {
@@ -381,9 +379,13 @@ async function extractSkillJson(archivePath: string): Promise<Record<string, unk
     });
 
     extract.then(() => {
-      if (!found) {
+      if (!settled) {
         reject(new Error('skill.json not found in archive'));
       }
-    }).catch(reject);
+    }).catch((err) => {
+      if (!settled) {
+        reject(err);
+      }
+    });
   });
 }

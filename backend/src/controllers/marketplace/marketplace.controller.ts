@@ -10,6 +10,8 @@
  */
 
 import type { Request, Response } from 'express';
+import path from 'path';
+import { homedir } from 'os';
 import {
   listItems,
   getItem,
@@ -242,6 +244,23 @@ export const handleSubmit = asyncHandler(async (req: Request, res: Response): Pr
     res.status(400).json({ success: false, error: 'archivePath is required' });
     return;
   }
+
+  // Validate archivePath is within allowed directories to prevent path traversal
+  const resolvedPath = path.resolve(archivePath);
+  const allowedDirs = [
+    path.join(homedir(), '.crewly'),
+    process.cwd(),
+    '/tmp',
+  ];
+  const isAllowed = allowedDirs.some((dir) => resolvedPath.startsWith(dir + path.sep));
+  if (!isAllowed) {
+    res.status(400).json({
+      success: false,
+      error: 'archivePath must be within the project directory, ~/.crewly, or /tmp',
+    });
+    return;
+  }
+
   const result = await submitSkill(archivePath);
   res.json(result);
 });
@@ -304,7 +323,7 @@ export const handleReviewSubmission = asyncHandler(async (req: Request, res: Res
     return;
   }
   const result = await reviewSubmission(req.params.id, action, notes);
-  if (result.message.includes('not found')) {
+  if (!result.success && result.message.startsWith('Submission not found')) {
     res.status(404).json(result);
     return;
   }

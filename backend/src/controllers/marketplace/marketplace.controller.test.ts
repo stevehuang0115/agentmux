@@ -465,11 +465,11 @@ describe('MarketplaceController', () => {
       mockSubmitSkill.mockResolvedValue(result);
 
       await handleSubmit(
-        { body: { archivePath: '/path/to/archive.tar.gz' } } as any,
+        { body: { archivePath: '/tmp/archive.tar.gz' } } as any,
         mockRes as any,
       );
 
-      expect(mockSubmitSkill).toHaveBeenCalledWith('/path/to/archive.tar.gz');
+      expect(mockSubmitSkill).toHaveBeenCalledWith('/tmp/archive.tar.gz');
       expect(mockRes.json).toHaveBeenCalledWith(result);
     });
 
@@ -486,11 +486,24 @@ describe('MarketplaceController', () => {
       });
     });
 
+    it('should return 400 when archivePath is outside allowed directories', async () => {
+      await handleSubmit(
+        { body: { archivePath: '/etc/passwd' } } as any,
+        mockRes as any,
+      );
+
+      expect(mockRes.status).toHaveBeenCalledWith(400);
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'archivePath must be within the project directory, ~/.crewly, or /tmp',
+      });
+    });
+
     it('should return 500 on service error', async () => {
       mockSubmitSkill.mockRejectedValue(new Error('IO error'));
 
       await handleSubmit(
-        { body: { archivePath: '/path/to/archive.tar.gz' } } as any,
+        { body: { archivePath: '/tmp/archive.tar.gz' } } as any,
         mockRes as any,
       );
 
