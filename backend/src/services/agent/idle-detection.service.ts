@@ -136,7 +136,7 @@ export class IdleDetectionService {
 			for (const member of team.members || []) {
 				// Check active and started agents (started agents may be stuck)
 				const isActive = member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
-				const isStarted = member.agentStatus === 'started';
+				const isStarted = member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTED;
 				if (!isActive && !isStarted) {
 					continue;
 				}
@@ -180,7 +180,8 @@ export class IdleDetectionService {
 					this.logger.info('Agent idle timeout reached, suspending', {
 						sessionName: member.sessionName,
 						role: member.role,
-						idleMinutes: timeoutMinutes,
+						idleMinutes: effectiveTimeoutMs / 60000,
+						agentStatus: member.agentStatus,
 					});
 
 					try {

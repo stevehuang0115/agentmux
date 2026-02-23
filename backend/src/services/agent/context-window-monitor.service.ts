@@ -327,6 +327,7 @@ export class ContextWindowMonitorService {
 			this.sessionSubscriptions.delete(sessionName);
 		}
 		this.contextStates.delete(sessionName);
+		this.proactiveCompactLastTriggered.delete(sessionName);
 
 		this.logger.debug('Stopped context window monitoring', { sessionName });
 	}
@@ -988,5 +989,6 @@ export class ContextWindowMonitorService {
 		}
 		this.sessionSubscriptions.clear();
 		this.contextStates.clear();
+		this.proactiveCompactLastTriggered.clear();
 	}
 }

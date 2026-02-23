@@ -283,12 +283,10 @@ export const TERMINAL_PATTERNS = {
  * Patterns for detecting Claude Code plan mode in terminal output.
  * When plan mode is detected, the session command helper should send
  * Escape to dismiss it before delivering messages.
+ *
+ * Re-exported from waiting-patterns to maintain a single source of truth.
  */
-export const PLAN_MODE_DISMISS_PATTERNS = [
-	/shift\+tab\s+to\s+cycle/i,
-	/ExitPlanMode/i,
-	/Plan mode/i,
-] as const;
+export { PLAN_MODE_PATTERNS as PLAN_MODE_DISMISS_PATTERNS } from './services/continuation/patterns/waiting-patterns.js';
 
 /**
  * Message queue constants for sequential message processing.
@@ -499,7 +497,7 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	MAX_COMPACT_ATTEMPTS: 3,
 	/** Cooldown between compact retries during periodic checks (ms) */
 	COMPACT_RETRY_COOLDOWN_MS: 60_000,
-	/** Cumulative output bytes threshold before triggering proactive compact (512KB) */
+	/** Cumulative output bytes threshold before triggering proactive compact (~500KB) */
 	PROACTIVE_COMPACT_THRESHOLD_BYTES: 512_000,
 	/** Cooldown between proactive compact triggers per session (10 minutes) */
 	PROACTIVE_COMPACT_COOLDOWN_MS: 600_000,

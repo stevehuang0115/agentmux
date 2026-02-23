@@ -429,6 +429,7 @@ export class PtySessionBackend implements ISessionBackend {
 		}
 		this.sessions.clear();
 		this.terminalBuffers.clear();
+		this.cumulativeOutputBytes.clear();
 
 		this.logger.info('Force-destroyed all PTY sessions');
 	}
