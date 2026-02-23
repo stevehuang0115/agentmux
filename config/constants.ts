@@ -874,8 +874,14 @@ export const MARKETPLACE_CONSTANTS = {
 	SUBMISSIONS_DIR: 'submissions',
 	/** GitHub repository (owner/repo) for PR-based skill submissions */
 	GITHUB_REPO: 'stevehuang0115/crewly',
-	/** Registry schema version — bump when the registry format changes */
+	/** Registry schema version -- bump when the registry format changes */
 	SCHEMA_VERSION: 2,
+	/** Timeout for downloading archive assets from the CDN (30 seconds) */
+	DOWNLOAD_TIMEOUT: 30000,
+	/** Timeout for downloading individual skill files from GitHub (15 seconds) */
+	GITHUB_FILE_TIMEOUT: 15000,
+	/** Timeout for fetching the registry index from public or premium sources (10 seconds) */
+	REGISTRY_FETCH_TIMEOUT: 10000,
 	/** Category mapping from skill.json categories to marketplace display categories */
 	CATEGORY_MAP: {
 		'task-management': 'automation',

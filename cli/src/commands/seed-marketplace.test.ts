@@ -178,22 +178,10 @@ describe('seedMarketplaceCommand', () => {
     }
   });
 
-  it('exits when skillsDir does not exist', async () => {
-    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
-    const exitSpy = jest.spyOn(process, 'exit').mockImplementation(() => {
-      throw new Error('process.exit called');
-    });
-
+  it('throws when skillsDir does not exist', async () => {
     await expect(
       seedMarketplaceCommand({ skillsDir: '/nonexistent/path/to/skills' }),
-    ).rejects.toThrow('process.exit called');
-
-    const calls = consoleSpy.mock.calls.flat().join('\n');
-    expect(calls).toContain('Skills directory not found');
-    expect(exitSpy).toHaveBeenCalledWith(1);
-
-    consoleSpy.mockRestore();
-    exitSpy.mockRestore();
+    ).rejects.toThrow('Skills directory not found');
   });
 
   it('handles skill validation failure', async () => {

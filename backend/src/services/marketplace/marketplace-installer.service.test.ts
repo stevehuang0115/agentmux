@@ -37,8 +37,9 @@ jest.mock('./marketplace.service.js', () => {
 });
 
 // Mock findPackageRoot so ensureCommonLibs copies from our temp fixtures
+const findPackageRootSpy = jest.fn((_dir: string) => tempDir);
 jest.mock('../../utils/package-root.js', () => ({
-  findPackageRoot: () => tempDir,
+  findPackageRoot: (dir: string) => findPackageRootSpy(dir),
 }));
 
 // Mock skill service and catalog service used by refreshSkillRegistrations
@@ -122,6 +123,7 @@ describe('marketplace-installer.service', () => {
     loadManifest.mockClear();
     saveManifest.mockClear();
     await saveManifest({ schemaVersion: 1, items: [] });
+    findPackageRootSpy.mockClear();
   });
 
   afterEach(async () => {
@@ -381,11 +383,8 @@ describe('marketplace-installer.service', () => {
 
       await ensureCommonLibs();
 
-      const mpBase = path.join(tempDir, 'marketplace');
-      // The test mock uses tempDir as homedir, but ensureCommonLibs uses os.homedir().
-      // We need to check the actual marketplace paths. Since this is a unit test,
-      // we verify the function ran without error. Integration testing would verify file presence.
-      expect(true).toBe(true);
+      // Verify findPackageRoot was called to resolve the package root
+      expect(findPackageRootSpy).toHaveBeenCalled();
     });
   });
 

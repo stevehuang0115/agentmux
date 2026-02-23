@@ -21,11 +21,12 @@ import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 /** Regex for valid marketplace item IDs (lowercase alphanumeric + hyphens, must start with alphanumeric) */
 const VALID_ID_PATTERN = /^[a-z0-9][a-z0-9\-]*$/;
 
-/** Compute paths lazily so os.homedir() is called at runtime, not import time */
+/** Returns the absolute path to the marketplace data directory (~/.crewly/marketplace). */
 function getMarketplaceDir(): string {
   return path.join(os.homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 }
 
+/** Returns the absolute path to the installed-items manifest file. */
 function getManifestPath(): string {
   return path.join(getMarketplaceDir(), MARKETPLACE_CONSTANTS.MANIFEST_FILE);
 }
@@ -99,9 +100,9 @@ export async function fetchRegistry(): Promise<MarketplaceRegistry> {
 
   // Fetch public and premium registries in parallel
   const [publicResult, premiumResult] = await Promise.allSettled([
-    fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, { signal: AbortSignal.timeout(10000) })
+    fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT) })
       .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
-    fetch(premiumUrl, { signal: AbortSignal.timeout(10000) })
+    fetch(premiumUrl, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT) })
       .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
   ]);
 
@@ -168,7 +169,7 @@ export async function saveManifest(manifest: InstalledItemsManifest): Promise<vo
  * @returns Absolute path to the install directory
  * @throws Error if id contains invalid characters (path traversal prevention)
  */
-export function getInstallPath(type: string, id: string): string {
+export function getInstallPath(type: 'skill' | 'model' | 'role', id: string): string {
   if (!VALID_ID_PATTERN.test(id)) {
     throw new Error(`Invalid marketplace item ID: "${id}". IDs must match /^[a-z0-9][a-z0-9\\-]*$/.`);
   }
@@ -199,106 +200,115 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
 
   await mkdir(installPath, { recursive: true });
 
-  if (isGitHubSource) {
-    // Download individual files from GitHub raw content in parallel
-    const requiredFiles = ['skill.json', 'execute.sh', 'instructions.md'];
+  try {
+    if (isGitHubSource) {
+      // Download individual files from GitHub raw content in parallel
+      const filesToDownload = ['skill.json', 'execute.sh', 'instructions.md'];
 
-    const results = await Promise.allSettled(
-      requiredFiles.map(async (file) => {
-        const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        return { file, res };
-      }),
-    );
+      const results = await Promise.allSettled(
+        filesToDownload.map(async (file) => {
+          const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.GITHUB_FILE_TIMEOUT) });
+          return { file, res };
+        }),
+      );
 
-    for (const result of results) {
-      if (result.status === 'rejected') {
-        const file = 'unknown';
-        // Clean up partial install
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Download failed for ${file}: ${String(result.reason)}` };
-      }
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const fileName = filesToDownload[i];
 
-      const { file, res } = result.value;
-      if (!res.ok) {
-        if (file === 'instructions.md') continue; // optional
-        // Clean up partial install
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
-      }
-      const content = Buffer.from(await res.arrayBuffer());
-      await writeFile(path.join(installPath, file), content);
-    }
-  } else {
-    // Archive-based install (premium CDN or local)
-    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) {
-      // Clean up partial install
-      await rm(installPath, { recursive: true, force: true }).catch(() => {});
-      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-    }
+        if (result.status === 'rejected') {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Download failed for ${fileName}: ${String(result.reason)}` };
+        }
 
-    const data = Buffer.from(await res.arrayBuffer());
-
-    // Verify checksum if provided
-    if (item.assets.checksum) {
-      const colonIdx = item.assets.checksum.indexOf(':');
-      if (colonIdx === -1) {
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Invalid checksum format: ${item.assets.checksum}` };
-      }
-      const algo = item.assets.checksum.slice(0, colonIdx);
-      const expected = item.assets.checksum.slice(colonIdx + 1);
-      if (algo !== 'sha256') {
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Unsupported checksum algorithm "${algo}"` };
-      }
-      const actual = createHash('sha256').update(data).digest('hex');
-      if (actual !== expected) {
-        // Clean up partial install
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Checksum mismatch for ${item.id}` };
-      }
-    }
-
-    if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-      try {
-        const readable = Readable.from(data);
-        await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
-      } catch (err) {
-        // Clean up partial install
-        await rm(installPath, { recursive: true, force: true }).catch(() => {});
-        return { success: false, message: `Extraction failed for ${item.id}: ${err instanceof Error ? err.message : String(err)}` };
+        const { file, res } = result.value;
+        if (!res.ok) {
+          if (file === 'instructions.md') continue; // optional
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
+        }
+        const content = Buffer.from(await res.arrayBuffer());
+        await writeFile(path.join(installPath, file), content);
       }
     } else {
-      const filename = path.basename(assetPath);
-      await writeFile(path.join(installPath, filename), data);
+      // Archive-based install (premium CDN or local)
+      const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.DOWNLOAD_TIMEOUT) });
+      if (!res.ok) {
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+      }
+
+      const data = Buffer.from(await res.arrayBuffer());
+
+      // Verify checksum if provided
+      if (item.assets.checksum) {
+        const colonIdx = item.assets.checksum.indexOf(':');
+        if (colonIdx === -1) {
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Invalid checksum format: ${item.assets.checksum}` };
+        }
+        const algo = item.assets.checksum.slice(0, colonIdx);
+        const expected = item.assets.checksum.slice(colonIdx + 1);
+        if (algo !== 'sha256') {
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Unsupported checksum algorithm "${algo}"` };
+        }
+        const actual = createHash('sha256').update(data).digest('hex');
+        if (actual !== expected) {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Checksum mismatch for ${item.id}` };
+        }
+      }
+
+      if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+        try {
+          const readable = Readable.from(data);
+          await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+        } catch (err) {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Extraction failed for ${item.id}: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      } else {
+        const filename = path.basename(assetPath);
+        await writeFile(path.join(installPath, filename), data);
+      }
     }
+
+    // Ensure _common/lib.sh for skills
+    if (item.type === 'skill') {
+      await ensureCommonLibs();
+    }
+
+    // Update manifest
+    const record: InstalledItemRecord = {
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      version: item.version,
+      installedAt: new Date().toISOString(),
+      installPath,
+      checksum: item.assets.checksum,
+    };
+
+    const manifest = await loadManifest();
+    manifest.items = manifest.items.filter((r) => r.id !== item.id);
+    manifest.items.push(record);
+    await saveManifest(manifest);
+
+    return { success: true, message: `Installed ${item.name} v${item.version}` };
+  } catch (error) {
+    // Clean up partial install on any unexpected error
+    await rm(installPath, { recursive: true, force: true }).catch(() => {});
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `Installation failed for ${item.id}: ${msg}` };
   }
-
-  // Ensure _common/lib.sh for skills
-  if (item.type === 'skill') {
-    await ensureCommonLibs();
-  }
-
-  // Update manifest
-  const record: InstalledItemRecord = {
-    id: item.id,
-    type: item.type,
-    name: item.name,
-    version: item.version,
-    installedAt: new Date().toISOString(),
-    installPath,
-    checksum: item.assets.checksum,
-  };
-
-  const manifest = await loadManifest();
-  manifest.items = manifest.items.filter((r) => r.id !== item.id);
-  manifest.items.push(record);
-  await saveManifest(manifest);
-
-  return { success: true, message: `Installed ${item.name} v${item.version}` };
 }
 
 // ========================= Common Libs =========================
@@ -345,7 +355,7 @@ export async function ensureCommonLibs(): Promise<void> {
     return;
   }
 
-  const mpBase = path.join(os.homedir(), '.crewly', 'marketplace');
+  const mpBase = path.join(os.homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 
   // Copy agent _common/lib.sh
   const agentCommonSrc = path.join(packageRoot, 'config', 'skills', 'agent', '_common', 'lib.sh');

@@ -16,6 +16,7 @@ import {
   resetRegistryCache,
 } from './marketplace.service.js';
 import type { InstalledItemsManifest } from '../../types/marketplace.types.js';
+import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 // Mock fs/promises
 jest.mock('fs/promises', () => ({
@@ -138,7 +139,7 @@ describe('fetchRegistry', () => {
     readFile.mockRejectedValue(new Error('ENOENT'));
 
     const registry = await fetchRegistry();
-    expect(registry.schemaVersion).toBe(2);
+    expect(registry.schemaVersion).toBe(MARKETPLACE_CONSTANTS.SCHEMA_VERSION);
     expect(registry.items).toHaveLength(0);
   });
 });
@@ -337,5 +338,17 @@ describe('getInstallPath', () => {
   it('should map role type to roles directory', () => {
     const p = getInstallPath('role', 'my-role');
     expect(p).toContain('roles');
+  });
+
+  it('should throw on path traversal attempt', () => {
+    expect(() => getInstallPath('skill', '../etc/passwd')).toThrow('Invalid marketplace item ID');
+  });
+
+  it('should throw on IDs with special characters', () => {
+    expect(() => getInstallPath('skill', 'my skill')).toThrow('Invalid marketplace item ID');
+  });
+
+  it('should throw on IDs starting with hyphen', () => {
+    expect(() => getInstallPath('skill', '-bad-id')).toThrow('Invalid marketplace item ID');
   });
 });

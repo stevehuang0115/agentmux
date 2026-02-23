@@ -89,6 +89,9 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
  * 2. Premium registry -- crewly.stevesprompt.com/api/registry/skills (private/paid skills)
  *
  * Results are merged with local registry items (locally published skills).
+ *
+ * When both remote sources fail and no local items exist, the empty registry
+ * is returned but NOT cached so the next call will retry immediately.
  */
 async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
   // Fetch public and premium registries in parallel
@@ -129,9 +132,13 @@ async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
     items: Array.from(mergedMap.values()),
   };
 
-  cachedRegistry = registry;
-  cacheTimestamp = now;
-  return cachedRegistry;
+  // Only cache non-empty registries so that next call retries on total failure
+  if (mergedMap.size > 0) {
+    cachedRegistry = registry;
+    cacheTimestamp = now;
+  }
+
+  return registry;
 }
 
 /**
@@ -142,7 +149,7 @@ async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
 async function fetchPublicRegistry(): Promise<MarketplaceItem[]> {
   try {
     const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT),
     });
     if (res.ok) {
       const data = (await res.json()) as MarketplaceRegistry;
@@ -163,7 +170,7 @@ async function fetchPremiumRegistry(): Promise<MarketplaceItem[]> {
   try {
     const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT),
     });
     if (res.ok) {
       const data = (await res.json()) as MarketplaceRegistry;

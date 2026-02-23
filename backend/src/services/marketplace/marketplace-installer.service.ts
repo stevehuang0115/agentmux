@@ -35,17 +35,83 @@ import { SkillCatalogService } from '../skill/skill-catalog.service.js';
 import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 /**
+ * Downloads an asset (archive or raw file), verifies its checksum,
+ * and extracts/writes it into the given install directory.
+ *
+ * Shared helper used by both `installItem` and `installToPath` to
+ * eliminate duplicated download/verify/extract logic.
+ *
+ * @param item - The marketplace item whose asset is being downloaded
+ * @param installPath - Local directory to write/extract the asset into
+ * @param assetPath - Relative path to the asset (archive or model file)
+ * @returns Operation result indicating success or failure with a message
+ */
+async function downloadAndExtractAsset(
+  item: MarketplaceItem,
+  installPath: string,
+  assetPath: string,
+): Promise<MarketplaceOperationResult> {
+  const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
+  const localAssetPath = path.join(localAssetsDir, assetPath);
+
+  let data: Buffer;
+  if (existsSync(localAssetPath)) {
+    data = await readFile(localAssetPath);
+  } else {
+    // Fall back to remote download (premium CDN)
+    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.DOWNLOAD_TIMEOUT) });
+    if (!res.ok) {
+      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+    }
+    data = Buffer.from(await res.arrayBuffer());
+  }
+
+  // Verify checksum if provided
+  if (item.assets.checksum) {
+    const colonIdx = item.assets.checksum.indexOf(':');
+    if (colonIdx === -1) {
+      return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
+    }
+    const algo = item.assets.checksum.slice(0, colonIdx);
+    const expected = item.assets.checksum.slice(colonIdx + 1);
+    if (algo !== 'sha256') {
+      return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
+    }
+    const actual = createHash('sha256').update(data).digest('hex');
+    if (actual !== expected) {
+      return {
+        success: false,
+        message: `Checksum mismatch: expected ${expected}, got ${actual}`,
+      };
+    }
+  }
+
+  // Write to install path
+  await mkdir(installPath, { recursive: true });
+
+  if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+    // Extract tar.gz archive contents into install directory
+    const readable = Readable.from(data);
+    await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+  } else {
+    // Non-archive asset (e.g., model file) — write raw
+    const filename = path.basename(assetPath);
+    await writeFile(path.join(installPath, filename), data);
+  }
+
+  return { success: true, message: `Installed ${item.name} v${item.version}` };
+}
+
+/**
  * Downloads and installs a marketplace item.
  *
  * Performs the following steps:
  * 1. Resolves the downloadable asset (archive or model)
- * 2. Loads the asset from local assets directory if available,
- *    otherwise downloads from the Crewly CDN
- * 3. Verifies the SHA-256 checksum if provided
- * 4. Extracts tar.gz archives to the install directory (skills),
- *    or writes raw files for non-archive assets (models)
- * 5. Ensures _common/lib.sh files exist for skill items
- * 6. Updates the installed-items manifest
+ * 2. Determines the source type (GitHub directory or CDN archive)
+ * 3. Delegates to `installFromGitHub` or `downloadAndExtractAsset`
+ * 4. Calls `finalizeInstall` to update manifest and refresh registrations
+ * 5. Cleans up partial install on failure
  *
  * @param item - The marketplace item to install
  * @returns Operation result indicating success or failure with a message
@@ -68,53 +134,9 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     }
 
     // Archive-based install (local assets or premium CDN)
-    const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
-    const localAssetPath = path.join(localAssetsDir, assetPath);
-
-    let data: Buffer;
-    if (existsSync(localAssetPath)) {
-      data = await readFile(localAssetPath);
-    } else {
-      // Fall back to remote download (premium CDN)
-      const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      if (!res.ok) {
-        return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-      }
-      data = Buffer.from(await res.arrayBuffer());
-    }
-
-    // Verify checksum if provided
-    if (item.assets.checksum) {
-      const colonIdx = item.assets.checksum.indexOf(':');
-      if (colonIdx === -1) {
-        return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
-      }
-      const algo = item.assets.checksum.slice(0, colonIdx);
-      const expected = item.assets.checksum.slice(colonIdx + 1);
-      if (algo !== 'sha256') {
-        return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
-      }
-      const actual = createHash('sha256').update(data).digest('hex');
-      if (actual !== expected) {
-        return {
-          success: false,
-          message: `Checksum mismatch: expected ${expected}, got ${actual}`,
-        };
-      }
-    }
-
-    // Write to install path
-    await mkdir(installPath, { recursive: true });
-
-    if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-      // Extract tar.gz archive contents into install directory
-      const readable = Readable.from(data);
-      await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
-    } else {
-      // Non-archive asset (e.g., model file) — write raw
-      const filename = path.basename(assetPath);
-      await writeFile(path.join(installPath, filename), data);
+    const downloadResult = await downloadAndExtractAsset(item, installPath, assetPath);
+    if (!downloadResult.success) {
+      return downloadResult;
     }
 
     // Post-install: update manifest, ensure common libs, refresh registrations
@@ -155,7 +177,7 @@ async function installFromGitHub(
   const results = await Promise.allSettled(
     filesToDownload.map(async (file) => {
       const url = `${baseUrl}/${sourcePath}/${file}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.GITHUB_FILE_TIMEOUT) });
       if (!res.ok) {
         return { file, ok: false as const, status: res.status, statusText: res.statusText };
       }
@@ -216,7 +238,7 @@ async function finalizeInstall(
     version: item.version,
     installedAt: new Date().toISOString(),
     installPath,
-    checksum: item.assets.checksum || undefined,
+    checksum: item.assets.checksum,
   };
 
   const manifest = await loadManifest();
@@ -315,7 +337,7 @@ export async function updateItem(item: MarketplaceItem): Promise<MarketplaceOper
     if (isGitHubSource) {
       installResult = await installFromGitHub(item, tempPath, assetPath);
     } else {
-      installResult = await installToPath(item, tempPath, assetPath);
+      installResult = await downloadAndExtractAsset(item, tempPath, assetPath);
     }
 
     if (!installResult.success) {
@@ -347,66 +369,6 @@ export async function updateItem(item: MarketplaceItem): Promise<MarketplaceOper
     const msg = error instanceof Error ? error.message : String(error);
     return { success: false, message: `Update failed: ${msg}` };
   }
-}
-
-/**
- * Installs an archive-based item to a specific path.
- * Used by updateItem for installing to a temp directory.
- *
- * @param item - The marketplace item to install
- * @param installPath - Target directory for installation
- * @param assetPath - Relative path to the asset
- * @returns Operation result indicating success or failure
- */
-async function installToPath(
-  item: MarketplaceItem,
-  installPath: string,
-  assetPath: string,
-): Promise<MarketplaceOperationResult> {
-  const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
-  const localAssetPath = path.join(localAssetsDir, assetPath);
-
-  let data: Buffer;
-  if (existsSync(localAssetPath)) {
-    data = await readFile(localAssetPath);
-  } else {
-    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) {
-      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-    }
-    data = Buffer.from(await res.arrayBuffer());
-  }
-
-  // Verify checksum if provided
-  if (item.assets.checksum) {
-    const colonIdx = item.assets.checksum.indexOf(':');
-    if (colonIdx === -1) {
-      return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
-    }
-    const algo = item.assets.checksum.slice(0, colonIdx);
-    const expected = item.assets.checksum.slice(colonIdx + 1);
-    if (algo !== 'sha256') {
-      return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
-    }
-    const actual = createHash('sha256').update(data).digest('hex');
-    if (actual !== expected) {
-      return { success: false, message: `Checksum mismatch: expected ${expected}, got ${actual}` };
-    }
-  }
-
-  await mkdir(installPath, { recursive: true });
-
-  if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-    const readable = Readable.from(data);
-    await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
-  } else {
-    const filename = path.basename(assetPath);
-    await writeFile(path.join(installPath, filename), data);
-  }
-
-  // For updateItem, finalizeInstall is called by the caller after rename
-  return { success: true, message: `Installed ${item.name} v${item.version} to temp path` };
 }
 
 /**
