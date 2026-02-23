@@ -1040,8 +1040,26 @@ export class CrewlyServer {
 		});
 
 		process.on('unhandledRejection', (reason, promise) => {
+			const message = reason instanceof Error ? reason.message : String(reason);
+
+			// Non-fatal rejections from third-party libraries (e.g., Slack Socket Mode
+			// state machine errors) should be logged but not trigger a full shutdown.
+			const nonFatalPatterns = [
+				'Unhandled event',    // finity state machine (Slack Socket Mode)
+				'socket hang up',     // transient network errors
+				'ECONNRESET',         // connection reset by peer
+			];
+			const isNonFatal = nonFatalPatterns.some(p => message.includes(p));
+
+			if (isNonFatal) {
+				this.logger.warn('Non-fatal unhandled rejection (suppressed shutdown)', {
+					reason: message,
+				});
+				return;
+			}
+
 			this.logger.error('Unhandled rejection', {
-				reason: reason instanceof Error ? reason.message : String(reason),
+				reason: message,
 				stack: reason instanceof Error ? reason.stack : undefined
 			});
 			this.logMemoryUsage();
