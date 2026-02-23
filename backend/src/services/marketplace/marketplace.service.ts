@@ -27,9 +27,22 @@ const MARKETPLACE_DIR = path.join(CREWLY_HOME, MARKETPLACE_CONSTANTS.DIR_NAME);
 const MANIFEST_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.MANIFEST_FILE);
 const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 
+/** Pattern for valid marketplace item IDs: lowercase alphanumeric with hyphens */
+const VALID_ITEM_ID_PATTERN = /^[a-z0-9][a-z0-9\-]*$/;
+
 let cachedRegistry: MarketplaceRegistry | null = null;
 let cacheTimestamp = 0;
 let fetchInFlight: Promise<MarketplaceRegistry> | null = null;
+
+/**
+ * Validates that a marketplace item ID is safe (no path traversal).
+ *
+ * @param id - The item ID to validate
+ * @returns True if the ID matches the allowed pattern
+ */
+function isValidItemId(id: string): boolean {
+  return VALID_ITEM_ID_PATTERN.test(id);
+}
 
 /**
  * Fetches the marketplace registry from the Crewly webapp API.
@@ -49,6 +62,13 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
     return cachedRegistry;
   }
 
+  // When forceRefresh is true, wait for any in-flight request to complete
+  // before starting a new fetch to avoid returning stale data
+  if (forceRefresh && fetchInFlight) {
+    await fetchInFlight.catch(() => {});
+    // Fall through to start a new fetch
+  }
+
   // Deduplicate concurrent requests
   if (fetchInFlight) {
     return fetchInFlight;
@@ -64,47 +84,21 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
 /**
  * Internal fetch implementation. Separated to enable in-flight deduplication.
  *
- * Fetches from two sources:
- * 1. Public registry — GitHub raw content (config/skills/registry.json in crewly repo)
- * 2. Premium registry — crewly.stevesprompt.com/api/registry/skills (private/paid skills)
+ * Fetches from two sources in parallel:
+ * 1. Public registry -- GitHub raw content (config/skills/registry.json in crewly repo)
+ * 2. Premium registry -- crewly.stevesprompt.com/api/registry/skills (private/paid skills)
  *
  * Results are merged with local registry items (locally published skills).
  */
 async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
-  const emptyRegistry = (): MarketplaceRegistry => ({
-    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
-    lastUpdated: new Date().toISOString(),
-    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
-    items: [],
-  });
+  // Fetch public and premium registries in parallel
+  const [publicResult, premiumResult] = await Promise.allSettled([
+    fetchPublicRegistry(),
+    fetchPremiumRegistry(),
+  ]);
 
-  // Fetch public registry from GitHub
-  let publicItems: MarketplaceItem[] = [];
-  try {
-    const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL);
-    if (res.ok) {
-      const data = (await res.json()) as MarketplaceRegistry;
-      publicItems = data.items || [];
-    }
-  } catch {
-    // Public registry unavailable — continue with empty
-  }
-
-  // Fetch premium registry from stevesprompt API
-  let premiumItems: MarketplaceItem[] = [];
-  try {
-    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = (await res.json()) as MarketplaceRegistry;
-      premiumItems = (data.items || []).map((item) => ({
-        ...item,
-        metadata: { ...item.metadata, premium: true },
-      }));
-    }
-  } catch {
-    // Premium registry unavailable — continue without premium skills
-  }
+  const publicItems = publicResult.status === 'fulfilled' ? publicResult.value : [];
+  const premiumItems = premiumResult.status === 'fulfilled' ? premiumResult.value : [];
 
   // If both failed and we have a cache, return cache
   if (publicItems.length === 0 && premiumItems.length === 0 && cachedRegistry) {
@@ -138,6 +132,50 @@ async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
   cachedRegistry = registry;
   cacheTimestamp = now;
   return cachedRegistry;
+}
+
+/**
+ * Fetches items from the public registry (GitHub raw content).
+ *
+ * @returns Array of public marketplace items, empty on failure
+ */
+async function fetchPublicRegistry(): Promise<MarketplaceItem[]> {
+  try {
+    const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      return data.items || [];
+    }
+  } catch {
+    // Public registry unavailable -- continue with empty
+  }
+  return [];
+}
+
+/**
+ * Fetches items from the premium registry (crewly.stevesprompt.com).
+ *
+ * @returns Array of premium marketplace items with premium flag, empty on failure
+ */
+async function fetchPremiumRegistry(): Promise<MarketplaceItem[]> {
+  try {
+    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      return (data.items || []).map((item) => ({
+        ...item,
+        metadata: { ...item.metadata, premium: true },
+      }));
+    }
+  } catch {
+    // Premium registry unavailable -- continue without premium skills
+  }
+  return [];
 }
 
 /**
@@ -323,6 +361,7 @@ function enrichWithStatusFromMap(
  * @param type - The marketplace item type
  * @param id - The marketplace item ID
  * @returns Absolute path to the item's install directory
+ * @throws Error if the id contains path traversal characters
  */
 const TYPE_DIR_MAP: Record<MarketplaceItemType, string> = {
   skill: 'skills',
@@ -331,6 +370,9 @@ const TYPE_DIR_MAP: Record<MarketplaceItemType, string> = {
 };
 
 export function getInstallPath(type: MarketplaceItemType, id: string): string {
+  if (!isValidItemId(id)) {
+    throw new Error(`Invalid marketplace item ID "${id}": must match ${VALID_ITEM_ID_PATTERN}`);
+  }
   const typeDir = TYPE_DIR_MAP[type];
   return path.join(MARKETPLACE_DIR, typeDir, id);
 }

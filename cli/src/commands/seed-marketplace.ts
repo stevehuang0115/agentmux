@@ -67,14 +67,14 @@ interface SeedOptions {
  * adding registry entries.
  *
  * @param options - Command options
+ * @throws Error if the skills directory does not exist
  */
 export async function seedMarketplaceCommand(options?: SeedOptions): Promise<void> {
   const projectRoot = process.cwd();
   const skillsDir = options?.skillsDir || path.join(projectRoot, 'config', 'skills', 'agent', 'marketplace');
 
   if (!existsSync(skillsDir)) {
-    console.log(chalk.red(`Skills directory not found: ${skillsDir}`));
-    process.exit(1);
+    throw new Error(`Skills directory not found: ${skillsDir}`);
   }
 
   console.log(chalk.blue('Seeding marketplace with built-in skills...\n'));

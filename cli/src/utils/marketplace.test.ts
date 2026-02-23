@@ -8,7 +8,7 @@
 import path from 'path';
 import { mkdtemp, rm, readdir, readFile, mkdir, writeFile } from 'fs/promises';
 import { tmpdir, homedir } from 'os';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import * as tar from 'tar';
 
@@ -68,6 +68,22 @@ async function createTarGz(files: Record<string, string>): Promise<Buffer> {
 function textToArrayBuffer(text: string): ArrayBuffer {
   const buf = Buffer.from(text);
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
+
+/**
+ * Creates a mock fetch response that returns a JSON registry.
+ * Used as a default mock for tests that call fetchRegistry() internally.
+ */
+function makeRegistryResponse(items: MarketplaceItem[]) {
+  return {
+    ok: true,
+    json: () => Promise.resolve({
+      schemaVersion: 1,
+      lastUpdated: '2025-01-01',
+      cdnBaseUrl: '',
+      items,
+    }),
+  };
 }
 
 function makeFakeItem(overrides: Partial<MarketplaceItem> = {}): MarketplaceItem {
@@ -137,7 +153,7 @@ describe('cli/utils/marketplace', () => {
 
     it('merges registries with premium items taking priority', async () => {
       global.fetch = jest.fn()
-        // First call: public registry
+        // First call: public registry (fetched in parallel)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({
@@ -150,7 +166,7 @@ describe('cli/utils/marketplace', () => {
             ],
           }),
         })
-        // Second call: premium registry
+        // Second call: premium registry (fetched in parallel)
         .mockResolvedValueOnce({
           ok: true,
           json: () => Promise.resolve({
@@ -177,6 +193,26 @@ describe('cli/utils/marketplace', () => {
       // Other skills should be present
       expect(result.items.find(i => i.id === 'skill-public')).toBeDefined();
       expect(result.items.find(i => i.id === 'skill-premium')).toBeDefined();
+    });
+
+    it('succeeds when only one source is available', async () => {
+      global.fetch = jest.fn()
+        // Public registry fails
+        .mockRejectedValueOnce(new Error('network error'))
+        // Premium registry succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [makeFakeItem({ id: 'premium-only', name: 'Premium Only' })],
+          }),
+        });
+
+      const result = await fetchRegistry();
+      expect(result.items.length).toBe(1);
+      expect(result.items[0].id).toBe('premium-only');
     });
   });
 
@@ -208,6 +244,22 @@ describe('cli/utils/marketplace', () => {
     it('maps model type to models directory', () => {
       const p = getInstallPath('model', 'my-model');
       expect(p).toContain(path.join('marketplace', 'models', 'my-model'));
+    });
+
+    it('throws on path traversal attempt', () => {
+      expect(() => getInstallPath('skill', '../etc/passwd')).toThrow('Invalid marketplace item ID');
+    });
+
+    it('throws on IDs with special characters', () => {
+      expect(() => getInstallPath('skill', 'my skill')).toThrow('Invalid marketplace item ID');
+      expect(() => getInstallPath('skill', 'UPPERCASE')).toThrow('Invalid marketplace item ID');
+      expect(() => getInstallPath('skill', '-starts-with-hyphen')).toThrow('Invalid marketplace item ID');
+    });
+
+    it('accepts valid IDs with hyphens and numbers', () => {
+      expect(() => getInstallPath('skill', 'my-skill-2')).not.toThrow();
+      expect(() => getInstallPath('skill', 'a')).not.toThrow();
+      expect(() => getInstallPath('skill', '1-test')).not.toThrow();
     });
   });
 
@@ -264,6 +316,70 @@ describe('cli/utils/marketplace', () => {
       const result = await downloadAndInstall(item);
       expect(result.success).toBe(false);
       expect(result.message).toContain('Checksum mismatch');
+    });
+
+    it('returns error for invalid checksum format', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+          checksum: 'nocolonhere',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(
+          archiveBuffer.buffer.slice(archiveBuffer.byteOffset, archiveBuffer.byteOffset + archiveBuffer.byteLength)
+        ),
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Invalid checksum format');
+    });
+
+    it('returns error for unsupported checksum algorithm', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+          checksum: 'md5:abc123',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(
+          archiveBuffer.buffer.slice(archiveBuffer.byteOffset, archiveBuffer.byteOffset + archiveBuffer.byteLength)
+        ),
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Unsupported checksum algorithm');
+      expect(result.message).toContain('md5');
+    });
+
+    it('cleans up install directory on download failure', async () => {
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Server Error',
+      });
+
+      const installDir = getInstallPath('skill', 'skill-test');
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+
+      // Install directory should be cleaned up
+      expect(existsSync(installDir)).toBe(false);
     });
 
     it('installs GitHub-sourced skill by downloading individual files', async () => {
@@ -397,7 +513,7 @@ describe('cli/utils/marketplace', () => {
         ],
       });
 
-      // Mock registry with two skills and a model
+      // Mock registry with two skills and a model (both parallel fetches return same data)
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({
@@ -440,20 +556,15 @@ describe('cli/utils/marketplace', () => {
         'execute.sh': '#!/bin/bash\necho hello',
       });
 
+      const registryResponse = makeRegistryResponse([
+        makeFakeItem({ id: 'skill-a', name: 'Skill A' }),
+        makeFakeItem({ id: 'skill-b', name: 'Skill B' }),
+      ]);
+
       global.fetch = jest.fn()
-        // First call: fetchRegistry
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            schemaVersion: 1,
-            lastUpdated: '2025-01-01',
-            cdnBaseUrl: '',
-            items: [
-              makeFakeItem({ id: 'skill-a', name: 'Skill A' }),
-              makeFakeItem({ id: 'skill-b', name: 'Skill B' }),
-            ],
-          }),
-        })
+        // First two calls: parallel fetchRegistry (public + premium)
+        .mockResolvedValueOnce(registryResponse)
+        .mockResolvedValueOnce(registryResponse)
         // Subsequent calls: downloadAndInstall fetch
         .mockResolvedValue({
           ok: true,
@@ -474,16 +585,14 @@ describe('cli/utils/marketplace', () => {
     });
 
     it('calls onProgress even when install fails', async () => {
+      const registryResponse = makeRegistryResponse([
+        makeFakeItem({ id: 'skill-fail', name: 'Fail Skill', assets: {} }),
+      ]);
+
       global.fetch = jest.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            schemaVersion: 1,
-            lastUpdated: '2025-01-01',
-            cdnBaseUrl: '',
-            items: [makeFakeItem({ id: 'skill-fail', name: 'Fail Skill', assets: {} })],
-          }),
-        });
+        // Both parallel fetchRegistry calls
+        .mockResolvedValueOnce(registryResponse)
+        .mockResolvedValueOnce(registryResponse);
 
       const progress: string[] = [];
       const count = await installAllSkills((name) => { progress.push(name); });

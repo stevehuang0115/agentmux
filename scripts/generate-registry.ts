@@ -96,6 +96,13 @@ async function main(): Promise<void> {
     }
 
     const skillJson: SkillJson = JSON.parse(await readFile(skillJsonPath, 'utf-8'));
+
+    // Validate required fields
+    if (!skillJson.id || !skillJson.name) {
+      console.log(`  SKIP ${entry.name} (missing id or name)`);
+      continue;
+    }
+
     const version = skillJson.version || '1.0.0';
 
     // Estimate skill size by summing file sizes in the directory

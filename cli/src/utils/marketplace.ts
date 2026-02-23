@@ -10,13 +10,16 @@
 
 import path from 'path';
 import os from 'os';
-import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
+import { readFile, writeFile, mkdir, copyFile, rm } from 'fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as tar from 'tar';
 import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
+
+/** Regex for valid marketplace item IDs (lowercase alphanumeric + hyphens, must start with alphanumeric) */
+const VALID_ID_PATTERN = /^[a-z0-9][a-z0-9\-]*$/;
 
 /** Compute paths lazily so os.homedir() is called at runtime, not import time */
 function getMarketplaceDir(): string {
@@ -84,6 +87,7 @@ export interface InstalledItemsManifest {
 /**
  * Fetches the marketplace registry from both public (GitHub) and premium (stevesprompt) sources.
  * Merges results, with premium items taking priority on ID conflict.
+ * Both sources are fetched in parallel for efficiency.
  *
  * @returns The full marketplace registry
  * @throws Error if both fetches fail
@@ -91,31 +95,28 @@ export interface InstalledItemsManifest {
 export async function fetchRegistry(): Promise<MarketplaceRegistry> {
   const items = new Map<string, MarketplaceItem>();
 
-  // Fetch public registry from GitHub
-  try {
-    const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL);
-    if (res.ok) {
-      const data = (await res.json()) as MarketplaceRegistry;
-      for (const item of data.items || []) {
-        items.set(item.id, item);
-      }
+  const premiumUrl = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
+
+  // Fetch public and premium registries in parallel
+  const [publicResult, premiumResult] = await Promise.allSettled([
+    fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, { signal: AbortSignal.timeout(10000) })
+      .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
+    fetch(premiumUrl, { signal: AbortSignal.timeout(10000) })
+      .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
+  ]);
+
+  // Process public registry results first (so premium overrides on conflict)
+  if (publicResult.status === 'fulfilled' && publicResult.value) {
+    for (const item of publicResult.value.items || []) {
+      items.set(item.id, item);
     }
-  } catch {
-    // Public registry unavailable
   }
 
-  // Fetch premium registry from stevesprompt API
-  try {
-    const premiumUrl = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
-    const res = await fetch(premiumUrl);
-    if (res.ok) {
-      const data = (await res.json()) as MarketplaceRegistry;
-      for (const item of data.items || []) {
-        items.set(item.id, item);
-      }
+  // Process premium registry results (takes priority)
+  if (premiumResult.status === 'fulfilled' && premiumResult.value) {
+    for (const item of premiumResult.value.items || []) {
+      items.set(item.id, item);
     }
-  } catch {
-    // Premium registry unavailable
   }
 
   if (items.size === 0) {
@@ -163,10 +164,14 @@ export async function saveManifest(manifest: InstalledItemsManifest): Promise<vo
  * Returns the local install path for a marketplace item.
  *
  * @param type - Item type (skill, model, role)
- * @param id - Item ID
+ * @param id - Item ID (must be lowercase alphanumeric with hyphens)
  * @returns Absolute path to the install directory
+ * @throws Error if id contains invalid characters (path traversal prevention)
  */
 export function getInstallPath(type: string, id: string): string {
+  if (!VALID_ID_PATTERN.test(id)) {
+    throw new Error(`Invalid marketplace item ID: "${id}". IDs must match /^[a-z0-9][a-z0-9\\-]*$/.`);
+  }
   const typeDir = type === 'skill' ? 'skills' : type === 'model' ? 'models' : 'roles';
   return path.join(getMarketplaceDir(), typeDir, id);
 }
@@ -176,6 +181,7 @@ export function getInstallPath(type: string, id: string): string {
  *
  * For skill archives (.tar.gz), extracts the contents into the install directory.
  * After installation, ensures _common/lib.sh files are present.
+ * Cleans up partial installs on failure.
  *
  * @param item - The marketplace item to install
  * @returns Object with success status and message
@@ -194,13 +200,30 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
   await mkdir(installPath, { recursive: true });
 
   if (isGitHubSource) {
-    // Download individual files from GitHub raw content
+    // Download individual files from GitHub raw content in parallel
     const requiredFiles = ['skill.json', 'execute.sh', 'instructions.md'];
-    for (const file of requiredFiles) {
-      const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
-      const res = await fetch(url);
+
+    const results = await Promise.allSettled(
+      requiredFiles.map(async (file) => {
+        const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        return { file, res };
+      }),
+    );
+
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        const file = 'unknown';
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Download failed for ${file}: ${String(result.reason)}` };
+      }
+
+      const { file, res } = result.value;
       if (!res.ok) {
         if (file === 'instructions.md') continue; // optional
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
         return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
       }
       const content = Buffer.from(await res.arrayBuffer());
@@ -209,8 +232,10 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
   } else {
     // Archive-based install (premium CDN or local)
     const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
     if (!res.ok) {
+      // Clean up partial install
+      await rm(installPath, { recursive: true, force: true }).catch(() => {});
       return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
     }
 
@@ -218,18 +243,34 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
 
     // Verify checksum if provided
     if (item.assets.checksum) {
-      const [algo, expected] = item.assets.checksum.split(':');
-      if (algo === 'sha256') {
-        const actual = createHash('sha256').update(data).digest('hex');
-        if (actual !== expected) {
-          return { success: false, message: `Checksum mismatch for ${item.id}` };
-        }
+      const colonIdx = item.assets.checksum.indexOf(':');
+      if (colonIdx === -1) {
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Invalid checksum format: ${item.assets.checksum}` };
+      }
+      const algo = item.assets.checksum.slice(0, colonIdx);
+      const expected = item.assets.checksum.slice(colonIdx + 1);
+      if (algo !== 'sha256') {
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Unsupported checksum algorithm "${algo}"` };
+      }
+      const actual = createHash('sha256').update(data).digest('hex');
+      if (actual !== expected) {
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Checksum mismatch for ${item.id}` };
       }
     }
 
     if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-      const readable = Readable.from(data);
-      await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+      try {
+        const readable = Readable.from(data);
+        await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+      } catch (err) {
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Extraction failed for ${item.id}: ${err instanceof Error ? err.message : String(err)}` };
+      }
     } else {
       const filename = path.basename(assetPath);
       await writeFile(path.join(installPath, filename), data);
