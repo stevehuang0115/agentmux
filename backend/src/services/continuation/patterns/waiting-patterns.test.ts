@@ -105,9 +105,16 @@ describe('waiting-patterns', () => {
 			expect(matchesAny(PLAN_MODE_PATTERNS, 'Plan mode is active')).toBe(true);
 		});
 
-		it('should be case-insensitive', () => {
-			expect(matchesAny(PLAN_MODE_PATTERNS, 'PLAN MODE detected')).toBe(true);
+		it('should be case-insensitive for shift+tab pattern', () => {
 			expect(matchesAny(PLAN_MODE_PATTERNS, 'SHIFT+TAB TO CYCLE')).toBe(true);
+		});
+
+		it('should be case-sensitive for ExitPlanMode and Plan mode', () => {
+			expect(matchesAny(PLAN_MODE_PATTERNS, 'ExitPlanMode')).toBe(true);
+			expect(matchesAny(PLAN_MODE_PATTERNS, 'Plan mode')).toBe(true);
+			// These are specific UI strings; arbitrary case variations should not match
+			expect(matchesAny(PLAN_MODE_PATTERNS, 'exitplanmode')).toBe(false);
+			expect(matchesAny(PLAN_MODE_PATTERNS, 'PLAN MODE')).toBe(false);
 		});
 
 		it('should NOT match normal output', () => {

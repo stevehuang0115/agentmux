@@ -679,6 +679,30 @@ describe('SessionCommandHelper', () => {
 			).rejects.toThrow("Session 'non-existent' does not exist");
 		});
 
+		it('should call dismissInteractivePromptIfNeeded before sending message', async () => {
+			// Mock dismiss to track the call and verify ordering
+			const callOrder: string[] = [];
+			const dismissSpy = jest.spyOn(helper, 'dismissInteractivePromptIfNeeded')
+				.mockImplementation(async () => {
+					callOrder.push('dismiss');
+					return false;
+				});
+			const smartSpy = jest.spyOn(helper, 'sendMessageSmart')
+				.mockImplementation(async () => {
+					callOrder.push('sendMessageSmart');
+					return { processingStarted: true, pasteDetected: false, enterSent: false, usedFallback: false };
+				});
+
+			await helper.sendMessageWithSmartRetry('test-session', 'hello');
+
+			expect(dismissSpy).toHaveBeenCalledWith('test-session');
+			expect(callOrder[0]).toBe('dismiss');
+			expect(callOrder[1]).toBe('sendMessageSmart');
+
+			dismissSpy.mockRestore();
+			smartSpy.mockRestore();
+		});
+
 		// Note: Additional async tests for sendMessageWithSmartRetry are challenging
 		// due to complex internal timing. The core logic is covered by:
 		// 1. sendMessageSmart tests (paste detection, fallback behavior)

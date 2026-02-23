@@ -63,8 +63,8 @@ export const QUESTION_PATTERNS: RegExp[] = [
  */
 export const PLAN_MODE_PATTERNS: RegExp[] = [
   /shift\+tab\s+to\s+cycle/i,
-  /ExitPlanMode/i,
-  /Plan mode/i,
+  /ExitPlanMode/,
+  /Plan mode/,
 ];
 
 /**

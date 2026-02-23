@@ -5,6 +5,7 @@
 import { IdleDetectionService } from './idle-detection.service.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
+import { AGENT_SUSPEND_CONSTANTS } from '../../constants.js';
 
 // Mock LoggerService
 jest.mock('../core/logger.service.js', () => ({
@@ -264,8 +265,11 @@ describe('IdleDetectionService', () => {
 			const service = IdleDetectionService.getInstance();
 			await service.performCheck();
 
-			// Should use the longer started agent timeout (15 min = 900000ms)
-			expect(mockIsIdleFor).toHaveBeenCalledWith('agent-dev', 900000);
+			// Should use the longer started agent timeout
+			expect(mockIsIdleFor).toHaveBeenCalledWith(
+				'agent-dev',
+				AGENT_SUSPEND_CONSTANTS.STARTED_AGENT_IDLE_TIMEOUT_MINUTES * 60 * 1000
+			);
 			expect(mockSuspendAgent).toHaveBeenCalledWith('agent-dev', 'team1', 'dev1', 'developer');
 		});
 

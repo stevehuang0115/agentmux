@@ -767,6 +767,9 @@ export class SessionCommandHelper {
 	): Promise<boolean> {
 		const session = this.getSessionOrThrow(sessionName);
 
+		// Dismiss plan mode if detected before attempting message delivery
+		await this.dismissInteractivePromptIfNeeded(sessionName);
+
 		// Use centralized patterns for consistency
 		const stuckPattern = TERMINAL_PATTERNS.PASTE_STUCK;
 		const processingPattern = TERMINAL_PATTERNS.PROCESSING;
