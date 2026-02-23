@@ -72,7 +72,7 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
  */
 async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
   const emptyRegistry = (): MarketplaceRegistry => ({
-    schemaVersion: 2,
+    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
     lastUpdated: new Date().toISOString(),
     cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
     items: [],
@@ -129,7 +129,7 @@ async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
   }
 
   const registry: MarketplaceRegistry = {
-    schemaVersion: 2,
+    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
     lastUpdated: new Date().toISOString(),
     cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
     items: Array.from(mergedMap.values()),
@@ -200,7 +200,9 @@ export async function getItem(id: string): Promise<MarketplaceItemWithStatus | n
   const registry = await fetchRegistry();
   const item = registry.items.find((i) => i.id === id);
   if (!item) return null;
-  return enrichWithStatus(item, await loadManifest());
+  const manifest = await loadManifest();
+  const installedMap = new Map(manifest.items.map((r) => [r.id, r]));
+  return enrichWithStatusFromMap(item, installedMap);
 }
 
 /**
@@ -301,30 +303,6 @@ function enrichWithStatusFromMap(
   installedMap: Map<string, InstalledItemRecord>
 ): MarketplaceItemWithStatus {
   const installed = installedMap.get(item.id);
-  if (!installed) {
-    return { ...item, installStatus: 'not_installed' };
-  }
-  if (installed.version !== item.version) {
-    return { ...item, installStatus: 'update_available', installedVersion: installed.version };
-  }
-  return { ...item, installStatus: 'installed', installedVersion: installed.version };
-}
-
-/**
- * Enriches a marketplace item with its local install status.
- *
- * Uses a linear scan for single-item lookups. For bulk operations,
- * use enrichWithStatusFromMap with a pre-built Map instead.
- *
- * @param item - The marketplace item from the registry
- * @param manifest - The local installed items manifest
- * @returns The item enriched with installStatus and optional installedVersion
- */
-function enrichWithStatus(
-  item: MarketplaceItem,
-  manifest: InstalledItemsManifest
-): MarketplaceItemWithStatus {
-  const installed = manifest.items.find((r) => r.id === item.id);
   if (!installed) {
     return { ...item, installStatus: 'not_installed' };
   }

@@ -14,7 +14,8 @@ import {
   AGENT_SUSPEND_CONSTANTS as CONFIG_AGENT_SUSPEND_CONSTANTS,
   VERSION_CHECK_CONSTANTS as CONFIG_VERSION_CHECK_CONSTANTS,
   AGENT_HEARTBEAT_MONITOR_CONSTANTS as CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS,
-  ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS
+  ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS,
+  MARKETPLACE_CONSTANTS as CONFIG_MARKETPLACE_CONSTANTS,
 } from '../../config/constants.js';
 
 // Re-export the cross-domain constants for backend use
@@ -639,35 +640,8 @@ export const MESSAGE_SOURCES = {
 	SYSTEM_EVENT: 'system_event',
 } as const;
 
-/**
- * Constants for marketplace registry, installation, and submission management.
- * Used by marketplace services to resolve API endpoints, cache settings,
- * and local file paths.
- */
-export const MARKETPLACE_CONSTANTS = {
-	/** GitHub raw content base URL for public skills registry */
-	PUBLIC_REGISTRY_URL: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main/config/skills/registry.json',
-	/** GitHub raw content base URL for downloading public skill files */
-	PUBLIC_CDN_BASE: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main',
-	/** Base URL for the Crewly marketplace webapp (premium/private registry) */
-	PREMIUM_BASE_URL: 'https://crewly.stevesprompt.com',
-	/** API endpoint for premium skills registry */
-	PREMIUM_REGISTRY_ENDPOINT: '/api/registry/skills',
-	/** API endpoint for downloading marketplace assets */
-	ASSETS_ENDPOINT: '/api/assets',
-	/** In-memory registry cache time-to-live (1 hour in ms) */
-	CACHE_TTL: 3600000,
-	/** Directory name under ~/.crewly/ for marketplace data */
-	DIR_NAME: 'marketplace',
-	/** File name for the installed-items manifest */
-	MANIFEST_FILE: 'manifest.json',
-	/** File name for the local registry of published skills */
-	LOCAL_REGISTRY_FILE: 'local-registry.json',
-	/** Subdirectory for skill submission archives */
-	SUBMISSIONS_DIR: 'submissions',
-	/** GitHub repository for PR-based skill submissions */
-	GITHUB_REPO: 'stevehuang0115/crewly',
-} as const;
+// Re-export marketplace constants from shared config
+export const MARKETPLACE_CONSTANTS = CONFIG_MARKETPLACE_CONSTANTS;
 
 /** Typed message source value */
 export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];

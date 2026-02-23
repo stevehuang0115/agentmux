@@ -15,9 +15,7 @@ import { validatePackage } from '../utils/package-validator.js';
 import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../utils/archive-creator.js';
 import type { SkillManifest } from '../utils/package-validator.js';
 import { readFileSync } from 'fs';
-
-/** GitHub repository for PR-based skill submissions */
-const GITHUB_REPO = 'stevehuang0115/crewly';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
 /** Options for the publish command */
 interface PublishOptions {
@@ -105,13 +103,13 @@ export async function publishCommand(skillPath?: string, options?: PublishOption
     console.log(chalk.blue('\nTo publish your skill to the Crewly marketplace:'));
     console.log('');
     console.log(chalk.white('  1. Fork the Crewly repo:'));
-    console.log(chalk.gray(`     https://github.com/${GITHUB_REPO}`));
+    console.log(chalk.gray(`     https://github.com/${MARKETPLACE_CONSTANTS.GITHUB_REPO}`));
     console.log('');
     console.log(chalk.white('  2. Copy your skill directory into your fork:'));
     console.log(chalk.gray(`     cp -r ${absPath} config/skills/agent/marketplace/${manifest.id}`));
     console.log('');
     console.log(chalk.white('  3. Commit and push, then open a Pull Request:'));
-    console.log(chalk.gray(`     gh pr create --repo ${GITHUB_REPO} --title "skill: add ${manifest.id}"`));
+    console.log(chalk.gray(`     gh pr create --repo ${MARKETPLACE_CONSTANTS.GITHUB_REPO} --title "skill: add ${manifest.id}"`));
     console.log('');
     console.log(chalk.white('  4. The registry index will be auto-generated on merge.'));
     console.log('');

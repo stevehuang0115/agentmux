@@ -117,33 +117,8 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
       await writeFile(path.join(installPath, filename), data);
     }
 
-    // Ensure _common/lib.sh files are present for skill items
-    if (item.type === 'skill') {
-      await ensureCommonLibs();
-    }
-
-    // Update manifest
-    const record: InstalledItemRecord = {
-      id: item.id,
-      type: item.type,
-      name: item.name,
-      version: item.version,
-      installedAt: new Date().toISOString(),
-      installPath,
-      checksum: item.assets.checksum,
-    };
-
-    const manifest = await loadManifest();
-    manifest.items = manifest.items.filter((r) => r.id !== item.id);
-    manifest.items.push(record);
-    await saveManifest(manifest);
-
-    // Refresh skill service and catalog so the new skill is immediately discoverable
-    if (item.type === 'skill') {
-      await refreshSkillRegistrations();
-    }
-
-    return { success: true, message: `Installed ${item.name} v${item.version}`, item: record };
+    // Post-install: update manifest, ensure common libs, refresh registrations
+    return await finalizeInstall(item, installPath);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     return { success: false, message: `Installation failed: ${msg}` };
@@ -184,12 +159,27 @@ async function installFromGitHub(
     await writeFile(path.join(installPath, file), content);
   }
 
-  // Ensure _common/lib.sh files are present for skill items
+  // Post-install: update manifest, ensure common libs, refresh registrations
+  return await finalizeInstall(item, installPath);
+}
+
+/**
+ * Shared post-install steps: update the installed-items manifest,
+ * ensure _common/lib.sh files exist for skills, and refresh
+ * skill registrations so the item is immediately discoverable.
+ *
+ * @param item - The marketplace item that was just installed
+ * @param installPath - Local directory where the item was installed
+ * @returns Operation result indicating success
+ */
+async function finalizeInstall(
+  item: MarketplaceItem,
+  installPath: string,
+): Promise<MarketplaceOperationResult> {
   if (item.type === 'skill') {
     await ensureCommonLibs();
   }
 
-  // Update manifest
   const record: InstalledItemRecord = {
     id: item.id,
     type: item.type,
@@ -205,7 +195,6 @@ async function installFromGitHub(
   manifest.items.push(record);
   await saveManifest(manifest);
 
-  // Refresh skill service and catalog
   if (item.type === 'skill') {
     await refreshSkillRegistrations();
   }

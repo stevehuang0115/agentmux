@@ -16,21 +16,15 @@ import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as tar from 'tar';
-
-// ========================= Constants =========================
-
-const PUBLIC_REGISTRY_URL = 'https://raw.githubusercontent.com/stevehuang0115/crewly/main/config/skills/registry.json';
-const PUBLIC_CDN_BASE = 'https://raw.githubusercontent.com/stevehuang0115/crewly/main';
-const PREMIUM_REGISTRY_URL = 'https://crewly.stevesprompt.com/api/registry/skills';
-const ASSETS_BASE = 'https://crewly.stevesprompt.com/api/assets';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
 /** Compute paths lazily so os.homedir() is called at runtime, not import time */
 function getMarketplaceDir(): string {
-  return path.join(os.homedir(), '.crewly', 'marketplace');
+  return path.join(os.homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 }
 
 function getManifestPath(): string {
-  return path.join(getMarketplaceDir(), 'manifest.json');
+  return path.join(getMarketplaceDir(), MARKETPLACE_CONSTANTS.MANIFEST_FILE);
 }
 
 // ========================= Types =========================
@@ -99,7 +93,7 @@ export async function fetchRegistry(): Promise<MarketplaceRegistry> {
 
   // Fetch public registry from GitHub
   try {
-    const res = await fetch(PUBLIC_REGISTRY_URL);
+    const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL);
     if (res.ok) {
       const data = (await res.json()) as MarketplaceRegistry;
       for (const item of data.items || []) {
@@ -112,7 +106,8 @@ export async function fetchRegistry(): Promise<MarketplaceRegistry> {
 
   // Fetch premium registry from stevesprompt API
   try {
-    const res = await fetch(PREMIUM_REGISTRY_URL);
+    const premiumUrl = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
+    const res = await fetch(premiumUrl);
     if (res.ok) {
       const data = (await res.json()) as MarketplaceRegistry;
       for (const item of data.items || []) {
@@ -128,9 +123,9 @@ export async function fetchRegistry(): Promise<MarketplaceRegistry> {
   }
 
   return {
-    schemaVersion: 2,
+    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
     lastUpdated: new Date().toISOString(),
-    cdnBaseUrl: PUBLIC_CDN_BASE,
+    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
     items: Array.from(items.values()),
   };
 }
@@ -202,7 +197,7 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
     // Download individual files from GitHub raw content
     const requiredFiles = ['skill.json', 'execute.sh', 'instructions.md'];
     for (const file of requiredFiles) {
-      const url = `${PUBLIC_CDN_BASE}/${assetPath}/${file}`;
+      const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
       const res = await fetch(url);
       if (!res.ok) {
         if (file === 'instructions.md') continue; // optional
@@ -213,7 +208,7 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
     }
   } else {
     // Archive-based install (premium CDN or local)
-    const url = `${ASSETS_BASE}/${assetPath}`;
+    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
     const res = await fetch(url);
     if (!res.ok) {
       return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };

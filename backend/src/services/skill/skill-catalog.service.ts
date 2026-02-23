@@ -316,9 +316,10 @@ export class SkillCatalogService {
 
       // Also scan marketplace-installed skills
       const marketplacePath = path.join(os.homedir(), '.crewly', 'marketplace', 'skills');
-      const marketplaceSkills = existsSync(marketplacePath)
-        ? await this.scanSkillDirectoriesAtAbsolute(marketplacePath)
-        : [];
+      const marketplaceSkills = await this.scanSkillDirectoriesAt(
+        marketplacePath,
+        { absolute: true, setBasePath: true },
+      );
 
       const skills = [...bundledSkills, ...marketplaceSkills];
 
@@ -422,23 +423,33 @@ export class SkillCatalogService {
   }
 
   /**
-   * Scan a skills directory at a given relative path for valid skill subdirectories.
+   * Scan a skills directory for valid skill subdirectories.
    *
    * Reads each subdirectory (skipping entries in SKIP_DIRECTORIES),
    * loads skill.json and instructions.md from each, and returns an array
    * of successfully loaded skills. Directories that fail to load are
    * logged as warnings but do not cause the entire scan to fail.
    *
-   * @param relativePath - Relative path from project root to the skills directory
+   * When a subdirectory has no skill.json, it is treated as a category
+   * directory (e.g. core/, marketplace/) and its children are scanned.
+   *
+   * @param pathOrRelative - Path to the skills directory. Joined with
+   *   projectRoot by default; used directly when `options.absolute` is true.
+   * @param options - Optional flags to control path resolution and basePath tagging
    * @returns Array of loaded skills with their definitions and instructions
    */
-  private async scanSkillDirectoriesAt(relativePath: string): Promise<LoadedSkill[]> {
-    const skillsRootDir = path.join(this.projectRoot, relativePath);
+  private async scanSkillDirectoriesAt(
+    pathOrRelative: string,
+    options?: { absolute?: boolean; setBasePath?: boolean },
+  ): Promise<LoadedSkill[]> {
+    const skillsRootDir = options?.absolute
+      ? pathOrRelative
+      : path.join(this.projectRoot, pathOrRelative);
 
     if (!existsSync(skillsRootDir)) {
-      this.logger.warn('Skills directory not found', {
-        path: skillsRootDir,
-      });
+      if (!options?.absolute) {
+        this.logger.warn('Skills directory not found', { path: skillsRootDir });
+      }
       return [];
     }
 
@@ -446,7 +457,6 @@ export class SkillCatalogService {
     const skills: LoadedSkill[] = [];
 
     for (const entry of entries) {
-      // Only process directories, skip non-directories and excluded names
       if (!entry.isDirectory()) {
         continue;
       }
@@ -463,6 +473,9 @@ export class SkillCatalogService {
         // Direct skill directory
         const skill = await this.loadSkillFromDirectory(skillsRootDir, entry.name);
         if (skill) {
+          if (options?.setBasePath) {
+            skill.basePath = skillsRootDir;
+          }
           skills.push(skill);
         }
       } else {
@@ -472,52 +485,10 @@ export class SkillCatalogService {
           if (!nested.isDirectory()) continue;
           const skill = await this.loadSkillFromDirectory(skillDir, nested.name);
           if (skill) {
-            // Set basePath so catalog usage lines include the subdirectory
             skill.basePath = skillDir;
             skills.push(skill);
           }
         }
-      }
-    }
-
-    // Sort skills alphabetically by name within their categories
-    skills.sort((a, b) => a.definition.name.localeCompare(b.definition.name));
-
-    return skills;
-  }
-
-  /**
-   * Scan a skills directory at an absolute path for valid skill subdirectories.
-   *
-   * Works the same as scanSkillDirectoriesAt() but uses the path directly
-   * instead of joining with this.projectRoot. Each loaded skill gets its
-   * basePath set so the catalog uses the correct absolute path in usage commands.
-   *
-   * @param absolutePath - Absolute path to the skills directory
-   * @returns Array of loaded skills with their definitions and instructions
-   */
-  private async scanSkillDirectoriesAtAbsolute(absolutePath: string): Promise<LoadedSkill[]> {
-    if (!existsSync(absolutePath)) {
-      return [];
-    }
-
-    const entries = await fs.readdir(absolutePath, { withFileTypes: true });
-    const skills: LoadedSkill[] = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      if ((SKIP_DIRECTORIES as readonly string[]).includes(entry.name)) {
-        continue;
-      }
-
-      const skill = await this.loadSkillFromDirectory(absolutePath, entry.name);
-      if (skill) {
-        // Set basePath so the catalog renders the correct absolute path for marketplace skills
-        skill.basePath = absolutePath;
-        skills.push(skill);
       }
     }
 

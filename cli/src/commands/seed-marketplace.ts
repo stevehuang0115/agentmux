@@ -19,10 +19,11 @@ import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../
 import { validatePackage } from '../utils/package-validator.js';
 import type { SkillManifest } from '../utils/package-validator.js';
 import type { RegistryEntry } from '../utils/archive-creator.js';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
 /** Marketplace directory path */
-const MARKETPLACE_DIR = path.join(homedir(), '.crewly', 'marketplace');
-const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, 'local-registry.json');
+const MARKETPLACE_DIR = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
+const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 const ASSETS_DIR = path.join(MARKETPLACE_DIR, 'assets');
 
 /**

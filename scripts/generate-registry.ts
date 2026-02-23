@@ -15,28 +15,11 @@
 import path from 'path';
 import { readdir, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
+import { MARKETPLACE_CONSTANTS } from '../config/constants.js';
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..');
 const MARKETPLACE_SKILLS_DIR = path.join(PROJECT_ROOT, 'config', 'skills', 'agent', 'marketplace');
 const REGISTRY_OUTPUT = path.join(PROJECT_ROOT, 'config', 'skills', 'registry.json');
-
-/** Category mapping from skill.json categories to marketplace categories */
-const CATEGORY_MAP: Record<string, string> = {
-  'task-management': 'automation',
-  'communication': 'communication',
-  'monitoring': 'analysis',
-  'development': 'development',
-  'knowledge': 'research',
-  'quality': 'quality',
-  'integration': 'integration',
-  'content-creation': 'content-creation',
-  'automation': 'automation',
-  'memory': 'research',
-  'security': 'security',
-  'design': 'design',
-  'research': 'research',
-  'analysis': 'analysis',
-};
 
 interface SkillJson {
   id: string;
@@ -132,7 +115,7 @@ async function main(): Promise<void> {
       description: skillJson.description,
       author: skillJson.author || 'Crewly Team',
       version,
-      category: CATEGORY_MAP[skillJson.category] || 'development',
+      category: MARKETPLACE_CONSTANTS.CATEGORY_MAP[skillJson.category] || 'development',
       tags: skillJson.tags || [],
       license: skillJson.license || 'MIT',
       downloads: 0,
@@ -157,9 +140,9 @@ async function main(): Promise<void> {
   }
 
   const registry: Registry = {
-    schemaVersion: 2,
+    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
     lastUpdated: now,
-    cdnBaseUrl: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main',
+    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
     source: 'github',
     items,
   };
