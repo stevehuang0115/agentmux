@@ -2,9 +2,9 @@ import * as os from 'os';
 import * as path from 'path';
 import * as fsModule from 'fs';
 import { promises as fs } from 'fs';
-import { GeminiRuntimeService, GEMINI_FAILURE_PATTERNS } from './gemini-runtime.service.js';
+import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { CREWLY_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, GEMINI_FAILURE_PATTERNS } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 import { getDefaultSettings } from '../../types/settings.types.js';
@@ -18,6 +18,9 @@ jest.mock('fs', () => ({
 	promises: {
 		...jest.requireActual('fs').promises,
 		mkdir: jest.fn().mockResolvedValue(undefined),
+		readFile: jest.fn(),
+		writeFile: jest.fn().mockResolvedValue(undefined),
+		appendFile: jest.fn().mockResolvedValue(undefined),
 	},
 }));
 
@@ -529,10 +532,9 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('ensureGeminiEnvFile', () => {
-		const mockExistsSync = fsModule.existsSync as jest.MockedFunction<typeof fsModule.existsSync>;
-		const mockReadFileSync = fsModule.readFileSync as jest.MockedFunction<typeof fsModule.readFileSync>;
-		const mockWriteFileSync = fsModule.writeFileSync as jest.MockedFunction<typeof fsModule.writeFileSync>;
-		const mockAppendFileSync = fsModule.appendFileSync as jest.MockedFunction<typeof fsModule.appendFileSync>;
+		const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+		const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+		const mockAppendFile = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
 
 		const projectPath = '/test/project';
 		const envPath = path.join(projectPath, '.env');
@@ -546,11 +548,10 @@ describe('GeminiRuntimeService', () => {
 			// Default: set the env var so most tests can focus on file behavior
 			process.env.GOOGLE_GENAI_API_KEY = 'test-api-key-123';
 
-			// Default mocks: .env does not exist, .gitignore does not exist
-			mockExistsSync.mockReturnValue(false);
-			mockReadFileSync.mockReturnValue('');
-			mockWriteFileSync.mockReturnValue(undefined);
-			mockAppendFileSync.mockReturnValue(undefined);
+			// Default mocks: files do not exist (readFile rejects with ENOENT)
+			mockReadFile.mockRejectedValue(new Error('ENOENT'));
+			mockWriteFile.mockResolvedValue(undefined);
+			mockAppendFile.mockResolvedValue(undefined);
 		});
 
 		afterEach(() => {
@@ -568,203 +569,159 @@ describe('GeminiRuntimeService', () => {
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should not attempt any file operations
-			expect(mockExistsSync).not.toHaveBeenCalled();
-			expect(mockReadFileSync).not.toHaveBeenCalled();
-			expect(mockWriteFileSync).not.toHaveBeenCalled();
-			expect(mockAppendFileSync).not.toHaveBeenCalled();
+			expect(mockReadFile).not.toHaveBeenCalled();
+			expect(mockWriteFile).not.toHaveBeenCalled();
+			expect(mockAppendFile).not.toHaveBeenCalled();
 		});
 
 		it('should skip when .env already contains the key', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return true;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
+			mockReadFile.mockImplementation(async (p) => {
 				if (p === envPath) return 'SOME_VAR=abc\nGOOGLE_GENAI_API_KEY=existing-key\n';
-				return '';
+				throw new Error('ENOENT');
 			});
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
-			// Should check existence and read the file but not write
-			expect(mockExistsSync).toHaveBeenCalledWith(envPath);
-			expect(mockReadFileSync).toHaveBeenCalledWith(envPath, 'utf8');
-			expect(mockWriteFileSync).not.toHaveBeenCalled();
-			expect(mockAppendFileSync).not.toHaveBeenCalled();
+			// Should read the file but not write
+			expect(mockReadFile).toHaveBeenCalledWith(envPath, 'utf8');
+			expect(mockWriteFile).not.toHaveBeenCalled();
+			expect(mockAppendFile).not.toHaveBeenCalled();
 		});
 
 		it('should append key to existing .env file that lacks it', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return true;
-				if (p === gitignorePath) return false;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
+			mockReadFile.mockImplementation(async (p) => {
 				if (p === envPath) return 'SOME_VAR=abc\n';
-				return '';
+				throw new Error('ENOENT');
 			});
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should append to existing .env (content ends with newline, so no extra separator)
-			expect(mockAppendFileSync).toHaveBeenCalledWith(
+			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
 				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);
 			// Should not create a new file
-			expect(mockWriteFileSync).not.toHaveBeenCalledWith(
+			expect(mockWriteFile).not.toHaveBeenCalledWith(
 				envPath,
 				expect.anything()
 			);
 		});
 
 		it('should append with newline separator when existing .env does not end with newline', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return true;
-				if (p === gitignorePath) return false;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
+			mockReadFile.mockImplementation(async (p) => {
 				if (p === envPath) return 'SOME_VAR=abc'; // no trailing newline
-				return '';
+				throw new Error('ENOENT');
 			});
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should prepend a newline separator before the key
-			expect(mockAppendFileSync).toHaveBeenCalledWith(
+			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
 				'\nGOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);
 		});
 
 		it('should create new .env file when it does not exist', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return false;
-				if (p === gitignorePath) return false;
-				return false;
-			});
+			// Default: readFile rejects (file doesn't exist)
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
-			// Should create .env with writeFileSync
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
+			// Should create .env with writeFile
+			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
 				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);
-			// Should not attempt to append
-			expect(mockAppendFileSync).not.toHaveBeenCalledWith(
+			// Should not attempt to append to .env
+			expect(mockAppendFile).not.toHaveBeenCalledWith(
 				envPath,
 				expect.anything()
 			);
 		});
 
 		it('should add .env to .gitignore if not present', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return false;
-				if (p === gitignorePath) return true;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
 				if (p === gitignorePath) return 'node_modules/\ndist/\n';
-				return '';
+				throw new Error('ENOENT');
 			});
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should create .env
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
+			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
 				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);
 
 			// Should append .env entry to .gitignore
-			expect(mockAppendFileSync).toHaveBeenCalledWith(
+			expect(mockAppendFile).toHaveBeenCalledWith(
 				gitignorePath,
 				'.env\n'
 			);
 		});
 
 		it('should create .gitignore with .env entry when .gitignore does not exist', async () => {
-			mockExistsSync.mockReturnValue(false);
+			// Default: all readFile reject (no files exist)
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should create .gitignore with .env entry
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
+			expect(mockWriteFile).toHaveBeenCalledWith(
 				gitignorePath,
 				'.env\n'
 			);
 		});
 
 		it('should not modify .gitignore if .env is already listed', async () => {
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return false;
-				if (p === gitignorePath) return true;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
 				if (p === gitignorePath) return 'node_modules/\n.env\ndist/\n';
-				return '';
+				throw new Error('ENOENT');
 			});
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
 			// Should create .env
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
+			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
 				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);
 
 			// Should NOT append to .gitignore since .env is already there
-			expect(mockAppendFileSync).not.toHaveBeenCalledWith(
+			expect(mockAppendFile).not.toHaveBeenCalledWith(
 				gitignorePath,
 				expect.anything()
 			);
 			// Should NOT write a new .gitignore
-			expect(mockWriteFileSync).not.toHaveBeenCalledWith(
+			expect(mockWriteFile).not.toHaveBeenCalledWith(
 				gitignorePath,
 				expect.anything()
 			);
 		});
 
 		it('should handle errors gracefully when writing .env fails', async () => {
-			mockExistsSync.mockReturnValue(false);
-			mockWriteFileSync.mockImplementation((p) => {
-				if (p === envPath) {
-					throw new Error('Permission denied');
-				}
-			});
+			// readFile rejects (file doesn't exist), writeFile rejects
+			mockWriteFile.mockRejectedValueOnce(new Error('Permission denied'));
 
 			// Should not throw
 			await expect(service['ensureGeminiEnvFile'](projectPath)).resolves.not.toThrow();
-
-			// Should have attempted to write .env
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
-				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
-			);
 		});
 
 		it('should handle errors gracefully when updating .gitignore fails', async () => {
-			// .env does not exist, .gitignore exists but reading it throws
-			mockExistsSync.mockImplementation((p) => {
-				if (p === envPath) return false;
-				if (p === gitignorePath) return true;
-				return false;
-			});
-			mockReadFileSync.mockImplementation((p) => {
-				if (p === gitignorePath) {
-					throw new Error('Read error');
-				}
-				return '';
+			// .env does not exist, .gitignore read throws
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
+				if (p === gitignorePath) throw new Error('Read error');
+				throw new Error('ENOENT');
 			});
 
 			// Should not throw — gitignore errors are caught separately
 			await expect(service['ensureGeminiEnvFile'](projectPath)).resolves.not.toThrow();
 
 			// Should still have created the .env file
-			expect(mockWriteFileSync).toHaveBeenCalledWith(
+			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
 				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
 			);

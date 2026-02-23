@@ -16,7 +16,7 @@ import {
 	type ISessionBackend,
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
-import { ORCHESTRATOR_SESSION_NAME, CHAT_CONSTANTS, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, CHAT_ROUTING_CONSTANTS, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
 import { getSlackOrchestratorBridge } from '../services/slack/slack-orchestrator-bridge.js';
 import { getChatService } from '../services/chat/chat.service.js';
 import type { SlackNotification } from '../types/slack.types.js';
@@ -509,7 +509,7 @@ export class TerminalGateway {
 
 		// Extract conversation ID from the output if present
 		// The format is [CHAT:conversationId] at the start of a response
-		const chatIdMatch = cleanContent.match(CHAT_CONSTANTS.CONVERSATION_ID_PATTERN);
+		const chatIdMatch = cleanContent.match(CHAT_ROUTING_CONSTANTS.CONVERSATION_ID_PATTERN);
 		if (chatIdMatch) {
 			this.logger.debug('Extracted conversation ID from output', { conversationId: chatIdMatch[1] });
 			this.activeConversationId = chatIdMatch[1];

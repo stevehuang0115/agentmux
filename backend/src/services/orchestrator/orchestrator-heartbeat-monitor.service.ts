@@ -25,6 +25,7 @@ import {
 	ORCHESTRATOR_HEARTBEAT_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
@@ -297,7 +298,7 @@ export class OrchestratorHeartbeatMonitorService {
 				SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
 				5000
 			);
-			await new Promise(resolve => setTimeout(resolve, pasteDelay));
+			await delay(pasteDelay);
 			session.write('\r');
 
 			this.logger.info('Heartbeat request sent to orchestrator PTY', {

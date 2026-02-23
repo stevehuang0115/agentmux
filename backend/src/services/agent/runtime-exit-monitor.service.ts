@@ -15,7 +15,6 @@ import { SHELL_PROMPT_PATTERNS } from '../continuation/patterns/idle-patterns.js
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
-import { GEMINI_FAILURE_PATTERNS } from './gemini-runtime.service.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { InProgressTask } from '../../types/task-tracking.types.js';
 import {
@@ -26,8 +25,10 @@ import {
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 	RUNTIME_TYPES,
+	GEMINI_FAILURE_PATTERNS,
 	type RuntimeType,
 } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Internal state tracked per monitored session.
@@ -606,7 +607,7 @@ export class RuntimeExitMonitorService {
 		activeTasks: InProgressTask[]
 	): Promise<void> {
 		// Wait for agent initialization
-		await new Promise(resolve => setTimeout(resolve, AGENT_SUSPEND_CONSTANTS.REHYDRATION_TIMEOUT_MS));
+		await delay(AGENT_SUSPEND_CONSTANTS.REHYDRATION_TIMEOUT_MS);
 
 		const backend = getSessionBackendSync();
 		if (!backend || !backend.sessionExists(sessionName)) {
@@ -654,11 +655,11 @@ export class RuntimeExitMonitorService {
 				SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
 				5000
 			);
-			await new Promise(resolve => setTimeout(resolve, pasteDelay));
+			await delay(pasteDelay);
 			session.write('\r');
 
 			// Delay between tasks to avoid flooding
-			await new Promise(resolve => setTimeout(resolve, 2000));
+			await delay(2000);
 		}
 
 		this.logger.info('Task re-delivery complete', {

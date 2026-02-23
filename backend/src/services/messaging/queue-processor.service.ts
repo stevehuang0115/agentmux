@@ -18,7 +18,7 @@ import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import {
   MESSAGE_QUEUE_CONSTANTS,
   ORCHESTRATOR_SESSION_NAME,
-  CHAT_CONSTANTS,
+  CHAT_ROUTING_CONSTANTS,
   EVENT_DELIVERY_CONSTANTS,
   RUNTIME_TYPES,
   ORCHESTRATOR_HEARTBEAT_CONSTANTS,
@@ -328,7 +328,7 @@ export class QueueProcessorService extends EventEmitter {
         const allContents = [message.content, ...batchedMessages.map(m => m.content)];
         deliveryContent = allContents.join('\n');
       } else {
-        deliveryContent = `[${CHAT_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
+        deliveryContent = `[${CHAT_ROUTING_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
       }
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
@@ -487,8 +487,6 @@ export class QueueProcessorService extends EventEmitter {
 
       // Progress timer: emit "still working" updates during long operations.
       // First fires at 90s, then every 60s thereafter.
-      const PROGRESS_INITIAL_MS = 90_000;
-      const PROGRESS_INTERVAL_MS = 60_000;
       let progressIntervalId: ReturnType<typeof setInterval> | undefined;
 
       const startProgressInterval = (): void => {
@@ -496,13 +494,13 @@ export class QueueProcessorService extends EventEmitter {
           const tracker = PtyActivityTrackerService.getInstance();
           const idleMs = tracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
           // Only emit progress if the orchestrator is still producing output
-          if (idleMs < PROGRESS_INTERVAL_MS) {
+          if (idleMs < MESSAGE_QUEUE_CONSTANTS.PROGRESS_INTERVAL_MS) {
             chatService.emitProgress(conversationId, 'Processing... (still working)');
           }
-        }, PROGRESS_INTERVAL_MS);
+        }, MESSAGE_QUEUE_CONSTANTS.PROGRESS_INTERVAL_MS);
       };
 
-      const progressStartId = setTimeout(startProgressInterval, PROGRESS_INITIAL_MS);
+      const progressStartId = setTimeout(startProgressInterval, MESSAGE_QUEUE_CONSTANTS.PROGRESS_INITIAL_MS);
 
       const cleanup = (): void => {
         clearTimeout(timeoutId);

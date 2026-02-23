@@ -20,7 +20,8 @@ import { Team, TeamMember, ApiResponse, ScheduledMessage } from '../../types/ind
 import {
   ORCHESTRATOR_SESSION_NAME,
   ORCHESTRATOR_ROLE,
-  RUNTIME_TYPES
+  RUNTIME_TYPES,
+  NON_RECOVERABLE_ERROR_PATTERNS
 } from '../../constants.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
@@ -354,8 +355,7 @@ async function _startTeamMemberCore(
       lastError = createResult.error;
 
       // Don't retry non-recoverable errors (e.g. missing CLI binary)
-      const nonRecoverablePatterns = ['command not found', 'not installed', 'No such file'];
-      if (lastError && nonRecoverablePatterns.some(p => lastError!.includes(p))) {
+      if (lastError && NON_RECOVERABLE_ERROR_PATTERNS.some(p => lastError!.includes(p))) {
         logger.error('Non-recoverable error detected, skipping retries', { sessionName, lastError });
         break;
       }
@@ -1599,11 +1599,6 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
       await Promise.all(savePromises);
     }
 
-    // Clean up memory before sending response
-    if (global.gc) {
-      global.gc();
-    }
-
     res.json({
       success: true,
       data: {
@@ -1636,7 +1631,7 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     }
 
     // Validate runtime type
-    const validRuntimeTypes = ['claude-code', 'gemini-cli', 'codex-cli'];
+    const validRuntimeTypes = Object.values(RUNTIME_TYPES);
     if (!validRuntimeTypes.includes(runtimeType)) {
       res.status(400).json({
         success: false,
