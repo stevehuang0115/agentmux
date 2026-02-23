@@ -20,7 +20,7 @@ This project uses Crewly for team coordination. You have bash skills available a
 
 Please run the register-self skill to let the team dashboard know you're available:
 ```bash
-bash {{AGENT_SKILLS_PATH}}/register-self/execute.sh '{"role":"{{ROLE}}","sessionName":"{{SESSION_NAME}}"}'
+bash {{AGENT_SKILLS_PATH}}/core/register-self/execute.sh '{"role":"{{ROLE}}","sessionName":"{{SESSION_NAME}}"}'
 ```
 All it does is update a local status flag so the web UI shows you as online - nothing more.
 
@@ -49,22 +49,22 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 
 - **`remember`** — Store knowledge for future reference
   ```bash
-  bash {{AGENT_SKILLS_PATH}}/remember/execute.sh '{"agentId":"{{SESSION_NAME}}","content":"...","category":"pattern","scope":"project","projectPath":"{{PROJECT_PATH}}"}'
+  bash {{AGENT_SKILLS_PATH}}/core/remember/execute.sh '{"agentId":"{{SESSION_NAME}}","content":"...","category":"pattern","scope":"project","projectPath":"{{PROJECT_PATH}}"}'
   ```
 
 - **`recall`** — Retrieve relevant knowledge from your memory
   ```bash
-  bash {{AGENT_SKILLS_PATH}}/recall/execute.sh '{"agentId":"{{SESSION_NAME}}","context":"what you are looking for","projectPath":"{{PROJECT_PATH}}"}'
+  bash {{AGENT_SKILLS_PATH}}/core/recall/execute.sh '{"agentId":"{{SESSION_NAME}}","context":"what you are looking for","projectPath":"{{PROJECT_PATH}}"}'
   ```
 
 - **`record-learning`** — Quickly jot down a learning while working
   ```bash
-  bash {{AGENT_SKILLS_PATH}}/record-learning/execute.sh '{"agentId":"{{SESSION_NAME}}","agentRole":"{{ROLE}}","projectPath":"{{PROJECT_PATH}}","learning":"what you learned"}'
+  bash {{AGENT_SKILLS_PATH}}/core/record-learning/execute.sh '{"agentId":"{{SESSION_NAME}}","agentRole":"{{ROLE}}","projectPath":"{{PROJECT_PATH}}","learning":"what you learned"}'
   ```
 
 - **`query-knowledge`** — Search company knowledge base for SOPs, runbooks, architecture docs
   ```bash
-  bash {{AGENT_SKILLS_PATH}}/query-knowledge/execute.sh '{"query":"deployment process","scope":"global"}'
+  bash {{AGENT_SKILLS_PATH}}/core/query-knowledge/execute.sh '{"query":"deployment process","scope":"global"}'
   ```
 
 ### When to Use Memory Tools

@@ -10,25 +10,25 @@
 
 import path from 'path';
 import os from 'os';
-import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
+import { readFile, writeFile, mkdir, copyFile, rm } from 'fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as tar from 'tar';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
-// ========================= Constants =========================
+/** Regex for valid marketplace item IDs (lowercase alphanumeric + hyphens, must start with alphanumeric) */
+const VALID_ID_PATTERN = /^[a-z0-9][a-z0-9\-]*$/;
 
-const REGISTRY_URL = 'https://crewly.stevesprompt.com/api/registry';
-const ASSETS_BASE = 'https://crewly.stevesprompt.com/api/assets';
-
-/** Compute paths lazily so os.homedir() is called at runtime, not import time */
+/** Returns the absolute path to the marketplace data directory (~/.crewly/marketplace). */
 function getMarketplaceDir(): string {
-  return path.join(os.homedir(), '.crewly', 'marketplace');
+  return path.join(os.homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 }
 
+/** Returns the absolute path to the installed-items manifest file. */
 function getManifestPath(): string {
-  return path.join(getMarketplaceDir(), 'manifest.json');
+  return path.join(getMarketplaceDir(), MARKETPLACE_CONSTANTS.MANIFEST_FILE);
 }
 
 // ========================= Types =========================
@@ -86,17 +86,50 @@ export interface InstalledItemsManifest {
 // ========================= Registry =========================
 
 /**
- * Fetches the marketplace registry from the marketing site API.
+ * Fetches the marketplace registry from both public (GitHub) and premium (stevesprompt) sources.
+ * Merges results, with premium items taking priority on ID conflict.
+ * Both sources are fetched in parallel for efficiency.
  *
  * @returns The full marketplace registry
- * @throws Error if the fetch fails
+ * @throws Error if both fetches fail
  */
 export async function fetchRegistry(): Promise<MarketplaceRegistry> {
-  const res = await fetch(REGISTRY_URL);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch registry: ${res.status} ${res.statusText}`);
+  const items = new Map<string, MarketplaceItem>();
+
+  const premiumUrl = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
+
+  // Fetch public and premium registries in parallel
+  const [publicResult, premiumResult] = await Promise.allSettled([
+    fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT) })
+      .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
+    fetch(premiumUrl, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.REGISTRY_FETCH_TIMEOUT) })
+      .then(async (res) => (res.ok ? ((await res.json()) as MarketplaceRegistry) : null)),
+  ]);
+
+  // Process public registry results first (so premium overrides on conflict)
+  if (publicResult.status === 'fulfilled' && publicResult.value) {
+    for (const item of publicResult.value.items || []) {
+      items.set(item.id, item);
+    }
   }
-  return (await res.json()) as MarketplaceRegistry;
+
+  // Process premium registry results (takes priority)
+  if (premiumResult.status === 'fulfilled' && premiumResult.value) {
+    for (const item of premiumResult.value.items || []) {
+      items.set(item.id, item);
+    }
+  }
+
+  if (items.size === 0) {
+    throw new Error('Failed to fetch registry: both public and premium sources unavailable');
+  }
+
+  return {
+    schemaVersion: MARKETPLACE_CONSTANTS.SCHEMA_VERSION,
+    lastUpdated: new Date().toISOString(),
+    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
+    items: Array.from(items.values()),
+  };
 }
 
 // ========================= Manifest =========================
@@ -132,10 +165,14 @@ export async function saveManifest(manifest: InstalledItemsManifest): Promise<vo
  * Returns the local install path for a marketplace item.
  *
  * @param type - Item type (skill, model, role)
- * @param id - Item ID
+ * @param id - Item ID (must be lowercase alphanumeric with hyphens)
  * @returns Absolute path to the install directory
+ * @throws Error if id contains invalid characters (path traversal prevention)
  */
-export function getInstallPath(type: string, id: string): string {
+export function getInstallPath(type: 'skill' | 'model' | 'role', id: string): string {
+  if (!VALID_ID_PATTERN.test(id)) {
+    throw new Error(`Invalid marketplace item ID: "${id}". IDs must match /^[a-z0-9][a-z0-9\\-]*$/.`);
+  }
   const typeDir = type === 'skill' ? 'skills' : type === 'model' ? 'models' : 'roles';
   return path.join(getMarketplaceDir(), typeDir, id);
 }
@@ -145,6 +182,7 @@ export function getInstallPath(type: string, id: string): string {
  *
  * For skill archives (.tar.gz), extracts the contents into the install directory.
  * After installation, ensures _common/lib.sh files are present.
+ * Cleans up partial installs on failure.
  *
  * @param item - The marketplace item to install
  * @returns Object with success status and message
@@ -157,58 +195,120 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
     return { success: false, message: `No downloadable asset for ${item.id}` };
   }
 
-  const url = `${ASSETS_BASE}/${assetPath}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-  }
+  // GitHub-sourced skills (directory path, not archive)
+  const isGitHubSource = assetPath.startsWith('config/skills/') && !assetPath.endsWith('.tar.gz');
 
-  const data = Buffer.from(await res.arrayBuffer());
-
-  // Verify checksum if provided
-  if (item.assets.checksum) {
-    const [algo, expected] = item.assets.checksum.split(':');
-    if (algo === 'sha256') {
-      const actual = createHash('sha256').update(data).digest('hex');
-      if (actual !== expected) {
-        return { success: false, message: `Checksum mismatch for ${item.id}` };
-      }
-    }
-  }
-
-  // Extract or write
   await mkdir(installPath, { recursive: true });
 
-  if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-    const readable = Readable.from(data);
-    await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
-  } else {
-    const filename = path.basename(assetPath);
-    await writeFile(path.join(installPath, filename), data);
+  try {
+    if (isGitHubSource) {
+      // Download individual files from GitHub raw content in parallel
+      const filesToDownload = ['skill.json', 'execute.sh', 'instructions.md'];
+
+      const results = await Promise.allSettled(
+        filesToDownload.map(async (file) => {
+          const url = `${MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE}/${assetPath}/${file}`;
+          const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.GITHUB_FILE_TIMEOUT) });
+          return { file, res };
+        }),
+      );
+
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const fileName = filesToDownload[i];
+
+        if (result.status === 'rejected') {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Download failed for ${fileName}: ${String(result.reason)}` };
+        }
+
+        const { file, res } = result.value;
+        if (!res.ok) {
+          if (file === 'instructions.md') continue; // optional
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
+        }
+        const content = Buffer.from(await res.arrayBuffer());
+        await writeFile(path.join(installPath, file), content);
+      }
+    } else {
+      // Archive-based install (premium CDN or local)
+      const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.DOWNLOAD_TIMEOUT) });
+      if (!res.ok) {
+        // Clean up partial install
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+      }
+
+      const data = Buffer.from(await res.arrayBuffer());
+
+      // Verify checksum if provided
+      if (item.assets.checksum) {
+        const colonIdx = item.assets.checksum.indexOf(':');
+        if (colonIdx === -1) {
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Invalid checksum format: ${item.assets.checksum}` };
+        }
+        const algo = item.assets.checksum.slice(0, colonIdx);
+        const expected = item.assets.checksum.slice(colonIdx + 1);
+        if (algo !== 'sha256') {
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Unsupported checksum algorithm "${algo}"` };
+        }
+        const actual = createHash('sha256').update(data).digest('hex');
+        if (actual !== expected) {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Checksum mismatch for ${item.id}` };
+        }
+      }
+
+      if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+        try {
+          const readable = Readable.from(data);
+          await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+        } catch (err) {
+          // Clean up partial install
+          await rm(installPath, { recursive: true, force: true }).catch(() => {});
+          return { success: false, message: `Extraction failed for ${item.id}: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      } else {
+        const filename = path.basename(assetPath);
+        await writeFile(path.join(installPath, filename), data);
+      }
+    }
+
+    // Ensure _common/lib.sh for skills
+    if (item.type === 'skill') {
+      await ensureCommonLibs();
+    }
+
+    // Update manifest
+    const record: InstalledItemRecord = {
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      version: item.version,
+      installedAt: new Date().toISOString(),
+      installPath,
+      checksum: item.assets.checksum,
+    };
+
+    const manifest = await loadManifest();
+    manifest.items = manifest.items.filter((r) => r.id !== item.id);
+    manifest.items.push(record);
+    await saveManifest(manifest);
+
+    return { success: true, message: `Installed ${item.name} v${item.version}` };
+  } catch (error) {
+    // Clean up partial install on any unexpected error
+    await rm(installPath, { recursive: true, force: true }).catch(() => {});
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `Installation failed for ${item.id}: ${msg}` };
   }
-
-  // Ensure _common/lib.sh for skills
-  if (item.type === 'skill') {
-    await ensureCommonLibs();
-  }
-
-  // Update manifest
-  const record: InstalledItemRecord = {
-    id: item.id,
-    type: item.type,
-    name: item.name,
-    version: item.version,
-    installedAt: new Date().toISOString(),
-    installPath,
-    checksum: item.assets.checksum,
-  };
-
-  const manifest = await loadManifest();
-  manifest.items = manifest.items.filter((r) => r.id !== item.id);
-  manifest.items.push(record);
-  await saveManifest(manifest);
-
-  return { success: true, message: `Installed ${item.name} v${item.version}` };
 }
 
 // ========================= Common Libs =========================
@@ -255,7 +355,7 @@ export async function ensureCommonLibs(): Promise<void> {
     return;
   }
 
-  const mpBase = path.join(os.homedir(), '.crewly', 'marketplace');
+  const mpBase = path.join(os.homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
 
   // Copy agent _common/lib.sh
   const agentCommonSrc = path.join(packageRoot, 'config', 'skills', 'agent', '_common', 'lib.sh');
@@ -326,21 +426,21 @@ export async function installAllSkills(
 // ========================= Bundled Skills =========================
 
 /**
- * Counts the number of bundled agent skills shipped with the Crewly package.
+ * Counts the number of bundled core agent skills shipped with the Crewly package.
  *
- * Looks in config/skills/agent/ for subdirectories that aren't _common.
+ * Looks in config/skills/agent/core/ for subdirectories.
  * Used as a fallback when the marketplace is unreachable.
  *
- * @returns The number of bundled skill directories
+ * @returns The number of bundled core skill directories
  */
 export function countBundledSkills(): number {
   const packageRoot = findPackageRoot(__dirname) || findPackageRoot(process.cwd());
   if (!packageRoot) return 0;
 
-  const agentSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent');
+  const coreSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent', 'core');
   try {
-    const entries = readdirSync(agentSkillsDir, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory() && !e.name.startsWith('_')).length;
+    const entries = readdirSync(coreSkillsDir, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).length;
   } catch {
     return 0;
   }

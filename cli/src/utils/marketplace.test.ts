@@ -8,7 +8,7 @@
 import path from 'path';
 import { mkdtemp, rm, readdir, readFile, mkdir, writeFile } from 'fs/promises';
 import { tmpdir, homedir } from 'os';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, existsSync } from 'fs';
 import { createHash } from 'crypto';
 import * as tar from 'tar';
 
@@ -37,6 +37,7 @@ import {
   formatBytes,
   checkSkillsInstalled,
   installAllSkills,
+  countBundledSkills,
   type MarketplaceItem,
 } from './marketplace.js';
 
@@ -58,6 +59,31 @@ async function createTarGz(files: Record<string, string>): Promise<Buffer> {
   const archivePath = path.join(dir, 'archive.tar.gz');
   await tar.c({ gzip: true, file: archivePath, cwd: dir }, ['skill']);
   return readFile(archivePath);
+}
+
+/**
+ * Converts a text string to a proper ArrayBuffer for fetch mocking.
+ * This ensures we don't have shared buffer issues.
+ */
+function textToArrayBuffer(text: string): ArrayBuffer {
+  const buf = Buffer.from(text);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
+
+/**
+ * Creates a mock fetch response that returns a JSON registry.
+ * Used as a default mock for tests that call fetchRegistry() internally.
+ */
+function makeRegistryResponse(items: MarketplaceItem[]) {
+  return {
+    ok: true,
+    json: () => Promise.resolve({
+      schemaVersion: 1,
+      lastUpdated: '2025-01-01',
+      cdnBaseUrl: '',
+      items,
+    }),
+  };
 }
 
 function makeFakeItem(overrides: Partial<MarketplaceItem> = {}): MarketplaceItem {
@@ -124,6 +150,70 @@ describe('cli/utils/marketplace', () => {
 
       await expect(fetchRegistry()).rejects.toThrow('Failed to fetch registry');
     });
+
+    it('merges registries with premium items taking priority', async () => {
+      global.fetch = jest.fn()
+        // First call: public registry (fetched in parallel)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [
+              makeFakeItem({ id: 'skill-public', name: 'Public Skill', version: '1.0.0' }),
+              makeFakeItem({ id: 'skill-shared', name: 'Public Version', version: '1.0.0' }),
+            ],
+          }),
+        })
+        // Second call: premium registry (fetched in parallel)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [
+              makeFakeItem({ id: 'skill-premium', name: 'Premium Skill', version: '2.0.0' }),
+              makeFakeItem({ id: 'skill-shared', name: 'Premium Version', version: '2.0.0' }),
+            ],
+          }),
+        });
+
+      const result = await fetchRegistry();
+
+      // Should have 3 total items (1 public, 1 premium, 1 shared)
+      expect(result.items.length).toBe(3);
+
+      // Premium version of shared skill should override public
+      const sharedSkill = result.items.find(i => i.id === 'skill-shared');
+      expect(sharedSkill?.name).toBe('Premium Version');
+      expect(sharedSkill?.version).toBe('2.0.0');
+
+      // Other skills should be present
+      expect(result.items.find(i => i.id === 'skill-public')).toBeDefined();
+      expect(result.items.find(i => i.id === 'skill-premium')).toBeDefined();
+    });
+
+    it('succeeds when only one source is available', async () => {
+      global.fetch = jest.fn()
+        // Public registry fails
+        .mockRejectedValueOnce(new Error('network error'))
+        // Premium registry succeeds
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [makeFakeItem({ id: 'premium-only', name: 'Premium Only' })],
+          }),
+        });
+
+      const result = await fetchRegistry();
+      expect(result.items.length).toBe(1);
+      expect(result.items[0].id).toBe('premium-only');
+    });
   });
 
   describe('manifest management', () => {
@@ -154,6 +244,22 @@ describe('cli/utils/marketplace', () => {
     it('maps model type to models directory', () => {
       const p = getInstallPath('model', 'my-model');
       expect(p).toContain(path.join('marketplace', 'models', 'my-model'));
+    });
+
+    it('throws on path traversal attempt', () => {
+      expect(() => getInstallPath('skill', '../etc/passwd')).toThrow('Invalid marketplace item ID');
+    });
+
+    it('throws on IDs with special characters', () => {
+      expect(() => getInstallPath('skill', 'my skill')).toThrow('Invalid marketplace item ID');
+      expect(() => getInstallPath('skill', 'UPPERCASE')).toThrow('Invalid marketplace item ID');
+      expect(() => getInstallPath('skill', '-starts-with-hyphen')).toThrow('Invalid marketplace item ID');
+    });
+
+    it('accepts valid IDs with hyphens and numbers', () => {
+      expect(() => getInstallPath('skill', 'my-skill-2')).not.toThrow();
+      expect(() => getInstallPath('skill', 'a')).not.toThrow();
+      expect(() => getInstallPath('skill', '1-test')).not.toThrow();
     });
   });
 
@@ -211,6 +317,176 @@ describe('cli/utils/marketplace', () => {
       expect(result.success).toBe(false);
       expect(result.message).toContain('Checksum mismatch');
     });
+
+    it('returns error for invalid checksum format', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+          checksum: 'nocolonhere',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(
+          archiveBuffer.buffer.slice(archiveBuffer.byteOffset, archiveBuffer.byteOffset + archiveBuffer.byteLength)
+        ),
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Invalid checksum format');
+    });
+
+    it('returns error for unsupported checksum algorithm', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+          checksum: 'md5:abc123',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(
+          archiveBuffer.buffer.slice(archiveBuffer.byteOffset, archiveBuffer.byteOffset + archiveBuffer.byteLength)
+        ),
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Unsupported checksum algorithm');
+      expect(result.message).toContain('md5');
+    });
+
+    it('cleans up install directory on download failure', async () => {
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/skill-test/skill-test-1.0.0.tar.gz',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        statusText: 'Server Error',
+      });
+
+      const installDir = getInstallPath('skill', 'skill-test');
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+
+      // Install directory should be cleaned up
+      expect(existsSync(installDir)).toBe(false);
+    });
+
+    it('installs GitHub-sourced skill by downloading individual files', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill',
+        assets: { archive: 'config/skills/agent/core/github-skill' }, // GitHub path, no .tar.gz
+      });
+
+      const mockFiles: Record<string, string> = {
+        'skill.json': '{"id":"github-skill"}',
+        'execute.sh': '#!/bin/bash\necho github',
+        'instructions.md': '# Instructions',
+      };
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename && mockFiles[filename]) {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer(mockFiles[filename])),
+          };
+        }
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(true);
+
+      // Verify all files were written
+      const installDir = getInstallPath('skill', 'github-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).toContain('instructions.md');
+
+      const skillJsonContent = await readFile(path.join(installDir, 'skill.json'), 'utf-8');
+      expect(skillJsonContent).toBe('{"id":"github-skill"}');
+    });
+
+    it('skips instructions.md on 404 for GitHub-sourced skills', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill-no-docs',
+        assets: { archive: 'config/skills/agent/core/github-skill-no-docs' },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename === 'skill.json') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('{"id":"test"}')),
+          };
+        }
+        if (filename === 'execute.sh') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('#!/bin/bash')),
+          };
+        }
+        // instructions.md returns 404
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(true); // Should succeed even without instructions.md
+
+      const installDir = getInstallPath('skill', 'github-skill-no-docs');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).not.toContain('instructions.md');
+    });
+
+    it('fails if execute.sh returns 404 for GitHub-sourced skills', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill-missing',
+        assets: { archive: 'config/skills/agent/core/github-skill-missing' },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename === 'skill.json') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('{"id":"test"}')),
+          };
+        }
+        // execute.sh returns 404
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Download failed for execute.sh');
+      expect(result.message).toContain('404');
+    });
+
+    it('returns error for items with no downloadable asset', async () => {
+      const item = makeFakeItem({
+        id: 'no-asset-skill',
+        assets: {}, // No archive, no model
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('No downloadable asset for no-asset-skill');
+    });
   });
 
   describe('formatBytes', () => {
@@ -237,7 +513,7 @@ describe('cli/utils/marketplace', () => {
         ],
       });
 
-      // Mock registry with two skills and a model
+      // Mock registry with two skills and a model (both parallel fetches return same data)
       global.fetch = jest.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve({
@@ -280,20 +556,15 @@ describe('cli/utils/marketplace', () => {
         'execute.sh': '#!/bin/bash\necho hello',
       });
 
+      const registryResponse = makeRegistryResponse([
+        makeFakeItem({ id: 'skill-a', name: 'Skill A' }),
+        makeFakeItem({ id: 'skill-b', name: 'Skill B' }),
+      ]);
+
       global.fetch = jest.fn()
-        // First call: fetchRegistry
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            schemaVersion: 1,
-            lastUpdated: '2025-01-01',
-            cdnBaseUrl: '',
-            items: [
-              makeFakeItem({ id: 'skill-a', name: 'Skill A' }),
-              makeFakeItem({ id: 'skill-b', name: 'Skill B' }),
-            ],
-          }),
-        })
+        // First two calls: parallel fetchRegistry (public + premium)
+        .mockResolvedValueOnce(registryResponse)
+        .mockResolvedValueOnce(registryResponse)
         // Subsequent calls: downloadAndInstall fetch
         .mockResolvedValue({
           ok: true,
@@ -314,22 +585,28 @@ describe('cli/utils/marketplace', () => {
     });
 
     it('calls onProgress even when install fails', async () => {
+      const registryResponse = makeRegistryResponse([
+        makeFakeItem({ id: 'skill-fail', name: 'Fail Skill', assets: {} }),
+      ]);
+
       global.fetch = jest.fn()
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            schemaVersion: 1,
-            lastUpdated: '2025-01-01',
-            cdnBaseUrl: '',
-            items: [makeFakeItem({ id: 'skill-fail', name: 'Fail Skill', assets: {} })],
-          }),
-        });
+        // Both parallel fetchRegistry calls
+        .mockResolvedValueOnce(registryResponse)
+        .mockResolvedValueOnce(registryResponse);
 
       const progress: string[] = [];
       const count = await installAllSkills((name) => { progress.push(name); });
 
       expect(count).toBe(0);
       expect(progress).toEqual(['Fail Skill']);
+    });
+  });
+
+  describe('countBundledSkills', () => {
+    it('returns a number >= 0', () => {
+      const count = countBundledSkills();
+      expect(typeof count).toBe('number');
+      expect(count).toBeGreaterThanOrEqual(0);
     });
   });
 });

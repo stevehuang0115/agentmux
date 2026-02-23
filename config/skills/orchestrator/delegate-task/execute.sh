@@ -18,7 +18,7 @@ require_param "task" "$TASK"
 # Build a structured task message
 TASK_MESSAGE="[TASK] Priority: ${PRIORITY}\n\n${TASK}"
 [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
-TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash config/skills/agent/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
+TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
 
 BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message}')
 

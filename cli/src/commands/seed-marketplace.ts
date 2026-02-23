@@ -19,10 +19,11 @@ import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../
 import { validatePackage } from '../utils/package-validator.js';
 import type { SkillManifest } from '../utils/package-validator.js';
 import type { RegistryEntry } from '../utils/archive-creator.js';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
 /** Marketplace directory path */
-const MARKETPLACE_DIR = path.join(homedir(), '.crewly', 'marketplace');
-const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, 'local-registry.json');
+const MARKETPLACE_DIR = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME);
+const LOCAL_REGISTRY_PATH = path.join(MARKETPLACE_DIR, MARKETPLACE_CONSTANTS.LOCAL_REGISTRY_FILE);
 const ASSETS_DIR = path.join(MARKETPLACE_DIR, 'assets');
 
 /**
@@ -32,14 +33,24 @@ const ASSETS_DIR = path.join(MARKETPLACE_DIR, 'assets');
  * Crewly users and are not tightly coupled to internal orchestration.
  */
 const PUBLISHABLE_SKILLS = [
-  'check-quality-gates',
+  'bug-triage',
+  'chrome-browser',
+  'code-review',
   'computer-use',
+  'daily-standup-report',
   'dep-updater',
+  'email-responder',
   'env-setup-checker',
+  'feedback-analyzer',
   'git-commit-helper',
+  'marketplace-publish',
   'nano-banana-image',
+  'playwright-chrome-browser',
   'readme-generator',
+  'rednote-reader',
   'send-pdf-to-slack',
+  'seo-blog-writer',
+  'social-media-post',
   'test-runner',
 ];
 
@@ -56,14 +67,14 @@ interface SeedOptions {
  * adding registry entries.
  *
  * @param options - Command options
+ * @throws Error if the skills directory does not exist
  */
 export async function seedMarketplaceCommand(options?: SeedOptions): Promise<void> {
   const projectRoot = process.cwd();
-  const skillsDir = options?.skillsDir || path.join(projectRoot, 'config', 'skills', 'agent');
+  const skillsDir = options?.skillsDir || path.join(projectRoot, 'config', 'skills', 'agent', 'marketplace');
 
   if (!existsSync(skillsDir)) {
-    console.log(chalk.red(`Skills directory not found: ${skillsDir}`));
-    process.exit(1);
+    throw new Error(`Skills directory not found: ${skillsDir}`);
   }
 
   console.log(chalk.blue('Seeding marketplace with built-in skills...\n'));

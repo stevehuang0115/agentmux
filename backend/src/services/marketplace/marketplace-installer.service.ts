@@ -13,7 +13,7 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { mkdir, rm, copyFile, readFile, writeFile } from 'fs/promises';
+import { mkdir, rm, copyFile, readFile, writeFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { Readable } from 'stream';
@@ -35,17 +35,83 @@ import { SkillCatalogService } from '../skill/skill-catalog.service.js';
 import { MARKETPLACE_CONSTANTS } from '../../constants.js';
 
 /**
+ * Downloads an asset (archive or raw file), verifies its checksum,
+ * and extracts/writes it into the given install directory.
+ *
+ * Shared helper used by both `installItem` and `installToPath` to
+ * eliminate duplicated download/verify/extract logic.
+ *
+ * @param item - The marketplace item whose asset is being downloaded
+ * @param installPath - Local directory to write/extract the asset into
+ * @param assetPath - Relative path to the asset (archive or model file)
+ * @returns Operation result indicating success or failure with a message
+ */
+async function downloadAndExtractAsset(
+  item: MarketplaceItem,
+  installPath: string,
+  assetPath: string,
+): Promise<MarketplaceOperationResult> {
+  const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
+  const localAssetPath = path.join(localAssetsDir, assetPath);
+
+  let data: Buffer;
+  if (existsSync(localAssetPath)) {
+    data = await readFile(localAssetPath);
+  } else {
+    // Fall back to remote download (premium CDN)
+    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.DOWNLOAD_TIMEOUT) });
+    if (!res.ok) {
+      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+    }
+    data = Buffer.from(await res.arrayBuffer());
+  }
+
+  // Verify checksum if provided
+  if (item.assets.checksum) {
+    const colonIdx = item.assets.checksum.indexOf(':');
+    if (colonIdx === -1) {
+      return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
+    }
+    const algo = item.assets.checksum.slice(0, colonIdx);
+    const expected = item.assets.checksum.slice(colonIdx + 1);
+    if (algo !== 'sha256') {
+      return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
+    }
+    const actual = createHash('sha256').update(data).digest('hex');
+    if (actual !== expected) {
+      return {
+        success: false,
+        message: `Checksum mismatch: expected ${expected}, got ${actual}`,
+      };
+    }
+  }
+
+  // Write to install path
+  await mkdir(installPath, { recursive: true });
+
+  if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+    // Extract tar.gz archive contents into install directory
+    const readable = Readable.from(data);
+    await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+  } else {
+    // Non-archive asset (e.g., model file) — write raw
+    const filename = path.basename(assetPath);
+    await writeFile(path.join(installPath, filename), data);
+  }
+
+  return { success: true, message: `Installed ${item.name} v${item.version}` };
+}
+
+/**
  * Downloads and installs a marketplace item.
  *
  * Performs the following steps:
  * 1. Resolves the downloadable asset (archive or model)
- * 2. Loads the asset from local assets directory if available,
- *    otherwise downloads from the Crewly CDN
- * 3. Verifies the SHA-256 checksum if provided
- * 4. Extracts tar.gz archives to the install directory (skills),
- *    or writes raw files for non-archive assets (models)
- * 5. Ensures _common/lib.sh files exist for skill items
- * 6. Updates the installed-items manifest
+ * 2. Determines the source type (GitHub directory or CDN archive)
+ * 3. Delegates to `installFromGitHub` or `downloadAndExtractAsset`
+ * 4. Calls `finalizeInstall` to update manifest and refresh registrations
+ * 5. Cleans up partial install on failure
  *
  * @param item - The marketplace item to install
  * @returns Operation result indicating success or failure with a message
@@ -54,93 +120,137 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
   const installPath = getInstallPath(item.type, item.id);
 
   try {
-    // Download the asset
     const assetPath = item.assets.archive || item.assets.model;
     if (!assetPath) {
       return { success: false, message: `No downloadable asset for ${item.id}` };
     }
 
-    // Check local assets first (for locally published/seeded skills)
-    const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
-    const localAssetPath = path.join(localAssetsDir, assetPath);
+    // Determine if this is a GitHub-sourced skill (directory path, not a .tar.gz)
+    const isGitHubSource = assetPath.startsWith('config/skills/') && !assetPath.endsWith('.tar.gz');
 
-    let data: Buffer;
-    if (existsSync(localAssetPath)) {
-      data = await readFile(localAssetPath);
-    } else {
-      // Fall back to remote download
-      const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-      }
-      data = Buffer.from(await res.arrayBuffer());
+    if (isGitHubSource) {
+      // Download individual skill files from GitHub raw content
+      return await installFromGitHub(item, installPath, assetPath);
     }
 
-    // Verify checksum if provided
-    if (item.assets.checksum) {
-      const colonIdx = item.assets.checksum.indexOf(':');
-      if (colonIdx === -1) {
-        return { success: false, message: `Invalid checksum format (expected "algo:hash"): ${item.assets.checksum}` };
-      }
-      const algo = item.assets.checksum.slice(0, colonIdx);
-      const expected = item.assets.checksum.slice(colonIdx + 1);
-      if (algo !== 'sha256') {
-        return { success: false, message: `Unsupported checksum algorithm "${algo}". Only sha256 is supported.` };
-      }
-      const actual = createHash('sha256').update(data).digest('hex');
-      if (actual !== expected) {
-        return {
-          success: false,
-          message: `Checksum mismatch: expected ${expected}, got ${actual}`,
-        };
-      }
+    // Archive-based install (local assets or premium CDN)
+    const downloadResult = await downloadAndExtractAsset(item, installPath, assetPath);
+    if (!downloadResult.success) {
+      return downloadResult;
     }
 
-    // Write to install path
-    await mkdir(installPath, { recursive: true });
-
-    if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-      // Extract tar.gz archive contents into install directory
-      const readable = Readable.from(data);
-      await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
-    } else {
-      // Non-archive asset (e.g., model file) — write raw
-      const filename = path.basename(assetPath);
-      await writeFile(path.join(installPath, filename), data);
-    }
-
-    // Ensure _common/lib.sh files are present for skill items
-    if (item.type === 'skill') {
-      await ensureCommonLibs();
-    }
-
-    // Update manifest
-    const record: InstalledItemRecord = {
-      id: item.id,
-      type: item.type,
-      name: item.name,
-      version: item.version,
-      installedAt: new Date().toISOString(),
-      installPath,
-      checksum: item.assets.checksum,
-    };
-
-    const manifest = await loadManifest();
-    manifest.items = manifest.items.filter((r) => r.id !== item.id);
-    manifest.items.push(record);
-    await saveManifest(manifest);
-
-    // Refresh skill service and catalog so the new skill is immediately discoverable
-    if (item.type === 'skill') {
-      await refreshSkillRegistrations();
-    }
-
-    return { success: true, message: `Installed ${item.name} v${item.version}`, item: record };
+    // Post-install: update manifest, ensure common libs, refresh registrations
+    return await finalizeInstall(item, installPath);
   } catch (error) {
+    // Clean up partial install on failure
+    await rm(installPath, { recursive: true, force: true }).catch(() => {});
     const msg = error instanceof Error ? error.message : String(error);
     return { success: false, message: `Installation failed: ${msg}` };
   }
+}
+
+/**
+ * Installs a skill by downloading individual files from GitHub raw content
+ * in parallel.
+ *
+ * Public skills in the crewly repo are stored as directories (not archives).
+ * This function downloads the essential skill files (skill.json, execute.sh,
+ * instructions.md) concurrently from GitHub. skill.json and execute.sh are
+ * required; instructions.md is optional.
+ *
+ * @param item - The marketplace item to install
+ * @param installPath - Local directory to install to
+ * @param sourcePath - Relative path in the GitHub repo (e.g. config/skills/agent/code-review)
+ * @returns Operation result
+ */
+async function installFromGitHub(
+  item: MarketplaceItem,
+  installPath: string,
+  sourcePath: string,
+): Promise<MarketplaceOperationResult> {
+  const baseUrl = MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE;
+  const filesToDownload = ['skill.json', 'execute.sh', 'instructions.md'];
+
+  await mkdir(installPath, { recursive: true });
+
+  // Download all files in parallel
+  const results = await Promise.allSettled(
+    filesToDownload.map(async (file) => {
+      const url = `${baseUrl}/${sourcePath}/${file}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(MARKETPLACE_CONSTANTS.GITHUB_FILE_TIMEOUT) });
+      if (!res.ok) {
+        return { file, ok: false as const, status: res.status, statusText: res.statusText };
+      }
+      const content = Buffer.from(await res.arrayBuffer());
+      return { file, ok: true as const, content };
+    })
+  );
+
+  // Process results: skill.json and execute.sh are required, instructions.md is optional
+  for (let i = 0; i < filesToDownload.length; i++) {
+    const file = filesToDownload[i];
+    const result = results[i];
+    const isOptional = file === 'instructions.md';
+
+    if (result.status === 'rejected') {
+      if (!isOptional) {
+        return { success: false, message: `Failed to download ${file}: ${result.reason}` };
+      }
+      continue;
+    }
+
+    const value = result.value;
+    if (!value.ok) {
+      if (!isOptional) {
+        return { success: false, message: `Failed to download ${file}: ${value.status} ${value.statusText}` };
+      }
+      continue;
+    }
+
+    await writeFile(path.join(installPath, file), value.content);
+  }
+
+  // Post-install: update manifest, ensure common libs, refresh registrations
+  return await finalizeInstall(item, installPath);
+}
+
+/**
+ * Shared post-install steps: update the installed-items manifest,
+ * ensure _common/lib.sh files exist for skills, and refresh
+ * skill registrations so the item is immediately discoverable.
+ *
+ * @param item - The marketplace item that was just installed
+ * @param installPath - Local directory where the item was installed
+ * @returns Operation result indicating success
+ */
+async function finalizeInstall(
+  item: MarketplaceItem,
+  installPath: string,
+): Promise<MarketplaceOperationResult> {
+  if (item.type === 'skill') {
+    await ensureCommonLibs();
+  }
+
+  const record: InstalledItemRecord = {
+    id: item.id,
+    type: item.type,
+    name: item.name,
+    version: item.version,
+    installedAt: new Date().toISOString(),
+    installPath,
+    checksum: item.assets.checksum,
+  };
+
+  const manifest = await loadManifest();
+  manifest.items = manifest.items.filter((r) => r.id !== item.id);
+  manifest.items.push(record);
+  await saveManifest(manifest);
+
+  if (item.type === 'skill') {
+    await refreshSkillRegistrations();
+  }
+
+  return { success: true, message: `Installed ${item.name} v${item.version}`, item: record };
 }
 
 /**
@@ -196,21 +306,69 @@ export async function uninstallItem(id: string): Promise<MarketplaceOperationRes
 }
 
 /**
- * Updates a marketplace item to the latest version.
+ * Updates a marketplace item to the latest version using a safe
+ * install-to-temp-then-swap strategy.
  *
- * Performs an uninstall followed by a fresh install. If the uninstall
- * step fails, the update is aborted and the error is reported.
+ * Performs the following steps:
+ * 1. Installs the new version to a temporary path (suffixed with -update-tmp)
+ * 2. On success: uninstalls the old version, renames temp to final path
+ * 3. On failure: cleans up the temp path without touching the old version
  *
  * @param item - The marketplace item with the latest version info
  * @returns Operation result indicating success or failure with a message
  */
 export async function updateItem(item: MarketplaceItem): Promise<MarketplaceOperationResult> {
-  const uninstallResult = await uninstallItemInternal(item.id, { skipRefresh: true });
-  if (!uninstallResult.success) {
-    return { success: false, message: `Update failed during uninstall: ${uninstallResult.message}` };
+  const finalPath = getInstallPath(item.type, item.id);
+  const tempPath = finalPath + '-update-tmp';
+
+  // Install new version to temp path by temporarily overriding getInstallPath behavior
+  // We create the temp item that installFromTemp will use
+  try {
+    // Manually perform the install steps to the temp path
+    const assetPath = item.assets.archive || item.assets.model;
+    if (!assetPath) {
+      return { success: false, message: `No downloadable asset for ${item.id}` };
+    }
+
+    const isGitHubSource = assetPath.startsWith('config/skills/') && !assetPath.endsWith('.tar.gz');
+
+    let installResult: MarketplaceOperationResult;
+
+    if (isGitHubSource) {
+      installResult = await installFromGitHub(item, tempPath, assetPath);
+    } else {
+      installResult = await downloadAndExtractAsset(item, tempPath, assetPath);
+    }
+
+    if (!installResult.success) {
+      // Clean up temp path on failure
+      await rm(tempPath, { recursive: true, force: true }).catch(() => {});
+      return { success: false, message: `Update failed during install: ${installResult.message}` };
+    }
+
+    // New version installed successfully to temp path
+    // Now uninstall the old version (removes old dir + manifest entry)
+    const uninstallResult = await uninstallItemInternal(item.id, { skipRefresh: true });
+    if (!uninstallResult.success) {
+      // If uninstall fails because item wasn't installed, that's OK for an update
+      if (!uninstallResult.message.includes('not installed')) {
+        await rm(tempPath, { recursive: true, force: true }).catch(() => {});
+        return { success: false, message: `Update failed during uninstall: ${uninstallResult.message}` };
+      }
+    }
+
+    // Rename temp to final path
+    // Remove any existing final path first (in case uninstall didn't fully clean up)
+    await rm(finalPath, { recursive: true, force: true }).catch(() => {});
+    await rename(tempPath, finalPath);
+
+    // Finalize: update manifest and refresh registrations
+    return await finalizeInstall(item, finalPath);
+  } catch (error) {
+    await rm(tempPath, { recursive: true, force: true }).catch(() => {});
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, message: `Update failed: ${msg}` };
   }
-  // installItem handles the refresh, so we only refresh once total
-  return installItem(item);
 }
 
 /**
@@ -270,14 +428,18 @@ async function refreshSkillRegistrations(): Promise<void> {
   try {
     const skillService = getSkillService();
     await skillService.refresh();
-  } catch {
+  } catch (error) {
     // Skill service may not be initialized yet (e.g., during CLI usage)
+    const msg = error instanceof Error ? error.message : String(error);
+    console.debug(`[marketplace] Failed to refresh skill service: ${msg}`);
   }
 
   try {
     const catalogService = SkillCatalogService.getInstance();
     await catalogService.generateAgentCatalog();
-  } catch {
+  } catch (error) {
     // Catalog service may not be available in all contexts
+    const msg = error instanceof Error ? error.message : String(error);
+    console.debug(`[marketplace] Failed to regenerate agent catalog: ${msg}`);
   }
 }

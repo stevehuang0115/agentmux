@@ -15,9 +15,7 @@ import { validatePackage } from '../utils/package-validator.js';
 import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../utils/archive-creator.js';
 import type { SkillManifest } from '../utils/package-validator.js';
 import { readFileSync } from 'fs';
-
-/** Default backend URL for submission */
-const DEFAULT_BACKEND_URL = 'http://localhost:3000';
+import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
 
 /** Options for the publish command */
 interface PublishOptions {
@@ -46,9 +44,9 @@ interface PublishOptions {
 export async function publishCommand(skillPath?: string, options?: PublishOptions): Promise<void> {
   if (!skillPath) {
     console.log(chalk.red('Please specify the path to a skill directory.'));
-    console.log(chalk.gray('Example: crewly publish config/skills/agent/my-skill'));
-    console.log(chalk.gray('         crewly publish config/skills/agent/my-skill --dry-run'));
-    console.log(chalk.gray('         crewly publish config/skills/agent/my-skill --submit'));
+    console.log(chalk.gray('Example: crewly publish config/skills/agent/marketplace/my-skill'));
+    console.log(chalk.gray('         crewly publish config/skills/agent/marketplace/my-skill --dry-run'));
+    console.log(chalk.gray('         crewly publish config/skills/agent/marketplace/my-skill --submit'));
     process.exit(1);
   }
 
@@ -102,33 +100,21 @@ export async function publishCommand(skillPath?: string, options?: PublishOption
 
   // Submit to marketplace if --submit flag is set
   if (options?.submit) {
-    const backendUrl = options.url || DEFAULT_BACKEND_URL;
-    console.log(chalk.blue(`\nSubmitting to marketplace at ${backendUrl}...`));
-
-    try {
-      const response = await fetch(`${backendUrl}/api/marketplace/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ archivePath }),
-      });
-
-      const data = await response.json() as { success: boolean; message: string; submission?: { id: string } };
-
-      if (data.success) {
-        console.log(chalk.green(`  ✓ ${data.message}`));
-        if (data.submission) {
-          console.log(chalk.gray(`  Submission ID: ${data.submission.id}`));
-        }
-      } else {
-        console.log(chalk.red(`  ✗ ${data.message}`));
-        process.exit(1);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.log(chalk.red(`  ✗ Failed to submit: ${msg}`));
-      console.log(chalk.gray('  Make sure Crewly backend is running (crewly start)'));
-      process.exit(1);
-    }
+    console.log(chalk.blue('\nTo publish your skill to the Crewly marketplace:'));
+    console.log('');
+    console.log(chalk.white('  1. Fork the Crewly repo:'));
+    console.log(chalk.gray(`     https://github.com/${MARKETPLACE_CONSTANTS.GITHUB_REPO}`));
+    console.log('');
+    console.log(chalk.white('  2. Copy your skill directory into your fork:'));
+    console.log(chalk.gray(`     cp -r ${absPath} config/skills/agent/marketplace/${manifest.id}`));
+    console.log('');
+    console.log(chalk.white('  3. Commit and push, then open a Pull Request:'));
+    console.log(chalk.gray(`     gh pr create --repo ${MARKETPLACE_CONSTANTS.GITHUB_REPO} --title "skill: add ${manifest.id}"`));
+    console.log('');
+    console.log(chalk.white('  4. The registry index will be auto-generated on merge.'));
+    console.log('');
+    console.log(chalk.gray('  Archive for reference: ') + archivePath);
+    console.log(chalk.gray('  Registry entry JSON above can be used for validation.'));
   }
 
   console.log(chalk.green('\nDone!'));
