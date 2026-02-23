@@ -119,7 +119,7 @@ export class ChatService extends EventEmitter {
   constructor(options?: ChatServiceOptions) {
     super();
     this.chatDir =
-      options?.chatDir ?? path.join(process.env.HOME || '~', '.crewly', 'chat');
+      options?.chatDir ?? path.join(os.homedir(), '.crewly', 'chat');
     this.logger = LoggerService.getInstance().createComponentLogger('ChatService');
   }
 

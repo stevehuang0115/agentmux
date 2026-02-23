@@ -437,6 +437,10 @@ export const GEMINI_SHELL_MODE_CONSTANTS = {
  * but is non-functional and requires a restart.
  *
  * Used by GeminiRuntimeService and RuntimeExitMonitorService.
+ *
+ * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
+ * `as const` produces a readonly tuple of regex literals, which complicates
+ * usage with array methods like `.some()` and `.find()`.
  */
 export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/Request cancelled/,
