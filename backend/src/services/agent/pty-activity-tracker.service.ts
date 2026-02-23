@@ -9,6 +9,8 @@
  */
 
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
+import { PTY_CONSTANTS } from '../../constants.js';
 
 /**
  * Tracks last PTY output timestamp per session for idle detection.
@@ -99,6 +101,23 @@ export class PtyActivityTrackerService {
 	 */
 	hasActivity(sessionName: string): boolean {
 		return this.lastActivityMap.has(sessionName);
+	}
+
+	/**
+	 * Record PTY activity only if the output contains meaningful content.
+	 * Strips ANSI escape codes (cursor movements, color codes, spinner characters)
+	 * and only records activity if the remaining text has sufficient non-whitespace
+	 * characters. This prevents TUI noise (spinners, cursor repositioning) from
+	 * resetting the idle timer.
+	 *
+	 * @param sessionName - The session that produced output
+	 * @param rawData - Raw PTY output data to evaluate
+	 */
+	recordFilteredActivity(sessionName: string, rawData: string): void {
+		const stripped = stripAnsiCodes(rawData).replace(/\s/g, '');
+		if (stripped.length >= PTY_CONSTANTS.MIN_MEANINGFUL_OUTPUT_BYTES) {
+			this.recordActivity(sessionName);
+		}
 	}
 
 	/**

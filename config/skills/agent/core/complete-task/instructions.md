@@ -28,6 +28,16 @@ bash config/skills/agent/complete-task/execute.sh '{"absoluteTaskPath":"/project
 
 If the task markdown contains an `## Output Schema` section with a JSON Schema definition, your `output` object must validate against that schema. If validation fails, the response will include the errors and you can retry (up to 2 retries). After max retries, the task will be moved to blocked/.
 
+## Pre-Completion Checklist
+
+Before calling this skill, verify:
+
+1. **All requirements met** — re-read the original task and confirm every requirement is addressed
+2. **Code tested** — if you wrote code, run the relevant tests and confirm they pass
+3. **URLs verified** — if your output includes URLs or links, verify they are valid
+4. **Sources cited** — for research tasks, ensure all factual claims have source references
+5. **Summary accurate** — your summary should reflect what was actually done, not just what was planned
+
 ## Output
 
 JSON confirmation of task completion status. If validation fails:

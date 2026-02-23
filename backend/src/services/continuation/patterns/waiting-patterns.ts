@@ -58,6 +58,16 @@ export const QUESTION_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * Patterns indicating agent is stuck in plan mode
+ * (Claude Code's interactive approval prompt that cannot be resolved via PTY input)
+ */
+export const PLAN_MODE_PATTERNS: RegExp[] = [
+  /shift\+tab\s+to\s+cycle/i,
+  /ExitPlanMode/i,
+  /Plan mode/i,
+];
+
+/**
  * All waiting pattern categories
  */
 export const WAITING_PATTERNS = {
@@ -65,4 +75,5 @@ export const WAITING_PATTERNS = {
   approval: APPROVAL_WAITING_PATTERNS,
   otherAgent: OTHER_AGENT_WAITING_PATTERNS,
   question: QUESTION_PATTERNS,
+  planMode: PLAN_MODE_PATTERNS,
 } as const;

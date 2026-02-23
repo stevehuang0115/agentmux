@@ -18,6 +18,11 @@ jest.mock('../core/logger.service.js', () => ({
 	},
 }));
 
+// Mock terminal-output.utils (stripAnsiCodes)
+jest.mock('../../utils/terminal-output.utils.js', () => ({
+	stripAnsiCodes: (content: string) => content.replace(/\x1b\[[0-9;]*[A-Za-zH]/g, '').replace(/\x1b[^[\]].?/g, ''),
+}));
+
 describe('PtyActivityTrackerService', () => {
 	beforeEach(() => {
 		PtyActivityTrackerService.resetInstance();
@@ -54,6 +59,38 @@ describe('PtyActivityTrackerService', () => {
 			tracker.recordActivity('agent-dev-001');
 			const secondIdle = tracker.getIdleTimeMs('agent-dev-001');
 			expect(secondIdle).toBeLessThanOrEqual(firstIdle);
+		});
+	});
+
+	describe('recordFilteredActivity', () => {
+		it('should record activity for meaningful output', () => {
+			const tracker = PtyActivityTrackerService.getInstance();
+			tracker.recordFilteredActivity('agent-dev-001', 'Hello world');
+			expect(tracker.hasActivity('agent-dev-001')).toBe(true);
+		});
+
+		it('should NOT record activity for pure ANSI escape codes', () => {
+			const tracker = PtyActivityTrackerService.getInstance();
+			tracker.recordFilteredActivity('agent-dev-001', '\x1b[1A\x1b[2K\x1b[1B');
+			expect(tracker.hasActivity('agent-dev-001')).toBe(false);
+		});
+
+		it('should NOT record activity for whitespace-only output', () => {
+			const tracker = PtyActivityTrackerService.getInstance();
+			tracker.recordFilteredActivity('agent-dev-001', '   \n\t  ');
+			expect(tracker.hasActivity('agent-dev-001')).toBe(false);
+		});
+
+		it('should NOT record activity for single character output', () => {
+			const tracker = PtyActivityTrackerService.getInstance();
+			tracker.recordFilteredActivity('agent-dev-001', 'x');
+			expect(tracker.hasActivity('agent-dev-001')).toBe(false);
+		});
+
+		it('should record activity for output with ANSI codes mixed with real text', () => {
+			const tracker = PtyActivityTrackerService.getInstance();
+			tracker.recordFilteredActivity('agent-dev-001', '\x1b[32mSuccess: tests passed\x1b[0m');
+			expect(tracker.hasActivity('agent-dev-001')).toBe(true);
 		});
 	});
 

@@ -18,7 +18,7 @@
 
 import type { ISession, ISessionBackend } from './session-backend.interface.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { SESSION_COMMAND_DELAYS, EVENT_DELIVERY_CONSTANTS, TERMINAL_PATTERNS } from '../../constants.js';
+import { SESSION_COMMAND_DELAYS, EVENT_DELIVERY_CONSTANTS, TERMINAL_PATTERNS, PLAN_MODE_DISMISS_PATTERNS } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
 
 /**
@@ -190,6 +190,30 @@ export class SessionCommandHelper {
 		session.write('\x1b');
 		this.logger.debug('Sent Escape to session', { sessionName });
 		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY);
+	}
+
+	/**
+	 * Detect and dismiss interactive prompts (e.g., plan mode) before message delivery.
+	 * Checks the last terminal output for plan mode patterns and sends Escape to exit
+	 * if detected. This prevents agents from getting permanently stuck in plan mode.
+	 *
+	 * @param sessionName - The session to check
+	 * @returns True if an interactive prompt was detected and dismissed
+	 */
+	async dismissInteractivePromptIfNeeded(sessionName: string): Promise<boolean> {
+		const output = this.capturePane(sessionName);
+		const isPlanMode = PLAN_MODE_DISMISS_PATTERNS.some(pattern => pattern.test(output));
+
+		if (isPlanMode) {
+			this.logger.warn('Plan mode detected in session, sending Escape to dismiss', {
+				sessionName,
+			});
+			await this.sendEscape(sessionName);
+			await delay(SESSION_COMMAND_DELAYS.CLAUDE_RECOVERY_DELAY);
+			return true;
+		}
+
+		return false;
 	}
 
 	/**

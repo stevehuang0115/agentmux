@@ -245,6 +245,51 @@ describe('IdleDetectionService', () => {
 			await expect(service.performCheck()).resolves.not.toThrow();
 		});
 
+		it('should check agents with started status', async () => {
+			mockGetTeams.mockResolvedValue([
+				{
+					id: 'team1',
+					members: [
+						{
+							id: 'dev1',
+							sessionName: 'agent-dev',
+							role: 'developer',
+							agentStatus: 'started',
+						},
+					],
+				},
+			]);
+			mockIsIdleFor.mockReturnValue(true);
+
+			const service = IdleDetectionService.getInstance();
+			await service.performCheck();
+
+			// Should use the longer started agent timeout (15 min = 900000ms)
+			expect(mockIsIdleFor).toHaveBeenCalledWith('agent-dev', 900000);
+			expect(mockSuspendAgent).toHaveBeenCalledWith('agent-dev', 'team1', 'dev1', 'developer');
+		});
+
+		it('should not check agents with activating status', async () => {
+			mockGetTeams.mockResolvedValue([
+				{
+					id: 'team1',
+					members: [
+						{
+							id: 'dev1',
+							sessionName: 'agent-dev',
+							role: 'developer',
+							agentStatus: 'activating',
+						},
+					],
+				},
+			]);
+
+			const service = IdleDetectionService.getInstance();
+			await service.performCheck();
+
+			expect(mockIsIdleFor).not.toHaveBeenCalled();
+		});
+
 		it('should use default timeout when settings read fails', async () => {
 			mockGetSettings.mockRejectedValueOnce(new Error('Settings error'));
 			mockGetTeams.mockResolvedValueOnce([

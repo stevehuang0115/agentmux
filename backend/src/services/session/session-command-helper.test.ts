@@ -642,6 +642,35 @@ describe('SessionCommandHelper', () => {
 		// The core behavior is verified through the tests above and integration testing.
 	});
 
+	describe('dismissInteractivePromptIfNeeded', () => {
+		it('should detect plan mode and send Escape', async () => {
+			mockBackend.captureOutput.mockReturnValue('Some output\n❯❯ bypass permissions on (shift+tab to cycle)');
+			const result = await helper.dismissInteractivePromptIfNeeded('test-session');
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenCalledWith('\x1b');
+		});
+
+		it('should detect ExitPlanMode pattern', async () => {
+			mockBackend.captureOutput.mockReturnValue('Use ExitPlanMode when ready');
+			const result = await helper.dismissInteractivePromptIfNeeded('test-session');
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenCalledWith('\x1b');
+		});
+
+		it('should detect Plan mode pattern', async () => {
+			mockBackend.captureOutput.mockReturnValue('Plan mode active');
+			const result = await helper.dismissInteractivePromptIfNeeded('test-session');
+			expect(result).toBe(true);
+		});
+
+		it('should return false when no plan mode detected', async () => {
+			mockBackend.captureOutput.mockReturnValue('Normal terminal output\n❯ ');
+			const result = await helper.dismissInteractivePromptIfNeeded('test-session');
+			expect(result).toBe(false);
+			expect(mockSession.write).not.toHaveBeenCalled();
+		});
+	});
+
 	describe('sendMessageWithSmartRetry', () => {
 		it('should throw error if session does not exist', async () => {
 			mockBackend.getSession.mockReturnValue(undefined);

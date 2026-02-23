@@ -870,15 +870,20 @@ export class ContextWindowMonitorService {
 	}
 
 	/**
-	 * Periodic check for stale states, cleanup, and compact retries.
+	 * Periodic check for stale states, cleanup, compact retries, and proactive compaction.
 	 *
 	 * For stale sessions (no context % detected recently), resets to normal.
 	 * For critical sessions with exhausted compacts, retries compact after
 	 * COMPACT_RETRY_COOLDOWN_MS has elapsed since the last attempt.
+	 * For all monitored sessions, checks cumulative output bytes and triggers
+	 * proactive compact when threshold is exceeded.
 	 */
 	private performCheck(): void {
 		const now = Date.now();
 		const staleThreshold = CONTEXT_WINDOW_MONITOR_CONSTANTS.STALE_DETECTION_THRESHOLD_MS;
+
+		// Proactive compact based on cumulative output volume
+		this.checkProactiveCompact(now);
 
 		for (const [sessionName, state] of this.contextStates) {
 			const timeSinceLastDetection = now - state.lastDetectedAt;
@@ -922,6 +927,55 @@ export class ContextWindowMonitorService {
 					});
 				}
 			}
+		}
+	}
+
+	/** Timestamp of last proactive compact per session for cooldown tracking */
+	private proactiveCompactLastTriggered: Map<string, number> = new Map();
+
+	/**
+	 * Check all monitored sessions for cumulative output volume and trigger
+	 * proactive compact when the threshold is exceeded.
+	 *
+	 * @param now - Current timestamp in epoch ms
+	 */
+	private checkProactiveCompact(now: number): void {
+		const backend = this.sessionBackend || getSessionBackendSync();
+		if (!backend || !backend.getCumulativeOutputBytes || !backend.resetCumulativeOutput) {
+			return;
+		}
+
+		for (const [sessionName, state] of this.contextStates) {
+			if (state.compactInProgress) {
+				continue;
+			}
+
+			const cumulativeBytes = backend.getCumulativeOutputBytes(sessionName);
+			if (cumulativeBytes < CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES) {
+				continue;
+			}
+
+			// Check cooldown
+			const lastTriggered = this.proactiveCompactLastTriggered.get(sessionName) ?? 0;
+			if (now - lastTriggered < CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_COOLDOWN_MS) {
+				continue;
+			}
+
+			this.logger.info('Proactive compact triggered by cumulative output volume', {
+				sessionName,
+				cumulativeBytes,
+				thresholdBytes: CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES,
+			});
+
+			this.proactiveCompactLastTriggered.set(sessionName, now);
+			backend.resetCumulativeOutput(sessionName);
+
+			this.triggerCompact(state).catch((err) => {
+				this.logger.error('Proactive compact failed', {
+					sessionName,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
 		}
 	}
 
