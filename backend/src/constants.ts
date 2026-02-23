@@ -83,6 +83,8 @@ export const PTY_CONSTANTS = {
 	FORCE_KILL_ESCALATION_DELAY: 500,
 	/** Delay before escalating from SIGTERM to SIGKILL in forceDestroyAll (ms) */
 	FORCE_DESTROY_ESCALATION_DELAY: 1000,
+	/** Minimum non-whitespace characters in stripped PTY output to count as meaningful activity */
+	MIN_MEANINGFUL_OUTPUT_BYTES: 2,
 } as const;
 
 // Session command timing delays (in milliseconds)
@@ -276,6 +278,15 @@ export const TERMINAL_PATTERNS = {
 	 */
 	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
 } as const;
+
+/**
+ * Patterns for detecting Claude Code plan mode in terminal output.
+ * When plan mode is detected, the session command helper should send
+ * Escape to dismiss it before delivering messages.
+ *
+ * Re-exported from waiting-patterns to maintain a single source of truth.
+ */
+export { PLAN_MODE_PATTERNS as PLAN_MODE_DISMISS_PATTERNS } from './services/continuation/patterns/waiting-patterns.js';
 
 /**
  * Message queue constants for sequential message processing.
@@ -486,6 +497,10 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	MAX_COMPACT_ATTEMPTS: 3,
 	/** Cooldown between compact retries during periodic checks (ms) */
 	COMPACT_RETRY_COOLDOWN_MS: 60_000,
+	/** Cumulative output bytes threshold before triggering proactive compact (~500KB) */
+	PROACTIVE_COMPACT_THRESHOLD_BYTES: 512_000,
+	/** Cooldown between proactive compact triggers per session (10 minutes) */
+	PROACTIVE_COMPACT_COOLDOWN_MS: 600_000,
 } as const;
 
 /**

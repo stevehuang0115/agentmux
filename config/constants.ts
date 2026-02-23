@@ -824,6 +824,8 @@ export const AGENT_SUSPEND_CONSTANTS = {
 	REHYDRATION_TIMEOUT_MS: 45_000,
 	/** Roles that are exempt from suspension */
 	EXEMPT_ROLES: ['orchestrator'] as const,
+	/** Idle timeout for agents stuck in 'started' status (minutes) */
+	STARTED_AGENT_IDLE_TIMEOUT_MINUTES: 15,
 } as const;
 
 // ========================= VERSION CHECK SYSTEM =========================

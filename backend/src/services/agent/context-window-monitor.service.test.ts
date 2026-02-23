@@ -1548,4 +1548,170 @@ describe('ContextWindowMonitorService', () => {
 			expect(mockUpdateSessionId).toHaveBeenCalledWith('test-agent', 'claude-session-abc');
 		});
 	});
+
+	// =========================================================================
+	// Proactive compact (cumulative output volume)
+	// =========================================================================
+
+	describe('proactive compact', () => {
+		function setupWithProactiveCompact() {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const mockGetCumulativeOutputBytes = jest.fn().mockReturnValue(0);
+			const mockResetCumulativeOutput = jest.fn();
+			const backend = {
+				...createMockSessionBackend(sessions as any),
+				getCumulativeOutputBytes: mockGetCumulativeOutputBytes,
+				resetCumulativeOutput: mockResetCumulativeOutput,
+			};
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+			return { service, mockSession, backend, mockGetCumulativeOutputBytes, mockResetCumulativeOutput };
+		}
+
+		it('should trigger proactive compact when cumulative output exceeds threshold', () => {
+			const { service, mockGetCumulativeOutputBytes, mockResetCumulativeOutput } = setupWithProactiveCompact();
+
+			// Set cumulative bytes above threshold
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES + 1
+			);
+
+			// Start periodic check and advance timer
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			// Should have reset cumulative output (confirming threshold was detected)
+			expect(mockResetCumulativeOutput).toHaveBeenCalledWith('test-agent');
+			// Should have set compactInProgress (confirming compact was triggered)
+			const state = service.getContextState('test-agent');
+			expect(state!.compactInProgress).toBe(true);
+			expect(state!.compactAttempts).toBe(1);
+		});
+
+		it('should NOT trigger proactive compact when below threshold', () => {
+			const { service, mockGetCumulativeOutputBytes, mockResetCumulativeOutput } = setupWithProactiveCompact();
+
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES - 1
+			);
+
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			expect(mockResetCumulativeOutput).not.toHaveBeenCalled();
+		});
+
+		it('should respect cooldown between proactive compacts', () => {
+			const { service, mockGetCumulativeOutputBytes, mockResetCumulativeOutput } = setupWithProactiveCompact();
+
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES + 1
+			);
+
+			service.start();
+
+			// First check triggers compact
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+			expect(mockResetCumulativeOutput).toHaveBeenCalledTimes(1);
+
+			// Reset the compactInProgress flag to simulate compact completion
+			const state = service.getContextState('test-agent')!;
+			state.compactInProgress = false;
+
+			// Second check within cooldown should NOT trigger
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+			expect(mockResetCumulativeOutput).toHaveBeenCalledTimes(1); // still 1
+		});
+
+		it('should allow proactive compact after cooldown expires', () => {
+			const { service, mockGetCumulativeOutputBytes, mockResetCumulativeOutput } = setupWithProactiveCompact();
+
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES + 1
+			);
+
+			service.start();
+
+			// First trigger
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+			expect(mockResetCumulativeOutput).toHaveBeenCalledTimes(1);
+
+			// Reset compactInProgress
+			const state = service.getContextState('test-agent')!;
+			state.compactInProgress = false;
+
+			// Advance past cooldown
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_COOLDOWN_MS);
+
+			expect(mockResetCumulativeOutput).toHaveBeenCalledTimes(2);
+		});
+
+		it('should NOT trigger proactive compact when compactInProgress', () => {
+			const { service, mockGetCumulativeOutputBytes, mockResetCumulativeOutput } = setupWithProactiveCompact();
+
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES + 1
+			);
+
+			// Set compactInProgress before check
+			const state = service.getContextState('test-agent')!;
+			state.compactInProgress = true;
+
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			expect(mockResetCumulativeOutput).not.toHaveBeenCalled();
+		});
+
+		it('should gracefully handle backend without getCumulativeOutputBytes', () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			// backend does NOT have getCumulativeOutputBytes/resetCumulativeOutput
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Should not throw
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+		});
+
+		it('should clean up proactiveCompactLastTriggered on stopSessionMonitoring', () => {
+			const { service, mockGetCumulativeOutputBytes } = setupWithProactiveCompact();
+
+			mockGetCumulativeOutputBytes.mockReturnValue(
+				CONTEXT_WINDOW_MONITOR_CONSTANTS.PROACTIVE_COMPACT_THRESHOLD_BYTES + 1
+			);
+
+			// Trigger to populate the map
+			service.start();
+			jest.advanceTimersByTime(CONTEXT_WINDOW_MONITOR_CONSTANTS.CHECK_INTERVAL_MS);
+
+			// Stop monitoring — should clean up
+			service.stopSessionMonitoring('test-agent');
+
+			// Verify state is fully cleaned up
+			expect(service.getContextState('test-agent')).toBeUndefined();
+		});
+	});
 });

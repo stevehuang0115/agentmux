@@ -134,8 +134,10 @@ export class IdleDetectionService {
 
 		for (const team of teams) {
 			for (const member of team.members || []) {
-				// Only check active agents
-				if (member.agentStatus !== CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE) {
+				// Check active and started agents (started agents may be stuck)
+				const isActive = member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE;
+				const isStarted = member.agentStatus === CREWLY_CONSTANTS.AGENT_STATUSES.STARTED;
+				if (!isActive && !isStarted) {
 					continue;
 				}
 
@@ -151,8 +153,13 @@ export class IdleDetectionService {
 					continue;
 				}
 
+				// Use longer timeout for 'started' agents to allow initialization to complete
+				const effectiveTimeoutMs = isStarted
+					? AGENT_SUSPEND_CONSTANTS.STARTED_AGENT_IDLE_TIMEOUT_MINUTES * 60 * 1000
+					: timeoutMs;
+
 				// Check if idle
-				if (activityTracker.isIdleFor(member.sessionName, timeoutMs)) {
+				if (activityTracker.isIdleFor(member.sessionName, effectiveTimeoutMs)) {
 					// Skip agents that are actively working (workingStatus: in_progress)
 					// This prevents suspending agents that are mid-task but happen to
 					// have stale PTY output (e.g., waiting for a long API call)
@@ -173,7 +180,8 @@ export class IdleDetectionService {
 					this.logger.info('Agent idle timeout reached, suspending', {
 						sessionName: member.sessionName,
 						role: member.role,
-						idleMinutes: timeoutMinutes,
+						idleMinutes: effectiveTimeoutMs / 60000,
+						agentStatus: member.agentStatus,
 					});
 
 					try {

@@ -95,4 +95,22 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 4. **Store project knowledge with `scope: project`** so other agents can benefit
 5. **Store personal knowledge with `scope: agent`** for role-specific learnings
 
+## Work Rhythm
+
+### On Session Start
+1. Call `recall` with your role and current project context to load previous knowledge
+2. Review what comes back — it may contain important gotchas, patterns, or unfinished work
+3. If there's unfinished work from a previous session, report it to the orchestrator
+
+### During Work
+- Report progress periodically using `report-status` so the orchestrator stays informed
+- When you discover important patterns or gotchas, call `record-learning` immediately — don't wait until the end
+- If you feel your context window is getting large (many tool calls, large file reads), call `record-learning` with your current state so the next session can pick up smoothly
+
+### Before Context Runs Low
+- If you notice you've been working for a long time or have done many operations, proactively save your progress:
+  ```bash
+  bash {{AGENT_SKILLS_PATH}}/core/record-learning/execute.sh '{"agentId":"{{SESSION_NAME}}","agentRole":"{{ROLE}}","projectPath":"{{PROJECT_PATH}}","learning":"Current progress: [what was done]. Remaining: [what is left]. Key findings: [important notes]"}'
+  ```
+
 After checking in, just say "Ready for tasks" and wait for me to send you work.

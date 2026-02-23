@@ -59,6 +59,11 @@ export class PtySessionBackend implements ISessionBackend {
 	private terminalBuffers: Map<string, PtyTerminalBuffer> = new Map();
 
 	/**
+	 * Map of session names to cumulative output bytes since last compact
+	 */
+	private cumulativeOutputBytes: Map<string, number> = new Map();
+
+	/**
 	 * Logger for this backend
 	 */
 	private logger: ComponentLogger;
@@ -93,7 +98,8 @@ export class PtySessionBackend implements ISessionBackend {
 	 */
 	async createSession(name: string, options: SessionOptions): Promise<ISession> {
 		if (this.sessions.has(name)) {
-			throw new Error(`Session '${name}' already exists`);
+			this.logger.warn('Session already exists, killing before recreation', { name });
+			await this.killSession(name);
 		}
 
 		this.logger.info('Creating PTY session', {
@@ -115,7 +121,10 @@ export class PtySessionBackend implements ISessionBackend {
 		// no WebSocket client is viewing the terminal UI.
 		session.onData((data) => {
 			terminalBuffer.write(data);
-			PtyActivityTrackerService.getInstance().recordActivity(name);
+			PtyActivityTrackerService.getInstance().recordFilteredActivity(name, data);
+			// Track cumulative output for proactive compact triggering
+			const current = this.cumulativeOutputBytes.get(name) ?? 0;
+			this.cumulativeOutputBytes.set(name, current + data.length);
 		});
 
 		// Clean up on session exit
@@ -182,6 +191,7 @@ export class PtySessionBackend implements ISessionBackend {
 			this.terminalBuffers.delete(name);
 		}
 
+		this.cumulativeOutputBytes.delete(name);
 		this.logger.debug('Session resources cleaned up', { name });
 	}
 
@@ -215,6 +225,27 @@ export class PtySessionBackend implements ISessionBackend {
 	 */
 	sessionExists(name: string): boolean {
 		return this.sessions.has(name);
+	}
+
+	/**
+	 * Get the cumulative output bytes for a session since last reset.
+	 * Used by ContextWindowMonitorService for proactive compaction.
+	 *
+	 * @param name - Name of the session
+	 * @returns Cumulative output bytes, or 0 if session not tracked
+	 */
+	getCumulativeOutputBytes(name: string): number {
+		return this.cumulativeOutputBytes.get(name) ?? 0;
+	}
+
+	/**
+	 * Reset the cumulative output byte counter for a session.
+	 * Called after a proactive compact is triggered.
+	 *
+	 * @param name - Name of the session
+	 */
+	resetCumulativeOutput(name: string): void {
+		this.cumulativeOutputBytes.set(name, 0);
 	}
 
 	/**
@@ -398,6 +429,7 @@ export class PtySessionBackend implements ISessionBackend {
 		}
 		this.sessions.clear();
 		this.terminalBuffers.clear();
+		this.cumulativeOutputBytes.clear();
 
 		this.logger.info('Force-destroyed all PTY sessions');
 	}

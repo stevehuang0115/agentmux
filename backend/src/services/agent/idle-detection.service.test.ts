@@ -5,6 +5,7 @@
 import { IdleDetectionService } from './idle-detection.service.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
+import { AGENT_SUSPEND_CONSTANTS } from '../../constants.js';
 
 // Mock LoggerService
 jest.mock('../core/logger.service.js', () => ({
@@ -243,6 +244,54 @@ describe('IdleDetectionService', () => {
 
 			const service = IdleDetectionService.getInstance();
 			await expect(service.performCheck()).resolves.not.toThrow();
+		});
+
+		it('should check agents with started status', async () => {
+			mockGetTeams.mockResolvedValue([
+				{
+					id: 'team1',
+					members: [
+						{
+							id: 'dev1',
+							sessionName: 'agent-dev',
+							role: 'developer',
+							agentStatus: 'started',
+						},
+					],
+				},
+			]);
+			mockIsIdleFor.mockReturnValue(true);
+
+			const service = IdleDetectionService.getInstance();
+			await service.performCheck();
+
+			// Should use the longer started agent timeout
+			expect(mockIsIdleFor).toHaveBeenCalledWith(
+				'agent-dev',
+				AGENT_SUSPEND_CONSTANTS.STARTED_AGENT_IDLE_TIMEOUT_MINUTES * 60 * 1000
+			);
+			expect(mockSuspendAgent).toHaveBeenCalledWith('agent-dev', 'team1', 'dev1', 'developer');
+		});
+
+		it('should not check agents with activating status', async () => {
+			mockGetTeams.mockResolvedValue([
+				{
+					id: 'team1',
+					members: [
+						{
+							id: 'dev1',
+							sessionName: 'agent-dev',
+							role: 'developer',
+							agentStatus: 'activating',
+						},
+					],
+				},
+			]);
+
+			const service = IdleDetectionService.getInstance();
+			await service.performCheck();
+
+			expect(mockIsIdleFor).not.toHaveBeenCalled();
 		});
 
 		it('should use default timeout when settings read fails', async () => {

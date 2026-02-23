@@ -340,6 +340,22 @@ export interface ISessionBackend {
 	getRawHistory(name: string): string;
 
 	/**
+	 * Get the cumulative output bytes for a session since last reset.
+	 * Used for proactive context window compaction.
+	 *
+	 * @param name - Name of the session
+	 * @returns Cumulative output bytes, or 0 if not tracked
+	 */
+	getCumulativeOutputBytes?(name: string): number;
+
+	/**
+	 * Reset the cumulative output byte counter for a session.
+	 *
+	 * @param name - Name of the session
+	 */
+	resetCumulativeOutput?(name: string): void;
+
+	/**
 	 * Check if a child process is alive inside a session's PTY shell.
 	 *
 	 * This is optional because not all backends may support process tree
