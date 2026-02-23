@@ -288,7 +288,7 @@ Every time you send work to an agent (via `delegate-task`, `send-message`, or an
 3. **Instruct the agent to report back** — include `report-status` in your task message so the agent can proactively notify you when done, blocked, or failed. Agents call it like:
 
     ```bash
-    bash config/skills/agent/report-status/execute.sh '{"sessionName":"<agent-session>","status":"done","summary":"..."}'
+    bash config/skills/agent/core/report-status/execute.sh '{"sessionName":"<agent-session>","status":"done","summary":"..."}'
     ```
 
 4. **Tell the user what you set up** — include the monitoring details in your chat response:

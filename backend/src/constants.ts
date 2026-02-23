@@ -645,10 +645,14 @@ export const MESSAGE_SOURCES = {
  * and local file paths.
  */
 export const MARKETPLACE_CONSTANTS = {
-	/** Base URL for the Crewly marketplace webapp */
-	BASE_URL: 'https://crewly.stevesprompt.com',
-	/** API endpoint for the marketplace skill/item registry */
-	REGISTRY_ENDPOINT: '/api/registry',
+	/** GitHub raw content base URL for public skills registry */
+	PUBLIC_REGISTRY_URL: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main/config/skills/registry.json',
+	/** GitHub raw content base URL for downloading public skill files */
+	PUBLIC_CDN_BASE: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main',
+	/** Base URL for the Crewly marketplace webapp (premium/private registry) */
+	PREMIUM_BASE_URL: 'https://crewly.stevesprompt.com',
+	/** API endpoint for premium skills registry */
+	PREMIUM_REGISTRY_ENDPOINT: '/api/registry/skills',
 	/** API endpoint for downloading marketplace assets */
 	ASSETS_ENDPOINT: '/api/assets',
 	/** In-memory registry cache time-to-live (1 hour in ms) */
@@ -661,6 +665,8 @@ export const MARKETPLACE_CONSTANTS = {
 	LOCAL_REGISTRY_FILE: 'local-registry.json',
 	/** Subdirectory for skill submission archives */
 	SUBMISSIONS_DIR: 'submissions',
+	/** GitHub repository for PR-based skill submissions */
+	GITHUB_REPO: 'stevehuang0115/crewly',
 } as const;
 
 /** Typed message source value */

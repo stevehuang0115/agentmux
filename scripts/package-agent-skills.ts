@@ -2,7 +2,7 @@
 /**
  * Package Agent Skills for Marketplace
  *
- * Iterates config/skills/agent/ (skipping _common), reads skill.json metadata,
+ * Iterates config/skills/agent/marketplace/, reads skill.json metadata,
  * creates tar.gz archives, computes SHA-256 checksums, and generates item.json
  * files for each skill. Output goes to dist/marketplace-export/skills/.
  *
@@ -19,11 +19,8 @@ import { createHash } from 'crypto';
 import * as tar from 'tar';
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, '..');
-const AGENT_SKILLS_DIR = path.join(PROJECT_ROOT, 'config', 'skills', 'agent');
+const MARKETPLACE_SKILLS_DIR = path.join(PROJECT_ROOT, 'config', 'skills', 'agent', 'marketplace');
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'dist', 'marketplace-export', 'skills');
-
-/** Directories to skip when scanning */
-const SKIP_DIRS = ['_common'];
 
 interface SkillJson {
   id: string;
@@ -68,22 +65,22 @@ interface MarketplaceItemJson {
 async function main(): Promise<void> {
   console.log('Packaging agent skills for marketplace...\n');
 
-  if (!existsSync(AGENT_SKILLS_DIR)) {
-    console.error(`Agent skills directory not found: ${AGENT_SKILLS_DIR}`);
+  if (!existsSync(MARKETPLACE_SKILLS_DIR)) {
+    console.error(`Agent skills directory not found: ${MARKETPLACE_SKILLS_DIR}`);
     process.exit(1);
   }
 
   await mkdir(OUTPUT_DIR, { recursive: true });
 
-  const entries = await readdir(AGENT_SKILLS_DIR, { withFileTypes: true });
+  const entries = await readdir(MARKETPLACE_SKILLS_DIR, { withFileTypes: true });
   const skillDirs = entries
-    .filter((e) => e.isDirectory() && !SKIP_DIRS.includes(e.name))
+    .filter((e) => e.isDirectory())
     .sort((a, b) => a.name.localeCompare(b.name));
 
   let count = 0;
 
   for (const entry of skillDirs) {
-    const skillDir = path.join(AGENT_SKILLS_DIR, entry.name);
+    const skillDir = path.join(MARKETPLACE_SKILLS_DIR, entry.name);
     const skillJsonPath = path.join(skillDir, 'skill.json');
 
     if (!existsSync(skillJsonPath)) {
@@ -106,7 +103,7 @@ async function main(): Promise<void> {
       {
         gzip: true,
         file: archivePath,
-        cwd: AGENT_SKILLS_DIR,
+        cwd: MARKETPLACE_SKILLS_DIR,
         filter: (filePath: string) => {
           // Exclude .env files but allow .env.example
           const base = path.basename(filePath);

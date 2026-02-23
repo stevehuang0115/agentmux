@@ -80,6 +80,14 @@ async function createTarGz(files: Record<string, string>, baseDir?: string): Pro
   return readFile(archivePath);
 }
 
+/**
+ * Convert string to ArrayBuffer for fetch mock (proper Node Buffer to ArrayBuffer conversion).
+ */
+function toArrayBuffer(str: string): ArrayBuffer {
+  const buf = Buffer.from(str);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+}
+
 function makeFakeItem(overrides: Partial<MarketplaceItem> = {}): MarketplaceItem {
   return {
     id: 'test-skill',
@@ -378,6 +386,260 @@ describe('marketplace-installer.service', () => {
       // We need to check the actual marketplace paths. Since this is a unit test,
       // we verify the function ran without error. Integration testing would verify file presence.
       expect(true).toBe(true);
+    });
+  });
+
+  describe('installItem — GitHub-sourced skills', () => {
+    it('successfully installs by downloading skill.json, execute.sh, instructions.md individually', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill',
+        name: 'GitHub Skill',
+        assets: { archive: 'config/skills/agent/github-skill' },
+      });
+
+      // Mock fetch to return individual files
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('skill.json')) {
+          return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(toArrayBuffer('{"id":"github-skill"}')),
+          });
+        }
+        if (url.includes('execute.sh')) {
+          return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(toArrayBuffer('#!/bin/bash\necho github')),
+          });
+        }
+        if (url.includes('instructions.md')) {
+          return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(toArrayBuffer('# GitHub Skill')),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Installed GitHub Skill v1.0.0');
+
+      // Verify files were downloaded
+      const installDir = path.join(tempDir, 'marketplace', 'skills', 'github-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).toContain('instructions.md');
+
+      // Verify content
+      const skillJson = await readFile(path.join(installDir, 'skill.json'), 'utf-8');
+      expect(skillJson).toBe('{"id":"github-skill"}');
+
+      const executeContent = await readFile(path.join(installDir, 'execute.sh'), 'utf-8');
+      expect(executeContent).toBe('#!/bin/bash\necho github');
+    });
+
+    it('skips instructions.md if it returns 404 (it\'s optional)', async () => {
+      const item = makeFakeItem({
+        id: 'minimal-skill',
+        name: 'Minimal Skill',
+        assets: { archive: 'config/skills/agent/minimal-skill' },
+      });
+
+      // Mock fetch to return only required files
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('skill.json')) {
+          return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(toArrayBuffer('{"id":"minimal-skill"}')),
+          });
+        }
+        if (url.includes('execute.sh')) {
+          return Promise.resolve({
+            ok: true,
+            arrayBuffer: () => Promise.resolve(toArrayBuffer('#!/bin/bash\necho minimal')),
+          });
+        }
+        // instructions.md returns 404
+        if (url.includes('instructions.md')) {
+          return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+        }
+        return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Installed Minimal Skill v1.0.0');
+
+      // Verify only required files exist
+      const installDir = path.join(tempDir, 'marketplace', 'skills', 'minimal-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).not.toContain('instructions.md');
+    });
+
+    it('fails if skill.json returns 404', async () => {
+      const item = makeFakeItem({
+        id: 'broken-skill',
+        name: 'Broken Skill',
+        assets: { archive: 'config/skills/agent/broken-skill' },
+      });
+
+      // Mock fetch to fail on skill.json
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('skill.json')) {
+          return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+        }
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: () => Promise.resolve(toArrayBuffer('content')),
+        });
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Failed to download skill.json');
+    });
+
+    it('fails if execute.sh returns 404', async () => {
+      const item = makeFakeItem({
+        id: 'no-exec-skill',
+        name: 'No Exec Skill',
+        assets: { archive: 'config/skills/agent/no-exec-skill' },
+      });
+
+      // Mock fetch to fail on execute.sh
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('execute.sh')) {
+          return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' });
+        }
+        return Promise.resolve({
+          ok: true,
+          arrayBuffer: () => Promise.resolve(toArrayBuffer('content')),
+        });
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Failed to download execute.sh');
+    });
+  });
+
+  describe('installItem — checksum validation edge cases', () => {
+    it('returns error for invalid checksum format (no colon separator)', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/test-skill/test-skill-1.0.0.tar.gz',
+          checksum: 'invalidformatwithnocolon',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(archiveBuffer.buffer.slice(
+          archiveBuffer.byteOffset,
+          archiveBuffer.byteOffset + archiveBuffer.byteLength
+        )),
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Invalid checksum format');
+      expect(result.message).toContain('expected "algo:hash"');
+    });
+
+    it('returns error for unsupported checksum algorithm (e.g., "md5:abc123")', async () => {
+      const archiveBuffer = await createTarGz({ 'execute.sh': 'echo hi' });
+
+      const item = makeFakeItem({
+        assets: {
+          archive: 'skills/test-skill/test-skill-1.0.0.tar.gz',
+          checksum: 'md5:5d41402abc4b2a76b9719d911017c592',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(archiveBuffer.buffer.slice(
+          archiveBuffer.byteOffset,
+          archiveBuffer.byteOffset + archiveBuffer.byteLength
+        )),
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Unsupported checksum algorithm "md5"');
+      expect(result.message).toContain('Only sha256 is supported');
+    });
+  });
+
+  describe('installItem — non-archive assets (model files)', () => {
+    it('writes raw file instead of extracting when item type is model with no .tar.gz in assetPath', async () => {
+      const modelData = Buffer.from('MOCK_MODEL_BINARY_DATA');
+
+      const item = makeFakeItem({
+        id: 'test-model',
+        name: 'Test Model',
+        type: 'model',
+        assets: {
+          model: 'models/test-model/model.bin',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(modelData.buffer.slice(
+          modelData.byteOffset,
+          modelData.byteOffset + modelData.byteLength
+        )),
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+      expect(result.message).toContain('Installed Test Model v1.0.0');
+
+      // Verify raw file was written (not extracted as archive)
+      const installDir = path.join(tempDir, 'marketplace', 'models', 'test-model');
+      const files = await readdir(installDir);
+      expect(files).toContain('model.bin');
+
+      // Verify content is exactly what we sent
+      const content = await readFile(path.join(installDir, 'model.bin'));
+      expect(content.toString()).toBe('MOCK_MODEL_BINARY_DATA');
+    });
+
+    it('writes raw file for skill asset with non-.tar.gz extension', async () => {
+      const rawData = Buffer.from('#!/bin/bash\necho raw install');
+
+      const item = makeFakeItem({
+        id: 'raw-skill',
+        name: 'Raw Skill',
+        assets: {
+          archive: 'skills/raw-skill/install.sh',
+        },
+      });
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(rawData.buffer.slice(
+          rawData.byteOffset,
+          rawData.byteOffset + rawData.byteLength
+        )),
+      });
+
+      const result = await installItem(item);
+      expect(result.success).toBe(true);
+
+      // Verify raw file exists
+      const installDir = path.join(tempDir, 'marketplace', 'skills', 'raw-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('install.sh');
+
+      const content = await readFile(path.join(installDir, 'install.sh'), 'utf-8');
+      expect(content).toBe('#!/bin/bash\necho raw install');
     });
   });
 });

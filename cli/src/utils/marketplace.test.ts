@@ -37,6 +37,7 @@ import {
   formatBytes,
   checkSkillsInstalled,
   installAllSkills,
+  countBundledSkills,
   type MarketplaceItem,
 } from './marketplace.js';
 
@@ -58,6 +59,15 @@ async function createTarGz(files: Record<string, string>): Promise<Buffer> {
   const archivePath = path.join(dir, 'archive.tar.gz');
   await tar.c({ gzip: true, file: archivePath, cwd: dir }, ['skill']);
   return readFile(archivePath);
+}
+
+/**
+ * Converts a text string to a proper ArrayBuffer for fetch mocking.
+ * This ensures we don't have shared buffer issues.
+ */
+function textToArrayBuffer(text: string): ArrayBuffer {
+  const buf = Buffer.from(text);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 }
 
 function makeFakeItem(overrides: Partial<MarketplaceItem> = {}): MarketplaceItem {
@@ -123,6 +133,50 @@ describe('cli/utils/marketplace', () => {
       });
 
       await expect(fetchRegistry()).rejects.toThrow('Failed to fetch registry');
+    });
+
+    it('merges registries with premium items taking priority', async () => {
+      global.fetch = jest.fn()
+        // First call: public registry
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [
+              makeFakeItem({ id: 'skill-public', name: 'Public Skill', version: '1.0.0' }),
+              makeFakeItem({ id: 'skill-shared', name: 'Public Version', version: '1.0.0' }),
+            ],
+          }),
+        })
+        // Second call: premium registry
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            schemaVersion: 1,
+            lastUpdated: '2025-01-01',
+            cdnBaseUrl: '',
+            items: [
+              makeFakeItem({ id: 'skill-premium', name: 'Premium Skill', version: '2.0.0' }),
+              makeFakeItem({ id: 'skill-shared', name: 'Premium Version', version: '2.0.0' }),
+            ],
+          }),
+        });
+
+      const result = await fetchRegistry();
+
+      // Should have 3 total items (1 public, 1 premium, 1 shared)
+      expect(result.items.length).toBe(3);
+
+      // Premium version of shared skill should override public
+      const sharedSkill = result.items.find(i => i.id === 'skill-shared');
+      expect(sharedSkill?.name).toBe('Premium Version');
+      expect(sharedSkill?.version).toBe('2.0.0');
+
+      // Other skills should be present
+      expect(result.items.find(i => i.id === 'skill-public')).toBeDefined();
+      expect(result.items.find(i => i.id === 'skill-premium')).toBeDefined();
     });
   });
 
@@ -210,6 +264,112 @@ describe('cli/utils/marketplace', () => {
       const result = await downloadAndInstall(item);
       expect(result.success).toBe(false);
       expect(result.message).toContain('Checksum mismatch');
+    });
+
+    it('installs GitHub-sourced skill by downloading individual files', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill',
+        assets: { archive: 'config/skills/agent/core/github-skill' }, // GitHub path, no .tar.gz
+      });
+
+      const mockFiles: Record<string, string> = {
+        'skill.json': '{"id":"github-skill"}',
+        'execute.sh': '#!/bin/bash\necho github',
+        'instructions.md': '# Instructions',
+      };
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename && mockFiles[filename]) {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer(mockFiles[filename])),
+          };
+        }
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(true);
+
+      // Verify all files were written
+      const installDir = getInstallPath('skill', 'github-skill');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).toContain('instructions.md');
+
+      const skillJsonContent = await readFile(path.join(installDir, 'skill.json'), 'utf-8');
+      expect(skillJsonContent).toBe('{"id":"github-skill"}');
+    });
+
+    it('skips instructions.md on 404 for GitHub-sourced skills', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill-no-docs',
+        assets: { archive: 'config/skills/agent/core/github-skill-no-docs' },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename === 'skill.json') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('{"id":"test"}')),
+          };
+        }
+        if (filename === 'execute.sh') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('#!/bin/bash')),
+          };
+        }
+        // instructions.md returns 404
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(true); // Should succeed even without instructions.md
+
+      const installDir = getInstallPath('skill', 'github-skill-no-docs');
+      const files = await readdir(installDir);
+      expect(files).toContain('skill.json');
+      expect(files).toContain('execute.sh');
+      expect(files).not.toContain('instructions.md');
+    });
+
+    it('fails if execute.sh returns 404 for GitHub-sourced skills', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill-missing',
+        assets: { archive: 'config/skills/agent/core/github-skill-missing' },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async (url: string) => {
+        const filename = url.split('/').pop();
+        if (filename === 'skill.json') {
+          return {
+            ok: true,
+            arrayBuffer: () => Promise.resolve(textToArrayBuffer('{"id":"test"}')),
+          };
+        }
+        // execute.sh returns 404
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Download failed for execute.sh');
+      expect(result.message).toContain('404');
+    });
+
+    it('returns error for items with no downloadable asset', async () => {
+      const item = makeFakeItem({
+        id: 'no-asset-skill',
+        assets: {}, // No archive, no model
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(false);
+      expect(result.message).toBe('No downloadable asset for no-asset-skill');
     });
   });
 
@@ -330,6 +490,14 @@ describe('cli/utils/marketplace', () => {
 
       expect(count).toBe(0);
       expect(progress).toEqual(['Fail Skill']);
+    });
+  });
+
+  describe('countBundledSkills', () => {
+    it('returns a number >= 0', () => {
+      const count = countBundledSkills();
+      expect(typeof count).toBe('number');
+      expect(count).toBeGreaterThanOrEqual(0);
     });
   });
 });

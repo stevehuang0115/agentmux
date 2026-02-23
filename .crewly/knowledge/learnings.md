@@ -579,3 +579,10 @@ Marketplace feature implementation: Agent skills (marketplace-search, marketplac
 
 ---
 
+## 2026-02-22
+
+### [developer/crewly-core-sam-217bfbbf] 21:01:39
+Marketplace architecture design complete. Key findings: (1) Current code is well-structured — service layer properly abstracts registry source, so switching from local file to Git-based registry requires only URL changes in 3 files. (2) marketplace.service.ts fetchRegistry() already has 1hr cache, local+remote merge, and graceful fallback — all stay as-is. (3) marketplace-installer already does checksum verification and local-first asset lookup. (4) CLI has independent marketplace.ts (no backend needed) plus publish.ts + archive-creator.ts for packaging. (5) Frontend talks to backend API only, completely registry-agnostic. (6) Recommended Git-based registry (Homebrew model): crewly-registry repo on GitHub, GitHub Releases for archives, GitHub Actions for CI validation (ShellCheck + banned pattern scan), PR-based submissions via gh CLI. (7) Migration is 4 phases: create repo, update URLs, update publish flow, deprecate old paths. (8) 17 total tasks, most are small/trivial.
+
+---
+

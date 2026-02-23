@@ -32,14 +32,24 @@ const ASSETS_DIR = path.join(MARKETPLACE_DIR, 'assets');
  * Crewly users and are not tightly coupled to internal orchestration.
  */
 const PUBLISHABLE_SKILLS = [
-  'check-quality-gates',
+  'bug-triage',
+  'chrome-browser',
+  'code-review',
   'computer-use',
+  'daily-standup-report',
   'dep-updater',
+  'email-responder',
   'env-setup-checker',
+  'feedback-analyzer',
   'git-commit-helper',
+  'marketplace-publish',
   'nano-banana-image',
+  'playwright-chrome-browser',
   'readme-generator',
+  'rednote-reader',
   'send-pdf-to-slack',
+  'seo-blog-writer',
+  'social-media-post',
   'test-runner',
 ];
 
@@ -59,7 +69,7 @@ interface SeedOptions {
  */
 export async function seedMarketplaceCommand(options?: SeedOptions): Promise<void> {
   const projectRoot = process.cwd();
-  const skillsDir = options?.skillsDir || path.join(projectRoot, 'config', 'skills', 'agent');
+  const skillsDir = options?.skillsDir || path.join(projectRoot, 'config', 'skills', 'agent', 'marketplace');
 
   if (!existsSync(skillsDir)) {
     console.log(chalk.red(`Skills directory not found: ${skillsDir}`));

@@ -4,8 +4,8 @@
 frontend/dist/models/
 frontend/dist/build-kits/
 
-# Agent skills (install via marketplace: crewly install --all)
-config/skills/agent/
+# Marketplace skills (install via marketplace: crewly install --all)
+config/skills/agent/marketplace/
 
 # Source and dev files (only dist/ is needed)
 backend/src/

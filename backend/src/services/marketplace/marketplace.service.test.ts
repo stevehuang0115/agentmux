@@ -92,10 +92,11 @@ beforeEach(() => {
 // --- Tests ---
 
 describe('fetchRegistry', () => {
-  it('should fetch registry from API', async () => {
+  it('should fetch registry from both public and premium sources', async () => {
     const registry = await fetchRegistry();
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // 2 fetch calls: public (GitHub) + premium (stevesprompt)
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(registry.items).toHaveLength(3);
   });
 
@@ -103,34 +104,41 @@ describe('fetchRegistry', () => {
     await fetchRegistry();
     await fetchRegistry();
 
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // Only the first call fetches (2 calls), second is cached
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it('should bypass cache when forceRefresh is true', async () => {
     await fetchRegistry();
     await fetchRegistry(true);
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // 2 calls per fetch x 2 fetches = 4
+    expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
   it('should fall back to cached registry on fetch failure', async () => {
-    // First fetch succeeds
+    // First fetch succeeds (2 calls)
     await fetchRegistry();
 
-    // Second fetch fails
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
+    // Second fetch: both public and premium fail
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' })
+      .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
     const registry = await fetchRegistry(true);
 
     expect(registry.items).toHaveLength(3);
   });
 
   it('should return empty registry when fetch fails with no cache', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
+    // Both public and premium fail
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' })
+      .mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Internal Server Error' });
     // Also mock readFile for local-registry.json to return nothing
     readFile.mockRejectedValue(new Error('ENOENT'));
 
     const registry = await fetchRegistry();
-    expect(registry.schemaVersion).toBe(1);
+    expect(registry.schemaVersion).toBe(2);
     expect(registry.items).toHaveLength(0);
   });
 });

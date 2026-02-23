@@ -92,6 +92,70 @@ describe('SkillCatalogService', () => {
     await createSkillDir(dirName, skillJson, defaultInstructions);
   }
 
+  /**
+   * Create an agent skill directory with skill.json and optionally instructions.md
+   *
+   * @param subPath - Subdirectory path relative to config/skills/agent/ (e.g., "core/accept-task" or "marketplace/code-review")
+   * @param skillJson - Object to serialize as skill.json
+   * @param instructions - Optional instructions.md content
+   */
+  async function createAgentSkillDir(
+    subPath: string,
+    skillJson: Record<string, unknown>,
+    instructions?: string
+  ): Promise<void> {
+    const skillDir = path.join(projectRoot, 'config', 'skills', 'agent', subPath);
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(path.join(skillDir, 'skill.json'), JSON.stringify(skillJson, null, 2));
+    if (instructions !== undefined) {
+      await fs.writeFile(path.join(skillDir, 'instructions.md'), instructions);
+    }
+  }
+
+  /**
+   * Create a standard agent skill directory with typical fields
+   *
+   * @param subPath - Subdirectory path relative to config/skills/agent/ (e.g., "core/accept-task")
+   * @param overrides - Partial overrides for skill.json fields
+   * @param instructions - Optional instructions.md content
+   */
+  async function createStandardAgentSkill(
+    subPath: string,
+    overrides: Record<string, unknown> = {},
+    instructions?: string
+  ): Promise<void> {
+    const dirName = subPath.split('/').pop() || subPath;
+    const defaults = {
+      id: `agent-${dirName}`,
+      name: dirName
+        .split('-')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' '),
+      description: `Description for ${dirName}`,
+      category: 'core',
+      skillType: 'claude-skill',
+      promptFile: 'instructions.md',
+      execution: {
+        type: 'script',
+        script: {
+          file: 'execute.sh',
+          interpreter: 'bash',
+          timeoutMs: 30000,
+        },
+      },
+      assignableRoles: ['agent'],
+      tags: ['test'],
+      version: '1.0.0',
+    };
+
+    const skillJson = { ...defaults, ...overrides };
+    const defaultInstructions =
+      instructions ??
+      `# ${skillJson.name}\n\nSome description.\n\n## Parameters\n\n| Parameter | Required | Description |\n|-----------|----------|-------------|\n| \`param1\` | Yes | A test parameter |\n\n## Output\n\nJSON result.`;
+
+    await createAgentSkillDir(subPath, skillJson, defaultInstructions);
+  }
+
   beforeEach(async () => {
     // Create unique test directory structure
     testDir = path.join(os.tmpdir(), `skill-catalog-test-${Date.now()}-${Math.random()}`);
@@ -728,6 +792,311 @@ describe('SkillCatalogService', () => {
       const result = await service.generateCatalog();
 
       expect(result.catalogPath).toBe(service.getCatalogPath());
+    });
+  });
+
+  // ===========================================================================
+  // generateAgentCatalog Tests
+  // ===========================================================================
+
+  describe('generateAgentCatalog', () => {
+    it('should generate agent catalog with skills in nested directories', async () => {
+      await createStandardAgentSkill('core/accept-task', {
+        category: 'core',
+        description: 'Accepts a task from the orchestrator',
+      });
+      await createStandardAgentSkill('core/heartbeat', {
+        category: 'core',
+        description: 'Sends heartbeat to orchestrator',
+      });
+      await createStandardAgentSkill('marketplace/code-review', {
+        category: 'marketplace',
+        description: 'Reviews code changes',
+      });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(3);
+      expect(result.categoryCount).toBe(2);
+      expect(result.error).toBeUndefined();
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).toContain('# Agent Skills Catalog');
+      expect(content).toContain('### Accept Task');
+      expect(content).toContain('### Heartbeat');
+      expect(content).toContain('### Code Review');
+    });
+
+    it('should write to AGENT_SKILLS_CATALOG.md, not SKILLS_CATALOG.md', async () => {
+      await createStandardAgentSkill('core/accept-task', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.catalogPath).toMatch(/AGENT_SKILLS_CATALOG\.md$/);
+      expect(result.catalogPath).not.toMatch(/\/SKILLS_CATALOG\.md$/);
+
+      // Verify the file actually exists
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content.length).toBeGreaterThan(0);
+    });
+
+    it('should handle empty agent directory', async () => {
+      // Create agent directory but with no skills
+      await fs.mkdir(path.join(projectRoot, 'config', 'skills', 'agent'), {
+        recursive: true,
+      });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(0);
+      expect(result.categoryCount).toBe(0);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).toContain('# Agent Skills Catalog');
+    });
+
+    it('should handle missing agent directory', async () => {
+      // Don't create the agent directory at all
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(0);
+      expect(result.categoryCount).toBe(0);
+    });
+
+    it('should use absolute paths in usage commands', async () => {
+      await createStandardAgentSkill('core/accept-task', {
+        category: 'core',
+      });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+
+      // The usage command should contain the absolute path to the skill
+      const absoluteSkillsPath = path.join(projectRoot, 'config', 'skills', 'agent');
+      expect(content).toContain(`bash ${absoluteSkillsPath}`);
+      expect(content).toContain('/accept-task/execute.sh');
+    });
+
+    it('should skip _common directory in agent skills', async () => {
+      // Create _common directory with a skill.json (should be skipped)
+      await createAgentSkillDir('_common', {
+        id: 'common-lib',
+        name: 'Common Library',
+        description: 'Shared utilities',
+        category: 'system',
+      });
+
+      await createStandardAgentSkill('core/accept-task', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(1);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).not.toContain('Common Library');
+    });
+
+    it('should handle nested category directories without skill.json', async () => {
+      // Create category directory without skill.json
+      await fs.mkdir(path.join(projectRoot, 'config', 'skills', 'agent', 'core'), {
+        recursive: true,
+      });
+
+      // Create a skill inside the category directory
+      await createStandardAgentSkill('core/accept-task', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(1);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).toContain('### Accept Task');
+    });
+
+    it('should group skills by category', async () => {
+      await createStandardAgentSkill('core/accept-task', { category: 'task-management' });
+      await createStandardAgentSkill('core/heartbeat', { category: 'monitoring' });
+      await createStandardAgentSkill('marketplace/code-review', { category: 'code-quality' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.categoryCount).toBe(3);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).toContain('## Task Management');
+      expect(content).toContain('## Monitoring');
+      expect(content).toContain('## Code Quality');
+    });
+
+    it('should skip directories without skill.json at nested level', async () => {
+      // Create nested directory without skill.json
+      await fs.mkdir(
+        path.join(projectRoot, 'config', 'skills', 'agent', 'core', 'not-a-skill'),
+        { recursive: true }
+      );
+      await fs.writeFile(
+        path.join(projectRoot, 'config', 'skills', 'agent', 'core', 'not-a-skill', 'readme.md'),
+        'Not a skill'
+      );
+
+      await createStandardAgentSkill('core/accept-task', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(1);
+    });
+
+    it('should handle skills with missing required fields', async () => {
+      // Create a skill.json missing the required "name" field
+      await createAgentSkillDir('core/incomplete-skill', {
+        id: 'agent-incomplete',
+        // name is missing
+        description: 'Incomplete',
+        category: 'core',
+      });
+
+      await createStandardAgentSkill('core/valid-skill', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(1);
+
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content).not.toContain('Incomplete');
+    });
+
+    it('should handle invalid JSON in skill.json', async () => {
+      const invalidDir = path.join(projectRoot, 'config', 'skills', 'agent', 'core', 'invalid');
+      await fs.mkdir(invalidDir, { recursive: true });
+      await fs.writeFile(path.join(invalidDir, 'skill.json'), '{ broken json!!!');
+
+      await createStandardAgentSkill('core/valid-skill', { category: 'core' });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+      expect(result.skillCount).toBe(1);
+    });
+
+    it('should include Parameters section from instructions.md', async () => {
+      const instructions = [
+        '# Accept Task',
+        '',
+        'Accepts a task from the orchestrator.',
+        '',
+        '## Parameters',
+        '',
+        '| Parameter | Required | Description |',
+        '|-----------|----------|-------------|',
+        '| `taskId` | Yes | The task identifier |',
+        '| `priority` | No | Task priority level |',
+        '',
+        '## Output',
+        '',
+        'JSON confirmation.',
+      ].join('\n');
+
+      await createStandardAgentSkill('core/accept-task', { category: 'core' }, instructions);
+
+      const result = await service.generateAgentCatalog();
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+
+      expect(content).toContain('| `taskId` | Yes | The task identifier |');
+      expect(content).toContain('| `priority` | No | Task priority level |');
+    });
+
+    it('should sort skills alphabetically within categories', async () => {
+      await createStandardAgentSkill('core/zebra-skill', {
+        name: 'Zebra Skill',
+        category: 'core',
+      });
+      await createStandardAgentSkill('core/alpha-skill', {
+        name: 'Alpha Skill',
+        category: 'core',
+      });
+
+      const result = await service.generateAgentCatalog();
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+
+      const alphaIndex = content.indexOf('### Alpha Skill');
+      const zebraIndex = content.indexOf('### Zebra Skill');
+
+      expect(alphaIndex).toBeLessThan(zebraIndex);
+    });
+
+    it('should create output directory if it does not exist', async () => {
+      await createStandardAgentSkill('core/test-skill', { category: 'core' });
+
+      // Remove the catalog output directory to verify it gets created
+      await fs.rm(catalogOutputDir, { recursive: true, force: true });
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(true);
+
+      // Verify directory was created and file written
+      const content = await fs.readFile(result.catalogPath, 'utf-8');
+      expect(content.length).toBeGreaterThan(0);
+    });
+
+    it('should return error result when write fails', async () => {
+      await createStandardAgentSkill('core/test-skill', { category: 'core' });
+
+      // Point catalog directory to an invalid path that cannot be created
+      (service as unknown as SkillCatalogServiceTestAccess).catalogDir =
+        '/dev/null/impossible/path';
+
+      const result = await service.generateAgentCatalog();
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      expect(result.skillCount).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  // getAgentCatalogPath Tests
+  // ===========================================================================
+
+  describe('getAgentCatalogPath', () => {
+    it('should return path ending with AGENT_SKILLS_CATALOG.md', () => {
+      const catalogPath = service.getAgentCatalogPath();
+
+      expect(catalogPath).toMatch(/AGENT_SKILLS_CATALOG\.md$/);
+    });
+
+    it('should return path under the catalog directory', () => {
+      const catalogPath = service.getAgentCatalogPath();
+
+      expect(catalogPath).toContain('skills');
+      expect(catalogPath).toContain('AGENT_SKILLS_CATALOG.md');
+    });
+
+    it('should return an absolute path', () => {
+      const catalogPath = service.getAgentCatalogPath();
+
+      expect(path.isAbsolute(catalogPath)).toBe(true);
+    });
+
+    it('should return different path than getCatalogPath', () => {
+      const orchestratorPath = service.getCatalogPath();
+      const agentPath = service.getAgentCatalogPath();
+
+      expect(orchestratorPath).not.toBe(agentPath);
+      expect(orchestratorPath).toContain('SKILLS_CATALOG.md');
+      expect(agentPath).toContain('AGENT_SKILLS_CATALOG.md');
     });
   });
 });

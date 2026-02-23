@@ -19,7 +19,9 @@ import * as tar from 'tar';
 
 // ========================= Constants =========================
 
-const REGISTRY_URL = 'https://crewly.stevesprompt.com/api/registry';
+const PUBLIC_REGISTRY_URL = 'https://raw.githubusercontent.com/stevehuang0115/crewly/main/config/skills/registry.json';
+const PUBLIC_CDN_BASE = 'https://raw.githubusercontent.com/stevehuang0115/crewly/main';
+const PREMIUM_REGISTRY_URL = 'https://crewly.stevesprompt.com/api/registry/skills';
 const ASSETS_BASE = 'https://crewly.stevesprompt.com/api/assets';
 
 /** Compute paths lazily so os.homedir() is called at runtime, not import time */
@@ -86,17 +88,51 @@ export interface InstalledItemsManifest {
 // ========================= Registry =========================
 
 /**
- * Fetches the marketplace registry from the marketing site API.
+ * Fetches the marketplace registry from both public (GitHub) and premium (stevesprompt) sources.
+ * Merges results, with premium items taking priority on ID conflict.
  *
  * @returns The full marketplace registry
- * @throws Error if the fetch fails
+ * @throws Error if both fetches fail
  */
 export async function fetchRegistry(): Promise<MarketplaceRegistry> {
-  const res = await fetch(REGISTRY_URL);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch registry: ${res.status} ${res.statusText}`);
+  const items = new Map<string, MarketplaceItem>();
+
+  // Fetch public registry from GitHub
+  try {
+    const res = await fetch(PUBLIC_REGISTRY_URL);
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      for (const item of data.items || []) {
+        items.set(item.id, item);
+      }
+    }
+  } catch {
+    // Public registry unavailable
   }
-  return (await res.json()) as MarketplaceRegistry;
+
+  // Fetch premium registry from stevesprompt API
+  try {
+    const res = await fetch(PREMIUM_REGISTRY_URL);
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      for (const item of data.items || []) {
+        items.set(item.id, item);
+      }
+    }
+  } catch {
+    // Premium registry unavailable
+  }
+
+  if (items.size === 0) {
+    throw new Error('Failed to fetch registry: both public and premium sources unavailable');
+  }
+
+  return {
+    schemaVersion: 2,
+    lastUpdated: new Date().toISOString(),
+    cdnBaseUrl: PUBLIC_CDN_BASE,
+    items: Array.from(items.values()),
+  };
 }
 
 // ========================= Manifest =========================
@@ -157,34 +193,52 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
     return { success: false, message: `No downloadable asset for ${item.id}` };
   }
 
-  const url = `${ASSETS_BASE}/${assetPath}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
-  }
+  // GitHub-sourced skills (directory path, not archive)
+  const isGitHubSource = assetPath.startsWith('config/skills/') && !assetPath.endsWith('.tar.gz');
 
-  const data = Buffer.from(await res.arrayBuffer());
-
-  // Verify checksum if provided
-  if (item.assets.checksum) {
-    const [algo, expected] = item.assets.checksum.split(':');
-    if (algo === 'sha256') {
-      const actual = createHash('sha256').update(data).digest('hex');
-      if (actual !== expected) {
-        return { success: false, message: `Checksum mismatch for ${item.id}` };
-      }
-    }
-  }
-
-  // Extract or write
   await mkdir(installPath, { recursive: true });
 
-  if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
-    const readable = Readable.from(data);
-    await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+  if (isGitHubSource) {
+    // Download individual files from GitHub raw content
+    const requiredFiles = ['skill.json', 'execute.sh', 'instructions.md'];
+    for (const file of requiredFiles) {
+      const url = `${PUBLIC_CDN_BASE}/${assetPath}/${file}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        if (file === 'instructions.md') continue; // optional
+        return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
+      }
+      const content = Buffer.from(await res.arrayBuffer());
+      await writeFile(path.join(installPath, file), content);
+    }
   } else {
-    const filename = path.basename(assetPath);
-    await writeFile(path.join(installPath, filename), data);
+    // Archive-based install (premium CDN or local)
+    const url = `${ASSETS_BASE}/${assetPath}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
+    }
+
+    const data = Buffer.from(await res.arrayBuffer());
+
+    // Verify checksum if provided
+    if (item.assets.checksum) {
+      const [algo, expected] = item.assets.checksum.split(':');
+      if (algo === 'sha256') {
+        const actual = createHash('sha256').update(data).digest('hex');
+        if (actual !== expected) {
+          return { success: false, message: `Checksum mismatch for ${item.id}` };
+        }
+      }
+    }
+
+    if (item.assets.archive && assetPath.endsWith('.tar.gz')) {
+      const readable = Readable.from(data);
+      await pipeline(readable, tar.x({ cwd: installPath, strip: 1 }));
+    } else {
+      const filename = path.basename(assetPath);
+      await writeFile(path.join(installPath, filename), data);
+    }
   }
 
   // Ensure _common/lib.sh for skills
@@ -326,21 +380,21 @@ export async function installAllSkills(
 // ========================= Bundled Skills =========================
 
 /**
- * Counts the number of bundled agent skills shipped with the Crewly package.
+ * Counts the number of bundled core agent skills shipped with the Crewly package.
  *
- * Looks in config/skills/agent/ for subdirectories that aren't _common.
+ * Looks in config/skills/agent/core/ for subdirectories.
  * Used as a fallback when the marketplace is unreachable.
  *
- * @returns The number of bundled skill directories
+ * @returns The number of bundled core skill directories
  */
 export function countBundledSkills(): number {
   const packageRoot = findPackageRoot(__dirname) || findPackageRoot(process.cwd());
   if (!packageRoot) return 0;
 
-  const agentSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent');
+  const coreSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent', 'core');
   try {
-    const entries = readdirSync(agentSkillsDir, { withFileTypes: true });
-    return entries.filter((e) => e.isDirectory() && !e.name.startsWith('_')).length;
+    const entries = readdirSync(coreSkillsDir, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).length;
   } catch {
     return 0;
   }

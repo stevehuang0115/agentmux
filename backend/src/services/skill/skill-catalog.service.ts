@@ -456,9 +456,27 @@ export class SkillCatalogService {
         continue;
       }
 
-      const skill = await this.loadSkillFromDirectory(skillsRootDir, entry.name);
-      if (skill) {
-        skills.push(skill);
+      const skillDir = path.join(skillsRootDir, entry.name);
+      const skillJsonPath = path.join(skillDir, SKILL_DEFINITION_FILE);
+
+      if (existsSync(skillJsonPath)) {
+        // Direct skill directory
+        const skill = await this.loadSkillFromDirectory(skillsRootDir, entry.name);
+        if (skill) {
+          skills.push(skill);
+        }
+      } else {
+        // Category subdirectory (e.g., core/, marketplace/) — recurse
+        const nestedEntries = await fs.readdir(skillDir, { withFileTypes: true });
+        for (const nested of nestedEntries) {
+          if (!nested.isDirectory()) continue;
+          const skill = await this.loadSkillFromDirectory(skillDir, nested.name);
+          if (skill) {
+            // Set basePath so catalog usage lines include the subdirectory
+            skill.basePath = skillDir;
+            skills.push(skill);
+          }
+        }
       }
     }
 

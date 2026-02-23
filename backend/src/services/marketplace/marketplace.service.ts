@@ -63,36 +63,79 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
 
 /**
  * Internal fetch implementation. Separated to enable in-flight deduplication.
+ *
+ * Fetches from two sources:
+ * 1. Public registry — GitHub raw content (config/skills/registry.json in crewly repo)
+ * 2. Premium registry — crewly.stevesprompt.com/api/registry/skills (private/paid skills)
+ *
+ * Results are merged with local registry items (locally published skills).
  */
 async function doFetchRegistry(now: number): Promise<MarketplaceRegistry> {
-  let remoteRegistry: MarketplaceRegistry;
+  const emptyRegistry = (): MarketplaceRegistry => ({
+    schemaVersion: 2,
+    lastUpdated: new Date().toISOString(),
+    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
+    items: [],
+  });
+
+  // Fetch public registry from GitHub
+  let publicItems: MarketplaceItem[] = [];
   try {
-    const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.REGISTRY_ENDPOINT}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      if (cachedRegistry) return cachedRegistry;
-      // Fall through to local-only registry
-      remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
-    } else {
-      remoteRegistry = (await res.json()) as MarketplaceRegistry;
+    const res = await fetch(MARKETPLACE_CONSTANTS.PUBLIC_REGISTRY_URL);
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      publicItems = data.items || [];
     }
   } catch {
-    if (cachedRegistry) return cachedRegistry;
-    remoteRegistry = { schemaVersion: 1, lastUpdated: new Date().toISOString(), cdnBaseUrl: MARKETPLACE_CONSTANTS.BASE_URL, items: [] };
+    // Public registry unavailable — continue with empty
   }
 
-  // Merge locally published skills into the registry
+  // Fetch premium registry from stevesprompt API
+  let premiumItems: MarketplaceItem[] = [];
+  try {
+    const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.PREMIUM_REGISTRY_ENDPOINT}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = (await res.json()) as MarketplaceRegistry;
+      premiumItems = (data.items || []).map((item) => ({
+        ...item,
+        metadata: { ...item.metadata, premium: true },
+      }));
+    }
+  } catch {
+    // Premium registry unavailable — continue without premium skills
+  }
+
+  // If both failed and we have a cache, return cache
+  if (publicItems.length === 0 && premiumItems.length === 0 && cachedRegistry) {
+    return cachedRegistry;
+  }
+
+  // Merge: public + premium (premium overwrites by ID if conflict)
+  const mergedMap = new Map<string, MarketplaceItem>();
+  for (const item of publicItems) {
+    mergedMap.set(item.id, item);
+  }
+  for (const item of premiumItems) {
+    mergedMap.set(item.id, item);
+  }
+
+  // Merge locally published skills
   const localItems = await loadLocalRegistry();
-  if (localItems.length > 0) {
-    const remoteIds = new Set(remoteRegistry.items.map((i) => i.id));
-    for (const localItem of localItems) {
-      if (!remoteIds.has(localItem.id)) {
-        remoteRegistry.items.push(localItem);
-      }
+  for (const item of localItems) {
+    if (!mergedMap.has(item.id)) {
+      mergedMap.set(item.id, item);
     }
   }
 
-  cachedRegistry = remoteRegistry;
+  const registry: MarketplaceRegistry = {
+    schemaVersion: 2,
+    lastUpdated: new Date().toISOString(),
+    cdnBaseUrl: MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE,
+    items: Array.from(mergedMap.values()),
+  };
+
+  cachedRegistry = registry;
   cacheTimestamp = now;
   return cachedRegistry;
 }

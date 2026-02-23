@@ -787,7 +787,7 @@ describe('AgentRegistrationService', () => {
 
 	describe('loadRegistrationPrompt (private method)', () => {
 		it('should load prompt from file and replace placeholders', async () => {
-			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}} using {{AGENT_SKILLS_PATH}}/register-self/execute.sh';
+			const promptTemplate = 'Register as {{ROLE}} with session {{SESSION_ID}} and member {{MEMBER_ID}} using {{AGENT_SKILLS_PATH}}/core/register-self/execute.sh';
 			mockReadFile.mockResolvedValue(promptTemplate);
 
 			// Access private method via reflection
@@ -797,7 +797,7 @@ describe('AgentRegistrationService', () => {
 			expect(result).toContain('test-session');
 			expect(result).toContain('member-123');
 			expect(result).not.toContain('{{AGENT_SKILLS_PATH}}');
-			expect(result).toContain('config/skills/agent/register-self/execute.sh');
+			expect(result).toContain('config/skills/agent/core/register-self/execute.sh');
 		});
 
 		it('should remove member ID parameter when not provided', async () => {

@@ -54,13 +54,20 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
   const installPath = getInstallPath(item.type, item.id);
 
   try {
-    // Download the asset
     const assetPath = item.assets.archive || item.assets.model;
     if (!assetPath) {
       return { success: false, message: `No downloadable asset for ${item.id}` };
     }
 
-    // Check local assets first (for locally published/seeded skills)
+    // Determine if this is a GitHub-sourced skill (directory path, not a .tar.gz)
+    const isGitHubSource = assetPath.startsWith('config/skills/') && !assetPath.endsWith('.tar.gz');
+
+    if (isGitHubSource) {
+      // Download individual skill files from GitHub raw content
+      return await installFromGitHub(item, installPath, assetPath);
+    }
+
+    // Archive-based install (local assets or premium CDN)
     const localAssetsDir = path.join(homedir(), '.crewly', MARKETPLACE_CONSTANTS.DIR_NAME, 'assets');
     const localAssetPath = path.join(localAssetsDir, assetPath);
 
@@ -68,8 +75,8 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     if (existsSync(localAssetPath)) {
       data = await readFile(localAssetPath);
     } else {
-      // Fall back to remote download
-      const url = `${MARKETPLACE_CONSTANTS.BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
+      // Fall back to remote download (premium CDN)
+      const url = `${MARKETPLACE_CONSTANTS.PREMIUM_BASE_URL}${MARKETPLACE_CONSTANTS.ASSETS_ENDPOINT}/${assetPath}`;
       const res = await fetch(url);
       if (!res.ok) {
         return { success: false, message: `Download failed: ${res.status} ${res.statusText}` };
@@ -141,6 +148,69 @@ export async function installItem(item: MarketplaceItem): Promise<MarketplaceOpe
     const msg = error instanceof Error ? error.message : String(error);
     return { success: false, message: `Installation failed: ${msg}` };
   }
+}
+
+/**
+ * Installs a skill by downloading individual files from GitHub raw content.
+ *
+ * Public skills in the crewly repo are stored as directories (not archives).
+ * This function downloads the essential skill files (skill.json, execute.sh,
+ * instructions.md) directly from GitHub.
+ *
+ * @param item - The marketplace item to install
+ * @param installPath - Local directory to install to
+ * @param sourcePath - Relative path in the GitHub repo (e.g. config/skills/agent/code-review)
+ * @returns Operation result
+ */
+async function installFromGitHub(
+  item: MarketplaceItem,
+  installPath: string,
+  sourcePath: string,
+): Promise<MarketplaceOperationResult> {
+  const baseUrl = MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE;
+  const requiredFiles = ['skill.json', 'execute.sh', 'instructions.md'];
+
+  await mkdir(installPath, { recursive: true });
+
+  for (const file of requiredFiles) {
+    const url = `${baseUrl}/${sourcePath}/${file}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      // instructions.md is optional for install to succeed
+      if (file === 'instructions.md') continue;
+      return { success: false, message: `Failed to download ${file}: ${res.status} ${res.statusText}` };
+    }
+    const content = Buffer.from(await res.arrayBuffer());
+    await writeFile(path.join(installPath, file), content);
+  }
+
+  // Ensure _common/lib.sh files are present for skill items
+  if (item.type === 'skill') {
+    await ensureCommonLibs();
+  }
+
+  // Update manifest
+  const record: InstalledItemRecord = {
+    id: item.id,
+    type: item.type,
+    name: item.name,
+    version: item.version,
+    installedAt: new Date().toISOString(),
+    installPath,
+    checksum: item.assets.checksum || undefined,
+  };
+
+  const manifest = await loadManifest();
+  manifest.items = manifest.items.filter((r) => r.id !== item.id);
+  manifest.items.push(record);
+  await saveManifest(manifest);
+
+  // Refresh skill service and catalog
+  if (item.type === 'skill') {
+    await refreshSkillRegistrations();
+  }
+
+  return { success: true, message: `Installed ${item.name} v${item.version}`, item: record };
 }
 
 /**
