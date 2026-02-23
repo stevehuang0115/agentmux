@@ -1,18 +1,26 @@
 import * as os from 'os';
 import * as path from 'path';
+import * as fsModule from 'fs';
 import { promises as fs } from 'fs';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { CREWLY_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, GEMINI_FAILURE_PATTERNS } from '../../constants.js';
 import { getSettingsService } from '../settings/settings.service.js';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
 import { getDefaultSettings } from '../../types/settings.types.js';
 
 jest.mock('fs', () => ({
 	...jest.requireActual('fs'),
+	existsSync: jest.fn(),
+	readFileSync: jest.fn(),
+	writeFileSync: jest.fn(),
+	appendFileSync: jest.fn(),
 	promises: {
 		...jest.requireActual('fs').promises,
 		mkdir: jest.fn().mockResolvedValue(undefined),
+		readFile: jest.fn(),
+		writeFile: jest.fn().mockResolvedValue(undefined),
+		appendFile: jest.fn().mockResolvedValue(undefined),
 	},
 }));
 
@@ -332,23 +340,40 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('getRuntimeExitPatterns', () => {
-		it('should return Gemini-specific exit patterns', () => {
+		it('should return Gemini-specific exit and failure patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			expect(patterns).toHaveLength(2);
+			expect(patterns).toHaveLength(7);
+			// Clean exit patterns
 			expect(patterns[0].test('Agent powering down')).toBe(true);
 			expect(patterns[1].test('Interaction Summary')).toBe(true);
+			// Gemini failure patterns
+			expect(patterns.some(p => p.test('Request cancelled'))).toBe(true);
+			expect(patterns.some(p => p.test('Error: something went wrong'))).toBe(true);
+			expect(patterns.some(p => p.test('RESOURCE_EXHAUSTED'))).toBe(true);
+			expect(patterns.some(p => p.test('UNAVAILABLE'))).toBe(true);
+			expect(patterns.some(p => p.test('Connection error'))).toBe(true);
 		});
 
 		it('should not match unrelated text', () => {
 			const patterns = service['getRuntimeExitPatterns']();
 			expect(patterns.some(p => p.test('Type your message'))).toBe(false);
 		});
+
+		it('should match Error: only at start of line', () => {
+			const patterns = service['getRuntimeExitPatterns']();
+			// Should match at start of line
+			expect(patterns.some(p => p.test('Error: API failed'))).toBe(true);
+			// Should match at start of line within multiline string
+			expect(patterns.some(p => p.test('some output\nError: something'))).toBe(true);
+			// Should NOT match Error: in the middle of a line
+			expect(patterns.some(p => p.test('Got an Error: in the middle'))).toBe(false);
+		});
 	});
 
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			expect(patterns).toHaveLength(2);
+			expect(patterns).toHaveLength(7);
 		});
 	});
 
@@ -505,4 +530,222 @@ describe('GeminiRuntimeService', () => {
 			await expect(service.ensureGeminiMcpConfig('/test/project')).resolves.not.toThrow();
 		});
 	});
+
+	describe('ensureGeminiEnvFile', () => {
+		const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+		const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+		const mockAppendFile = fs.appendFile as jest.MockedFunction<typeof fs.appendFile>;
+
+		const projectPath = '/test/project';
+		const envPath = path.join(projectPath, '.env');
+		const gitignorePath = path.join(projectPath, '.gitignore');
+
+		let originalEnv: string | undefined;
+
+		beforeEach(() => {
+			jest.clearAllMocks();
+			originalEnv = process.env.GOOGLE_GENAI_API_KEY;
+			// Default: set the env var so most tests can focus on file behavior
+			process.env.GOOGLE_GENAI_API_KEY = 'test-api-key-123';
+
+			// Default mocks: files do not exist (readFile rejects with ENOENT)
+			mockReadFile.mockRejectedValue(new Error('ENOENT'));
+			mockWriteFile.mockResolvedValue(undefined);
+			mockAppendFile.mockResolvedValue(undefined);
+		});
+
+		afterEach(() => {
+			// Restore original env
+			if (originalEnv !== undefined) {
+				process.env.GOOGLE_GENAI_API_KEY = originalEnv;
+			} else {
+				delete process.env.GOOGLE_GENAI_API_KEY;
+			}
+		});
+
+		it('should skip when GOOGLE_GENAI_API_KEY is not in process.env', async () => {
+			delete process.env.GOOGLE_GENAI_API_KEY;
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should not attempt any file operations
+			expect(mockReadFile).not.toHaveBeenCalled();
+			expect(mockWriteFile).not.toHaveBeenCalled();
+			expect(mockAppendFile).not.toHaveBeenCalled();
+		});
+
+		it('should skip when .env already contains the key', async () => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) return 'SOME_VAR=abc\nGOOGLE_GENAI_API_KEY=existing-key\n';
+				throw new Error('ENOENT');
+			});
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should read the file but not write
+			expect(mockReadFile).toHaveBeenCalledWith(envPath, 'utf8');
+			expect(mockWriteFile).not.toHaveBeenCalled();
+			expect(mockAppendFile).not.toHaveBeenCalled();
+		});
+
+		it('should append key to existing .env file that lacks it', async () => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) return 'SOME_VAR=abc\n';
+				throw new Error('ENOENT');
+			});
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should append to existing .env (content ends with newline, so no extra separator)
+			expect(mockAppendFile).toHaveBeenCalledWith(
+				envPath,
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+			// Should not create a new file
+			expect(mockWriteFile).not.toHaveBeenCalledWith(
+				envPath,
+				expect.anything()
+			);
+		});
+
+		it('should append with newline separator when existing .env does not end with newline', async () => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) return 'SOME_VAR=abc'; // no trailing newline
+				throw new Error('ENOENT');
+			});
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should prepend a newline separator before the key
+			expect(mockAppendFile).toHaveBeenCalledWith(
+				envPath,
+				'\nGOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+		});
+
+		it('should create new .env file when it does not exist', async () => {
+			// Default: readFile rejects (file doesn't exist)
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should create .env with writeFile
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				envPath,
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+			// Should not attempt to append to .env
+			expect(mockAppendFile).not.toHaveBeenCalledWith(
+				envPath,
+				expect.anything()
+			);
+		});
+
+		it('should add .env to .gitignore if not present', async () => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
+				if (p === gitignorePath) return 'node_modules/\ndist/\n';
+				throw new Error('ENOENT');
+			});
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should create .env
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				envPath,
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+
+			// Should append .env entry to .gitignore
+			expect(mockAppendFile).toHaveBeenCalledWith(
+				gitignorePath,
+				'.env\n'
+			);
+		});
+
+		it('should create .gitignore with .env entry when .gitignore does not exist', async () => {
+			// Default: all readFile reject (no files exist)
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should create .gitignore with .env entry
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				gitignorePath,
+				'.env\n'
+			);
+		});
+
+		it('should not modify .gitignore if .env is already listed', async () => {
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
+				if (p === gitignorePath) return 'node_modules/\n.env\ndist/\n';
+				throw new Error('ENOENT');
+			});
+
+			await service['ensureGeminiEnvFile'](projectPath);
+
+			// Should create .env
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				envPath,
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+
+			// Should NOT append to .gitignore since .env is already there
+			expect(mockAppendFile).not.toHaveBeenCalledWith(
+				gitignorePath,
+				expect.anything()
+			);
+			// Should NOT write a new .gitignore
+			expect(mockWriteFile).not.toHaveBeenCalledWith(
+				gitignorePath,
+				expect.anything()
+			);
+		});
+
+		it('should handle errors gracefully when writing .env fails', async () => {
+			// readFile rejects (file doesn't exist), writeFile rejects
+			mockWriteFile.mockRejectedValueOnce(new Error('Permission denied'));
+
+			// Should not throw
+			await expect(service['ensureGeminiEnvFile'](projectPath)).resolves.not.toThrow();
+		});
+
+		it('should handle errors gracefully when updating .gitignore fails', async () => {
+			// .env does not exist, .gitignore read throws
+			mockReadFile.mockImplementation(async (p) => {
+				if (p === envPath) throw new Error('ENOENT');
+				if (p === gitignorePath) throw new Error('Read error');
+				throw new Error('ENOENT');
+			});
+
+			// Should not throw — gitignore errors are caught separately
+			await expect(service['ensureGeminiEnvFile'](projectPath)).resolves.not.toThrow();
+
+			// Should still have created the .env file
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				envPath,
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+			);
+		});
+	});
+
+	describe('GEMINI_FAILURE_PATTERNS', () => {
+		it('should export failure patterns as a constant array', () => {
+			expect(GEMINI_FAILURE_PATTERNS).toBeInstanceOf(Array);
+			expect(GEMINI_FAILURE_PATTERNS.length).toBe(5);
+		});
+
+		it('should contain expected failure patterns', () => {
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Request cancelled'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('RESOURCE_EXHAUSTED'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAVAILABLE'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Connection error'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Error: something'))).toBe(true);
+		});
+
+		it('should not match normal output', () => {
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Working on task'))).toBe(false);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Type your message'))).toBe(false);
+		});
+	});
+
 });

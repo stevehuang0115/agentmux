@@ -1,9 +1,9 @@
 #!/bin/bash
 # =============================================================================
 # RedNote (小红书) Reader Skill
-# Reads content from the 小红书 macOS iPad app via Accessibility API.
-# The app's UI is deeply nested (25+ levels) — this skill knows the exact
-# structure so agents don't need to explore each time.
+# Two modes of operation:
+#   1. iPad App (Accessibility API) — feed, scroll-feed, nav, raw
+#   2. Web API (curl + cookies) — list-notes, read-post (lowest token cost)
 # =============================================================================
 set -euo pipefail
 
@@ -12,12 +12,222 @@ source "${SCRIPT_DIR}/../../_common/lib.sh"
 
 APP_NAME="discover"
 MAX_DEPTH=28
+COOKIE_FILE="${HOME}/.mcp/rednote/cookies.json"
+XHS_USER_AGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 INPUT="${1:-}"
-[ -z "$INPUT" ] && error_exit "Usage: execute.sh '{\"action\":\"feed|scroll-feed|nav|search|raw\"}'"
+[ -z "$INPUT" ] && error_exit "Usage: execute.sh '{\"action\":\"list-notes|read-post|feed|scroll-feed|nav|raw\"}'"
 
 ACTION=$(echo "$INPUT" | jq -r '.action // empty')
 require_param "action" "$ACTION"
+
+# =============================================================================
+# Web API Mode — uses curl + cookies (lowest token cost, no Playwright)
+# =============================================================================
+
+# Build cookie header string from cookies.json
+build_cookie_header() {
+  if [ ! -f "$COOKIE_FILE" ]; then
+    error_exit "Cookies not found at $COOKIE_FILE. Log in via browser first."
+  fi
+  python3 -c "
+import json, sys
+cookies = json.load(open('$COOKIE_FILE'))
+print('; '.join(f\"{c['name']}={c['value']}\" for c in cookies))
+" 2>/dev/null || error_exit "Failed to parse cookies from $COOKIE_FILE"
+}
+
+# Get user ID from cookies
+get_user_id() {
+  local uid
+  uid=$(echo "$INPUT" | jq -r '.userId // empty')
+  if [ -n "$uid" ]; then
+    echo "$uid"
+    return
+  fi
+  python3 -c "
+import json
+cookies = json.load(open('$COOKIE_FILE'))
+uid = [c['value'] for c in cookies if c['name'] == 'x-user-id-creator.xiaohongshu.com']
+print(uid[0] if uid else '')
+" 2>/dev/null
+}
+
+# -----------------------------------------------------------------------------
+# list-notes — Get user's notes via web API (titles, IDs, stats, xsecTokens)
+# -----------------------------------------------------------------------------
+do_list_notes() {
+  local cookies user_id
+  cookies=$(build_cookie_header)
+  user_id=$(get_user_id)
+  [ -z "$user_id" ] && error_exit "No userId found. Pass userId param or ensure x-user-id-creator cookie exists."
+
+  local html
+  html=$(curl -s "https://www.xiaohongshu.com/user/profile/${user_id}" \
+    -H "User-Agent: ${XHS_USER_AGENT}" \
+    -H "Cookie: ${cookies}" \
+    -H "Referer: https://www.xiaohongshu.com/" 2>/dev/null)
+
+  [ -z "$html" ] && error_exit "Empty response from profile page"
+
+  local result
+  result=$(python3 -c "
+import json, re, sys
+
+html = sys.stdin.read()
+match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.+?})\s*</script>', html, re.DOTALL)
+if not match:
+    print(json.dumps({'error': 'No __INITIAL_STATE__ found. Page may be blocked or cookies expired.'}))
+    sys.exit(0)
+
+raw = match.group(1)
+raw = re.sub(r'\bundefined\b', 'null', raw)
+data = json.loads(raw)
+
+# notes[0] contains the array of note card wrappers
+all_notes = data.get('user', {}).get('notes', [[]])
+note_cards = all_notes[0] if all_notes and isinstance(all_notes[0], list) else []
+
+# user info
+user_info = data.get('user', {}).get('userPageData', {})
+nickname = user_info.get('basicInfo', {}).get('nickname', '')
+desc = user_info.get('basicInfo', {}).get('desc', '')
+fans = user_info.get('interactions', [{}])[0].get('count', '?') if user_info.get('interactions') else '?'
+
+notes = []
+for item in note_cards:
+    nc = item.get('noteCard', {})
+    ii = nc.get('interactInfo', {})
+    notes.append({
+        'noteId': nc.get('noteId', item.get('id', '')),
+        'title': nc.get('displayTitle', ''),
+        'type': nc.get('type', 'unknown'),
+        'likes': ii.get('likedCount', '0'),
+        'pinned': ii.get('sticky', False),
+        'xsecToken': nc.get('xsecToken', item.get('xsecToken', ''))
+    })
+
+print(json.dumps({
+    'userId': '${user_id}',
+    'nickname': nickname,
+    'desc': desc,
+    'totalNotes': len(notes),
+    'notes': notes
+}, ensure_ascii=False))
+" <<< "$html" 2>/dev/null)
+
+  if echo "$result" | jq -e '.error' >/dev/null 2>&1; then
+    error_exit "$(echo "$result" | jq -r '.error')"
+  fi
+  echo "{\"success\":true,\"action\":\"list-notes\",\"data\":$result}"
+}
+
+# -----------------------------------------------------------------------------
+# read-post — Read full post content via web API (body, tags, comments, images)
+# -----------------------------------------------------------------------------
+do_read_post() {
+  local note_id xsec_token cookies user_id
+  note_id=$(echo "$INPUT" | jq -r '.noteId // empty')
+  require_param "noteId" "$note_id"
+
+  xsec_token=$(echo "$INPUT" | jq -r '.xsecToken // empty')
+  require_param "xsecToken" "$xsec_token"
+
+  cookies=$(build_cookie_header)
+  user_id=$(get_user_id)
+
+  local referer="https://www.xiaohongshu.com/"
+  [ -n "$user_id" ] && referer="https://www.xiaohongshu.com/user/profile/${user_id}"
+
+  local html
+  html=$(curl -s "https://www.xiaohongshu.com/explore/${note_id}?xsec_token=${xsec_token}&xsec_source=pc_user" \
+    -H "User-Agent: ${XHS_USER_AGENT}" \
+    -H "Cookie: ${cookies}" \
+    -H "Referer: ${referer}" 2>/dev/null)
+
+  [ -z "$html" ] && error_exit "Empty response from note page"
+
+  local result
+  result=$(python3 -c "
+import json, re, sys
+
+html = sys.stdin.read()
+
+# Check for anti-scraping block
+if '/404/sec_' in html or len(html) < 500:
+    print(json.dumps({'error': 'Note page blocked by anti-scraping. xsecToken may be expired.'}))
+    sys.exit(0)
+
+match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.+?})\s*</script>', html, re.DOTALL)
+if not match:
+    print(json.dumps({'error': 'No __INITIAL_STATE__ found in note page'}))
+    sys.exit(0)
+
+raw = match.group(1)
+raw = re.sub(r'\bundefined\b', 'null', raw)
+data = json.loads(raw)
+
+note_map = data.get('note', {}).get('noteDetailMap', {})
+note_key = list(note_map.keys())[0] if note_map else None
+if not note_key:
+    print(json.dumps({'error': 'No note detail in __INITIAL_STATE__'}))
+    sys.exit(0)
+
+note = note_map[note_key].get('note', {})
+ii = note.get('interactInfo', {})
+tags = [t.get('name', '') for t in note.get('tagList', []) if t.get('name')]
+
+# Extract image URLs
+images = []
+for img in note.get('imageList', []):
+    url = img.get('urlDefault', img.get('url', ''))
+    if url:
+        images.append(url)
+
+# Extract video URL if present
+video = None
+video_info = note.get('video', {})
+if video_info:
+    media = video_info.get('media', {})
+    streams = media.get('stream', {})
+    for quality in ['h264', 'h265', 'av1']:
+        stream_list = streams.get(quality, [])
+        if stream_list:
+            video = stream_list[0].get('masterUrl', '')
+            if video:
+                break
+
+# Author info
+user = note.get('user', {})
+
+result = {
+    'noteId': note.get('noteId', '${note_id}'),
+    'title': note.get('title', ''),
+    'body': note.get('desc', ''),
+    'type': note.get('type', 'unknown'),
+    'author': user.get('nickname', user.get('nickName', '')),
+    'authorId': user.get('userId', ''),
+    'likes': ii.get('likedCount', '0'),
+    'collects': ii.get('collectedCount', '0'),
+    'comments': ii.get('commentCount', '0'),
+    'shares': ii.get('shareCount', '0'),
+    'tags': tags,
+    'imageCount': len(images),
+    'hasVideo': video is not None,
+}
+
+print(json.dumps(result, ensure_ascii=False))
+" <<< "$html" 2>/dev/null)
+
+  if echo "$result" | jq -e '.error' >/dev/null 2>&1; then
+    error_exit "$(echo "$result" | jq -r '.error')"
+  fi
+  echo "{\"success\":true,\"action\":\"read-post\",\"data\":$result}"
+}
+
+# =============================================================================
+# iPad App Mode — uses Accessibility API (requires app running on macOS)
+# =============================================================================
 
 # -----------------------------------------------------------------------------
 # Check that the app is running and accessible
@@ -375,10 +585,14 @@ do_search() {
 # Dispatch
 # -----------------------------------------------------------------------------
 case "$ACTION" in
+  # Web API actions (low token cost, recommended)
+  list-notes)   do_list_notes ;;
+  read-post)    do_read_post ;;
+  # iPad App actions (Accessibility API)
   feed)         do_feed ;;
   scroll-feed)  do_scroll_feed ;;
   nav)          do_nav ;;
   search)       do_search ;;
   raw)          do_raw ;;
-  *)            error_exit "Unknown action: $ACTION (use feed, scroll-feed, nav, search, raw)" ;;
+  *)            error_exit "Unknown action: $ACTION (use list-notes, read-post, feed, scroll-feed, nav, search, raw)" ;;
 esac

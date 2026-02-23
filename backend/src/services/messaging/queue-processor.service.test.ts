@@ -43,7 +43,7 @@ jest.mock('../../constants.js', () => ({
     },
   },
   ORCHESTRATOR_SESSION_NAME: 'crewly-orc',
-  CHAT_CONSTANTS: {
+  CHAT_ROUTING_CONSTANTS: {
     MESSAGE_PREFIX: 'CHAT',
   },
   EVENT_DELIVERY_CONSTANTS: {

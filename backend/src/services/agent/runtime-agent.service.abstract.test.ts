@@ -170,6 +170,108 @@ describe('RuntimeAgentService (Abstract)', () => {
 
 			expect(result).toBe(false);
 		});
+
+		it('should return false immediately when error pattern is detected without waiting for timeout', async () => {
+			mockSessionHelper.capturePane.mockReturnValue('Failed to initialize runtime');
+
+			const startTime = Date.now();
+			// Use a very long timeout to prove fail-fast behavior
+			const result = await service['waitForRuntimeReady']('test-session', 30000, 2000);
+			const elapsed = Date.now() - startTime;
+
+			expect(result).toBe(false);
+			// Should return well before the 30s timeout; allow generous margin for CI but
+			// it must be significantly less than the timeout to prove fail-fast
+			expect(elapsed).toBeLessThan(5000);
+			// capturePane should only be called once since error is found on first check
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledTimes(1);
+		});
+
+		it('should detect the "Error" pattern alone in output', async () => {
+			mockSessionHelper.capturePane.mockReturnValue('Error: something went wrong');
+
+			const result = await service['waitForRuntimeReady']('test-session', 5000, 500);
+
+			expect(result).toBe(false);
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledTimes(1);
+		});
+
+		it('should detect the "Failed" pattern alone in output', async () => {
+			mockSessionHelper.capturePane.mockReturnValue('Connection Failed');
+
+			const result = await service['waitForRuntimeReady']('test-session', 5000, 500);
+
+			expect(result).toBe(false);
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledTimes(1);
+		});
+
+		it('should not false-positive when output contains no error or ready patterns', async () => {
+			// Output that does not contain "Error", "Failed", "Ready", or "Welcome"
+			mockSessionHelper.capturePane.mockReturnValue('Initializing system... please wait');
+
+			const result = await service['waitForRuntimeReady']('test-session', 200, 50);
+
+			expect(result).toBe(false);
+			// Should have been called multiple times since it polled until timeout
+			expect(mockSessionHelper.capturePane.mock.calls.length).toBeGreaterThan(1);
+		});
+
+		it('should match error pattern as a substring (includes-based matching)', async () => {
+			// "Error" appears as a substring inside "RuntimeError" -- since the code uses
+			// output.includes(pattern), this WILL match. This test documents that behavior.
+			mockSessionHelper.capturePane.mockReturnValue('Caught a RuntimeError in module');
+
+			const result = await service['waitForRuntimeReady']('test-session', 5000, 500);
+
+			expect(result).toBe(false);
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledTimes(1);
+		});
+
+		it('should prioritize ready pattern over error pattern when both are present', async () => {
+			// The code checks ready patterns BEFORE error patterns, so when both match,
+			// the method should return true (ready takes priority).
+			mockSessionHelper.capturePane.mockReturnValue('Welcome - Error log cleared');
+
+			const result = await service['waitForRuntimeReady']('test-session', 5000, 500);
+
+			expect(result).toBe(true);
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledTimes(1);
+		});
+
+		it('should detect error pattern appearing after initial clean output', async () => {
+			// Simulate output changing over time: first call clean, second call has error
+			let callCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				callCount++;
+				if (callCount === 1) {
+					return 'Initializing...';
+				}
+				return 'Initializing... Failed to connect';
+			});
+
+			const result = await service['waitForRuntimeReady']('test-session', 10000, 50);
+
+			expect(result).toBe(false);
+			// Should have been called at least twice: first clean, then with error
+			expect(mockSessionHelper.capturePane.mock.calls.length).toBeGreaterThanOrEqual(2);
+		});
+
+		it('should handle capturePane throwing an error gracefully and continue polling', async () => {
+			let callCount = 0;
+			mockSessionHelper.capturePane.mockImplementation(() => {
+				callCount++;
+				if (callCount === 1) {
+					throw new Error('Session not found');
+				}
+				return 'Welcome to the runtime';
+			});
+
+			const result = await service['waitForRuntimeReady']('test-session', 10000, 50);
+
+			expect(result).toBe(true);
+			// Should have recovered from the error on first call and found ready on second
+			expect(mockSessionHelper.capturePane.mock.calls.length).toBeGreaterThanOrEqual(2);
+		});
 	});
 
 	describe('executeRuntimeInitScript', () => {

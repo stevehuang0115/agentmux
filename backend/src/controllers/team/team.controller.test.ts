@@ -35,6 +35,13 @@ jest.mock('../../services/monitoring/activity-monitor.service.js', () => ({
   },
 }));
 
+const mockGetSettings = jest.fn<any>();
+jest.mock('../../services/settings/settings.service.js', () => ({
+  getSettingsService: jest.fn(() => ({
+    getSettings: mockGetSettings,
+  })),
+}));
+
 describe('Teams Handlers', () => {
   let mockApiContext: ApiContext;
   let mockRequest: Partial<Request>;
@@ -64,6 +71,17 @@ describe('Teams Handlers', () => {
     const { ActivityMonitorService } = require('../../services/monitoring/activity-monitor.service.js');
     (ActivityMonitorService.getInstance as jest.Mock).mockReturnValue({
       getTeamWorkingStatus: mockGetTeamWorkingStatus,
+    });
+
+    // Re-setup the SettingsService mock implementation after clearAllMocks
+    const { getSettingsService } = require('../../services/settings/settings.service.js');
+    (getSettingsService as jest.Mock).mockReturnValue({
+      getSettings: mockGetSettings,
+    });
+
+    // Default: settings return claude-code as defaultRuntime
+    mockGetSettings.mockResolvedValue({
+      general: { defaultRuntime: 'claude-code' },
     });
 
     // Create response mock
@@ -700,6 +718,126 @@ describe('Teams Handlers', () => {
         success: false,
         error: 'All team members must have name, role, and systemPrompt'
       });
+    });
+  });
+
+  describe('getDefaultRuntime (via createTeam and addTeamMember)', () => {
+    it('should return configured default runtime from settings', async () => {
+      // Configure settings to return gemini-cli as the default runtime
+      mockGetSettings.mockResolvedValue({
+        general: { defaultRuntime: 'gemini-cli' },
+      });
+
+      // Use addTeamMember which always calls getDefaultRuntime() (no runtimeType in body)
+      const existingTeam: Team = {
+        id: 'team-rt-1',
+        name: 'Runtime Test Team',
+        description: 'Team for runtime testing',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([existingTeam]);
+      mockRequest.params = { id: 'team-rt-1' };
+      mockRequest.body = {
+        name: 'New Agent',
+        role: 'developer',
+      };
+
+      await teamsHandlers.addTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            runtimeType: 'gemini-cli',
+          }),
+        })
+      );
+      expect(mockGetSettings).toHaveBeenCalled();
+    });
+
+    it('should fall back to claude-code when settings has no defaultRuntime', async () => {
+      // Configure settings to return an empty/falsy defaultRuntime
+      mockGetSettings.mockResolvedValue({
+        general: { defaultRuntime: '' },
+      });
+
+      const existingTeam: Team = {
+        id: 'team-rt-2',
+        name: 'Fallback Test Team',
+        description: 'Team for fallback testing',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([existingTeam]);
+      mockRequest.params = { id: 'team-rt-2' };
+      mockRequest.body = {
+        name: 'Fallback Agent',
+        role: 'developer',
+      };
+
+      await teamsHandlers.addTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            runtimeType: 'claude-code',
+          }),
+        })
+      );
+    });
+
+    it('should fall back to claude-code when getSettings throws an error', async () => {
+      // Configure settings to throw an error
+      mockGetSettings.mockRejectedValue(new Error('Settings file not found'));
+
+      const existingTeam: Team = {
+        id: 'team-rt-3',
+        name: 'Error Fallback Team',
+        description: 'Team for error fallback testing',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([existingTeam]);
+      mockRequest.params = { id: 'team-rt-3' };
+      mockRequest.body = {
+        name: 'Error Agent',
+        role: 'developer',
+      };
+
+      await teamsHandlers.addTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Should still succeed with claude-code fallback
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            runtimeType: 'claude-code',
+          }),
+        })
+      );
     });
   });
 

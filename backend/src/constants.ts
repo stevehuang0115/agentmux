@@ -69,6 +69,9 @@ export const RUNTIME_TYPES = {
 	CODEX_CLI: 'codex-cli',
 } as const;
 
+/** Error patterns indicating non-recoverable failures (e.g. missing CLI binary) that should not be retried. */
+export const NON_RECOVERABLE_ERROR_PATTERNS = ['command not found', 'not installed', 'No such file'] as const;
+
 // PTY session constants
 export const PTY_CONSTANTS = {
 	MAX_DATA_LISTENERS: 100,
@@ -115,8 +118,8 @@ export const TERMINAL_CONTROLLER_CONSTANTS = {
 	MAX_OUTPUT_SIZE: 16384, // 16KB max output per request
 } as const;
 
-// Chat-related constants
-export const CHAT_CONSTANTS = {
+// Chat routing constants (message markers and patterns for orchestrator communication)
+export const CHAT_ROUTING_CONSTANTS = {
 	/** Regex pattern for extracting conversation ID from chat messages */
 	CONVERSATION_ID_PATTERN: /\[CHAT:([^\]]+)\]/,
 	/** Regex pattern for extracting conversation ID from response markers */
@@ -312,6 +315,10 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
 	PERSISTENCE_DIR: 'queue',
+	/** Initial delay before the first progress message in waitForResponse (ms) */
+	PROGRESS_INITIAL_MS: 90_000,
+	/** Interval between subsequent progress messages (ms) */
+	PROGRESS_INTERVAL_MS: 60_000,
 	/** Socket.IO event names for queue status updates */
 	SOCKET_EVENTS: {
 		/** Emitted when a new message is enqueued */
@@ -424,6 +431,26 @@ export const GEMINI_SHELL_MODE_CONSTANTS = {
 } as const;
 
 /**
+ * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
+ * These patterns are distinct from exit patterns (which indicate the CLI has shut down
+ * cleanly). Failure patterns match error states where the CLI may still be running
+ * but is non-functional and requires a restart.
+ *
+ * Used by GeminiRuntimeService and RuntimeExitMonitorService.
+ *
+ * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
+ * `as const` produces a readonly tuple of regex literals, which complicates
+ * usage with array methods like `.some()` and `.find()`.
+ */
+export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
+	/Request cancelled/,
+	/^Error: /m,
+	/RESOURCE_EXHAUSTED/,
+	/UNAVAILABLE/,
+	/Connection error/,
+];
+
+/**
  * Constants for runtime exit detection monitoring.
  * Used by RuntimeExitMonitorService to detect when an agent CLI exits.
  */
@@ -492,7 +519,7 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	/** Threshold for considering a context state stale (5 minutes) */
 	STALE_DETECTION_THRESHOLD_MS: 5 * 60 * 1000,
 	/** Time to wait after sending compact command before checking result (ms) */
-	COMPACT_WAIT_MS: 30_000,
+	COMPACT_WAIT_MS: 120_000,
 	/** Maximum compact attempts per threshold episode before giving up */
 	MAX_COMPACT_ATTEMPTS: 3,
 	/** Cooldown between compact retries during periodic checks (ms) */

@@ -25,6 +25,7 @@ import {
 	ORCHESTRATOR_HEARTBEAT_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
@@ -213,6 +214,22 @@ export class OrchestratorHeartbeatMonitorService {
 			return;
 		}
 
+		// Fast path: if the child process is dead, skip heartbeat messaging
+		// and trigger restart immediately. This prevents sending heartbeat
+		// messages to a bare shell, which would produce error output that
+		// resets the PTY activity tracker and block restart indefinitely.
+		if (this.sessionBackend.isChildProcessAlive) {
+			const isAlive = this.sessionBackend.isChildProcessAlive(ORCHESTRATOR_SESSION_NAME);
+			if (!isAlive) {
+				this.logger.warn('Orchestrator child process is dead, triggering immediate restart', {
+					sessionName: ORCHESTRATOR_SESSION_NAME,
+				});
+				this.heartbeatRequestSentAt = null;
+				await this.triggerAutoRestart();
+				return;
+			}
+		}
+
 		const activityTracker = PtyActivityTrackerService.getInstance();
 		const idleTimeMs = activityTracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
 
@@ -281,13 +298,16 @@ export class OrchestratorHeartbeatMonitorService {
 				SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
 				5000
 			);
-			await new Promise(resolve => setTimeout(resolve, pasteDelay));
+			await delay(pasteDelay);
 			session.write('\r');
 
 			this.logger.info('Heartbeat request sent to orchestrator PTY', {
 				heartbeatRequestCount: this.heartbeatRequestCount,
 			});
 		} catch (err) {
+			// Reset heartbeat state so a failed delivery doesn't trigger a false restart
+			this.heartbeatRequestSentAt = null;
+			this.heartbeatRequestCount = Math.max(0, this.heartbeatRequestCount - 1);
 			this.logger.error('Failed to send heartbeat request to orchestrator', {
 				error: err instanceof Error ? err.message : String(err),
 			});

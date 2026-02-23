@@ -20,11 +20,13 @@ import { Team, TeamMember, ApiResponse, ScheduledMessage } from '../../types/ind
 import {
   ORCHESTRATOR_SESSION_NAME,
   ORCHESTRATOR_ROLE,
-  RUNTIME_TYPES
+  RUNTIME_TYPES,
+  NON_RECOVERABLE_ERROR_PATTERNS
 } from '../../constants.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
+import { getSettingsService } from '../../services/settings/settings.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { ActivityMonitorService } from '../../services/monitoring/activity-monitor.service.js';
 import { MemoryService } from '../../services/memory/memory.service.js';
@@ -49,6 +51,20 @@ let eventBusService: EventBusService | null = null;
  */
 export function setTeamControllerEventBusService(service: EventBusService): void {
   eventBusService = service;
+}
+
+/**
+ * Get the default runtime type from user settings, falling back to CLAUDE_CODE.
+ *
+ * @returns The default runtime type configured in settings
+ */
+async function getDefaultRuntime(): Promise<TeamMember['runtimeType']> {
+  try {
+    const settings = await getSettingsService().getSettings();
+    return settings.general.defaultRuntime || RUNTIME_TYPES.CLAUDE_CODE;
+  } catch {
+    return RUNTIME_TYPES.CLAUDE_CODE;
+  }
 }
 
 /**
@@ -338,6 +354,12 @@ async function _startTeamMemberCore(
 
       lastError = createResult.error;
 
+      // Don't retry non-recoverable errors (e.g. missing CLI binary)
+      if (lastError && NON_RECOVERABLE_ERROR_PATTERNS.some(p => lastError!.includes(p))) {
+        logger.error('Non-recoverable error detected, skipping retries', { sessionName, lastError });
+        break;
+      }
+
       // If this isn't the last attempt, wait before retrying with exponential backoff
       if (attempt < MAX_CREATION_RETRIES) {
         const retryDelay = 1000 * attempt; // 1s, 2s exponential backoff
@@ -576,7 +598,7 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
         systemPrompt: member.systemPrompt,
         agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
         workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
-        runtimeType: member.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
+        runtimeType: member.runtimeType || await getDefaultRuntime(),
         skillOverrides: member.skillOverrides || [],
         excludedRoleSkills: member.excludedRoleSkills || [],
         createdAt: new Date().toISOString(),
@@ -1010,7 +1032,7 @@ export async function addTeamMember(this: ApiContext, req: Request, res: Respons
       systemPrompt: `You are ${name}, a ${role} on the ${team.name} team.`,
       agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
       workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
-      runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+      runtimeType: await getDefaultRuntime(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -1325,7 +1347,8 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
 
       // Deliver sequentially in the background
       (async () => {
-        for (const queuedMsg of queuedMessages) {
+        for (let i = 0; i < queuedMessages.length; i++) {
+          const queuedMsg = queuedMessages[i];
           try {
             await this.agentRegistrationService.sendMessageToAgent(sessionName, queuedMsg.data, runtimeType);
             logger.info('Delivered queued message', { sessionName, queuedAt: new Date(queuedMsg.queuedAt).toISOString() });
@@ -1333,7 +1356,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
             logger.error('Failed to deliver queued message', { sessionName, error: flushError instanceof Error ? flushError.message : String(flushError) });
           }
           // Delay between messages to let the agent process each one
-          if (queuedMessages.indexOf(queuedMsg) < queuedMessages.length - 1) {
+          if (i < queuedMessages.length - 1) {
             await new Promise(resolve => setTimeout(resolve, SUB_AGENT_QUEUE_CONSTANTS.FLUSH_INTER_MESSAGE_DELAY));
           }
         }
@@ -1577,11 +1600,6 @@ export async function getTeamActivityStatus(this: ApiContext, req: Request, res:
       await Promise.all(savePromises);
     }
 
-    // Clean up memory before sending response
-    if (global.gc) {
-      global.gc();
-    }
-
     res.json({
       success: true,
       data: {
@@ -1614,7 +1632,7 @@ export async function updateTeamMemberRuntime(this: ApiContext, req: Request, re
     }
 
     // Validate runtime type
-    const validRuntimeTypes = ['claude-code', 'gemini-cli', 'codex-cli'];
+    const validRuntimeTypes = Object.values(RUNTIME_TYPES);
     if (!validRuntimeTypes.includes(runtimeType)) {
       res.status(400).json({
         success: false,
@@ -1776,7 +1794,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
 
     // Update members if provided (from TeamModal edit)
     if (updates.members !== undefined && Array.isArray(updates.members)) {
-      team.members = updates.members.map((memberUpdate: TeamMemberUpdate) => {
+      team.members = await Promise.all(updates.members.map(async (memberUpdate: TeamMemberUpdate) => {
         // Find existing member by name (since the modal doesn't send IDs)
         const existingMember = team.members.find(m => m.name === memberUpdate.name);
 
@@ -1801,7 +1819,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
             systemPrompt: memberUpdate.systemPrompt,
             agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
             workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE,
-            runtimeType: memberUpdate.runtimeType || RUNTIME_TYPES.CLAUDE_CODE,
+            runtimeType: memberUpdate.runtimeType || await getDefaultRuntime(),
             avatar: memberUpdate.avatar,
             skillOverrides: memberUpdate.skillOverrides || [],
             excludedRoleSkills: memberUpdate.excludedRoleSkills || [],
@@ -1809,7 +1827,7 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
             updatedAt: new Date().toISOString()
           } as MutableTeamMember;
         }
-      });
+      }));
     }
 
     // Update timestamp

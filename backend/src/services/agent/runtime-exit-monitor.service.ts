@@ -14,6 +14,7 @@ import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { SHELL_PROMPT_PATTERNS } from '../continuation/patterns/idle-patterns.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
+import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { InProgressTask } from '../../types/task-tracking.types.js';
 import {
@@ -23,8 +24,11 @@ import {
 	RUNTIME_EXIT_CONSTANTS,
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
+	RUNTIME_TYPES,
+	GEMINI_FAILURE_PATTERNS,
 	type RuntimeType,
 } from '../../constants.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Internal state tracked per monitored session.
@@ -39,6 +43,8 @@ interface MonitoredSession {
 	buffer: string;
 	startedAt: number;
 	exitDetected: boolean;
+	/** Guard flag to prevent concurrent confirmAndReact invocations */
+	confirmationInFlight: boolean;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	/** Interval handle for periodic process-alive polling */
 	processPollingInterval?: ReturnType<typeof setInterval>;
@@ -55,6 +61,11 @@ interface MonitoredSession {
  * 2. Capturing session memory
  * 3. Broadcasting WebSocket events to the frontend
  * 4. Cancelling pending registration operations
+ *
+ * For Gemini CLI, the service also detects failure patterns (API errors,
+ * quota exhaustion, network issues) that indicate the CLI is stuck and
+ * needs recovery. These failure patterns bypass the shell prompt verification
+ * since the CLI may still be running but non-functional.
  *
  * @example
  * ```typescript
@@ -167,6 +178,7 @@ export class RuntimeExitMonitorService {
 			buffer: '',
 			startedAt: Date.now(),
 			exitDetected: false,
+			confirmationInFlight: false,
 			unsubscribe: () => {},
 		};
 
@@ -294,128 +306,207 @@ export class RuntimeExitMonitorService {
 
 	/**
 	 * Confirm exit by checking for a shell prompt, then react.
+	 *
+	 * For Gemini CLI failure patterns (API errors, quota exhaustion, etc.),
+	 * the shell prompt check is bypassed because the CLI may be stuck in an
+	 * error state without returning to the shell.
 	 */
 	private async confirmAndReact(
 		sessionName: string,
 		helper: SessionCommandHelper
 	): Promise<void> {
 		const monitored = this.sessions.get(sessionName);
-		if (!monitored || monitored.exitDetected) {
+		if (!monitored || monitored.exitDetected || monitored.confirmationInFlight) {
 			return;
 		}
 
-		// Verify shell prompt is visible (avoids false positives)
-		if (!this.verifyExitWithShellPrompt(sessionName, helper)) {
-			this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
-			return;
-		}
+		monitored.confirmationInFlight = true;
 
-		// Mark as detected to prevent double-processing
-		monitored.exitDetected = true;
+		try {
+			// Verify shell prompt is visible (avoids false positives)
+			const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
 
-		this.logger.info('Runtime exit detected and confirmed', {
-			sessionName,
-			runtimeType: monitored.runtimeType,
-			role: monitored.role,
-		});
+			if (!shellPromptConfirmed) {
+				// For Gemini CLI: check if a failure pattern is present in the buffer.
+				// Gemini failure patterns (RESOURCE_EXHAUSTED, Connection error, etc.)
+				// indicate the CLI is stuck/crashed but may not have exited to shell.
+				// In this case, proceed with recovery without requiring a shell prompt.
+				const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
+					&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 
-		// Fire the exit-detected callback (used to cancel pending registrations)
-		if (this.onExitDetectedCallback) {
+				if (!isGeminiFailure) {
+					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
+					return;
+				}
+
+				this.logger.info('Gemini CLI failure pattern detected without shell prompt, proceeding with recovery', {
+					sessionName,
+					runtimeType: monitored.runtimeType,
+					detectedPattern: GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source,
+				});
+			}
+
+			// Mark as detected to prevent double-processing
+			monitored.exitDetected = true;
+
+			this.logger.info('Runtime exit detected and confirmed', {
+				sessionName,
+				runtimeType: monitored.runtimeType,
+				role: monitored.role,
+			});
+
+			// Fire the exit-detected callback (used to cancel pending registrations)
+			if (this.onExitDetectedCallback) {
+				try {
+					this.onExitDetectedCallback(sessionName);
+				} catch (error) {
+					this.logger.warn('onExitDetected callback error', {
+						sessionName,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+
+			// Check for in-progress tasks — restart agent if any exist (non-orchestrator only)
+			if (monitored.role !== ORCHESTRATOR_ROLE && this.agentRegistrationService && this.taskTrackingService) {
+				try {
+					const tasks = await this.taskTrackingService.getTasksForTeamMember(monitored.memberId || '');
+					const activeTasks = tasks.filter(t => t.status === 'assigned' || t.status === 'active');
+
+					if (activeTasks.length > 0) {
+						this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
+							sessionName,
+							activeTaskCount: activeTasks.length,
+						});
+
+						try {
+							await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
+							// Cleanup this subscription (restart succeeded, skip inactive flow)
+							this.stopMonitoring(sessionName);
+							return;
+						} catch (restartError) {
+							this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+								sessionName,
+								error: restartError instanceof Error ? restartError.message : String(restartError),
+							});
+							// Fall through to normal inactive flow
+						}
+					}
+				} catch (error) {
+					this.logger.warn('Failed to check in-progress tasks after runtime exit', {
+						sessionName,
+						error: error instanceof Error ? error.message : String(error),
+					});
+					// Fall through to normal inactive flow
+				}
+			}
+
+			// Orchestrator-specific restart: attempt auto-restart when runtime exits
+			if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+				// Capture session memory before restart
+				try {
+					const sessionMemoryService = SessionMemoryService.getInstance();
+					await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+				} catch (error) {
+					this.logger.warn('Failed to capture session memory before orchestrator restart', {
+						sessionName,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+
+				try {
+					const restartService = OrchestratorRestartService.getInstance();
+					const success = await restartService.attemptRestart();
+
+					if (success) {
+						this.logger.info('Orchestrator restarted after runtime exit', { sessionName });
+
+						// Broadcast restarted status
+						try {
+							const terminalGateway = getTerminalGateway();
+							if (terminalGateway) {
+								terminalGateway.broadcastOrchestratorStatus({
+									sessionName,
+									agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+									reason: 'runtime_exit_restart',
+								});
+							}
+						} catch {
+							// Best-effort broadcast
+						}
+
+						this.stopMonitoring(sessionName);
+						return;
+					}
+
+					this.logger.warn('Orchestrator restart after runtime exit failed or not allowed, falling back to inactive', {
+						sessionName,
+					});
+				} catch (error) {
+					this.logger.warn('Orchestrator restart attempt threw error, falling back to inactive', {
+						sessionName,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+				// Fall through to normal inactive flow
+			}
+
+			// Update agent status to inactive
 			try {
-				this.onExitDetectedCallback(sessionName);
+				const storageService = StorageService.getInstance();
+				await storageService.updateAgentStatus(
+					sessionName,
+					CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+				);
+				this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
 			} catch (error) {
-				this.logger.warn('onExitDetected callback error', {
+				this.logger.warn('Failed to update agent status after runtime exit', {
 					sessionName,
 					error: error instanceof Error ? error.message : String(error),
 				});
 			}
-		}
 
-		// Check for in-progress tasks — restart agent if any exist (non-orchestrator only)
-		if (monitored.role !== ORCHESTRATOR_ROLE && this.agentRegistrationService && this.taskTrackingService) {
-			try {
-				const tasks = await this.taskTrackingService.getTasksForTeamMember(monitored.memberId || '');
-				const activeTasks = tasks.filter(t => t.status === 'assigned' || t.status === 'active');
-
-				if (activeTasks.length > 0) {
-					this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
+			// Capture session memory (skip for orchestrator — already captured above)
+			if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
+				try {
+					const sessionMemoryService = SessionMemoryService.getInstance();
+					await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+				} catch (error) {
+					this.logger.warn('Failed to capture session memory after runtime exit', {
 						sessionName,
-						activeTaskCount: activeTasks.length,
+						error: error instanceof Error ? error.message : String(error),
 					});
+				}
+			}
 
-					try {
-						await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
-						// Cleanup this subscription (restart succeeded, skip inactive flow)
-						this.stopMonitoring(sessionName);
-						return;
-					} catch (restartError) {
-						this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
-							sessionName,
-							error: restartError instanceof Error ? restartError.message : String(restartError),
-						});
-						// Fall through to normal inactive flow
+			// Broadcast WebSocket event
+			try {
+				const terminalGateway = getTerminalGateway();
+				if (terminalGateway) {
+					const statusPayload = {
+						sessionName,
+						agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+						reason: 'runtime_exited',
+					};
+
+					if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+						terminalGateway.broadcastOrchestratorStatus(statusPayload);
+					} else {
+						terminalGateway.broadcastTeamMemberStatus(statusPayload);
 					}
 				}
 			} catch (error) {
-				this.logger.warn('Failed to check in-progress tasks after runtime exit', {
+				this.logger.warn('Failed to broadcast runtime exit event', {
 					sessionName,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				// Fall through to normal inactive flow
 			}
+
+			// Cleanup this subscription
+			this.stopMonitoring(sessionName);
+		} finally {
+			monitored.confirmationInFlight = false;
 		}
-
-		// Update agent status to inactive
-		try {
-			const storageService = StorageService.getInstance();
-			await storageService.updateAgentStatus(
-				sessionName,
-				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
-			);
-			this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
-		} catch (error) {
-			this.logger.warn('Failed to update agent status after runtime exit', {
-				sessionName,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-
-		// Capture session memory
-		try {
-			const sessionMemoryService = SessionMemoryService.getInstance();
-			await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
-		} catch (error) {
-			this.logger.warn('Failed to capture session memory after runtime exit', {
-				sessionName,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-
-		// Broadcast WebSocket event
-		try {
-			const terminalGateway = getTerminalGateway();
-			if (terminalGateway) {
-				const statusPayload = {
-					sessionName,
-					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
-					reason: 'runtime_exited',
-				};
-
-				if (sessionName === ORCHESTRATOR_SESSION_NAME) {
-					terminalGateway.broadcastOrchestratorStatus(statusPayload);
-				} else {
-					terminalGateway.broadcastTeamMemberStatus(statusPayload);
-				}
-			}
-		} catch (error) {
-			this.logger.warn('Failed to broadcast runtime exit event', {
-				sessionName,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-
-		// Cleanup this subscription
-		this.stopMonitoring(sessionName);
 	}
 
 	/**
@@ -525,7 +616,7 @@ export class RuntimeExitMonitorService {
 		activeTasks: InProgressTask[]
 	): Promise<void> {
 		// Wait for agent initialization
-		await new Promise(resolve => setTimeout(resolve, AGENT_SUSPEND_CONSTANTS.REHYDRATION_TIMEOUT_MS));
+		await delay(AGENT_SUSPEND_CONSTANTS.REHYDRATION_TIMEOUT_MS);
 
 		const backend = getSessionBackendSync();
 		if (!backend || !backend.sessionExists(sessionName)) {
@@ -573,11 +664,11 @@ export class RuntimeExitMonitorService {
 				SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
 				5000
 			);
-			await new Promise(resolve => setTimeout(resolve, pasteDelay));
+			await delay(pasteDelay);
 			session.write('\r');
 
 			// Delay between tasks to avoid flooding
-			await new Promise(resolve => setTimeout(resolve, 2000));
+			await delay(2000);
 		}
 
 		this.logger.info('Task re-delivery complete', {
@@ -634,7 +725,12 @@ export class RuntimeExitMonitorService {
 		});
 
 		// Trigger the same exit flow as pattern-based detection
-		this.confirmAndReact(sessionName, helper);
+		this.confirmAndReact(sessionName, helper).catch((error) => {
+			this.logger.warn('confirmAndReact error from process check', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
 	}
 
 	/**
