@@ -305,6 +305,9 @@ export class OrchestratorHeartbeatMonitorService {
 				heartbeatRequestCount: this.heartbeatRequestCount,
 			});
 		} catch (err) {
+			// Reset heartbeat state so a failed delivery doesn't trigger a false restart
+			this.heartbeatRequestSentAt = null;
+			this.heartbeatRequestCount = Math.max(0, this.heartbeatRequestCount - 1);
 			this.logger.error('Failed to send heartbeat request to orchestrator', {
 				error: err instanceof Error ? err.message : String(err),
 			});

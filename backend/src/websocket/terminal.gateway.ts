@@ -597,13 +597,11 @@ export class TerminalGateway {
 			return;
 		}
 
-		NOTIFY_CONSTANTS.MARKER_PATTERN.lastIndex = 0;
-		let match: RegExpExecArray | null;
 		let lastMatchEnd = 0;
 
-		while ((match = NOTIFY_CONSTANTS.MARKER_PATTERN.exec(this.orchestratorOutputBuffer)) !== null) {
+		for (const match of this.orchestratorOutputBuffer.matchAll(NOTIFY_CONSTANTS.MARKER_PATTERN)) {
 			const rawContent = match[1].trim();
-			lastMatchEnd = match.index + match[0].length;
+			lastMatchEnd = match.index! + match[0].length;
 
 			const payload = parseNotifyContent(rawContent);
 			if (!payload) {

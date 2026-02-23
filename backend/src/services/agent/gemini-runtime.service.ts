@@ -182,7 +182,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		}
 
 		const envPath = path.join(projectPath, '.env');
-		const envLine = `GOOGLE_GENAI_API_KEY=${apiKey}`;
+		const envLine = `GOOGLE_GENAI_API_KEY="${apiKey}"`;
 
 		try {
 			// Check if .env already contains the key

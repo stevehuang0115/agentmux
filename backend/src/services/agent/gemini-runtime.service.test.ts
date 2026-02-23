@@ -599,7 +599,7 @@ describe('GeminiRuntimeService', () => {
 			// Should append to existing .env (content ends with newline, so no extra separator)
 			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 			// Should not create a new file
 			expect(mockWriteFile).not.toHaveBeenCalledWith(
@@ -619,7 +619,7 @@ describe('GeminiRuntimeService', () => {
 			// Should prepend a newline separator before the key
 			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
-				'\nGOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'\nGOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 		});
 
@@ -631,7 +631,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env with writeFile
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 			// Should not attempt to append to .env
 			expect(mockAppendFile).not.toHaveBeenCalledWith(
@@ -652,7 +652,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 
 			// Should append .env entry to .gitignore
@@ -686,7 +686,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 
 			// Should NOT append to .gitignore since .env is already there
@@ -723,7 +723,7 @@ describe('GeminiRuntimeService', () => {
 			// Should still have created the .env file
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY=test-api-key-123\n'
+				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
 			);
 		});
 	});

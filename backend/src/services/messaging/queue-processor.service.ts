@@ -488,8 +488,10 @@ export class QueueProcessorService extends EventEmitter {
       // Progress timer: emit "still working" updates during long operations.
       // First fires at 90s, then every 60s thereafter.
       let progressIntervalId: ReturnType<typeof setInterval> | undefined;
+      let cleaned = false;
 
       const startProgressInterval = (): void => {
+        if (cleaned) return;
         progressIntervalId = setInterval(() => {
           const tracker = PtyActivityTrackerService.getInstance();
           const idleMs = tracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
@@ -503,6 +505,7 @@ export class QueueProcessorService extends EventEmitter {
       const progressStartId = setTimeout(startProgressInterval, MESSAGE_QUEUE_CONSTANTS.PROGRESS_INITIAL_MS);
 
       const cleanup = (): void => {
+        cleaned = true;
         clearTimeout(timeoutId);
         clearTimeout(ackTimeoutId);
         clearTimeout(progressStartId);

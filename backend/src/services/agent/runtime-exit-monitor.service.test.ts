@@ -507,8 +507,7 @@ describe('RuntimeExitMonitorService', () => {
 			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.PROCESS_POLL_INTERVAL_MS);
 
 			// Flush async confirmAndReact
-			await Promise.resolve();
-			await Promise.resolve();
+			await jest.runAllTimersAsync();
 
 			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
 				'test-agent',

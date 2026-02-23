@@ -1347,7 +1347,8 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
 
       // Deliver sequentially in the background
       (async () => {
-        for (const queuedMsg of queuedMessages) {
+        for (let i = 0; i < queuedMessages.length; i++) {
+          const queuedMsg = queuedMessages[i];
           try {
             await this.agentRegistrationService.sendMessageToAgent(sessionName, queuedMsg.data, runtimeType);
             logger.info('Delivered queued message', { sessionName, queuedAt: new Date(queuedMsg.queuedAt).toISOString() });
@@ -1355,7 +1356,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
             logger.error('Failed to deliver queued message', { sessionName, error: flushError instanceof Error ? flushError.message : String(flushError) });
           }
           // Delay between messages to let the agent process each one
-          if (queuedMessages.indexOf(queuedMsg) < queuedMessages.length - 1) {
+          if (i < queuedMessages.length - 1) {
             await new Promise(resolve => setTimeout(resolve, SUB_AGENT_QUEUE_CONSTANTS.FLUSH_INTER_MESSAGE_DELAY));
           }
         }

@@ -43,6 +43,8 @@ interface MonitoredSession {
 	buffer: string;
 	startedAt: number;
 	exitDetected: boolean;
+	/** Guard flag to prevent concurrent confirmAndReact invocations */
+	confirmationInFlight: boolean;
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	/** Interval handle for periodic process-alive polling */
 	processPollingInterval?: ReturnType<typeof setInterval>;
@@ -176,6 +178,7 @@ export class RuntimeExitMonitorService {
 			buffer: '',
 			startedAt: Date.now(),
 			exitDetected: false,
+			confirmationInFlight: false,
 			unsubscribe: () => {},
 		};
 
@@ -313,10 +316,13 @@ export class RuntimeExitMonitorService {
 		helper: SessionCommandHelper
 	): Promise<void> {
 		const monitored = this.sessions.get(sessionName);
-		if (!monitored || monitored.exitDetected) {
+		if (!monitored || monitored.exitDetected || monitored.confirmationInFlight) {
 			return;
 		}
 
+		monitored.confirmationInFlight = true;
+
+		try {
 		// Verify shell prompt is visible (avoids false positives)
 		const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
 
@@ -498,6 +504,9 @@ export class RuntimeExitMonitorService {
 
 		// Cleanup this subscription
 		this.stopMonitoring(sessionName);
+		} finally {
+			monitored.confirmationInFlight = false;
+		}
 	}
 
 	/**
