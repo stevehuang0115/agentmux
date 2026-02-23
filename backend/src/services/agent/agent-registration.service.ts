@@ -2497,6 +2497,30 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					await delay(500);
 				}
 
+				// For Gemini CLI: detect and clear interactive modes before sending message.
+				// The Gemini CLI can enter interactive states (file picker from /resume,
+				// command palette, error prompts) where pasted text is consumed by the
+				// interactive UI rather than the main input. Send Ctrl-C to clear these
+				// states before writing the actual message.
+				if (!isClaudeCode) {
+					const preOutput = sessionHelper.capturePane(sessionName, 10);
+					const interactiveModePatterns = [
+						'Select a file',       // /resume file picker
+						'❯',                   // Interactive list selector
+						'Choose an option',    // Generic interactive prompt
+						'/resume',             // Resume command active
+					];
+					const inInteractiveMode = interactiveModePatterns.some(p => preOutput.includes(p));
+					if (inInteractiveMode) {
+						this.logger.warn('Gemini CLI in interactive mode, sending Ctrl-C to clear', {
+							sessionName,
+							detectedPattern: interactiveModePatterns.find(p => preOutput.includes(p)),
+						});
+						await sessionHelper.sendKey(sessionName, 'C-c');
+						await new Promise(r => setTimeout(r, 1500));
+					}
+				}
+
 				// Capture output BEFORE sending to detect changes for ALL runtimes.
 				// Claude Code: progressive output-change detection prevents false-positive
 				// Ctrl+C by giving Claude up to 6.5s to start rendering output.

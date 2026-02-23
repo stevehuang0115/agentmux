@@ -1150,6 +1150,77 @@ describe('ChatService', () => {
   });
 
   // ===========================================================================
+  // emitProgress Tests
+  // ===========================================================================
+
+  describe('emitProgress', () => {
+    it('should emit a progress message to the correct conversation', async () => {
+      const conv = await service.createNewConversation('Progress Test');
+      const eventSpy = jest.fn();
+      service.on('chat_message', eventSpy);
+
+      service.emitProgress(conv.id, 'Processing... (still working)');
+
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      const event = eventSpy.mock.calls[0][0];
+      expect(event.type).toBe('chat_message');
+      expect(event.data.conversationId).toBe(conv.id);
+      expect(event.data.content).toBe('Processing... (still working)');
+    });
+
+    it('should not persist the progress message to disk', async () => {
+      const conv = await service.createNewConversation('No Persist Test');
+
+      // Add a real persisted message first so we have a baseline count
+      await service.sendMessage({ content: 'Real message', conversationId: conv.id });
+      const messagesBefore = await service.getMessages({ conversationId: conv.id });
+      expect(messagesBefore.length).toBe(1);
+
+      // Emit a progress message (transient, should not be persisted)
+      service.emitProgress(conv.id, 'Thinking...');
+
+      // Message count should remain unchanged
+      const messagesAfter = await service.getMessages({ conversationId: conv.id });
+      expect(messagesAfter.length).toBe(1);
+
+      // Conversation messageCount should also remain unchanged
+      const updatedConv = await service.getConversation(conv.id);
+      expect(updatedConv?.messageCount).toBe(1);
+    });
+
+    it('should do nothing harmful if conversation does not exist', () => {
+      const eventSpy = jest.fn();
+      service.on('chat_message', eventSpy);
+
+      // emitProgress does not validate conversation existence; it simply
+      // creates a transient message and emits it. This should not throw.
+      expect(() => {
+        service.emitProgress('non-existent-conv-id', 'Progress update');
+      }).not.toThrow();
+
+      // The event is still emitted with the provided conversationId
+      expect(eventSpy).toHaveBeenCalledTimes(1);
+      expect(eventSpy.mock.calls[0][0].data.conversationId).toBe('non-existent-conv-id');
+    });
+
+    it('should include contentType status in the emitted message', async () => {
+      const conv = await service.createNewConversation('Status Type Test');
+      const eventSpy = jest.fn();
+      service.on('chat_message', eventSpy);
+
+      service.emitProgress(conv.id, 'Delegating task to agent...');
+
+      const emittedMessage = eventSpy.mock.calls[0][0].data;
+      expect(emittedMessage.contentType).toBe('status');
+      expect(emittedMessage.from.type).toBe('system');
+      expect(emittedMessage.from.name).toBe('System');
+      expect(emittedMessage.status).toBe('delivered');
+      expect(emittedMessage.id).toBeDefined();
+      expect(emittedMessage.timestamp).toBeDefined();
+    });
+  });
+
+  // ===========================================================================
   // getStatistics Tests
   // ===========================================================================
 

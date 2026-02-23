@@ -485,9 +485,30 @@ export class QueueProcessorService extends EventEmitter {
         }
       }, MESSAGE_QUEUE_CONSTANTS.ACK_TIMEOUT);
 
+      // Progress timer: emit "still working" updates during long operations.
+      // First fires at 90s, then every 60s thereafter.
+      const PROGRESS_INITIAL_MS = 90_000;
+      const PROGRESS_INTERVAL_MS = 60_000;
+      let progressIntervalId: ReturnType<typeof setInterval> | undefined;
+
+      const startProgressInterval = (): void => {
+        progressIntervalId = setInterval(() => {
+          const tracker = PtyActivityTrackerService.getInstance();
+          const idleMs = tracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
+          // Only emit progress if the orchestrator is still producing output
+          if (idleMs < PROGRESS_INTERVAL_MS) {
+            chatService.emitProgress(conversationId, 'Processing... (still working)');
+          }
+        }, PROGRESS_INTERVAL_MS);
+      };
+
+      const progressStartId = setTimeout(startProgressInterval, PROGRESS_INITIAL_MS);
+
       const cleanup = (): void => {
         clearTimeout(timeoutId);
         clearTimeout(ackTimeoutId);
+        clearTimeout(progressStartId);
+        if (progressIntervalId) clearInterval(progressIntervalId);
         chatService.removeListener('message', onMessage);
       };
 

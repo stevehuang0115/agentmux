@@ -1246,9 +1246,13 @@ describe('parseNotifyContent', () => {
       expect(parseNotifyContent('   ')).toBeNull();
     });
 
-    it('should return null for empty body after separator', () => {
+    it('should treat entire content as body when headers present but body is empty', () => {
       const raw = 'conversationId: conv-1\n---\n';
-      expect(parseNotifyContent(raw)).toBeNull();
+      const payload = parseNotifyContent(raw);
+      // With resilient header parsing, headers-but-no-body falls back to
+      // treating the entire cleaned content as the message body.
+      expect(payload).not.toBeNull();
+      expect(payload!.message).toBe('conversationId: conv-1\n---');
     });
 
     it('should ignore unknown header keys', () => {

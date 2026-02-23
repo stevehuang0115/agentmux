@@ -1,8 +1,26 @@
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { CREWLY_CONSTANTS, RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+
+/**
+ * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
+ * These patterns are distinct from exit patterns (which indicate the CLI has shut down
+ * cleanly). Failure patterns match error states where the CLI may still be running
+ * but is non-functional and requires a restart.
+ *
+ * Exported for use by RuntimeExitMonitorService to bypass shell prompt verification
+ * when these patterns are detected (the CLI may be stuck rather than exited to shell).
+ */
+export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
+	/Request cancelled/,
+	/^Error: /m,
+	/RESOURCE_EXHAUSTED/,
+	/UNAVAILABLE/,
+	/Connection error/,
+];
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -66,12 +84,22 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
-	 * Gemini CLI specific exit patterns for runtime exit detection
+	 * Gemini CLI specific exit patterns for runtime exit detection.
+	 *
+	 * Includes both clean exit patterns (e.g. "Agent powering down") and
+	 * failure patterns that indicate the CLI is stuck or crashed and needs
+	 * recovery (e.g. API quota exhaustion, network errors).
+	 *
+	 * @returns Array of RegExp patterns that match runtime exit or failure output
 	 */
 	protected getRuntimeExitPatterns(): RegExp[] {
 		return [
+			// Clean exit patterns
 			/Agent powering down/i,
 			/Interaction Summary/,
+			// Gemini CLI failure/stuck patterns — CLI may crash or become
+			// unresponsive when these errors occur, requiring a restart
+			...GEMINI_FAILURE_PATTERNS,
 		];
 	}
 
@@ -114,6 +142,9 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// that doesn't depend on the CLI being ready for interactive commands.
 		await this.ensureGeminiMcpConfig(effectiveProjectPath);
 
+		// Ensure GOOGLE_GENAI_API_KEY is in the project .env file
+		await this.ensureGeminiEnvFile(effectiveProjectPath);
+
 		// Wait for Gemini CLI's async auto-update check to complete before
 		// sending commands. The auto-update notification (e.g., "Automatic
 		// update failed") appears shortly after startup and can interfere
@@ -149,6 +180,70 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	async ensureGeminiMcpConfig(projectPath: string): Promise<void> {
 		const settingsPath = path.join(projectPath, '.gemini', 'settings.json');
 		await this.ensureMcpConfig(settingsPath, projectPath);
+	}
+
+	/**
+	 * Ensure the project root `.env` file contains GOOGLE_GENAI_API_KEY.
+	 * Gemini CLI reads this key from `.env` in the working directory.
+	 * If the key exists in the process environment but not in `.env`, append it.
+	 * Also ensures `.gitignore` includes `.env` to prevent accidental commits.
+	 *
+	 * @param projectPath - Project directory where `.env` will be created/updated
+	 */
+	private async ensureGeminiEnvFile(projectPath: string): Promise<void> {
+		const apiKey = process.env.GOOGLE_GENAI_API_KEY;
+		if (!apiKey) {
+			this.logger.debug('GOOGLE_GENAI_API_KEY not found in process environment, skipping .env setup');
+			return;
+		}
+
+		const envPath = path.join(projectPath, '.env');
+		const envLine = `GOOGLE_GENAI_API_KEY=${apiKey}`;
+
+		try {
+			// Check if .env already contains the key
+			if (fs.existsSync(envPath)) {
+				const content = fs.readFileSync(envPath, 'utf8');
+				if (content.includes('GOOGLE_GENAI_API_KEY=')) {
+					this.logger.debug('GOOGLE_GENAI_API_KEY already present in .env', { projectPath });
+					return;
+				}
+				// Append to existing .env
+				const separator = content.endsWith('\n') ? '' : '\n';
+				fs.appendFileSync(envPath, `${separator}${envLine}\n`);
+			} else {
+				// Create new .env
+				fs.writeFileSync(envPath, `${envLine}\n`);
+			}
+			this.logger.info('Added GOOGLE_GENAI_API_KEY to .env', { projectPath });
+		} catch (error) {
+			this.logger.warn('Failed to write GOOGLE_GENAI_API_KEY to .env (non-fatal)', {
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+
+		// Ensure .gitignore includes .env
+		try {
+			const gitignorePath = path.join(projectPath, '.gitignore');
+			if (fs.existsSync(gitignorePath)) {
+				const content = fs.readFileSync(gitignorePath, 'utf8');
+				if (!content.split('\n').some(line => line.trim() === '.env')) {
+					const separator = content.endsWith('\n') ? '' : '\n';
+					fs.appendFileSync(gitignorePath, `${separator}.env\n`);
+					this.logger.info('Added .env to .gitignore', { projectPath });
+				}
+			} else {
+				fs.writeFileSync(gitignorePath, '.env\n');
+				this.logger.info('Created .gitignore with .env entry', { projectPath });
+			}
+		} catch (error) {
+			this.logger.warn('Failed to update .gitignore (non-fatal)', {
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/**

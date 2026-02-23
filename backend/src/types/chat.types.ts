@@ -408,10 +408,10 @@ export type NotifyUrgency = (typeof NOTIFY_URGENCY_LEVELS)[number];
  *
  * The orchestrator outputs header+body content inside [NOTIFY] markers to route
  * messages to chat, Slack, or both depending on which header fields are present:
- * - `conversationId` present → route to chat UI
- * - `channelId` present → route to Slack
- * - Both → both (common case)
- * - Neither + activeConversationId exists → fallback to chat
+ * - `conversationId` present -> route to chat UI
+ * - `channelId` present -> route to Slack
+ * - Both -> both (common case)
+ * - Neither + activeConversationId exists -> fallback to chat
  *
  * Format:
  * ```
@@ -425,7 +425,7 @@ export type NotifyUrgency = (typeof NOTIFY_URGENCY_LEVELS)[number];
  * ```
  */
 export interface NotifyPayload {
-  /** Required — markdown content for the notification */
+  /** Required -- markdown content for the notification */
   message: string;
 
   /** Route to chat UI conversation (copied from incoming [CHAT:convId]) */
@@ -629,8 +629,28 @@ export function parseNotifyContent(raw: string): NotifyPayload | null {
     }
   }
 
+  // Validate that at least one header line contains a recognized key.
+  // Gemini CLI TUI artifacts can corrupt headers after stripping, leaving
+  // garbage in the header section. If no valid headers are found, treat the
+  // entire cleaned content as the message body (fallback).
+  if (headerSection) {
+    const hasValidHeader = headerSection.split('\n').some((line) => {
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) return false;
+      const key = line.slice(0, colonIdx).trim();
+      return KNOWN_HEADER_KEYS.has(key);
+    });
+    if (!hasValidHeader) {
+      // Headers are garbage — treat everything as body
+      const msg = cleaned.trim();
+      return msg ? { message: msg } : null;
+    }
+  }
+
   if (!body) {
-    return null;
+    // If we have headers but no body, treat entire content as body
+    const msg = cleaned.trim();
+    return msg ? { message: msg } : null;
   }
 
   const payload: NotifyPayload = { message: body };

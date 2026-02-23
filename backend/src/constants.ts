@@ -492,7 +492,7 @@ export const CONTEXT_WINDOW_MONITOR_CONSTANTS = {
 	/** Threshold for considering a context state stale (5 minutes) */
 	STALE_DETECTION_THRESHOLD_MS: 5 * 60 * 1000,
 	/** Time to wait after sending compact command before checking result (ms) */
-	COMPACT_WAIT_MS: 30_000,
+	COMPACT_WAIT_MS: 120_000,
 	/** Maximum compact attempts per threshold episode before giving up */
 	MAX_COMPACT_ATTEMPTS: 3,
 	/** Cooldown between compact retries during periodic checks (ms) */

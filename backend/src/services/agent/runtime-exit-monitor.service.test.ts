@@ -1,5 +1,7 @@
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
-import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
+import { GEMINI_FAILURE_PATTERNS } from './gemini-runtime.service.js';
+import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
+import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -98,6 +100,16 @@ jest.mock('fs/promises', () => ({
 	readFile: jest.fn().mockResolvedValue('Task content here'),
 }));
 
+const mockAttemptRestart = jest.fn().mockResolvedValue(true);
+jest.mock('../orchestrator/orchestrator-restart.service.js', () => ({
+	OrchestratorRestartService: {
+		getInstance: () => ({
+			attemptRestart: mockAttemptRestart,
+		}),
+		resetInstance: jest.fn(),
+	},
+}));
+
 const mockGetExitPatterns = jest.fn().mockReturnValue([
 	/Agent powering down/i,
 	/Interaction Summary/,
@@ -121,6 +133,8 @@ describe('RuntimeExitMonitorService', () => {
 
 		// Default: onData returns an unsubscribe function
 		mockOnData.mockReturnValue(jest.fn());
+		// Default: orchestrator restart succeeds (overridden in specific tests)
+		mockAttemptRestart.mockResolvedValue(true);
 	});
 
 	afterEach(() => {
@@ -364,11 +378,11 @@ describe('RuntimeExitMonitorService', () => {
 			jest.useRealTimers();
 		});
 
-		it('should broadcast orchestrator status for orchestrator session', async () => {
+		it('should broadcast orchestrator restarted status when restart succeeds', async () => {
 			jest.useFakeTimers();
+			mockAttemptRestart.mockResolvedValue(true);
 
-			// ORCHESTRATOR_SESSION_NAME is 'crewly-orc'
-			service.startMonitoring('crewly-orc', RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
 			const onDataCallback = mockOnData.mock.calls[0][0];
 
 			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
@@ -378,7 +392,30 @@ describe('RuntimeExitMonitorService', () => {
 
 			expect(mockBroadcastOrchestratorStatus).toHaveBeenCalledWith(
 				expect.objectContaining({
-					sessionName: 'crewly-orc',
+					sessionName: ORCHESTRATOR_SESSION_NAME,
+					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+					reason: 'runtime_exit_restart',
+				})
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should broadcast orchestrator inactive status when restart fails', async () => {
+			jest.useFakeTimers();
+			mockAttemptRestart.mockResolvedValue(false);
+
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			expect(mockBroadcastOrchestratorStatus).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sessionName: ORCHESTRATOR_SESSION_NAME,
 					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
 					reason: 'runtime_exited',
 				})
@@ -605,14 +642,11 @@ describe('RuntimeExitMonitorService', () => {
 			jest.useRealTimers();
 		});
 
-		it('should always set orchestrator to inactive even with tasks', async () => {
+		it('should restart orchestrator on exit via OrchestratorRestartService', async () => {
 			jest.useFakeTimers();
+			mockAttemptRestart.mockResolvedValue(true);
 
-			mockGetTasksForTeamMember.mockResolvedValue([
-				{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'assigned', assignedTeamMemberId: 'orc-1' },
-			]);
-
-			service.startMonitoring('crewly-orc', RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator', undefined, 'orc-1');
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
 			const onDataCallback = mockOnData.mock.calls[0][0];
 
 			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
@@ -620,10 +654,35 @@ describe('RuntimeExitMonitorService', () => {
 			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
 			await jest.runAllTimersAsync();
 
-			// Should NOT restart orchestrator, should set inactive
+			// Should have attempted orchestrator restart
+			expect(mockAttemptRestart).toHaveBeenCalled();
+			// Should NOT have set inactive (restart succeeded)
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+			// Should have captured session memory before restart
+			expect(mockOnSessionEnd).toHaveBeenCalledWith(ORCHESTRATOR_SESSION_NAME, 'orchestrator', expect.any(String));
+			// Should NOT use agent restart path
 			expect(mockCreateAgentSession).not.toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should fall back to inactive when orchestrator restart fails', async () => {
+			jest.useFakeTimers();
+			mockAttemptRestart.mockResolvedValue(false);
+
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Should have attempted restart
+			expect(mockAttemptRestart).toHaveBeenCalled();
+			// Restart failed, so should set inactive
 			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
-				'crewly-orc',
+				ORCHESTRATOR_SESSION_NAME,
 				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 
@@ -657,4 +716,106 @@ describe('RuntimeExitMonitorService', () => {
 			jest.useRealTimers();
 		});
 	});
+
+	describe('Gemini failure pattern detection', () => {
+		beforeEach(() => {
+			// Include Gemini failure patterns in the mocked exit patterns
+			mockGetExitPatterns.mockReturnValue([
+				/Agent powering down/i,
+				/Interaction Summary/,
+				...GEMINI_FAILURE_PATTERNS,
+			]);
+		});
+
+		it('should detect Gemini failure pattern even without shell prompt', async () => {
+			jest.useFakeTimers();
+
+			// Shell prompt NOT visible (Gemini CLI is stuck, not exited)
+			mockCapturePane.mockReturnValue('RESOURCE_EXHAUSTED: quota exceeded');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('RESOURCE_EXHAUSTED: quota exceeded');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			// Should still detect exit and update status (failure pattern bypasses shell prompt)
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'gemini-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should detect Connection error pattern for Gemini CLI', async () => {
+			jest.useFakeTimers();
+
+			mockCapturePane.mockReturnValue('Connection error: network timeout');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Connection error: network timeout');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'gemini-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should NOT bypass shell prompt check for non-Gemini runtimes', async () => {
+			jest.useFakeTimers();
+
+			// Non-Gemini runtime with a failure pattern that happens to match
+			// but no shell prompt — should NOT trigger exit
+			mockCapturePane.mockReturnValue('RESOURCE_EXHAUSTED: some output');
+
+			service.startMonitoring('claude-agent', RUNTIME_TYPES.CLAUDE_CODE, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('RESOURCE_EXHAUSTED: some output');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+
+			// Flush pending microtasks without running infinite timer loop
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Should NOT update status (non-Gemini runtime, no shell prompt)
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('claude-agent');
+			jest.useRealTimers();
+		});
+
+		it('should detect Request cancelled pattern for Gemini CLI', async () => {
+			jest.useFakeTimers();
+
+			mockCapturePane.mockReturnValue('Request cancelled by user');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Request cancelled by user');
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await jest.runAllTimersAsync();
+
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'gemini-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+	});
+
 });

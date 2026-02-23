@@ -58,6 +58,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 		sessionExists: jest.Mock;
 		getSession: jest.Mock;
 		killSession: jest.Mock;
+		isChildProcessAlive: jest.Mock;
 	};
 	let mockSession: {
 		write: jest.Mock;
@@ -82,6 +83,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			sessionExists: jest.fn().mockReturnValue(true),
 			getSession: jest.fn().mockReturnValue(mockSession),
 			killSession: jest.fn().mockResolvedValue(undefined),
+			isChildProcessAlive: jest.fn().mockReturnValue(true),
 		};
 
 		service.setDependencies(mockSessionBackend as any);
@@ -321,6 +323,54 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 
 			// Should not throw
 			await expect(service.performCheck()).resolves.toBeUndefined();
+
+			restartSpy.mockRestore();
+		});
+
+		it('should trigger immediate restart when child process is dead', async () => {
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+
+			// Advance past startup grace period
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			// Child process is dead
+			mockSessionBackend.isChildProcessAlive.mockReturnValue(false);
+
+			await service.performCheck();
+
+			// Should trigger restart immediately without sending heartbeat
+			expect(restartSpy).toHaveBeenCalled();
+			expect(mockSession.write).not.toHaveBeenCalled();
+			expect(service.getState().autoRestartCount).toBe(1);
+
+			restartSpy.mockRestore();
+		});
+
+		it('should not trigger immediate restart when child process is alive', async () => {
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+
+			// Advance past startup grace period
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			// Child process is alive
+			mockSessionBackend.isChildProcessAlive.mockReturnValue(true);
+
+			// Also make orchestrator idle so we can verify it proceeds to heartbeat logic
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS + 1);
+			await performCheckAndFlush(service);
+
+			// Should NOT have triggered immediate restart
+			expect(restartSpy).not.toHaveBeenCalled();
+			// Should have proceeded to send heartbeat request instead
+			expect(mockSession.write).toHaveBeenCalled();
 
 			restartSpy.mockRestore();
 		});

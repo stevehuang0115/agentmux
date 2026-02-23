@@ -14,6 +14,8 @@ import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { SHELL_PROMPT_PATTERNS } from '../continuation/patterns/idle-patterns.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
+import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
+import { GEMINI_FAILURE_PATTERNS } from './gemini-runtime.service.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { InProgressTask } from '../../types/task-tracking.types.js';
 import {
@@ -23,6 +25,7 @@ import {
 	RUNTIME_EXIT_CONSTANTS,
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
+	RUNTIME_TYPES,
 	type RuntimeType,
 } from '../../constants.js';
 
@@ -55,6 +58,11 @@ interface MonitoredSession {
  * 2. Capturing session memory
  * 3. Broadcasting WebSocket events to the frontend
  * 4. Cancelling pending registration operations
+ *
+ * For Gemini CLI, the service also detects failure patterns (API errors,
+ * quota exhaustion, network issues) that indicate the CLI is stuck and
+ * needs recovery. These failure patterns bypass the shell prompt verification
+ * since the CLI may still be running but non-functional.
  *
  * @example
  * ```typescript
@@ -294,6 +302,10 @@ export class RuntimeExitMonitorService {
 
 	/**
 	 * Confirm exit by checking for a shell prompt, then react.
+	 *
+	 * For Gemini CLI failure patterns (API errors, quota exhaustion, etc.),
+	 * the shell prompt check is bypassed because the CLI may be stuck in an
+	 * error state without returning to the shell.
 	 */
 	private async confirmAndReact(
 		sessionName: string,
@@ -305,9 +317,26 @@ export class RuntimeExitMonitorService {
 		}
 
 		// Verify shell prompt is visible (avoids false positives)
-		if (!this.verifyExitWithShellPrompt(sessionName, helper)) {
-			this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
-			return;
+		const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
+
+		if (!shellPromptConfirmed) {
+			// For Gemini CLI: check if a failure pattern is present in the buffer.
+			// Gemini failure patterns (RESOURCE_EXHAUSTED, Connection error, etc.)
+			// indicate the CLI is stuck/crashed but may not have exited to shell.
+			// In this case, proceed with recovery without requiring a shell prompt.
+			const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
+				&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+
+			if (!isGeminiFailure) {
+				this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
+				return;
+			}
+
+			this.logger.info('Gemini CLI failure pattern detected without shell prompt, proceeding with recovery', {
+				sessionName,
+				runtimeType: monitored.runtimeType,
+				detectedPattern: GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source,
+			});
 		}
 
 		// Mark as detected to prevent double-processing
@@ -365,6 +394,56 @@ export class RuntimeExitMonitorService {
 			}
 		}
 
+		// Orchestrator-specific restart: attempt auto-restart when runtime exits
+		if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+			// Capture session memory before restart
+			try {
+				const sessionMemoryService = SessionMemoryService.getInstance();
+				await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+			} catch (error) {
+				this.logger.warn('Failed to capture session memory before orchestrator restart', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			try {
+				const restartService = OrchestratorRestartService.getInstance();
+				const success = await restartService.attemptRestart();
+
+				if (success) {
+					this.logger.info('Orchestrator restarted after runtime exit', { sessionName });
+
+					// Broadcast restarted status
+					try {
+						const terminalGateway = getTerminalGateway();
+						if (terminalGateway) {
+							terminalGateway.broadcastOrchestratorStatus({
+								sessionName,
+								agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+								reason: 'runtime_exit_restart',
+							});
+						}
+					} catch {
+						// Best-effort broadcast
+					}
+
+					this.stopMonitoring(sessionName);
+					return;
+				}
+
+				this.logger.warn('Orchestrator restart after runtime exit failed or not allowed, falling back to inactive', {
+					sessionName,
+				});
+			} catch (error) {
+				this.logger.warn('Orchestrator restart attempt threw error, falling back to inactive', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+			// Fall through to normal inactive flow
+		}
+
 		// Update agent status to inactive
 		try {
 			const storageService = StorageService.getInstance();
@@ -380,15 +459,17 @@ export class RuntimeExitMonitorService {
 			});
 		}
 
-		// Capture session memory
-		try {
-			const sessionMemoryService = SessionMemoryService.getInstance();
-			await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
-		} catch (error) {
-			this.logger.warn('Failed to capture session memory after runtime exit', {
-				sessionName,
-				error: error instanceof Error ? error.message : String(error),
-			});
+		// Capture session memory (skip for orchestrator — already captured above)
+		if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
+			try {
+				const sessionMemoryService = SessionMemoryService.getInstance();
+				await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+			} catch (error) {
+				this.logger.warn('Failed to capture session memory after runtime exit', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		}
 
 		// Broadcast WebSocket event

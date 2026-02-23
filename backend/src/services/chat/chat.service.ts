@@ -717,6 +717,29 @@ export class ChatService extends EventEmitter {
   }
 
   /**
+   * Emit a transient progress update to the frontend for a conversation.
+   *
+   * Unlike addSystemMessage, this does NOT persist the message to disk.
+   * It creates a temporary system chat message and emits it via the
+   * 'chat_message' WebSocket event so the UI can display a progress
+   * indicator during long-running orchestrator operations.
+   *
+   * @param conversationId - Conversation to emit progress for
+   * @param text - Progress text to display (e.g. "Processing... (still working)")
+   */
+  emitProgress(conversationId: string, text: string): void {
+    const message = createChatMessage({
+      conversationId,
+      content: text,
+      from: { type: 'system', name: 'System' },
+      contentType: 'status',
+      status: 'delivered',
+    });
+
+    this.emitChatMessageEvent(message);
+  }
+
+  /**
    * Emit a chat message event
    *
    * @param message - The message to emit

@@ -283,6 +283,20 @@ export abstract class RuntimeAgentService {
 					});
 					return true;
 				}
+
+				// Check for error patterns — fail fast instead of waiting for full timeout
+				const errorPatterns = this.getRuntimeErrorPatterns();
+				const hasError = errorPatterns.some((pattern) => output.includes(pattern));
+				if (hasError) {
+					const detectedError = errorPatterns.find((p) => output.includes(p));
+					this.logger.error('Runtime error pattern detected during startup', {
+						sessionName,
+						runtimeType: this.getRuntimeType(),
+						detectedError,
+						totalElapsed: Date.now() - startTime,
+					});
+					return false;
+				}
 			} catch (error) {
 				this.logger.warn('Error while checking runtime ready signal', {
 					sessionName,

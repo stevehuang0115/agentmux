@@ -33,3 +33,9 @@ bash config/skills/orchestrator/schedule-check/execute.sh '{"minutes":10,"messag
 ## Output
 
 JSON with the scheduled check ID and fire time.
+
+## Best Practices
+
+- **Always validate relevance** before acting on a scheduled check. If the agent or task it references is no longer active, cancel the schedule instead of performing the check.
+- **Include context in the message** — mention the agent name and task so the orchestrator can quickly determine relevance when the check fires.
+- **Use `maxOccurrences`** for time-bounded tasks to prevent stale schedules from running indefinitely.

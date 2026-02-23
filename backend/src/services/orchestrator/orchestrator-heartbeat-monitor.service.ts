@@ -213,6 +213,22 @@ export class OrchestratorHeartbeatMonitorService {
 			return;
 		}
 
+		// Fast path: if the child process is dead, skip heartbeat messaging
+		// and trigger restart immediately. This prevents sending heartbeat
+		// messages to a bare shell, which would produce error output that
+		// resets the PTY activity tracker and block restart indefinitely.
+		if (this.sessionBackend.isChildProcessAlive) {
+			const isAlive = this.sessionBackend.isChildProcessAlive(ORCHESTRATOR_SESSION_NAME);
+			if (!isAlive) {
+				this.logger.warn('Orchestrator child process is dead, triggering immediate restart', {
+					sessionName: ORCHESTRATOR_SESSION_NAME,
+				});
+				this.heartbeatRequestSentAt = null;
+				await this.triggerAutoRestart();
+				return;
+			}
+		}
+
 		const activityTracker = PtyActivityTrackerService.getInstance();
 		const idleTimeMs = activityTracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
 
