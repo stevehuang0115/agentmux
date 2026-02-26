@@ -52,7 +52,7 @@ describe('SlackMessengerAdapter', () => {
     it('should delegate to SlackService when connected', async () => {
       mockIsConnected.mockReturnValue(true);
       mockSendMessage.mockResolvedValue(undefined as never);
-      await adapter.sendMessage('channel-1', 'text', { threadTs: 'ts-1' });
+      await adapter.sendMessage('channel-1', 'text', { threadId: 'ts-1' });
       expect(mockSendMessage).toHaveBeenCalledWith({
         channelId: 'channel-1',
         text: 'text',
@@ -60,7 +60,7 @@ describe('SlackMessengerAdapter', () => {
       });
     });
 
-    it('should pass undefined threadTs when not provided', async () => {
+    it('should pass undefined threadId when not provided', async () => {
       mockIsConnected.mockReturnValue(true);
       mockSendMessage.mockResolvedValue(undefined as never);
       await adapter.sendMessage('ch', 'msg');

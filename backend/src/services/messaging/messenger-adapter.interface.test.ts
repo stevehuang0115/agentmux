@@ -25,17 +25,17 @@ describe('MessengerAdapter interface types', () => {
     };
     expect(msg.platform).toBe('slack');
     expect(msg.userId).toBeUndefined();
-    expect(msg.threadTs).toBeUndefined();
+    expect(msg.threadId).toBeUndefined();
   });
 
-  it('should allow constructing SendOptions with threadTs', () => {
-    const opts: SendOptions = { threadTs: '123.456' };
-    expect(opts.threadTs).toBe('123.456');
+  it('should allow constructing SendOptions with threadId', () => {
+    const opts: SendOptions = { threadId: '123.456' };
+    expect(opts.threadId).toBe('123.456');
   });
 
   it('should allow empty SendOptions', () => {
     const opts: SendOptions = {};
-    expect(opts.threadTs).toBeUndefined();
+    expect(opts.threadId).toBeUndefined();
   });
 
   it('should allow implementing MessengerAdapter shape', () => {

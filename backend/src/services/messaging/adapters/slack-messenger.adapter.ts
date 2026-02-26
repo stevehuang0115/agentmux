@@ -13,7 +13,7 @@ export class SlackMessengerAdapter implements MessengerAdapter {
     if (!slack.isConnected()) {
       throw new Error('Slack is not connected');
     }
-    await slack.sendMessage({ channelId: channel, text, threadTs: options?.threadTs });
+    await slack.sendMessage({ channelId: channel, text, threadTs: options?.threadId });
   }
 
   getStatus(): { connected: boolean; platform: MessengerPlatform; details?: Record<string, unknown> } {

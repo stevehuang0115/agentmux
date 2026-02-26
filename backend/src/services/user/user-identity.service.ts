@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 
 export type ConnectedProvider = 'google' | 'github' | 'calendar' | 'drive';
@@ -37,7 +38,7 @@ export class UserIdentityService {
 
   private constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('UserIdentityService');
-    this.storePath = path.join(os.homedir(), '.crewly', 'users.json');
+    this.storePath = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, 'users.json');
   }
 
   static getInstance(): UserIdentityService {
@@ -45,6 +46,13 @@ export class UserIdentityService {
       UserIdentityService.instance = new UserIdentityService();
     }
     return UserIdentityService.instance;
+  }
+
+  /**
+   * Reset the singleton instance (for testing).
+   */
+  static resetInstance(): void {
+    UserIdentityService.instance = null;
   }
 
   private async ensureStoreDir(): Promise<void> {
@@ -70,8 +78,11 @@ export class UserIdentityService {
   }
 
   private getKey(): Buffer {
-    const source = process.env.CREWLY_TOKEN_ENCRYPTION_KEY || process.env.CREWLY_SECRET || 'crewly-local-dev-key';
-    return crypto.createHash('sha256').update(source).digest();
+    const source = process.env.CREWLY_TOKEN_ENCRYPTION_KEY || process.env.CREWLY_SECRET;
+    if (!source) {
+      this.logger.warn('No CREWLY_TOKEN_ENCRYPTION_KEY or CREWLY_SECRET set — using insecure fallback key');
+    }
+    return crypto.createHash('sha256').update(source || 'crewly-local-dev-key').digest();
   }
 
   encryptToken(value: string): string {

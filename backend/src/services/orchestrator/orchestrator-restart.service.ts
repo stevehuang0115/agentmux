@@ -22,6 +22,7 @@ import { MemoryService } from '../memory/memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Restart statistics for monitoring
@@ -58,7 +59,7 @@ export interface RestartStats {
  * ```
  */
 export class OrchestratorRestartService {
-	private static instance: OrchestratorRestartService;
+	private static instance: OrchestratorRestartService | null = null;
 	private logger: ComponentLogger;
 
 	/** Timestamps of recent restarts for cooldown tracking */
@@ -93,7 +94,7 @@ export class OrchestratorRestartService {
 	 * Reset the singleton instance (for testing).
 	 */
 	static resetInstance(): void {
-		OrchestratorRestartService.instance = undefined as unknown as OrchestratorRestartService;
+		OrchestratorRestartService.instance = null;
 	}
 
 	/**
@@ -167,9 +168,7 @@ export class OrchestratorRestartService {
 			this.logger.info('Attempting orchestrator restart...');
 
 			// Step 1: Wait a brief delay for cleanup
-			await new Promise<void>((resolve) =>
-				setTimeout(resolve, ORCHESTRATOR_RESTART_CONSTANTS.RESTART_DELAY_MS)
-			);
+			await delay(ORCHESTRATOR_RESTART_CONSTANTS.RESTART_DELAY_MS);
 
 			// Step 2: Kill the old PTY session
 			try {

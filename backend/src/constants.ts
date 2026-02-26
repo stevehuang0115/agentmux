@@ -731,6 +731,19 @@ export const MARKETPLACE_CONSTANTS = CONFIG_MARKETPLACE_CONSTANTS;
 /** Typed message source value */
 export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
 
+/** Google OAuth endpoint URLs and default scopes. */
+export const GOOGLE_OAUTH_CONSTANTS = {
+	AUTH_BASE_URL: 'https://accounts.google.com/o/oauth2/v2/auth',
+	TOKEN_ENDPOINT: 'https://oauth2.googleapis.com/token',
+	USERINFO_ENDPOINT: 'https://www.googleapis.com/oauth2/v2/userinfo',
+	DEFAULT_SCOPES: [
+		'openid',
+		'email',
+		'https://www.googleapis.com/auth/gmail.readonly',
+		'https://www.googleapis.com/auth/gmail.send',
+	],
+} as const;
+
 // Type helpers
 export type AgentStatus =
 	(typeof CREWLY_CONSTANTS.AGENT_STATUSES)[keyof typeof CREWLY_CONSTANTS.AGENT_STATUSES];
