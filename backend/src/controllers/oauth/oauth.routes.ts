@@ -121,8 +121,10 @@ export function createOAuthRouter(): Router {
       if (state) {
         try {
           statePayload = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
-        } catch {
-          // best effort only
+        } catch (err) {
+          logger.warn('Failed to parse OAuth state parameter', {
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 

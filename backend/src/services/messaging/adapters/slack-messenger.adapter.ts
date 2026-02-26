@@ -21,7 +21,7 @@ export class SlackMessengerAdapter implements MessengerAdapter {
     return {
       connected: slack.isConnected(),
       platform: this.platform,
-      details: slack.getStatus() as unknown as Record<string, unknown>,
+      details: Object.fromEntries(Object.entries(slack.getStatus())),
     };
   }
 
