@@ -139,7 +139,7 @@ describe('SettingsService', () => {
 
       expect(settings.general.runtimeCommands['claude-code']).toBe('/custom/claude --dangerously-skip-permissions');
       expect(settings.general.runtimeCommands['gemini-cli']).toBe('gemini --yolo');
-      expect(settings.general.runtimeCommands['codex-cli']).toBe('codex --full-auto');
+      expect(settings.general.runtimeCommands['codex-cli']).toBe('codex -a never -s danger-full-access');
       expect((settings.general as any).claudeCodeCommand).toBeUndefined();
       expect((settings.general as any).claudeCodeInitScript).toBeUndefined();
     });
@@ -177,7 +177,7 @@ describe('SettingsService', () => {
           runtimeCommands: {
             'claude-code': 'claude --dangerously-skip-permissions',
             'gemini-cli': 'gemini --yolo',
-            'codex-cli': 'codex --full-auto',
+            'codex-cli': 'codex -a never -s danger-full-access',
           },
         },
       };
@@ -191,6 +191,28 @@ describe('SettingsService', () => {
       const settings = await service.getSettings();
 
       expect(settings.general.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
+    });
+
+    it('should migrate old Codex default command to new no-confirmation command', async () => {
+      const settingsWithOldCodexDefault = {
+        general: {
+          runtimeCommands: {
+            'claude-code': 'claude --dangerously-skip-permissions',
+            'gemini-cli': 'gemini --yolo',
+            'codex-cli': 'codex --full-auto',
+          },
+        },
+      };
+
+      await fs.writeFile(
+        path.join(testDir, 'settings.json'),
+        JSON.stringify(settingsWithOldCodexDefault, null, 2)
+      );
+
+      service.clearCache();
+      const settings = await service.getSettings();
+
+      expect(settings.general.runtimeCommands['codex-cli']).toBe('codex -a never -s danger-full-access');
     });
   });
 

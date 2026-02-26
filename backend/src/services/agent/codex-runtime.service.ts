@@ -16,33 +16,23 @@ export class CodexRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
-	 * Codex CLI specific detection using '/' command
+	 * Codex CLI runtime detection.
+	 *
+	 * NOTE: Do not use active key probes (Ctrl+C, '/', etc.) here. Codex can
+	 * interpret those as shell input/cancel and drop back to zsh, which causes
+	 * false negatives and unintended exits during health checks.
 	 */
 	protected async detectRuntimeSpecific(sessionName: string): Promise<boolean> {
-		// First to clear the current command
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
-
-		// Capture the output before checking
-		const beforeOutput = this.sessionHelper.capturePane(sessionName, 20);
-		// Send the '/' key to detect changes
-		await this.sessionHelper.sendKey(sessionName, '/');
-		await new Promise((resolve) => setTimeout(resolve, 2000));
-		// Capture the output after sending '/'
-		const afterOutput = this.sessionHelper.capturePane(sessionName, 20);
-
-		// Clear the '/' command again
-		await this.sessionHelper.clearCurrentCommandLine(sessionName);
-
-		const hasOutputChange = afterOutput.length - beforeOutput.length > 5;
+		const output = this.sessionHelper.capturePane(sessionName, 120);
+		const readyPatterns = this.getRuntimeReadyPatterns();
+		const hasReadySignal = readyPatterns.some((pattern) => output.includes(pattern));
 
 		this.logger.debug('Codex detection completed', {
 			sessionName,
-			hasOutputChange,
-			beforeLength: beforeOutput.length,
-			afterLength: afterOutput.length,
+			hasReadySignal,
 		});
 
-		return hasOutputChange;
+		return hasReadySignal;
 	}
 
 	/**
@@ -69,6 +59,7 @@ export class CodexRuntimeService extends RuntimeAgentService {
 		return [
 			/codex.*exited/i,
 			/Session\s+ended/i,
+			/Conversation interrupted/i,
 		];
 	}
 

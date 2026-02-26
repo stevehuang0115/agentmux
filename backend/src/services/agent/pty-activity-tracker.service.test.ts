@@ -95,9 +95,9 @@ describe('PtyActivityTrackerService', () => {
 	});
 
 	describe('getIdleTimeMs', () => {
-		it('should return Infinity for unknown sessions', () => {
+		it('should return 0 for unknown sessions', () => {
 			const tracker = PtyActivityTrackerService.getInstance();
-			expect(tracker.getIdleTimeMs('unknown')).toBe(Infinity);
+			expect(tracker.getIdleTimeMs('unknown')).toBe(0);
 		});
 
 		it('should return a small number immediately after recording', () => {
@@ -149,7 +149,7 @@ describe('PtyActivityTrackerService', () => {
 
 			tracker.clearSession('agent-dev-001');
 			expect(tracker.hasActivity('agent-dev-001')).toBe(false);
-			expect(tracker.getIdleTimeMs('agent-dev-001')).toBe(Infinity);
+			expect(tracker.getIdleTimeMs('agent-dev-001')).toBe(0);
 		});
 
 		it('should not throw for unknown sessions', () => {

@@ -81,7 +81,8 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 - Make or learn about an architectural decision (category: `decision`, scope: `project`)
 - Find a gotcha, bug, or workaround (category: `gotcha`, scope: `project`)
 - Learn something useful for your role (category: `fact`, scope: `agent`)
-- Note a user preference or working style (category: `preference`, scope: `agent`)
+- Note your own working style (category: `preference`, scope: `agent`)
+- Note a cross-agent user preference (category: `user_preference`, scope: `project`)
 
 **Before answering questions** about deployment, architecture, past decisions, or infrastructure:
 - **Always call `recall` first** to check stored knowledge before answering from scratch
@@ -91,6 +92,11 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 - Any gotchas or patterns discovered
 - What's left unfinished (if anything)
 
+**When you fix an error** — immediately call `record-learning` with:
+- The exact error message
+- The fix you applied
+- Environment/runtime context so other agents do not repeat the same debugging loop
+
 ### Key Rules
 
 1. **Always pass `agentId` and `projectPath`** — without these, memory can't be saved or retrieved correctly
@@ -98,5 +104,6 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 3. **Use `recall` liberally** — it's cheap and often surfaces useful context
 4. **Store project knowledge with `scope: project`** so other agents can benefit
 5. **Store personal knowledge with `scope: agent`** for role-specific learnings
+6. **Store cross-agent user preferences with `scope: project` + `category: user_preference`**
 
 After checking in, just say "Ready for tasks" and wait for me to send you work.

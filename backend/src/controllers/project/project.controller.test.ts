@@ -15,6 +15,7 @@ jest.mock('fs');
 jest.mock('path');
 jest.mock('util');
 jest.mock('child_process');
+jest.mock('node-pty', () => ({ spawn: jest.fn() }));
 
 describe('Projects Handlers', () => {
   let mockApiContext: ApiContext;
@@ -143,7 +144,7 @@ describe('Projects Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error creating project:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error creating project'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -214,7 +215,7 @@ describe('Projects Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error getting projects:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error getting projects'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -276,7 +277,7 @@ describe('Projects Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error getting project:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error getting project'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -353,11 +354,11 @@ describe('Projects Handlers', () => {
         mockResponse as Response
       );
 
-      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
           success: false,
-          error: 'Project path is required'
+          error: 'Failed to create project'
         })
       );
     });

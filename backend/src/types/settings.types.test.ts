@@ -57,9 +57,11 @@ describe('Settings Types', () => {
         runtimeCommands: {
           'claude-code': 'claude --dangerously-skip-permissions',
           'gemini-cli': 'gemini --yolo',
-          'codex-cli': 'codex --full-auto',
+          'codex-cli': 'codex -a never -s danger-full-access',
         },
         agentIdleTimeoutMinutes: 10,
+        enableProactiveCompact: true,
+        enableSelfEvolution: false,
       };
 
       expect(settings.defaultRuntime).toBe('claude-code');
@@ -86,6 +88,8 @@ describe('Settings Types', () => {
           'codex-cli': '/custom/codex --custom-flag',
         },
         agentIdleTimeoutMinutes: 15,
+        enableProactiveCompact: true,
+        enableSelfEvolution: false,
       };
 
       expect(settings.runtimeCommands['claude-code']).toContain('/custom/path');
@@ -141,9 +145,11 @@ describe('Settings Types', () => {
           runtimeCommands: {
             'claude-code': 'claude --dangerously-skip-permissions',
             'gemini-cli': 'gemini --yolo',
-            'codex-cli': 'codex --full-auto',
+            'codex-cli': 'codex -a never -s danger-full-access',
           },
           agentIdleTimeoutMinutes: 10,
+          enableProactiveCompact: true,
+          enableSelfEvolution: false,
         },
         chat: {
           showRawTerminalOutput: false,
@@ -258,7 +264,7 @@ describe('Settings Types', () => {
 
       expect(defaults.general.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
       expect(defaults.general.runtimeCommands['gemini-cli']).toBe('gemini --yolo');
-      expect(defaults.general.runtimeCommands['codex-cli']).toBe('codex --full-auto');
+      expect(defaults.general.runtimeCommands['codex-cli']).toBe('codex -a never -s danger-full-access');
     });
 
     it('should include non-empty runtime commands for all runtimes', () => {

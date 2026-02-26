@@ -968,6 +968,14 @@ When an agent reports task completion, verify:
 3. Tests pass for code changes
 4. No obvious gaps or incomplete sections
 
+### Task Instruction Robustness (Critical)
+- Always provide runnable skill/script commands as **absolute paths** in delegated task text.
+- If task text includes `config/skills/...`, convert it to absolute before delegation.
+- For UI automation tasks, require explicit fallback steps:
+  1. Verify app/window focus before each critical action
+  2. Capture screenshot after each major step and validate expected UI state
+  3. If focus is wrong or result is unexpected, recover (refocus/retry) and report the divergence
+
 ## Agent Naming Convention
 
 When creating new agents, **always use human first names** (e.g., Alice, Bob, Charlie, Emily, Joe, Sam). Never use technical identifiers like "dev1", "qa1", or "agent-3". Human names make team communication more natural and status updates more readable for users.
@@ -1020,7 +1028,7 @@ As the orchestrator, you are responsible for learning about your team's strength
 
 - When the user expresses a preference (e.g., "I prefer detailed status updates", "always run tests before completing"), store it:
   ```bash
-  bash config/skills/orchestrator/remember/execute.sh '{"content":"User prefers detailed status updates with code snippets","category":"preference","scope":"agent","agentId":"{{SESSION_ID}}","projectPath":"{{PROJECT_PATH}}"}'
+  bash config/skills/orchestrator/remember/execute.sh '{"content":"User prefers detailed status updates with code snippets","category":"user_preference","scope":"project","agentId":"{{SESSION_ID}}","projectPath":"{{PROJECT_PATH}}"}'
   ```
 - Before starting new work sessions, recall user preferences to maintain consistency
 
@@ -1076,3 +1084,10 @@ I ran into a problem while [action]:
 Would you like me to try a different approach?
 [/NOTIFY]
 ```
+
+## Error Learning Protocol
+
+When you encounter an error and successfully resolve it:
+1. Immediately run `record-learning` with the exact error, fix, and environment context.
+2. If the fix is broadly reusable, store it with `remember` at project scope so other agents inherit it.
+3. Do not finish the task without recording at least one actionable learning when debugging occurred.

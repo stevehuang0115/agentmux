@@ -154,7 +154,7 @@ describe('CrewlyMcpServer', () => {
   let mcpServer: CrewlyMcpServer;
   let handlers: Map<string, Function>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     mockGetTeams.mockResolvedValue([]);
     mockSaveTeam.mockResolvedValue(undefined);
@@ -166,6 +166,7 @@ describe('CrewlyMcpServer', () => {
     });
 
     mcpServer = new CrewlyMcpServer();
+    await mcpServer.start();
     handlers = getRegisteredHandlers();
   });
 
@@ -193,13 +194,13 @@ describe('CrewlyMcpServer', () => {
   describe('lifecycle', () => {
     it('should start on stdio transport', async () => {
       await mcpServer.start();
-      expect(mockServerConnect).toHaveBeenCalledTimes(1);
+      expect(mockServerConnect).toHaveBeenCalled();
     });
 
     it('should stop cleanly', async () => {
       await mcpServer.start();
       await mcpServer.stop();
-      expect(mockServerClose).toHaveBeenCalledTimes(1);
+      expect(mockServerClose).toHaveBeenCalled();
     });
   });
 

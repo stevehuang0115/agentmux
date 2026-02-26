@@ -157,7 +157,7 @@ describe('Errors Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error tracking error:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error tracking error'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -367,7 +367,7 @@ describe('Errors Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error clearing errors:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error clearing errors'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({

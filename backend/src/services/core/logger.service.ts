@@ -22,6 +22,14 @@ export interface LoggerOptions {
   userId?: string;
 }
 
+interface LoggerConfig {
+  level: LogLevel;
+  enableFileLogging: boolean;
+  logDir: string;
+  maxFiles: number;
+  format: 'json' | 'simple';
+}
+
 export class LoggerService {
   private static instance: LoggerService;
   private config: ConfigService;
@@ -50,10 +58,22 @@ export class LoggerService {
     return LoggerService.instance;
   }
 
-  private async initializeLogDirectory(): Promise<void> {
-    if (!this.config.get('logging').enableFileLogging) return;
+  private getLoggingConfig(): LoggerConfig {
+    const raw = (this.config.get('logging') as Partial<LoggerConfig> | undefined) ?? {};
+    return {
+      level: raw.level ?? 'info',
+      enableFileLogging: raw.enableFileLogging ?? false,
+      logDir: raw.logDir ?? 'logs',
+      maxFiles: raw.maxFiles ?? 10,
+      format: raw.format ?? 'simple',
+    };
+  }
 
-    const logDir = this.config.get('logging').logDir;
+  private async initializeLogDirectory(): Promise<void> {
+    const logConfig = this.getLoggingConfig();
+    if (!logConfig.enableFileLogging) return;
+
+    const logDir = logConfig.logDir;
     try {
       if (!existsSync(logDir)) {
         await fs.mkdir(logDir, { recursive: true });
@@ -97,12 +117,12 @@ export class LoggerService {
   }
 
   private shouldLog(level: LogLevel): boolean {
-    const configLevel = this.config.get('logging').level;
+    const configLevel = this.getLoggingConfig().level;
     return this.LOG_LEVELS[level] <= this.LOG_LEVELS[configLevel];
   }
 
   private formatLogEntry(entry: LogEntry): string {
-    const logConfig = this.config.get('logging');
+    const logConfig = this.getLoggingConfig();
     
     if (logConfig.format === 'json') {
       return JSON.stringify(entry);
@@ -132,7 +152,7 @@ export class LoggerService {
   }
 
   private async writeToFile(entry: LogEntry): Promise<void> {
-    const logConfig = this.config.get('logging');
+    const logConfig = this.getLoggingConfig();
     if (!logConfig.enableFileLogging) return;
 
     try {
@@ -152,11 +172,14 @@ export class LoggerService {
   }
 
   private async rotateLogs(): Promise<void> {
-    const logConfig = this.config.get('logging');
+    const logConfig = this.getLoggingConfig();
     const logDir = logConfig.logDir;
     
     try {
       const files = await fs.readdir(logDir);
+      if (!Array.isArray(files)) {
+        return;
+      }
       const logFiles = files
         .filter(file => file.startsWith('crewly-') && file.endsWith('.log'))
         .sort()
@@ -195,7 +218,7 @@ export class LoggerService {
     this.writeToConsole(entry);
 
     // Queue for file logging
-    if (this.config.get('logging').enableFileLogging) {
+    if (this.getLoggingConfig().enableFileLogging) {
       this.logQueue.push(entry);
     }
   }
@@ -319,7 +342,7 @@ export class LoggerService {
 
   // Get recent logs
   public async getRecentLogs(level?: LogLevel, limit: number = 100): Promise<LogEntry[]> {
-    const logConfig = this.config.get('logging');
+    const logConfig = this.getLoggingConfig();
     if (!logConfig.enableFileLogging) {
       return [];
     }

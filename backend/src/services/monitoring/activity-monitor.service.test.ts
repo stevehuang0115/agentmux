@@ -59,6 +59,7 @@ describe('ActivityMonitorService', () => {
       getTeams: jest.fn().mockResolvedValue([]),
       getProjects: jest.fn().mockResolvedValue([]),
       updateAgentStatus: jest.fn().mockResolvedValue(undefined),
+      saveTeam: jest.fn().mockResolvedValue(undefined),
     } as any;
     (StorageService.getInstance as jest.Mock).mockReturnValue(mockStorageService);
 
@@ -296,9 +297,16 @@ describe('ActivityMonitorService', () => {
         staleAgents,
         thresholdMinutes: expectedThreshold
       });
-      // Both dead sessions should be marked inactive
-      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith('test-session-1', 'inactive');
-      expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith('test-session-2', 'inactive');
+      // Team members are now batch-updated and persisted once per modified team
+      expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalledWith('test-session-1', 'inactive');
+      expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalledWith('test-session-2', 'inactive');
+      expect(mockStorageService.saveTeam).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'test-team',
+        members: expect.arrayContaining([
+          expect.objectContaining({ sessionName: 'test-session-1', agentStatus: 'inactive' }),
+          expect.objectContaining({ sessionName: 'test-session-2', agentStatus: 'inactive' }),
+        ])
+      }));
     });
 
     it('should mark stale orchestrator as inactive when session is dead', async () => {

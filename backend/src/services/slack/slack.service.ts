@@ -226,6 +226,19 @@ export class SlackService extends EventEmitter {
         this.logger.info('Connected in Socket Mode');
       }
     } catch (error) {
+      // Ensure partially initialized Bolt app is torn down to avoid
+      // lingering socket retries/background tasks after failed startup.
+      if (this.app) {
+        try {
+          await this.app.stop();
+        } catch {
+          // Ignore shutdown errors during failed initialization
+        }
+      }
+      this.app = null;
+      this.client = null;
+      this.status.connected = false;
+      this.status.socketMode = false;
       this.status.lastError = (error as Error).message;
       this.status.lastErrorAt = new Date().toISOString();
       this.emit('error', error);

@@ -7,9 +7,8 @@
  * @module pty-terminal-buffer
  */
 
+import * as XtermHeadless from '@xterm/headless';
 import type { Terminal as TerminalType } from '@xterm/headless';
-import pkg from '@xterm/headless';
-const { Terminal } = pkg;
 import {
 	DEFAULT_TERMINAL_COLS,
 	DEFAULT_TERMINAL_ROWS,
@@ -41,6 +40,16 @@ import { PTY_CONSTANTS } from '../../../constants.js';
  * ```
  */
 export class PtyTerminalBuffer {
+	/**
+	 * Handles both ESM named export and CJS default export interop in tests/runtime.
+	 */
+	private static readonly TerminalCtor = ((XtermHeadless as unknown as {
+		Terminal: new (options: Record<string, unknown>) => TerminalType;
+		default?: { Terminal: new (options: Record<string, unknown>) => TerminalType };
+	}).Terminal ??
+		(XtermHeadless as unknown as {
+			default?: { Terminal: new (options: Record<string, unknown>) => TerminalType };
+		}).default?.Terminal) as new (options: Record<string, unknown>) => TerminalType;
 	/**
 	 * The @xterm/headless Terminal instance
 	 */
@@ -88,7 +97,7 @@ export class PtyTerminalBuffer {
 		maxHistorySize: number = PTY_CONSTANTS.DEFAULT_MAX_HISTORY_SIZE
 	) {
 		this.maxHistorySize = maxHistorySize;
-		this.terminal = new Terminal({
+		this.terminal = new PtyTerminalBuffer.TerminalCtor({
 			cols,
 			rows,
 			scrollback: PTY_CONSTANTS.DEFAULT_SCROLLBACK,

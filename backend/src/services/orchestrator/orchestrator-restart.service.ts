@@ -17,10 +17,12 @@ import {
 	type RuntimeType,
 } from '../../constants.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { StorageService } from '../core/storage.service.js';
 import { MemoryService } from '../memory/memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
+import { delay } from '../../utils/async.utils.js';
 
 /**
  * Restart statistics for monitoring
@@ -57,7 +59,7 @@ export interface RestartStats {
  * ```
  */
 export class OrchestratorRestartService {
-	private static instance: OrchestratorRestartService;
+	private static instance: OrchestratorRestartService | null = null;
 	private logger: ComponentLogger;
 
 	/** Timestamps of recent restarts for cooldown tracking */
@@ -92,7 +94,7 @@ export class OrchestratorRestartService {
 	 * Reset the singleton instance (for testing).
 	 */
 	static resetInstance(): void {
-		OrchestratorRestartService.instance = undefined as unknown as OrchestratorRestartService;
+		OrchestratorRestartService.instance = null;
 	}
 
 	/**
@@ -166,9 +168,7 @@ export class OrchestratorRestartService {
 			this.logger.info('Attempting orchestrator restart...');
 
 			// Step 1: Wait a brief delay for cleanup
-			await new Promise<void>((resolve) =>
-				setTimeout(resolve, ORCHESTRATOR_RESTART_CONSTANTS.RESTART_DELAY_MS)
-			);
+			await delay(ORCHESTRATOR_RESTART_CONSTANTS.RESTART_DELAY_MS);
 
 			// Step 2: Kill the old PTY session
 			try {
@@ -182,8 +182,27 @@ export class OrchestratorRestartService {
 				});
 			}
 
-			// Step 3: Determine runtime type
-			let runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE;
+			// Step 3: Determine runtime type (preserve the orchestrator's configured runtime).
+			const runtimeType = await this.resolveOrchestratorRuntimeType();
+
+			// Step 3b: For Gemini CLI, gather existing project paths for /directory allowlist.
+			let additionalAllowlistPaths: string[] | undefined;
+			if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+				try {
+					const storageService = StorageService.getInstance();
+					const projects = await storageService.getProjects();
+					additionalAllowlistPaths = projects.map(project => project.path);
+					if (additionalAllowlistPaths.length > 0) {
+						this.logger.info('Will add project paths to Gemini CLI allowlist during restart', {
+							projectCount: additionalAllowlistPaths.length,
+						});
+					}
+				} catch (error) {
+					this.logger.warn('Failed to get projects for Gemini CLI allowlist (continuing without)', {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
 
 			// Step 4: Create new agent session
 			const result = await this.agentRegistrationService.createAgentSession({
@@ -192,6 +211,7 @@ export class OrchestratorRestartService {
 				projectPath: process.cwd(),
 				windowName: ORCHESTRATOR_WINDOW_NAME,
 				runtimeType,
+				additionalAllowlistPaths,
 			});
 
 			if (!result.success) {
@@ -258,6 +278,26 @@ export class OrchestratorRestartService {
 		} finally {
 			this.isRestarting = false;
 		}
+	}
+
+	/**
+	 * Resolve orchestrator runtime type from persisted orchestrator status.
+	 * Falls back to Claude Code if status is unavailable/invalid.
+	 */
+	private async resolveOrchestratorRuntimeType(): Promise<RuntimeType> {
+		try {
+			const orchestratorStatus = await StorageService.getInstance().getOrchestratorStatus();
+			const storedRuntimeType = orchestratorStatus?.runtimeType;
+			if (storedRuntimeType && Object.values(RUNTIME_TYPES).includes(storedRuntimeType as RuntimeType)) {
+				return storedRuntimeType as RuntimeType;
+			}
+		} catch (error) {
+			this.logger.warn('Failed to resolve orchestrator runtime type from storage, using default', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		return RUNTIME_TYPES.CLAUDE_CODE;
 	}
 
 	/**

@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import * as os from 'os';
 import * as path from 'path';
 import { existsSync } from 'fs';
 import { LoggerService, ComponentLogger } from './logger.service.js';
@@ -163,8 +164,8 @@ export class ConfigService {
 			logging: {
 				level: (process.env.LOG_LEVEL as any) || 'info',
 				format: (process.env.LOG_FORMAT as any) || 'simple',
-				enableFileLogging: process.env.FILE_LOGGING === 'true',
-				logDir: process.env.LOG_DIR || path.join(process.cwd(), 'logs'),
+				enableFileLogging: process.env.FILE_LOGGING !== 'false',
+				logDir: process.env.LOG_DIR || path.join(os.homedir(), '.crewly', 'logs'),
 				maxFiles: parseInt(process.env.LOG_MAX_FILES || '5', 10),
 				maxSize: process.env.LOG_MAX_SIZE || '10m',
 			},

@@ -22,7 +22,7 @@ bash config/skills/orchestrator/remember/execute.sh '{"content":"TypeScript stri
 ## Valid Categories by Scope
 
 - **Agent scope** (`scope: "agent"`): `fact`, `pattern`, `preference`
-- **Project scope** (`scope: "project"`): `pattern`, `decision`, `gotcha`, `relationship`
+- **Project scope** (`scope: "project"`): `pattern`, `decision`, `gotcha`, `relationship`, `user_preference`
 
 Using a category that doesn't match the scope will return an error.
 

@@ -1,364 +1,89 @@
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Request, Response } from 'express';
 import * as configHandlers from './config.controller.js';
 import type { ApiContext } from '../types.js';
-import { StorageService, TmuxService, SchedulerService } from '../../services/index.js';
-import { ActiveProjectsService } from '../../services/index.js';
-import { PromptTemplateService } from '../../services/index.js';
-import * as fs from 'fs/promises';
+import * as fs from 'fs';
 
-// Mock dependencies
-jest.mock('../../services/index.js');
-jest.mock('../../services/index.js');
-jest.mock('../../services/index.js');
-jest.mock('fs/promises');
+jest.mock('fs', () => ({
+  existsSync: jest.fn(),
+  readFileSync: jest.fn(),
+}));
+
+jest.mock('path', () => ({
+  join: (...parts: string[]) => parts.join('/'),
+}));
 
 describe('Config Handlers', () => {
   let mockApiContext: ApiContext;
   let mockRequest: Partial<Request>;
-  let mockResponse: Partial<Response>;
-  let responseMock: {
-    status: jest.Mock<any>;
-    json: jest.Mock<any>;
-    send: jest.Mock<any>;
-  };
+  let responseMock: { status: jest.Mock<any>; json: jest.Mock<any> };
 
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Create response mock
+    mockApiContext = {} as ApiContext;
+    mockRequest = { params: { fileName: 'config.json' } };
     responseMock = {
       status: jest.fn<any>().mockReturnThis(),
       json: jest.fn<any>().mockReturnThis(),
-      send: jest.fn<any>().mockReturnThis(),
     };
-
-    // Setup API context
-    mockApiContext = {
-      storageService: new StorageService() as jest.Mocked<StorageService>,
-      tmuxService: new TmuxService() as jest.Mocked<TmuxService>,
-      schedulerService: new SchedulerService(new StorageService()) as jest.Mocked<SchedulerService>,
-      activeProjectsService: new ActiveProjectsService() as jest.Mocked<ActiveProjectsService>,
-      promptTemplateService: new PromptTemplateService() as jest.Mocked<PromptTemplateService>,
-      agentRegistrationService: {} as any,
-      taskAssignmentMonitor: {} as any,
-      taskTrackingService: {} as any,
-    };
-
-    mockRequest = {};
-    mockResponse = responseMock as any;
   });
 
-  afterEach(() => {
-    jest.resetAllMocks();
+  it('returns 400 for invalid file names', async () => {
+    mockRequest.params = { fileName: '../secrets.json' };
+
+    await configHandlers.getConfigFile.call(mockApiContext, mockRequest as Request, responseMock as unknown as Response);
+
+    expect(responseMock.status).toHaveBeenCalledWith(400);
+    expect(responseMock.json).toHaveBeenCalledWith({ success: false, error: 'Invalid file name' });
   });
 
-  describe('getConfigFile', () => {
-    it('should return config file content successfully', async () => {
-      const mockConfigContent = {
-        version: '1.0.0',
-        apiPort: 3000,
-        features: {
-          gitIntegration: true,
-          autoCommit: false
-        }
-      };
+  it('returns 404 when config file does not exist', async () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
 
-      mockRequest.params = { filename: 'config.json' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(mockConfigContent, null, 2));
+    await configHandlers.getConfigFile.call(mockApiContext, mockRequest as Request, responseMock as unknown as Response);
 
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(fs.readFile).toHaveBeenCalledWith('config.json', 'utf-8');
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'config.json',
-          content: JSON.stringify(mockConfigContent, null, 2)
-        }
-      });
-    });
-
-    it('should handle JSON config files', async () => {
-      const jsonConfig = { env: 'development', debug: true };
-      mockRequest.params = { filename: 'app.json' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(JSON.stringify(jsonConfig));
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'app.json',
-          content: JSON.stringify(jsonConfig)
-        }
-      });
-    });
-
-    it('should handle YAML config files', async () => {
-      const yamlContent = 'version: 1.0.0\nname: test-app\nport: 3000\n';
-      mockRequest.params = { filename: 'app.yml' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(yamlContent);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'app.yml',
-          content: yamlContent
-        }
-      });
-    });
-
-    it('should handle environment files', async () => {
-      const envContent = 'NODE_ENV=development\nAPI_PORT=3000\nDATABASE_URL=sqlite://db.sqlite\n';
-      mockRequest.params = { filename: '.env' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(envContent);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: '.env',
-          content: envContent
-        }
-      });
-    });
-
-    it('should return 404 when config file not found', async () => {
-      mockRequest.params = { filename: 'nonexistent.json' };
-      const error = new Error('File not found') as any;
-      error.code = 'ENOENT';
-      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.status).toHaveBeenCalledWith(404);
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Config file not found'
-      });
-    });
-
-    it('should handle file read permission errors', async () => {
-      mockRequest.params = { filename: 'secure.json' };
-      const error = new Error('Permission denied') as any;
-      error.code = 'EACCES';
-      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(consoleSpy).toHaveBeenCalledWith('Error reading config file:', expect.any(Error));
-      expect(responseMock.status).toHaveBeenCalledWith(500);
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Failed to read config file'
-      });
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle empty config files', async () => {
-      mockRequest.params = { filename: 'empty.json' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue('');
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'empty.json',
-          content: ''
-        }
-      });
-    });
-
-    it('should handle binary files gracefully', async () => {
-      mockRequest.params = { filename: 'binary.dat' };
-      const binaryContent = Buffer.from([0x89, 0x50, 0x4E, 0x47]); // PNG header
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(binaryContent);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'binary.dat',
-          content: binaryContent.toString('utf-8')
-        }
-      });
-    });
-
-    it('should validate filename parameter', async () => {
-      mockRequest.params = {};
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(fs.readFile).toHaveBeenCalledWith(undefined, 'utf-8');
-      // The fs.readFile call will likely fail, which will trigger error handling
-    });
-
-    it('should handle various config file extensions', async () => {
-      const testFiles = [
-        { name: 'package.json', content: '{"name": "test"}' },
-        { name: 'tsconfig.json', content: '{"compilerOptions": {}}' },
-        { name: 'docker-compose.yml', content: 'version: "3"' },
-        { name: '.gitignore', content: 'node_modules/\n*.log' },
-        { name: 'Dockerfile', content: 'FROM node:18' },
-        { name: 'README.md', content: '# Test Project' }
-      ];
-
-      for (const testFile of testFiles) {
-        mockRequest.params = { filename: testFile.name };
-        (fs.readFile as jest.Mock<any>).mockResolvedValue(testFile.content);
-
-        await configHandlers.getConfigFile.call(
-          mockApiContext,
-          mockRequest as Request,
-          mockResponse as Response
-        );
-
-        expect(fs.readFile).toHaveBeenCalledWith(testFile.name, 'utf-8');
-        expect(responseMock.json).toHaveBeenCalledWith({
-          success: true,
-          data: {
-            filename: testFile.name,
-            content: testFile.content
-          }
-        });
-      }
-    });
-
-    it('should handle file system errors other than ENOENT', async () => {
-      mockRequest.params = { filename: 'corrupted.json' };
-      const error = new Error('I/O error') as any;
-      error.code = 'EIO';
-      (fs.readFile as jest.Mock<any>).mockRejectedValue(error);
-
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(consoleSpy).toHaveBeenCalledWith('Error reading config file:', expect.any(Error));
-      expect(responseMock.status).toHaveBeenCalledWith(500);
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: false,
-        error: 'Failed to read config file'
-      });
-
-      consoleSpy.mockRestore();
-    });
-
-    it('should handle malformed JSON gracefully', async () => {
-      mockRequest.params = { filename: 'malformed.json' };
-      const malformedJson = '{"name": "test", invalid}';
-      (fs.readFile as jest.Mock<any>).mockResolvedValue(malformedJson);
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      // The handler should still return the raw content, not try to parse it
-      expect(responseMock.json).toHaveBeenCalledWith({
-        success: true,
-        data: {
-          filename: 'malformed.json',
-          content: malformedJson
-        }
-      });
+    expect(responseMock.status).toHaveBeenCalledWith(404);
+    expect(responseMock.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Config file config.json not found',
     });
   });
 
-  describe('Error handling', () => {
-    it('should handle async errors properly', async () => {
-      mockRequest.params = { filename: 'test.json' };
-      (fs.readFile as jest.Mock<any>).mockRejectedValue(new Error('Async error'));
+  it('returns parsed JSON for json files', async () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue('{"foo":"bar"}');
 
-      const consoleSpy = jest.spyOn(console, 'error').mockImplementation((() => {}) as any);
+    await configHandlers.getConfigFile.call(mockApiContext, mockRequest as Request, responseMock as unknown as Response);
 
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
+    expect(fs.readFileSync).toHaveBeenCalledWith(expect.stringContaining('/config/config.json'), 'utf8');
+    expect(responseMock.json).toHaveBeenCalledWith({ foo: 'bar' });
+  });
 
-      expect(consoleSpy).toHaveBeenCalled();
-      expect(responseMock.status).toHaveBeenCalledWith(500);
+  it('returns 500 for invalid json content', async () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue('{bad json');
 
-      consoleSpy.mockRestore();
-    });
+    await configHandlers.getConfigFile.call(mockApiContext, mockRequest as Request, responseMock as unknown as Response);
 
-    it('should handle null filename parameter', async () => {
-      mockRequest.params = { filename: null as any };
-
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(fs.readFile).toHaveBeenCalledWith(null, 'utf-8');
+    expect(responseMock.status).toHaveBeenCalledWith(500);
+    expect(responseMock.json).toHaveBeenCalledWith({
+      success: false,
+      error: 'Invalid JSON format in config file',
     });
   });
 
-  describe('Integration', () => {
-    it('should properly use file system operations', async () => {
-      mockRequest.params = { filename: 'integration-test.json' };
-      (fs.readFile as jest.Mock<any>).mockResolvedValue('{"test": true}');
+  it('returns plain content for non-json files', async () => {
+    mockRequest.params = { fileName: 'notes.txt' };
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue('hello world');
 
-      await configHandlers.getConfigFile.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
+    await configHandlers.getConfigFile.call(mockApiContext, mockRequest as Request, responseMock as unknown as Response);
 
-      expect(fs.readFile).toHaveBeenCalledWith('integration-test.json', 'utf-8');
+    expect(responseMock.json).toHaveBeenCalledWith({
+      success: true,
+      data: { content: 'hello world' },
+      message: 'Config file notes.txt retrieved successfully',
     });
   });
 });

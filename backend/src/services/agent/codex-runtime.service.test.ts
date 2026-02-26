@@ -36,22 +36,19 @@ describe('CodexRuntimeService', () => {
 	});
 
 	describe('detectRuntimeSpecific', () => {
-		it('should detect Codex when output length increases significantly after / key', async () => {
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('before output')
-				.mockReturnValueOnce('before output with much more content added');
+		it('should detect Codex when ready pattern is present in output', async () => {
+			mockSessionHelper.capturePane.mockReturnValueOnce('OpenAI Codex\nmodel: gpt-5');
 
 			const result = await service['detectRuntimeSpecific']('test-session');
 
 			expect(result).toBe(true);
-			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalledWith('test-session');
-			expect(mockSessionHelper.sendKey).toHaveBeenCalledWith('test-session', '/');
+			expect(mockSessionHelper.capturePane).toHaveBeenCalledWith('test-session', 120);
+			expect(mockSessionHelper.clearCurrentCommandLine).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendKey).not.toHaveBeenCalled();
 		});
 
-		it('should not detect Codex when output length stays the same', async () => {
-			mockSessionHelper.capturePane
-				.mockReturnValueOnce('before output')
-				.mockReturnValueOnce('before output');
+		it('should not detect Codex when no ready pattern is present', async () => {
+			mockSessionHelper.capturePane.mockReturnValueOnce('yellowsunhy@macbookpro crewly %');
 
 			const result = await service['detectRuntimeSpecific']('test-session');
 
@@ -82,10 +79,11 @@ describe('CodexRuntimeService', () => {
 	describe('getRuntimeExitPatterns', () => {
 		it('should return Codex-specific exit patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			expect(patterns).toHaveLength(2);
+			expect(patterns).toHaveLength(3);
 			expect(patterns[0].test('codex exited')).toBe(true);
 			expect(patterns[0].test('Codex CLI exited')).toBe(true);
 			expect(patterns[1].test('Session ended')).toBe(true);
+			expect(patterns[2].test('Conversation interrupted')).toBe(true);
 		});
 
 		it('should not match unrelated text', () => {
@@ -97,7 +95,7 @@ describe('CodexRuntimeService', () => {
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			expect(patterns).toHaveLength(2);
+			expect(patterns).toHaveLength(3);
 		});
 	});
 

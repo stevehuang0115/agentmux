@@ -94,7 +94,7 @@ describe('TaskTrackingService', () => {
         lastUpdated: expect.any(String),
         version: '1.0.0'
       });
-      expect(console.error).toHaveBeenCalledWith('Error loading task tracking data:', expect.any(Error));
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error loading task tracking data'));
     });
   });
 
@@ -117,7 +117,7 @@ describe('TaskTrackingService', () => {
       (fs.writeFile as jest.Mock).mockRejectedValue(new Error('Write error'));
 
       await expect(service.saveTaskData(mockTaskData)).rejects.toThrow('Write error');
-      expect(console.error).toHaveBeenCalledWith('Error saving task tracking data:', expect.any(Error));
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error saving task tracking data'));
     });
   });
 

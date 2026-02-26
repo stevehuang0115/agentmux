@@ -16,6 +16,7 @@ import {
 	CREWLY_CONSTANTS,
 	ENV_CONSTANTS,
 	AGENT_TIMEOUTS,
+	ORCHESTRATOR_SESSION_NAME,
 	ORCHESTRATOR_ROLE,
 	RUNTIME_TYPES,
 	RuntimeType,
@@ -77,6 +78,11 @@ export class AgentRegistrationService {
 		sentAt: number;
 		recovered: boolean;
 	}>>();
+
+	// Per-session delivery mutex to serialize message delivery.
+	// Prevents concurrent sendMessageWithRetry calls to the same session,
+	// which causes multiple Ctrl+C presses that can crash the runtime.
+	private sessionDeliveryMutex = new Map<string, Promise<void>>();
 
 
 	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
@@ -172,6 +178,41 @@ export class AgentRegistrationService {
 			this._sessionHelper = createSessionCommandHelper(backend);
 		}
 		return this._sessionHelper;
+	}
+
+	/**
+	 * Resolve the runtime type for a session from storage.
+	 * Checks orchestrator status first, then team member data.
+	 * Falls back to CLAUDE_CODE if nothing is found.
+	 *
+	 * IMPORTANT: Callers should prefer passing runtimeType explicitly.
+	 * This method exists as a safety net so that Ctrl+C (Claude Code
+	 * cleanup) is never sent to a Gemini CLI session, which would
+	 * trigger /quit and kill the agent.
+	 */
+	private async resolveSessionRuntimeType(sessionName: string): Promise<RuntimeType> {
+		try {
+			// Check if this is the orchestrator session
+			if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+				const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+				if (orchestratorStatus?.runtimeType) {
+					return orchestratorStatus.runtimeType as RuntimeType;
+				}
+			}
+
+			// Check team member data
+			const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
+			if (memberInfo?.member?.runtimeType) {
+				return memberInfo.member.runtimeType as RuntimeType;
+			}
+		} catch (error) {
+			this.logger.debug('Could not resolve runtime type from storage, using default', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		return RUNTIME_TYPES.CLAUDE_CODE;
 	}
 
 	/**
@@ -301,7 +342,8 @@ export class AgentRegistrationService {
 		timeout: number = AGENT_TIMEOUTS.REGULAR_AGENT_INITIALIZATION,
 		memberId?: string,
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
-		runtimeFlags?: string[]
+		runtimeFlags?: string[],
+		additionalAllowlistPaths?: string[]
 	): Promise<{
 		success: boolean;
 		message?: string;
@@ -337,7 +379,8 @@ export class AgentRegistrationService {
 				projectPath,
 				memberId,
 				runtimeType,
-				runtimeFlags
+				runtimeFlags,
+				additionalAllowlistPaths
 			);
 			if (step1Success) {
 				return {
@@ -448,7 +491,8 @@ export class AgentRegistrationService {
 		projectPath?: string,
 		memberId?: string,
 		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE,
-		runtimeFlags?: string[]
+		runtimeFlags?: string[],
+		additionalAllowlistPaths?: string[]
 	): Promise<boolean> {
 		// Clear Commandline
 		await (await this.getSessionHelper()).clearCurrentCommandLine(sessionName);
@@ -484,7 +528,7 @@ export class AgentRegistrationService {
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
 			try {
 				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-				promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+				promptFilePath = await this.writePromptFile(sessionName, prompt);
 			} catch (promptError) {
 				this.logger.warn('Failed to pre-write prompt file (non-fatal, will fall back to direct delivery)', {
 					sessionName,
@@ -520,7 +564,7 @@ export class AgentRegistrationService {
 
 		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
 		try {
-			await runtimeService2.postInitialize(sessionName, projectPath);
+			await runtimeService2.postInitialize(sessionName, projectPath, additionalAllowlistPaths);
 			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
 			// arrived during postInitialize commands, so they don't leak into the prompt input
 			await delay(500);
@@ -653,13 +697,23 @@ export class AgentRegistrationService {
 		this.registrationAbortControllers.set(sessionName, controller);
 
 		try {
+			this.logger.info('Loading registration prompt', { sessionName, role, runtimeType });
+
 			if (controller.signal.aborted) return;
 			const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
 
-			if (controller.signal.aborted) return;
-			await this.sendPromptRobustly(sessionName, prompt, runtimeType, controller.signal);
+			this.logger.info('Registration prompt loaded, sending to agent', {
+				sessionName, role, runtimeType, promptLength: prompt.length,
+			});
 
-			this.logger.debug('Registration prompt sent asynchronously', { sessionName, role });
+			if (controller.signal.aborted) return;
+			const sent = await this.sendPromptRobustly(sessionName, prompt, runtimeType, controller.signal);
+
+			if (sent) {
+				this.logger.info('Registration prompt sent successfully', { sessionName, role });
+			} else {
+				this.logger.warn('Registration prompt delivery returned false', { sessionName, role, runtimeType });
+			}
 		} catch (error) {
 			if (controller.signal.aborted) {
 				this.logger.info('Registration prompt cancelled (runtime exited)', { sessionName });
@@ -668,6 +722,7 @@ export class AgentRegistrationService {
 			this.logger.warn('Failed to send registration prompt asynchronously', {
 				sessionName,
 				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
 			});
 		} finally {
 			this.registrationAbortControllers.delete(sessionName);
@@ -724,7 +779,7 @@ export class AgentRegistrationService {
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
 			try {
 				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-				promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+				promptFilePath = await this.writePromptFile(sessionName, prompt);
 			} catch (promptError) {
 				this.logger.warn('Failed to pre-write prompt file in full recreation (non-fatal)', {
 					sessionName,
@@ -773,18 +828,28 @@ export class AgentRegistrationService {
 			);
 			await delay(5000);
 
-			this.logger.debug('Verifying orchestrator runtime responsiveness', {
-				sessionName,
-				runtimeType,
-			});
-			// runtimeService4: Final verification instance for orchestrator responsiveness
-			// Clean instance for post-initialization responsiveness testing
-			const runtimeService4 = this.createRuntimeService(runtimeType);
-			const runtimeResponding = await runtimeService4.detectRuntimeWithCommand(sessionName);
-			if (!runtimeResponding) {
-				throw new Error(
-					`${runtimeType} not responding to commands after orchestrator recreation`
-				);
+			// Codex CLI is sensitive to active key-probe verification (it may drop to
+			// the shell when probe keys are interpreted outside the TUI). We already
+			// passed waitForRuntimeReady above, so skip the extra command probe here.
+			if (runtimeType !== RUNTIME_TYPES.CODEX_CLI) {
+				this.logger.debug('Verifying orchestrator runtime responsiveness', {
+					sessionName,
+					runtimeType,
+				});
+				// runtimeService4: Final verification instance for orchestrator responsiveness
+				// Clean instance for post-initialization responsiveness testing
+				const runtimeService4 = this.createRuntimeService(runtimeType);
+				const runtimeResponding = await runtimeService4.detectRuntimeWithCommand(sessionName);
+				if (!runtimeResponding) {
+					throw new Error(
+						`${runtimeType} not responding to commands after orchestrator recreation`
+					);
+				}
+			} else {
+				this.logger.debug('Skipping active runtime probe for Codex orchestrator recreation', {
+					sessionName,
+					runtimeType,
+				});
 			}
 
 			this.logger.debug(
@@ -995,6 +1060,26 @@ export class AgentRegistrationService {
 				prompt += `\n- **Member ID:** ${memberId}`;
 			}
 
+			// Conditionally append Self Evolution instructions for the orchestrator
+			if (role === ORCHESTRATOR_ROLE) {
+				try {
+					const settings = await getSettingsService().getSettings();
+					if (settings.general.enableSelfEvolution) {
+						const selfEvoPath = path.join(
+							this.projectRoot, 'config', 'roles', 'orchestrator', 'self-evolution.md'
+						);
+						const selfEvoPrompt = await readFile(selfEvoPath, 'utf8');
+						prompt += `\n\n---\n\n${selfEvoPrompt}`;
+						this.logger.info('Self Evolution prompt injected', { sessionName });
+					}
+				} catch (selfEvoError) {
+					this.logger.warn('Failed to load self-evolution prompt (non-critical)', {
+						sessionName,
+						error: selfEvoError instanceof Error ? selfEvoError.message : String(selfEvoError),
+					});
+				}
+			}
+
 			return prompt;
 		} catch (error) {
 			// Fallback to inline prompt if file doesn't exist
@@ -1034,19 +1119,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	 *
 	 * @param sessionName - Session name (used for filename)
 	 * @param prompt - The full prompt content
-	 * @param runtimeType - Runtime type (determines directory)
 	 * @returns The absolute path to the written file, or undefined on error
 	 */
 	private async writePromptFile(
 		sessionName: string,
-		prompt: string,
-		runtimeType: RuntimeType
+		prompt: string
 	): Promise<string | undefined> {
-		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
-		const promptsDir = isClaudeCode
-			? path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME, 'prompts')
-			: path.join(this.projectRoot, '.crewly', 'prompts');
-		const promptFilePath = path.join(promptsDir, `${sessionName}-init.md`);
+		const promptFilePath = this.getInitPromptFilePath(sessionName);
+		const promptsDir = path.dirname(promptFilePath);
 
 		try {
 			await mkdir(promptsDir, { recursive: true });
@@ -1065,6 +1145,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			});
 			return undefined;
 		}
+	}
+
+	/**
+	 * Build the unified init prompt path used by all runtimes.
+	 */
+	private getInitPromptFilePath(sessionName: string): string {
+		return path.join(
+			os.homedir(),
+			CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
+			'prompts',
+			`${sessionName}-init.md`
+		);
 	}
 
 	/**
@@ -1366,6 +1458,13 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		 * @default false
 		 */
 		forceRecreate?: boolean;
+		/**
+		 * Additional paths to add to Gemini CLI's /directory allowlist during
+		 * postInitialize, before the registration prompt is sent. Used by the
+		 * orchestrator to include all existing project paths so they don't
+		 * race with the "Read the file..." prompt.
+		 */
+		additionalAllowlistPaths?: string[];
 	}): Promise<{
 		success: boolean;
 		sessionName?: string;
@@ -1413,6 +1512,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		runtimeType?: RuntimeType;
 		teamId?: string;
 		forceRecreate?: boolean;
+		additionalAllowlistPaths?: string[];
 	}): Promise<{
 		success: boolean;
 		sessionName?: string;
@@ -1580,7 +1680,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					}
 
 					// Step 2: If runtime not detected or registration failed, try Ctrl+C restart
+					// only for Claude. Gemini/Codex treat Ctrl+C as destructive at prompt
+					// and can exit the runtime instead of recovering.
 					if (!recoverySuccess) {
+						if (runtimeType !== RUNTIME_TYPES.CLAUDE_CODE) {
+							this.logger.info(
+								'Skipping Ctrl+C recovery for non-Claude runtime; falling back to recreation',
+								{ sessionName, runtimeType }
+							);
+							throw new Error(`${runtimeType} recovery requires full recreation`);
+						}
+
 						this.logger.info(
 							'Runtime not detected or registration failed, attempting Ctrl+C restart',
 							{
@@ -1643,7 +1753,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// Start context window monitoring for recovered non-orchestrator session
 					if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
 						ContextWindowMonitorService.getInstance().startSessionMonitoring(
-							sessionName, config.memberId, config.teamId, role
+							sessionName, config.memberId, config.teamId, role, runtimeType
 						);
 					}
 
@@ -1750,7 +1860,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				timeout,
 				memberId,
 				runtimeType,
-				runtimeFlags
+				runtimeFlags,
+				config.additionalAllowlistPaths
 			);
 
 			if (!initResult.success) {
@@ -1764,7 +1875,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Start context window monitoring for newly created non-orchestrator session
 			if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
 				ContextWindowMonitorService.getInstance().startSessionMonitoring(
-					sessionName, config.memberId, config.teamId, role
+					sessionName, config.memberId, config.teamId, role, runtimeType
 				);
 			}
 
@@ -1900,18 +2011,42 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	async sendMessageToAgent(
 		sessionName: string,
 		message: string,
-		runtimeType: RuntimeType = RUNTIME_TYPES.CLAUDE_CODE
+		runtimeType?: RuntimeType
 	): Promise<{
 		success: boolean;
 		message?: string;
 		error?: string;
 	}> {
+		// Per-session delivery serialization: chain this delivery after any
+		// in-flight delivery to the same session. This prevents concurrent
+		// sendMessageWithRetry calls that each send Ctrl+C on retry attempts,
+		// which can kill the runtime when 25+ scheduled checks fire at once.
+		const previousDelivery = this.sessionDeliveryMutex.get(sessionName);
+		let releaseMutex!: () => void;
+		const currentDelivery = new Promise<void>((r) => { releaseMutex = r; });
+		this.sessionDeliveryMutex.set(sessionName, currentDelivery);
+
+		if (previousDelivery) {
+			this.logger.info('Waiting for in-flight delivery to complete before sending', {
+				sessionName,
+				messageLength: message.length,
+			});
+			await previousDelivery.catch(() => {});
+		}
+
 		try {
 			if (!message || typeof message !== 'string') {
 				return {
 					success: false,
 					error: 'Message is required and must be a string',
 				};
+			}
+
+			// Auto-resolve runtime type if not provided.
+			// CRITICAL: defaulting to CLAUDE_CODE is dangerous because
+			// Ctrl+C cleanup (Claude Code behavior) triggers /quit on Gemini CLI.
+			if (!runtimeType) {
+				runtimeType = await this.resolveSessionRuntimeType(sessionName);
 			}
 
 			// Get session helper once for this method
@@ -1928,8 +2063,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Guard: refuse to deliver if the runtime process has exited.
 			// When Claude Code exits (e.g. context exhaustion), the PTY shell
 			// stays alive. Writing to it would execute garbage as shell commands.
-			const backend = sessionHelper.getBackend();
-			if (backend.isChildProcessAlive && !backend.isChildProcessAlive(sessionName)) {
+			const backend =
+				typeof (sessionHelper as { getBackend?: () => { isChildProcessAlive?: (name: string) => boolean } }).getBackend === 'function'
+					? (sessionHelper as { getBackend: () => { isChildProcessAlive?: (name: string) => boolean } }).getBackend()
+					: getSessionBackendSync();
+			const childAlive = backend?.isChildProcessAlive?.(sessionName);
+			if (childAlive === false) {
 				this.logger.error('Runtime process not alive, refusing to deliver message', {
 					sessionName,
 					messageLength: message.length,
@@ -1970,6 +2109,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				success: false,
 				error: errorMessage,
 			};
+		} finally {
+			releaseMutex();
+			if (this.sessionDeliveryMutex.get(sessionName) === currentDelivery) {
+				this.sessionDeliveryMutex.delete(sessionName);
+			}
 		}
 	}
 
@@ -2497,11 +2641,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					await delay(500);
 				}
 
-				// For Gemini CLI: detect and clear interactive modes before sending message.
-				// The Gemini CLI can enter interactive states (file picker from /resume,
-				// command palette, error prompts) where pasted text is consumed by the
-				// interactive UI rather than the main input. Send Ctrl-C to clear these
-				// states before writing the actual message.
+				// For Gemini CLI: detect and gently escape interactive modes before
+				// sending the message. Avoid Ctrl-C here — Gemini interprets it as
+				// destructive cancellation/quit in some states.
 				if (!isClaudeCode) {
 					const preOutput = sessionHelper.capturePane(sessionName, 10);
 					const interactiveModePatterns = [
@@ -2512,12 +2654,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					];
 					const inInteractiveMode = interactiveModePatterns.some(p => preOutput.includes(p));
 					if (inInteractiveMode) {
-						this.logger.warn('Gemini CLI in interactive mode, sending Ctrl-C to clear', {
+						this.logger.warn('Gemini CLI in interactive mode, using non-destructive recovery', {
 							sessionName,
 							detectedPattern: interactiveModePatterns.find(p => preOutput.includes(p)),
 						});
-						await sessionHelper.sendKey(sessionName, 'C-c');
-						await new Promise(r => setTimeout(r, 1500));
+						await sessionHelper.sendKey(sessionName, 'Tab');
+						await delay(250);
+						await sessionHelper.sendEnter(sessionName);
+						await delay(1000);
 					}
 				}
 
@@ -2771,8 +2915,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							&& /reading|thinking|processing|analyzing|generating|searching/i.test(newContent);
 
 						const significantLengthChange = Math.abs(lengthDiff) > 10;
+						// For Gemini CLI, contentChanged alone is sufficient evidence of
+						// delivery. The TUI redraws minimally (lengthDiff can be as low as
+						// 1-2 chars) when processing starts, so requiring significantLengthChange
+						// causes false "stuck" detection. False "stuck" + Ctrl+C kills the CLI.
+						const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 						const delivered = (lengthDiff > 20)
 							|| (contentChanged && significantLengthChange)
+							|| (contentChanged && isGemini)
 							|| hasProcessingIndicators
 							|| hasGeminiIndicators;
 
@@ -2809,30 +2959,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				if (isClaudeCode) {
 					await sessionHelper.clearCurrentCommandLine(sessionName);
 				} else {
-					// Gemini CLI retry cleanup: be careful with cleanup keystrokes.
-					// If output changed (contentChanged=true), text likely reached the
-					// input box but wasn't submitted — Ctrl+C safely clears it.
-					// If output did NOT change at all, the TUI input is likely defocused
-					// and the input box is EMPTY. Ctrl+C on an empty Gemini CLI prompt
-					// triggers /quit and exits the CLI entirely.
-					const noOutputChange = !isClaudeCode && beforeOutput === sessionHelper.capturePane(sessionName, 20);
-					if (noOutputChange) {
-						this.logger.warn('No output change detected — TUI input likely defocused, using Tab to cycle Ink focus', {
-							sessionName,
-							attempt,
-						});
-						// Tab triggers focusNext() in Ink's FocusContext, which should
-						// cycle focus back to the InputPrompt component even when it's
-						// defocused. This is more reliable than Enter (which is silently
-						// consumed when no component is focused).
-						await sessionHelper.sendKey(sessionName, 'Tab');
-						await delay(300);
-						await sessionHelper.sendEnter(sessionName);
-						await delay(300);
-					} else {
-						await sessionHelper.sendCtrlC(sessionName);
-						await delay(200);
-					}
+					// Gemini CLI retry cleanup: NEVER send Ctrl+C — it triggers /quit
+					// and kills the CLI entirely, regardless of whether text is in the
+					// input box or not. Use Tab to cycle Ink focus back to the input
+					// prompt, then Enter to submit any pending text.
+					this.logger.warn('Gemini CLI message stuck — using Tab focus recovery (no Ctrl+C)', {
+						sessionName,
+						attempt,
+					});
+					await sessionHelper.sendKey(sessionName, 'Tab');
+					await delay(300);
+					await sessionHelper.sendEnter(sessionName);
+					await delay(300);
 				}
 				await delay(SESSION_COMMAND_DELAYS.CLEAR_COMMAND_DELAY);
 
@@ -3240,6 +3378,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	private getPromptPatternForRuntime(runtimeType?: RuntimeType): RegExp {
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) return TERMINAL_PATTERNS.CLAUDE_CODE_PROMPT;
 		if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) return TERMINAL_PATTERNS.GEMINI_CLI_PROMPT;
+		if (runtimeType === RUNTIME_TYPES.CODEX_CLI) return TERMINAL_PATTERNS.CODEX_CLI_PROMPT;
 		return TERMINAL_PATTERNS.PROMPT_STREAM;
 	}
 
@@ -3263,6 +3402,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
+		const isCodex = runtimeType === RUNTIME_TYPES.CODEX_CLI;
 		const streamPattern = this.getPromptPatternForRuntime(runtimeType);
 
 		// Check for prompt FIRST. Processing indicators like "thinking" or "analyzing"
@@ -3284,7 +3424,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
 
 			// Claude Code prompts: ❯, ⏵, $ alone on a line
-			if (!isGemini) {
+			if (!isGemini && !isCodex) {
 				if (['❯', '⏵', '$'].some(ch => trimmed === ch || stripped === ch)) {
 					return true;
 				}
@@ -3298,8 +3438,16 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Gemini CLI prompts: > or ! followed by space
 			if (!isClaudeCode) {
-				if (trimmed.startsWith('> ') || trimmed.startsWith('! ') ||
-					stripped.startsWith('> ') || stripped.startsWith('! ')) {
+				if (isCodex) {
+					// Codex prompt uses `›`; avoid plain `> ` to prevent false-positives
+					// from markdown blockquotes in agent output.
+					if (trimmed.startsWith('› ') || stripped.startsWith('› ')) {
+						return true;
+					}
+				} else if (
+					trimmed.startsWith('> ') || trimmed.startsWith('! ') ||
+					stripped.startsWith('> ') || stripped.startsWith('! ')
+				) {
 					return true;
 				}
 			}
@@ -3546,7 +3694,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		const sessionHelper = await this.getSessionHelper();
 
 		// Step 1: Write prompt to a file (idempotent — may already exist from pre-launch write).
-		const promptFilePath = await this.writePromptFile(sessionName, prompt, runtimeType);
+		const promptFilePath = await this.writePromptFile(sessionName, prompt);
 		if (!promptFilePath) {
 			// File write failure is fatal — all runtimes use the file-read approach.
 			return false;
@@ -3562,12 +3710,16 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			? 'Begin your work now. Follow the instructions you were given and start by doing an initial assessment of the project.'
 			: `Read the file at ${promptFilePath} and follow all instructions in it.`;
 
-		// Claude Code: single attempt only. The full prompt is loaded via
-		// --append-system-prompt-file, so the kickoff is just a short trigger.
-		// Retrying causes duplicates because Claude returns to its prompt between
-		// tool calls, making retry checks think the first message wasn't received.
-		// Gemini CLI / other runtimes: up to 3 attempts (prompt loaded via file-read).
-		const maxAttempts = isClaudeCode ? 1 : 3;
+		// Single attempt for all runtimes. Retrying causes duplicate messages because:
+		// - Claude Code: returns to its prompt between tool calls, making retry
+		//   checks think the first message wasn't received.
+		// - Gemini CLI: the echoed message "Read the file at..." starts with `> `
+		//   which isClaudeAtPrompt misdetects as an idle prompt, and the TUI's
+		//   input box shows `> ` even during processing. Both cause false-negative
+		//   delivery verification and unnecessary retries.
+		// The sendMessage helper reliably writes to the PTY — if it succeeds,
+		// the message was delivered.
+		const maxAttempts = 1;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			// Check abort before each attempt
@@ -3577,7 +3729,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 
 			try {
-				this.logger.debug('Sending prompt to agent', {
+				this.logger.info('Sending prompt to agent', {
 					sessionName,
 					attempt,
 					runtimeType,
@@ -3592,13 +3744,22 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				}
 
 				// Clear any pending input before sending the instruction (first attempt only).
-				// Claude Code: Escape closes slash menus + Ctrl+U clears line.
-				// Gemini CLI (Ink TUI): Do NOT send any cleanup keystrokes.
-				if (isClaudeCode && attempt === 1) {
-					await sessionHelper.sendEscape(sessionName);
-					await delay(200);
-					await sessionHelper.sendKey(sessionName, 'C-u');
-					await delay(300);
+				if (attempt === 1) {
+					if (isClaudeCode) {
+						// Claude Code: Escape closes slash menus + Ctrl+U clears line.
+						await sessionHelper.sendEscape(sessionName);
+						await delay(200);
+						await sessionHelper.sendKey(sessionName, 'C-u');
+						await delay(300);
+					} else {
+						// Gemini CLI (Ink TUI): After /directory add processing, the TUI
+						// input may lose focus or have stale invisible characters.
+						// Send Enter to flush any residual input, then wait for the
+						// prompt to settle before sending the real instruction.
+						this.logger.debug('Gemini CLI pre-send: flushing input with Enter', { sessionName });
+						await sessionHelper.sendEnter(sessionName);
+						await delay(1000);
+					}
 				}
 
 				// Check abort right before writing instruction to terminal
@@ -3648,33 +3809,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					return false;
 				}
 
-				// Gemini CLI / other runtimes: original verification with length comparison
-				// Capture state before sending was skipped for Claude Code path above,
-				// so capture it here for non-Claude runtimes on retry.
-				const verifyDelay = 3000;
-				await delay(verifyDelay);
-
-				if (abortSignal?.aborted) return false;
-
-				const afterOutput = sessionHelper.capturePane(sessionName, 20);
-				const hasProcessingIndicators = /thinking|processing|analyzing|registering|reading/i.test(
-					afterOutput
-				);
-
-				if (hasProcessingIndicators) {
-					this.logger.debug('Prompt instruction delivered successfully', {
-						sessionName, attempt, runtimeType,
-					});
-					return true;
-				}
-
-				this.logger.debug('Prompt instruction delivery unconfirmed - retrying', {
+				// Gemini CLI / other runtimes: trust the PTY delivery.
+				// sendMessage writes directly to the PTY — if it didn't throw,
+				// the message was delivered. Terminal-based verification is unreliable
+				// because Gemini's TUI always shows `> ` (even during processing)
+				// and our echoed message starts with `> `, both causing false
+				// "at prompt" detection.
+				this.logger.info('Prompt instruction sent to PTY (trusting delivery)', {
 					sessionName, attempt, runtimeType,
+					messageLength: messageToSend.length,
 				});
-
-				if (attempt < maxAttempts) {
-					await delay(1000);
-				}
+				return true;
 			} catch (error) {
 				this.logger.error('Error during prompt instruction delivery', {
 					sessionName,

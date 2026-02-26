@@ -14,7 +14,8 @@ describe('Assignments Handlers', () => {
 
     mockStorageService = {
       getProjects: jest.fn<any>(),
-      getTeams: jest.fn<any>()
+      getTeams: jest.fn<any>(),
+      saveProject: jest.fn<any>()
     };
 
     mockApiController = {

@@ -27,7 +27,14 @@ import type {
 /**
  * Categories for the unified remember operation
  */
-export type RememberCategory = 'fact' | 'pattern' | 'decision' | 'gotcha' | 'preference' | 'relationship';
+export type RememberCategory =
+  | 'fact'
+  | 'pattern'
+  | 'decision'
+  | 'gotcha'
+  | 'preference'
+  | 'user_preference'
+  | 'relationship';
 
 /**
  * Scope for memory operations
@@ -468,8 +475,20 @@ export class MemoryService implements IMemoryService {
           relationshipType: params.metadata?.relationshipType || 'uses',
         });
 
+      case 'user_preference':
+        return this.projectMemory.addPattern(params.projectPath, {
+          category: 'user_preference',
+          title: params.metadata?.title || 'User Preference',
+          description: params.content,
+          example: params.metadata?.example,
+          files: params.metadata?.files,
+          discoveredBy: params.agentId,
+        });
+
       default:
-        throw new Error(`Category '${params.category}' is not valid for project scope. Use 'pattern', 'decision', 'gotcha', or 'relationship'.`);
+        throw new Error(
+          `Category '${params.category}' is not valid for project scope. Use 'pattern', 'decision', 'gotcha', 'relationship', or 'user_preference'.`
+        );
     }
   }
 

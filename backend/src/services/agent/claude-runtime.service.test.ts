@@ -175,13 +175,20 @@ describe('ClaudeRuntimeService', () => {
 				path.join('/test/project', '.mcp.json'),
 				{
 					mcpServers: {
-						playwright: {
-							command: 'npx',
-							args: ['@playwright/mcp@latest', '--headless'],
+							playwright: {
+								command: 'npx',
+								args: [
+									'@playwright/mcp@latest',
+									'--headless',
+									'--human-delay-min',
+									'300',
+									'--human-delay-max',
+									'1200',
+								],
+							},
 						},
-					},
-				}
-			);
+					}
+				);
 		});
 
 		it('should preserve existing user MCP servers', async () => {
@@ -199,12 +206,19 @@ describe('ClaudeRuntimeService', () => {
 				{
 					mcpServers: {
 						'my-custom-server': { command: 'node', args: ['server.js'] },
-						playwright: {
-							command: 'npx',
-							args: ['@playwright/mcp@latest', '--headless'],
+							playwright: {
+								command: 'npx',
+								args: [
+									'@playwright/mcp@latest',
+									'--headless',
+									'--human-delay-min',
+									'300',
+									'--human-delay-max',
+									'1200',
+								],
+							},
 						},
-					},
-					otherSetting: 'preserved',
+						otherSetting: 'preserved',
 				}
 			);
 		});

@@ -48,6 +48,12 @@ export interface GeneralSettings {
 
   /** Minutes of inactivity before an agent is automatically suspended (0 = disabled) */
   agentIdleTimeoutMinutes: number;
+
+  /** Enable proactive context compaction based on cumulative terminal output volume */
+  enableProactiveCompact: boolean;
+
+  /** Enable Self Evolution mode — orchestrator monitors for errors and self-triages */
+  enableSelfEvolution: boolean;
 }
 
 /**
@@ -79,6 +85,14 @@ export interface SkillsSettings {
 
   /** Enable browser automation capabilities */
   enableBrowserAutomation: boolean;
+
+  /** Browser runtime profile used when generating MCP browser config */
+  browserProfile?: {
+    headless: boolean;
+    stealth: boolean;
+    humanDelayMinMs: number;
+    humanDelayMaxMs: number;
+  };
 
   /** Enable script execution */
   enableScriptExecution: boolean;
@@ -184,9 +198,11 @@ export function getDefaultSettings(): CrewlySettings {
       runtimeCommands: {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
-        'codex-cli': 'codex --full-auto',
+        'codex-cli': 'codex -a never -s danger-full-access',
       },
       agentIdleTimeoutMinutes: 10,
+      enableProactiveCompact: true,
+      enableSelfEvolution: false,
     },
     chat: {
       showRawTerminalOutput: false,
@@ -198,6 +214,12 @@ export function getDefaultSettings(): CrewlySettings {
     skills: {
       skillsDirectory: '',
       enableBrowserAutomation: true,
+      browserProfile: {
+        headless: true,
+        stealth: false,
+        humanDelayMinMs: 300,
+        humanDelayMaxMs: 1200,
+      },
       enableScriptExecution: true,
       skillExecutionTimeoutMs: 60000,
     },
@@ -246,6 +268,14 @@ export function validateSettings(settings: CrewlySettings): SettingsValidationRe
     errors.push('agentIdleTimeoutMinutes must be >= 0 (0 disables idle suspension)');
   }
 
+  if (typeof settings.general.enableProactiveCompact !== 'boolean') {
+    errors.push('enableProactiveCompact must be a boolean');
+  }
+
+  if (typeof settings.general.enableSelfEvolution !== 'undefined' && typeof settings.general.enableSelfEvolution !== 'boolean') {
+    errors.push('enableSelfEvolution must be a boolean');
+  }
+
   // Validate runtimeCommands
   if (settings.general.runtimeCommands) {
     for (const runtime of AI_RUNTIMES) {
@@ -264,6 +294,15 @@ export function validateSettings(settings: CrewlySettings): SettingsValidationRe
   // Validate skills settings
   if (settings.skills.skillExecutionTimeoutMs < SETTINGS_CONSTRAINTS.MIN_SKILL_EXECUTION_TIMEOUT) {
     errors.push(`Skill execution timeout must be at least ${SETTINGS_CONSTRAINTS.MIN_SKILL_EXECUTION_TIMEOUT}ms`);
+  }
+
+  if (settings.skills.browserProfile) {
+    if (typeof settings.skills.browserProfile.headless !== 'boolean') {
+      errors.push('skills.browserProfile.headless must be a boolean');
+    }
+    if (typeof settings.skills.browserProfile.stealth !== 'boolean') {
+      errors.push('skills.browserProfile.stealth must be a boolean');
+    }
   }
 
   return {

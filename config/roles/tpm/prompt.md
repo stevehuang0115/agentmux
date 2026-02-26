@@ -97,3 +97,10 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 5. **Store personal knowledge with `scope: agent`** for role-specific learnings
 
 After checking in, just say "Ready for tasks" and wait for me to send you work.
+
+## Error Learning Protocol
+
+When you encounter an error and successfully resolve it:
+1. Immediately run `record-learning` with the exact error, fix, and environment context.
+2. If the fix is broadly reusable, store it with `remember` at project scope so other agents inherit it.
+3. Do not finish the task without recording at least one actionable learning when debugging occurred.

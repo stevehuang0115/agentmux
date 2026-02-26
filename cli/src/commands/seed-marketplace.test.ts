@@ -79,7 +79,6 @@ const skillsDir = path.join(TEMP_ROOT, 'skills');
 beforeAll(() => {
   mkdirSync(skillsDir, { recursive: true });
   // Create some skills that match PUBLISHABLE_SKILLS list
-  createSkillDir(skillsDir, 'check-quality-gates');
   createSkillDir(skillsDir, 'dep-updater');
   createSkillDir(skillsDir, 'test-runner');
 });
@@ -113,7 +112,6 @@ describe('seedMarketplaceCommand', () => {
     expect(registry.items.length).toBeGreaterThan(0);
 
     const ids = registry.items.map((i: { id: string }) => i.id);
-    expect(ids).toContain('check-quality-gates');
     expect(ids).toContain('dep-updater');
     expect(ids).toContain('test-runner');
   });
@@ -126,8 +124,8 @@ describe('seedMarketplaceCommand', () => {
     consoleSpy.mockRestore();
 
     const assetsDir = path.join(MARKETPLACE_DIR, 'assets', 'skills');
-    expect(existsSync(path.join(assetsDir, 'check-quality-gates'))).toBe(true);
     expect(existsSync(path.join(assetsDir, 'dep-updater'))).toBe(true);
+    expect(existsSync(path.join(assetsDir, 'test-runner'))).toBe(true);
   });
 
   it('skips already published skills with same version', async () => {

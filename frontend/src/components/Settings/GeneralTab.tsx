@@ -240,6 +240,42 @@ export const GeneralTab: React.FC = () => {
               className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
             />
           </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="enableProactiveCompact" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Proactive Context Compaction
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Automatically run runtime compact/compress when output volume grows large
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="enableProactiveCompact"
+              checked={localSettings.general.enableProactiveCompact}
+              onChange={(e) => handleChange('general', 'enableProactiveCompact', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <label htmlFor="enableSelfEvolution" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                Self Evolution Mode
+              </label>
+              <p className="text-xs text-text-secondary-dark mt-0.5">
+                Orchestrator monitors for errors, triages issues, and reports bugs. When enabled, the orchestrator will proactively read system and session logs to diagnose problems.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              id="enableSelfEvolution"
+              checked={localSettings.general.enableSelfEvolution}
+              onChange={(e) => handleChange('general', 'enableSelfEvolution', e.target.checked)}
+              className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+            />
+          </div>
         </div>
       </section>
 

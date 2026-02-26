@@ -19,6 +19,7 @@ import {
   DEFAULT_SCHEDULES,
   DEFAULT_ADAPTIVE_CONFIG,
 } from '../../types/scheduler.types.js';
+import { ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/storage.service.js');
@@ -872,6 +873,58 @@ describe('SchedulerService', () => {
 
       // After delivery completes, the next timeout should be scheduled
       expect(recurringTimeouts.has(checkId)).toBe(true);
+    });
+
+    it('should auto-cancel recurring check after sustained idle observations', async () => {
+      const mockActivityMonitor = {
+        getWorkingStatusForSession: jest.fn().mockResolvedValue('idle'),
+      };
+      service.setActivityMonitor(mockActivityMonitor as any);
+
+      service.scheduleRecurringCheck('test-session', 1, 'Recurring message');
+
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 10; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      // threshold is 3; after 3 intervals it should cancel before delivery.
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(2);
+      expect(service.getStats().recurringChecks).toBe(0);
+    });
+
+    it('should not auto-cancel recurring checks for orchestrator session when idle', async () => {
+      const mockActivityMonitor = {
+        getWorkingStatusForSession: jest.fn().mockResolvedValue('idle'),
+      };
+      service.setActivityMonitor(mockActivityMonitor as any);
+
+      service.scheduleRecurringCheck(ORCHESTRATOR_SESSION_NAME, 1, 'Recurring message');
+
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 10; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      expect(service.getStats().recurringChecks).toBe(1);
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(3);
+      expect(mockActivityMonitor.getWorkingStatusForSession).not.toHaveBeenCalled();
     });
   });
 

@@ -68,6 +68,14 @@ export interface ScheduledCheck {
   scheduledFor: string;
   intervalMinutes?: number;
   isRecurring: boolean;
+  label?: string;
+  persistent?: boolean;
+  timezone?: string;
+  recurrenceType?: 'interval' | 'daily' | 'weekdays' | 'weekly';
+  timeOfDay?: string;
+  dayOfWeek?: number;
+  maxOccurrences?: number;
+  currentOccurrence?: number;
   createdAt: string;
   /** Optional session name of the agent being monitored (for status enrichment) */
   watchedSession?: string;

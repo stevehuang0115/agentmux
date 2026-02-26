@@ -737,6 +737,20 @@ describe('TerminalGateway', () => {
 			);
 		});
 
+		it('should not fallback to activeConversationId for typed event payloads', async () => {
+			gateway.setActiveConversationId('active-conv-fallback');
+
+			const output = `[NOTIFY]\ntype: agent_inactive\n---\nAgent Ella became inactive\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
+		});
+
 		it('should skip legacy JSON NOTIFY payloads missing required message field', () => {
 			const output = `[NOTIFY]${JSON.stringify({ type: 'alert', conversationId: 'conv-1' })}[/NOTIFY]`;
 

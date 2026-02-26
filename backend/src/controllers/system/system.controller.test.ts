@@ -49,7 +49,13 @@ jest.mock('../../services/index.js', () => ({
   },
   LoggerService: {
     getInstance: jest.fn().mockReturnValue({
-      getRecentLogs: jest.fn()
+      getRecentLogs: jest.fn(),
+      createComponentLogger: jest.fn().mockReturnValue({
+        info: jest.fn(),
+        warn: jest.fn(),
+        error: jest.fn(),
+        debug: jest.fn(),
+      })
     })
   }
 }));

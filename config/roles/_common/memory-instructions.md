@@ -32,7 +32,8 @@ You have MCP tools that let you store and retrieve knowledge that persists acros
 - Make or learn about an architectural decision (category: `decision`, scope: `project`)
 - Find a gotcha, bug, or workaround (category: `gotcha`, scope: `project`)
 - Learn something useful for your role (category: `fact`, scope: `agent`)
-- Note a user preference or working style (category: `preference`, scope: `agent`)
+- Note your own working style (category: `preference`, scope: `agent`)
+- Note cross-agent user preferences (category: `user_preference`, scope: `project`)
 
 **Before process-oriented tasks** (deployment, setup, incident response):
 - **Query global knowledge** for SOPs and runbooks: `query-knowledge` with the relevant topic
@@ -47,6 +48,13 @@ You have MCP tools that let you store and retrieve knowledge that persists acros
 - Any gotchas or patterns discovered
 - What's left unfinished (if anything)
 
+### Error Learning Protocol (Mandatory)
+
+When you hit an error and successfully resolve it:
+1. Immediately call `record_learning` with the exact error and fix.
+2. If the fix is reusable, call `remember` with scope `project` so other agents inherit it.
+3. Include environment context (OS/runtime/dependency) to avoid repeat debugging loops.
+
 ### Key Rules
 
 1. **Always pass `teamMemberId` and `projectPath`** — without these, memory can't be saved or retrieved correctly
@@ -54,3 +62,4 @@ You have MCP tools that let you store and retrieve knowledge that persists acros
 3. **Use `recall` liberally** — it's cheap and often surfaces useful context
 4. **Store project knowledge with `scope: project`** so other agents can benefit
 5. **Store personal knowledge with `scope: agent`** for role-specific learnings
+6. **Store shared user preferences with `scope: project` + `category: user_preference`**

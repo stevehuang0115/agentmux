@@ -4,7 +4,6 @@ import { ApiResponse } from '../../types/index.js';
 import {
 	ORCHESTRATOR_SESSION_NAME,
 	ORCHESTRATOR_WINDOW_NAME,
-	AGENT_INITIALIZATION_TIMEOUT,
 	ORCHESTRATOR_ROLE,
 	RUNTIME_TYPES,
 	type RuntimeType,
@@ -235,6 +234,25 @@ export async function setupOrchestrator(
 			logger.warn('Failed to get orchestrator runtime type from storage, using default', { runtimeType, error: error instanceof Error ? error.message : String(error) });
 		}
 
+		// For Gemini CLI, gather existing project paths so all /directory add
+		// commands can run during postInitialize — before the registration prompt.
+		let additionalAllowlistPaths: string[] | undefined;
+		if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+			try {
+				const projects = await this.storageService.getProjects();
+				additionalAllowlistPaths = projects.map(project => project.path);
+				if (additionalAllowlistPaths.length > 0) {
+					logger.info('Will add existing project paths to Gemini CLI allowlist during init', {
+						projectPaths: additionalAllowlistPaths,
+					});
+				}
+			} catch (error) {
+				logger.warn('Failed to get projects for Gemini CLI allowlist (continuing without)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
 		logger.info('Calling agentRegistrationService.createAgentSession', {
 			sessionName: ORCHESTRATOR_SESSION_NAME,
 			role: ORCHESTRATOR_ROLE,
@@ -251,6 +269,7 @@ export async function setupOrchestrator(
 			windowName: ORCHESTRATOR_WINDOW_NAME,
 			runtimeType: runtimeType as RuntimeType,
 			forceRecreate: true,
+			additionalAllowlistPaths,
 		});
 
 		logger.info('createAgentSession result', {
@@ -291,51 +310,6 @@ export async function setupOrchestrator(
 			terminalGateway.startOrchestratorChatMonitoring(ORCHESTRATOR_SESSION_NAME);
 		} else {
 			logger.warn('Terminal gateway not available, chat monitoring disabled');
-		}
-
-		// For Gemini CLI orchestrator, add all existing project paths to allowlist
-		if (runtimeType === 'gemini-cli') {
-			try {
-				logger.info('Orchestrator uses Gemini CLI, adding existing projects to allowlist');
-				
-				// Get all existing projects
-				const projects = await this.storageService.getProjects();
-				const projectPaths = projects.map(project => project.path);
-				
-				if (projectPaths.length > 0) {
-					logger.info('Found projects to add to Gemini CLI allowlist', { projectPaths });
-					
-					// Import RuntimeServiceFactory dynamically to avoid circular dependency
-					const { RuntimeServiceFactory } = await import('../../services/agent/runtime-service.factory.js');
-
-					// Get Gemini runtime service instance (uses PTY session backend)
-					const geminiService = RuntimeServiceFactory.create(
-						RUNTIME_TYPES.GEMINI_CLI,
-						null, // Legacy tmux parameter - ignored, PTY session backend is used
-						process.cwd()
-					) as any; // Cast to access Gemini-specific methods
-					
-					// Add all project paths to allowlist
-					const allowlistResult = await geminiService.addMultipleProjectsToAllowlist(
-						ORCHESTRATOR_SESSION_NAME,
-						projectPaths
-					);
-					
-					logger.info('Gemini CLI allowlist update result', {
-						success: allowlistResult.success,
-						message: allowlistResult.message,
-						successCount: allowlistResult.results.filter((r: any) => r.success).length,
-						totalCount: allowlistResult.results.length
-					});
-				} else {
-					logger.info('No existing projects found to add to Gemini CLI allowlist');
-				}
-			} catch (error) {
-				// Log error but continue - as per requirement, don't fail orchestrator startup
-				logger.warn('Failed to add existing projects to Gemini CLI allowlist (continuing anyway)', {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
 		}
 
 		// Note: Agent status is now updated to 'active' directly in AgentRegistrationService.tryCleanupAndReinit

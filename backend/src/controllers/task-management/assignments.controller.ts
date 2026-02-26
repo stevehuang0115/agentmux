@@ -40,14 +40,19 @@ export async function updateAssignment(this: ApiController, req: Request, res: R
   try {
     const { id } = req.params as any;
     const { status } = req.body as any;
-    const [projectId] = String(id).split('-');
     if (status && ['todo', 'in-progress', 'review', 'done'].includes(status)) {
       const projects = await this.storageService.getProjects();
-      const project = projects.find(p => p.id === projectId);
+      const assignmentId = String(id ?? '');
+      const project = projects.find(p => assignmentId === p.id || assignmentId.startsWith(`${p.id}-`));
       if (project) {
-        if (status === 'in-progress') project.status = 'active';
-        else if (status === 'done') project.status = 'completed';
-        await this.storageService.saveProject(project);
+        let nextProjectStatus: string | null = null;
+        if (status === 'in-progress') nextProjectStatus = 'active';
+        else if (status === 'done') nextProjectStatus = 'completed';
+
+        if (nextProjectStatus && project.status !== nextProjectStatus) {
+          project.status = nextProjectStatus as any;
+          await this.storageService.saveProject(project);
+        }
       }
     }
     res.json({ success: true, message: 'Assignment updated successfully' });
@@ -56,4 +61,3 @@ export async function updateAssignment(this: ApiController, req: Request, res: R
     res.status(500).json({ success: false, error: 'Failed to update assignment' });
   }
 }
-

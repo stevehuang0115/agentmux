@@ -14,5 +14,5 @@ Register this agent as active with the Crewly backend. This must be the first sk
 ## Example
 
 ```bash
-bash config/skills/agent/register-self/execute.sh '{"role":"developer","sessionName":"dev-1"}'
+bash config/skills/agent/core/register-self/execute.sh '{"role":"developer","sessionName":"dev-1"}'
 ```

@@ -27,9 +27,20 @@ describe('Tickets Handlers', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
+    mockTicketService = {
+      createTicket: jest.fn(),
+      getAllTickets: jest.fn(),
+      getTicket: jest.fn(),
+      updateTicket: jest.fn(),
+      deleteTicket: jest.fn(),
+      addSubtask: jest.fn(),
+      toggleSubtask: jest.fn(),
+      createTicketTemplate: jest.fn(),
+      getAllTemplates: jest.fn(),
+      getTicketTemplate: jest.fn()
+    };
     const { TicketEditorService } = require('../../services/index.js');
-    mockTicketService = new TicketEditorService();
+    (TicketEditorService as jest.Mock).mockImplementation(() => mockTicketService);
 
     mockStorageService = {
       getProjects: jest.fn<any>()

@@ -21,6 +21,9 @@ import { StorageService } from '../../services/core/storage.service.js';
 import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from '../../services/agent/agent-suspend.service.js';
 import type { ApiContext } from '../types.js';
+import { existsSync } from 'fs';
+import { readFile } from 'fs/promises';
+import { PtySessionBackend } from '../../services/session/pty/pty-session-backend.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -779,6 +782,83 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 		res.status(500).json({
 			success: false,
 			error: 'Failed to deliver message',
+		} as ApiResponse);
+	}
+}
+
+/**
+ * Get persistent session log file content.
+ *
+ * Reads the ANSI-stripped session log file (distinct from live PTY buffer).
+ * Includes output from before session restarts.
+ *
+ * @param req - Express request with sessionName param and optional lines query
+ * @param res - Express response object
+ *
+ * @example
+ * GET /api/sessions/crewly-orc/logs?lines=200
+ * Response: { success: true, data: { lines: [...], sessionName: "crewly-orc", count: 200 } }
+ */
+export async function getSessionLogs(req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+		const lines = parseInt(req.query.lines as string) || 100;
+
+		if (!sessionName) {
+			res.status(400).json({
+				success: false,
+				error: 'Session name is required',
+			} as ApiResponse);
+			return;
+		}
+
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({
+				success: false,
+				error: sessionValidation.error,
+			} as ApiResponse);
+			return;
+		}
+
+		const backend = getSessionBackendSync();
+		if (!backend || !(backend instanceof PtySessionBackend)) {
+			res.status(503).json({
+				success: false,
+				error: 'Session backend not available',
+			} as ApiResponse);
+			return;
+		}
+
+		const logPath = backend.getSessionLogPath(sessionName);
+		if (!existsSync(logPath)) {
+			res.status(404).json({
+				success: false,
+				error: `No log file found for session '${sessionName}'`,
+			} as ApiResponse);
+			return;
+		}
+
+		const content = await readFile(logPath, 'utf-8');
+		const allLines = content.split('\n');
+		const lastLines = allLines.slice(-lines);
+
+		res.json({
+			success: true,
+			data: {
+				lines: lastLines,
+				sessionName,
+				count: lastLines.length,
+				totalLines: allLines.length,
+			},
+		} as ApiResponse);
+	} catch (error) {
+		logger.error('Error reading session logs', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			success: false,
+			error: 'Failed to read session logs',
 		} as ApiResponse);
 	}
 }

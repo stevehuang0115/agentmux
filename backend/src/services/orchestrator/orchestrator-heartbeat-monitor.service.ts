@@ -85,6 +85,8 @@ export class OrchestratorHeartbeatMonitorService {
 
 	/** Session backend for writing to orchestrator PTY */
 	private sessionBackend: ISessionBackend | null = null;
+	/** Optional callback used to suppress idle heartbeats when no work is pending. */
+	private hasPendingWork: (() => boolean) | null = null;
 
 	private constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('OrchestratorHeartbeatMonitor');
@@ -117,8 +119,9 @@ export class OrchestratorHeartbeatMonitorService {
 	 *
 	 * @param sessionBackend - Session backend for accessing the orchestrator PTY
 	 */
-	setDependencies(sessionBackend: ISessionBackend): void {
+	setDependencies(sessionBackend: ISessionBackend, hasPendingWork?: () => boolean): void {
 		this.sessionBackend = sessionBackend;
+		this.hasPendingWork = hasPendingWork ?? null;
 	}
 
 	/**
@@ -259,7 +262,18 @@ export class OrchestratorHeartbeatMonitorService {
 			return;
 		}
 
-		// No activity for HEARTBEAT_REQUEST_THRESHOLD_MS — send a heartbeat request
+		// No activity for HEARTBEAT_REQUEST_THRESHOLD_MS. If there's no queued
+		// work, skip synthetic heartbeat pings to avoid idle token burn.
+		const pendingWork = this.hasPendingWork ? this.hasPendingWork() : true;
+		if (!pendingWork) {
+			if (this.heartbeatRequestSentAt !== null) {
+				this.heartbeatRequestSentAt = null;
+			}
+			this.logger.debug('Skipping heartbeat request: no pending orchestrator work');
+			return;
+		}
+
+		// Otherwise, send a heartbeat request.
 		this.logger.info('Orchestrator idle, sending heartbeat request', {
 			idleTimeMs,
 		});

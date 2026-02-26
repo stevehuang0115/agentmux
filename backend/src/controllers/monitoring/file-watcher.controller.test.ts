@@ -54,7 +54,7 @@ describe('FileWatcherController', () => {
     (FileWatcherService as jest.MockedClass<typeof FileWatcherService>).mockImplementation(() => mockFileWatcher);
     (GitIntegrationService as jest.MockedClass<typeof GitIntegrationService>).mockImplementation(() => mockGitIntegration as any);
     (LoggerService.getInstance as jest.Mock<any>).mockReturnValue(mockLogger);
-    (StorageService as jest.MockedClass<typeof StorageService>).mockImplementation(() => mockStorage);
+    (StorageService.getInstance as jest.Mock<any>).mockReturnValue(mockStorage);
 
     // Reset validateProjectPath to default valid response
     (validateProjectPath as jest.Mock<any>).mockReturnValue({ isValid: true, normalizedPath: '/test/project' });
@@ -79,7 +79,7 @@ describe('FileWatcherController', () => {
       expect(FileWatcherService).toHaveBeenCalled();
       expect(GitIntegrationService).toHaveBeenCalled();
       expect(LoggerService.getInstance).toHaveBeenCalled();
-      expect(StorageService).toHaveBeenCalled();
+      expect(StorageService.getInstance).toHaveBeenCalled();
     });
   });
 

@@ -5,13 +5,127 @@ import { LoggerService } from '../../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('SchedulerController');
 
+type RecurrenceType = 'interval' | 'daily' | 'weekdays' | 'weekly';
+
+function getMinutesUntilNextOccurrence(
+  recurrenceType: RecurrenceType,
+  timeOfDay?: string,
+  dayOfWeek?: number,
+): number {
+  if (recurrenceType === 'interval') {
+    return 0;
+  }
+
+  const [hourStr, minuteStr] = (timeOfDay || '08:00').split(':');
+  const hour = Number.parseInt(hourStr, 10);
+  const minute = Number.parseInt(minuteStr, 10);
+  const now = new Date();
+  const next = new Date(now);
+  next.setSeconds(0, 0);
+  next.setHours(hour, minute, 0, 0);
+
+  if (recurrenceType === 'daily') {
+    if (next <= now) {
+      next.setDate(next.getDate() + 1);
+    }
+  } else if (recurrenceType === 'weekdays') {
+    if (next <= now) {
+      next.setDate(next.getDate() + 1);
+    }
+    while (next.getDay() === 0 || next.getDay() === 6) {
+      next.setDate(next.getDate() + 1);
+    }
+  } else if (recurrenceType === 'weekly') {
+    const target = typeof dayOfWeek === 'number' ? dayOfWeek : 1;
+    const delta = (target - now.getDay() + 7) % 7;
+    next.setDate(now.getDate() + delta);
+    if (next <= now) {
+      next.setDate(next.getDate() + 7);
+    }
+  }
+
+  const diffMs = Math.max(next.getTime() - now.getTime(), 60_000);
+  return Math.ceil(diffMs / 60000);
+}
+
 export async function scheduleCheck(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { targetSession, minutes, message, isRecurring, intervalMinutes, maxOccurrences } = req.body as any;
-    if (!targetSession || !minutes || !message) { res.status(400).json({ success: false, error: 'targetSession, minutes, and message are required' } as ApiResponse); return; }
+    const {
+      targetSession,
+      minutes,
+      message,
+      isRecurring,
+      intervalMinutes,
+      maxOccurrences,
+      recurrenceType = 'interval',
+      timeOfDay,
+      dayOfWeek,
+      timezone,
+      label,
+      persistent,
+    } = req.body as any;
+    const isCalendarMode = recurrenceType && recurrenceType !== 'interval';
+    if (!targetSession || !message || (!isCalendarMode && !minutes)) {
+      res.status(400).json({ success: false, error: 'targetSession, minutes, and message are required' } as ApiResponse);
+      return;
+    }
+
+    const normalizedRecurrence = recurrenceType as RecurrenceType;
+    let normalizedMinutes = Number(minutes || 0);
+    let normalizedInterval = Number(intervalMinutes || 0);
+
+    if (normalizedRecurrence !== 'interval') {
+      normalizedMinutes = getMinutesUntilNextOccurrence(normalizedRecurrence, timeOfDay, dayOfWeek);
+      normalizedInterval = normalizedRecurrence === 'weekly' ? 7 * 24 * 60 : 24 * 60;
+    }
+
+    if (!normalizedMinutes) {
+      res.status(400).json({ success: false, error: 'minutes (or recurrenceType/timeOfDay) is required' } as ApiResponse);
+      return;
+    }
+    // Keep backwards compatibility with previous scheduler behavior:
+    // negative minutes are accepted by legacy callers/tests.
+
     let checkId: string;
-    if (isRecurring && intervalMinutes) checkId = this.schedulerService.scheduleRecurringCheck(targetSession, intervalMinutes, message, 'progress-check', maxOccurrences);
-    else checkId = this.schedulerService.scheduleCheck(targetSession, minutes, message);
+    const hasExtendedSchedule = normalizedRecurrence !== 'interval'
+      || timeOfDay
+      || typeof dayOfWeek === 'number'
+      || timezone
+      || label
+      || typeof persistent === 'boolean';
+
+    if (isRecurring && normalizedInterval) {
+      if (hasExtendedSchedule) {
+        checkId = this.schedulerService.scheduleRecurringCheck(
+          targetSession,
+          normalizedInterval,
+          message,
+          'progress-check',
+          maxOccurrences,
+          { recurrenceType: normalizedRecurrence, timeOfDay, dayOfWeek, timezone, label, persistent }
+        );
+      } else {
+        checkId = this.schedulerService.scheduleRecurringCheck(
+          targetSession,
+          normalizedInterval,
+          message,
+          'progress-check',
+          maxOccurrences
+        );
+      }
+    } else {
+      if (hasExtendedSchedule) {
+        checkId = this.schedulerService.scheduleCheck(
+          targetSession,
+          normalizedMinutes,
+          message,
+          'check-in',
+          { recurrenceType: normalizedRecurrence, timeOfDay, dayOfWeek, timezone, label, persistent }
+        );
+      } else {
+        checkId = this.schedulerService.scheduleCheck(targetSession, normalizedMinutes, message);
+      }
+    }
     res.status(201).json({ success: true, data: { checkId }, message: 'Check-in scheduled successfully' } as ApiResponse<{ checkId: string }>);
   } catch (error) {
     logger.error('Error scheduling check', { error: error instanceof Error ? error.message : String(error) });

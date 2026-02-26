@@ -10,10 +10,11 @@ jest.mock('fs/promises', () => ({
 }));
 
 // Mock fs existsSync
-const mockExistsSync = jest.fn<any>();
 jest.mock('fs', () => ({
-  existsSync: (...args: any[]) => mockExistsSync(...args)
+  existsSync: jest.fn<any>()
 }));
+import { existsSync } from 'fs';
+const mockExistsSync = existsSync as jest.Mock<any>;
 
 // Mock os
 jest.mock('os', () => ({

@@ -15,8 +15,11 @@ import {
 import { PtySession } from './pty-session.js';
 import { PtyTerminalBuffer } from './pty-terminal-buffer.js';
 import { LoggerService, ComponentLogger } from '../../core/logger.service.js';
-import { PTY_CONSTANTS } from '../../../constants.js';
+import { PTY_CONSTANTS, CREWLY_CONSTANTS } from '../../../constants.js';
 import { PtyActivityTrackerService } from '../../agent/pty-activity-tracker.service.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 /**
  * PTY Session Backend implementation.
@@ -64,15 +67,48 @@ export class PtySessionBackend implements ISessionBackend {
 	private cumulativeOutputBytes: Map<string, number> = new Map();
 
 	/**
+	 * Map of session names to writable file streams for persistent session logs
+	 */
+	private sessionLogStreams: Map<string, fs.WriteStream> = new Map();
+
+	/**
+	 * Directory for persistent session log files
+	 */
+	private sessionLogsDir: string;
+
+	/**
 	 * Logger for this backend
 	 */
 	private logger: ComponentLogger;
+
+	/**
+	 * Regex patterns for stripping ANSI escape codes from terminal output
+	 */
+	private static readonly ANSI_STRIP_PATTERNS = [
+		/\x1B\[[0-9;]*[a-zA-Z]/g,  // CSI sequences (colors, cursor, etc.)
+		/\x1B\][^\x07]*\x07/g,     // OSC sequences (title, etc.)
+		/\x1B\[\?[0-9;]*[hl]/g,    // Private mode set/reset
+		/\x1B[()][AB012]/g,         // Character set selection
+		/\x1B\[?[0-9;]*[JKH]/g,    // Erase and cursor positioning
+	];
 
 	/**
 	 * Create a new PTY session backend.
 	 */
 	constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('PtySessionBackend');
+		this.sessionLogsDir = path.join(
+			os.homedir(),
+			CREWLY_CONSTANTS.PATHS.CREWLY_HOME,
+			CREWLY_CONSTANTS.PATHS.LOGS_DIR,
+			CREWLY_CONSTANTS.PATHS.SESSION_LOGS_DIR
+		);
+		// Ensure session logs directory exists
+		try {
+			fs.mkdirSync(this.sessionLogsDir, { recursive: true });
+		} catch {
+			// Non-fatal: logging will be skipped if dir can't be created
+		}
 		this.logger.info('PTY session backend initialized');
 	}
 
@@ -116,6 +152,9 @@ export class PtySessionBackend implements ISessionBackend {
 		const rows = options.rows ?? DEFAULT_TERMINAL_ROWS;
 		const terminalBuffer = new PtyTerminalBuffer(cols, rows);
 
+		// Open persistent session log file stream (append mode with restart separator)
+		this.openSessionLogStream(name);
+
 		// Pipe session output to terminal buffer and record activity for idle detection.
 		// Recording here (at session creation) ensures activity is tracked even when
 		// no WebSocket client is viewing the terminal UI.
@@ -125,6 +164,8 @@ export class PtySessionBackend implements ISessionBackend {
 			// Track cumulative output for proactive compact triggering
 			const current = this.cumulativeOutputBytes.get(name) ?? 0;
 			this.cumulativeOutputBytes.set(name, current + data.length);
+			// Write ANSI-stripped output to persistent session log file
+			this.writeToSessionLog(name, data);
 		});
 
 		// Clean up on session exit
@@ -192,6 +233,7 @@ export class PtySessionBackend implements ISessionBackend {
 		}
 
 		this.cumulativeOutputBytes.delete(name);
+		this.closeSessionLogStream(name);
 		this.logger.debug('Session resources cleaned up', { name });
 	}
 
@@ -427,6 +469,9 @@ export class PtySessionBackend implements ISessionBackend {
 		for (const terminalBuffer of this.terminalBuffers.values()) {
 			terminalBuffer.dispose();
 		}
+		for (const [name] of this.sessionLogStreams) {
+			this.closeSessionLogStream(name);
+		}
 		this.sessions.clear();
 		this.terminalBuffers.clear();
 		this.cumulativeOutputBytes.clear();
@@ -515,5 +560,94 @@ export class PtySessionBackend implements ISessionBackend {
 	 */
 	getTerminalBufferInstance(name: string): PtyTerminalBuffer | undefined {
 		return this.terminalBuffers.get(name);
+	}
+
+	/**
+	 * Get the file path for a session's persistent log file.
+	 *
+	 * @param sessionName - Name of the session
+	 * @returns Absolute path to the session log file
+	 */
+	getSessionLogPath(sessionName: string): string {
+		return path.join(this.sessionLogsDir, `${sessionName}.log`);
+	}
+
+	/**
+	 * Open a writable file stream for a session log.
+	 * If a log file already exists (from a previous run), appends a restart separator.
+	 *
+	 * @param sessionName - Name of the session
+	 */
+	private openSessionLogStream(sessionName: string): void {
+		try {
+			// Close any existing stream for this session
+			this.closeSessionLogStream(sessionName);
+
+			const logPath = this.getSessionLogPath(sessionName);
+			const fileExists = fs.existsSync(logPath);
+
+			const stream = fs.createWriteStream(logPath, { flags: 'a' });
+			stream.on('error', (err) => {
+				this.logger.warn('Session log stream error', {
+					sessionName,
+					error: err.message,
+				});
+			});
+
+			// Write restart separator if file already exists
+			if (fileExists) {
+				stream.write(`\n--- SESSION RESTARTED at ${new Date().toISOString()} ---\n\n`);
+			} else {
+				stream.write(`--- SESSION STARTED at ${new Date().toISOString()} ---\n\n`);
+			}
+
+			this.sessionLogStreams.set(sessionName, stream);
+		} catch (err) {
+			this.logger.warn('Failed to open session log stream', {
+				sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	/**
+	 * Write ANSI-stripped terminal data to a session's persistent log file.
+	 *
+	 * @param sessionName - Name of the session
+	 * @param data - Raw terminal data (with ANSI codes)
+	 */
+	private writeToSessionLog(sessionName: string, data: string): void {
+		const stream = this.sessionLogStreams.get(sessionName);
+		if (!stream || stream.destroyed) return;
+
+		// Strip ANSI escape codes for readable log output
+		let stripped = data;
+		for (const pattern of PtySessionBackend.ANSI_STRIP_PATTERNS) {
+			stripped = stripped.replace(pattern, '');
+		}
+
+		// Only write if there's content after stripping
+		if (stripped.length > 0) {
+			stream.write(stripped);
+		}
+	}
+
+	/**
+	 * Close and remove the file stream for a session log.
+	 *
+	 * @param sessionName - Name of the session
+	 */
+	private closeSessionLogStream(sessionName: string): void {
+		const stream = this.sessionLogStreams.get(sessionName);
+		if (stream) {
+			try {
+				if (!stream.destroyed) {
+					stream.end();
+				}
+			} catch {
+				// Ignore close errors
+			}
+			this.sessionLogStreams.delete(sessionName);
+		}
 	}
 }
