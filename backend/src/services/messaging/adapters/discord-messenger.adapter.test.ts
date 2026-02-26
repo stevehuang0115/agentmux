@@ -54,7 +54,7 @@ describe('DiscordMessengerAdapter', () => {
 
   describe('sendMessage', () => {
     it('should throw when not initialized', async () => {
-      await expect(adapter.sendMessage('channel-1', 'hello')).rejects.toThrow(
+      await expect(adapter.sendMessage('123456789', 'hello')).rejects.toThrow(
         'Discord adapter is not initialized'
       );
     });
@@ -66,11 +66,19 @@ describe('DiscordMessengerAdapter', () => {
 
       // Send message
       mockFetch.mockResolvedValueOnce({ ok: true } as Response);
-      await adapter.sendMessage('channel-1', 'hello');
+      await adapter.sendMessage('123456789', 'hello');
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
       const sendCall = mockFetch.mock.calls[1];
-      expect(sendCall[0]).toContain('channels/channel-1/messages');
+      expect(sendCall[0]).toContain('channels/123456789/messages');
+    });
+
+    it('should throw on invalid channel ID', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true } as Response);
+      await adapter.initialize({ token: 'valid-token' });
+      await expect(adapter.sendMessage('invalid-channel', 'hello')).rejects.toThrow(
+        'Invalid Discord channel ID'
+      );
     });
 
     it('should throw when Discord API returns error on send', async () => {
@@ -81,7 +89,7 @@ describe('DiscordMessengerAdapter', () => {
         ok: false,
         text: async () => 'Rate limited',
       } as Response);
-      await expect(adapter.sendMessage('ch', 'msg')).rejects.toThrow('Discord send failed: Rate limited');
+      await expect(adapter.sendMessage('999', 'msg')).rejects.toThrow('Discord send failed: Rate limited');
     });
   });
 

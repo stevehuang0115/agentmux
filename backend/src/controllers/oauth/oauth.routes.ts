@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { GOOGLE_OAUTH_CONSTANTS } from '../../constants.js';
 import { UserIdentityService } from '../../services/user/user-identity.service.js';
+import { LoggerService } from '../../services/core/logger.service.js';
 
 /**
  * Build Google OAuth client config from environment variables.
@@ -27,6 +28,7 @@ function getGoogleConfig(req: Request): { clientId: string; clientSecret: string
 export function createOAuthRouter(): Router {
   const router = Router();
   const users = UserIdentityService.getInstance();
+  const logger = LoggerService.getInstance().createComponentLogger('OAuthRoutes');
 
   router.get('/google/start', async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -128,6 +130,12 @@ export function createOAuthRouter(): Router {
         email: profile.email,
         slackUserId: statePayload.slackUserId,
       });
+
+      if (!tokenData.refresh_token) {
+        logger.warn('Google OAuth did not return a refresh_token — using access_token as fallback', {
+          email: profile.email,
+        });
+      }
 
       await users.connectService(user.id, 'google', {
         refreshToken: tokenData.refresh_token || tokenData.access_token,

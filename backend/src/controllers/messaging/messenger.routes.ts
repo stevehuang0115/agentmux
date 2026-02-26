@@ -9,6 +9,19 @@ import { TelegramMessengerAdapter } from '../../services/messaging/adapters/tele
 import { DiscordMessengerAdapter } from '../../services/messaging/adapters/discord-messenger.adapter.js';
 import type { MessengerPlatform } from '../../services/messaging/messenger-adapter.interface.js';
 
+/** Known messenger platforms for input validation. */
+const VALID_PLATFORMS: ReadonlySet<string> = new Set<MessengerPlatform>(['slack', 'telegram', 'discord']);
+
+/**
+ * Validate that a string is a known messenger platform.
+ *
+ * @param value - The platform string from request params
+ * @returns The validated MessengerPlatform, or null if invalid
+ */
+function validatePlatform(value: string): MessengerPlatform | null {
+  return VALID_PLATFORMS.has(value) ? (value as MessengerPlatform) : null;
+}
+
 /**
  * Get the credential file path for a messenger platform.
  *
@@ -49,7 +62,11 @@ export function createMessengerRouter(): Router {
 
   router.post('/:platform/connect', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const platform = req.params.platform as MessengerPlatform;
+      const platform = validatePlatform(req.params.platform);
+      if (!platform) {
+        res.status(400).json({ success: false, error: `Invalid platform: ${req.params.platform}` });
+        return;
+      }
       const adapter = registry.get(platform);
       if (!adapter) {
         res.status(404).json({ success: false, error: `Unsupported platform: ${platform}` });
@@ -68,7 +85,11 @@ export function createMessengerRouter(): Router {
 
   router.post('/:platform/disconnect', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const platform = req.params.platform as MessengerPlatform;
+      const platform = validatePlatform(req.params.platform);
+      if (!platform) {
+        res.status(400).json({ success: false, error: `Invalid platform: ${req.params.platform}` });
+        return;
+      }
       const adapter = registry.get(platform);
       if (!adapter) {
         res.status(404).json({ success: false, error: `Unsupported platform: ${platform}` });
@@ -85,7 +106,11 @@ export function createMessengerRouter(): Router {
 
   router.post('/:platform/send', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const platform = req.params.platform as MessengerPlatform;
+      const platform = validatePlatform(req.params.platform);
+      if (!platform) {
+        res.status(400).json({ success: false, error: `Invalid platform: ${req.params.platform}` });
+        return;
+      }
       const adapter = registry.get(platform);
       if (!adapter) {
         res.status(404).json({ success: false, error: `Unsupported platform: ${platform}` });

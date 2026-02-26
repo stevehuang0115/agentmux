@@ -31,10 +31,21 @@ interface UserStore {
 
 const STORE_SCHEMA_VERSION = 1;
 
+/**
+ * Service for managing user identities and encrypted service tokens.
+ *
+ * Uses a file-backed JSON store with an in-memory cache for reads.
+ * Tokens are encrypted with AES-256-GCM using a key derived from
+ * environment variables.
+ */
 export class UserIdentityService {
   private static instance: UserIdentityService | null = null;
   private readonly logger: ComponentLogger;
   private readonly storePath: string;
+  /** Cached encryption key (derived once from env) */
+  private cachedKey: Buffer | null = null;
+  /** In-memory cache of the user store to avoid repeated disk reads */
+  private storeCache: UserStore | null = null;
 
   private constructor() {
     this.logger = LoggerService.getInstance().createComponentLogger('UserIdentityService');
@@ -59,32 +70,67 @@ export class UserIdentityService {
     await fs.mkdir(path.dirname(this.storePath), { recursive: true });
   }
 
+  /**
+   * Load the user store from disk, using in-memory cache when available.
+   *
+   * @returns The parsed user store
+   */
   private async loadStore(): Promise<UserStore> {
+    if (this.storeCache) {
+      return this.storeCache;
+    }
     try {
       const raw = await fs.readFile(this.storePath, 'utf8');
       const parsed = JSON.parse(raw) as UserStore;
       if (!Array.isArray(parsed.users)) {
-        return { schemaVersion: STORE_SCHEMA_VERSION, users: [] };
+        this.storeCache = { schemaVersion: STORE_SCHEMA_VERSION, users: [] };
+        return this.storeCache;
       }
-      return parsed;
+      this.storeCache = parsed;
+      return this.storeCache;
     } catch {
-      return { schemaVersion: STORE_SCHEMA_VERSION, users: [] };
+      this.storeCache = { schemaVersion: STORE_SCHEMA_VERSION, users: [] };
+      return this.storeCache;
     }
   }
 
+  /**
+   * Persist the user store to disk using atomic write (temp + rename).
+   *
+   * @param store - The store data to persist
+   */
   private async saveStore(store: UserStore): Promise<void> {
     await this.ensureStoreDir();
-    await fs.writeFile(this.storePath, JSON.stringify(store, null, 2) + '\n', 'utf8');
+    const tmpPath = `${this.storePath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(store, null, 2) + '\n', 'utf8');
+    await fs.rename(tmpPath, this.storePath);
+    this.storeCache = store;
   }
 
+  /**
+   * Derive the AES-256 encryption key from environment variables.
+   * Caches the result to avoid recomputing SHA-256 on every call.
+   *
+   * @returns 32-byte key buffer
+   */
   private getKey(): Buffer {
+    if (this.cachedKey) {
+      return this.cachedKey;
+    }
     const source = process.env.CREWLY_TOKEN_ENCRYPTION_KEY || process.env.CREWLY_SECRET;
     if (!source) {
       this.logger.warn('No CREWLY_TOKEN_ENCRYPTION_KEY or CREWLY_SECRET set — using insecure fallback key');
     }
-    return crypto.createHash('sha256').update(source || 'crewly-local-dev-key').digest();
+    this.cachedKey = crypto.createHash('sha256').update(source || 'crewly-local-dev-key').digest();
+    return this.cachedKey;
   }
 
+  /**
+   * Encrypt a plaintext token using AES-256-GCM.
+   *
+   * @param value - The plaintext token
+   * @returns Encrypted string in the format `iv.tag.ciphertext` (base64)
+   */
   encryptToken(value: string): string {
     const iv = crypto.randomBytes(12);
     const key = this.getKey();
@@ -94,8 +140,19 @@ export class UserIdentityService {
     return `${iv.toString('base64')}.${tag.toString('base64')}.${encrypted.toString('base64')}`;
   }
 
+  /**
+   * Decrypt an encrypted token string produced by {@link encryptToken}.
+   *
+   * @param value - Encrypted string in `iv.tag.ciphertext` format
+   * @returns The decrypted plaintext
+   * @throws Error if the token format is invalid or decryption fails
+   */
   decryptToken(value: string): string {
-    const [ivB64, tagB64, bodyB64] = value.split('.');
+    const parts = value.split('.');
+    if (parts.length !== 3 || parts.some((p) => !p)) {
+      throw new Error('Invalid encrypted token format: expected iv.tag.ciphertext');
+    }
+    const [ivB64, tagB64, bodyB64] = parts;
     const key = this.getKey();
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
     decipher.setAuthTag(Buffer.from(tagB64, 'base64'));

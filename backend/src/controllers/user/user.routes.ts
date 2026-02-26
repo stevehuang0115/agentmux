@@ -38,8 +38,8 @@ export function createUserRouter(): Router {
     try {
       const email = String(req.body?.email || '').trim();
       const slackUserId = req.body?.slackUserId ? String(req.body.slackUserId) : undefined;
-      if (!email) {
-        res.status(400).json({ success: false, error: 'email is required' });
+      if (!email || !email.includes('@') || !email.includes('.')) {
+        res.status(400).json({ success: false, error: 'A valid email is required' });
         return;
       }
       const user = await users.createOrUpdateUser({ email, slackUserId });

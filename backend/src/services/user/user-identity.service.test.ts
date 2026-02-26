@@ -70,6 +70,18 @@ describe('UserIdentityService', () => {
       const b = service.encryptToken('same');
       expect(a).not.toBe(b);
     });
+
+    it('should throw on malformed encrypted token (too few parts)', () => {
+      expect(() => service.decryptToken('abc.def')).toThrow('Invalid encrypted token format');
+    });
+
+    it('should throw on empty encrypted token', () => {
+      expect(() => service.decryptToken('')).toThrow('Invalid encrypted token format');
+    });
+
+    it('should throw on malformed token with empty segment', () => {
+      expect(() => service.decryptToken('abc..def')).toThrow('Invalid encrypted token format');
+    });
   });
 
   describe('user CRUD', () => {
