@@ -11,28 +11,32 @@ import request from 'supertest';
 import express from 'express';
 import selfImprovementRouter from './self-improvement.controller.js';
 
+const mockService = {
+  planImprovement: jest.fn(),
+  executeImprovement: jest.fn(),
+  getStatus: jest.fn(),
+  cancelImprovement: jest.fn(),
+  getHistory: jest.fn(),
+};
+
+const mockStartupService = {
+  forceRollback: jest.fn(),
+};
+
 // Mock the services
 jest.mock('../../services/orchestrator/index.js', () => ({
-  getSelfImprovementService: jest.fn(() => ({
-    planImprovement: jest.fn(),
-    executeImprovement: jest.fn(),
-    getStatus: jest.fn(),
-    cancelImprovement: jest.fn(),
-    getHistory: jest.fn(),
-  })),
+  getSelfImprovementService: jest.fn(() => mockService),
 }));
 
 jest.mock('../../services/orchestrator/improvement-startup.service.js', () => ({
-  getImprovementStartupService: jest.fn(() => ({
-    forceRollback: jest.fn(),
-  })),
+  getImprovementStartupService: jest.fn(() => mockStartupService),
 }));
 
 import { getSelfImprovementService } from '../../services/orchestrator/index.js';
 
 describe('self-improvement.controller', () => {
   let app: express.Application;
-  let mockService: ReturnType<typeof getSelfImprovementService>;
+  let service: ReturnType<typeof getSelfImprovementService>;
 
   beforeEach(() => {
     // Use clearAllMocks instead of resetAllMocks to preserve mock implementations
@@ -41,7 +45,7 @@ describe('self-improvement.controller', () => {
     app.use(express.json());
     app.use('/api/self-improvement', selfImprovementRouter);
 
-    mockService = getSelfImprovementService();
+    service = getSelfImprovementService();
   });
 
   describe('POST /api/self-improvement/plan', () => {
@@ -54,7 +58,7 @@ describe('self-improvement.controller', () => {
         requiresRestart: true,
       };
 
-      (mockService.planImprovement as jest.Mock<any>).mockResolvedValue(mockPlan);
+      (service.planImprovement as jest.Mock<any>).mockResolvedValue(mockPlan);
 
       const response = await request(app)
         .post('/api/self-improvement/plan')
@@ -70,7 +74,7 @@ describe('self-improvement.controller', () => {
     });
 
     it('should return 400 on plan error', async () => {
-      (mockService.planImprovement as jest.Mock<any>).mockRejectedValue(
+      (service.planImprovement as jest.Mock<any>).mockRejectedValue(
         new Error('Another improvement is pending')
       );
 
@@ -134,7 +138,7 @@ describe('self-improvement.controller', () => {
         targetFiles: ['test.ts'],
       };
 
-      (mockService.getStatus as jest.Mock<any>).mockResolvedValue(mockStatus as never);
+      (service.getStatus as jest.Mock<any>).mockResolvedValue(mockStatus as never);
 
       const response = await request(app)
         .get('/api/self-improvement/status');
@@ -145,7 +149,7 @@ describe('self-improvement.controller', () => {
     });
 
     it('should return null when no pending improvement', async () => {
-      (mockService.getStatus as jest.Mock<any>).mockResolvedValue(null);
+      (service.getStatus as jest.Mock<any>).mockResolvedValue(null);
 
       const response = await request(app)
         .get('/api/self-improvement/status');
@@ -157,7 +161,7 @@ describe('self-improvement.controller', () => {
 
   describe('POST /api/self-improvement/cancel', () => {
     it('should cancel planned improvement', async () => {
-      (mockService.cancelImprovement as jest.Mock<any>).mockResolvedValue(undefined);
+      (service.cancelImprovement as jest.Mock<any>).mockResolvedValue(undefined);
 
       const response = await request(app)
         .post('/api/self-improvement/cancel');
@@ -167,7 +171,7 @@ describe('self-improvement.controller', () => {
     });
 
     it('should return 400 on cancel error', async () => {
-      (mockService.cancelImprovement as jest.Mock<any>).mockRejectedValue(
+      (service.cancelImprovement as jest.Mock<any>).mockRejectedValue(
         new Error('Cannot cancel: in execution phase')
       );
 
@@ -186,7 +190,7 @@ describe('self-improvement.controller', () => {
         { id: 'si-2', description: 'Second', phase: 'completed' },
       ];
 
-      (mockService.getHistory as jest.Mock<any>).mockResolvedValue(mockHistory as never);
+      (service.getHistory as jest.Mock<any>).mockResolvedValue(mockHistory as never);
 
       const response = await request(app)
         .get('/api/self-improvement/history');
@@ -197,30 +201,30 @@ describe('self-improvement.controller', () => {
     });
 
     it('should respect limit parameter', async () => {
-      (mockService.getHistory as jest.Mock<any>).mockResolvedValue([]);
+      (service.getHistory as jest.Mock<any>).mockResolvedValue([]);
 
       await request(app)
         .get('/api/self-improvement/history?limit=5');
 
-      expect(mockService.getHistory).toHaveBeenCalledWith(5);
+      expect(service.getHistory).toHaveBeenCalledWith(5);
     });
 
     it('should cap limit at 100', async () => {
-      (mockService.getHistory as jest.Mock<any>).mockResolvedValue([]);
+      (service.getHistory as jest.Mock<any>).mockResolvedValue([]);
 
       await request(app)
         .get('/api/self-improvement/history?limit=999');
 
-      expect(mockService.getHistory).toHaveBeenCalledWith(100);
+      expect(service.getHistory).toHaveBeenCalledWith(100);
     });
 
     it('should use default limit for invalid values', async () => {
-      (mockService.getHistory as jest.Mock<any>).mockResolvedValue([]);
+      (service.getHistory as jest.Mock<any>).mockResolvedValue([]);
 
       await request(app)
         .get('/api/self-improvement/history?limit=invalid');
 
-      expect(mockService.getHistory).toHaveBeenCalledWith(10);
+      expect(service.getHistory).toHaveBeenCalledWith(10);
     });
   });
 });

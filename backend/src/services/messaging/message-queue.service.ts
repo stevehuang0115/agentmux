@@ -187,6 +187,25 @@ export class MessageQueueService extends EventEmitter {
       throw new Error(`Queue is full (max ${MESSAGE_QUEUE_CONSTANTS.MAX_QUEUE_SIZE} messages)`);
     }
 
+    // Coalesce bursty system events into a single pending message so the
+    // orchestrator processes one combined notification instead of many singles.
+    if (input.source === 'system_event') {
+      const lastPendingSystemEvent = [...this.queue]
+        .reverse()
+        .find((m) => m.source === 'system_event');
+
+      if (lastPendingSystemEvent) {
+        const mergedContent = `${lastPendingSystemEvent.content}\n${input.content}`;
+        if (mergedContent.length <= MESSAGE_QUEUE_CONSTANTS.MAX_SYSTEM_EVENT_COALESCE_CHARS) {
+          lastPendingSystemEvent.content = mergedContent;
+          this.emit('enqueued', lastPendingSystemEvent);
+          this.emitStatusUpdate();
+          this.schedulePersist();
+          return lastPendingSystemEvent;
+        }
+      }
+    }
+
     const message: QueuedMessage = {
       id: crypto.randomUUID(),
       content: input.content,

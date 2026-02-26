@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Router } from 'express';
-import { createSystemRouter } from './system.routes.js';
 import type { ApiContext } from '../types.js';
+
+jest.mock('./system.controller.js', () => ({
+  getSystemHealth: jest.fn((_req: any, res: any) => res.json({ ok: true })),
+  getSystemMetrics: jest.fn((_req: any, res: any) => res.json({ ok: true })),
+  getSystemConfiguration: jest.fn((_req: any, res: any) => res.json({ ok: true })),
+}));
+
+const { createSystemRouter } = require('./system.routes.js');
 
 describe('System Routes', () => {
   let mockContext: ApiContext;

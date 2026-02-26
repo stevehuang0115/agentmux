@@ -679,10 +679,21 @@ export class ProjectMemoryService implements IProjectMemoryService {
       context += '\n';
     }
 
+    const userPreferences = patterns.filter((p) => p.category === 'user_preference');
+    const codePatterns = patterns.filter((p) => p.category !== 'user_preference');
+
+    if (userPreferences.length > 0) {
+      context += '### User Preferences\n\n';
+      userPreferences.slice(0, 10).forEach((p) => {
+        context += `- ${p.description}\n`;
+      });
+      context += '\n';
+    }
+
     // Key patterns
-    if (patterns.length > 0) {
+    if (codePatterns.length > 0) {
       context += '### Code Patterns\n\n';
-      patterns.slice(0, 10).forEach(p => {
+      codePatterns.slice(0, 10).forEach(p => {
         context += `- **[${p.category}] ${p.title}**: ${p.description}\n`;
         if (p.example) {
           context += `  Example: \`${p.example}\`\n`;

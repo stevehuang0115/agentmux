@@ -535,7 +535,10 @@ export class CrewlyServer {
 				const orchHbSessionBackend = getSessionBackendSync();
 				if (orchHbSessionBackend) {
 					const orchHeartbeatMonitor = OrchestratorHeartbeatMonitorService.getInstance();
-					orchHeartbeatMonitor.setDependencies(orchHbSessionBackend);
+					orchHeartbeatMonitor.setDependencies(
+						orchHbSessionBackend,
+						() => this.messageQueueService.hasPending() || this.queueProcessorService.isProcessingMessage()
+					);
 					orchHeartbeatMonitor.start();
 					this.logger.info('OrchestratorHeartbeatMonitorService started');
 				}

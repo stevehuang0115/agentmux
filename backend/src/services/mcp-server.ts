@@ -19,14 +19,6 @@
  * @module services/mcp-server
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import {
-  StdioServerTransport,
-} from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
 import { StorageService } from './core/storage.service.js';
 import { MemoryService } from './memory/memory.service.js';
 import type { Team, TeamMember } from '../types/index.js';
@@ -251,10 +243,11 @@ const TOOL_DEFINITIONS = [
  * ```
  */
 export class CrewlyMcpServer {
-  private server: Server;
+  private server: any | null = null;
   private storage: StorageService;
   private memory: MemoryService;
-  private transport: StdioServerTransport | null = null;
+  private transport: any | null = null;
+  private stdioTransportCtor: (new () => any) | null = null;
 
   /**
    * Creates a new CrewlyMcpServer instance.
@@ -264,8 +257,55 @@ export class CrewlyMcpServer {
   constructor(config?: CrewlyMcpServerConfig) {
     this.storage = StorageService.getInstance(config?.crewlyHome);
     this.memory = MemoryService.getInstance();
+    this.tryInitializeWithRequire();
+  }
 
-    this.server = new Server(
+  /**
+   * Register MCP request handlers for tool listing and tool calling.
+   */
+  private registerHandlers(
+    schemas: { listTools: unknown; callTool: unknown },
+  ): void {
+    if (!this.server) {
+      throw new Error('MCP server is not initialized');
+    }
+
+    // Handle tools/list request
+    this.server.setRequestHandler(schemas.listTools, async () => ({
+      tools: TOOL_DEFINITIONS.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      })),
+    }));
+
+    // Handle tools/call request
+    this.server.setRequestHandler(schemas.callTool, async (request: any) => {
+      const { name, arguments: args } = request.params;
+      const result = await this.handleToolCall(name, args ?? {});
+      return result as unknown as Record<string, unknown>;
+    });
+  }
+
+  private async ensureInitialized(): Promise<void> {
+    if (this.server && this.stdioTransportCtor) {
+      return;
+    }
+
+    const serverModule = await import('@modelcontextprotocol/sdk/server/index.js') as any;
+    const stdioModule = await import('@modelcontextprotocol/sdk/server/stdio.js') as any;
+    const typesModule = await import('@modelcontextprotocol/sdk/types.js') as any;
+
+    const ServerCtor = serverModule.Server ?? serverModule.default?.Server;
+    const StdioTransportCtor = stdioModule.StdioServerTransport ?? stdioModule.default?.StdioServerTransport;
+    const listTools = typesModule.ListToolsRequestSchema;
+    const callTool = typesModule.CallToolRequestSchema;
+
+    if (!ServerCtor || !StdioTransportCtor || !listTools || !callTool) {
+      throw new Error('Failed to load MCP server SDK modules');
+    }
+
+    this.server = new ServerCtor(
       {
         name: MCP_SERVER_CONSTANTS.SERVER_INFO.NAME,
         version: MCP_SERVER_CONSTANTS.SERVER_INFO.VERSION,
@@ -276,29 +316,51 @@ export class CrewlyMcpServer {
         },
       },
     );
-
-    this.registerHandlers();
+    this.stdioTransportCtor = StdioTransportCtor;
+    this.registerHandlers({ listTools, callTool });
   }
 
-  /**
-   * Register MCP request handlers for tool listing and tool calling.
-   */
-  private registerHandlers(): void {
-    // Handle tools/list request
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOL_DEFINITIONS.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-      })),
-    }));
+  private tryInitializeWithRequire(): void {
+    if (this.server && this.stdioTransportCtor) {
+      return;
+    }
 
-    // Handle tools/call request
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      const result = await this.handleToolCall(name, args ?? {});
-      return result as unknown as Record<string, unknown>;
-    });
+    try {
+      const req = (0, eval)('require') as ((id: string) => any) | undefined;
+      if (!req) {
+        return;
+      }
+
+      const serverModule = req('@modelcontextprotocol/sdk/server/index.js');
+      const stdioModule = req('@modelcontextprotocol/sdk/server/stdio.js');
+      const typesModule = req('@modelcontextprotocol/sdk/types.js');
+
+      const ServerCtor = serverModule.Server ?? serverModule.default?.Server;
+      const StdioTransportCtor = stdioModule.StdioServerTransport ?? stdioModule.default?.StdioServerTransport;
+      const listTools = typesModule.ListToolsRequestSchema;
+      const callTool = typesModule.CallToolRequestSchema;
+
+      if (!ServerCtor || !StdioTransportCtor || !listTools || !callTool) {
+        return;
+      }
+
+      this.server = new ServerCtor(
+        {
+          name: MCP_SERVER_CONSTANTS.SERVER_INFO.NAME,
+          version: MCP_SERVER_CONSTANTS.SERVER_INFO.VERSION,
+        },
+        {
+          capabilities: {
+            tools: {},
+          },
+        },
+      );
+      this.stdioTransportCtor = StdioTransportCtor;
+      this.registerHandlers({ listTools, callTool });
+    } catch {
+      // Ignore in environments where `require` cannot load ESM SDK modules.
+      // `ensureInitialized()` will use dynamic import on demand.
+    }
   }
 
   /**
@@ -670,7 +732,11 @@ export class CrewlyMcpServer {
    * The process will stay alive until the client disconnects.
    */
   async start(): Promise<void> {
-    this.transport = new StdioServerTransport();
+    await this.ensureInitialized();
+    if (!this.server || !this.stdioTransportCtor) {
+      throw new Error('MCP server is not initialized');
+    }
+    this.transport = new this.stdioTransportCtor();
     await this.server.connect(this.transport);
   }
 
@@ -678,7 +744,9 @@ export class CrewlyMcpServer {
    * Stop the MCP server and clean up resources.
    */
   async stop(): Promise<void> {
-    await this.server.close();
+    if (this.server) {
+      await this.server.close();
+    }
     this.transport = null;
   }
 
@@ -687,7 +755,7 @@ export class CrewlyMcpServer {
    *
    * @returns The Server instance
    */
-  getServer(): Server {
+  getServer(): any {
     return this.server;
   }
 }

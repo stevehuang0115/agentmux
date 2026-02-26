@@ -91,6 +91,18 @@ describe('stripAnsiCodes', () => {
 			const result = stripAnsiCodes('[CHAT_RESPONSE]');
 			expect(result).toBe('[CHAT_RESPONSE]');
 		});
+
+		it('should remove private-mode fragments like [?25h and [?2026l', () => {
+			const input = 'hello[?25h world[?2026l!';
+			const result = stripAnsiCodes(input);
+			expect(result).toBe('hello world!');
+		});
+
+		it('should remove escaped private-mode fragments', () => {
+			const input = 'A\x1b[?25hB\x1b[?2026lC';
+			const result = stripAnsiCodes(input);
+			expect(result).toBe('ABC');
+		});
 	});
 
 	describe('OSC sequences', () => {

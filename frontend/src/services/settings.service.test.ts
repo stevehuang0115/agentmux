@@ -24,7 +24,7 @@ describe('SettingsService', () => {
       runtimeCommands: {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
-        'codex-cli': 'codex --full-auto',
+        'codex-cli': 'codex -a never -s danger-full-access',
       },
     },
     chat: {

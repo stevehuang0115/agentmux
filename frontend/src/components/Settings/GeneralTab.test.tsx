@@ -22,7 +22,7 @@ describe('GeneralTab', () => {
       runtimeCommands: {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
-        'codex-cli': 'codex --full-auto',
+        'codex-cli': 'codex -a never -s danger-full-access',
       },
     },
     chat: {
@@ -112,7 +112,7 @@ describe('GeneralTab', () => {
       expect(geminiInput.value).toBe('gemini --yolo');
 
       const codexInput = screen.getByLabelText('Codex CLI') as HTMLInputElement;
-      expect(codexInput.value).toBe('codex --full-auto');
+      expect(codexInput.value).toBe('codex -a never -s danger-full-access');
     });
 
     it('should render action buttons', () => {

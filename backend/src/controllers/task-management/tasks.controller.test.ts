@@ -21,9 +21,14 @@ describe('Tasks Handlers', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
+    mockTaskService = {
+      getAllTasks: jest.fn(),
+      getMilestones: jest.fn(),
+      getTasksByStatus: jest.fn(),
+      getTasksByMilestone: jest.fn()
+    };
     const { TaskService } = require('../../services/index.js');
-    mockTaskService = new TaskService();
+    (TaskService as jest.Mock).mockImplementation(() => mockTaskService);
 
     mockStorageService = {
       getProjects: jest.fn<any>()

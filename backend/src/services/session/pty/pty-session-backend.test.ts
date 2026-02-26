@@ -60,13 +60,15 @@ describe('PtySessionBackend', () => {
 			expect(backend!.getSessionCount()).toBe(1);
 		});
 
-		it('should throw when creating a session with duplicate name', async () => {
-			await backend!.createSession('test-session', createTestOptions());
+			it('should recreate session when creating with duplicate name', async () => {
+				const original = await backend!.createSession('test-session', createTestOptions());
+				const recreated = await backend!.createSession('test-session', createTestOptions());
 
-			await expect(
-				backend!.createSession('test-session', createTestOptions())
-			).rejects.toThrow("Session 'test-session' already exists");
-		});
+				expect(recreated.name).toBe('test-session');
+				expect(recreated.pid).toBeGreaterThan(0);
+				expect(recreated.pid).not.toBe(original.pid);
+				expect(backend!.getSessionCount()).toBe(1);
+			});
 
 		it('should allow creating multiple sessions with different names', async () => {
 			await backend!.createSession('session-1', createTestOptions());

@@ -430,7 +430,7 @@ describe('Delivery Logs Handlers', () => {
         mockResponse as Response
       );
 
-      expect(console.error).toHaveBeenCalledWith('Error getting delivery logs:', error);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error getting delivery logs'));
 
       console.error = originalConsoleError;
     });
@@ -448,7 +448,7 @@ describe('Delivery Logs Handlers', () => {
         mockResponse as Response
       );
 
-      expect(console.error).toHaveBeenCalledWith('Error clearing delivery logs:', error);
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Error clearing delivery logs'));
 
       console.error = originalConsoleError;
     });

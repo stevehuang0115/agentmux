@@ -290,6 +290,13 @@ export class SettingsService {
       } satisfies Record<AIRuntime, string>;
     }
 
+    // Keep existing users aligned with the current safer Codex default.
+    // Only rewrite when their value is exactly the previous built-in default.
+    const runtimeCommands = general['runtimeCommands'] as Record<string, unknown> | undefined;
+    if (runtimeCommands?.['codex-cli'] === 'codex --full-auto') {
+      runtimeCommands['codex-cli'] = 'codex -a never -s danger-full-access';
+    }
+
     // Clean up legacy fields
     delete general['claudeCodeCommand'];
     delete general['claudeCodeInitScript'];

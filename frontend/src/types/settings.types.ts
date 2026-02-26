@@ -32,6 +32,10 @@ export interface GeneralSettings {
   runtimeCommands: Record<AIRuntime, string>;
   /** Minutes of inactivity before an agent is automatically suspended (0 = disabled) */
   agentIdleTimeoutMinutes: number;
+  /** Enable proactive context compaction based on cumulative terminal output volume */
+  enableProactiveCompact: boolean;
+  /** Enable Self Evolution mode — orchestrator monitors for errors and self-triages */
+  enableSelfEvolution: boolean;
 }
 
 /**
@@ -58,6 +62,13 @@ export interface SkillsSettings {
   skillsDirectory: string;
   /** Enable browser automation skills */
   enableBrowserAutomation: boolean;
+  /** Browser profile for anti-bot and headed/headless behavior */
+  browserProfile?: {
+    headless: boolean;
+    stealth: boolean;
+    humanDelayMinMs: number;
+    humanDelayMaxMs: number;
+  };
   /** Enable script execution skills */
   enableScriptExecution: boolean;
   /** Default skill execution timeout in milliseconds */

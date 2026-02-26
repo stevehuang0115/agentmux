@@ -55,8 +55,8 @@ const DEFAULT_CONFIG: SlackBridgeConfig = {
   showTypingIndicator: true,
   maxResponseLength: 3000,
   enableNotifications: true,
-  responseTimeoutMs: MESSAGE_QUEUE_CONSTANTS.DEFAULT_MESSAGE_TIMEOUT + 5000,
-  skillDeliveryWaitMs: SLACK_BRIDGE_CONSTANTS.SKILL_DELIVERY_WAIT_MS,
+  responseTimeoutMs: (MESSAGE_QUEUE_CONSTANTS?.DEFAULT_MESSAGE_TIMEOUT ?? 120000) + 5000,
+  skillDeliveryWaitMs: SLACK_BRIDGE_CONSTANTS?.SKILL_DELIVERY_WAIT_MS ?? 3000,
 };
 
 /**

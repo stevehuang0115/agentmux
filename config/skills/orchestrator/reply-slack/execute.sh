@@ -16,12 +16,17 @@ Usage:
   # Upload an image with optional comment
   bash execute.sh --channel C0123 --image /path/to/screenshot.png --text "Here's the result"
 
+  # Upload any file type (PDF, CSV, etc.) with optional comment
+  bash execute.sh --channel C0123 --file /path/to/report.pdf --text "Daily report"
+
 Options:
   --channel | -c   Slack channel ID (required unless JSON provided)
   --text    | -t   Message text (optional when piping stdin)
   --text-file     Read message text from the specified file path
   --thread  | -r   Slack thread timestamp for replies
   --image   | -i   Path to image file to upload (uses /api/slack/upload-image)
+  --file    | -f   Path to file upload (uses /api/slack/upload-file)
+  --allow-new-thread  Allow posting without --thread (disabled by default for safety)
   --json    | -j   Raw JSON payload (same as legacy usage)
   --help    | -h   Show this help
 EOF_USAGE
@@ -32,6 +37,8 @@ CHANNEL_ID=""
 TEXT=""
 THREAD_TS=""
 IMAGE_PATH=""
+FILE_PATH=""
+ALLOW_NEW_THREAD="false"
 
 # Detect legacy JSON argument as the first parameter
 if [[ $# -gt 0 && ${1:0:1} == '{' ]]; then
@@ -62,6 +69,14 @@ while [[ $# -gt 0 ]]; do
     --image|-i)
       IMAGE_PATH="$2"
       shift 2
+      ;;
+    --file|-f)
+      FILE_PATH="$2"
+      shift 2
+      ;;
+    --allow-new-thread)
+      ALLOW_NEW_THREAD="true"
+      shift
       ;;
     --conversation|-C)
       CONVERSATION_ID="$2"
@@ -117,9 +132,20 @@ if [ -n "$TEXT" ]; then
   TEXT="${TEXT//\\n/$_NL}"
 fi
 
-# When uploading an image, text is optional (serves as initial_comment)
-if [ -z "$IMAGE_PATH" ] && [ -z "$TEXT" ]; then
+# Prevent ambiguous uploads.
+if [ -n "$IMAGE_PATH" ] && [ -n "$FILE_PATH" ]; then
+  error_exit "Use either --image or --file, not both."
+fi
+
+# When uploading an image/file, text is optional (serves as initial_comment)
+if [ -z "$IMAGE_PATH" ] && [ -z "$FILE_PATH" ] && [ -z "$TEXT" ]; then
   error_exit "Slack message text is required. Pass --text, --text-file, pipe stdin, or include it in the JSON payload."
+fi
+
+# Safety default: require explicit thread targeting to avoid accidental
+# top-level replies when a threaded reply was intended.
+if [ -z "$THREAD_TS" ] && [ "$ALLOW_NEW_THREAD" != "true" ]; then
+  error_exit "threadTs is required to prevent accidental new-thread posts. Pass --thread <ts> (or --allow-new-thread to override)."
 fi
 
 if [ -n "$IMAGE_PATH" ]; then
@@ -134,6 +160,18 @@ if [ -n "$IMAGE_PATH" ]; then
      (if $threadTs != "" then {threadTs: $threadTs} else {} end)')
 
   api_call POST "/slack/upload-image" "$BODY"
+elif [ -n "$FILE_PATH" ]; then
+  # Generic file upload mode — use /api/slack/upload-file
+  BODY=$(jq -n \
+    --arg channelId "$CHANNEL_ID" \
+    --arg filePath "$FILE_PATH" \
+    --arg initialComment "${TEXT:-}" \
+    --arg threadTs "${THREAD_TS:-}" \
+    '{channelId: $channelId, filePath: $filePath} +
+     (if $initialComment != "" then {initialComment: $initialComment} else {} end) +
+     (if $threadTs != "" then {threadTs: $threadTs} else {} end)')
+
+  api_call POST "/slack/upload-file" "$BODY"
 else
   # Text-only mode — use /api/slack/send
   if [ -n "$THREAD_TS" ]; then
@@ -164,6 +202,11 @@ fi
   echo "---"
   if [ -n "$IMAGE_PATH" ]; then
     printf 'Image uploaded: %s\n' "$IMAGE_PATH"
+    if [ -n "$TEXT" ]; then
+      printf '%s\n' "$TEXT"
+    fi
+  elif [ -n "$FILE_PATH" ]; then
+    printf 'File uploaded: %s\n' "$FILE_PATH"
     if [ -n "$TEXT" ]; then
       printf '%s\n' "$TEXT"
     fi

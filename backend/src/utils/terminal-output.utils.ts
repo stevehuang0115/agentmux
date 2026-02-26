@@ -22,6 +22,8 @@ export function stripAnsiCodes(content: string): string {
 		// Replace cursor forward movements with a space (\d* is safe here because \x1b prefix
 		// prevents false matches with text like [CHAT_RESPONSE]; orphaned CSI below uses \d+)
 		.replace(/\x1b\[\d*C/g, ' ')
+		// Remove private-mode CSI sequences (e.g. ESC[?25h, ESC[?2026l) used by TUI renderers
+		.replace(/\x1b\[\?[0-9;]*[A-Za-z]/g, '')
 		// Remove other CSI sequences (colors, cursor positioning, etc.)
 		.replace(/\x1b\[[0-9;]*[A-Za-zH]/g, '')
 		// Remove OSC sequences (title changes, hyperlinks, etc.)
@@ -34,6 +36,9 @@ export function stripAnsiCodes(content: string): string {
 		// Note: \d+ (one or more digits) required to avoid matching [C in [CHAT_RESPONSE]
 		.replace(/\[\d+C/g, ' ')
 		.replace(/\[\d+(?:;\d+)*[A-BJKHfm]/g, '')
+		// Clean orphaned private-mode fragments where ESC was lost at buffer boundary.
+		// Examples: "[?25h", "[?25l", "[?2026h", "[?2026l"
+		.replace(/\[\?[0-9;]*[A-Za-z]/g, '')
 		// Replace carriage returns with newline (CR/LF normalization)
 		.replace(/\r\n/g, '\n')
 		.replace(/\r/g, '\n')

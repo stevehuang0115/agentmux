@@ -15,10 +15,30 @@ PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
 require_param "to" "$TO"
 require_param "task" "$TASK"
 
+# Resolve Crewly root from this script path:
+# config/skills/orchestrator/delegate-task/execute.sh -> project root
+CREWLY_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+
+resolve_skill_paths() {
+  local input="$1"
+  # Convert "bash config/skills/..." and "/config/skills/..." to absolute paths.
+  # This keeps delegated instructions runnable when agents use different CWDs.
+  perl -pe '
+    my $root = $ENV{"CREWLY_ROOT"};
+    s{\bbash\s+config/skills/}{bash $root/config/skills/}g;
+    s{(?<![A-Za-z0-9_./-])config/skills/}{$root/config/skills/}g;
+  ' <<< "$input"
+}
+
+TASK="$(CREWLY_ROOT="$CREWLY_ROOT" resolve_skill_paths "$TASK")"
+if [ -n "$CONTEXT" ]; then
+  CONTEXT="$(CREWLY_ROOT="$CREWLY_ROOT" resolve_skill_paths "$CONTEXT")"
+fi
+
 # Build a structured task message
 TASK_MESSAGE="[TASK] Priority: ${PRIORITY}\n\n${TASK}"
 [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
-TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
+TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
 
 BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message}')
 

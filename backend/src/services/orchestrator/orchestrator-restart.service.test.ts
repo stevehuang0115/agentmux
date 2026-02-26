@@ -36,8 +36,17 @@ jest.mock('../slack/slack.service.js', () => ({
 	}),
 }));
 
+const mockGetOrchestratorStatus = jest.fn();
+jest.mock('../core/storage.service.js', () => ({
+	StorageService: {
+		getInstance: () => ({
+			getOrchestratorStatus: mockGetOrchestratorStatus,
+		}),
+	},
+}));
+
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
-import { ORCHESTRATOR_RESTART_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_RESTART_CONSTANTS, RUNTIME_TYPES } from '../../constants.js';
 
 describe('OrchestratorRestartService', () => {
 	let service: OrchestratorRestartService;
@@ -72,6 +81,10 @@ describe('OrchestratorRestartService', () => {
 			mockSessionBackend as any,
 			mockSocketIO
 		);
+
+		mockGetOrchestratorStatus.mockResolvedValue({
+			runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
+		});
 	});
 
 	afterEach(() => {
@@ -171,6 +184,19 @@ describe('OrchestratorRestartService', () => {
 
 			expect(result).toBe(true);
 			expect(mockSessionBackend.killSession).not.toHaveBeenCalled();
+		});
+
+		it('should restart orchestrator with stored runtime type', async () => {
+			mockGetOrchestratorStatus.mockResolvedValueOnce({
+				runtimeType: RUNTIME_TYPES.GEMINI_CLI,
+			});
+
+			const result = await service.attemptRestart();
+
+			expect(result).toBe(true);
+			expect(mockAgentRegistrationService.createAgentSession).toHaveBeenCalledWith(
+				expect.objectContaining({ runtimeType: RUNTIME_TYPES.GEMINI_CLI })
+			);
 		});
 	});
 

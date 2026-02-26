@@ -26,6 +26,8 @@ import {
 	SESSION_COMMAND_DELAYS,
 	RUNTIME_TYPES,
 	GEMINI_FAILURE_PATTERNS,
+	GEMINI_FORCE_RESTART_PATTERNS,
+	GEMINI_FAILURE_RETRY_CONSTANTS,
 	type RuntimeType,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -48,6 +50,8 @@ interface MonitoredSession {
 	debounceTimer?: ReturnType<typeof setTimeout>;
 	/** Interval handle for periodic process-alive polling */
 	processPollingInterval?: ReturnType<typeof setInterval>;
+	/** Number of Gemini failure retry attempts so far */
+	geminiFailureRetries: number;
 }
 
 /**
@@ -180,6 +184,7 @@ export class RuntimeExitMonitorService {
 			exitDetected: false,
 			confirmationInFlight: false,
 			unsubscribe: () => {},
+			geminiFailureRetries: 0,
 		};
 
 		// Get exit patterns for this runtime type
@@ -308,8 +313,10 @@ export class RuntimeExitMonitorService {
 	 * Confirm exit by checking for a shell prompt, then react.
 	 *
 	 * For Gemini CLI failure patterns (API errors, quota exhaustion, etc.),
-	 * the shell prompt check is bypassed because the CLI may be stuck in an
-	 * error state without returning to the shell.
+	 * the system retries with exponential backoff before declaring the agent
+	 * dead. Gemini CLI often recovers automatically from transient API errors
+	 * (RESOURCE_EXHAUSTED, UNAVAILABLE, Connection error). Only after
+	 * MAX_RETRIES does the system proceed with the exit/restart flow.
 	 */
 	private async confirmAndReact(
 		sessionName: string,
@@ -327,23 +334,48 @@ export class RuntimeExitMonitorService {
 			const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
 
 			if (!shellPromptConfirmed) {
-				// For Gemini CLI: check if a failure pattern is present in the buffer.
-				// Gemini failure patterns (RESOURCE_EXHAUSTED, Connection error, etc.)
-				// indicate the CLI is stuck/crashed but may not have exited to shell.
-				// In this case, proceed with recovery without requiring a shell prompt.
+				// Codex: "Conversation interrupted" indicates the run was aborted and
+				// often leaves the agent stranded without completion callbacks. Treat it
+				// as an actionable runtime failure even if shell prompt isn't visible.
+				const isCodexInterrupted = monitored.runtimeType === RUNTIME_TYPES.CODEX_CLI
+					&& /Conversation interrupted/i.test(monitored.buffer);
+				if (isCodexInterrupted) {
+					this.logger.warn('Codex interruption detected, proceeding with recovery flow', {
+						sessionName,
+					});
+					// fall through to exit/restart handling below
+				}
+
+				// For Gemini CLI: detect either retryable failure patterns or forced
+				// restart/update markers that require immediate recovery handling.
 				const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
 					&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+				const isGeminiForceRestart = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
+					&& GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 
-				if (!isGeminiFailure) {
+				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted) {
 					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
 					return;
 				}
 
-				this.logger.info('Gemini CLI failure pattern detected without shell prompt, proceeding with recovery', {
-					sessionName,
-					runtimeType: monitored.runtimeType,
-					detectedPattern: GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source,
-				});
+				if (isGeminiFailure || isGeminiForceRestart) {
+					// Some Gemini failures are transient; others (auto-update/restart)
+					// should trigger immediate recovery and task re-delivery.
+					const forceRestart = isGeminiForceRestart;
+					if (forceRestart) {
+						this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
+							sessionName,
+						});
+					} else {
+						// Retry with exponential backoff before declaring exit.
+						// Gemini CLI can recover from transient API errors automatically.
+						const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
+						if (retryResult === 'recovered') {
+							return;
+						}
+						// retryResult === 'exhausted' — fall through to exit flow
+					}
+				}
 			}
 
 			// Mark as detected to prevent double-processing
@@ -371,7 +403,9 @@ export class RuntimeExitMonitorService {
 			if (monitored.role !== ORCHESTRATOR_ROLE && this.agentRegistrationService && this.taskTrackingService) {
 				try {
 					const tasks = await this.taskTrackingService.getTasksForTeamMember(monitored.memberId || '');
-					const activeTasks = tasks.filter(t => t.status === 'assigned' || t.status === 'active');
+					const activeTasks = tasks.filter(
+						t => t.status === 'assigned' || t.status === 'active' || t.status === 'pending_assignment'
+					);
 
 					if (activeTasks.length > 0) {
 						this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
@@ -403,6 +437,21 @@ export class RuntimeExitMonitorService {
 
 			// Orchestrator-specific restart: attempt auto-restart when runtime exits
 			if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+				// CRITICAL: Set status to inactive BEFORE restart so the queue
+				// processor doesn't deliver messages during postInitialize.
+				// Without this, the old 'active' status persists in storage and
+				// the queue processor sends chat messages that get concatenated
+				// into /directory add commands in the new Gemini CLI session.
+				try {
+					const storageService = StorageService.getInstance();
+					await storageService.updateAgentStatus(
+						sessionName,
+						CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+					);
+				} catch {
+					// Best-effort — continue with restart
+				}
+
 				// Capture session memory before restart
 				try {
 					const sessionMemoryService = SessionMemoryService.getInstance();
@@ -421,13 +470,17 @@ export class RuntimeExitMonitorService {
 					if (success) {
 						this.logger.info('Orchestrator restarted after runtime exit', { sessionName });
 
-						// Broadcast restarted status
+						// Broadcast restarted status as STARTED (not ACTIVE).
+						// The agent becomes ACTIVE only after the registration prompt
+						// is fully processed and the MCP registration call completes.
+						// Broadcasting ACTIVE prematurely causes the queue processor
+						// to deliver messages during postInitialize.
 						try {
 							const terminalGateway = getTerminalGateway();
 							if (terminalGateway) {
 								terminalGateway.broadcastOrchestratorStatus({
 									sessionName,
-									agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+									agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.STARTED,
 									reason: 'runtime_exit_restart',
 								});
 							}
@@ -507,6 +560,103 @@ export class RuntimeExitMonitorService {
 		} finally {
 			monitored.confirmationInFlight = false;
 		}
+	}
+
+	/**
+	 * Handle a Gemini CLI failure with exponential backoff retry.
+	 *
+	 * Waits with increasing delays and checks if the CLI recovers (returns
+	 * to a ready prompt). Returns 'recovered' if the CLI is back, or
+	 * 'exhausted' if max retries have been reached.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param monitored - Monitored session state (retry counter is mutated)
+	 * @param helper - Session command helper for terminal output capture
+	 * @returns 'recovered' if CLI is back, 'exhausted' if retries exhausted
+	 */
+	private async handleGeminiFailureWithRetry(
+		sessionName: string,
+		monitored: MonitoredSession,
+		helper: SessionCommandHelper
+	): Promise<'recovered' | 'exhausted'> {
+		const detectedPattern = GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
+		monitored.geminiFailureRetries++;
+
+		const {
+			MAX_RETRIES,
+			INITIAL_BACKOFF_MS,
+			MAX_BACKOFF_MS,
+			BACKOFF_MULTIPLIER,
+			RECOVERY_CHECK_LINES,
+		} = GEMINI_FAILURE_RETRY_CONSTANTS;
+
+		if (monitored.geminiFailureRetries > MAX_RETRIES) {
+			this.logger.warn('Gemini CLI failure retries exhausted, proceeding with exit flow', {
+				sessionName,
+				retries: monitored.geminiFailureRetries,
+				maxRetries: MAX_RETRIES,
+				detectedPattern,
+			});
+			return 'exhausted';
+		}
+
+		// Exponential backoff: INITIAL * MULTIPLIER^(retry-1), capped at MAX
+		const backoffMs = Math.min(
+			INITIAL_BACKOFF_MS * Math.pow(BACKOFF_MULTIPLIER, monitored.geminiFailureRetries - 1),
+			MAX_BACKOFF_MS
+		);
+
+		this.logger.info('Gemini CLI failure detected, waiting for recovery', {
+			sessionName,
+			retry: monitored.geminiFailureRetries,
+			maxRetries: MAX_RETRIES,
+			backoffMs,
+			detectedPattern,
+		});
+
+		// Clear the buffer so the same error text doesn't immediately re-trigger
+		monitored.buffer = '';
+
+		await delay(backoffMs);
+
+		// Check if the CLI has recovered by looking for ready prompt patterns
+		try {
+			const output = helper.capturePane(sessionName, RECOVERY_CHECK_LINES);
+			const geminiReadyPatterns = [
+				'Type your message',
+				'gemini>',
+				'context left)',
+			];
+			const hasRecovered = geminiReadyPatterns.some((pattern) => output.includes(pattern));
+
+			if (hasRecovered) {
+				this.logger.info('Gemini CLI recovered after transient failure', {
+					sessionName,
+					retry: monitored.geminiFailureRetries,
+					detectedPattern,
+				});
+				monitored.geminiFailureRetries = 0;
+				return 'recovered';
+			}
+
+			this.logger.debug('Gemini CLI has not recovered yet after backoff', {
+				sessionName,
+				retry: monitored.geminiFailureRetries,
+				maxRetries: MAX_RETRIES,
+			});
+		} catch (error) {
+			this.logger.warn('Error checking Gemini CLI recovery', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		// Not recovered but retries remain — let the next failure detection handle it
+		if (monitored.geminiFailureRetries < MAX_RETRIES) {
+			return 'recovered'; // Return 'recovered' to skip exit flow this time
+		}
+
+		return 'exhausted';
 	}
 
 	/**

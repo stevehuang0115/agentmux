@@ -15,6 +15,103 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		super(sessionHelper, projectRoot);
 	}
 
+	/**
+	 * Gemini CLI can show an interactive trust gate on first launch:
+	 * "Do you trust this folder?".
+	 * Auto-accept the default "Trust folder" option so startup does not stall.
+	 */
+	async waitForRuntimeReady(
+		sessionName: string,
+		timeout: number,
+		checkInterval: number = 2000
+	): Promise<boolean> {
+		const startTime = Date.now();
+		let trustPromptAttempts = 0;
+
+		this.logger.info('Waiting for runtime to be ready', {
+			sessionName,
+			runtimeType: this.getRuntimeType(),
+			timeout,
+			checkInterval,
+		});
+
+		while (Date.now() - startTime < timeout) {
+			try {
+				const output = this.sessionHelper.capturePane(sessionName);
+
+				if (this.isGeminiTrustPrompt(output)) {
+					trustPromptAttempts++;
+					this.logger.info('Gemini trust prompt detected during startup, auto-confirming', {
+						sessionName,
+						attempt: trustPromptAttempts,
+					});
+
+					// Always use Enter to accept the currently selected default option.
+					// Typing "1" can leak into the normal input box after Gemini restarts.
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(1000);
+					continue;
+				}
+
+				const readyPatterns = this.getRuntimeReadyPatterns();
+				const hasReadySignal = readyPatterns.some((pattern) => output.includes(pattern));
+				if (hasReadySignal) {
+					const detectedPattern = readyPatterns.find((p) => output.includes(p));
+					this.logger.info('Runtime ready pattern detected', {
+						sessionName,
+						runtimeType: this.getRuntimeType(),
+						detectedPattern,
+						totalElapsed: Date.now() - startTime,
+					});
+					return true;
+				}
+
+				const errorPatterns = this.getRuntimeErrorPatterns();
+				const hasError = errorPatterns.some((pattern) => output.includes(pattern));
+				if (hasError) {
+					const detectedError = errorPatterns.find((p) => output.includes(p));
+					this.logger.error('Runtime error pattern detected during startup', {
+						sessionName,
+						runtimeType: this.getRuntimeType(),
+						detectedError,
+						totalElapsed: Date.now() - startTime,
+					});
+					return false;
+				}
+			} catch (error) {
+				this.logger.warn('Error while checking runtime ready signal', {
+					sessionName,
+					runtimeType: this.getRuntimeType(),
+					error: String(error),
+				});
+			}
+
+			await delay(checkInterval);
+		}
+
+		try {
+			const lastOutput = this.sessionHelper.capturePane(sessionName);
+			const lastLines = lastOutput.split('\n').slice(-10).join('\n');
+			this.logger.warn('Timeout waiting for runtime ready signal', {
+				sessionName,
+				runtimeType: this.getRuntimeType(),
+				timeout,
+				checkInterval,
+				totalElapsed: Date.now() - startTime,
+				lastTerminalLines: lastLines,
+			});
+		} catch {
+			this.logger.warn('Timeout waiting for runtime ready signal', {
+				sessionName,
+				runtimeType: this.getRuntimeType(),
+				timeout,
+				checkInterval,
+				totalElapsed: Date.now() - startTime,
+			});
+		}
+		return false;
+	}
+
 	protected getRuntimeType(): RuntimeType {
 		return RUNTIME_TYPES.GEMINI_CLI;
 	}
@@ -67,6 +164,11 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		];
 	}
 
+	private isGeminiTrustPrompt(output: string): boolean {
+		return /Do you trust this folder\?/i.test(output)
+			&& /Trust folder/i.test(output);
+	}
+
 	/**
 	 * Gemini CLI specific exit patterns for runtime exit detection.
 	 *
@@ -111,7 +213,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 * @param targetProjectPath - Optional target project path for MCP config.
 	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string, additionalAllowlistPaths?: string[]): Promise<void> {
 		const effectiveProjectPath = targetProjectPath || this.projectRoot;
 		const crewlyHome = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
 		this.logger.info('Gemini CLI post-init: adding paths to directory allowlist', {
@@ -119,6 +221,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 			crewlyHome,
 			projectRoot: this.projectRoot,
 			targetProjectPath: effectiveProjectPath,
+			additionalPaths: additionalAllowlistPaths?.length ?? 0,
 		});
 
 		// Ensure MCP servers (e.g., playwright) are configured before the agent starts.
@@ -129,19 +232,32 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// Ensure GOOGLE_GENAI_API_KEY is in the project .env file
 		await this.ensureGeminiEnvFile(effectiveProjectPath);
 
+		// Ensure required paths are trusted by Gemini CLI before /directory add.
+		// Include the system temp directory so agents can read temp files
+		// (e.g. screenshots saved to /tmp by skills like rednote-reader).
+		const tempDir = os.tmpdir();
+		const pathsToAdd = [crewlyHome, this.projectRoot, tempDir];
+		if (effectiveProjectPath !== this.projectRoot) {
+			pathsToAdd.push(effectiveProjectPath);
+		}
+
+		// Merge additional paths (e.g. orchestrator's existing project paths)
+		// so ALL /directory add commands run before the registration prompt.
+		if (additionalAllowlistPaths?.length) {
+			for (const p of additionalAllowlistPaths) {
+				if (!pathsToAdd.includes(p)) {
+					pathsToAdd.push(p);
+				}
+			}
+		}
+
+		await this.ensureGeminiTrustedFolders(pathsToAdd);
+
 		// Wait for Gemini CLI's async auto-update check to complete before
 		// sending commands. The auto-update notification (e.g., "Automatic
 		// update failed") appears shortly after startup and can interfere
 		// with slash command processing if we send /directory add too early.
 		await delay(3000);
-
-		// Add ~/.crewly, the Crewly project root, and the target project to the allowlist.
-		// The target project path may differ from projectRoot when the agent works on a
-		// separate project (e.g., business_os vs crewly).
-		const pathsToAdd = [crewlyHome, this.projectRoot];
-		if (effectiveProjectPath !== this.projectRoot) {
-			pathsToAdd.push(effectiveProjectPath);
-		}
 
 		const result = await this.addMultipleProjectsToAllowlist(sessionName, pathsToAdd);
 
@@ -151,6 +267,11 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				results: result.results,
 			});
 		}
+
+		// Do not return to caller until Gemini is back at a clean prompt.
+		// Otherwise the immediate "Read the file ..." instruction can race with
+		// an in-flight slash command and get concatenated in the input box.
+		await this.waitForSlashQueueToDrain(sessionName);
 	}
 
 	/**
@@ -243,6 +364,56 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
+	 * Ensure Gemini trusted folders contain the required paths.
+	 * Gemini blocks `/directory add` for paths that are not pre-trusted.
+	 */
+	private async ensureGeminiTrustedFolders(paths: string[]): Promise<void> {
+		const trustedFoldersPath = path.join(os.homedir(), '.gemini', 'trustedFolders.json');
+		const normalizedPaths = [...new Set(paths.map((p) => path.resolve(p)))];
+
+		try {
+			let trustedFolders: Record<string, string> = {};
+			try {
+				const raw = await fsPromises.readFile(trustedFoldersPath, 'utf8');
+				const parsed = JSON.parse(raw);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					trustedFolders = parsed as Record<string, string>;
+				}
+			} catch (readError) {
+				// Missing file is expected on first run; malformed content is reset.
+				if ((readError as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+					this.logger.warn('Failed to read Gemini trusted folders, resetting file', {
+						trustedFoldersPath,
+						error: readError instanceof Error ? readError.message : String(readError),
+					});
+				}
+			}
+
+			let changed = false;
+			for (const folderPath of normalizedPaths) {
+				if (trustedFolders[folderPath] !== 'TRUST_FOLDER') {
+					trustedFolders[folderPath] = 'TRUST_FOLDER';
+					changed = true;
+				}
+			}
+
+			if (!changed) return;
+
+			await fsPromises.mkdir(path.dirname(trustedFoldersPath), { recursive: true });
+			await fsPromises.writeFile(trustedFoldersPath, `${JSON.stringify(trustedFolders, null, 2)}\n`, 'utf8');
+			this.logger.info('Gemini trusted folders updated', {
+				trustedFoldersPath,
+				addedCount: normalizedPaths.length,
+			});
+		} catch (error) {
+			this.logger.warn('Failed to update Gemini trusted folders (non-fatal)', {
+				trustedFoldersPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
 	 * Check if Gemini CLI is installed and configured
 	 */
 	async checkGeminiInstallation(): Promise<{
@@ -321,6 +492,18 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				// The "/directory add" success message appears in the upper messages
 				// area via addItem(), so 20 lines only captures the unchanging bottom.
 				const beforeOutput = this.sessionHelper.capturePane(sessionName, 100);
+				const alreadyAllowlistedBeforeSend = this.isPathAlreadyAllowlisted(beforeOutput, projectPath);
+				if (alreadyAllowlistedBeforeSend) {
+					this.logger.info('Project already in Gemini CLI workspace, skipping /directory add', {
+						sessionName,
+						projectPath,
+						attempt,
+					});
+					return {
+						success: true,
+						message: `Project path ${projectPath} is already in Gemini CLI workspace`,
+					};
+				}
 
 				// Send the directory add command
 				// Add a trailing space as sometimes Gemini CLI needs it to delimit the path properly
@@ -333,15 +516,69 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				// Verify: check if output changed (slash commands produce confirmation)
 				const afterOutput = this.sessionHelper.capturePane(sessionName, 100);
 				const outputChanged = beforeOutput !== afterOutput;
-				const hasConfirmation = /added|directory|✓|success/i.test(afterOutput);
+				// Do not treat the literal "/directory add ..." input text as confirmation.
+				// "directory" alone is too broad and causes false positives when the
+				// command is still stuck in the prompt.
+				const hasConfirmation = /added|✓|success/i.test(afterOutput);
+				const alreadyAllowlistedAfterSend = this.isPathAlreadyAllowlisted(afterOutput, projectPath);
+				const slashQueueBlocked = /slash commands cannot be queued/i.test(afterOutput);
+				const stuckAtPrompt = this.isTextLikelyStuckAtPrompt(afterOutput, addCommand);
 
-				if (outputChanged || hasConfirmation) {
+				// Gemini CLI can drop Enter while still accepting typed text, which causes
+				// subsequent commands to concatenate in the same input box. If we detect
+				// that the command text is still at the prompt, press Enter again before
+				// retrying so we do not append the next command to the same line.
+				if (stuckAtPrompt) {
+					this.logger.warn('Directory add command appears stuck at prompt, re-pressing Enter', {
+						sessionName,
+						projectPath,
+						attempt,
+					});
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(500);
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(1500);
+
+					const recoveredOutput = this.sessionHelper.capturePane(sessionName, 100);
+					const recoveredHasConfirmation = /added|✓|success/i.test(recoveredOutput);
+					const recoveredAlreadyAllowlisted = this.isPathAlreadyAllowlisted(recoveredOutput, projectPath);
+					const stillStuck = this.isTextLikelyStuckAtPrompt(recoveredOutput, addCommand);
+					if (recoveredHasConfirmation || recoveredAlreadyAllowlisted || !stillStuck) {
+						this.logger.info('Project added to Gemini CLI allowlist after Enter recovery', {
+							sessionName,
+							projectPath,
+							attempt,
+							recoveredHasConfirmation,
+							recoveredAlreadyAllowlisted,
+						});
+						return {
+							success: true,
+							message: `Project path ${projectPath} added to Gemini CLI allowlist`,
+						};
+					}
+				}
+
+				// Gemini can report queue contention when commands are fired too quickly.
+				// Treat this as a hard retry signal and do not mark success.
+				if (slashQueueBlocked) {
+					this.logger.warn('Gemini CLI slash command queue is busy, retrying /directory add', {
+						sessionName,
+						projectPath,
+						attempt,
+					});
+					await delay(2000);
+					continue;
+				}
+
+				// Only accept explicit confirmation signals. Generic output changes
+				// are too noisy in Gemini's TUI and can produce false positives.
+				if ((hasConfirmation || alreadyAllowlistedAfterSend) && !stuckAtPrompt) {
 					this.logger.info('Project added to Gemini CLI allowlist (verified)', {
 						sessionName,
 						projectPath,
 						attempt,
-						outputChanged,
 						hasConfirmation,
+						alreadyAllowlistedAfterSend,
 					});
 					return {
 						success: true,
@@ -384,8 +621,37 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
+	 * Heuristic to detect text that is still sitting in Gemini's input box.
+	 * This indicates the message was typed but Enter was not processed.
+	 */
+	private isTextLikelyStuckAtPrompt(terminalOutput: string, message: string): boolean {
+		if (!terminalOutput || !message) return false;
+		const snippet = message.replace(/\s+/g, ' ').trim();
+		if (!snippet) return false;
+		const bottomText = terminalOutput
+			.split('\n')
+			.slice(-15)
+			.join(' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+		return bottomText.includes(snippet);
+	}
+
+	/**
+	 * Detect whether Gemini CLI output indicates a path is already allowlisted.
+	 */
+	private isPathAlreadyAllowlisted(terminalOutput: string, projectPath: string): boolean {
+		if (!terminalOutput || !projectPath) return false;
+		const normalizedOutput = terminalOutput.replace(/\s+/g, ' ');
+		const normalizedPath = projectPath.replace(/\s+/g, ' ');
+		const hasAlreadyMarker = /already in (the )?workspace|already added|already allowed/i.test(normalizedOutput);
+		return hasAlreadyMarker && normalizedOutput.includes(normalizedPath);
+	}
+
+	/**
 	 * Add multiple project paths to Gemini CLI allowlist
-	 * Efficiently adds all paths in sequence
+	 * Attempts a single batched slash command first, then falls back to
+	 * per-path commands for resiliency.
 	 */
 	async addMultipleProjectsToAllowlist(
 		sessionName: string,
@@ -395,16 +661,45 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		message: string;
 		results: Array<{ path: string; success: boolean; error?: string }>;
 	}> {
+		const uniqueProjectPaths = [...new Set(projectPaths)];
 		const results: Array<{ path: string; success: boolean; error?: string }> = [];
 		let successCount = 0;
 
 		this.logger.info('Adding multiple projects to Gemini CLI allowlist', {
 			sessionName,
-			projectCount: projectPaths.length,
-			projectPaths,
+			projectCount: uniqueProjectPaths.length,
+			projectPaths: uniqueProjectPaths,
 		});
 
-		for (const projectPath of projectPaths) {
+		// Fast path: Gemini CLI supports `/directory add path1,path2,...`.
+		// Use this first to avoid queueing many slash commands back-to-back.
+		if (uniqueProjectPaths.length > 1) {
+			const batchResult = await this.addProjectsToAllowlistBatch(sessionName, uniqueProjectPaths);
+			if (batchResult.success) {
+				for (const projectPath of uniqueProjectPaths) {
+					results.push({ path: projectPath, success: true });
+				}
+				successCount = uniqueProjectPaths.length;
+
+				this.logger.info('Completed adding multiple projects via batch command', {
+					sessionName,
+					totalProjects: uniqueProjectPaths.length,
+				});
+
+				return {
+					success: true,
+					message: `Added ${successCount}/${uniqueProjectPaths.length} projects to Gemini CLI allowlist`,
+					results,
+				};
+			}
+
+			this.logger.warn('Batch /directory add failed, falling back to per-path commands', {
+				sessionName,
+				reason: batchResult.message,
+			});
+		}
+
+		for (const projectPath of uniqueProjectPaths) {
 			try {
 				const result = await this.addProjectToAllowlist(sessionName, projectPath);
 				if (result.success) {
@@ -426,17 +721,17 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 				});
 			}
 
-			// Small delay between commands
-			await delay(500);
+			// Keep spacing between slash commands to reduce queue contention in Gemini CLI.
+			await delay(1500);
 		}
 
-		const message = `Added ${successCount}/${projectPaths.length} projects to Gemini CLI allowlist`;
+		const message = `Added ${successCount}/${uniqueProjectPaths.length} projects to Gemini CLI allowlist`;
 
 		this.logger.info('Completed adding multiple projects to Gemini CLI allowlist', {
 			sessionName,
-			totalProjects: projectPaths.length,
+			totalProjects: uniqueProjectPaths.length,
 			successCount,
-			failureCount: projectPaths.length - successCount,
+			failureCount: uniqueProjectPaths.length - successCount,
 		});
 
 		return {
@@ -444,5 +739,125 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 			message,
 			results,
 		};
+	}
+
+	/**
+	 * Send a single batched `/directory add` command with comma-separated paths.
+	 */
+	private async addProjectsToAllowlistBatch(
+		sessionName: string,
+		projectPaths: string[]
+	): Promise<{ success: boolean; message: string }> {
+		const maxAttempts = 2;
+		const commandPayload = projectPaths.join(',');
+		const batchCommand = `/directory add ${commandPayload} `;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				await this.sessionHelper.sendEnter(sessionName);
+				await delay(1000);
+
+				const beforeOutput = this.sessionHelper.capturePane(sessionName, 120);
+				const allAlreadyPresent = projectPaths.every((p) =>
+					this.isPathAlreadyAllowlisted(beforeOutput, p)
+				);
+				if (allAlreadyPresent) {
+					return {
+						success: true,
+						message: 'All paths are already in Gemini CLI workspace',
+					};
+				}
+
+				await this.sessionHelper.sendMessage(sessionName, batchCommand);
+				await delay(2500);
+
+				const afterOutput = this.sessionHelper.capturePane(sessionName, 120);
+				const hasQueueWarning = /slash commands cannot be queued/i.test(afterOutput);
+				const stuckAtPrompt = this.isTextLikelyStuckAtPrompt(afterOutput, batchCommand);
+				const hasConfirmation = /added|✓|success/i.test(afterOutput);
+				const allPresentAfter = projectPaths.every((p) =>
+					this.isPathAlreadyAllowlisted(afterOutput, p)
+				);
+
+				if (hasQueueWarning) {
+					await delay(2000);
+					continue;
+				}
+
+				if (stuckAtPrompt) {
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(500);
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(1500);
+
+					const recoveredOutput = this.sessionHelper.capturePane(sessionName, 120);
+					const recoveredConfirmation = /added|✓|success/i.test(recoveredOutput);
+					const recoveredAllPresent = projectPaths.every((p) =>
+						this.isPathAlreadyAllowlisted(recoveredOutput, p)
+					);
+					const stillStuck = this.isTextLikelyStuckAtPrompt(recoveredOutput, batchCommand);
+
+					if ((recoveredConfirmation || recoveredAllPresent) && !stillStuck) {
+						return { success: true, message: 'Batch directory add command succeeded' };
+					}
+				}
+
+				if ((hasConfirmation || allPresentAfter) && !stuckAtPrompt) {
+					return { success: true, message: 'Batch directory add command succeeded' };
+				}
+			} catch (error) {
+				if (attempt === maxAttempts) {
+					return {
+						success: false,
+						message: error instanceof Error ? error.message : String(error),
+					};
+				}
+			}
+		}
+
+		return {
+			success: false,
+			message: 'Batch directory add command not confirmed',
+		};
+	}
+
+	/**
+	 * Wait until Gemini's slash-command queue is idle and the prompt is ready
+	 * for normal text input.
+	 */
+	private async waitForSlashQueueToDrain(sessionName: string): Promise<void> {
+		const maxChecks = 8;
+		for (let check = 1; check <= maxChecks; check++) {
+			const output = this.sessionHelper.capturePane(sessionName, 120);
+			const hasQueueWarning = /slash commands cannot be queued/i.test(output);
+			const hasReadyPrompt = this.getRuntimeReadyPatterns().some((pattern) => output.includes(pattern));
+			const addCommandStuck = this.isTextLikelyStuckAtPrompt(output, '/directory add');
+
+			if (hasReadyPrompt && !hasQueueWarning && !addCommandStuck) {
+				this.logger.debug('Gemini slash command queue appears idle', {
+					sessionName,
+					check,
+				});
+				return;
+			}
+
+			// If command text still sits in the input box, submit/clear it so the
+			// next non-slash instruction is not appended to the same line.
+			if (addCommandStuck || hasQueueWarning) {
+				this.logger.debug('Gemini slash queue not idle yet, nudging prompt with Enter', {
+					sessionName,
+					check,
+					hasQueueWarning,
+					addCommandStuck,
+				});
+				await this.sessionHelper.sendEnter(sessionName);
+			}
+
+			await delay(1000);
+		}
+
+		this.logger.warn('Timed out waiting for Gemini slash queue to drain (continuing anyway)', {
+			sessionName,
+		});
 	}
 }

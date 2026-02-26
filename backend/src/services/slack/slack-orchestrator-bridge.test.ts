@@ -1046,8 +1046,7 @@ describe('SlackOrchestratorBridge', () => {
 
       // Should not throw, error is caught internally
       expect(consoleSpy).toHaveBeenCalledWith(
-        '[SlackBridge] Fallback Slack delivery failed',
-        expect.objectContaining({ error: 'Slack API error' })
+        expect.stringContaining('Fallback Slack delivery failed')
       );
 
       consoleSpy.mockRestore();

@@ -35,10 +35,13 @@ import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
+import { getSettingsService } from '../settings/settings.service.js';
 import {
 	CONTEXT_WINDOW_MONITOR_CONSTANTS,
 	RUNTIME_COMPACT_COMMANDS,
 	RUNTIME_TYPES,
+	ORCHESTRATOR_SESSION_NAME,
+	CREWLY_CONSTANTS,
 	AGENT_SUSPEND_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
@@ -89,6 +92,10 @@ export interface ContextWindowState {
 	compactInProgress: boolean;
 	/** Timestamp of the last compact attempt */
 	lastCompactAt: number;
+	/** Context percent recorded when compact was triggered (for post-compact verification) */
+	preCompactPercent: number;
+	/** Handle for the compact wait timeout (cleared on session stop) */
+	compactWaitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -106,14 +113,39 @@ interface SessionSubscription {
 // =============================================================================
 
 /**
- * Patterns to match context window usage percentages from Claude Code output.
+ * Patterns to match context window usage percentages from PTY output.
  * Each pattern captures the percentage as group 1.
+ *
+ * Covers:
+ * - Claude Code: "85% context", "context: 85%", "85% ctx"
+ * - Gemini CLI: "85% context used", "context 85%"
+ * - Generic: "XX% of context"
  */
 const CONTEXT_PERCENT_PATTERNS: RegExp[] = [
 	/(\d{1,3})%\s*(?:of\s+)?context/i,
 	/context[:\s]+(\d{1,3})%/i,
 	/(\d{1,3})%\s*ctx/i,
 ];
+
+/**
+ * Patterns to detect Gemini CLI token-count context display.
+ * Gemini CLI shows remaining context as token counts (e.g., "1M context left)",
+ * "500K context left)") rather than percentages.
+ *
+ * These patterns extract the numeric token count and unit suffix.
+ * Group 1: numeric value, Group 2: unit (K, M, or empty = raw number).
+ */
+const GEMINI_CONTEXT_TOKEN_PATTERNS: RegExp[] = [
+	/(\d+(?:\.\d+)?)\s*(K|M|k|m)?\s*(?:tokens?\s+)?context\s+left/i,
+	/(\d+(?:\.\d+)?)\s*(K|M|k|m)?\s*context\s+(?:tokens?\s+)?(?:left|remaining)/i,
+];
+
+/**
+ * Known max context sizes for Gemini models (in tokens).
+ * Used to estimate context usage percentage from token counts.
+ * Conservative estimate: assume 1M tokens max (Gemini 2.0 Flash/Pro).
+ */
+const GEMINI_DEFAULT_MAX_CONTEXT_TOKENS = 1_000_000;
 
 // =============================================================================
 // Service
@@ -216,6 +248,7 @@ export class ContextWindowMonitorService {
 			redThreshold: CONTEXT_WINDOW_MONITOR_CONSTANTS.RED_THRESHOLD_PERCENT,
 			criticalThreshold: CONTEXT_WINDOW_MONITOR_CONSTANTS.CRITICAL_THRESHOLD_PERCENT,
 		});
+		void this.refreshProactiveCompactSetting();
 
 		this.checkTimer = setInterval(() => {
 			this.performCheck();
@@ -294,6 +327,8 @@ export class ContextWindowMonitorService {
 			compactAttempts: 0,
 			compactInProgress: false,
 			lastCompactAt: 0,
+			preCompactPercent: 0,
+			compactWaitTimer: null,
 		};
 		this.contextStates.set(sessionName, state);
 
@@ -326,6 +361,14 @@ export class ContextWindowMonitorService {
 			sub.unsubscribe();
 			this.sessionSubscriptions.delete(sessionName);
 		}
+
+		// Clear any dangling compact wait timer to prevent stale callbacks
+		const state = this.contextStates.get(sessionName);
+		if (state?.compactWaitTimer) {
+			clearTimeout(state.compactWaitTimer);
+			state.compactWaitTimer = null;
+		}
+
 		this.contextStates.delete(sessionName);
 		this.proactiveCompactLastTriggered.delete(sessionName);
 
@@ -375,7 +418,7 @@ export class ContextWindowMonitorService {
 		}
 
 		// Try to extract context percentage from buffer
-		const percent = this.extractContextPercent(sub.buffer);
+		const percent = this.extractContextPercent(sub.buffer, state.runtimeType);
 		if (percent !== null) {
 			this.updateContextUsage(sessionName, percent);
 			// Clear buffer after successful extraction to avoid re-matching
@@ -386,10 +429,16 @@ export class ContextWindowMonitorService {
 	/**
 	 * Extract context usage percentage from terminal output.
 	 *
+	 * Tries percentage-based patterns first (Claude Code, generic), then
+	 * Gemini CLI token-count patterns. Token counts are converted to an
+	 * estimated usage percentage using GEMINI_DEFAULT_MAX_CONTEXT_TOKENS.
+	 *
 	 * @param text - Cleaned terminal output text
+	 * @param runtimeType - Optional runtime type for runtime-specific parsing
 	 * @returns The extracted percentage (0-100) or null if not found
 	 */
-	private extractContextPercent(text: string): number | null {
+	private extractContextPercent(text: string, runtimeType?: RuntimeType): number | null {
+		// Try standard percentage patterns first (works for all runtimes)
 		for (const pattern of CONTEXT_PERCENT_PATTERNS) {
 			const match = pattern.exec(text);
 			if (match) {
@@ -399,6 +448,26 @@ export class ContextWindowMonitorService {
 				}
 			}
 		}
+
+		// Try Gemini token-count patterns ("500K context left", "1M context left")
+		for (const pattern of GEMINI_CONTEXT_TOKEN_PATTERNS) {
+			const match = pattern.exec(text);
+			if (match) {
+				const value = parseFloat(match[1]);
+				const unit = (match[2] || '').toUpperCase();
+				let tokensRemaining = value;
+				if (unit === 'K') tokensRemaining = value * 1_000;
+				else if (unit === 'M') tokensRemaining = value * 1_000_000;
+
+				if (tokensRemaining >= 0 && tokensRemaining <= GEMINI_DEFAULT_MAX_CONTEXT_TOKENS * 2) {
+					const usedPercent = Math.round(
+						((GEMINI_DEFAULT_MAX_CONTEXT_TOKENS - tokensRemaining) / GEMINI_DEFAULT_MAX_CONTEXT_TOKENS) * 100
+					);
+					return Math.max(0, Math.min(100, usedPercent));
+				}
+			}
+		}
+
 		return null;
 	}
 
@@ -585,6 +654,30 @@ export class ContextWindowMonitorService {
 	 * @param state - Context window state for the session to compact
 	 */
 	private async triggerCompact(state: ContextWindowState): Promise<void> {
+		// Do not compact while an agent is actively working. Runtime compact
+		// commands can interrupt generation and cause task loss.
+		// Keep this check fast-path synchronous when storage helpers are not
+		// available (common in tests/mocks) to preserve existing behavior.
+		let isBusy = false;
+		const canCheckMemberBusy =
+			this.storageService
+			&& typeof (this.storageService as unknown as { findMemberBySessionName?: unknown }).findMemberBySessionName === 'function';
+		const canCheckOrchestratorBusy =
+			this.storageService
+			&& typeof (this.storageService as unknown as { getOrchestratorStatus?: unknown }).getOrchestratorStatus === 'function';
+
+		if (canCheckMemberBusy || canCheckOrchestratorBusy) {
+			isBusy = await this.isSessionBusyForCompact(state.sessionName);
+		}
+		if (isBusy) {
+			this.logger.info('Skipping compact: session is actively working', {
+				sessionName: state.sessionName,
+				runtimeType: state.runtimeType,
+				contextPercent: state.contextPercent,
+			});
+			return;
+		}
+
 		const backend = this.sessionBackend || getSessionBackendSync();
 		if (!backend) {
 			this.logger.warn('Cannot trigger compact: session backend not available', {
@@ -613,6 +706,7 @@ export class ContextWindowMonitorService {
 		state.compactInProgress = true;
 		state.compactAttempts++;
 		state.lastCompactAt = Date.now();
+		state.preCompactPercent = state.contextPercent;
 
 		this.logger.info('Triggering context compaction', {
 			sessionName: state.sessionName,
@@ -622,15 +716,41 @@ export class ContextWindowMonitorService {
 			contextPercent: state.contextPercent,
 		});
 
-		// Send Escape first to clear any in-progress input, then the compact command
-		session.write('\x1b');
-		await new Promise(resolve => setTimeout(resolve, 200));
+		// Claude/Codex: Escape can safely clear in-progress input.
+		// Gemini: Escape cancels the current request ("Request cancelled"), so skip it.
+		if (state.runtimeType !== RUNTIME_TYPES.GEMINI_CLI) {
+			session.write('\x1b');
+			await new Promise(resolve => setTimeout(resolve, 200));
+		}
 		session.write(command + '\r');
 
+		// Clear any previous compact wait timer to avoid stale callbacks
+		if (state.compactWaitTimer) {
+			clearTimeout(state.compactWaitTimer);
+		}
+
 		// After COMPACT_WAIT_MS, mark compact as no longer in progress
-		// so further threshold evaluations can proceed
-		setTimeout(() => {
+		// and verify that context usage actually decreased (post-compact verification).
+		state.compactWaitTimer = setTimeout(() => {
 			state.compactInProgress = false;
+			state.compactWaitTimer = null;
+
+			// Post-compact verification: if context % did not decrease,
+			// reset compact tracking so the next threshold evaluation retries.
+			if (state.contextPercent >= state.preCompactPercent && state.level !== 'normal') {
+				this.logger.warn('Post-compact verification: context did not decrease', {
+					sessionName: state.sessionName,
+					preCompactPercent: state.preCompactPercent,
+					currentPercent: state.contextPercent,
+					level: state.level,
+				});
+			} else if (state.contextPercent < state.preCompactPercent) {
+				this.logger.info('Post-compact verification: context decreased', {
+					sessionName: state.sessionName,
+					preCompactPercent: state.preCompactPercent,
+					currentPercent: state.contextPercent,
+				});
+			}
 		}, CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_WAIT_MS);
 
 		// Broadcast compact status to frontend
@@ -644,6 +764,33 @@ export class ContextWindowMonitorService {
 				level: state.level,
 				timestamp: new Date().toISOString(),
 			});
+		}
+	}
+
+	/**
+	 * Returns true when a session is currently marked as in-progress.
+	 * Falls back to false on lookup errors so monitoring can continue.
+	 */
+	private async isSessionBusyForCompact(sessionName: string): Promise<boolean> {
+		if (!this.storageService) {
+			return false;
+		}
+
+		try {
+			if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+				const orchestrator = await this.storageService.getOrchestratorStatus();
+				return orchestrator?.workingStatus === CREWLY_CONSTANTS.WORKING_STATUSES.IN_PROGRESS;
+			}
+
+			const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
+			const workingStatus = (memberInfo?.member as { workingStatus?: string } | undefined)?.workingStatus;
+			return workingStatus === CREWLY_CONSTANTS.WORKING_STATUSES.IN_PROGRESS;
+		} catch (error) {
+			this.logger.debug('Failed to read working status before compact (non-fatal)', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
 		}
 	}
 
@@ -883,8 +1030,12 @@ export class ContextWindowMonitorService {
 		const now = Date.now();
 		const staleThreshold = CONTEXT_WINDOW_MONITOR_CONSTANTS.STALE_DETECTION_THRESHOLD_MS;
 
-		// Proactive compact based on cumulative output volume
-		this.checkProactiveCompact(now);
+		// Proactive compact based on cumulative output volume (configurable)
+		if (this.proactiveCompactEnabled) {
+			this.checkProactiveCompact(now);
+		}
+		// Refresh cached setting in background so runtime config changes are picked up.
+		void this.refreshProactiveCompactSetting();
 
 		for (const [sessionName, state] of this.contextStates) {
 			const timeSinceLastDetection = now - state.lastDetectedAt;
@@ -933,6 +1084,21 @@ export class ContextWindowMonitorService {
 
 	/** Timestamp of last proactive compact per session for cooldown tracking */
 	private proactiveCompactLastTriggered: Map<string, number> = new Map();
+	/** Cached toggle for proactive compact behavior (loaded from settings) */
+	private proactiveCompactEnabled: boolean = true;
+
+	/**
+	 * Refresh the cached proactive compact toggle from persisted settings.
+	 * Non-fatal: any read failure keeps the previous cached value.
+	 */
+	private async refreshProactiveCompactSetting(): Promise<void> {
+		try {
+			const settings = await getSettingsService().getSettings();
+			this.proactiveCompactEnabled = settings?.general?.enableProactiveCompact ?? true;
+		} catch {
+			// Keep last known value on read failures.
+		}
+	}
 
 	/**
 	 * Check all monitored sessions for cumulative output volume and trigger

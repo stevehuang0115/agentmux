@@ -1,6 +1,7 @@
 # Delegate Task
 
 Sends a structured task assignment to an agent. When a `projectPath` is provided, also creates a task MD file in the project's `.crewly/tasks/delegated/in_progress/` directory for tracking.
+The script auto-resolves `config/skills/...` references to absolute paths so delegated tasks remain runnable from any working directory.
 
 ## Usage
 

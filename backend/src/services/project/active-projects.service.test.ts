@@ -100,7 +100,7 @@ describe('ActiveProjectsService', () => {
         lastUpdated: expect.any(String),
         version: '1.0.0'
       });
-      expect(consoleSpy).toHaveBeenCalledWith('Error loading active projects data:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error loading active projects data'));
     });
   });
 
@@ -141,7 +141,7 @@ describe('ActiveProjectsService', () => {
       const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
 
       await expect(service.saveActiveProjectsData(mockData)).rejects.toThrow('Write error');
-      expect(consoleSpy).toHaveBeenCalledWith('Error saving active projects data:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error saving active projects data'));
     });
   });
 
@@ -235,7 +235,7 @@ describe('ActiveProjectsService', () => {
 
       expect(result.checkInScheduleId).toBeUndefined();
       expect(result.gitCommitScheduleId).toBeUndefined();
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to create scheduled messages for project:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to create scheduled messages for project'));
     });
   });
 
@@ -327,7 +327,7 @@ describe('ActiveProjectsService', () => {
 
       await service.stopProject('test-project', mockMessageSchedulerService);
 
-      expect(consoleSpy).toHaveBeenCalledWith('Failed to cancel scheduled messages for project:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to cancel scheduled messages for project'));
       expect(service.saveActiveProjectsData).toHaveBeenCalled();
     });
   });
@@ -353,13 +353,13 @@ describe('ActiveProjectsService', () => {
     it('should continue with start if stop fails', async () => {
       const stopSpy = jest.spyOn(service, 'stopProject').mockRejectedValue(new Error('Stop error'));
       const startSpy = jest.spyOn(service, 'startProject').mockResolvedValue({});
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      const consoleSpy = jest.spyOn(console, 'info').mockImplementation();
 
       await service.restartProject('test-project', mockMessageSchedulerService);
 
       expect(stopSpy).toHaveBeenCalled();
       expect(startSpy).toHaveBeenCalled();
-      expect(consoleSpy).toHaveBeenCalledWith('Project was not running, starting fresh:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Project was not running, starting fresh'));
     });
   });
 

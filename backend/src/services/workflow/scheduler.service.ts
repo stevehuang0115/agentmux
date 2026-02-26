@@ -19,7 +19,7 @@ import { StorageService } from '../core/storage.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { AgentRegistrationService } from '../agent/agent-registration.service.js';
-import { RUNTIME_TYPES, RuntimeType } from '../../constants.js';
+import { RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, RuntimeType } from '../../constants.js';
 import {
   ScheduledMessageType,
   EnhancedScheduledMessage,
@@ -131,6 +131,17 @@ export class SchedulerService extends EventEmitter {
   private activityMonitor: IActivityMonitorLike | null = null;
   private agentRegistrationService: AgentRegistrationService | null = null;
 
+  // Per-session delivery guard: prevents concurrent deliveries to the same session.
+  // When multiple scheduled checks fire simultaneously (e.g., 25+ checks at once),
+  // each independently calls sendMessageWithRetry which sends Ctrl+C on retry.
+  // 25+ concurrent Ctrl+C presses crash the runtime. This guard ensures only
+  // one check delivers per session at a time; concurrent checks are dropped.
+  private deliveryInProgress = new Set<string>();
+  /** Consecutive idle hits per recurring check ID for auto-cancel policy. */
+  private recurringIdleStreak = new Map<string, number>();
+  /** Auto-cancel recurring checks after this many consecutive idle observations. */
+  private static readonly RECURRING_IDLE_AUTO_CANCEL_THRESHOLD = 3;
+
   /**
    * Creates a new SchedulerService
    *
@@ -209,6 +220,14 @@ export class SchedulerService extends EventEmitter {
    */
   private async resolveRuntimeType(sessionName: string): Promise<RuntimeType> {
     try {
+      // Check orchestrator status first (orchestrator is not a team member)
+      if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+        const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+        if (orchestratorStatus?.runtimeType) {
+          return orchestratorStatus.runtimeType as RuntimeType;
+        }
+      }
+
       const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
       if (memberInfo?.member?.runtimeType) {
         return memberInfo.member.runtimeType as RuntimeType;
@@ -235,7 +254,15 @@ export class SchedulerService extends EventEmitter {
     targetSession: string,
     minutes: number,
     message: string,
-    type: ScheduledMessageType = 'check-in'
+    type: ScheduledMessageType = 'check-in',
+    options?: {
+      label?: string;
+      persistent?: boolean;
+      timezone?: string;
+      recurrenceType?: 'interval' | 'daily' | 'weekdays' | 'weekly';
+      timeOfDay?: string;
+      dayOfWeek?: number;
+    }
   ): string {
     const checkId = uuidv4();
     const scheduledFor = new Date(Date.now() + minutes * 60 * 1000);
@@ -246,6 +273,12 @@ export class SchedulerService extends EventEmitter {
       message,
       scheduledFor: scheduledFor.toISOString(),
       isRecurring: false,
+      label: options?.label,
+      persistent: options?.persistent,
+      timezone: options?.timezone,
+      recurrenceType: options?.recurrenceType,
+      timeOfDay: options?.timeOfDay,
+      dayOfWeek: options?.dayOfWeek,
       createdAt: new Date().toISOString(),
     };
 
@@ -259,6 +292,7 @@ export class SchedulerService extends EventEmitter {
       createdAt: new Date().toISOString(),
     };
     this.enhancedMessages.set(checkId, enhancedMessage);
+    this.oneTimeChecksData.set(checkId, scheduledCheck);
 
     // Persist to disk so one-time checks survive restarts
     this.storageService.saveOneTimeCheck(scheduledCheck).catch(err => {
@@ -272,6 +306,7 @@ export class SchedulerService extends EventEmitter {
     const timeout = setTimeout(() => {
       this.executeCheck(targetSession, message);
       this.scheduledChecks.delete(checkId);
+      this.oneTimeChecksData.delete(checkId);
       this.enhancedMessages.delete(checkId);
       this.storageService.deleteOneTimeCheck(checkId).catch(err => {
         this.logger.error('Failed to delete persisted one-time check after execution', {
@@ -310,7 +345,15 @@ export class SchedulerService extends EventEmitter {
     intervalMinutes: number,
     message: string,
     type: ScheduledMessageType = 'progress-check',
-    maxOccurrences?: number
+    maxOccurrences?: number,
+    options?: {
+      label?: string;
+      persistent?: boolean;
+      timezone?: string;
+      recurrenceType?: 'interval' | 'daily' | 'weekdays' | 'weekly';
+      timeOfDay?: string;
+      dayOfWeek?: number;
+    }
   ): string {
     const checkId = uuidv4();
     const firstExecution = new Date(Date.now() + intervalMinutes * 60 * 1000);
@@ -322,6 +365,14 @@ export class SchedulerService extends EventEmitter {
       scheduledFor: firstExecution.toISOString(),
       intervalMinutes,
       isRecurring: true,
+      label: options?.label,
+      persistent: options?.persistent,
+      timezone: options?.timezone,
+      recurrenceType: options?.recurrenceType || 'interval',
+      timeOfDay: options?.timeOfDay,
+      dayOfWeek: options?.dayOfWeek,
+      maxOccurrences,
+      currentOccurrence: 0,
       createdAt: new Date().toISOString(),
     };
 
@@ -559,7 +610,9 @@ export class SchedulerService extends EventEmitter {
     if (timeout) {
       clearTimeout(timeout);
       this.scheduledChecks.delete(checkId);
+      this.oneTimeChecksData.delete(checkId);
       this.enhancedMessages.delete(checkId);
+      this.recurringIdleStreak.delete(checkId);
       this.storageService.deleteOneTimeCheck(checkId).catch(err => {
         this.logger.error('Failed to delete persisted one-time check', {
           checkId,
@@ -581,6 +634,7 @@ export class SchedulerService extends EventEmitter {
       }
       this.recurringChecks.delete(checkId);
       this.enhancedMessages.delete(checkId);
+      this.recurringIdleStreak.delete(checkId);
       this.storageService.deleteRecurringCheck(checkId).catch(err => {
         this.logger.error('Failed to delete persisted recurring check', {
           checkId,
@@ -598,6 +652,7 @@ export class SchedulerService extends EventEmitter {
       clearTimeout(contTimeout);
       this.continuationChecks.delete(checkId);
       this.enhancedMessages.delete(checkId);
+      this.recurringIdleStreak.delete(checkId);
       this.emit('check_cancelled', { checkId, type: 'continuation' });
       this.logger.info('Cancelled continuation check', { checkId });
       return;
@@ -621,6 +676,7 @@ export class SchedulerService extends EventEmitter {
       if (enhanced && enhanced.sessionName === sessionName) {
         clearTimeout(timeout);
         this.scheduledChecks.delete(checkId);
+        this.oneTimeChecksData.delete(checkId);
         this.enhancedMessages.delete(checkId);
       }
     }
@@ -673,13 +729,14 @@ export class SchedulerService extends EventEmitter {
   listScheduledChecks(): ScheduledCheck[] {
     const checks: ScheduledCheck[] = [];
 
+    for (const check of this.oneTimeChecksData.values()) {
+      checks.push(check);
+    }
+
     // Add recurring checks
     for (const check of this.recurringChecks.values()) {
       checks.push(check);
     }
-
-    // Note: We don't store one-time check details after scheduling
-    // In a production system, you'd want to persist this information
 
     return checks.sort(
       (a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime()
@@ -718,6 +775,18 @@ export class SchedulerService extends EventEmitter {
    * @param message - Message to send
    */
   private async executeCheck(targetSession: string, message: string): Promise<void> {
+    // Per-session guard: skip if a delivery to this session is already in progress.
+    // Prevents flood-delivering when multiple scheduled checks fire simultaneously,
+    // which causes 25+ concurrent Ctrl+C presses that crash the runtime.
+    if (this.deliveryInProgress.has(targetSession)) {
+      this.logger.info('Delivery already in progress for session, skipping scheduled check', {
+        targetSession,
+        messageLength: message.length,
+      });
+      return;
+    }
+
+    this.deliveryInProgress.add(targetSession);
     let success = false;
     let error: string | undefined;
 
@@ -777,6 +846,8 @@ export class SchedulerService extends EventEmitter {
         message,
         error,
       });
+    } finally {
+      this.deliveryInProgress.delete(targetSession);
     }
 
     // Create delivery log for scheduler messages
@@ -865,7 +936,39 @@ export class SchedulerService extends EventEmitter {
       // Check if this recurring check is still active
       if (!this.recurringChecks.has(checkId)) {
         this.recurringTimeouts.delete(checkId);
+        this.recurringIdleStreak.delete(checkId);
         return; // Check was cancelled
+      }
+
+      // Auto-cancel stale recurring checks when the target stays idle.
+      // This avoids indefinite "check again" loops for agents that are no
+      // longer actively working on a task.
+      if (this.activityMonitor && targetSession !== ORCHESTRATOR_SESSION_NAME) {
+        try {
+          const status = await this.activityMonitor.getWorkingStatusForSession(targetSession);
+          if (status === 'idle') {
+            const idleHits = (this.recurringIdleStreak.get(checkId) ?? 0) + 1;
+            this.recurringIdleStreak.set(checkId, idleHits);
+            if (idleHits >= SchedulerService.RECURRING_IDLE_AUTO_CANCEL_THRESHOLD) {
+              this.logger.info('Auto-cancelling recurring check after sustained idle status', {
+                checkId,
+                targetSession,
+                idleHits,
+                threshold: SchedulerService.RECURRING_IDLE_AUTO_CANCEL_THRESHOLD,
+              });
+              this.cancelCheck(checkId);
+              return;
+            }
+          } else {
+            this.recurringIdleStreak.set(checkId, 0);
+          }
+        } catch (error) {
+          this.logger.debug('Failed idle auto-cancel check (continuing recurring execution)', {
+            checkId,
+            targetSession,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       await this.executeCheck(targetSession, message);
@@ -885,6 +988,17 @@ export class SchedulerService extends EventEmitter {
       if (enhanced?.recurring) {
         enhanced.recurring.currentOccurrence =
           (enhanced.recurring.currentOccurrence || 0) + 1;
+        const recurringCheck = this.recurringChecks.get(checkId);
+        if (recurringCheck) {
+          recurringCheck.currentOccurrence = enhanced.recurring.currentOccurrence;
+          recurringCheck.maxOccurrences = enhanced.recurring.maxOccurrences;
+          this.storageService.saveRecurringCheck(recurringCheck).catch((err) => {
+            this.logger.error('Failed to persist recurring check occurrence update', {
+              checkId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
 
         // Check if max occurrences reached
         if (
@@ -903,6 +1017,7 @@ export class SchedulerService extends EventEmitter {
       // Check again if still active before scheduling next (may have been cancelled during execution)
       if (!this.recurringChecks.has(checkId)) {
         this.recurringTimeouts.delete(checkId);
+        this.recurringIdleStreak.delete(checkId);
         return;
       }
 
@@ -925,6 +1040,7 @@ export class SchedulerService extends EventEmitter {
       clearTimeout(timeout);
     }
     this.scheduledChecks.clear();
+    this.oneTimeChecksData.clear();
 
     // Clear all recurring checks and their timeouts
     for (const timeout of this.recurringTimeouts.values()) {
@@ -932,6 +1048,7 @@ export class SchedulerService extends EventEmitter {
     }
     this.recurringTimeouts.clear();
     this.recurringChecks.clear();
+    this.recurringIdleStreak.clear();
 
     // Clear persisted recurring checks
     this.storageService.clearRecurringChecks().catch(err => {
@@ -995,7 +1112,8 @@ export class SchedulerService extends EventEmitter {
           type: 'progress-check',
           recurring: {
             interval: check.intervalMinutes,
-            currentOccurrence: 0,
+            currentOccurrence: check.currentOccurrence || 0,
+            maxOccurrences: check.maxOccurrences,
           },
           createdAt: check.createdAt,
         };
@@ -1077,6 +1195,7 @@ export class SchedulerService extends EventEmitter {
         const timeout = setTimeout(() => {
           this.executeCheck(check.targetSession, check.message);
           this.scheduledChecks.delete(check.id);
+          this.oneTimeChecksData.delete(check.id);
           this.enhancedMessages.delete(check.id);
           this.storageService.deleteOneTimeCheck(check.id).catch(err => {
             this.logger.error('Failed to delete persisted one-time check after execution', {
@@ -1088,6 +1207,7 @@ export class SchedulerService extends EventEmitter {
         }, remainingMs);
 
         this.scheduledChecks.set(check.id, timeout);
+        this.oneTimeChecksData.set(check.id, check);
         restored++;
       }
 

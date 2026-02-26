@@ -5,7 +5,7 @@ import { AgentRegistrationService } from '../agent/agent-registration.service.js
 import { StorageService } from '../core/storage.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { MessageDeliveryLogModel } from '../../models/ScheduledMessage.js';
-import { CREWLY_CONSTANTS, RUNTIME_TYPES, RuntimeType } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, RuntimeType } from '../../constants.js';
 
 export class MessageSchedulerService extends EventEmitter {
   private activeTimers: Map<string, NodeJS.Timeout> = new Map();
@@ -133,6 +133,14 @@ export class MessageSchedulerService extends EventEmitter {
    */
   private async resolveRuntimeType(sessionName: string): Promise<RuntimeType> {
     try {
+      // Check orchestrator status first (orchestrator is not a team member)
+      if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+        const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+        if (orchestratorStatus?.runtimeType) {
+          return orchestratorStatus.runtimeType as RuntimeType;
+        }
+      }
+
       const memberInfo = await this.storageService.findMemberBySessionName(sessionName);
       if (memberInfo?.member?.runtimeType) {
         return memberInfo.member.runtimeType as RuntimeType;

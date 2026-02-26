@@ -12,11 +12,16 @@
  * @module services/mcp-client
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import {
-	StdioClientTransport,
-	type StdioServerParameters,
-} from '@modelcontextprotocol/sdk/client/stdio.js';
+interface McpSdkClient {
+	connect: (transport: unknown) => Promise<void>;
+	close: () => Promise<void>;
+	listTools: () => Promise<{ tools?: Array<{ name: string; description?: string; inputSchema: unknown }> }>;
+	callTool: (args: { name: string; arguments: Record<string, unknown> }) => Promise<{
+		content?: unknown[];
+		isError?: boolean;
+	}>;
+	getServerVersion: () => { name?: string; version?: string } | undefined;
+}
 
 // ========================= Constants =========================
 
@@ -116,9 +121,9 @@ export interface McpServerStatus {
  */
 interface McpServerConnection {
 	/** The MCP SDK client instance */
-	client: Client;
+	client: McpSdkClient;
 	/** The stdio transport for the child process */
-	transport: StdioClientTransport;
+	transport: unknown;
 	/** Cached list of tools from this server */
 	tools: McpToolInfo[];
 	/** Original configuration */
@@ -181,22 +186,30 @@ export class McpClientService {
 			);
 		}
 
-		const serverParams: StdioServerParameters = {
+		const serverParams = {
 			command: config.command,
 			args: config.args,
 			env: config.env,
 			stderr: 'ignore',
 		};
 
-		const transport = new StdioClientTransport(serverParams);
+		const clientModule = await import('@modelcontextprotocol/sdk/client/index.js') as any;
+		const stdioModule = await import('@modelcontextprotocol/sdk/client/stdio.js') as any;
+		const ClientCtor = clientModule.Client ?? clientModule.default?.Client;
+		const StdioTransportCtor = stdioModule.StdioClientTransport ?? stdioModule.default?.StdioClientTransport;
+		if (!ClientCtor || !StdioTransportCtor) {
+			throw new Error('Failed to load MCP SDK client modules');
+		}
 
-		const client = new Client(
+		const transport = new StdioTransportCtor(serverParams);
+
+		const client: McpSdkClient = new ClientCtor(
 			{
 				name: MCP_CLIENT_CONSTANTS.CLIENT_INFO.NAME,
 				version: MCP_CLIENT_CONSTANTS.CLIENT_INFO.VERSION,
 			},
 			{ capabilities: {} },
-		);
+		) as McpSdkClient;
 
 		await client.connect(transport);
 

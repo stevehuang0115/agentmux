@@ -240,7 +240,7 @@ export const TERMINAL_PATTERNS = {
 	 * Agent prompt indicators (characters that appear at input prompts).
 	 * Includes Claude Code (❯, >, ⏵), bash ($), and Gemini CLI (!).
 	 */
-	PROMPT_CHARS: ['❯', '>', '⏵', '$', '!'] as const,
+	PROMPT_CHARS: ['❯', '>', '›', '⏵', '$', '!'] as const,
 
 	/**
 	 * Claude Code idle prompt detection.
@@ -261,10 +261,19 @@ export const TERMINAL_PATTERNS = {
 	GEMINI_CLI_PROMPT: /(?:^|\n)\s*(?:[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
 
 	/**
+	 * Codex CLI idle prompt detection.
+	 * Matches:
+	 * - `› ` prompt lines (Codex TUI prompt indicator)
+	 * - Box-drawing border followed by `›` or `>`
+	 * - Textual input placeholder shown by Codex
+	 */
+	CODEX_CLI_PROMPT: /(?:^|\n)\s*(?:›\s|[│┃]\s*[›>]\s|.*?Type\s+your\s+message(?:\s+or\s+@path\/to\/file)?)/i,
+
+	/**
 	 * Combined prompt pattern for any runtime (union of Claude Code + Gemini CLI).
 	 * Use runtime-specific patterns when you need to distinguish between runtimes.
 	 */
-	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$)|[>!]\s|[│┃]\s*[>!]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
+	PROMPT_STREAM: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$)|[>!]\s|[│┃]\s*[>!]\s|[›>]\s|[│┃]\s*[›>]\s|.*?(?:Type\s+your\s+message|YOLO\s+mode))/i,
 
 	/**
 	 * Processing indicators including status text patterns.
@@ -310,7 +319,9 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 	 *  delivery, the orchestrator is likely context-exhausted (ms) */
 	ACK_TIMEOUT: 15000,
 	/** Maximum number of system events to batch into a single delivery */
-	MAX_SYSTEM_EVENT_BATCH: 5,
+	MAX_SYSTEM_EVENT_BATCH: 100,
+	/** Max combined chars when coalescing pending system events in-queue */
+	MAX_SYSTEM_EVENT_COALESCE_CHARS: 12000,
 	/** Queue persistence file name (stored under crewly home) */
 	PERSISTENCE_FILE: 'message-queue.json',
 	/** Queue persistence directory name */
@@ -442,12 +453,44 @@ export const GEMINI_SHELL_MODE_CONSTANTS = {
  * `as const` produces a readonly tuple of regex literals, which complicates
  * usage with array methods like `.some()` and `.find()`.
  */
+/**
+ * Constants for Gemini CLI failure retry with exponential backoff.
+ * When Gemini API errors (RESOURCE_EXHAUSTED, UNAVAILABLE, etc.) are detected,
+ * the system waits and retries before declaring the agent dead. Gemini CLI
+ * often recovers automatically from transient API errors.
+ */
+export const GEMINI_FAILURE_RETRY_CONSTANTS = {
+	/** Maximum retry attempts before triggering exit/restart flow */
+	MAX_RETRIES: 5,
+	/** Initial backoff delay (ms) — doubles each retry */
+	INITIAL_BACKOFF_MS: 1_000,
+	/** Maximum backoff delay cap (ms) */
+	MAX_BACKOFF_MS: 30_000,
+	/** Backoff multiplier per retry */
+	BACKOFF_MULTIPLIER: 2,
+	/** Lines of terminal output to capture when checking for recovery */
+	RECOVERY_CHECK_LINES: 50,
+} as const;
+
 export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/Request cancelled/,
-	/^Error: /m,
 	/RESOURCE_EXHAUSTED/,
 	/UNAVAILABLE/,
 	/Connection error/,
+	/INTERNAL(?:\s*:|:)/,
+	/DEADLINE_EXCEEDED/,
+	/PERMISSION_DENIED/,
+	/UNAUTHENTICATED/,
+];
+
+/**
+ * Gemini update/upgrade markers that should trigger forced recovery.
+ * These indicate the CLI interrupted the current request for self-update.
+ */
+export const GEMINI_FORCE_RESTART_PATTERNS: RegExp[] = [
+	/Gemini CLI update available!/i,
+	/Attempting to automatically update now/i,
+	/Gemini CLI is restarting to apply the trust changes/i,
 ];
 
 /**

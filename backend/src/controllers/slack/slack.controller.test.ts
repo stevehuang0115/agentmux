@@ -93,16 +93,16 @@ describe('Slack Controller', () => {
       process.env.SLACK_BOT_TOKEN = 'xoxb-test';
       process.env.SLACK_APP_TOKEN = 'xapp-test';
       process.env.SLACK_SIGNING_SECRET = 'secret';
+      jest.spyOn(getSlackService(), 'initialize').mockRejectedValue(new Error('mock connect failure'));
 
-      // Note: This will fail because @slack/bolt isn't installed
       const response = await request(app).post('/api/slack/connect').send({});
 
-      // Will fail at initialization since bolt isn't installed
       expect(response.status).toBe(500);
     });
 
     it('should prefer body credentials over environment', async () => {
       process.env.SLACK_BOT_TOKEN = 'xoxb-env';
+      jest.spyOn(getSlackService(), 'initialize').mockRejectedValue(new Error('mock connect failure'));
 
       const response = await request(app).post('/api/slack/connect').send({
         botToken: 'xoxb-body',
@@ -110,13 +110,13 @@ describe('Slack Controller', () => {
         signingSecret: 'secret-body',
       });
 
-      // Will fail at initialization, but validates that body takes precedence
       expect(response.status).toBe(500);
     });
   });
 
   describe('POST /api/slack/disconnect', () => {
     it('should disconnect without error when not connected', async () => {
+      jest.spyOn(getSlackService(), 'disconnect').mockResolvedValue(undefined);
       const response = await request(app).post('/api/slack/disconnect');
 
       expect(response.status).toBe(200);

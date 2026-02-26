@@ -7,6 +7,28 @@
 // Jest globals are available automatically
 import { SlackService, getSlackService, resetSlackService } from './slack.service.js';
 import type { SlackConfig, SlackNotification } from '../../types/slack.types.js';
+import { EventEmitter } from 'events';
+
+const mockBoltStart = jest.fn().mockResolvedValue(undefined);
+const mockBoltStop = jest.fn().mockResolvedValue(undefined);
+
+jest.mock('@slack/bolt', () => ({
+  App: jest.fn().mockImplementation(() => ({
+    client: {
+      chat: { postMessage: jest.fn(), update: jest.fn() },
+      reactions: { add: jest.fn() },
+      users: { info: jest.fn() },
+      files: { uploadV2: jest.fn(), info: jest.fn() },
+    },
+    receiver: { client: new EventEmitter() },
+    message: jest.fn(),
+    event: jest.fn(),
+    error: jest.fn(),
+    start: mockBoltStart,
+    stop: mockBoltStop,
+  })),
+  LogLevel: { INFO: 'info' },
+}));
 
 describe('SlackService', () => {
   const mockConfig: SlackConfig = {
@@ -590,8 +612,7 @@ describe('SlackService', () => {
   describe('initialize with invalid credentials', () => {
     it('should throw error when credentials are invalid', async () => {
       const service = getSlackService();
-
-      // @slack/bolt is installed but the test token is invalid, so initialize should reject
+      mockBoltStart.mockRejectedValueOnce(new Error('invalid_auth'));
       await expect(service.initialize(mockConfig)).rejects.toThrow();
     });
   });

@@ -64,6 +64,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 		write: jest.Mock;
 		name: string;
 	};
+	let hasPendingWork: jest.Mock<boolean, []>;
 
 	beforeEach(() => {
 		jest.useFakeTimers();
@@ -85,8 +86,9 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			killSession: jest.fn().mockResolvedValue(undefined),
 			isChildProcessAlive: jest.fn().mockReturnValue(true),
 		};
+		hasPendingWork = jest.fn().mockReturnValue(true);
 
-		service.setDependencies(mockSessionBackend as any);
+		service.setDependencies(mockSessionBackend as any, hasPendingWork);
 
 		// Set up OrchestratorRestartService with mock dependencies
 		const restartService = OrchestratorRestartService.getInstance();
@@ -223,6 +225,21 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			const state = service.getState();
 			expect(state.heartbeatRequestSentAt).not.toBeNull();
 			expect(state.heartbeatRequestCount).toBe(1);
+		});
+
+		it('should skip heartbeat request when idle and no pending work', async () => {
+			hasPendingWork.mockReturnValue(false);
+
+			service.start();
+			service.stop();
+
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS + 1);
+
+			await service.performCheck();
+
+			expect(mockSession.write).not.toHaveBeenCalled();
+			expect(service.getState().heartbeatRequestSentAt).toBeNull();
 		});
 
 		it('should clear pending state when orchestrator responds', async () => {

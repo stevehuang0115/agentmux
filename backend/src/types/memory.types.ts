@@ -198,7 +198,16 @@ export interface AgentMemory {
 /**
  * Categories for project code patterns
  */
-export type PatternCategory = 'api' | 'component' | 'service' | 'testing' | 'styling' | 'database' | 'config' | 'other';
+export type PatternCategory =
+  | 'api'
+  | 'component'
+  | 'service'
+  | 'testing'
+  | 'styling'
+  | 'database'
+  | 'config'
+  | 'user_preference'
+  | 'other';
 
 /**
  * A code pattern discovered in the project

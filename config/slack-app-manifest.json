@@ -1,0 +1,37 @@
+{
+  "display_information": {
+    "name": "Crewly",
+    "description": "AI Team Orchestrator"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Crewly",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "files:read",
+        "files:write",
+        "app_mentions:read",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "message.im",
+        "message.channels",
+        "app_mention"
+      ]
+    }
+  }
+}

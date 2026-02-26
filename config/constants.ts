@@ -62,6 +62,12 @@ export const CREWLY_CONSTANTS = {
 		DOCS_DIR: 'docs',
 		/** Knowledge documents index file */
 		DOCS_INDEX_FILE: 'docs-index.json',
+		/** Server logs directory */
+		LOGS_DIR: 'logs',
+		/** Session PTY logs subdirectory (under LOGS_DIR) */
+		SESSION_LOGS_DIR: 'sessions',
+		/** Bug reports directory */
+		BUG_REPORTS_DIR: 'bug-reports',
 	},
 
 	/**

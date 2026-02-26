@@ -147,6 +147,24 @@ describe('GeminiRuntimeService', () => {
 		});
 	});
 
+	describe('waitForRuntimeReady', () => {
+		it('should auto-confirm Gemini trust prompt and continue startup', async () => {
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce(
+					'Do you trust this folder?\n1. Trust folder (crewly)\n2. Trust parent folder\n3. Don\'t trust'
+				)
+				.mockReturnValue('Type your message');
+
+			const promise = service.waitForRuntimeReady('test-session', 5000, 200);
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await promise;
+
+			expect(result).toBe(true);
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('test-session');
+			expect(mockSessionHelper.sendKey).not.toHaveBeenCalledWith('test-session', '1');
+		});
+	});
+
 	describe('getRuntimeErrorPatterns', () => {
 		it('should return Gemini-specific error patterns', () => {
 			const patterns = service['getRuntimeErrorPatterns']();
@@ -167,8 +185,9 @@ describe('GeminiRuntimeService', () => {
 	});
 
 	describe('postInitialize', () => {
-		it('should add ~/.crewly to Gemini CLI directory allowlist', async () => {
-			const expectedPath = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+		it('should add ~/.crewly and /tmp to Gemini CLI directory allowlist', async () => {
+			const expectedCrewlyPath = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+			const expectedTmpPath = os.tmpdir();
 
 			// Mock capturePane to return different values (simulating output change)
 			// so addProjectToAllowlist succeeds on first attempt
@@ -182,11 +201,17 @@ describe('GeminiRuntimeService', () => {
 			await jest.advanceTimersByTimeAsync(20000);
 			await promise;
 
-			// Should send /directory add command for ~/.crewly (trailing space for path delimiter)
+			// Should send a batched /directory add command that includes ~/.crewly and /tmp.
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
 				'test-session',
-				`/directory add ${expectedPath} `
+				expect.stringContaining(`/directory add ${expectedCrewlyPath}`)
 			);
+			// The batched command should also include the temp directory
+			const sentCommand = mockSessionHelper.sendMessage.mock.calls.find(
+				(call: any[]) => typeof call[1] === 'string' && call[1].includes('/directory add')
+			);
+			expect(sentCommand).toBeDefined();
+			expect(sentCommand![1]).toContain(expectedTmpPath);
 		});
 
 		it('should not throw when addProjectToAllowlist fails', async () => {
@@ -197,6 +222,29 @@ describe('GeminiRuntimeService', () => {
 
 			// Should not throw — errors are handled gracefully
 			await expect(promise).resolves.not.toThrow();
+		});
+
+		it('should wait for slash queue to drain before finishing postInitialize', async () => {
+			const expectedPath = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
+
+			mockSessionHelper.capturePane
+				// addProjectsToAllowlistBatch: before + after(success)
+				.mockReturnValueOnce('before')
+				.mockReturnValueOnce('✓ Added directory')
+				// waitForSlashQueueToDrain: queue still busy, then ready
+				.mockReturnValueOnce('Slash commands cannot be queued')
+				.mockReturnValueOnce('Type your message');
+
+			const promise = service.postInitialize('test-session');
+			await jest.advanceTimersByTimeAsync(30000);
+			await promise;
+
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
+				'test-session',
+				expect.stringContaining(`/directory add ${expectedPath}`)
+			);
+			// 1 from batched command warm-up + 1 queue-drain nudge
+			expect(mockSessionHelper.sendEnter.mock.calls.length).toBeGreaterThanOrEqual(2);
 		});
 	});
 
@@ -269,19 +317,102 @@ describe('GeminiRuntimeService', () => {
 			expect(result.success).toBe(false);
 			expect(result.message).toContain('Failed to add project path to allowlist');
 		});
+
+		it('should recover when command text is stuck at prompt by pressing Enter again', async () => {
+			const sessionName = 'test-session';
+			const projectPath = '/path/to/project';
+			const addCommand = `/directory add ${projectPath}`;
+
+			// Attempt 1:
+			// 1) before output
+			// 2) after output with command still in prompt (stuck)
+			// 3) recovered output after Enter re-press with success confirmation
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before')
+				.mockReturnValueOnce(`│ > ${addCommand}`)
+				.mockReturnValueOnce('✓ Added directory');
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(10000);
+			const result = await promise;
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(1);
+			// Initial dismiss Enter + recovery double-Enter
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(3);
+		});
+
+		it('should retry when prompt remains stuck after Enter recovery', async () => {
+			const sessionName = 'test-session';
+			const projectPath = '/path/to/project';
+			const addCommand = `/directory add ${projectPath}`;
+
+			// Attempt 1 stays stuck even after recovery capture.
+			// Attempt 2 succeeds via normal output confirmation.
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before-1')
+				.mockReturnValueOnce(`│ > ${addCommand}`)
+				.mockReturnValueOnce(`│ > ${addCommand}`) // still stuck after Enter recovery
+				.mockReturnValueOnce('before-2')
+				.mockReturnValueOnce('before-2\n✓ Added directory');
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(30000);
+			const result = await promise;
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(2);
+			// Attempt 1: initial + recovery double-Enter, attempt 2: initial
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(4);
+		});
+
+		it('should skip sending /directory add when path is already in workspace output', async () => {
+			const sessionName = 'test-session';
+			const projectPath = '/path/to/project';
+
+			mockSessionHelper.capturePane.mockReturnValue(
+				`The following directories are already in the workspace: ${projectPath}`
+			);
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(5000);
+			const result = await promise;
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain('already in Gemini CLI workspace');
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('should retry when Gemini reports slash command queue contention', async () => {
+			const sessionName = 'test-session';
+			const projectPath = '/path/to/project';
+
+			// Attempt 1: queue warning appears
+			// Attempt 2: explicit success confirmation
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before-1')
+				.mockReturnValueOnce('Slash commands cannot be queued')
+				.mockReturnValueOnce('before-2')
+				.mockReturnValueOnce('✓ Added directory');
+
+			const promise = service.addProjectToAllowlist(sessionName, projectPath);
+			await jest.advanceTimersByTimeAsync(30000);
+			const result = await promise;
+
+			expect(result.success).toBe(true);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe('addMultipleProjectsToAllowlist', () => {
-		it('should successfully add multiple projects to allowlist', async () => {
+		it('should send one batched /directory add command for multiple projects', async () => {
 			const sessionName = 'test-session';
 			const projectPaths = ['/path/to/project1', '/path/to/project2'];
 
-			// Mock capturePane to always show change (success on first attempt)
-			let captureCallCount = 0;
-			mockSessionHelper.capturePane.mockImplementation(() => {
-				captureCallCount++;
-				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Added';
-			});
+			// Batch path: before capture, then explicit success confirmation.
+			mockSessionHelper.capturePane
+				.mockReturnValueOnce('before')
+				.mockReturnValueOnce('✓ Added directory');
 
 			const promise = service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
 			await jest.advanceTimersByTimeAsync(30000);
@@ -291,37 +422,45 @@ describe('GeminiRuntimeService', () => {
 			expect(result.message).toBe('Added 2/2 projects to Gemini CLI allowlist');
 			expect(result.results).toHaveLength(2);
 			expect(result.results.every((r) => r.success)).toBe(true);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(1);
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith(
+				sessionName,
+				`/directory add ${projectPaths.join(',')} `
+			);
 		});
 
-		it('should handle partial failures gracefully', async () => {
+		it('should fall back to per-path adds when batched command is not confirmed', async () => {
 			const sessionName = 'test-session';
 			const projectPaths = ['/path/to/project1', '/path/to/project2'];
 
-			// First addProjectToAllowlist call succeeds (output changes),
-			// second call fails (sendMessage throws on later calls)
-			let captureCallCount = 0;
-			mockSessionHelper.capturePane.mockImplementation(() => {
-				captureCallCount++;
-				return captureCallCount % 2 === 1 ? 'before' : 'before\n✓ Added';
-			});
-
-			let sendMessageCallCount = 0;
-			mockSessionHelper.sendMessage.mockImplementation(async () => {
-				sendMessageCallCount++;
-				// First call (project1 /directory add) succeeds
-				// Subsequent calls for project2 all fail (3 retries)
-				if (sendMessageCallCount > 1) {
-					throw new Error('Failed for project2');
-				}
-			});
+			// Batch attempt (2 attempts) never confirms:
+			// - returns no confirmation text
+			// Then per-path fallback:
+			// - project1 succeeds
+			// - project2 succeeds
+			mockSessionHelper.capturePane
+				// Batch attempt 1 before/after
+				.mockReturnValueOnce('before-batch-1')
+				.mockReturnValueOnce('no confirmation')
+				// Batch attempt 2 before/after
+				.mockReturnValueOnce('before-batch-2')
+				.mockReturnValueOnce('still no confirmation')
+				// Fallback project1 before/after
+				.mockReturnValueOnce('before-p1')
+				.mockReturnValueOnce('✓ Added directory')
+				// Fallback project2 before/after
+				.mockReturnValueOnce('before-p2')
+				.mockReturnValueOnce('✓ Added directory');
 
 			const promise = service.addMultipleProjectsToAllowlist(sessionName, projectPaths);
 			await jest.advanceTimersByTimeAsync(60000);
 			const result = await promise;
 
-			expect(result.success).toBe(true); // At least one succeeded
+			expect(result.success).toBe(true);
 			expect(result.results[0].success).toBe(true);
-			expect(result.results[1].success).toBe(false);
+			expect(result.results[1].success).toBe(true);
+			// 2 batched attempts + 2 fallback per-path sends
+			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(4);
 		});
 
 		it('should return success false when no projects can be added', async () => {
@@ -342,16 +481,20 @@ describe('GeminiRuntimeService', () => {
 	describe('getRuntimeExitPatterns', () => {
 		it('should return Gemini-specific exit and failure patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			expect(patterns).toHaveLength(7);
+			// 2 clean exit + 8 failure patterns
+			expect(patterns).toHaveLength(10);
 			// Clean exit patterns
 			expect(patterns[0].test('Agent powering down')).toBe(true);
 			expect(patterns[1].test('Interaction Summary')).toBe(true);
 			// Gemini failure patterns
 			expect(patterns.some(p => p.test('Request cancelled'))).toBe(true);
-			expect(patterns.some(p => p.test('Error: something went wrong'))).toBe(true);
 			expect(patterns.some(p => p.test('RESOURCE_EXHAUSTED'))).toBe(true);
 			expect(patterns.some(p => p.test('UNAVAILABLE'))).toBe(true);
 			expect(patterns.some(p => p.test('Connection error'))).toBe(true);
+			expect(patterns.some(p => p.test('INTERNAL: server error'))).toBe(true);
+			expect(patterns.some(p => p.test('DEADLINE_EXCEEDED'))).toBe(true);
+			expect(patterns.some(p => p.test('PERMISSION_DENIED'))).toBe(true);
+			expect(patterns.some(p => p.test('UNAUTHENTICATED'))).toBe(true);
 		});
 
 		it('should not match unrelated text', () => {
@@ -359,21 +502,22 @@ describe('GeminiRuntimeService', () => {
 			expect(patterns.some(p => p.test('Type your message'))).toBe(false);
 		});
 
-		it('should match Error: only at start of line', () => {
+		it('should not match non-fatal Error: lines from tool output', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			// Should match at start of line
-			expect(patterns.some(p => p.test('Error: API failed'))).toBe(true);
-			// Should match at start of line within multiline string
-			expect(patterns.some(p => p.test('some output\nError: something'))).toBe(true);
-			// Should NOT match Error: in the middle of a line
-			expect(patterns.some(p => p.test('Got an Error: in the middle'))).toBe(false);
+			// Generic "Error: something" should NOT match (was a false positive before)
+			expect(patterns.some(p => p.test('Error: Path not in workspace'))).toBe(false);
+			expect(patterns.some(p => p.test('Error: file not found'))).toBe(false);
+			// But specific gRPC status codes SHOULD match
+			expect(patterns.some(p => p.test('RESOURCE_EXHAUSTED: quota exceeded'))).toBe(true);
+			expect(patterns.some(p => p.test('INTERNAL: server error'))).toBe(true);
 		});
 	});
 
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			expect(patterns).toHaveLength(7);
+			// 2 clean exit + 8 failure patterns
+			expect(patterns).toHaveLength(10);
 		});
 	});
 
@@ -437,13 +581,20 @@ describe('GeminiRuntimeService', () => {
 				path.join('/test/project', '.gemini', 'settings.json'),
 				{
 					mcpServers: {
-						playwright: {
-							command: 'npx',
-							args: ['@playwright/mcp@latest', '--headless'],
+							playwright: {
+								command: 'npx',
+								args: [
+									'@playwright/mcp@latest',
+									'--headless',
+									'--human-delay-min',
+									'300',
+									'--human-delay-max',
+									'1200',
+								],
+							},
 						},
-					},
-				}
-			);
+					}
+				);
 		});
 
 		it('should preserve existing user MCP servers', async () => {
@@ -461,12 +612,19 @@ describe('GeminiRuntimeService', () => {
 				{
 					mcpServers: {
 						'my-custom-server': { command: 'node', args: ['server.js'] },
-						playwright: {
-							command: 'npx',
-							args: ['@playwright/mcp@latest', '--headless'],
+							playwright: {
+								command: 'npx',
+								args: [
+									'@playwright/mcp@latest',
+									'--headless',
+									'--human-delay-min',
+									'300',
+									'--human-delay-max',
+									'1200',
+								],
+							},
 						},
-					},
-					otherSetting: 'preserved',
+						otherSetting: 'preserved',
 				}
 			);
 		});
@@ -728,10 +886,53 @@ describe('GeminiRuntimeService', () => {
 		});
 	});
 
+	describe('ensureGeminiTrustedFolders', () => {
+		beforeEach(() => {
+			jest.clearAllMocks();
+		});
+
+		it('should create trustedFolders.json entries for required paths', async () => {
+			(fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockReset();
+			(fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockReset();
+			(fs.mkdir as jest.MockedFunction<typeof fs.mkdir>).mockReset();
+
+			// Re-set implementations after reset (mockReset strips implementations)
+			(fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce('{}' as any);
+			(fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mockResolvedValue(undefined as any);
+			(fs.mkdir as jest.MockedFunction<typeof fs.mkdir>).mockResolvedValue(undefined as any);
+
+			await (service as any).ensureGeminiTrustedFolders([
+				'/Users/yellowsunhy/.crewly',
+				'/Users/yellowsunhy/Desktop/projects/crewly',
+			]);
+
+			expect(fs.writeFile).toHaveBeenCalled();
+			const writeArgs = (fs.writeFile as jest.MockedFunction<typeof fs.writeFile>).mock.calls[0];
+			expect(String(writeArgs[0])).toContain(path.join('.gemini', 'trustedFolders.json'));
+			const content = String(writeArgs[1]);
+			expect(content).toContain('"/Users/yellowsunhy/.crewly": "TRUST_FOLDER"');
+			expect(content).toContain('"/Users/yellowsunhy/Desktop/projects/crewly": "TRUST_FOLDER"');
+		});
+
+		it('should preserve existing trusted folders and avoid duplicate writes when unchanged', async () => {
+			(fs.readFile as jest.MockedFunction<typeof fs.readFile>).mockResolvedValueOnce(
+				JSON.stringify({
+					'/Users/yellowsunhy/.crewly': 'TRUST_FOLDER',
+				}) as any
+			);
+
+			await (service as any).ensureGeminiTrustedFolders([
+				'/Users/yellowsunhy/.crewly',
+			]);
+
+			expect(fs.writeFile).not.toHaveBeenCalled();
+		});
+	});
+
 	describe('GEMINI_FAILURE_PATTERNS', () => {
 		it('should export failure patterns as a constant array', () => {
 			expect(GEMINI_FAILURE_PATTERNS).toBeInstanceOf(Array);
-			expect(GEMINI_FAILURE_PATTERNS.length).toBe(5);
+			expect(GEMINI_FAILURE_PATTERNS.length).toBe(8);
 		});
 
 		it('should contain expected failure patterns', () => {
@@ -739,12 +940,18 @@ describe('GeminiRuntimeService', () => {
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('RESOURCE_EXHAUSTED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAVAILABLE'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Connection error'))).toBe(true);
-			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Error: something'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('INTERNAL: server error'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('DEADLINE_EXCEEDED'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('PERMISSION_DENIED'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAUTHENTICATED'))).toBe(true);
 		});
 
-		it('should not match normal output', () => {
+		it('should not match normal output or non-fatal errors', () => {
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Working on task'))).toBe(false);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Type your message'))).toBe(false);
+			// Non-fatal tool errors should NOT match
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Error: Path not in workspace'))).toBe(false);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Error: file not found'))).toBe(false);
 		});
 	});
 

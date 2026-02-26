@@ -344,7 +344,7 @@ export abstract class RuntimeAgentService {
 	 * @param targetProjectPath - Optional target project path for the agent (where MCP configs should be written).
 	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string, additionalAllowlistPaths?: string[]): Promise<void> {
 		// No-op by default — override in concrete classes
 		this.logger.debug('postInitialize (no-op)', { sessionName, runtimeType: this.getRuntimeType() });
 	}
@@ -392,10 +392,19 @@ export abstract class RuntimeAgentService {
 		try {
 			// Check if browser automation is enabled
 			let enableBrowserAutomation = true;
+			let browserProfile = {
+				headless: true,
+				stealth: false,
+				humanDelayMinMs: 300,
+				humanDelayMaxMs: 1200,
+			};
 			try {
 				const settingsService = getSettingsService();
 				const settings = await settingsService.getSettings();
 				enableBrowserAutomation = settings.skills.enableBrowserAutomation;
+				if (settings.skills.browserProfile) {
+					browserProfile = settings.skills.browserProfile;
+				}
 			} catch {
 				// Settings service unavailable — default to enabled
 				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
@@ -405,9 +414,23 @@ export abstract class RuntimeAgentService {
 			const requiredServers: Record<string, { command: string; args: string[] }> = {};
 
 			if (enableBrowserAutomation) {
+				const mcpPackage = browserProfile.stealth
+					? '@mcp-world/playwright-mcp-world@latest'
+					: '@playwright/mcp@latest';
+				const args = [mcpPackage];
+				if (browserProfile.headless) {
+					args.push('--headless');
+				}
+				// Provide profile hints for MCP forks that support anti-bot options.
+				if (browserProfile.stealth) {
+					args.push('--stealth');
+				}
+				args.push('--human-delay-min', String(browserProfile.humanDelayMinMs));
+				args.push('--human-delay-max', String(browserProfile.humanDelayMaxMs));
+
 				requiredServers['playwright'] = {
 					command: 'npx',
-					args: ['@playwright/mcp@latest', '--headless'],
+					args,
 				};
 			}
 
@@ -448,6 +471,7 @@ export abstract class RuntimeAgentService {
 				addedServers: added,
 				totalServers: Object.keys(existingMcpServers).length,
 				enableBrowserAutomation,
+				browserProfile,
 			});
 		} catch (error) {
 			// Non-fatal: agent can still work without MCP servers

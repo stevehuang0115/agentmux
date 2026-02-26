@@ -641,7 +641,12 @@ export class TerminalGateway {
 	 * @param payload - Parsed NOTIFY payload
 	 */
 	private async handleNotifyPayload(sessionName: string, payload: NotifyPayload): Promise<void> {
-		const conversationId = payload.conversationId || this.activeConversationId;
+		const canFallbackToActiveConversation = !payload.conversationId
+			&& !payload.channelId
+			&& !payload.threadTs
+			&& !payload.type;
+		const conversationId = payload.conversationId
+			|| (canFallbackToActiveConversation ? this.activeConversationId : null);
 
 		// Build metadata dict with NOTIFY fields for the chat message
 		const metadata: Record<string, unknown> = {};
@@ -680,6 +685,12 @@ export class TerminalGateway {
 					contentLength: payload.message.length,
 				});
 			}
+		}
+		if (!conversationId && payload.type) {
+			this.logger.debug('Dropping non-conversation NOTIFY payload to avoid cross-thread event leakage', {
+				type: payload.type,
+				hasChannelId: Boolean(payload.channelId),
+			});
 		}
 
 		// Slack delivery is handled exclusively by the reply-slack skill

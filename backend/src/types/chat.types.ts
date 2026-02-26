@@ -648,9 +648,8 @@ export function parseNotifyContent(raw: string): NotifyPayload | null {
   }
 
   if (!body) {
-    // If we have headers but no body, treat entire content as body
-    const msg = cleaned.trim();
-    return msg ? { message: msg } : null;
+    // Header-only notify payloads are invalid; avoid routing header text as chat content.
+    return null;
   }
 
   const payload: NotifyPayload = { message: body };

@@ -17,6 +17,7 @@ import { SlackConfig, SlackNotification, SlackNotificationType } from '../../typ
 import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS } from '../../constants.js';
 
 const router = Router();
+const SLACK_MANIFEST_PATH = path.join(process.cwd(), 'config', 'slack-app-manifest.json');
 
 /**
  * Handle Slack platform errors consistently across endpoints.
@@ -60,6 +61,35 @@ router.get('/status', async (req: Request, res: Response, next: NextFunction) =>
       data: {
         ...status,
         isConfigured: slackService.isConnected(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/slack/install
+ *
+ * Returns the one-click Slack app manifest and an import URL payload to simplify setup.
+ */
+router.get('/install', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const manifestRaw = await fs.readFile(SLACK_MANIFEST_PATH, 'utf8');
+    const manifest = JSON.parse(manifestRaw) as Record<string, unknown>;
+    const encodedManifest = encodeURIComponent(JSON.stringify(manifest));
+    const importUrl = `https://api.slack.com/apps?new_app=1&manifest_json=${encodedManifest}`;
+
+    res.json({
+      success: true,
+      data: {
+        manifest,
+        importUrl,
+        instructions: [
+          'Open importUrl and create the app from manifest',
+          'Enable Socket Mode and install app to workspace',
+          'Copy Bot Token, App Token, Signing Secret into /api/slack/connect',
+        ],
       },
     });
   } catch (error) {

@@ -266,8 +266,9 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.GEMINI_CLI
 			);
 
-			// Give time for async operation to complete
-			await new Promise(resolve => setTimeout(resolve, 1000));
+			// Give time for async operation to complete. Gemini prompt delivery
+			// does a pre-send Enter flush with a 1000ms delay before sendMessage.
+			await new Promise(resolve => setTimeout(resolve, 2000));
 
 			// Should have called sendMessage with file-read instruction for Gemini
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
@@ -1506,6 +1507,34 @@ describe('AgentRegistrationService', () => {
 				'│ > Type your message │',
 			].join('\n');
 			expect(isGeminiInShellMode(output)).toBe(false);
+		});
+	});
+
+	describe('isClaudeAtPrompt (private method) with Codex runtime', () => {
+		let isClaudeAtPrompt: (output: string, runtimeType?: any) => boolean;
+
+		beforeEach(() => {
+			isClaudeAtPrompt = (service as any).isClaudeAtPrompt.bind(service);
+		});
+
+		it('should detect Codex prompt with `›` indicator', () => {
+			const output = [
+				'OpenAI Codex (v0.104.0)',
+				'87% context left',
+				'› Type your message or @path/to/file',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CODEX_CLI)).toBe(true);
+		});
+
+		it('should not treat Claude quote line as Codex prompt', () => {
+			const output = [
+				'Assistant response:',
+				'> quoted markdown line',
+				'More text',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CODEX_CLI)).toBe(false);
 		});
 	});
 

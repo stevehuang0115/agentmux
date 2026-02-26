@@ -77,6 +77,7 @@ program
 
 program
   .command('onboard')
+  .alias('init')
   .description('Interactive setup wizard for new Crewly users')
   .option('-y, --yes', 'Non-interactive mode: use all defaults (CI-friendly)')
   .option('--template <id>', 'Select a team template by ID (e.g. web-dev-team)')

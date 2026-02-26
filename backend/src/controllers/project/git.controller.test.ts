@@ -24,6 +24,7 @@ describe('Git Handlers', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (global as any).gitServices = {};
 
     // Create response mock
     responseMock = {
@@ -175,7 +176,7 @@ describe('Git Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error getting git status:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error getting git status'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -273,7 +274,7 @@ describe('Git Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error committing changes:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error committing changes'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -339,7 +340,7 @@ describe('Git Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error starting auto-commit:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error starting auto-commit'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -355,6 +356,9 @@ describe('Git Handlers', () => {
   describe('stopAutoCommit', () => {
     it('should stop auto commit successfully', async () => {
       mockRequest.params = { projectId: 'project-123' };
+      (global as any).gitServices = {
+        'project-123': { stopAutoCommitTimer: jest.fn() }
+      };
 
       await gitHandlers.stopAutoCommit.call(
         mockApiContext,
@@ -400,7 +404,7 @@ describe('Git Handlers', () => {
         mockResponse as Response
       );
 
-      expect(consoleSpy).toHaveBeenCalledWith('Error getting git status:', expect.any(Error));
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Error getting git status'));
       expect(responseMock.status).toHaveBeenCalledWith(500);
       expect(responseMock.json).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -59,4 +59,7 @@ export function registerTerminalRoutes(router: Router, apiController?: ApiContro
 
 	// Kill session
 	router.delete('/terminal/:sessionName', terminalHandlers.killSession);
+
+	// Get persistent session log file (ANSI-stripped, includes pre-restart output)
+	router.get('/sessions/:sessionName/logs', terminalHandlers.getSessionLogs);
 }

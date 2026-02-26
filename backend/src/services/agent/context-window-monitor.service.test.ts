@@ -820,6 +820,31 @@ describe('ContextWindowMonitorService', () => {
 			expect(compactIndex).toBeGreaterThan(escapeIndex);
 		});
 
+		it('should NOT send escape before /compress for gemini runtime', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+			const regService = createMockAgentRegistrationService();
+
+			service.setDependencies(
+				backend as any,
+				regService as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer', 'gemini-cli');
+			service.updateContextUsage('test-agent', 86);
+			await jest.advanceTimersByTimeAsync(300);
+
+			const writeCalls = mockSession.session.write.mock.calls.map((c: string[]) => c[0]);
+			expect(writeCalls).toContain('/compress\r');
+			expect(writeCalls).not.toContain('\x1b');
+		});
+
 		it('should track lastCompactAt timestamp', () => {
 			const { service } = setupWithCompact();
 			const before = Date.now();
@@ -1711,6 +1736,235 @@ describe('ContextWindowMonitorService', () => {
 			service.stopSessionMonitoring('test-agent');
 
 			// Verify state is fully cleaned up
+			expect(service.getContextState('test-agent')).toBeUndefined();
+		});
+	});
+
+	// =========================================================================
+	// Gemini token-count context detection
+	// =========================================================================
+
+	describe('Gemini token-count context detection', () => {
+		function setupGeminiSession() {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer', 'gemini-cli');
+			return { service, mockSession, eventBus };
+		}
+
+		it('should detect "500K context left" as ~50% usage', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('500K context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(50);
+			expect(state!.level).toBe('normal');
+		});
+
+		it('should detect "200K context left" as ~80% usage', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('200K context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(80);
+			expect(state!.level).toBe('yellow');
+		});
+
+		it('should detect "100K context left" as ~90% usage (red)', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('100K context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(90);
+			expect(state!.level).toBe('red');
+		});
+
+		it('should detect "50K context left" as ~95% usage (critical)', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('50K context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(95);
+			expect(state!.level).toBe('critical');
+		});
+
+		it('should detect "1M context left" as ~0% usage', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('1M context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(0);
+			expect(state!.level).toBe('normal');
+		});
+
+		it('should detect "0.5M context left" as ~50% usage', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('0.5M context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(50);
+			expect(state!.level).toBe('normal');
+		});
+
+		it('should detect "150K tokens context left" format', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('150K tokens context left');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(85);
+			expect(state!.level).toBe('red');
+		});
+
+		it('should detect "300K context remaining" format', () => {
+			const { service, mockSession } = setupGeminiSession();
+			mockSession.emit('300K context remaining');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(70);
+			expect(state!.level).toBe('yellow');
+		});
+
+		it('should still detect percentage format for Gemini if present', () => {
+			const { service, mockSession } = setupGeminiSession();
+			// If Gemini ever outputs percentage format, it should still work
+			mockSession.emit('85% context');
+
+			const state = service.getContextState('test-agent');
+			expect(state!.contextPercent).toBe(85);
+			expect(state!.level).toBe('red');
+		});
+	});
+
+	// =========================================================================
+	// Post-compact verification
+	// =========================================================================
+
+	describe('post-compact verification', () => {
+		function setupForPostCompact() {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+			return { service, mockSession, eventBus };
+		}
+
+		it('should store preCompactPercent when compact is triggered', () => {
+			const { service } = setupForPostCompact();
+
+			service.updateContextUsage('test-agent', 86);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.preCompactPercent).toBe(86);
+		});
+
+		it('should store compactWaitTimer reference when compact is triggered', async () => {
+			const { service } = setupForPostCompact();
+
+			service.updateContextUsage('test-agent', 86);
+			// triggerCompact is async — advance past the 200ms internal delay
+			await jest.advanceTimersByTimeAsync(300);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactWaitTimer).not.toBeNull();
+		});
+
+		it('should clear compactWaitTimer after COMPACT_WAIT_MS', async () => {
+			const { service } = setupForPostCompact();
+
+			service.updateContextUsage('test-agent', 86);
+			// Advance past the 200ms internal delay to let triggerCompact set the timer
+			await jest.advanceTimersByTimeAsync(300);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactWaitTimer).not.toBeNull();
+
+			// Now advance past COMPACT_WAIT_MS
+			await jest.advanceTimersByTimeAsync(CONTEXT_WINDOW_MONITOR_CONSTANTS.COMPACT_WAIT_MS);
+
+			expect(state!.compactWaitTimer).toBeNull();
+			expect(state!.compactInProgress).toBe(false);
+		});
+	});
+
+	// =========================================================================
+	// Compact timer cleanup on session stop
+	// =========================================================================
+
+	describe('compact timer cleanup', () => {
+		it('should clear compactWaitTimer on stopSessionMonitoring', async () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+			service.updateContextUsage('test-agent', 86); // triggers compact
+			// Advance past the 200ms internal delay to let triggerCompact set the timer
+			await jest.advanceTimersByTimeAsync(300);
+
+			const state = service.getContextState('test-agent');
+			expect(state!.compactWaitTimer).not.toBeNull();
+
+			// Stop monitoring — should clean up timer
+			service.stopSessionMonitoring('test-agent');
+
+			// State is deleted, so we verify indirectly: no errors from dangling timeouts
+			expect(service.getContextState('test-agent')).toBeUndefined();
+		});
+
+		it('should not throw when stopping session with no active compact timer', () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+
+			service.setDependencies(
+				backend as any,
+				createMockAgentRegistrationService() as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				createMockEventBus() as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// No compact triggered, so no timer
+			const state = service.getContextState('test-agent');
+			expect(state!.compactWaitTimer).toBeNull();
+
+			// Should not throw
+			service.stopSessionMonitoring('test-agent');
 			expect(service.getContextState('test-agent')).toBeUndefined();
 		});
 	});
