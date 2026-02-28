@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as os from 'os';
-import { readFile, readdir, stat, mkdir, writeFile } from 'fs/promises';
+import { readFile, readdir, stat, mkdir, writeFile, access } from 'fs/promises';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
 	SessionCommandHelper,
@@ -306,7 +306,7 @@ export class AgentRegistrationService {
 		];
 		for (const candidate of searchDirs) {
 			try {
-				await readFile(candidate, 'utf8');
+				await access(candidate);
 				return candidate;
 			} catch {
 				// Not found in this directory, try next

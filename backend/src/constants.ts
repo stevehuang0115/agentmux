@@ -718,6 +718,8 @@ export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
 	/** Maximum concurrent file downloads per message */
 	MAX_CONCURRENT_DOWNLOADS: 3,
+	/** Maximum redirect hops to follow during file download */
+	MAX_DOWNLOAD_REDIRECTS: 5,
 } as const;
 
 /**

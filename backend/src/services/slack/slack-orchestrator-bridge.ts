@@ -275,7 +275,7 @@ export class SlackOrchestratorBridge extends EventEmitter {
 
       this.emit('message_handled', { message, response });
     } catch (error) {
-      this.logger.error('Error handling message', { error: error instanceof Error ? (error as Error).message : String(error) });
+      this.logger.error('Error handling message', { error: error instanceof Error ? error.message : String(error) });
       await this.sendErrorResponse(message, error as Error);
       this.emit('error', error);
     }
@@ -491,9 +491,39 @@ Just type naturally to chat with the orchestrator!`;
 
       return response;
     } catch (error) {
-      this.logger.error('Error sending to orchestrator', { error: error instanceof Error ? (error as Error).message : String(error) });
+      this.logger.error('Error sending to orchestrator', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+  }
+
+  /**
+   * Refresh file download URLs via the Slack files.info API.
+   * The event payload URLs may not work with just the bot token — the
+   * files.info API returns authenticated URLs and validates scope.
+   *
+   * @param files - Slack file objects to refresh URLs for (mutated in place)
+   * @returns true if downloads can proceed, false if scope is missing
+   */
+  private async refreshFileUrls(files: SlackFile[]): Promise<boolean> {
+    for (const file of files) {
+      try {
+        const freshInfo = await this.slackService.getFileInfo(file.id);
+        if (freshInfo.url_private_download) {
+          file.url_private_download = freshInfo.url_private_download;
+        }
+        if (freshInfo.url_private) {
+          file.url_private = freshInfo.url_private;
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
+          this.logger.error('Bot token lacks files:read scope — cannot download files. Add the "files:read" scope to your Slack app.');
+          return false;
+        }
+        this.logger.warn('Could not refresh URL via files.info', { fileName: file.name, error: errMsg });
+      }
+    }
+    return true;
   }
 
   /**
@@ -521,28 +551,8 @@ Just type naturally to chat with the orchestrator!`;
     const rejectionMessages: string[] = [];
 
     // Refresh file URLs via files.info API before downloading.
-    // The event payload URLs may not work with just the bot token — the
-    // files.info API returns authenticated URLs and also validates that
-    // the bot has the required files:read scope.
-    for (const file of files) {
-      try {
-        const freshInfo = await this.slackService.getFileInfo(file.id);
-        if (freshInfo.url_private_download) {
-          file.url_private_download = freshInfo.url_private_download;
-        }
-        if (freshInfo.url_private) {
-          file.url_private = freshInfo.url_private;
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
-          this.logger.error('Bot token lacks files:read scope — cannot download images. Please add the "files:read" scope to your Slack app at https://api.slack.com/apps and reinstall.');
-          return; // Skip all downloads — scope is missing for all files
-        }
-        // For other errors (e.g. file_not_found), continue with original URL
-        this.logger.warn('Could not refresh URL via files.info', { fileName: file.name, error: errMsg });
-      }
-    }
+    const canProceed = await this.refreshFileUrls(files);
+    if (!canProceed) return;
 
     for (let i = 0; i < files.length; i += maxConcurrent) {
       const batch = files.slice(i, i + maxConcurrent);
@@ -613,24 +623,8 @@ Just type naturally to chat with the orchestrator!`;
     const maxConcurrent = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
 
     // Refresh file URLs via files.info API
-    for (const file of nonImageFiles) {
-      try {
-        const freshInfo = await this.slackService.getFileInfo(file.id);
-        if (freshInfo.url_private_download) {
-          file.url_private_download = freshInfo.url_private_download;
-        }
-        if (freshInfo.url_private) {
-          file.url_private = freshInfo.url_private;
-        }
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
-          this.logger.error('Bot token lacks files:read scope — cannot download files');
-          return;
-        }
-        this.logger.warn('Could not refresh file URL via files.info', { fileName: file.name, error: errMsg });
-      }
-    }
+    const canProceed = await this.refreshFileUrls(nonImageFiles);
+    if (!canProceed) return;
 
     for (let i = 0; i < nonImageFiles.length; i += maxConcurrent) {
       const batch = nonImageFiles.slice(i, i + maxConcurrent);
@@ -647,7 +641,7 @@ Just type naturally to chat with the orchestrator!`;
           const downloadUrl = file.url_private_download || file.url_private;
 
           // Authenticated fetch with manual redirect handling (same as SlackImageService)
-          const maxRedirects = 5;
+          const maxRedirects = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_DOWNLOAD_REDIRECTS;
           let currentUrl = downloadUrl;
           let response: Response | null = null;
 

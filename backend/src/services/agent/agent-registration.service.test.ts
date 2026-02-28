@@ -31,6 +31,7 @@ jest.mock('fs/promises', () => ({
 	stat: jest.fn().mockResolvedValue({ mtimeMs: 0 }),
 	mkdir: jest.fn().mockResolvedValue(undefined),
 	writeFile: jest.fn().mockResolvedValue(undefined),
+	access: jest.fn(),
 }));
 
 jest.mock('os', () => ({
@@ -64,6 +65,7 @@ describe('AgentRegistrationService', () => {
 	let service: AgentRegistrationService;
 	let mockStorageService: jest.Mocked<StorageService>;
 	let mockReadFile: jest.Mock;
+	let mockAccess: jest.Mock;
 	let mockSessionHelper: any;
 	let mockRuntimeService: any;
 
@@ -141,6 +143,9 @@ describe('AgentRegistrationService', () => {
 
 		mockReadFile = require('fs/promises').readFile;
 		mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orchestrator-prompt.md"}]}');
+
+		mockAccess = require('fs/promises').access;
+		mockAccess.mockRejectedValue(new Error('ENOENT: no such file'));
 
 		// Mock SessionStatePersistence
 		(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
@@ -1329,22 +1334,25 @@ describe('AgentRegistrationService', () => {
 
 	describe('resolveRuntimeFlags (private method)', () => {
 		it('should return flags from role skills', async () => {
-			// Mock role.json with assignedSkills
+			// findSkillJsonPath uses access() for existence checks
+			mockAccess.mockImplementation((filePath: string) => {
+				// chrome-browser found in marketplace
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
+			// readFile handles content reads (role.json + skill.json)
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['chrome-browser'],
 					}));
 				}
-				// findSkillJsonPath searches agent/core/ first, then agent/marketplace/
 				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
-				}
-				// agent/core/ path not found
-				if (filePath.includes('agent/core/chrome-browser/skill.json')) {
-					return Promise.reject(new Error('ENOENT: no such file'));
 				}
 				return Promise.resolve('{}');
 			});
@@ -1356,13 +1364,19 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should apply skill overrides and exclusions', async () => {
+			// All three skills found in agent/core/
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['skill-alpha', 'skill-beta'],
 					}));
 				}
-				// findSkillJsonPath searches agent/core/ then agent/marketplace/
 				if (filePath.includes('agent/core/skill-alpha/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--alpha'] },
@@ -1377,10 +1391,6 @@ describe('AgentRegistrationService', () => {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--gamma'] },
 					}));
-				}
-				// All agent/marketplace/ lookups fail
-				if (filePath.includes('agent/marketplace/')) {
-					return Promise.reject(new Error('ENOENT: no such file'));
 				}
 				return Promise.resolve('{}');
 			});
@@ -1399,20 +1409,23 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should return empty for non-matching runtime', async () => {
+			// chrome-browser found in marketplace
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['chrome-browser'],
 					}));
 				}
-				// findSkillJsonPath: found in marketplace
 				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
-				}
-				if (filePath.includes('agent/core/chrome-browser/skill.json')) {
-					return Promise.reject(new Error('ENOENT: no such file'));
 				}
 				return Promise.resolve('{}');
 			});
@@ -1434,13 +1447,13 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should handle missing skill config gracefully', async () => {
+			// access rejects for all skill paths (default mock)
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['nonexistent-skill'],
 					}));
 				}
-				// Skill file doesn't exist in any directory
 				return Promise.reject(new Error('ENOENT: no such file'));
 			});
 
@@ -1451,17 +1464,19 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should find skills in marketplace subdirectory via skillOverrides', async () => {
+			// chrome-browser found in marketplace, not in core
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: [],
 					}));
 				}
-				// chrome-browser is not in agent/core/
-				if (filePath.includes('agent/core/chrome-browser/skill.json')) {
-					return Promise.reject(new Error('ENOENT: no such file'));
-				}
-				// chrome-browser IS in agent/marketplace/
 				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
@@ -1480,21 +1495,23 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should deduplicate flags from multiple skills', async () => {
+			// Both skills found in agent/core/
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['skill-a', 'skill-b'],
 					}));
 				}
-				// Both skills produce the same flag; found in agent/core/
 				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
-				}
-				// agent/marketplace/ lookups fail
-				if (filePath.includes('agent/marketplace/')) {
-					return Promise.reject(new Error('ENOENT: no such file'));
 				}
 				return Promise.resolve('{}');
 			});
