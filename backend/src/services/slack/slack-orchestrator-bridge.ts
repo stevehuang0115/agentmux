@@ -684,6 +684,10 @@ Just type naturally to chat with the orchestrator!`;
             const fileStream = createWriteStream(localPath);
             const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
             await pipeline(nodeStream, fileStream);
+          } catch (downloadErr) {
+            // Clean up partial file on failure
+            try { await fs.unlink(localPath); } catch { /* ignore if file doesn't exist */ }
+            throw downloadErr;
           } finally {
             clearTimeout(timeoutId);
           }
@@ -753,8 +757,8 @@ Just type naturally to chat with the orchestrator!`;
 
     if (message.attachments && message.attachments.length > 0) {
       for (const file of message.attachments) {
-        const sizeKB = Math.round(file.size / 1024);
-        text += `\n[Slack File: ${file.localPath} (${file.name}, ${file.mimetype}, ${sizeKB}KB)]`;
+        const sizeStr = file.size < 1024 ? `${file.size}B` : `${Math.round(file.size / 1024)}KB`;
+        text += `\n[Slack File: ${file.localPath} (${file.name}, ${file.mimetype}, ${sizeStr})]`;
       }
     }
 
