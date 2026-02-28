@@ -101,6 +101,25 @@ export interface SlackImageInfo {
 }
 
 /**
+ * Downloaded non-image file info with local file path.
+ * Created after successfully downloading a non-image SlackFile to the local filesystem.
+ */
+export interface SlackFileInfo {
+  /** Slack file ID */
+  id: string;
+  /** Original file name */
+  name: string;
+  /** MIME type of the file */
+  mimetype: string;
+  /** Absolute path to the downloaded file on disk */
+  localPath: string;
+  /** File size in bytes */
+  size: number;
+  /** Permalink to the original file in Slack */
+  permalink: string;
+}
+
+/**
  * Incoming Slack message
  */
 export interface SlackIncomingMessage {
@@ -121,6 +140,10 @@ export interface SlackIncomingMessage {
   images?: SlackImageInfo[];
   /** Whether the message contains image attachments */
   hasImages?: boolean;
+  /** Downloaded non-image file info with local paths (populated after download) */
+  attachments?: SlackFileInfo[];
+  /** Whether the message has any file attachments (images or other) */
+  hasFiles?: boolean;
 }
 
 /**

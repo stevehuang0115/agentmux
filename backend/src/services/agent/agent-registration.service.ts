@@ -254,19 +254,28 @@ export class AgentRegistrationService {
 				effectiveSkills.delete(excluded);
 			}
 
-			// 3. For each skill, read skill.json and collect flags matching runtime
+			// 3. For each skill, read skill.json and collect flags matching runtime.
+			//    Skills live under agent/core/ or agent/marketplace/ subdirectories,
+			//    so search both paths when looking up skill.json.
 			for (const skillId of effectiveSkills) {
 				try {
-					const skillPath = path.join(this.projectRoot, 'config', 'skills', skillId, 'skill.json');
-					const skillContent = await readFile(skillPath, 'utf8');
+					const skillJsonPath = await this.findSkillJsonPath(skillId);
+					if (!skillJsonPath) {
+						this.logger.warn('Skill config not found in any known directory', { skillId });
+						continue;
+					}
+					const skillContent = await readFile(skillJsonPath, 'utf8');
 					const skillConfig = JSON.parse(skillContent);
 					if (skillConfig.runtime?.runtime === runtimeType && Array.isArray(skillConfig.runtime?.flags)) {
 						for (const flag of skillConfig.runtime.flags) {
 							flags.add(flag);
 						}
 					}
-				} catch {
-					// Skill config not found — skip silently
+				} catch (skillErr) {
+					this.logger.warn('Failed to read skill config', {
+						skillId,
+						error: skillErr instanceof Error ? skillErr.message : String(skillErr),
+					});
 				}
 			}
 
@@ -281,6 +290,29 @@ export class AgentRegistrationService {
 			});
 		}
 		return Array.from(flags);
+	}
+
+	/**
+	 * Search known skill directories for a skill's skill.json file.
+	 * Skills live under `config/skills/agent/core/` or `config/skills/agent/marketplace/`.
+	 *
+	 * @param skillId - The skill identifier (directory name)
+	 * @returns Absolute path to skill.json, or null if not found
+	 */
+	private async findSkillJsonPath(skillId: string): Promise<string | null> {
+		const searchDirs = [
+			path.join(this.projectRoot, 'config', 'skills', 'agent', 'core', skillId, 'skill.json'),
+			path.join(this.projectRoot, 'config', 'skills', 'agent', 'marketplace', skillId, 'skill.json'),
+		];
+		for (const candidate of searchDirs) {
+			try {
+				await readFile(candidate, 'utf8');
+				return candidate;
+			} catch {
+				// Not found in this directory, try next
+			}
+		}
+		return null;
 	}
 
 	/**
@@ -562,9 +594,26 @@ export class AgentRegistrationService {
 			sessionName, runtimeType, role
 		);
 
+		// Look up per-agent browser automation override from member config
+		let browserAutomationOverride: boolean | undefined;
+		if (memberId) {
+			try {
+				const teams = await this.storageService.getTeams();
+				for (const team of teams) {
+					const member = team.members?.find((m) => m.id === memberId || m.sessionName === sessionName);
+					if (member?.enableBrowserAutomation !== undefined) {
+						browserAutomationOverride = member.enableBrowserAutomation;
+						break;
+					}
+				}
+			} catch {
+				// Non-fatal — will use global setting
+			}
+		}
+
 		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
 		try {
-			await runtimeService2.postInitialize(sessionName, projectPath, additionalAllowlistPaths);
+			await runtimeService2.postInitialize(sessionName, projectPath, additionalAllowlistPaths, browserAutomationOverride);
 			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
 			// arrived during postInitialize commands, so they don't leak into the prompt input
 			await delay(500);
@@ -879,10 +928,27 @@ export class AgentRegistrationService {
 			);
 		}
 
+		// Look up per-agent browser automation override from member config
+		let browserOverrideForRecreation: boolean | undefined;
+		if (memberId) {
+			try {
+				const teams = await this.storageService.getTeams();
+				for (const team of teams) {
+					const member = team.members?.find((m) => m.id === memberId || m.sessionName === sessionName);
+					if (member?.enableBrowserAutomation !== undefined) {
+						browserOverrideForRecreation = member.enableBrowserAutomation;
+						break;
+					}
+				}
+			} catch {
+				// Non-fatal — will use global setting
+			}
+		}
+
 		// Run post-initialization hook (e.g., Gemini CLI directory allowlist)
 		try {
 			const postInitService = this.createRuntimeService(runtimeType);
-			await postInitService.postInitialize(sessionName, projectPath);
+			await postInitService.postInitialize(sessionName, projectPath, undefined, browserOverrideForRecreation);
 			// Drain stale terminal escape sequences (e.g. DA1 [?1;2c) that may have
 			// arrived during postInitialize commands, so they don't leak into the prompt input
 			await delay(500);
@@ -2541,11 +2607,27 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
 				if (!this.isClaudeAtPrompt(output, runtimeType)) {
-					// On the final attempt, fall back to direct delivery rather than
-					// returning a 502 error. The agent may be at a prompt that doesn't
-					// match our detection patterns, or the terminal buffer may be stale.
-					// This mirrors what the /write endpoint does successfully.
 					if (attempt === maxAttempts) {
+						// On the final attempt, check if the agent is DEFINITELY busy
+						// before force-delivering. If we see "esc to interrupt" or
+						// processing indicators, the agent is actively working and
+						// force-delivery risks corrupting its current task.
+						const tailForBusyCheck = output.slice(-2000);
+						const isBusy = TERMINAL_PATTERNS.BUSY_STATUS_BAR.test(tailForBusyCheck) ||
+							TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(tailForBusyCheck);
+
+						if (isBusy) {
+							this.logger.warn('Agent is busy (processing indicators detected), skipping force delivery', {
+								sessionName,
+								attempt,
+								runtimeType,
+							});
+							return false;
+						}
+
+						// Not clearly busy — fall back to direct delivery. The agent
+						// may be at a prompt that doesn't match our detection patterns,
+						// or the terminal buffer may be stale.
 						this.logger.warn('Prompt detection failed on final attempt, delivering message directly', {
 							sessionName,
 							attempt,
@@ -2927,7 +3009,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							|| hasGeminiIndicators;
 
 						if (delivered) {
-							this.logger.debug('Message delivered successfully (TUI output changed)', {
+							// Log at warn level when verification passed on weak signals
+							// (output length change only, no explicit processing indicators)
+							// so future false positives are traceable in logs.
+							const hasStrongSignal = hasProcessingIndicators || hasGeminiIndicators;
+							const logLevel = hasStrongSignal ? 'debug' : 'warn';
+							this.logger[logLevel](`Message delivery verified (${hasStrongSignal ? 'strong' : 'weak'} signal)`, {
 								sessionName,
 								attempt,
 								lengthDiff,
@@ -2935,6 +3022,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								hasProcessingIndicators,
 								hasGeminiIndicators,
 								newContentLength: newContent.length,
+								signal: hasStrongSignal ? 'processing-indicators' : 'output-length-change-only',
 							});
 							return true;
 						}
@@ -3383,11 +3471,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
-	 * Check if Claude Code appears to be at an input prompt.
-	 * Looks for common prompt indicators in terminal output.
+	 * Check if the agent appears to be at an input prompt.
+	 * Looks for prompt indicators (❯, ⏵, $, ❯❯, ⏵⏵) in terminal output.
+	 * Also checks for busy indicators (esc to interrupt, spinners, ⏺)
+	 * to avoid false negatives when the agent is processing.
 	 *
 	 * @param terminalOutput - The terminal output to check
-	 * @returns true if Claude Code appears to be at a prompt
+	 * @param runtimeType - The runtime type for pattern selection
+	 * @returns true if the agent appears to be at a prompt
 	 */
 	private isClaudeAtPrompt(terminalOutput: string, runtimeType?: RuntimeType): boolean {
 		// Handle null/undefined/empty input — return false since an empty buffer
@@ -3430,7 +3521,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				}
 				// ❯❯ = bypass permissions prompt (idle).
 				// Matches "❯❯", "❯❯ ", and "❯❯ bypass permissions on (shift+tab to cycle)".
-				// This line disappears during processing and reappears when idle.
+				// Note: ⏵⏵ appears in the status bar but is visible both when idle AND
+				// busy, so it cannot be used as a reliable prompt indicator.
 				if (trimmed.startsWith('❯❯')) {
 					return true;
 				}
@@ -3459,11 +3551,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return true;
 		}
 
-		// No prompt found — check if still processing. Only check the last few
-		// lines to avoid matching words like "thinking" in historical response text.
-		const recentLines = linesToCheck.slice(-5).join('\n');
+		// No prompt found — check if still processing.
+		// Check last 10 lines (not just 5) because tool output can push processing
+		// indicators further up while the status bar stays at the bottom.
+		const recentLines = linesToCheck.join('\n');
 		if (TERMINAL_PATTERNS.PROCESSING_WITH_TEXT.test(recentLines)) {
 			this.logger.debug('Processing indicators present near bottom of output');
+			return false;
+		}
+
+		// Check for "esc to interrupt" in the status bar — this is a definitive
+		// busy signal. Claude Code only shows this text while actively processing.
+		// It disappears when the agent returns to idle at the prompt.
+		if (TERMINAL_PATTERNS.BUSY_STATUS_BAR.test(recentLines)) {
+			this.logger.debug('Busy status bar detected (esc to interrupt)');
 			return false;
 		}
 

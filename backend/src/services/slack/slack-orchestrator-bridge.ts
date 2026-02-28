@@ -8,6 +8,10 @@
  */
 
 import { EventEmitter } from 'events';
+import { promises as fs, createWriteStream } from 'fs';
+import path from 'path';
+import os from 'os';
+import { pipeline } from 'stream/promises';
 import { getSlackService, SlackService } from './slack.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
 import {
@@ -19,6 +23,8 @@ import {
   SlackNotification,
   SlackConversationContext,
   SlackImageInfo,
+  SlackFileInfo,
+  SlackFile,
   ParsedSlackCommand,
   parseCommandIntent,
 } from '../../types/slack.types.js';
@@ -26,7 +32,7 @@ import { getSlackImageService } from './slack-image.service.js';
 import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_BRIDGE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_FILE_DOWNLOAD_CONSTANTS, SLACK_BRIDGE_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -177,13 +183,25 @@ export class SlackOrchestratorBridge extends EventEmitter {
     this.logger.info('Received message', {
       preview: (message.text || '').substring(0, 50),
       hasImages: message.hasImages,
-      imageCount: message.files?.length || 0,
+      hasFiles: message.hasFiles,
+      fileCount: message.files?.length || 0,
     });
 
     try {
-      // Download images if present
-      if (message.hasImages && message.files) {
-        await this.downloadMessageImages(message);
+      // Download files if present (both images and non-image files)
+      if (message.hasFiles && message.files) {
+        const imageFiles = message.files.filter(f => f.mimetype?.startsWith('image/'));
+        const nonImageFiles = message.files.filter(f => !f.mimetype?.startsWith('image/'));
+
+        // Download images via existing path
+        if (imageFiles.length > 0) {
+          await this.downloadMessageImages(message);
+        }
+
+        // Download non-image files
+        if (nonImageFiles.length > 0) {
+          await this.downloadMessageFiles(message, nonImageFiles);
+        }
       }
 
       // Get or create conversation context
@@ -193,8 +211,8 @@ export class SlackOrchestratorBridge extends EventEmitter {
         message.userId
       );
 
-      // Build enriched text with image references for the agent
-      const enrichedText = this.enrichTextWithImages(message);
+      // Build enriched text with file references for the agent
+      const enrichedText = this.enrichTextWithFiles(message);
 
       // Store inbound message in thread file (with image metadata)
       if (this.threadStore) {
@@ -571,19 +589,161 @@ Just type naturally to chat with the orchestrator!`;
   }
 
   /**
-   * Enrich message text with image file path references so agents
-   * can read them via their file-reading tools (Claude Code Read, Gemini @file).
+   * Download non-image file attachments from a Slack message.
+   * Uses authenticated fetch (same pattern as SlackImageService) to download
+   * files to a temp directory. Populates `message.attachments` with results.
+   * Skips magic-byte validation since these are generic files.
    *
-   * @param message - Message with optional downloaded images
-   * @returns Enriched text with image references appended
+   * @param message - Incoming message to populate with downloaded file info
+   * @param nonImageFiles - Non-image SlackFile objects to download
    */
-  private enrichTextWithImages(message: SlackIncomingMessage): string {
+  private async downloadMessageFiles(message: SlackIncomingMessage, nonImageFiles: SlackFile[]): Promise<void> {
+    const botToken = this.slackService.getBotToken();
+    if (!botToken) {
+      this.logger.warn('Cannot download files: no bot token available');
+      return;
+    }
+
+    const crewlyHome = path.join(os.homedir(), '.crewly');
+    const tempDir = path.join(crewlyHome, SLACK_FILE_DOWNLOAD_CONSTANTS.TEMP_DIR);
+    await fs.mkdir(tempDir, { recursive: true });
+
+    const downloadedFiles: SlackFileInfo[] = [];
+    const rejectionMessages: string[] = [];
+    const maxConcurrent = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
+
+    // Refresh file URLs via files.info API
+    for (const file of nonImageFiles) {
+      try {
+        const freshInfo = await this.slackService.getFileInfo(file.id);
+        if (freshInfo.url_private_download) {
+          file.url_private_download = freshInfo.url_private_download;
+        }
+        if (freshInfo.url_private) {
+          file.url_private = freshInfo.url_private;
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('missing_scope') || errMsg.includes('not_allowed_token_type')) {
+          this.logger.error('Bot token lacks files:read scope — cannot download files');
+          return;
+        }
+        this.logger.warn('Could not refresh file URL via files.info', { fileName: file.name, error: errMsg });
+      }
+    }
+
+    for (let i = 0; i < nonImageFiles.length; i += maxConcurrent) {
+      const batch = nonImageFiles.slice(i, i + maxConcurrent);
+      const results = await Promise.allSettled(
+        batch.map(async (file) => {
+          // Size check
+          if (file.size > SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_FILE_SIZE) {
+            const maxMB = Math.round(SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
+            throw new Error(`File too large: ${file.size} bytes (max ${maxMB} MB)`);
+          }
+
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const localPath = path.join(tempDir, `${file.id}-${safeName}`);
+          const downloadUrl = file.url_private_download || file.url_private;
+
+          // Authenticated fetch with manual redirect handling (same as SlackImageService)
+          const maxRedirects = 5;
+          let currentUrl = downloadUrl;
+          let response: Response | null = null;
+
+          for (let r = 0; r <= maxRedirects; r++) {
+            response = await fetch(currentUrl, {
+              headers: { 'Authorization': `Bearer ${botToken}` },
+              redirect: 'manual',
+            });
+            if (response.status >= 300 && response.status < 400) {
+              const location = response.headers.get('location');
+              if (!location) throw new Error(`Redirect without Location header`);
+              currentUrl = location;
+              continue;
+            }
+            break;
+          }
+
+          if (!response || !response.ok) {
+            throw new Error(`Download failed with status ${response?.status || 'unknown'}`);
+          }
+          if (!response.body) {
+            throw new Error('Empty response body from Slack');
+          }
+
+          const fileStream = createWriteStream(localPath);
+          const { Readable } = await import('stream');
+          const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
+          await pipeline(nodeStream, fileStream);
+
+          return {
+            id: file.id,
+            name: file.name,
+            mimetype: file.mimetype,
+            localPath,
+            size: file.size,
+            permalink: file.permalink,
+          } satisfies SlackFileInfo;
+        }),
+      );
+
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result.status === 'fulfilled') {
+          downloadedFiles.push(result.value);
+        } else {
+          const fileName = batch[j].name;
+          const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          this.logger.warn('Failed to download file', { fileName, reason });
+          if (reason.startsWith('File too large:')) {
+            rejectionMessages.push(`${fileName}: ${reason}`);
+          }
+        }
+      }
+    }
+
+    if (downloadedFiles.length > 0) {
+      message.attachments = downloadedFiles;
+    }
+
+    if (rejectionMessages.length > 0) {
+      try {
+        const maxMB = Math.round(SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_FILE_SIZE / (1024 * 1024));
+        const warningText = `:warning: Some file(s) could not be downloaded:\n${rejectionMessages.map(f => `• ${f}`).join('\n')}\n\nMax size: ${maxMB} MB.`;
+        await this.slackService.sendMessage({
+          channelId: message.channelId,
+          text: warningText,
+          threadTs: message.threadTs || message.ts,
+        });
+      } catch (err) {
+        this.logger.warn('Failed to send file rejection warning to Slack', { error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  /**
+   * Enrich message text with file path references so agents
+   * can read them via their file-reading tools (Claude Code Read, Gemini @file).
+   * Includes both images and non-image file attachments.
+   *
+   * @param message - Message with optional downloaded images and files
+   * @returns Enriched text with file references appended
+   */
+  private enrichTextWithFiles(message: SlackIncomingMessage): string {
     let text = message.text || '';
 
     if (message.images && message.images.length > 0) {
       for (const img of message.images) {
         const dims = img.width && img.height ? ` (${img.width}x${img.height})` : '';
         text += `\n[Slack Image: ${img.localPath}${dims}, ${img.mimetype}]`;
+      }
+    }
+
+    if (message.attachments && message.attachments.length > 0) {
+      for (const file of message.attachments) {
+        const sizeKB = Math.round(file.size / 1024);
+        text += `\n[Slack File: ${file.localPath} (${file.name}, ${file.mimetype}, ${sizeKB}KB)]`;
       }
     }
 

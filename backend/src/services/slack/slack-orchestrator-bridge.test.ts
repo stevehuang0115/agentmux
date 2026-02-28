@@ -296,7 +296,7 @@ describe('SlackOrchestratorBridge', () => {
   describe('image handling', () => {
     it('should enrich text with image file references', () => {
       const bridge = new SlackOrchestratorBridge();
-      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
 
       const message: SlackIncomingMessage = {
         id: '1', type: 'message', text: 'Check this', userId: 'U1',
@@ -308,21 +308,64 @@ describe('SlackOrchestratorBridge', () => {
         }],
       };
 
-      const enriched = enrichTextWithImages(message);
+      const enriched = enrichTextWithFiles(message);
       expect(enriched).toContain('Check this');
       expect(enriched).toContain('[Slack Image: /tmp/F001-shot.png (1920x1080), image/png]');
     });
 
     it('should return original text when no images', () => {
       const bridge = new SlackOrchestratorBridge();
-      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
 
       const message: SlackIncomingMessage = {
         id: '1', type: 'message', text: 'No images here', userId: 'U1',
         channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
       };
 
-      expect(enrichTextWithImages(message)).toBe('No images here');
+      expect(enrichTextWithFiles(message)).toBe('No images here');
+    });
+
+    it('should enrich text with non-image file attachments', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Check this PDF', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        attachments: [{
+          id: 'F002', name: 'report.pdf', mimetype: 'application/pdf',
+          localPath: '/tmp/F002-report.pdf', size: 102400,
+          permalink: 'https://slack.com/files/F002',
+        }],
+      };
+
+      const enriched = enrichTextWithFiles(message);
+      expect(enriched).toContain('Check this PDF');
+      expect(enriched).toContain('[Slack File: /tmp/F002-report.pdf (report.pdf, application/pdf, 100KB)]');
+    });
+
+    it('should enrich text with both images and file attachments', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Mixed files', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        images: [{
+          id: 'F001', name: 'shot.png', mimetype: 'image/png',
+          localPath: '/tmp/F001-shot.png', width: 800, height: 600,
+          permalink: 'https://slack.com/files/F001',
+        }],
+        attachments: [{
+          id: 'F002', name: 'doc.csv', mimetype: 'text/csv',
+          localPath: '/tmp/F002-doc.csv', size: 2048,
+          permalink: 'https://slack.com/files/F002',
+        }],
+      };
+
+      const enriched = enrichTextWithFiles(message);
+      expect(enriched).toContain('[Slack Image:');
+      expect(enriched).toContain('[Slack File:');
     });
 
     it('should download images via SlackImageService', async () => {
