@@ -628,6 +628,78 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('downloadMessageFiles (non-image files)', () => {
+    it('should skip download when no bot token is available', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('');
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'doc', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const nonImageFiles = [{ id: 'F001', name: 'doc.pdf', mimetype: 'application/pdf', filetype: 'pdf',
+        size: 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      // No attachments set since we couldn't download
+      expect(message.attachments).toBeUndefined();
+    });
+
+    it('should reject files exceeding max file size', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'x', url_private_download: 'x',
+      });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      // 25MB exceeds the 20MB limit
+      const nonImageFiles = [{ id: 'F001', name: 'huge.zip', mimetype: 'application/zip', filetype: 'zip',
+        size: 25 * 1024 * 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      expect(message.attachments).toBeUndefined();
+      // Should send a rejection warning
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('could not be downloaded'),
+        })
+      );
+    });
+
+    it('should abort all downloads when files:read scope is missing', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockRejectedValue(new Error('missing_scope'));
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const nonImageFiles = [{ id: 'F001', name: 'a.pdf', mimetype: 'application/pdf', filetype: 'pdf',
+        size: 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      expect(message.attachments).toBeUndefined();
+    });
+  });
+
   describe('notifications', () => {
     it('should not throw when sending task completed notification', async () => {
       const bridge = new SlackOrchestratorBridge();

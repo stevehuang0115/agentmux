@@ -168,7 +168,7 @@ export class ActivityMonitorService {
       const staleThreshold = CONTINUATION_CONSTANTS.DETECTION.STALE_THRESHOLD_MINUTES;
       const staleAgents = await this.agentHeartbeatService.detectStaleAgents(staleThreshold);
       if (staleAgents.length > 0) {
-        this.logger.info('Detected stale agents for potential inactivity', {
+        this.logger.debug('Detected stale agents for potential inactivity', {
           staleAgents,
           thresholdMinutes: staleThreshold
         });
@@ -195,11 +195,17 @@ export class ActivityMonitorService {
 
             const sessionAlive = backend.sessionExists(sessionName);
             if (!sessionAlive) {
-              this.logger.info('Marking stale agent as inactive (session dead)', {
+              this.logger.debug('Marking stale agent as inactive (session dead)', {
                 agentId,
                 sessionName
               });
               deadSessions.add(sessionName);
+              // Update heartbeat file so detectStaleAgents stops re-detecting this agent
+              await this.agentHeartbeatService.updateAgentHeartbeat(
+                sessionName,
+                agentId === AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID ? undefined : agentId,
+                CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+              );
             } else if (agentId === AGENT_IDENTITY_CONSTANTS.ORCHESTRATOR.ID) {
               this.logger.debug('Orchestrator is stale but auto-restart is disabled', {
                 sessionName,

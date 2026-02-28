@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
+import { RuntimeAgentService, type McpConfigResult } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -233,15 +233,38 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	 * @param targetProjectPath - Optional target project path for MCP config.
 	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string, targetProjectPath?: string): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string, _additionalAllowlistPaths?: string[], browserAutomationOverride?: boolean): Promise<void> {
 		const effectiveProjectPath = targetProjectPath || this.projectRoot;
 		this.logger.info('Claude Code post-init: ensuring MCP config', {
 			sessionName,
 			projectRoot: this.projectRoot,
 			targetProjectPath: effectiveProjectPath,
+			browserAutomationOverride,
 		});
 
-		await this.ensureClaudeMcpConfig(effectiveProjectPath);
+		const result = await this.ensureClaudeMcpConfig(effectiveProjectPath, browserAutomationOverride);
+
+		// Health check: verify the config was written correctly
+		if (result.success && result.totalServers > 0) {
+			const mcpConfigPath = path.join(effectiveProjectPath, '.mcp.json');
+			const verified = await this.verifyMcpConfig(mcpConfigPath, result.serverNames);
+			if (verified) {
+				this.logger.info('MCP health check passed', {
+					sessionName,
+					servers: result.serverNames,
+				});
+			} else {
+				this.logger.warn('MCP health check failed: config file does not match expected servers', {
+					sessionName,
+					expectedServers: result.serverNames,
+				});
+			}
+		} else if (!result.success) {
+			this.logger.warn('MCP config setup failed during post-init', {
+				sessionName,
+				error: result.error,
+			});
+		}
 	}
 
 	/**
@@ -251,9 +274,10 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	 * Delegates to the shared `ensureMcpConfig` in the base class.
 	 *
 	 * @param projectPath - Project directory where `.mcp.json` will be created
+	 * @returns Result of the MCP config operation
 	 */
-	async ensureClaudeMcpConfig(projectPath: string): Promise<void> {
+	async ensureClaudeMcpConfig(projectPath: string, browserAutomationOverride?: boolean): Promise<McpConfigResult> {
 		const mcpConfigPath = path.join(projectPath, '.mcp.json');
-		await this.ensureMcpConfig(mcpConfigPath, projectPath);
+		return await this.ensureMcpConfig(mcpConfigPath, projectPath, browserAutomationOverride);
 	}
 }

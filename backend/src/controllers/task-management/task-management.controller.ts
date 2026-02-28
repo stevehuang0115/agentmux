@@ -10,8 +10,31 @@ import { CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { TaskOutputValidatorService } from '../../services/quality/task-output-validator.service.js';
 import { TASK_OUTPUT_CONSTANTS, type TaskOutputRetryInfo } from '../../types/task-output.types.js';
+import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TaskManagementController');
+
+/** Module-level reference to EventBusService for auto-cleanup on task completion */
+let eventBusService: EventBusService | null = null;
+
+/**
+ * Set the EventBusService instance for task monitoring cleanup.
+ * Called during server initialization.
+ *
+ * @param service - The EventBusService instance
+ */
+export function setEventBusServiceForTaskCleanup(service: EventBusService): void {
+	eventBusService = service;
+}
+
+/**
+ * Get the current EventBusService reference (exposed for testing).
+ *
+ * @returns The EventBusService or null
+ */
+export function getEventBusServiceForTaskCleanup(): EventBusService | null {
+	return eventBusService;
+}
 
 /**
  * Creates a new task MD file in the project's .crewly/tasks/ directory.
@@ -427,10 +450,12 @@ export async function completeTask(
 			await writeFile(doneTargetPath, updatedContent, 'utf-8');
 			await unlinkFile(taskPath);
 
-			// Remove from task tracking
+			// Remove from task tracking and clean up monitoring
 			const allTasksWithSchema = await this.taskTrackingService.getAllInProgressTasks();
 			const taskToRemoveWithSchema = allTasksWithSchema.find(t => t.taskFilePath === taskPath);
+			let cleanupResultSchema = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 			if (taskToRemoveWithSchema) {
+				cleanupResultSchema = await cleanupTaskMonitoring(this, taskToRemoveWithSchema);
 				await this.taskTrackingService.removeTask(taskToRemoveWithSchema.id);
 			}
 
@@ -442,6 +467,7 @@ export async function completeTask(
 				outputPath: outputFilePath,
 				status: 'done',
 				completedAt: new Date().toISOString(),
+				monitoringCleanup: cleanupResultSchema,
 			});
 			return;
 		}
@@ -460,10 +486,12 @@ export async function completeTask(
 		await writeFile(targetPath, updatedContent, 'utf-8');
 		await unlinkFile(taskPath);
 
-		// Remove from task tracking (find task by file path and remove it)
+		// Remove from task tracking and clean up monitoring
 		const allTasks = await this.taskTrackingService.getAllInProgressTasks();
 		const taskToRemove = allTasks.find(t => t.taskFilePath === taskPath);
+		let cleanupResult = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 		if (taskToRemove) {
+			cleanupResult = await cleanupTaskMonitoring(this, taskToRemove);
 			await this.taskTrackingService.removeTask(taskToRemove.id);
 		}
 
@@ -474,6 +502,7 @@ export async function completeTask(
 			newPath: targetPath,
 			status: 'done',
 			completedAt: new Date().toISOString(),
+			monitoringCleanup: cleanupResult,
 		});
 	} catch (error) {
 		logger.error('Error completing task', { error: error instanceof Error ? error.message : String(error) });
@@ -1450,5 +1479,118 @@ export async function requestReview(
 			success: false,
 			error: 'Failed to request review',
 		});
+	}
+}
+
+/**
+ * Cleans up monitoring resources (scheduled checks and event subscriptions)
+ * linked to a task. Called automatically when a task is completed.
+ *
+ * @param controller - The ApiController instance (for schedulerService access)
+ * @param task - The task whose monitoring to clean up
+ * @returns Object with counts of cancelled schedules and unsubscribed events
+ */
+async function cleanupTaskMonitoring(
+	controller: ApiController,
+	task: { scheduleIds?: string[]; subscriptionIds?: string[] }
+): Promise<{ cancelledSchedules: number; unsubscribedEvents: number }> {
+	let cancelledSchedules = 0;
+	let unsubscribedEvents = 0;
+
+	// Cancel linked schedules
+	if (task.scheduleIds && task.scheduleIds.length > 0) {
+		for (const scheduleId of task.scheduleIds) {
+			try {
+				controller.schedulerService.cancelCheck(scheduleId);
+				cancelledSchedules++;
+			} catch (error) {
+				logger.warn('Failed to cancel schedule during task cleanup', {
+					scheduleId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+	}
+
+	// Unsubscribe linked event subscriptions
+	if (task.subscriptionIds && task.subscriptionIds.length > 0 && eventBusService) {
+		for (const subscriptionId of task.subscriptionIds) {
+			try {
+				eventBusService.unsubscribe(subscriptionId);
+				unsubscribedEvents++;
+			} catch (error) {
+				logger.warn('Failed to unsubscribe event during task cleanup', {
+					subscriptionId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+	}
+
+	if (cancelledSchedules > 0 || unsubscribedEvents > 0) {
+		logger.info('Task monitoring cleaned up', { cancelledSchedules, unsubscribedEvents });
+	}
+
+	return { cancelledSchedules, unsubscribedEvents };
+}
+
+/**
+ * Adds monitoring IDs (schedule and subscription IDs) to tasks for a given agent session.
+ * Called by delegate-task after setting up auto-monitoring to link monitoring resources
+ * to the task for auto-cleanup on completion.
+ *
+ * @param req - Request containing sessionName, scheduleIds, subscriptionIds
+ * @param res - Response with success status
+ */
+export async function addMonitoring(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName, scheduleIds = [], subscriptionIds = [] } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({ success: false, error: 'sessionName is required' });
+			return;
+		}
+
+		if (scheduleIds.length === 0 && subscriptionIds.length === 0) {
+			res.status(400).json({ success: false, error: 'At least one scheduleId or subscriptionId is required' });
+			return;
+		}
+
+		// Find the most recent task assigned to this session
+		const tasks = await this.taskTrackingService.getTasksBySessionName(sessionName);
+
+		if (tasks.length === 0) {
+			// No tracked task found — store IDs anyway by finding any in_progress_tasks entry
+			logger.warn('No tracked tasks found for session, storing monitoring IDs for session-level cleanup', { sessionName });
+			res.json({
+				success: true,
+				message: 'No tracked task found for session; monitoring IDs noted but not linked to a task',
+				sessionName,
+				scheduleIds,
+				subscriptionIds,
+			});
+			return;
+		}
+
+		// Link to the most recently assigned task
+		const latestTask = tasks.sort((a, b) => new Date(b.assignedAt).getTime() - new Date(a.assignedAt).getTime())[0];
+
+		await this.taskTrackingService.addMonitoringIds(
+			latestTask.id,
+			scheduleIds,
+			subscriptionIds
+		);
+
+		res.json({
+			success: true,
+			message: 'Monitoring IDs linked to task',
+			taskId: latestTask.id,
+			taskName: latestTask.taskName,
+			scheduleIds,
+			subscriptionIds,
+		});
+	} catch (error) {
+		logger.error('Error adding monitoring IDs', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to add monitoring IDs' });
 	}
 }

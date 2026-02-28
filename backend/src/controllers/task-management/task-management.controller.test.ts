@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import * as taskManagementHandlers from './task-management.controller.js';
-import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput } from './task-management.controller.js';
+import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput, addMonitoring, setEventBusServiceForTaskCleanup } from './task-management.controller.js';
 import type { ApiController } from '../api.controller.js';
 import { TASK_OUTPUT_CONSTANTS } from '../../types/task-output.types.js';
 
@@ -55,11 +55,18 @@ describe('Task Management Handlers', () => {
     getAllInProgressTasks: jest.fn<any>(),
     removeTask: jest.fn<any>(),
     recoverAbandonedTasks: jest.fn<any>(),
+    addMonitoringIds: jest.fn<any>(),
+    getTasksBySessionName: jest.fn<any>(),
+  };
+
+  const mockSchedulerService = {
+    cancelCheck: jest.fn<any>(),
   };
 
   const fullMockApiController = {
     storageService: mockStorageService,
     taskTrackingService: mockTaskTrackingService,
+    schedulerService: mockSchedulerService,
   } as unknown as ApiController;
 
   beforeEach(() => {
@@ -784,6 +791,184 @@ describe('Task Management Handlers', () => {
           success: true,
           data: outputData,
         })
+      );
+    });
+  });
+
+  describe('addMonitoring', () => {
+    it('should return 400 when sessionName is missing', async () => {
+      mockRequest.body = { scheduleIds: ['sched-1'], subscriptionIds: [] };
+
+      await addMonitoring.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(400);
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'sessionName is required' })
+      );
+    });
+
+    it('should return 400 when no monitoring IDs are provided', async () => {
+      mockRequest.body = { sessionName: 'agent-joe', scheduleIds: [], subscriptionIds: [] };
+
+      await addMonitoring.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockResponse.status).toHaveBeenCalledWith(400);
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'At least one scheduleId or subscriptionId is required' })
+      );
+    });
+
+    it('should link monitoring IDs to the most recent task for the session', async () => {
+      const tasks = [
+        { id: 'task-old', taskName: 'Old Task', assignedAt: '2026-01-01T00:00:00.000Z' },
+        { id: 'task-new', taskName: 'New Task', assignedAt: '2026-01-02T00:00:00.000Z' },
+      ];
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue(tasks);
+      mockTaskTrackingService.addMonitoringIds.mockResolvedValue(undefined);
+      mockRequest.body = {
+        sessionName: 'agent-joe',
+        scheduleIds: ['sched-1'],
+        subscriptionIds: ['sub-1'],
+      };
+
+      await addMonitoring.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockTaskTrackingService.addMonitoringIds).toHaveBeenCalledWith(
+        'task-new', ['sched-1'], ['sub-1']
+      );
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, taskId: 'task-new' })
+      );
+    });
+
+    it('should handle no tracked tasks gracefully', async () => {
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue([]);
+      mockRequest.body = {
+        sessionName: 'agent-joe',
+        scheduleIds: ['sched-1'],
+        subscriptionIds: [],
+      };
+
+      await addMonitoring.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('No tracked task found') })
+      );
+    });
+  });
+
+  describe('completeTask with monitoring cleanup', () => {
+    const mockEventBus = {
+      unsubscribe: jest.fn<any>(),
+    };
+
+    beforeEach(() => {
+      setEventBusServiceForTaskCleanup(mockEventBus as any);
+    });
+
+    afterEach(() => {
+      setEventBusServiceForTaskCleanup(null as any);
+    });
+
+    it('should clean up schedules and subscriptions when completing a task', async () => {
+      const trackedTask = {
+        id: 'tracked-1',
+        taskFilePath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+        scheduleIds: ['sched-1', 'sched-2'],
+        subscriptionIds: ['sub-1'],
+      };
+
+      mockRequest.body = {
+        taskPath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+        sessionName: 'session-123',
+      };
+
+      (existsSync as jest.Mock<any>).mockReturnValue(true);
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task\nSome content');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+      (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+      (basename as jest.Mock<any>).mockReturnValue('test_task.md');
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/done');
+      mockExtractSchemaFromMarkdown.mockReturnValue(null);
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([trackedTask]);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockSchedulerService.cancelCheck).toHaveBeenCalledWith('sched-1');
+      expect(mockSchedulerService.cancelCheck).toHaveBeenCalledWith('sched-2');
+      expect(mockEventBus.unsubscribe).toHaveBeenCalledWith('sub-1');
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          monitoringCleanup: { cancelledSchedules: 2, unsubscribedEvents: 1 },
+        })
+      );
+    });
+
+    it('should complete task even when no monitoring IDs exist', async () => {
+      const trackedTask = {
+        id: 'tracked-1',
+        taskFilePath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+      };
+
+      mockRequest.body = {
+        taskPath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+        sessionName: 'session-123',
+      };
+
+      (existsSync as jest.Mock<any>).mockReturnValue(true);
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task\nSome content');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+      (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+      (basename as jest.Mock<any>).mockReturnValue('test_task.md');
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/done');
+      mockExtractSchemaFromMarkdown.mockReturnValue(null);
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([trackedTask]);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+
+      await completeTask.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      expect(mockSchedulerService.cancelCheck).not.toHaveBeenCalled();
+      expect(mockEventBus.unsubscribe).not.toHaveBeenCalled();
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          monitoringCleanup: { cancelledSchedules: 0, unsubscribedEvents: 0 },
+        })
+      );
+    });
+
+    it('should handle cleanup errors gracefully without failing completion', async () => {
+      const trackedTask = {
+        id: 'tracked-1',
+        taskFilePath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+        scheduleIds: ['sched-bad'],
+        subscriptionIds: ['sub-bad'],
+      };
+
+      mockRequest.body = {
+        taskPath: '/project/.crewly/tasks/delegated/in_progress/test_task.md',
+        sessionName: 'session-123',
+      };
+
+      (existsSync as jest.Mock<any>).mockReturnValue(true);
+      (readFile as jest.Mock<any>).mockResolvedValue('# Task\nSome content');
+      (writeFile as jest.Mock<any>).mockResolvedValue(undefined);
+      (mkdir as jest.Mock<any>).mockResolvedValue(undefined);
+      (basename as jest.Mock<any>).mockReturnValue('test_task.md');
+      (dirname as jest.Mock<any>).mockReturnValue('/project/.crewly/tasks/delegated/done');
+      mockExtractSchemaFromMarkdown.mockReturnValue(null);
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([trackedTask]);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+      mockSchedulerService.cancelCheck.mockImplementation(() => { throw new Error('Schedule not found'); });
+      mockEventBus.unsubscribe.mockImplementation(() => { throw new Error('Subscription not found'); });
+
+      await completeTask.call(fullMockApiController, mockRequest as Request, mockResponse as Response);
+
+      // Task should still complete successfully even if cleanup fails
+      expect(mockResponse.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
       );
     });
   });

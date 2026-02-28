@@ -579,6 +579,123 @@ describe('TaskTrackingService', () => {
     });
   });
 
+  describe('addMonitoringIds', () => {
+    it('should add schedule and subscription IDs to an existing task', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [{ ...mockTask }]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+
+      await service.addMonitoringIds('task-123', ['sched-1', 'sched-2'], ['sub-1']);
+
+      expect(taskData.tasks[0].scheduleIds).toEqual(['sched-1', 'sched-2']);
+      expect(taskData.tasks[0].subscriptionIds).toEqual(['sub-1']);
+      expect(service.saveTaskData).toHaveBeenCalledWith(taskData);
+    });
+
+    it('should append to existing monitoring IDs', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [{ ...mockTask, scheduleIds: ['sched-existing'], subscriptionIds: ['sub-existing'] }]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+
+      await service.addMonitoringIds('task-123', ['sched-new'], ['sub-new']);
+
+      expect(taskData.tasks[0].scheduleIds).toEqual(['sched-existing', 'sched-new']);
+      expect(taskData.tasks[0].subscriptionIds).toEqual(['sub-existing', 'sub-new']);
+    });
+
+    it('should throw error if task not found', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+
+      await expect(service.addMonitoringIds('nonexistent', ['sched-1'], []))
+        .rejects.toThrow('Task with ID nonexistent not found');
+    });
+  });
+
+  describe('getTasksBySessionName', () => {
+    it('should return tasks filtered by session name', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'task-1', assignedSessionName: 'session-abc' },
+          { ...mockTask, id: 'task-2', assignedSessionName: 'session-xyz' },
+          { ...mockTask, id: 'task-3', assignedSessionName: 'session-abc' },
+        ]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const result = await service.getTasksBySessionName('session-abc');
+
+      expect(result).toHaveLength(2);
+      expect(result.every(t => t.assignedSessionName === 'session-abc')).toBe(true);
+    });
+
+    it('should return empty array when no tasks match', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+
+      const result = await service.getTasksBySessionName('nonexistent-session');
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe('getMonitoringIdsForSession', () => {
+    it('should collect all monitoring IDs from tasks for a session', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          {
+            ...mockTask,
+            id: 'task-1',
+            assignedSessionName: 'session-abc',
+            scheduleIds: ['sched-1', 'sched-2'],
+            subscriptionIds: ['sub-1'],
+          },
+          {
+            ...mockTask,
+            id: 'task-2',
+            assignedSessionName: 'session-abc',
+            scheduleIds: ['sched-3'],
+            subscriptionIds: ['sub-2', 'sub-3'],
+          },
+          {
+            ...mockTask,
+            id: 'task-3',
+            assignedSessionName: 'session-xyz',
+            scheduleIds: ['sched-other'],
+            subscriptionIds: [],
+          },
+        ]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const result = await service.getMonitoringIdsForSession('session-abc');
+
+      expect(result.scheduleIds).toEqual(['sched-1', 'sched-2', 'sched-3']);
+      expect(result.subscriptionIds).toEqual(['sub-1', 'sub-2', 'sub-3']);
+    });
+
+    it('should return empty arrays when tasks have no monitoring IDs', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, assignedSessionName: 'session-abc' },
+        ]
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const result = await service.getMonitoringIdsForSession('session-abc');
+
+      expect(result.scheduleIds).toEqual([]);
+      expect(result.subscriptionIds).toEqual([]);
+    });
+  });
+
   describe('Team integration tests', () => {
     it('should handle tasks with team assignments', async () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);

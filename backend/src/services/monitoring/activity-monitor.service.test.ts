@@ -88,6 +88,7 @@ describe('ActivityMonitorService', () => {
         teamMembers: {},
         metadata: { lastUpdated: new Date().toISOString(), version: '1.0.0' },
       }),
+      updateAgentHeartbeat: jest.fn().mockResolvedValue(undefined),
       getInstance: jest.fn()
     } as any;
 
@@ -293,10 +294,17 @@ describe('ActivityMonitorService', () => {
 
       const expectedThreshold = CONTINUATION_CONSTANTS.DETECTION.STALE_THRESHOLD_MINUTES;
       expect(mockAgentHeartbeatService.detectStaleAgents).toHaveBeenCalledWith(expectedThreshold);
-      expect(mockLogger.info).toHaveBeenCalledWith('Detected stale agents for potential inactivity', {
+      expect(mockLogger.debug).toHaveBeenCalledWith('Detected stale agents for potential inactivity', {
         staleAgents,
         thresholdMinutes: expectedThreshold
       });
+      // Heartbeat file should be updated for dead agents
+      expect(mockAgentHeartbeatService.updateAgentHeartbeat).toHaveBeenCalledWith(
+        'test-session-1', 'member-1', 'inactive'
+      );
+      expect(mockAgentHeartbeatService.updateAgentHeartbeat).toHaveBeenCalledWith(
+        'test-session-2', 'member-2', 'inactive'
+      );
       // Team members are now batch-updated and persisted once per modified team
       expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalledWith('test-session-1', 'inactive');
       expect(mockStorageService.updateAgentStatus).not.toHaveBeenCalledWith('test-session-2', 'inactive');
@@ -328,6 +336,12 @@ describe('ActivityMonitorService', () => {
 
       await (service as any).performActivityCheck();
 
+      // Heartbeat file should be updated for dead orchestrator
+      expect(mockAgentHeartbeatService.updateAgentHeartbeat).toHaveBeenCalledWith(
+        CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+        undefined,
+        'inactive'
+      );
       expect(mockStorageService.updateAgentStatus).toHaveBeenCalledWith(
         CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         'inactive'

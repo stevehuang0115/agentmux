@@ -12,6 +12,10 @@ export interface InProgressTask {
   lastCheckedAt?: string;
   blockReason?: string;
   priority?: 'low' | 'medium' | 'high';
+  /** IDs of scheduled checks linked to this task for auto-cleanup on completion */
+  scheduleIds?: string[];
+  /** IDs of event subscriptions linked to this task for auto-cleanup on completion */
+  subscriptionIds?: string[];
 }
 
 export interface TaskTrackingData {

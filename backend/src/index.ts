@@ -60,6 +60,7 @@ import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } fro
 import { SlackImageService, setSlackImageService } from './services/slack/slack-image.service.js';
 import { NotifyReconciliationService } from './services/slack/notify-reconciliation.service.js';
 import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
+import { setEventBusServiceForTaskCleanup } from './controllers/task-management/task-management.controller.js';
 import { setTeamControllerEventBusService } from './controllers/team/team.controller.js';
 import { SkillCatalogService } from './services/skill/skill-catalog.service.js';
 import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.js';
@@ -271,6 +272,7 @@ export class CrewlyServer {
 		this.teamsJsonWatcherService.setEventBusService(this.eventBusService);
 		setEventBusControllerService(this.eventBusService);
 		setTeamControllerEventBusService(this.eventBusService);
+		setEventBusServiceForTaskCleanup(this.eventBusService);
 
 		// Initialize Slack thread store for persistent thread conversations
 		const slackThreadStore = new SlackThreadStoreService(this.config.crewlyHome);

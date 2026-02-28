@@ -4,13 +4,20 @@ import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
 import * as settingsServiceModule from '../settings/settings.service.js';
 import { getDefaultSettings } from '../../types/settings.types.js';
 import { readFile } from 'fs/promises';
+import { safeReadJson } from '../../utils/file-io.utils.js';
 
 // Mock fs/promises at module level so the static import in the source file is intercepted
 jest.mock('fs/promises', () => ({
 	readFile: jest.fn(),
 }));
 
+jest.mock('../../utils/file-io.utils.js', () => ({
+	safeReadJson: jest.fn(),
+	atomicWriteJson: jest.fn().mockResolvedValue(undefined),
+}));
+
 const mockReadFile = readFile as jest.MockedFunction<typeof readFile>;
+const mockSafeReadJson = safeReadJson as jest.MockedFunction<typeof safeReadJson>;
 
 // Test implementation of abstract class
 class TestRuntimeService extends RuntimeAgentService {
@@ -737,6 +744,58 @@ echo "second command"
 		it('should not match unrelated text', () => {
 			const patterns = service.getExitPatterns();
 			expect(patterns.some(p => p.test('Hello world'))).toBe(false);
+		});
+	});
+
+	describe('verifyMcpConfig', () => {
+		let verifyMcpConfig: (configFilePath: string, expectedServers: string[]) => Promise<boolean>;
+
+		beforeEach(() => {
+			verifyMcpConfig = (service as any).verifyMcpConfig.bind(service);
+		});
+
+		it('should return true when all expected servers are present', async () => {
+			mockSafeReadJson.mockResolvedValue({
+				mcpServers: {
+					'crewly-server': { command: 'node', args: ['server.js'] },
+					'chrome-mcp': { command: 'node', args: ['chrome.js'] },
+				},
+			});
+
+			const result = await verifyMcpConfig('/path/to/config.json', ['crewly-server', 'chrome-mcp']);
+			expect(result).toBe(true);
+		});
+
+		it('should return false when expected servers are missing', async () => {
+			mockSafeReadJson.mockResolvedValue({
+				mcpServers: {
+					'crewly-server': { command: 'node', args: ['server.js'] },
+				},
+			});
+
+			const result = await verifyMcpConfig('/path/to/config.json', ['crewly-server', 'chrome-mcp']);
+			expect(result).toBe(false);
+		});
+
+		it('should return false when mcpServers key is missing', async () => {
+			mockSafeReadJson.mockResolvedValue({});
+
+			const result = await verifyMcpConfig('/path/to/config.json', ['crewly-server']);
+			expect(result).toBe(false);
+		});
+
+		it('should return true for empty expected servers list', async () => {
+			mockSafeReadJson.mockResolvedValue({ mcpServers: {} });
+
+			const result = await verifyMcpConfig('/path/to/config.json', []);
+			expect(result).toBe(true);
+		});
+
+		it('should return false when file read throws', async () => {
+			mockSafeReadJson.mockRejectedValue(new Error('ENOENT'));
+
+			const result = await verifyMcpConfig('/path/to/config.json', ['crewly-server']);
+			expect(result).toBe(false);
 		});
 	});
 });

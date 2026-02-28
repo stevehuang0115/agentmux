@@ -10,6 +10,23 @@ import { delay } from '../../utils/async.utils.js';
 import type { AIRuntime } from '../../types/settings.types.js';
 
 /**
+ * Result of MCP configuration operation.
+ * Returned by ensureMcpConfig to indicate what was configured.
+ */
+export interface McpConfigResult {
+	/** Whether the config was written successfully */
+	success: boolean;
+	/** Number of new servers added */
+	addedServers: number;
+	/** Total servers in the final config */
+	totalServers: number;
+	/** Names of servers in the final config */
+	serverNames: string[];
+	/** Error message if success is false */
+	error?: string;
+}
+
+/**
  * Runtime configuration interface
  */
 export interface RuntimeConfig {
@@ -344,7 +361,7 @@ export abstract class RuntimeAgentService {
 	 * @param targetProjectPath - Optional target project path for the agent (where MCP configs should be written).
 	 *                            Falls back to this.projectRoot if not provided.
 	 */
-	async postInitialize(sessionName: string, targetProjectPath?: string, additionalAllowlistPaths?: string[]): Promise<void> {
+	async postInitialize(sessionName: string, targetProjectPath?: string, additionalAllowlistPaths?: string[], browserAutomationOverride?: boolean): Promise<void> {
 		// No-op by default — override in concrete classes
 		this.logger.debug('postInitialize (no-op)', { sessionName, runtimeType: this.getRuntimeType() });
 	}
@@ -387,8 +404,15 @@ export abstract class RuntimeAgentService {
 	 * @param configFilePath - Absolute path to the MCP config JSON file
 	 *                         (e.g., `/project/.mcp.json` or `/project/.gemini/settings.json`)
 	 * @param projectPath - Project directory path, used only for log context
+	 * @param browserAutomationOverride - Per-agent override for browser automation.
+	 *                                    When provided, takes precedence over global settings.
+	 *                                    `undefined` means use global setting.
 	 */
-	protected async ensureMcpConfig(configFilePath: string, projectPath: string): Promise<void> {
+	protected async ensureMcpConfig(
+		configFilePath: string,
+		projectPath: string,
+		browserAutomationOverride?: boolean,
+	): Promise<McpConfigResult> {
 		try {
 			// Check if browser automation is enabled
 			let enableBrowserAutomation = true;
@@ -408,6 +432,15 @@ export abstract class RuntimeAgentService {
 			} catch {
 				// Settings service unavailable — default to enabled
 				this.logger.warn('Could not read settings for browser automation flag, defaulting to enabled');
+			}
+
+			// Per-agent override takes precedence over global setting
+			if (browserAutomationOverride !== undefined) {
+				this.logger.info('Using per-agent browser automation override', {
+					globalSetting: enableBrowserAutomation,
+					override: browserAutomationOverride,
+				});
+				enableBrowserAutomation = browserAutomationOverride;
 			}
 
 			// Build required MCP servers
@@ -440,7 +473,7 @@ export abstract class RuntimeAgentService {
 					runtimeType: this.getRuntimeType(),
 					projectPath,
 				});
-				return;
+				return { success: true, addedServers: 0, totalServers: 0, serverNames: [] };
 			}
 
 			// Ensure parent directory exists (handles .gemini/ and similar)
@@ -464,23 +497,71 @@ export abstract class RuntimeAgentService {
 			const merged = { ...existing, mcpServers: existingMcpServers };
 			await atomicWriteJson(configFilePath, merged);
 
+			const serverNames = Object.keys(existingMcpServers);
+
 			this.logger.info('MCP config ensured', {
 				runtimeType: this.getRuntimeType(),
 				projectPath,
 				configFilePath,
 				addedServers: added,
-				totalServers: Object.keys(existingMcpServers).length,
+				totalServers: serverNames.length,
+				serverNames,
 				enableBrowserAutomation,
 				browserProfile,
 			});
+
+			return { success: true, addedServers: added, totalServers: serverNames.length, serverNames };
 		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
 			// Non-fatal: agent can still work without MCP servers
 			this.logger.warn('Failed to ensure MCP config (non-fatal)', {
 				runtimeType: this.getRuntimeType(),
 				projectPath,
 				configFilePath,
+				error: errorMessage,
+			});
+			return { success: false, addedServers: 0, totalServers: 0, serverNames: [], error: errorMessage };
+		}
+	}
+
+	/**
+	 * Verify MCP config file exists and contains expected servers.
+	 *
+	 * Reads the config file back after write and checks that the expected
+	 * server names are present. Non-fatal — logs warnings on failure.
+	 *
+	 * @param configFilePath - Absolute path to the MCP config JSON file
+	 * @param expectedServers - Server names expected to be present (e.g. ['playwright'])
+	 * @returns True if all expected servers are present, false otherwise
+	 */
+	protected async verifyMcpConfig(configFilePath: string, expectedServers: string[]): Promise<boolean> {
+		try {
+			const config = await safeReadJson<Record<string, unknown>>(configFilePath, {});
+			const mcpServers = (config['mcpServers'] as Record<string, unknown>) || {};
+			const presentServers = Object.keys(mcpServers);
+			const missing = expectedServers.filter(s => !presentServers.includes(s));
+
+			if (missing.length > 0) {
+				this.logger.warn('MCP config verification failed: missing servers', {
+					configFilePath,
+					expectedServers,
+					presentServers,
+					missing,
+				});
+				return false;
+			}
+
+			this.logger.info('MCP config verification passed', {
+				configFilePath,
+				servers: presentServers,
+			});
+			return true;
+		} catch (error) {
+			this.logger.warn('MCP config verification error (non-fatal)', {
+				configFilePath,
 				error: error instanceof Error ? error.message : String(error),
 			});
+			return false;
 		}
 	}
 

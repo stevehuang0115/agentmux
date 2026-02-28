@@ -7,7 +7,7 @@
  * @module components/Settings/SkillsTab
  */
 
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Target,
   Pencil,
@@ -21,8 +21,12 @@ import {
   Plus,
   RefreshCw,
   X,
+  Save,
+  Check,
+  Monitor,
 } from 'lucide-react';
 import { useSkills, type UseSkillsOptions } from '../../hooks/useSkills';
+import { useSettings } from '../../hooks/useSettings';
 import type {
   Skill,
   SkillSummary,
@@ -30,6 +34,7 @@ import type {
   SkillType,
   SkillNotice,
 } from '../../types/skill.types';
+import type { CrewlySettings } from '../../types/settings.types';
 import type { CreateSkillInput } from '../../services/skills.service';
 import { getSkillCategoryLabel, getSkillTypeLabel, SKILL_CATEGORIES } from '../../types/skill.types';
 import { Button, IconButton } from '../UI/Button';
@@ -88,6 +93,58 @@ const SKILL_TYPE_COLORS: Record<SkillType, string> = {
  * @returns SkillsTab component
  */
 export const SkillsTab: React.FC = () => {
+  // Browser automation settings state
+  const { settings, updateSettings } = useSettings();
+  const [browserSettings, setBrowserSettings] = useState<CrewlySettings['skills'] | null>(null);
+  const [browserHasChanges, setBrowserHasChanges] = useState(false);
+  const [browserSaveStatus, setBrowserSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  useEffect(() => {
+    if (settings) {
+      setBrowserSettings(settings.skills);
+      setBrowserHasChanges(false);
+    }
+  }, [settings]);
+
+  const handleBrowserChange = <K extends keyof CrewlySettings['skills']>(
+    field: K,
+    value: CrewlySettings['skills'][K]
+  ) => {
+    if (!browserSettings) return;
+    setBrowserSettings({ ...browserSettings, [field]: value });
+    setBrowserHasChanges(true);
+    setBrowserSaveStatus('idle');
+  };
+
+  const handleBrowserProfileChange = (
+    field: keyof NonNullable<CrewlySettings['skills']['browserProfile']>,
+    value: boolean | number
+  ) => {
+    if (!browserSettings) return;
+    setBrowserSettings({
+      ...browserSettings,
+      browserProfile: {
+        ...browserSettings.browserProfile!,
+        [field]: value,
+      },
+    });
+    setBrowserHasChanges(true);
+    setBrowserSaveStatus('idle');
+  };
+
+  const handleBrowserSave = async () => {
+    if (!browserSettings) return;
+    setBrowserSaveStatus('saving');
+    try {
+      await updateSettings({ skills: browserSettings });
+      setBrowserSaveStatus('saved');
+      setBrowserHasChanges(false);
+      setTimeout(() => setBrowserSaveStatus('idle'), 2000);
+    } catch {
+      setBrowserSaveStatus('error');
+    }
+  };
+
   // Filter state
   const [categoryFilter, setCategoryFilter] = useState<SkillCategory | ''>('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -164,6 +221,125 @@ export const SkillsTab: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Browser Automation Settings */}
+      {browserSettings && (
+        <section className="bg-surface-dark border border-border-dark rounded-lg p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Monitor className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-semibold">Browser Automation</h2>
+          </div>
+
+          <div className="space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <label htmlFor="enableBrowserAutomation" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                  Enable Browser Automation
+                </label>
+                <p className="text-xs text-text-secondary-dark mt-0.5">
+                  Allow agents to use Playwright for browser tasks (navigate, click, screenshot, etc.)
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                id="enableBrowserAutomation"
+                checked={browserSettings.enableBrowserAutomation}
+                onChange={(e) => handleBrowserChange('enableBrowserAutomation', e.target.checked)}
+                className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+              />
+            </div>
+
+            {browserSettings.enableBrowserAutomation && browserSettings.browserProfile && (
+              <div className="pl-4 border-l-2 border-border-dark space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <label htmlFor="headless" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                      Headless Mode
+                    </label>
+                    <p className="text-xs text-text-secondary-dark mt-0.5">
+                      Run browser invisibly in the background (recommended)
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    id="headless"
+                    checked={browserSettings.browserProfile.headless}
+                    onChange={(e) => handleBrowserProfileChange('headless', e.target.checked)}
+                    className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <label htmlFor="stealth" className="text-sm font-medium text-text-primary-dark cursor-pointer">
+                      Stealth Mode
+                    </label>
+                    <p className="text-xs text-text-secondary-dark mt-0.5">
+                      Use anti-detection features to avoid bot blocking (uses community fork)
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    id="stealth"
+                    checked={browserSettings.browserProfile.stealth}
+                    onChange={(e) => handleBrowserProfileChange('stealth', e.target.checked)}
+                    className="w-5 h-5 rounded border-border-dark bg-background-dark text-primary focus:ring-primary focus:ring-offset-0 cursor-pointer"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <FormLabel htmlFor="humanDelayMin">Min Delay (ms)</FormLabel>
+                    <FormInput
+                      id="humanDelayMin"
+                      type="number"
+                      min={0}
+                      max={browserSettings.browserProfile.humanDelayMaxMs}
+                      value={browserSettings.browserProfile.humanDelayMinMs}
+                      onChange={(e) => handleBrowserProfileChange('humanDelayMinMs', parseInt(e.target.value, 10) || 0)}
+                    />
+                    <p className="text-xs text-text-secondary-dark mt-1">Minimum delay between actions</p>
+                  </div>
+                  <div>
+                    <FormLabel htmlFor="humanDelayMax">Max Delay (ms)</FormLabel>
+                    <FormInput
+                      id="humanDelayMax"
+                      type="number"
+                      min={browserSettings.browserProfile.humanDelayMinMs}
+                      max={10000}
+                      value={browserSettings.browserProfile.humanDelayMaxMs}
+                      onChange={(e) => handleBrowserProfileChange('humanDelayMaxMs', parseInt(e.target.value, 10) || 0)}
+                    />
+                    <p className="text-xs text-text-secondary-dark mt-1">Maximum delay between actions</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Save/status bar */}
+          <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-border-dark">
+            {browserSaveStatus === 'saved' && (
+              <span className="text-sm text-emerald-400 flex items-center gap-1">
+                <Check className="w-4 h-4" /> Saved
+              </span>
+            )}
+            {browserSaveStatus === 'error' && (
+              <span className="text-sm text-rose-400 flex items-center gap-1">
+                <AlertCircle className="w-4 h-4" /> Save failed
+              </span>
+            )}
+            <Button
+              onClick={handleBrowserSave}
+              disabled={!browserHasChanges || browserSaveStatus === 'saving'}
+              icon={Save}
+              size="sm"
+            >
+              {browserSaveStatus === 'saving' ? 'Saving...' : 'Save'}
+            </Button>
+          </div>
+        </section>
+      )}
+
       {/* Header */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
