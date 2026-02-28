@@ -423,6 +423,11 @@ export class SchedulerService extends EventEmitter {
    * @returns Array of check IDs
    */
   scheduleDefaultCheckins(sessionName: string): string[] {
+    if (!sessionName) {
+      this.logger.warn('Skipping default check-ins for empty sessionName');
+      return [];
+    }
+
     const checkIds: string[] = [];
 
     // Initial check-in after 5 minutes

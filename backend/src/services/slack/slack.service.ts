@@ -256,7 +256,7 @@ export class SlackService extends EventEmitter {
 
     // Handle direct messages
     this.app.message(async ({ message }) => {
-      // Allow messages with text or images (or both)
+      // Allow messages with text or files (or both)
       if (!message.text && (!message.files || message.files.length === 0)) return;
       if (!message.user) return;
 
@@ -266,8 +266,9 @@ export class SlackService extends EventEmitter {
         return;
       }
 
-      // Extract image files from the event payload
-      const imageFiles = (message.files || []).filter(f => f.mimetype?.startsWith('image/'));
+      // Pass ALL files through; downstream services handle image vs non-image distinction
+      const allFiles = (message.files || []) as import('../../types/slack.types.js').SlackFile[];
+      const imageFiles = allFiles.filter(f => f.mimetype?.startsWith('image/'));
 
       const incomingMessage: SlackIncomingMessage = {
         id: message.ts || '',
@@ -279,8 +280,9 @@ export class SlackService extends EventEmitter {
         ts: message.ts || '',
         teamId: message.team || '',
         eventTs: message.ts || '',
-        files: imageFiles.length > 0 ? imageFiles : undefined,
+        files: allFiles.length > 0 ? allFiles : undefined,
         hasImages: imageFiles.length > 0,
+        hasFiles: allFiles.length > 0,
       };
 
       this.status.messagesReceived++;

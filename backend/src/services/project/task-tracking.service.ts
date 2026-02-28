@@ -238,6 +238,75 @@ export class TaskTrackingService extends EventEmitter {
     return openTasks;
   }
 
+  /**
+   * Store monitoring IDs (schedules and subscriptions) for a task so they can be
+   * automatically cleaned up when the task completes.
+   *
+   * @param taskId - The task ID to associate monitoring with
+   * @param scheduleIds - Array of schedule check IDs to link
+   * @param subscriptionIds - Array of event subscription IDs to link
+   */
+  async addMonitoringIds(
+    taskId: string,
+    scheduleIds: string[],
+    subscriptionIds: string[]
+  ): Promise<void> {
+    const data = await this.loadTaskData();
+    const task = data.tasks.find(t => t.id === taskId);
+
+    if (!task) {
+      throw new Error(`Task with ID ${taskId} not found`);
+    }
+
+    task.scheduleIds = [...(task.scheduleIds || []), ...scheduleIds];
+    task.subscriptionIds = [...(task.subscriptionIds || []), ...subscriptionIds];
+    await this.saveTaskData(data);
+
+    this.logger.info('Added monitoring IDs to task', {
+      taskId,
+      scheduleIds,
+      subscriptionIds,
+    });
+  }
+
+  /**
+   * Find all tasks assigned to a specific agent session.
+   *
+   * @param sessionName - The agent session name
+   * @returns Array of tasks assigned to the session
+   */
+  async getTasksBySessionName(sessionName: string): Promise<InProgressTask[]> {
+    const data = await this.loadTaskData();
+    return data.tasks.filter(t => t.assignedSessionName === sessionName);
+  }
+
+  /**
+   * Collect all monitoring IDs (schedules and subscriptions) for tasks assigned
+   * to a specific agent session. Used for auto-cleanup when tasks complete.
+   *
+   * @param sessionName - The agent session name
+   * @returns Object with arrays of scheduleIds and subscriptionIds
+   */
+  async getMonitoringIdsForSession(sessionName: string): Promise<{
+    scheduleIds: string[];
+    subscriptionIds: string[];
+  }> {
+    const tasks = await this.getTasksBySessionName(sessionName);
+    const scheduleIds: string[] = [];
+    const subscriptionIds: string[] = [];
+
+    for (const task of tasks) {
+      if (task.scheduleIds) {
+        scheduleIds.push(...task.scheduleIds);
+      }
+      if (task.subscriptionIds) {
+        subscriptionIds.push(...task.subscriptionIds);
+      }
+    }
+
+    return { scheduleIds, subscriptionIds };
+  }
+
   private extractTaskNameFromFile(filename: string): string {
     // Remove extension and number prefix
     return filename

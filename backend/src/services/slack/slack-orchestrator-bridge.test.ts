@@ -296,7 +296,7 @@ describe('SlackOrchestratorBridge', () => {
   describe('image handling', () => {
     it('should enrich text with image file references', () => {
       const bridge = new SlackOrchestratorBridge();
-      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
 
       const message: SlackIncomingMessage = {
         id: '1', type: 'message', text: 'Check this', userId: 'U1',
@@ -308,21 +308,64 @@ describe('SlackOrchestratorBridge', () => {
         }],
       };
 
-      const enriched = enrichTextWithImages(message);
+      const enriched = enrichTextWithFiles(message);
       expect(enriched).toContain('Check this');
       expect(enriched).toContain('[Slack Image: /tmp/F001-shot.png (1920x1080), image/png]');
     });
 
     it('should return original text when no images', () => {
       const bridge = new SlackOrchestratorBridge();
-      const enrichTextWithImages = (bridge as any).enrichTextWithImages.bind(bridge);
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
 
       const message: SlackIncomingMessage = {
         id: '1', type: 'message', text: 'No images here', userId: 'U1',
         channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
       };
 
-      expect(enrichTextWithImages(message)).toBe('No images here');
+      expect(enrichTextWithFiles(message)).toBe('No images here');
+    });
+
+    it('should enrich text with non-image file attachments', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Check this PDF', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        attachments: [{
+          id: 'F002', name: 'report.pdf', mimetype: 'application/pdf',
+          localPath: '/tmp/F002-report.pdf', size: 102400,
+          permalink: 'https://slack.com/files/F002',
+        }],
+      };
+
+      const enriched = enrichTextWithFiles(message);
+      expect(enriched).toContain('Check this PDF');
+      expect(enriched).toContain('[Slack File: /tmp/F002-report.pdf (report.pdf, application/pdf, 100KB)]');
+    });
+
+    it('should enrich text with both images and file attachments', () => {
+      const bridge = new SlackOrchestratorBridge();
+      const enrichTextWithFiles = (bridge as any).enrichTextWithFiles.bind(bridge);
+
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'Mixed files', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        images: [{
+          id: 'F001', name: 'shot.png', mimetype: 'image/png',
+          localPath: '/tmp/F001-shot.png', width: 800, height: 600,
+          permalink: 'https://slack.com/files/F001',
+        }],
+        attachments: [{
+          id: 'F002', name: 'doc.csv', mimetype: 'text/csv',
+          localPath: '/tmp/F002-doc.csv', size: 2048,
+          permalink: 'https://slack.com/files/F002',
+        }],
+      };
+
+      const enriched = enrichTextWithFiles(message);
+      expect(enriched).toContain('[Slack Image:');
+      expect(enriched).toContain('[Slack File:');
     });
 
     it('should download images via SlackImageService', async () => {
@@ -349,7 +392,7 @@ describe('SlackOrchestratorBridge', () => {
         }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       expect(message.images).toBeDefined();
       expect(message.images).toHaveLength(1);
@@ -406,7 +449,7 @@ describe('SlackOrchestratorBridge', () => {
         files,
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       expect(message.images).toBeDefined();
       expect(message.images).toHaveLength(5);
@@ -443,7 +486,7 @@ describe('SlackOrchestratorBridge', () => {
         ],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // First file failed, but the other 2 in the batch should succeed
       expect(message.images).toHaveLength(2);
@@ -468,7 +511,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should skip all downloads — no images downloaded
       expect(message.images).toBeUndefined();
@@ -496,7 +539,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should still attempt download with original URLs
       const mockImgService = getSlackImageService();
@@ -517,7 +560,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
       expect(message.images).toBeUndefined();
     });
 
@@ -542,7 +585,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 25000000, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should have no downloaded images
       expect(message.images).toBeUndefined();
@@ -578,10 +621,82 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should NOT send a warning for generic errors
       expect(sendMessageSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('downloadMessageFiles (non-image files)', () => {
+    it('should skip download when no bot token is available', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('');
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: 'doc', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const nonImageFiles = [{ id: 'F001', name: 'doc.pdf', mimetype: 'application/pdf', filetype: 'pdf',
+        size: 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      // No attachments set since we couldn't download
+      expect(message.attachments).toBeUndefined();
+    });
+
+    it('should reject files exceeding max file size', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockResolvedValue({
+        url_private: 'x', url_private_download: 'x',
+      });
+      const sendMessageSpy = jest.spyOn(slackService, 'sendMessage').mockResolvedValue('ok');
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      // 25MB exceeds the 20MB limit
+      const nonImageFiles = [{ id: 'F001', name: 'huge.zip', mimetype: 'application/zip', filetype: 'zip',
+        size: 25 * 1024 * 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      expect(message.attachments).toBeUndefined();
+      // Should send a rejection warning
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining('could not be downloaded'),
+        })
+      );
+    });
+
+    it('should abort all downloads when files:read scope is missing', async () => {
+      const bridge = new SlackOrchestratorBridge();
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'getBotToken').mockReturnValue('xoxb-test');
+      jest.spyOn(slackService, 'getFileInfo').mockRejectedValue(new Error('missing_scope'));
+
+      const downloadMessageFiles = (bridge as any).downloadMessageFiles.bind(bridge);
+      const message: SlackIncomingMessage = {
+        id: '1', type: 'message', text: '', userId: 'U1',
+        channelId: 'C1', ts: '1', teamId: 'T1', eventTs: '1',
+        hasFiles: true,
+      };
+      const nonImageFiles = [{ id: 'F001', name: 'a.pdf', mimetype: 'application/pdf', filetype: 'pdf',
+        size: 1024, url_private: 'x', url_private_download: 'x', permalink: 'x' }];
+
+      await downloadMessageFiles(message, nonImageFiles);
+
+      expect(message.attachments).toBeUndefined();
     });
   });
 

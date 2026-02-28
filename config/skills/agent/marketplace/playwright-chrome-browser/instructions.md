@@ -4,13 +4,13 @@ This skill enables browser automation capabilities through the Playwright MCP se
 
 ## Prerequisites
 
-Before using this skill, you must install the Playwright MCP server in Claude Code:
+Crewly auto-configures the Playwright MCP server when browser automation is enabled in Settings (`enableBrowserAutomation: true`). The `.mcp.json` file is generated automatically during agent startup.
+
+For manual installation:
 
 ```bash
-claude mcp add @anthropic/mcp-server-playwright
+npx @playwright/mcp@latest
 ```
-
-Verify the installation by checking your Claude Code MCP configuration.
 
 ## Capabilities
 
@@ -80,9 +80,10 @@ The browser automation tools are available through MCP (Model Context Protocol) 
 
 ### MCP Server Not Found
 If you get an error about the MCP server not being available:
-1. Verify installation: Check Claude Code MCP settings
-2. Restart Claude Code after adding the MCP server
-3. Re-run: `claude mcp add @anthropic/mcp-server-playwright`
+1. Verify `enableBrowserAutomation` is `true` in Crewly Settings
+2. Check that `.mcp.json` exists in the project root with a `playwright` entry
+3. Restart the agent session to regenerate MCP config
+4. Manual fallback: `npx @playwright/mcp@latest`
 
 ### Element Not Found
 - Ensure the page has fully loaded before interacting

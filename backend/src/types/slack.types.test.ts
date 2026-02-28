@@ -14,6 +14,7 @@ import {
   ParsedSlackCommand,
   SlackFile,
   SlackImageInfo,
+  SlackFileInfo,
   NOTIFICATION_URGENCIES,
   COMMAND_PATTERNS,
   isUserAllowed,
@@ -264,6 +265,49 @@ describe('Slack Types', () => {
 
       expect(imageInfo.localPath).toContain('F0123');
       expect(imageInfo.width).toBe(800);
+    });
+
+    it('should allow creating a valid SlackFileInfo', () => {
+      const fileInfo: SlackFileInfo = {
+        id: 'F0456',
+        name: 'report.pdf',
+        mimetype: 'application/pdf',
+        localPath: '/tmp/slack-files/F0456-report.pdf',
+        size: 102400,
+        permalink: 'https://slack.com/files/F0456',
+      };
+
+      expect(fileInfo.localPath).toContain('F0456');
+      expect(fileInfo.mimetype).toBe('application/pdf');
+      expect(fileInfo.size).toBe(102400);
+    });
+
+    it('should allow creating a SlackIncomingMessage with file attachments', () => {
+      const message: SlackIncomingMessage = {
+        id: 'msg-789',
+        type: 'message',
+        text: 'Here is a PDF',
+        userId: 'U12345',
+        channelId: 'C12345',
+        ts: '1234567890.123456',
+        teamId: 'T12345',
+        eventTs: '1234567890.123456',
+        hasFiles: true,
+        hasImages: false,
+        attachments: [{
+          id: 'F0456',
+          name: 'report.pdf',
+          mimetype: 'application/pdf',
+          localPath: '/tmp/slack-files/F0456-report.pdf',
+          size: 102400,
+          permalink: 'https://slack.com/files/F0456',
+        }],
+      };
+
+      expect(message.hasFiles).toBe(true);
+      expect(message.hasImages).toBe(false);
+      expect(message.attachments).toHaveLength(1);
+      expect(message.attachments![0].mimetype).toBe('application/pdf');
     });
 
     it('should allow creating a valid SlackOutgoingMessage', () => {

@@ -12,6 +12,7 @@ MESSAGE=$(echo "$INPUT" | jq -r '.message // empty')
 require_param "sessionName" "$SESSION_NAME"
 require_param "message" "$MESSAGE"
 
-BODY=$(jq -n --arg message "$MESSAGE" '{message: $message}')
+# waitTimeout matches EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT (120000ms)
+BODY=$(jq -n --arg message "$MESSAGE" '{message: $message, waitForReady: true, waitTimeout: 120000}')
 
 api_call POST "/terminal/${SESSION_NAME}/deliver" "$BODY"

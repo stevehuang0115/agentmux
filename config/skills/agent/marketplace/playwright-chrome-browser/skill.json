@@ -14,14 +14,14 @@
   },
   "runtime": {
     "runtime": "claude-code",
-    "requiredMcpServers": ["@anthropic/mcp-server-playwright"]
+    "requiredMcpServers": ["@playwright/mcp"]
   },
   "notices": [
     {
       "type": "requirement",
       "title": "Playwright MCP Required",
-      "message": "This skill requires the Playwright MCP server to be installed in Claude Code. Run: claude mcp add @anthropic/mcp-server-playwright",
-      "link": "https://www.npmjs.com/package/@anthropic/mcp-server-playwright",
+      "message": "This skill requires the Playwright MCP server. Crewly auto-configures this when browser automation is enabled in Settings. Manual install: npx @playwright/mcp@latest",
+      "link": "https://www.npmjs.com/package/@playwright/mcp",
       "linkText": "View Package"
     },
     {

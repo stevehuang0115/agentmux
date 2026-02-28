@@ -10,6 +10,7 @@ export interface TeamMember {
   runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli'; // AI runtime to use
   skillOverrides?: string[]; // Additional skill IDs beyond what the role provides
   excludedRoleSkills?: string[]; // Role skills to exclude for this specific member
+  enableBrowserAutomation?: boolean; // Per-agent browser override (undefined = use global setting)
   currentTickets?: string[];
   readyAt?: string; // ISO timestamp when agent reported ready
   capabilities?: string[]; // Agent-reported capabilities

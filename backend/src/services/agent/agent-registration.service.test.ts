@@ -31,6 +31,7 @@ jest.mock('fs/promises', () => ({
 	stat: jest.fn().mockResolvedValue({ mtimeMs: 0 }),
 	mkdir: jest.fn().mockResolvedValue(undefined),
 	writeFile: jest.fn().mockResolvedValue(undefined),
+	access: jest.fn(),
 }));
 
 jest.mock('os', () => ({
@@ -64,6 +65,7 @@ describe('AgentRegistrationService', () => {
 	let service: AgentRegistrationService;
 	let mockStorageService: jest.Mocked<StorageService>;
 	let mockReadFile: jest.Mock;
+	let mockAccess: jest.Mock;
 	let mockSessionHelper: any;
 	let mockRuntimeService: any;
 
@@ -141,6 +143,9 @@ describe('AgentRegistrationService', () => {
 
 		mockReadFile = require('fs/promises').readFile;
 		mockReadFile.mockResolvedValue('{"roles": [{"key": "orchestrator", "promptFile": "orchestrator-prompt.md"}]}');
+
+		mockAccess = require('fs/promises').access;
+		mockAccess.mockRejectedValue(new Error('ENOENT: no such file'));
 
 		// Mock SessionStatePersistence
 		(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
@@ -1329,14 +1334,22 @@ describe('AgentRegistrationService', () => {
 
 	describe('resolveRuntimeFlags (private method)', () => {
 		it('should return flags from role skills', async () => {
-			// Mock role.json with assignedSkills
+			// findSkillJsonPath uses access() for existence checks
+			mockAccess.mockImplementation((filePath: string) => {
+				// chrome-browser found in marketplace
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
+			// readFile handles content reads (role.json + skill.json)
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['chrome-browser'],
 					}));
 				}
-				if (filePath.includes('skill.json')) {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
@@ -1351,23 +1364,30 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should apply skill overrides and exclusions', async () => {
+			// All three skills found in agent/core/
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['skill-alpha', 'skill-beta'],
 					}));
 				}
-				if (filePath.endsWith('skill-alpha/skill.json')) {
+				if (filePath.includes('agent/core/skill-alpha/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--alpha'] },
 					}));
 				}
-				if (filePath.endsWith('skill-beta/skill.json')) {
+				if (filePath.includes('agent/core/skill-beta/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--beta'] },
 					}));
 				}
-				if (filePath.endsWith('skill-gamma/skill.json')) {
+				if (filePath.includes('agent/core/skill-gamma/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--gamma'] },
 					}));
@@ -1389,13 +1409,20 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should return empty for non-matching runtime', async () => {
+			// chrome-browser found in marketplace
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['chrome-browser'],
 					}));
 				}
-				if (filePath.includes('skill.json')) {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
@@ -1420,13 +1447,13 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should handle missing skill config gracefully', async () => {
+			// access rejects for all skill paths (default mock)
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['nonexistent-skill'],
 					}));
 				}
-				// Skill file doesn't exist
 				return Promise.reject(new Error('ENOENT: no such file'));
 			});
 
@@ -1436,15 +1463,52 @@ describe('AgentRegistrationService', () => {
 			expect(flags).toEqual([]);
 		});
 
+		it('should find skills in marketplace subdirectory via skillOverrides', async () => {
+			// chrome-browser found in marketplace, not in core
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('role.json')) {
+					return Promise.resolve(JSON.stringify({
+						assignedSkills: [],
+					}));
+				}
+				if (filePath.includes('agent/marketplace/chrome-browser/skill.json')) {
+					return Promise.resolve(JSON.stringify({
+						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
+					}));
+				}
+				return Promise.resolve('{}');
+			});
+
+			const resolveRuntimeFlags = (service as any).resolveRuntimeFlags.bind(service);
+			const flags = await resolveRuntimeFlags(
+				'generalist', 'claude-code',
+				['chrome-browser'],
+			);
+
+			expect(flags).toEqual(['--chrome']);
+		});
+
 		it('should deduplicate flags from multiple skills', async () => {
+			// Both skills found in agent/core/
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('ENOENT: no such file'));
+			});
 			mockReadFile.mockImplementation((filePath: string) => {
 				if (filePath.includes('role.json')) {
 					return Promise.resolve(JSON.stringify({
 						assignedSkills: ['skill-a', 'skill-b'],
 					}));
 				}
-				// Both skills produce the same flag
-				if (filePath.includes('skill.json')) {
+				if (filePath.includes('agent/core/') && filePath.includes('skill.json')) {
 					return Promise.resolve(JSON.stringify({
 						runtime: { runtime: 'claude-code', flags: ['--chrome'] },
 					}));
@@ -1535,6 +1599,132 @@ describe('AgentRegistrationService', () => {
 			].join('\n');
 
 			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CODEX_CLI)).toBe(false);
+		});
+	});
+
+	describe('isClaudeAtPrompt — prompt detection and busy indicators', () => {
+		let isClaudeAtPrompt: (output: string, runtimeType?: any) => boolean;
+
+		beforeEach(() => {
+			isClaudeAtPrompt = (service as any).isClaudeAtPrompt.bind(service);
+		});
+
+		it('should detect ❯ prompt with status bar below as idle', () => {
+			const output = [
+				'Previous output text',
+				'────────────────────────────────────────',
+				'❯',
+				'────────────────────────────────────────',
+				'⏵⏵ bypass permissions on (shift+tab to cycle) · ctrl+t to hide tasks',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(true);
+		});
+
+		it('should detect ❯❯ bypass permissions prompt as idle', () => {
+			const output = [
+				'Previous output',
+				'❯❯ bypass permissions on (shift+tab to cycle)',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(true);
+		});
+
+		it('should detect single ❯ on its own line', () => {
+			const output = [
+				'Some previous output',
+				'────────────────────────────────────────',
+				'❯',
+				'────────────────────────────────────────',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(true);
+		});
+
+		it('should return false when busy with esc to interrupt and no ❯ prompt', () => {
+			// Agent is processing — no ❯ prompt visible, status bar shows "esc to interrupt"
+			const output = [
+				'Tool output line 1',
+				'Tool output line 2',
+				'Tool output line 3',
+				'────────────────────────────────────────',
+				'────────────────────────────────────────',
+			].join('\n');
+
+			// No prompt, no processing indicators → returns false
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(false);
+		});
+
+		it('should return false when processing indicators (⏺) are present', () => {
+			const output = [
+				'⏺ Writing Edit...',
+				'  Updated 3 lines',
+				'More output',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(false);
+		});
+
+		it('should return false when spinner chars are present', () => {
+			const output = [
+				'Some output',
+				'⠋ Thinking...',
+			].join('\n');
+
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(false);
+		});
+
+		it('should return false when "esc to interrupt" is in terminal output', () => {
+			const output = [
+				'Some tool output...',
+				'more output here',
+				'⏵⏵ bypass permissions on · esc to interrupt · ctrl+t',
+			].join('\n');
+
+			// No ❯ prompt visible + esc to interrupt = busy
+			expect(isClaudeAtPrompt(output, RUNTIME_TYPES.CLAUDE_CODE)).toBe(false);
+		});
+
+		it('should return false for empty output', () => {
+			expect(isClaudeAtPrompt('', RUNTIME_TYPES.CLAUDE_CODE)).toBe(false);
+		});
+	});
+
+	describe('sendMessageWithRetry — busy agent protection', () => {
+		it('should not force-deliver when agent is busy (esc to interrupt)', async () => {
+			// Simulate busy terminal with "esc to interrupt" in status bar but no prompt
+			const busyOutput = [
+				'Tool output line 1',
+				'Tool output line 2',
+				'Tool output line 3',
+				'────────────────────────────────────────',
+				'⏵⏵ bypass permissions on · esc to interrupt · ctrl+t',
+			].join('\n');
+
+			// All 3 attempts show agent as busy (no prompt, has "esc to interrupt")
+			mockSessionHelper.capturePane.mockReturnValue(busyOutput);
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(false);
+			// Should not have called sendMessage (no force delivery when busy)
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('should not force-deliver when processing indicators (⏺) are present', async () => {
+			const busyOutput = [
+				'⏺ Running Bash command...',
+				'  $ npm test',
+				'  PASS test1.ts',
+				'  PASS test2.ts',
+			].join('\n');
+
+			mockSessionHelper.capturePane.mockReturnValue(busyOutput);
+
+			const result = await service.sendMessageToAgent('test-session', 'Hello');
+
+			expect(result.success).toBe(false);
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
 		});
 	});
 

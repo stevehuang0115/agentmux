@@ -30,6 +30,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Review request endpoint (for agents to request code reviews)
   router.post('/task-management/request-review', (req, res) => taskMgmtHandlers.requestReview.call(apiController, req, res));
 
+  // Monitoring linkage endpoint (for delegate-task auto-monitoring)
+  router.post('/task-management/add-monitoring', (req, res) => taskMgmtHandlers.addMonitoring.call(apiController, req, res));
+
   // In-Progress Tasks Routes
   router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }

@@ -165,8 +165,11 @@ describe('ClaudeRuntimeService', () => {
 		it('should create .mcp.json with playwright when it does not exist', async () => {
 			mockSafeReadJson.mockResolvedValue({});
 
-			await service.ensureClaudeMcpConfig('/test/project');
+			const result = await service.ensureClaudeMcpConfig('/test/project');
 
+			expect(result.success).toBe(true);
+			expect(result.addedServers).toBe(1);
+			expect(result.serverNames).toContain('playwright');
 			expect(mockMkdir).toHaveBeenCalledWith(
 				'/test/project',
 				{ recursive: true }
@@ -250,8 +253,11 @@ describe('ClaudeRuntimeService', () => {
 				getSettings: jest.fn().mockResolvedValue(disabledSettings),
 			} as any);
 
-			await service.ensureClaudeMcpConfig('/test/project');
+			const result = await service.ensureClaudeMcpConfig('/test/project');
 
+			expect(result.success).toBe(true);
+			expect(result.totalServers).toBe(0);
+			expect(result.serverNames).toEqual([]);
 			expect(mockAtomicWriteJson).not.toHaveBeenCalled();
 		});
 
@@ -272,28 +278,91 @@ describe('ClaudeRuntimeService', () => {
 			);
 		});
 
-		it('should not throw when filesystem operations fail', async () => {
+		it('should return error result when filesystem operations fail', async () => {
 			mockAtomicWriteJson.mockRejectedValue(new Error('Permission denied'));
 
-			await expect(service.ensureClaudeMcpConfig('/test/project')).resolves.not.toThrow();
+			const result = await service.ensureClaudeMcpConfig('/test/project');
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe('Permission denied');
 		});
 	});
 
 	describe('postInitialize', () => {
 		it('should call ensureClaudeMcpConfig with project root when no target path given', async () => {
-			const spy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue(undefined);
+			const spy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 1, totalServers: 1, serverNames: ['playwright'],
+			});
 
 			await service.postInitialize('test-session');
 
-			expect(spy).toHaveBeenCalledWith('/test/project');
+			expect(spy).toHaveBeenCalledWith('/test/project', undefined);
 		});
 
 		it('should call ensureClaudeMcpConfig with target project path when provided', async () => {
-			const spy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue(undefined);
+			const spy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 1, totalServers: 1, serverNames: ['playwright'],
+			});
 
 			await service.postInitialize('test-session', '/target/project');
 
-			expect(spy).toHaveBeenCalledWith('/target/project');
+			expect(spy).toHaveBeenCalledWith('/target/project', undefined);
+		});
+
+		it('should run health check verification after successful config', async () => {
+			const configSpy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 1, totalServers: 1, serverNames: ['playwright'],
+			});
+			const verifySpy = jest.spyOn(service as any, 'verifyMcpConfig').mockResolvedValue(true);
+
+			await service.postInitialize('test-session');
+
+			expect(configSpy).toHaveBeenCalledWith('/test/project', undefined);
+			expect(verifySpy).toHaveBeenCalledWith(
+				path.join('/test/project', '.mcp.json'),
+				['playwright']
+			);
+		});
+
+		it('should pass browser automation override to ensureClaudeMcpConfig', async () => {
+			const spy = jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 0, totalServers: 0, serverNames: [],
+			});
+
+			await service.postInitialize('test-session', '/test/project', undefined, false);
+
+			expect(spy).toHaveBeenCalledWith('/test/project', false);
+		});
+
+		it('should log warning when health check fails', async () => {
+			jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 1, totalServers: 1, serverNames: ['playwright'],
+			});
+			jest.spyOn(service as any, 'verifyMcpConfig').mockResolvedValue(false);
+
+			// Should not throw even when verification fails
+			await expect(service.postInitialize('test-session')).resolves.not.toThrow();
+		});
+
+		it('should skip health check when no servers configured', async () => {
+			jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: true, addedServers: 0, totalServers: 0, serverNames: [],
+			});
+			const verifySpy = jest.spyOn(service as any, 'verifyMcpConfig');
+
+			await service.postInitialize('test-session');
+
+			expect(verifySpy).not.toHaveBeenCalled();
+		});
+
+		it('should log warning when config setup itself fails', async () => {
+			jest.spyOn(service, 'ensureClaudeMcpConfig').mockResolvedValue({
+				success: false, addedServers: 0, totalServers: 0, serverNames: [], error: 'Permission denied',
+			});
+			const verifySpy = jest.spyOn(service as any, 'verifyMcpConfig');
+
+			await expect(service.postInitialize('test-session')).resolves.not.toThrow();
+			expect(verifySpy).not.toHaveBeenCalled();
 		});
 	});
 

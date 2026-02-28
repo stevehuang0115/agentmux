@@ -514,7 +514,7 @@ export class AgentHeartbeatService {
 			}
 
 			if (staleAgents.length > 0) {
-				this.logger.info('Detected stale agents', {
+				this.logger.debug('Detected stale agents', {
 					staleAgents,
 					thresholdMinutes
 				});

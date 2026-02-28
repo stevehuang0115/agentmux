@@ -246,8 +246,8 @@ export const TERMINAL_PATTERNS = {
 	 * Claude Code idle prompt detection.
 	 * Matches:
 	 * - ❯ or ⏵ or $ alone on a line (standard Claude Code prompt)
-	 * - ❯❯ followed by space or end-of-line (bypass permissions prompt,
-	 *   e.g. "❯❯ bypass permissions on (shift+tab to cycle)")
+	 * - ❯❯ or ⏵⏵ followed by space or end-of-line (bypass permissions prompt,
+	 *   e.g. "⏵⏵ bypass permissions on (shift+tab to cycle)")
 	 */
 	CLAUDE_CODE_PROMPT: /(?:^|\n)\s*(?:[❯⏵$]\s*(?:\n|$)|❯❯(?:\s|$))/,
 
@@ -287,8 +287,16 @@ export const TERMINAL_PATTERNS = {
 
 	/**
 	 * Pattern for detecting Claude Code processing with status text.
+	 * Includes spinner characters, working indicator (⏺), and common status verbs.
 	 */
-	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
+	PROCESSING_WITH_TEXT: /thinking|processing|analyzing|running|calling|frosting|⏺|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/i,
+
+	/**
+	 * Pattern for detecting Claude Code's "esc to interrupt" status bar text.
+	 * This text only appears when the agent is actively processing, making it
+	 * a reliable busy indicator. It's absent when the agent is idle at prompt.
+	 */
+	BUSY_STATUS_BAR: /esc\s+to\s+interrupt/i,
 } as const;
 
 /**
@@ -352,8 +360,8 @@ export const MESSAGE_QUEUE_CONSTANTS = {
  * Used by EventBusService for subscription management and notification delivery.
  */
 export const EVENT_BUS_CONSTANTS = {
-	/** Default subscription time-to-live in minutes */
-	DEFAULT_SUBSCRIPTION_TTL_MINUTES: 30,
+	/** Default subscription time-to-live in minutes (2 hours) */
+	DEFAULT_SUBSCRIPTION_TTL_MINUTES: 120,
 	/** Maximum allowed subscription TTL in minutes (24 hours) */
 	MAX_SUBSCRIPTION_TTL_MINUTES: 1440,
 	/** Maximum subscriptions per subscriber session */
@@ -696,6 +704,24 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
 	/** Default backoff delay (ms) when no Retry-After header is present */
 	UPLOAD_DEFAULT_BACKOFF_MS: SLACK_API_LIMITS.UPLOAD_DEFAULT_BACKOFF_MS,
+} as const;
+
+/**
+ * Constants for downloading non-image file attachments from Slack messages.
+ * Used by SlackOrchestratorBridge to download generic files (PDFs, docs, etc.)
+ * sent by users so agents can access them via file-reading tools.
+ */
+export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
+	/** Temp directory for downloaded files (relative to ~/.crewly/) */
+	TEMP_DIR: 'tmp/slack-files',
+	/** Maximum allowed file size for downloads (20 MB — Slack limit) */
+	MAX_FILE_SIZE: SLACK_API_LIMITS.MAX_FILE_SIZE,
+	/** Maximum concurrent file downloads per message */
+	MAX_CONCURRENT_DOWNLOADS: 3,
+	/** Maximum redirect hops to follow during file download */
+	MAX_DOWNLOAD_REDIRECTS: 5,
+	/** Timeout for individual file download requests (ms) */
+	DOWNLOAD_TIMEOUT_MS: 60_000,
 } as const;
 
 /**
