@@ -11,6 +11,7 @@ import { EventEmitter } from 'events';
 import { promises as fs, createWriteStream } from 'fs';
 import path from 'path';
 import os from 'os';
+import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { getSlackService, SlackService } from './slack.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
@@ -193,9 +194,9 @@ export class SlackOrchestratorBridge extends EventEmitter {
         const imageFiles = message.files.filter(f => f.mimetype?.startsWith('image/'));
         const nonImageFiles = message.files.filter(f => !f.mimetype?.startsWith('image/'));
 
-        // Download images via existing path
+        // Download images via existing path (pass only imageFiles to avoid redundant API calls)
         if (imageFiles.length > 0) {
-          await this.downloadMessageImages(message);
+          await this.downloadMessageImages(message, imageFiles);
         }
 
         // Download non-image files
@@ -527,25 +528,26 @@ Just type naturally to chat with the orchestrator!`;
   }
 
   /**
-   * Download all image files from a Slack message using SlackImageService.
+   * Download image files from a Slack message using SlackImageService.
    * Populates `message.images` with successfully downloaded image info.
    * Downloads are batched with a concurrency limit of MAX_CONCURRENT_DOWNLOADS.
    *
-   * @param message - Incoming message with files to download
+   * @param message - Incoming message to attach downloaded images to
+   * @param imageFiles - Pre-filtered list of image files to download
    */
-  private async downloadMessageImages(message: SlackIncomingMessage): Promise<void> {
+  private async downloadMessageImages(message: SlackIncomingMessage, imageFiles: SlackFile[]): Promise<void> {
     const botToken = this.slackService.getBotToken();
     if (!botToken) {
       this.logger.warn('Cannot download images: no bot token available');
       return;
     }
 
-    if (!message.files || message.files.length === 0) {
+    if (imageFiles.length === 0) {
       return;
     }
 
     const slackImageService = getSlackImageService();
-    const files = message.files;
+    const files = imageFiles;
     const downloadedImages: SlackImageInfo[] = [];
     const maxConcurrent = SLACK_IMAGE_CONSTANTS.MAX_CONCURRENT_DOWNLOADS;
     const rejectionMessages: string[] = [];
@@ -640,36 +642,51 @@ Just type naturally to chat with the orchestrator!`;
           const localPath = path.join(tempDir, `${file.id}-${safeName}`);
           const downloadUrl = file.url_private_download || file.url_private;
 
-          // Authenticated fetch with manual redirect handling (same as SlackImageService)
+          // Authenticated fetch with manual redirect handling, timeout, and resource cleanup
           const maxRedirects = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_DOWNLOAD_REDIRECTS;
+          const timeoutMs = SLACK_FILE_DOWNLOAD_CONSTANTS.DOWNLOAD_TIMEOUT_MS;
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
           let currentUrl = downloadUrl;
           let response: Response | null = null;
 
-          for (let r = 0; r <= maxRedirects; r++) {
-            response = await fetch(currentUrl, {
-              headers: { 'Authorization': `Bearer ${botToken}` },
-              redirect: 'manual',
-            });
-            if (response.status >= 300 && response.status < 400) {
-              const location = response.headers.get('location');
-              if (!location) throw new Error(`Redirect without Location header`);
-              currentUrl = location;
-              continue;
+          try {
+            let exhaustedRedirects = true;
+            for (let r = 0; r <= maxRedirects; r++) {
+              response = await fetch(currentUrl, {
+                headers: { 'Authorization': `Bearer ${botToken}` },
+                redirect: 'manual',
+                signal: controller.signal,
+              });
+              if (response.status >= 300 && response.status < 400) {
+                const location = response.headers.get('location');
+                if (!location) throw new Error(`Redirect without Location header`);
+                // Drain response body to free the socket before following redirect
+                await response.body?.cancel();
+                currentUrl = location;
+                continue;
+              }
+              exhaustedRedirects = false;
+              break;
             }
-            break;
-          }
 
-          if (!response || !response.ok) {
-            throw new Error(`Download failed with status ${response?.status || 'unknown'}`);
-          }
-          if (!response.body) {
-            throw new Error('Empty response body from Slack');
-          }
+            if (exhaustedRedirects) {
+              throw new Error(`Too many redirects (${maxRedirects}) while downloading file from Slack`);
+            }
 
-          const fileStream = createWriteStream(localPath);
-          const { Readable } = await import('stream');
-          const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
-          await pipeline(nodeStream, fileStream);
+            if (!response || !response.ok) {
+              throw new Error(`Download failed with status ${response?.status || 'unknown'}`);
+            }
+            if (!response.body) {
+              throw new Error('Empty response body from Slack');
+            }
+
+            const fileStream = createWriteStream(localPath);
+            const nodeStream = Readable.fromWeb(response.body as import('stream/web').ReadableStream);
+            await pipeline(nodeStream, fileStream);
+          } finally {
+            clearTimeout(timeoutId);
+          }
 
           return {
             id: file.id,

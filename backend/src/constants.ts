@@ -720,6 +720,8 @@ export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	MAX_CONCURRENT_DOWNLOADS: 3,
 	/** Maximum redirect hops to follow during file download */
 	MAX_DOWNLOAD_REDIRECTS: 5,
+	/** Timeout for individual file download requests (ms) */
+	DOWNLOAD_TIMEOUT_MS: 60_000,
 } as const;
 
 /**

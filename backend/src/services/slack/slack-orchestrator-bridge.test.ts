@@ -392,7 +392,7 @@ describe('SlackOrchestratorBridge', () => {
         }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       expect(message.images).toBeDefined();
       expect(message.images).toHaveLength(1);
@@ -449,7 +449,7 @@ describe('SlackOrchestratorBridge', () => {
         files,
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       expect(message.images).toBeDefined();
       expect(message.images).toHaveLength(5);
@@ -486,7 +486,7 @@ describe('SlackOrchestratorBridge', () => {
         ],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // First file failed, but the other 2 in the batch should succeed
       expect(message.images).toHaveLength(2);
@@ -511,7 +511,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should skip all downloads — no images downloaded
       expect(message.images).toBeUndefined();
@@ -539,7 +539,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should still attempt download with original URLs
       const mockImgService = getSlackImageService();
@@ -560,7 +560,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
       expect(message.images).toBeUndefined();
     });
 
@@ -585,7 +585,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 25000000, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should have no downloaded images
       expect(message.images).toBeUndefined();
@@ -621,7 +621,7 @@ describe('SlackOrchestratorBridge', () => {
           size: 1, url_private: 'x', url_private_download: 'x', permalink: 'x' }],
       };
 
-      await downloadMessageImages(message);
+      await downloadMessageImages(message, message.files!);
 
       // Should NOT send a warning for generic errors
       expect(sendMessageSpy).not.toHaveBeenCalled();
