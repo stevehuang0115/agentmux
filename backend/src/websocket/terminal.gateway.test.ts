@@ -888,5 +888,38 @@ describe('TerminalGateway', () => {
 			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
 			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C456', '12345.001');
 		});
+
+		it('should skip NOTIFY blocks inside Claude Code tool output (⏺ indicator)', async () => {
+			// Simulate Claude Code reading a file that contains [NOTIFY] example blocks.
+			// Tool output is preceded by ⏺ (the Claude Code working indicator).
+			const toolOutput = `⏺ Read(config/roles/orchestrator/prompt.md)\n\n  Example:\n  [NOTIFY]\nconversationId: conv-example\n---\nExample response\n[/NOTIFY]\n\n  Another example:\n  [NOTIFY]\nconversationId: conv-abc123\n---\nHello world\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](toolOutput);
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			// Neither NOTIFY block should be routed — they're from file content
+			expect(mockChatGateway.processNotifyMessage).not.toHaveBeenCalled();
+		});
+
+		it('should process NOTIFY after tool output ends (❯ prompt)', async () => {
+			// Tool output followed by prompt, then a real NOTIFY
+			const output = `⏺ Bash(get-status)\nAgent is active\n❯ \n[NOTIFY]\nconversationId: conv-real\n---\nReal response\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			// The NOTIFY after ❯ prompt IS real and should be processed
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledTimes(1);
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'crewly-orc',
+				'Real response',
+				'conv-real',
+				undefined
+			);
+		});
 	});
 });
