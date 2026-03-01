@@ -179,10 +179,11 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 		const output = backend.captureOutput(sessionName, maxLines);
 
 		// Limit output size to prevent memory issues
-		const trimmedOutput =
-			output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE
-				? '...' + output.substring(output.length - TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE + 3)
-				: output;
+		const wasTruncated = output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE;
+		const trimmedOutput = wasTruncated
+			? `[TRUNCATED: output exceeded ${Math.round(output.length / 1024)}KB, showing last ${Math.round(TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE / 1024)}KB]\n...` +
+				output.substring(output.length - TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE + 3)
+			: output;
 
 		res.json({
 			success: true,
@@ -190,7 +191,7 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 				output: trimmedOutput,
 				sessionName,
 				lines: maxLines,
-				truncated: output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE,
+				truncated: wasTruncated,
 			},
 		} as ApiResponse);
 	} catch (error) {

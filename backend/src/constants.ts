@@ -115,7 +115,7 @@ export const SESSION_COMMAND_DELAYS = {
 export const TERMINAL_CONTROLLER_CONSTANTS = {
 	DEFAULT_CAPTURE_LINES: 50,
 	MAX_CAPTURE_LINES: 500,
-	MAX_OUTPUT_SIZE: 16384, // 16KB max output per request
+	MAX_OUTPUT_SIZE: 131072, // 128KB max output per request
 } as const;
 
 // Chat routing constants (message markers and patterns for orchestrator communication)
@@ -699,6 +699,7 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	SUPPORTED_EXTENSIONS: [
 		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
+		'.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.zip',
 	] as const,
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
@@ -722,6 +723,10 @@ export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	MAX_DOWNLOAD_REDIRECTS: 5,
 	/** Timeout for individual file download requests (ms) */
 	DOWNLOAD_TIMEOUT_MS: 60_000,
+	/** Maximum extracted text length included inline in messages (characters) */
+	MAX_EXTRACTED_TEXT_LENGTH: 8000,
+	/** MIME types eligible for text extraction */
+	EXTRACTABLE_MIMES: ['application/pdf'] as readonly string[],
 } as const;
 
 /**
