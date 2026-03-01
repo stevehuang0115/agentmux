@@ -33,6 +33,7 @@ import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './context-window-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
+import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -2272,7 +2273,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Also subscribe to terminal data for faster detection
 			const unsubscribe = session.onData((data) => {
 				if (resolved) return;
-				if (streamPattern.test(data)) {
+				// Strip ANSI escape sequences before testing — raw PTY data contains
+				// cursor positioning, color codes, etc. that break regex matching (#106)
+				const cleanData = stripAnsiCodes(data);
+				if (streamPattern.test(cleanData)) {
 					// Double-check with capturePane to avoid false positives from partial data
 					const output = sessionHelper.capturePane(sessionName);
 					if (this.isClaudeAtPrompt(output, runtimeType)) {
@@ -3514,8 +3518,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return false;
 		}
 
-		// Only analyze the tail of the buffer to avoid matching historical prompts
-		const tailSection = terminalOutput.slice(-2000);
+		// Only analyze the tail of the buffer to avoid matching historical prompts.
+		// Use 5000 chars to accommodate large tool outputs that push the prompt
+		// further back in the buffer (#106).
+		const tailSection = terminalOutput.slice(-5000);
 
 		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
@@ -3537,8 +3543,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		const hasPrompt = linesToCheck.some((line) => {
 			const trimmed = line.trim();
-			// Strip TUI box-drawing borders (│, ┃, etc.) that Gemini CLI wraps around prompts
-			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
+			// Strip TUI box-drawing borders that Gemini CLI and other TUI frameworks
+			// wrap around prompts. Covers full Unicode box-drawing range (#106).
+			const stripped = trimmed
+				.replace(/^[\u2500-\u257F|+\-═║╭╮╰╯]+\s*/, '')
+				.replace(/\s*[\u2500-\u257F|+\-═║╭╮╰╯]+$/, '');
 
 			// Claude Code prompts: ❯, ⏵, $ alone on a line
 			if (!isGemini && !isCodex) {
