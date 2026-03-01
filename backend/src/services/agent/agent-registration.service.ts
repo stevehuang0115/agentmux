@@ -3078,6 +3078,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
+		// Verification failed, but the message was physically written to the PTY.
+		// If the session is still alive, the agent will likely process it — return
+		// true to avoid false "Failed to deliver" errors shown to users (#99).
+		const backend = getSessionBackendSync();
+		const childAlive = backend?.isChildProcessAlive?.(sessionName);
+		if (childAlive !== false) {
+			this.logger.warn('Message delivery verification inconclusive but session alive — assuming success', {
+				sessionName,
+				maxAttempts,
+				messageLength: message.length,
+			});
+			return true;
+		}
+
 		this.logger.error('Message delivery failed after all retry attempts', {
 			sessionName,
 			maxAttempts,
