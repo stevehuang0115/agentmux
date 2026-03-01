@@ -67,6 +67,10 @@ export class WhatsAppService extends EventEmitter {
   private messagesReceived = 0;
   private phoneNumber: string | null = null;
   private conversationContexts: Map<string, WhatsAppConversationContext> = new Map();
+  private reconnectAttempts = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private static readonly MAX_RECONNECT_DELAY_MS = 60000;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
 
   /**
    * Initialize the WhatsApp connection.
@@ -76,6 +80,11 @@ export class WhatsAppService extends EventEmitter {
    */
   async initialize(config: WhatsAppConfig): Promise<void> {
     this.config = config;
+
+    // Clean up existing socket listeners before re-initializing (prevents leaks on reconnect)
+    if (this.sock) {
+      this.sock.ev.removeAllListeners();
+    }
 
     const authDir = config.authStatePath || path.join(os.homedir(), '.crewly', WHATSAPP_CONSTANTS.AUTH_DIR);
     await fs.mkdir(authDir, { recursive: true });
@@ -121,14 +130,43 @@ export class WhatsAppService extends EventEmitter {
           const shouldReconnect = statusCode !== DisconnectReason?.loggedOut;
 
           if (shouldReconnect) {
-            this.logger.info('Connection closed, reconnecting...', { statusCode });
-            setTimeout(() => {
+            // Exponential backoff: 5s, 10s, 20s, 40s, ... up to MAX_RECONNECT_DELAY_MS
+            const delay = Math.min(
+              WHATSAPP_CONSTANTS.RECONNECT_INTERVAL_MS * Math.pow(2, this.reconnectAttempts),
+              WhatsAppService.MAX_RECONNECT_DELAY_MS,
+            );
+            this.reconnectAttempts++;
+
+            this.logger.info('Connection closed, reconnecting...', {
+              statusCode,
+              attempt: this.reconnectAttempts,
+              delayMs: delay,
+            });
+
+            if (this.reconnectTimer) {
+              clearTimeout(this.reconnectTimer);
+            }
+
+            this.reconnectTimer = setTimeout(() => {
+              this.reconnectTimer = null;
               this.initialize(config).catch((err) => {
-                this.logger.error('Reconnection failed', { error: err instanceof Error ? err.message : String(err) });
+                const error = err instanceof Error ? err : new Error(String(err));
+                this.logger.error('Reconnection failed', {
+                  error: error.message,
+                  attempt: this.reconnectAttempts,
+                });
+                this.emit('error', error);
+
+                if (this.reconnectAttempts >= WhatsAppService.MAX_RECONNECT_ATTEMPTS) {
+                  this.logger.error('Max reconnection attempts reached, giving up');
+                  this.reconnectAttempts = 0;
+                  this.emit('disconnected', 'max_retries_exceeded');
+                }
               });
-            }, WHATSAPP_CONSTANTS.RECONNECT_INTERVAL_MS);
+            }, delay);
           } else {
             this.logger.info('Logged out, not reconnecting');
+            this.reconnectAttempts = 0;
             this.emit('disconnected', 'logged_out');
           }
         }
@@ -136,6 +174,11 @@ export class WhatsAppService extends EventEmitter {
         if (connection === 'open') {
           this.connected = true;
           this.currentQrCode = null;
+          this.reconnectAttempts = 0;
+          if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+          }
           this.phoneNumber = (sock as unknown as BaileysSocket).user?.id?.split(':')[0] || config.phoneNumber || null;
           this.logger.info('Connected', { phoneNumber: this.phoneNumber });
           this.emit('connected');
@@ -162,7 +205,16 @@ export class WhatsAppService extends EventEmitter {
   /**
    * Process an incoming Baileys message and emit as WhatsAppIncomingMessage.
    *
-   * @param rawMsg - Raw Baileys message object
+   * Extracts text from various WhatsApp message types (conversation, extendedTextMessage),
+   * validates the sender against the allowed contacts list, and emits a normalized
+   * message event for the bridge to handle.
+   *
+   * Messages are silently ignored if:
+   * - Sent by this account (fromMe = true)
+   * - No text content present (images, stickers, etc.)
+   * - Sender not in allowedContacts list (when configured)
+   *
+   * @param rawMsg - Raw Baileys message object containing key, message content, and metadata
    */
   private handleIncomingMessage(rawMsg: Record<string, unknown>): void {
     try {
@@ -269,6 +321,12 @@ export class WhatsAppService extends EventEmitter {
    * Disconnect from WhatsApp gracefully.
    */
   async disconnect(): Promise<void> {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempts = 0;
+
     if (this.sock) {
       try {
         this.sock.end(undefined);

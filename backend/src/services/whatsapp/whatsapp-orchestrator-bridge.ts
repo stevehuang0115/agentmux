@@ -40,7 +40,7 @@ export interface WhatsAppBridgeConfig {
 const DEFAULT_CONFIG: WhatsAppBridgeConfig = {
   orchestratorSession: ORCHESTRATOR_SESSION_NAME,
   maxResponseLength: WHATSAPP_CONSTANTS.MAX_RESPONSE_LENGTH,
-  responseTimeoutMs: (MESSAGE_QUEUE_CONSTANTS?.DEFAULT_MESSAGE_TIMEOUT ?? 120000) + WHATSAPP_CONSTANTS.RESPONSE_TIMEOUT_BUFFER_MS,
+  responseTimeoutMs: (MESSAGE_QUEUE_CONSTANTS?.DEFAULT_MESSAGE_TIMEOUT ?? WHATSAPP_CONSTANTS.DEFAULT_FALLBACK_TIMEOUT_MS) + WHATSAPP_CONSTANTS.RESPONSE_TIMEOUT_BUFFER_MS,
 };
 
 /** WhatsApp bridge singleton */
@@ -65,6 +65,7 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
   private messageQueueService: MessageQueueService | null = null;
   private config: WhatsAppBridgeConfig;
   private initialized = false;
+  private boundMessageHandler: ((message: WhatsAppIncomingMessage) => Promise<void>) | null = null;
 
   /**
    * Create a new WhatsAppOrchestratorBridge
@@ -85,7 +86,8 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    this.whatsappService.on('message', this.handleWhatsAppMessage.bind(this));
+    this.boundMessageHandler = this.handleWhatsAppMessage.bind(this);
+    this.whatsappService.on('message', this.boundMessageHandler);
 
     this.initialized = true;
     this.logger.info('Initialized');
@@ -175,7 +177,9 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
         return getOrchestratorOfflineMessage(true);
       }
 
-      if (!this.messageQueueService) {
+      // Capture reference to avoid race condition with non-null assertion
+      const mqService = this.messageQueueService;
+      if (!mqService) {
         this.logger.error('Message queue service not configured');
         return 'The WhatsApp bridge is not properly configured. Please restart the server.';
       }
@@ -198,7 +202,7 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
         }, this.config.responseTimeoutMs);
 
         try {
-          this.messageQueueService!.enqueue({
+          mqService.enqueue({
             content: message,
             conversationId: result.conversation.id,
             source: 'whatsapp',
@@ -228,10 +232,13 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
 
   /**
    * Cleanup bridge resources.
-   * Removes event listeners and resets initialization state.
+   * Removes only this bridge's event listener and resets initialization state.
    */
   cleanup(): void {
-    this.whatsappService.removeAllListeners('message');
+    if (this.boundMessageHandler) {
+      this.whatsappService.removeListener('message', this.boundMessageHandler);
+      this.boundMessageHandler = null;
+    }
     this.initialized = false;
   }
 

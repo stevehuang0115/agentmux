@@ -787,6 +787,8 @@ export const WHATSAPP_CONSTANTS = {
 	JID_SUFFIX_PATTERN: /@s\.whatsapp\.net$/,
 	/** Regex pattern for phone number + prefix */
 	PHONE_PREFIX_PATTERN: /^\+/,
+	/** Fallback timeout when MESSAGE_QUEUE_CONSTANTS is unavailable (ms) */
+	DEFAULT_FALLBACK_TIMEOUT_MS: 120000,
 } as const;
 
 /** Google OAuth endpoint URLs and default scopes. */
