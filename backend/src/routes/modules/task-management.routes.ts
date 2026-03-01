@@ -33,6 +33,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Monitoring linkage endpoint (for delegate-task auto-monitoring)
   router.post('/task-management/add-monitoring', (req, res) => taskMgmtHandlers.addMonitoring.call(apiController, req, res));
 
+  // Session-based task completion (for report-status auto-completion)
+  router.post('/task-management/complete-by-session', (req, res) => taskMgmtHandlers.completeTasksBySession.call(apiController, req, res));
+
   // In-Progress Tasks Routes
   router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }

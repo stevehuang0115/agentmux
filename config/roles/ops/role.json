@@ -1,0 +1,13 @@
+{
+  "id": "ops",
+  "name": "ops",
+  "displayName": "Ops Engineer",
+  "description": "Operations engineer focused on deployment, infrastructure, CI/CD pipelines, monitoring, and system reliability",
+  "category": "automation",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["documentation"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

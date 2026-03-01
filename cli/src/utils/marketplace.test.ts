@@ -453,10 +453,10 @@ describe('cli/utils/marketplace', () => {
       expect(files).not.toContain('instructions.md');
     });
 
-    it('fails if execute.sh returns 404 for GitHub-sourced skills', async () => {
+    it('succeeds when execute.sh returns 404 for GitHub-sourced skills (MCP/prompt-only skills)', async () => {
       const item = makeFakeItem({
-        id: 'github-skill-missing',
-        assets: { archive: 'config/skills/agent/core/github-skill-missing' },
+        id: 'github-skill-no-exec',
+        assets: { archive: 'config/skills/agent/core/github-skill-no-exec' },
       });
 
       global.fetch = jest.fn().mockImplementation(async (url: string) => {
@@ -467,13 +467,27 @@ describe('cli/utils/marketplace', () => {
             arrayBuffer: () => Promise.resolve(textToArrayBuffer('{"id":"test"}')),
           };
         }
-        // execute.sh returns 404
+        // execute.sh and instructions.md return 404 — only skill.json is required
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      });
+
+      const result = await downloadAndInstall(item);
+      expect(result.success).toBe(true);
+    });
+
+    it('fails if skill.json returns 404 for GitHub-sourced skills', async () => {
+      const item = makeFakeItem({
+        id: 'github-skill-missing',
+        assets: { archive: 'config/skills/agent/core/github-skill-missing' },
+      });
+
+      global.fetch = jest.fn().mockImplementation(async () => {
         return { ok: false, status: 404, statusText: 'Not Found' };
       });
 
       const result = await downloadAndInstall(item);
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Download failed for execute.sh');
+      expect(result.message).toContain('Download failed for skill.json');
       expect(result.message).toContain('404');
     });
 

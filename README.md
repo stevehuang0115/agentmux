@@ -22,18 +22,18 @@ Crewly is an open-source multi-agent orchestration platform that coordinates AI 
 ## Quick Start
 
 ```bash
-# Try it instantly (no global install needed)
-npx crewly onboard
+# Initialize Crewly in your project (no global install needed)
+npx crewly init
 
-# Or install globally
+# Or install globally first
 npm install -g crewly
-crewly onboard
+crewly init
 
 # Start the platform
 crewly start
 ```
 
-This starts the backend server and opens the web dashboard in your browser. From there:
+The `init` command walks you through provider selection, installs agent skills, and scaffolds a `.crewly/` directory. Then `crewly start` launches the backend server and opens the web dashboard. From there:
 
 1. Create a **team** with agents assigned to roles
 2. Assign the team to a **project** (any local code directory)
@@ -105,7 +105,7 @@ You can change the default runtime or customize launch commands in **Settings**.
 ## CLI Commands
 
 ```bash
-crewly onboard       # Interactive setup wizard
+crewly init          # Interactive setup wizard (alias: onboard)
 crewly start         # Start backend + open dashboard
 crewly stop          # Stop all services and sessions
 crewly status        # Show running services

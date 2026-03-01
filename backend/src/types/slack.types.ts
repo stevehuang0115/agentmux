@@ -117,6 +117,8 @@ export interface SlackFileInfo {
   size: number;
   /** Permalink to the original file in Slack */
   permalink: string;
+  /** Extracted text content (for PDFs and text-based files) */
+  extractedText?: string;
 }
 
 /**

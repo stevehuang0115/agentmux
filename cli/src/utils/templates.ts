@@ -43,14 +43,15 @@ export interface TeamTemplate {
 /**
  * Resolves the absolute path to the config/templates/ directory.
  *
- * Walks up from __dirname to find the project root containing config/templates/.
- * Falls back to process.cwd() if not found (e.g. in test environments).
+ * Walks up from the CLI entry point (process.argv[1]) to find the project root
+ * containing config/templates/. Falls back to process.cwd() if not found
+ * (e.g. in test environments).
  *
  * @returns Absolute path to templates directory
  */
 export function getTemplatesDir(): string {
-  // Walk up from this file's directory to find config/templates/
-  let dir = __dirname;
+  // Walk up from the CLI entry script to find config/templates/
+  let dir = process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
   for (let i = 0; i < 10; i++) {
     const candidate = path.join(dir, 'config', 'templates');
     if (existsSync(candidate)) {

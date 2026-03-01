@@ -395,6 +395,26 @@ describe('Slack Controller', () => {
       }
     });
 
+    it('should accept MP4 video files and return 503 when Slack is not connected', async () => {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const os = await import('os');
+      const tmpFile = path.join(os.tmpdir(), 'test-upload.mp4');
+      await fs.writeFile(tmpFile, 'fake mp4 data');
+
+      try {
+        const response = await request(app).post('/api/slack/upload-file').send({
+          channelId: 'C123',
+          filePath: tmpFile,
+        });
+
+        expect(response.status).toBe(503);
+        expect(response.body.error).toBe('Slack is not connected');
+      } finally {
+        await fs.unlink(tmpFile).catch(() => {});
+      }
+    });
+
     it('should reject files with no extension', async () => {
       const fs = await import('fs/promises');
       const path = await import('path');

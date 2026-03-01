@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import * as taskManagementHandlers from './task-management.controller.js';
-import { assignTask, completeTask, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput, addMonitoring, setEventBusServiceForTaskCleanup } from './task-management.controller.js';
+import { assignTask, completeTask, completeTasksBySession, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput, addMonitoring, setEventBusServiceForTaskCleanup } from './task-management.controller.js';
 import type { ApiController } from '../api.controller.js';
 import { TASK_OUTPUT_CONSTANTS } from '../../types/task-output.types.js';
 
@@ -98,6 +98,7 @@ describe('Task Management Handlers', () => {
       expect(typeof taskManagementHandlers.createTasksFromConfig).toBe('function');
       expect(typeof taskManagementHandlers.createTask).toBe('function');
       expect(typeof taskManagementHandlers.getTaskOutput).toBe('function');
+      expect(typeof taskManagementHandlers.completeTasksBySession).toBe('function');
     });
   });
 
@@ -969,6 +970,205 @@ describe('Task Management Handlers', () => {
       // Task should still complete successfully even if cleanup fails
       expect(mockResponse.json).toHaveBeenCalledWith(
         expect.objectContaining({ success: true })
+      );
+    });
+  });
+
+  describe('completeTasksBySession', () => {
+    let mockReq: Partial<Request>;
+    let mockRes: any;
+    let jsonSpy: jest.Mock<any>;
+    let statusSpy: jest.Mock<any>;
+
+    beforeEach(() => {
+      jsonSpy = jest.fn<any>();
+      statusSpy = jest.fn<any>().mockReturnValue({ json: jsonSpy });
+
+      mockRes = {
+        status: statusSpy,
+        json: jsonSpy,
+      };
+    });
+
+    it('returns 400 when sessionName is missing', async () => {
+      mockReq = { body: {} };
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(400);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'sessionName is required' })
+      );
+    });
+
+    it('returns success with 0 completed when no tasks found', async () => {
+      mockReq = { body: { sessionName: 'dev-agent-1' } };
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue([]);
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          completedCount: 0,
+          completedTasks: [],
+        })
+      );
+    });
+
+    it('completes assigned tasks and removes them from tracking', async () => {
+      const tasks = [
+        {
+          id: 'task-1',
+          taskName: 'Implement auth',
+          assignedSessionName: 'dev-agent-1',
+          status: 'assigned',
+          assignedAt: '2026-02-27T00:00:00Z',
+        },
+        {
+          id: 'task-2',
+          taskName: 'Write tests',
+          assignedSessionName: 'dev-agent-1',
+          status: 'active',
+          assignedAt: '2026-02-27T01:00:00Z',
+        },
+      ];
+
+      mockReq = { body: { sessionName: 'dev-agent-1' } };
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue(tasks);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledTimes(2);
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledWith('task-1');
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledWith('task-2');
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          completedCount: 2,
+          completedTasks: ['Implement auth', 'Write tests'],
+        })
+      );
+    });
+
+    it('skips tasks that are not assigned or active', async () => {
+      const tasks = [
+        {
+          id: 'task-1',
+          taskName: 'Active task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'assigned',
+          assignedAt: '2026-02-27T00:00:00Z',
+        },
+        {
+          id: 'task-2',
+          taskName: 'Blocked task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'blocked',
+          assignedAt: '2026-02-27T01:00:00Z',
+        },
+        {
+          id: 'task-3',
+          taskName: 'Completed task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'completed',
+          assignedAt: '2026-02-27T02:00:00Z',
+        },
+      ];
+
+      mockReq = { body: { sessionName: 'dev-agent-1' } };
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue(tasks);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      // Only task-1 (assigned) should be completed
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledTimes(1);
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledWith('task-1');
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          completedCount: 1,
+          completedTasks: ['Active task'],
+        })
+      );
+    });
+
+    it('cleans up monitoring resources for completed tasks', async () => {
+      const mockEventBus = {
+        unsubscribe: jest.fn<any>(),
+      };
+      setEventBusServiceForTaskCleanup(mockEventBus as any);
+
+      const tasks = [
+        {
+          id: 'task-1',
+          taskName: 'Monitored task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'assigned',
+          assignedAt: '2026-02-27T00:00:00Z',
+          scheduleIds: ['sched-1'],
+          subscriptionIds: ['sub-1'],
+        },
+      ];
+
+      mockReq = { body: { sessionName: 'dev-agent-1' } };
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue(tasks);
+      mockTaskTrackingService.removeTask.mockResolvedValue(undefined);
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(mockSchedulerService.cancelCheck).toHaveBeenCalledWith('sched-1');
+      expect(mockEventBus.unsubscribe).toHaveBeenCalledWith('sub-1');
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          monitoringCleanup: {
+            cancelledSchedules: 1,
+            unsubscribedEvents: 1,
+          },
+        })
+      );
+
+      // Clean up
+      setEventBusServiceForTaskCleanup(null as any);
+    });
+
+    it('continues completing other tasks when one fails', async () => {
+      const tasks = [
+        {
+          id: 'task-1',
+          taskName: 'Failing task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'assigned',
+          assignedAt: '2026-02-27T00:00:00Z',
+        },
+        {
+          id: 'task-2',
+          taskName: 'Success task',
+          assignedSessionName: 'dev-agent-1',
+          status: 'assigned',
+          assignedAt: '2026-02-27T01:00:00Z',
+        },
+      ];
+
+      mockReq = { body: { sessionName: 'dev-agent-1' } };
+      mockTaskTrackingService.getTasksBySessionName.mockResolvedValue(tasks);
+      mockTaskTrackingService.removeTask
+        .mockRejectedValueOnce(new Error('DB error'))
+        .mockResolvedValueOnce(undefined);
+
+      await completeTasksBySession.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      // Second task should still complete
+      expect(mockTaskTrackingService.removeTask).toHaveBeenCalledTimes(2);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          completedCount: 1,
+          completedTasks: ['Success task'],
+        })
       );
     });
   });

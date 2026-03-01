@@ -13,6 +13,10 @@ import os from 'os';
 import { readFile, writeFile, mkdir, copyFile, rm } from 'fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'fs';
 import { createHash } from 'crypto';
+/** Returns the directory of the CLI entry point, or CWD as fallback */
+function getCliDir(): string {
+  return process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : process.cwd();
+}
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as tar from 'tar';
@@ -203,7 +207,11 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
   try {
     if (isGitHubSource) {
       // Download individual files from GitHub raw content in parallel
-      const filesToDownload = ['skill.json', 'execute.sh', 'instructions.md'];
+      // Use custom file list from metadata if available, otherwise default 3 files
+      const metadataFiles = item.metadata?.files as string[] | undefined;
+      const filesToDownload = metadataFiles && Array.isArray(metadataFiles) && metadataFiles.length > 0
+        ? metadataFiles
+        : ['skill.json', 'execute.sh', 'instructions.md'];
 
       const results = await Promise.allSettled(
         filesToDownload.map(async (file) => {
@@ -225,7 +233,7 @@ export async function downloadAndInstall(item: MarketplaceItem): Promise<{ succe
 
         const { file, res } = result.value;
         if (!res.ok) {
-          if (file === 'instructions.md') continue; // optional
+          if (file !== 'skill.json') continue; // only skill.json is strictly required
           // Clean up partial install
           await rm(installPath, { recursive: true, force: true }).catch(() => {});
           return { success: false, message: `Download failed for ${file}: ${res.status} ${res.statusText}` };
@@ -350,7 +358,7 @@ function findPackageRoot(startDir: string): string | null {
  * package into the marketplace directory so installed skills can source them.
  */
 export async function ensureCommonLibs(): Promise<void> {
-  const packageRoot = findPackageRoot(__dirname) || findPackageRoot(process.cwd());
+  const packageRoot = findPackageRoot(getCliDir()) || findPackageRoot(process.cwd());
   if (!packageRoot) {
     return;
   }
@@ -434,7 +442,7 @@ export async function installAllSkills(
  * @returns The number of bundled core skill directories
  */
 export function countBundledSkills(): number {
-  const packageRoot = findPackageRoot(__dirname) || findPackageRoot(process.cwd());
+  const packageRoot = findPackageRoot(getCliDir()) || findPackageRoot(process.cwd());
   if (!packageRoot) return 0;
 
   const coreSkillsDir = path.join(packageRoot, 'config', 'skills', 'agent', 'core');

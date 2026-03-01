@@ -12,6 +12,7 @@ import { createSettingsRouter } from './settings/index.js';
 import { createChatRouter } from './chat/index.js';
 import { createSkillRouter } from './skill/index.js';
 import { createSlackRouter } from './slack/index.js';
+import { createWhatsAppRouter } from './whatsapp/index.js';
 import { createUserRouter } from './user/user.routes.js';
 import { createOAuthRouter } from './oauth/oauth.routes.js';
 import { createMessengerRouter } from './messaging/messenger.routes.js';
@@ -37,6 +38,7 @@ export function createApiRouter(context: ApiContext): Router {
   router.use('/chat', createChatRouter(context));
   router.use('/skills', createSkillRouter());
   router.use('/slack', createSlackRouter());
+  router.use('/whatsapp', createWhatsAppRouter());
   router.use('/users', createUserRouter());
   router.use('/oauth', createOAuthRouter());
   router.use('/messengers', createMessengerRouter());

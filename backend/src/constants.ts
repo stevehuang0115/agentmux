@@ -752,6 +752,7 @@ export const EMBEDDING_CONSTANTS = {
  */
 export const MESSAGE_SOURCES = {
 	SLACK: 'slack',
+	WHATSAPP: 'whatsapp',
 	WEB_CHAT: 'web_chat',
 	SYSTEM_EVENT: 'system_event',
 } as const;
@@ -761,6 +762,24 @@ export const MARKETPLACE_CONSTANTS = CONFIG_MARKETPLACE_CONSTANTS;
 
 /** Typed message source value */
 export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
+
+/**
+ * Constants for WhatsApp integration via Baileys.
+ * Used by WhatsAppService, WhatsAppOrchestratorBridge, and WhatsApp controller
+ * for connection management and message handling.
+ */
+export const WHATSAPP_CONSTANTS = {
+	/** Directory name for auth state persistence (under ~/.crewly/) */
+	AUTH_DIR: 'whatsapp-auth',
+	/** Maximum text message length (WhatsApp limit) */
+	MAX_MESSAGE_LENGTH: 4000,
+	/** Maximum file size for sending documents (5 MB) */
+	MAX_FILE_SIZE: 5 * 1024 * 1024,
+	/** Delay between reconnection attempts (ms) */
+	RECONNECT_INTERVAL_MS: 5000,
+	/** Timeout for QR code scanning before expiry (ms) */
+	QR_TIMEOUT_MS: 60000,
+} as const;
 
 /** Google OAuth endpoint URLs and default scopes. */
 export const GOOGLE_OAUTH_CONSTANTS = {

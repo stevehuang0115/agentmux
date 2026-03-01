@@ -54,6 +54,7 @@ import { getSettingsService } from './services/settings/index.js';
 import { MemoryService } from './services/memory/memory.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
 import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/index.js';
+import { initializeWhatsAppIfConfigured, shutdownWhatsApp } from './services/whatsapp/index.js';
 import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
 import { EventBusService } from './services/event-bus/index.js';
 import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
@@ -679,6 +680,9 @@ export class CrewlyServer {
 			// Initialize Slack if configured
 			await this.initializeSlackIfConfigured();
 
+			// Initialize WhatsApp if configured
+			await this.initializeWhatsAppIfConfigured();
+
 			// Start NOTIFY reconciliation service (retries failed Slack deliveries)
 			this.notifyReconciliationService = new NotifyReconciliationService();
 			this.notifyReconciliationService.start();
@@ -746,6 +750,32 @@ export class CrewlyServer {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			// Don't fail startup if Slack fails
+		}
+	}
+
+	/**
+	 * Initialize WhatsApp integration if environment variables are configured.
+	 * Gracefully handles missing configuration or connection failures.
+	 */
+	private async initializeWhatsAppIfConfigured(): Promise<void> {
+		try {
+			this.logger.info('Checking WhatsApp configuration...');
+			const result = await initializeWhatsAppIfConfigured({
+				messageQueueService: this.messageQueueService,
+			});
+
+			if (result.success) {
+				this.logger.info('WhatsApp integration initialized successfully');
+			} else if (result.attempted) {
+				this.logger.warn('WhatsApp initialization failed', { error: result.error });
+			} else {
+				this.logger.info('WhatsApp not configured, skipping initialization');
+			}
+		} catch (error) {
+			this.logger.error('Error initializing WhatsApp integration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Don't fail startup if WhatsApp fails
 		}
 	}
 
@@ -1225,6 +1255,10 @@ export class CrewlyServer {
 			// Shutdown Slack integration
 			this.logger.info('Shutting down Slack integration...');
 			await shutdownSlack();
+
+			// Shutdown WhatsApp integration
+			this.logger.info('Shutting down WhatsApp integration...');
+			await shutdownWhatsApp();
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();
