@@ -92,10 +92,15 @@ export function isContactAllowed(from: string, config: WhatsAppConfig): boolean 
   if (!config.allowedContacts || config.allowedContacts.length === 0) {
     return true; // No restrictions
   }
-  // Strip the @s.whatsapp.net suffix for comparison
-  const normalizedFrom = from.replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '');
+  // Strip the @s.whatsapp.net suffix and + prefix for exact comparison.
+  // WhatsApp JIDs use full international numbers without + (e.g., 11234567890@s.whatsapp.net).
+  const normalizedFrom = from
+    .replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '')
+    .replace(WHATSAPP_CONSTANTS.PHONE_PREFIX_PATTERN, '');
   return config.allowedContacts.some((contact) => {
-    const normalizedContact = contact.replace(WHATSAPP_CONSTANTS.PHONE_PREFIX_PATTERN, '').replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '');
-    return normalizedFrom.endsWith(normalizedContact);
+    const normalizedContact = contact
+      .replace(WHATSAPP_CONSTANTS.PHONE_PREFIX_PATTERN, '')
+      .replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '');
+    return normalizedFrom === normalizedContact;
   });
 }
