@@ -9,7 +9,6 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import { promises as fs } from 'fs';
 import { getWhatsAppService } from '../../services/whatsapp/whatsapp.service.js';
 import { getWhatsAppOrchestratorBridge } from '../../services/whatsapp/whatsapp-orchestrator-bridge.js';
 import type { WhatsAppConfig } from '../../types/whatsapp.types.js';
@@ -148,6 +147,14 @@ router.post('/send', async (req: Request, res: Response, next: NextFunction) => 
       res.status(400).json({
         success: false,
         error: 'to and text are required',
+      });
+      return;
+    }
+
+    if (text.length > WHATSAPP_CONSTANTS.MAX_MESSAGE_LENGTH) {
+      res.status(400).json({
+        success: false,
+        error: `Message exceeds maximum length of ${WHATSAPP_CONSTANTS.MAX_MESSAGE_LENGTH} characters`,
       });
       return;
     }

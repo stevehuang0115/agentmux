@@ -779,6 +779,14 @@ export const WHATSAPP_CONSTANTS = {
 	RECONNECT_INTERVAL_MS: 5000,
 	/** Timeout for QR code scanning before expiry (ms) */
 	QR_TIMEOUT_MS: 60000,
+	/** Maximum response length from orchestrator before truncation */
+	MAX_RESPONSE_LENGTH: 3000,
+	/** Buffer added to message queue timeout for response timeout (ms) */
+	RESPONSE_TIMEOUT_BUFFER_MS: 5000,
+	/** Regex pattern for WhatsApp JID suffix */
+	JID_SUFFIX_PATTERN: /@s\.whatsapp\.net$/,
+	/** Regex pattern for phone number + prefix */
+	PHONE_PREFIX_PATTERN: /^\+/,
 } as const;
 
 /** Google OAuth endpoint URLs and default scopes. */

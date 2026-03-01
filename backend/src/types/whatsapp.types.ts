@@ -7,6 +7,8 @@
  * @module types/whatsapp
  */
 
+import { WHATSAPP_CONSTANTS } from '../constants.js';
+
 /**
  * WhatsApp service configuration
  */
@@ -91,9 +93,9 @@ export function isContactAllowed(from: string, config: WhatsAppConfig): boolean 
     return true; // No restrictions
   }
   // Strip the @s.whatsapp.net suffix for comparison
-  const normalizedFrom = from.replace(/@s\.whatsapp\.net$/, '');
+  const normalizedFrom = from.replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '');
   return config.allowedContacts.some((contact) => {
-    const normalizedContact = contact.replace(/^\+/, '').replace(/@s\.whatsapp\.net$/, '');
+    const normalizedContact = contact.replace(WHATSAPP_CONSTANTS.PHONE_PREFIX_PATTERN, '').replace(WHATSAPP_CONSTANTS.JID_SUFFIX_PATTERN, '');
     return normalizedFrom.endsWith(normalizedContact);
   });
 }

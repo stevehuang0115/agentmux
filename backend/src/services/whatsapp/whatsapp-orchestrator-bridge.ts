@@ -19,7 +19,7 @@ import type {
   WhatsAppConversationContext,
 } from '../../types/whatsapp.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, WHATSAPP_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -39,8 +39,8 @@ export interface WhatsAppBridgeConfig {
  */
 const DEFAULT_CONFIG: WhatsAppBridgeConfig = {
   orchestratorSession: ORCHESTRATOR_SESSION_NAME,
-  maxResponseLength: 3000,
-  responseTimeoutMs: (MESSAGE_QUEUE_CONSTANTS?.DEFAULT_MESSAGE_TIMEOUT ?? 120000) + 5000,
+  maxResponseLength: WHATSAPP_CONSTANTS.MAX_RESPONSE_LENGTH,
+  responseTimeoutMs: (MESSAGE_QUEUE_CONSTANTS?.DEFAULT_MESSAGE_TIMEOUT ?? 120000) + WHATSAPP_CONSTANTS.RESPONSE_TIMEOUT_BUFFER_MS,
 };
 
 /** WhatsApp bridge singleton */
@@ -224,6 +224,15 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
       });
       throw error;
     }
+  }
+
+  /**
+   * Cleanup bridge resources.
+   * Removes event listeners and resets initialization state.
+   */
+  cleanup(): void {
+    this.whatsappService.removeAllListeners('message');
+    this.initialized = false;
   }
 
   /**
