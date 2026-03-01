@@ -692,7 +692,7 @@ function mapKeyToSequence(key: string): string {
 export async function deliverMessage(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
 		const { sessionName } = req.params;
-		const { message, runtimeType, waitForReady, waitTimeout } = req.body;
+		const { message, runtimeType, waitForReady, waitTimeout, force } = req.body;
 
 		if (!sessionName) {
 			res.status(400).json({
@@ -731,6 +731,32 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 			} catch {
 				// Non-fatal: sendMessageToAgent will use its default
 			}
+		}
+
+		// Force mode: write directly to PTY, skipping waitForReady and verification.
+		// Use when the agent is busy and waitForReady would time out (#113).
+		if (force) {
+			const { getSessionBackendSync } = await import('../../services/session/index.js');
+			const backend = getSessionBackendSync();
+			const session = backend?.getSession(sessionName);
+			if (!session) {
+				res.status(404).json({
+					success: false,
+					error: `Session '${sessionName}' not found`,
+				} as ApiResponse);
+				return;
+			}
+			session.write(message + '\r');
+			logger.info('Message force-delivered via direct PTY write', {
+				sessionName,
+				messageLength: message.length,
+			});
+			res.json({
+				success: true,
+				verified: false,
+				force: true,
+			} as ApiResponse);
+			return;
 		}
 
 		// Optionally wait for agent to be at prompt before delivering
