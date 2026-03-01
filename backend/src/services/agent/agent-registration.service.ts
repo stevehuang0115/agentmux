@@ -2684,9 +2684,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						await delay(300);
 					}
 				} else {
-					// On retry attempts (2+), force a PTY resize to trigger SIGWINCH.
-					// This makes Ink re-render the TUI, potentially restoring focus state.
-					if (attempt > 1) {
+					// Detect recent /compress — Ink TUI loses internal focus after
+					// /compress re-renders, causing subsequent messages to be silently
+					// dropped even though the prompt `>` is visible (#114).
+					// Always force PTY resize on attempt 1 if /compress detected.
+					const recentOutput = sessionHelper.capturePane(sessionName, 40);
+					const compressDetected = recentOutput.includes('/compress') ||
+						recentOutput.includes('Context compressed') ||
+						recentOutput.includes('Compressing context');
+					const needsResize = attempt > 1 || compressDetected;
+
+					// Force a PTY resize to trigger SIGWINCH, making Ink
+					// re-render the TUI and potentially restore focus state.
+					if (needsResize) {
 						try {
 							const session = sessionHelper.getSession(sessionName);
 							if (session) {
@@ -2698,6 +2708,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								this.logger.debug('PTY resize sent to trigger TUI re-render', {
 									sessionName,
 									attempt,
+									compressDetected,
 								});
 							}
 						} catch (resizeErr) {
@@ -2720,7 +2731,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// the input is engaged. Enter on an empty `> ` prompt is a
 					// safe no-op (just shows a new blank prompt line).
 					await sessionHelper.sendEnter(sessionName);
-					await delay(500);
+					// Extra settling time after /compress to let Ink TUI stabilize
+					await delay(compressDetected ? 1000 : 500);
 				}
 
 				// For Gemini CLI: detect and gently escape interactive modes before
