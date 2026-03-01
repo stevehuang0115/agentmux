@@ -120,6 +120,8 @@ if [ -n "$INPUT_JSON" ]; then
   TEXT=${TEXT:-$(echo "$INPUT_JSON" | jq -r '.text // empty')}
   THREAD_TS=${THREAD_TS:-$(echo "$INPUT_JSON" | jq -r '.threadTs // empty')}
   CONVERSATION_ID=${CONVERSATION_ID:-$(echo "$INPUT_JSON" | jq -r '.conversationId // empty')}
+  FILE_PATH=${FILE_PATH:-$(echo "$INPUT_JSON" | jq -r '.file // .filePath // empty')}
+  IMAGE_PATH=${IMAGE_PATH:-$(echo "$INPUT_JSON" | jq -r '.image // .imagePath // empty')}
 fi
 
 require_param "channelId" "$CHANNEL_ID"
