@@ -589,10 +589,15 @@ export abstract class RuntimeAgentService {
 				});
 			}
 		} catch (error) {
-			this.logger.error('Failed to load runtime configurations', {
-				runtimeType: this.getRuntimeType(),
-				error: error instanceof Error ? error.message : String(error),
-			});
+			const isNotFound = error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT';
+			if (isNotFound) {
+				this.logger.debug('Runtime config not found, using fallback', { runtimeType: this.getRuntimeType() });
+			} else {
+				this.logger.error('Failed to load runtime configurations', {
+					runtimeType: this.getRuntimeType(),
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 		}
 	}
 

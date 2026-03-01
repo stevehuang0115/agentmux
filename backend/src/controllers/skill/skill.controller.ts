@@ -62,7 +62,7 @@ interface ClaudeSettings {
  * MCP server installation status
  */
 interface McpServerStatus {
-  /** Package name (e.g., @anthropic/mcp-server-playwright) */
+  /** Package name (e.g., @playwright/mcp) */
   packageName: string;
   /** Whether the MCP server is installed/configured */
   isInstalled: boolean;

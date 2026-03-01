@@ -16,6 +16,7 @@ import { createSkillArchive, generateChecksum, generateRegistryEntry } from '../
 import type { SkillManifest } from '../utils/package-validator.js';
 import { readFileSync } from 'fs';
 import { MARKETPLACE_CONSTANTS } from '../../../config/constants.js';
+import { submitToGitHub } from '../utils/gh-submit.js';
 
 /** Options for the publish command */
 interface PublishOptions {
@@ -100,21 +101,21 @@ export async function publishCommand(skillPath?: string, options?: PublishOption
 
   // Submit to marketplace if --submit flag is set
   if (options?.submit) {
-    console.log(chalk.blue('\nTo publish your skill to the Crewly marketplace:'));
-    console.log('');
-    console.log(chalk.white('  1. Fork the Crewly repo:'));
-    console.log(chalk.gray(`     https://github.com/${MARKETPLACE_CONSTANTS.GITHUB_REPO}`));
-    console.log('');
-    console.log(chalk.white('  2. Copy your skill directory into your fork:'));
-    console.log(chalk.gray(`     cp -r ${absPath} config/skills/agent/marketplace/${manifest.id}`));
-    console.log('');
-    console.log(chalk.white('  3. Commit and push, then open a Pull Request:'));
-    console.log(chalk.gray(`     gh pr create --repo ${MARKETPLACE_CONSTANTS.GITHUB_REPO} --title "skill: add ${manifest.id}"`));
-    console.log('');
-    console.log(chalk.white('  4. The registry index will be auto-generated on merge.'));
-    console.log('');
-    console.log(chalk.gray('  Archive for reference: ') + archivePath);
-    console.log(chalk.gray('  Registry entry JSON above can be used for validation.'));
+    try {
+      const result = await submitToGitHub(absPath, manifest);
+      console.log(chalk.green(`\nPull request created successfully!`));
+      console.log(chalk.blue(`  PR: ${result.prUrl}`));
+      console.log(chalk.gray(`  Branch: ${result.branch}`));
+      console.log(chalk.gray('  The registry index will be auto-generated on merge.'));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(chalk.red(`\nFailed to submit: ${msg}`));
+      console.log(chalk.gray('\nYou can submit manually:'));
+      console.log(chalk.gray(`  1. Fork: https://github.com/${MARKETPLACE_CONSTANTS.GITHUB_REPO}`));
+      console.log(chalk.gray(`  2. Copy: cp -r ${absPath} config/skills/agent/marketplace/${manifest.id}`));
+      console.log(chalk.gray(`  3. PR:   gh pr create --repo ${MARKETPLACE_CONSTANTS.GITHUB_REPO} --title "skill: add ${manifest.id}"`));
+      process.exit(1);
+    }
   }
 
   console.log(chalk.green('\nDone!'));

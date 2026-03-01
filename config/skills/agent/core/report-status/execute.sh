@@ -33,3 +33,9 @@ if [ "$STATUS" = "done" ] && [ -n "$TASK_PATH" ]; then
     '{taskPath: $taskPath, sessionName: $sessionName}')
   api_call POST "/task-management/complete" "$COMPLETE_BODY" || true
 fi
+
+# Auto-complete tracked tasks when status is done
+if [ "$STATUS" = "done" ]; then
+  SESSION_BODY=$(jq -n --arg sessionName "$SESSION_NAME" '{sessionName: $sessionName}')
+  api_call POST "/task-management/complete-by-session" "$SESSION_BODY" || true
+fi

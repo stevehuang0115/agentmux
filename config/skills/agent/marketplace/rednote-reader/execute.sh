@@ -55,11 +55,12 @@ check_app() {
     fi
   fi
 
-  # Check accessibility
+  # Check accessibility — use osascript ObjC bridge instead of swift
+  # (swift -e fails if Xcode license is not accepted, masking the real error)
   local trusted
-  trusted=$(swift -e 'import Cocoa; print(AXIsProcessTrusted())' 2>/dev/null || echo "false")
+  trusted=$(osascript -l JavaScript -e "ObjC.import('Cocoa'); $.AXIsProcessTrusted()" 2>/dev/null || echo "false")
   if [ "$trusted" != "true" ]; then
-    error_exit "Accessibility permission required. System Settings > Privacy & Security > Accessibility > enable Terminal."
+    error_exit "Accessibility permission required. System Settings > Privacy & Security > Accessibility > enable the app running this script (e.g. Terminal, claude, iTerm2)."
   fi
 }
 

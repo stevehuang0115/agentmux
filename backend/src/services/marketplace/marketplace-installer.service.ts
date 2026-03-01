@@ -169,7 +169,11 @@ async function installFromGitHub(
   sourcePath: string,
 ): Promise<MarketplaceOperationResult> {
   const baseUrl = MARKETPLACE_CONSTANTS.PUBLIC_CDN_BASE;
-  const filesToDownload = ['skill.json', 'execute.sh', 'instructions.md'];
+  // Use custom file list from metadata if available, otherwise default 3 files
+  const metadataFiles = item.metadata?.files as string[] | undefined;
+  const filesToDownload = metadataFiles && Array.isArray(metadataFiles) && metadataFiles.length > 0
+    ? metadataFiles
+    : ['skill.json', 'execute.sh', 'instructions.md'];
 
   await mkdir(installPath, { recursive: true });
 
@@ -190,7 +194,12 @@ async function installFromGitHub(
   for (let i = 0; i < filesToDownload.length; i++) {
     const file = filesToDownload[i];
     const result = results[i];
-    const isOptional = file === 'instructions.md';
+    // skill.json is always required. execute.sh is required only when using
+    // the default file list (non-MCP skills). When metadata.files is provided
+    // (MCP skills), only skill.json is mandatory — other files are optional.
+    const isOptional = metadataFiles
+      ? file !== 'skill.json'
+      : file !== 'skill.json' && file !== 'execute.sh';
 
     if (result.status === 'rejected') {
       if (!isOptional) {

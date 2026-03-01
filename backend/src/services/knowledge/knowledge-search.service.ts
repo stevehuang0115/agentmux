@@ -168,8 +168,14 @@ export class GeminiEmbeddingStrategy implements KnowledgeSearchStrategy {
         });
 
         if (!response.ok) {
+          let responseBody = '';
+          try { responseBody = (await response.text()).slice(0, 200); } catch { /* ignore */ }
           this.logger.warn('Gemini embedding API returned non-OK status', {
             status: response.status,
+            statusText: response.statusText,
+            model: EMBEDDING_CONSTANTS.GEMINI_MODEL,
+            textLength: text.length,
+            responseBody,
           });
           return null;
         }
@@ -182,6 +188,9 @@ export class GeminiEmbeddingStrategy implements KnowledgeSearchStrategy {
     } catch (error) {
       this.logger.warn('Gemini embedding API call failed', {
         error: error instanceof Error ? error.message : String(error),
+        model: EMBEDDING_CONSTANTS.GEMINI_MODEL,
+        textLength: text.length,
+        isTimeout: error instanceof Error && error.name === 'AbortError',
       });
       return null;
     }
@@ -199,7 +208,7 @@ export class GeminiEmbeddingStrategy implements KnowledgeSearchStrategy {
     const queryEmbedding = await this.embed(query);
 
     if (!queryEmbedding) {
-      this.logger.info('Falling back to keyword search due to embedding failure');
+      this.logger.debug('Falling back to keyword search due to embedding failure');
       return this.fallback.search(query, documents);
     }
 
@@ -220,7 +229,7 @@ export class GeminiEmbeddingStrategy implements KnowledgeSearchStrategy {
     }
 
     if (scored.length === 0) {
-      this.logger.info('No embedding results, falling back to keyword search');
+      this.logger.debug('No embedding results, falling back to keyword search');
       return this.fallback.search(query, documents);
     }
 

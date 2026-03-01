@@ -13,6 +13,7 @@ import path from 'path';
 import os from 'os';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
+import { PDFParse } from 'pdf-parse';
 import { getSlackService, SlackService } from './slack.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
 import {
@@ -692,6 +693,12 @@ Just type naturally to chat with the orchestrator!`;
             clearTimeout(timeoutId);
           }
 
+          // Extract text from PDFs after download
+          let extractedText: string | undefined;
+          if (SLACK_FILE_DOWNLOAD_CONSTANTS.EXTRACTABLE_MIMES.includes(file.mimetype)) {
+            extractedText = await this.extractPdfText(localPath, file.name);
+          }
+
           return {
             id: file.id,
             name: file.name,
@@ -699,6 +706,7 @@ Just type naturally to chat with the orchestrator!`;
             localPath,
             size: file.size,
             permalink: file.permalink,
+            extractedText,
           } satisfies SlackFileInfo;
         }),
       );
@@ -759,10 +767,43 @@ Just type naturally to chat with the orchestrator!`;
       for (const file of message.attachments) {
         const sizeStr = file.size < 1024 ? `${file.size}B` : `${Math.round(file.size / 1024)}KB`;
         text += `\n[Slack File: ${file.localPath} (${file.name}, ${file.mimetype}, ${sizeStr})]`;
+        if (file.extractedText) {
+          text += `\n--- Extracted content from ${file.name} ---\n${file.extractedText}\n--- End of ${file.name} ---`;
+        }
       }
     }
 
     return text;
+  }
+
+  /**
+   * Extract text content from a downloaded PDF file.
+   * Returns undefined if extraction fails or produces no text.
+   *
+   * @param filePath - Absolute path to the downloaded PDF
+   * @param fileName - Original file name (for logging)
+   * @returns Extracted text (possibly truncated) or undefined
+   */
+  async extractPdfText(filePath: string, fileName: string): Promise<string | undefined> {
+    try {
+      const fileBuffer = await fs.readFile(filePath);
+      const parser = new PDFParse({ data: fileBuffer });
+      const pdfData = await parser.getText();
+      const rawText = typeof pdfData === 'string' ? pdfData : pdfData?.text;
+      if (rawText && rawText.trim().length > 0) {
+        const maxLen = SLACK_FILE_DOWNLOAD_CONSTANTS.MAX_EXTRACTED_TEXT_LENGTH;
+        return rawText.trim().length > maxLen
+          ? rawText.trim().substring(0, maxLen) + '\n... [truncated]'
+          : rawText.trim();
+      }
+      return undefined;
+    } catch (extractErr) {
+      this.logger.warn('Failed to extract text from PDF', {
+        fileName,
+        error: extractErr instanceof Error ? extractErr.message : String(extractErr),
+      });
+      return undefined;
+    }
   }
 
   /**

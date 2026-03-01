@@ -592,16 +592,52 @@ export class TerminalGateway {
 	 *
 	 * @param sessionName - The orchestrator session name
 	 */
+	/**
+	 * Process unified [NOTIFY]...[/NOTIFY] markers from the orchestrator output buffer.
+	 *
+	 * Filters out false positives from Claude Code tool output display.
+	 * When Claude Code reads files (e.g., prompt.md) or runs bash commands,
+	 * the displayed output may contain [NOTIFY] example blocks. These are
+	 * detected by checking for the ⏺ tool indicator in the text preceding
+	 * each match — real NOTIFY blocks are direct AI output (no tool indicator).
+	 *
+	 * @param sessionName - The orchestrator session name
+	 */
 	private processNotifyMarkers(sessionName: string): void {
 		if (!this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
 			return;
 		}
 
 		let lastMatchEnd = 0;
+		let inToolOutput = false;
 
 		for (const match of this.orchestratorOutputBuffer.matchAll(NOTIFY_CONSTANTS.MARKER_PATTERN)) {
+			const matchStart = match.index!;
+			const matchEnd = matchStart + match[0].length;
+
+			// Check if this NOTIFY block is inside Claude Code tool output.
+			// Tool output is preceded by ⏺ (U+23FA). Look at the text between
+			// the previous match end and this match start for state transitions:
+			// - ⏺ with no following ❯ → entering/still in tool output
+			// - ❯ after ⏺ → tool output ended, back to direct AI output
+			const gapText = this.orchestratorOutputBuffer.slice(lastMatchEnd, matchStart);
+			if (gapText.includes('⏺')) {
+				inToolOutput = true;
+			}
+			if (gapText.includes('❯')) {
+				inToolOutput = false;
+			}
+			if (inToolOutput) {
+				this.logger.debug('Skipping NOTIFY inside tool output (false positive)', {
+					matchStart,
+					gapSnippet: gapText.slice(-80),
+				});
+				lastMatchEnd = matchEnd;
+				continue;
+			}
+
 			const rawContent = match[1].trim();
-			lastMatchEnd = match.index! + match[0].length;
+			lastMatchEnd = matchEnd;
 
 			const payload = parseNotifyContent(rawContent);
 			if (!payload) {
@@ -628,6 +664,7 @@ export class TerminalGateway {
 			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
 		}
 	}
+
 
 	/**
 	 * Handle a single parsed NOTIFY payload — route to chat and/or Slack.

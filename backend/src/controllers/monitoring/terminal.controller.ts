@@ -179,10 +179,11 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 		const output = backend.captureOutput(sessionName, maxLines);
 
 		// Limit output size to prevent memory issues
-		const trimmedOutput =
-			output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE
-				? '...' + output.substring(output.length - TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE + 3)
-				: output;
+		const wasTruncated = output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE;
+		const trimmedOutput = wasTruncated
+			? `[TRUNCATED: output exceeded ${Math.round(output.length / 1024)}KB, showing last ${Math.round(TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE / 1024)}KB]\n...` +
+				output.substring(output.length - TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE + 3)
+			: output;
 
 		res.json({
 			success: true,
@@ -190,7 +191,7 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 				output: trimmedOutput,
 				sessionName,
 				lines: maxLines,
-				truncated: output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE,
+				truncated: wasTruncated,
 			},
 		} as ApiResponse);
 	} catch (error) {
@@ -692,7 +693,7 @@ function mapKeyToSequence(key: string): string {
 export async function deliverMessage(this: ApiContext, req: Request, res: Response): Promise<void> {
 	try {
 		const { sessionName } = req.params;
-		const { message, runtimeType, waitForReady, waitTimeout } = req.body;
+		const { message, runtimeType, waitForReady, waitTimeout, force } = req.body;
 
 		if (!sessionName) {
 			res.status(400).json({
@@ -731,6 +732,32 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 			} catch {
 				// Non-fatal: sendMessageToAgent will use its default
 			}
+		}
+
+		// Force mode: write directly to PTY, skipping waitForReady and verification.
+		// Use when the agent is busy and waitForReady would time out (#113).
+		if (force) {
+			const { getSessionBackendSync } = await import('../../services/session/index.js');
+			const backend = getSessionBackendSync();
+			const session = backend?.getSession(sessionName);
+			if (!session) {
+				res.status(404).json({
+					success: false,
+					error: `Session '${sessionName}' not found`,
+				} as ApiResponse);
+				return;
+			}
+			session.write(message + '\r');
+			logger.info('Message force-delivered via direct PTY write', {
+				sessionName,
+				messageLength: message.length,
+			});
+			res.json({
+				success: true,
+				verified: false,
+				force: true,
+			} as ApiResponse);
+			return;
 		}
 
 		// Optionally wait for agent to be at prompt before delivering

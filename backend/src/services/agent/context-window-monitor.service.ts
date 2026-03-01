@@ -670,10 +670,13 @@ export class ContextWindowMonitorService {
 			isBusy = await this.isSessionBusyForCompact(state.sessionName);
 		}
 		if (isBusy) {
+			state.compactAttempts++;
 			this.logger.info('Skipping compact: session is actively working', {
 				sessionName: state.sessionName,
 				runtimeType: state.runtimeType,
 				contextPercent: state.contextPercent,
+				compactAttempts: state.compactAttempts,
+				maxAttempts: CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS,
 			});
 			return;
 		}
@@ -1042,6 +1045,14 @@ export class ContextWindowMonitorService {
 
 			// Clean up stale states (no context % detected for a while)
 			if (timeSinceLastDetection > staleThreshold && state.level !== 'normal') {
+				// If we're critical and compact never succeeded, keep state to allow retry
+				if (state.level === 'critical' && state.compactAttempts > 0) {
+					this.logger.debug('Keeping critical state despite staleness (compact attempts pending)', {
+						sessionName,
+						compactAttempts: state.compactAttempts,
+					});
+					continue;
+				}
 				this.logger.debug('Context state stale, resetting to normal', {
 					sessionName,
 					timeSinceLastDetectionMs: timeSinceLastDetection,

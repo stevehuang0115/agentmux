@@ -1594,3 +1594,108 @@ export async function addMonitoring(this: ApiController, req: Request, res: Resp
 		res.status(500).json({ success: false, error: 'Failed to add monitoring IDs' });
 	}
 }
+
+/**
+ * Completes all tasks assigned to a given agent session.
+ *
+ * Called by the report-status skill when an agent reports status=done.
+ * Finds all in-progress/assigned tasks for the session, marks them as
+ * completed in task tracking, and cleans up monitoring resources.
+ *
+ * @param req - Request containing sessionName
+ * @param res - Response with list of completed tasks
+ */
+export async function completeTasksBySession(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.body;
+
+		if (!sessionName) {
+			res.status(400).json({ success: false, error: 'sessionName is required' });
+			return;
+		}
+
+		const tasks = await this.taskTrackingService.getTasksBySessionName(sessionName);
+		const activeTasks = tasks.filter(t => t.status === 'assigned' || t.status === 'active');
+
+		if (activeTasks.length === 0) {
+			res.json({
+				success: true,
+				message: 'No active tasks found for session',
+				sessionName,
+				completedCount: 0,
+				completedTasks: [],
+			});
+			return;
+		}
+
+		const completedTasks: string[] = [];
+		let totalCancelledSchedules = 0;
+		let totalUnsubscribedEvents = 0;
+
+		for (const task of activeTasks) {
+			try {
+				// Move task file from in_progress/ to done/ if it exists
+				if (task.taskFilePath && task.taskFilePath.includes('/in_progress/') && existsSync(task.taskFilePath)) {
+					try {
+						const targetPath = task.taskFilePath.replace('/in_progress/', '/done/');
+						const targetDir = dirname(targetPath);
+						await ensureDirectoryExists(targetDir);
+
+						const taskContent = await readFile(task.taskFilePath, 'utf-8');
+						const updatedContent = addTaskCompletionInfo(taskContent);
+						await writeFile(targetPath, updatedContent, 'utf-8');
+						await unlink(task.taskFilePath);
+
+						logger.debug('Moved task file to done', {
+							taskId: task.id,
+							from: task.taskFilePath,
+							to: targetPath,
+						});
+					} catch (fileError) {
+						logger.warn('Failed to move task file to done (continuing with tracking cleanup)', {
+							taskId: task.id,
+							taskFilePath: task.taskFilePath,
+							error: fileError instanceof Error ? fileError.message : String(fileError),
+						});
+					}
+				}
+
+				// Clean up monitoring resources
+				const cleanup = await cleanupTaskMonitoring(this, task);
+				totalCancelledSchedules += cleanup.cancelledSchedules;
+				totalUnsubscribedEvents += cleanup.unsubscribedEvents;
+
+				// Remove from tracking
+				await this.taskTrackingService.removeTask(task.id);
+				completedTasks.push(task.taskName);
+
+				logger.info('Auto-completed task for session', {
+					taskId: task.id,
+					taskName: task.taskName,
+					sessionName,
+				});
+			} catch (error) {
+				logger.warn('Failed to auto-complete task', {
+					taskId: task.id,
+					taskName: task.taskName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		res.json({
+			success: true,
+			message: `Completed ${completedTasks.length} task(s) for session ${sessionName}`,
+			sessionName,
+			completedCount: completedTasks.length,
+			completedTasks,
+			monitoringCleanup: {
+				cancelledSchedules: totalCancelledSchedules,
+				unsubscribedEvents: totalUnsubscribedEvents,
+			},
+		});
+	} catch (error) {
+		logger.error('Error completing tasks by session', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to complete tasks by session' });
+	}
+}

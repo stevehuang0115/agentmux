@@ -33,6 +33,7 @@ import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './context-window-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
+import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 
 export interface OrchestratorConfig {
 	sessionName: string;
@@ -2272,7 +2273,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Also subscribe to terminal data for faster detection
 			const unsubscribe = session.onData((data) => {
 				if (resolved) return;
-				if (streamPattern.test(data)) {
+				// Strip ANSI escape sequences before testing — raw PTY data contains
+				// cursor positioning, color codes, etc. that break regex matching (#106)
+				const cleanData = stripAnsiCodes(data);
+				if (streamPattern.test(cleanData)) {
 					// Double-check with capturePane to avoid false positives from partial data
 					const output = sessionHelper.capturePane(sessionName);
 					if (this.isClaudeAtPrompt(output, runtimeType)) {
@@ -2684,9 +2688,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						await delay(300);
 					}
 				} else {
-					// On retry attempts (2+), force a PTY resize to trigger SIGWINCH.
-					// This makes Ink re-render the TUI, potentially restoring focus state.
-					if (attempt > 1) {
+					// Detect recent /compress — Ink TUI loses internal focus after
+					// /compress re-renders, causing subsequent messages to be silently
+					// dropped even though the prompt `>` is visible (#114).
+					// Always force PTY resize on attempt 1 if /compress detected.
+					const recentOutput = sessionHelper.capturePane(sessionName, 40);
+					const compressDetected = recentOutput.includes('/compress') ||
+						recentOutput.includes('Context compressed') ||
+						recentOutput.includes('Compressing context');
+					const needsResize = attempt > 1 || compressDetected;
+
+					// Force a PTY resize to trigger SIGWINCH, making Ink
+					// re-render the TUI and potentially restore focus state.
+					if (needsResize) {
 						try {
 							const session = sessionHelper.getSession(sessionName);
 							if (session) {
@@ -2698,6 +2712,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								this.logger.debug('PTY resize sent to trigger TUI re-render', {
 									sessionName,
 									attempt,
+									compressDetected,
 								});
 							}
 						} catch (resizeErr) {
@@ -2720,7 +2735,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// the input is engaged. Enter on an empty `> ` prompt is a
 					// safe no-op (just shows a new blank prompt line).
 					await sessionHelper.sendEnter(sessionName);
-					await delay(500);
+					// Extra settling time after /compress to let Ink TUI stabilize
+					await delay(compressDetected ? 1000 : 500);
 				}
 
 				// For Gemini CLI: detect and gently escape interactive modes before
@@ -3076,6 +3092,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					await delay(SESSION_COMMAND_DELAYS.MESSAGE_RETRY_DELAY);
 				}
 			}
+		}
+
+		// Verification failed, but the message was physically written to the PTY.
+		// If the session is still alive, the agent will likely process it — return
+		// true to avoid false "Failed to deliver" errors shown to users (#99).
+		const backend = getSessionBackendSync();
+		const childAlive = backend?.isChildProcessAlive?.(sessionName);
+		if (childAlive !== false) {
+			this.logger.warn('Message delivery verification inconclusive but session alive — assuming success', {
+				sessionName,
+				maxAttempts,
+				messageLength: message.length,
+			});
+			return true;
 		}
 
 		this.logger.error('Message delivery failed after all retry attempts', {
@@ -3488,8 +3518,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return false;
 		}
 
-		// Only analyze the tail of the buffer to avoid matching historical prompts
-		const tailSection = terminalOutput.slice(-2000);
+		// Only analyze the tail of the buffer to avoid matching historical prompts.
+		// Use 5000 chars to accommodate large tool outputs that push the prompt
+		// further back in the buffer (#106).
+		const tailSection = terminalOutput.slice(-5000);
 
 		const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
 		const isClaudeCode = runtimeType === RUNTIME_TYPES.CLAUDE_CODE;
@@ -3511,8 +3543,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 		const hasPrompt = linesToCheck.some((line) => {
 			const trimmed = line.trim();
-			// Strip TUI box-drawing borders (│, ┃, etc.) that Gemini CLI wraps around prompts
-			const stripped = trimmed.replace(/^[│┃|]+\s*/, '').replace(/\s*[│┃|]+$/, '');
+			// Strip TUI box-drawing borders that Gemini CLI and other TUI frameworks
+			// wrap around prompts. Covers full Unicode box-drawing range (#106).
+			const stripped = trimmed
+				.replace(/^[\u2500-\u257F|+\-═║╭╮╰╯]+\s*/, '')
+				.replace(/\s*[\u2500-\u257F|+\-═║╭╮╰╯]+$/, '');
 
 			// Claude Code prompts: ❯, ⏵, $ alone on a line
 			if (!isGemini && !isCodex) {

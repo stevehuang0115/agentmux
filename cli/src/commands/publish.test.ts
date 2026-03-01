@@ -41,6 +41,12 @@ jest.mock('../utils/archive-creator.js', () => ({
   generateRegistryEntry: (...args: unknown[]) => mockGenerateRegistryEntry(...args),
 }));
 
+// Mock gh-submit
+const mockSubmitToGitHub = jest.fn();
+jest.mock('../utils/gh-submit.js', () => ({
+  submitToGitHub: (...args: unknown[]) => mockSubmitToGitHub(...args),
+}));
+
 // Mock fs
 jest.mock('fs', () => {
   const actual = jest.requireActual('fs');
@@ -126,5 +132,59 @@ describe('publishCommand', () => {
     expect(mockCreateArchive).toHaveBeenCalled();
     expect(mockGenerateChecksum).toHaveBeenCalledWith('/output/test-1.0.0.tar.gz');
     expect(mockConsole).toHaveBeenCalledWith(expect.stringContaining('Done'));
+  });
+
+  it('should call submitToGitHub when --submit flag is set', async () => {
+    mockValidate.mockReturnValue({
+      valid: true,
+      errors: [],
+      warnings: [],
+    });
+    mockCreateArchive.mockResolvedValue('/output/test-1.0.0.tar.gz');
+    mockGenerateChecksum.mockReturnValue('sha256:abc123');
+    mockGenerateRegistryEntry.mockReturnValue({
+      id: 'test',
+      type: 'skill',
+      name: 'Test',
+      version: '1.0.0',
+    });
+    mockSubmitToGitHub.mockResolvedValue({
+      prUrl: 'https://github.com/stevehuang0115/crewly/pull/99',
+      branch: 'skill/test',
+      username: 'testuser',
+    });
+
+    await publishCommand('/some/path', { submit: true });
+
+    expect(mockSubmitToGitHub).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ id: 'test' }),
+    );
+    expect(mockConsole).toHaveBeenCalledWith(
+      expect.stringContaining('Pull request created successfully'),
+    );
+  });
+
+  it('should show manual instructions when submit fails', async () => {
+    mockValidate.mockReturnValue({
+      valid: true,
+      errors: [],
+      warnings: [],
+    });
+    mockCreateArchive.mockResolvedValue('/output/test-1.0.0.tar.gz');
+    mockGenerateChecksum.mockReturnValue('sha256:abc123');
+    mockGenerateRegistryEntry.mockReturnValue({
+      id: 'test',
+      type: 'skill',
+    });
+    mockSubmitToGitHub.mockRejectedValue(new Error('gh not installed'));
+
+    await expect(publishCommand('/some/path', { submit: true })).rejects.toThrow('process.exit');
+    expect(mockConsole).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to submit'),
+    );
+    expect(mockConsole).toHaveBeenCalledWith(
+      expect.stringContaining('submit manually'),
+    );
   });
 });

@@ -115,7 +115,7 @@ export const SESSION_COMMAND_DELAYS = {
 export const TERMINAL_CONTROLLER_CONSTANTS = {
 	DEFAULT_CAPTURE_LINES: 50,
 	MAX_CAPTURE_LINES: 500,
-	MAX_OUTPUT_SIZE: 16384, // 16KB max output per request
+	MAX_OUTPUT_SIZE: 131072, // 128KB max output per request
 } as const;
 
 // Chat routing constants (message markers and patterns for orchestrator communication)
@@ -699,6 +699,7 @@ export const SLACK_FILE_UPLOAD_CONSTANTS = {
 	SUPPORTED_EXTENSIONS: [
 		'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
 		'.txt', '.csv', '.doc', '.docx', '.xls', '.xlsx',
+		'.mp4', '.mov', '.avi', '.mkv', '.mp3', '.wav', '.zip',
 	] as const,
 	/** Maximum number of retry attempts for Slack API 429 responses */
 	UPLOAD_MAX_RETRIES: SLACK_API_LIMITS.UPLOAD_MAX_RETRIES,
@@ -722,6 +723,10 @@ export const SLACK_FILE_DOWNLOAD_CONSTANTS = {
 	MAX_DOWNLOAD_REDIRECTS: 5,
 	/** Timeout for individual file download requests (ms) */
 	DOWNLOAD_TIMEOUT_MS: 60_000,
+	/** Maximum extracted text length included inline in messages (characters) */
+	MAX_EXTRACTED_TEXT_LENGTH: 8000,
+	/** MIME types eligible for text extraction */
+	EXTRACTABLE_MIMES: ['application/pdf'] as readonly string[],
 } as const;
 
 /**
@@ -747,6 +752,7 @@ export const EMBEDDING_CONSTANTS = {
  */
 export const MESSAGE_SOURCES = {
 	SLACK: 'slack',
+	WHATSAPP: 'whatsapp',
 	WEB_CHAT: 'web_chat',
 	SYSTEM_EVENT: 'system_event',
 } as const;
@@ -756,6 +762,34 @@ export const MARKETPLACE_CONSTANTS = CONFIG_MARKETPLACE_CONSTANTS;
 
 /** Typed message source value */
 export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
+
+/**
+ * Constants for WhatsApp integration via Baileys.
+ * Used by WhatsAppService, WhatsAppOrchestratorBridge, and WhatsApp controller
+ * for connection management and message handling.
+ */
+export const WHATSAPP_CONSTANTS = {
+	/** Directory name for auth state persistence (under ~/.crewly/) */
+	AUTH_DIR: 'whatsapp-auth',
+	/** Maximum text message length (WhatsApp limit) */
+	MAX_MESSAGE_LENGTH: 4000,
+	/** Maximum file size for sending documents (5 MB) */
+	MAX_FILE_SIZE: 5 * 1024 * 1024,
+	/** Delay between reconnection attempts (ms) */
+	RECONNECT_INTERVAL_MS: 5000,
+	/** Timeout for QR code scanning before expiry (ms) */
+	QR_TIMEOUT_MS: 60000,
+	/** Maximum response length from orchestrator before truncation */
+	MAX_RESPONSE_LENGTH: 3000,
+	/** Buffer added to message queue timeout for response timeout (ms) */
+	RESPONSE_TIMEOUT_BUFFER_MS: 5000,
+	/** Regex pattern for WhatsApp JID suffix */
+	JID_SUFFIX_PATTERN: /@s\.whatsapp\.net$/,
+	/** Regex pattern for phone number + prefix */
+	PHONE_PREFIX_PATTERN: /^\+/,
+	/** Fallback timeout when MESSAGE_QUEUE_CONSTANTS is unavailable (ms) */
+	DEFAULT_FALLBACK_TIMEOUT_MS: 120000,
+} as const;
 
 /** Google OAuth endpoint URLs and default scopes. */
 export const GOOGLE_OAUTH_CONSTANTS = {
