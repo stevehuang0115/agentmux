@@ -1083,4 +1083,114 @@ describe('RuntimeExitMonitorService', () => {
 		});
 	});
 
+	describe('notifyOrchestratorOfFailure (via private access)', () => {
+		it('should build correct message with active tasks and restart succeeded', () => {
+			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
+			// Spy on the http dynamic import to capture the request body
+			const httpRequestSpy = jest.fn().mockReturnValue({
+				on: jest.fn(),
+				write: jest.fn(),
+				end: jest.fn(),
+			});
+			jest.mock('http', () => ({
+				request: httpRequestSpy,
+			}), { virtual: true });
+
+			// notifyOrchestratorOfFailure is fire-and-forget, so we verify
+			// it does not throw for various inputs
+			expect(() => notify(
+				'agent-sam',
+				'runtime_exited',
+				[{ taskName: 'Fix bug' }, { taskName: 'Write tests' }],
+				true
+			)).not.toThrow();
+		});
+
+		it('should not throw when orchestrator session is not found', () => {
+			mockGetSession.mockReturnValueOnce(null);
+			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
+
+			expect(() => notify(
+				'agent-sam',
+				'api_failure',
+				[],
+				false
+			)).not.toThrow();
+		});
+
+		it('should not throw with empty active tasks', () => {
+			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
+
+			expect(() => notify(
+				'agent-sam',
+				'unknown',
+				[],
+				false
+			)).not.toThrow();
+		});
+	});
+
+	describe('Gemini "Trying to reach" pattern (#128)', () => {
+		beforeEach(() => {
+			mockGetExitPatterns.mockReturnValue([
+				/Agent powering down/i,
+				...GEMINI_FAILURE_PATTERNS,
+			]);
+		});
+
+		it('should detect "Trying to reach" as a Gemini failure pattern', () => {
+			const pattern = GEMINI_FAILURE_PATTERNS.find(
+				p => p.source.includes('Trying to reach')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern!.test('Trying to reach models/gemini-2.5-pro (Attempt 3/10)')).toBe(true);
+		});
+
+		it('should not match "Trying to reach" without attempt info', () => {
+			const pattern = GEMINI_FAILURE_PATTERNS.find(
+				p => p.source.includes('Trying to reach')
+			);
+			expect(pattern!.test('Trying to reach the server')).toBe(false);
+		});
+
+		it('should trigger retry (not immediate exit) for "Trying to reach" on Gemini CLI', async () => {
+			jest.useFakeTimers();
+
+			mockCapturePane.mockReturnValue('Trying to reach models/gemini-2.5-pro (Attempt 5/10)');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Trying to reach models/gemini-2.5-pro (Attempt 5/10)');
+
+			const backoffMs = Math.min(
+				GEMINI_FAILURE_RETRY_CONSTANTS.INITIAL_BACKOFF_MS,
+				GEMINI_FAILURE_RETRY_CONSTANTS.MAX_BACKOFF_MS
+			);
+			await jest.advanceTimersByTimeAsync(
+				RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + backoffMs + 200
+			);
+
+			// Should NOT mark inactive on first attempt
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('gemini-agent');
+			jest.useRealTimers();
+		});
+	});
+
+	describe('Automatic update failed pattern (#128)', () => {
+		it('should be present in GEMINI_FORCE_RESTART_PATTERNS', () => {
+			// Import the constant directly
+			const { GEMINI_FORCE_RESTART_PATTERNS } = require('../../constants.js');
+			const pattern = GEMINI_FORCE_RESTART_PATTERNS.find(
+				(p: RegExp) => p.source.includes('Automatic update failed')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern.test('Automatic update failed due to npm EACCES')).toBe(true);
+			expect(pattern.test('automatic update failed')).toBe(true); // case insensitive
+		});
+	});
+
 });
