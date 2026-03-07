@@ -772,10 +772,12 @@ describe('TeamModal Component', () => {
     });
 
     it('should exclude current team from parent dropdown when editing', async () => {
+      // Use a team with empty members to avoid fetchRoleDetails infinite loop
       const editTeam = {
-        ...mockTeam,
-        id: 'team-alpha', // Same as one of the mock teams
-        parentTeamId: undefined,
+        id: 'team-alpha',
+        name: 'Alpha Edit',
+        members: [],
+        projectIds: [],
       };
 
       await act(async () => {
@@ -792,8 +794,10 @@ describe('TeamModal Component', () => {
 
     it('should pre-select parent team when editing team with parentTeamId', async () => {
       const editTeam = {
-        ...mockTeam,
         id: 'team-1',
+        name: 'Test',
+        members: [],
+        projectIds: [],
         parentTeamId: 'team-beta',
       };
 
@@ -807,14 +811,17 @@ describe('TeamModal Component', () => {
 
     it('should include parentTeamId in submit data when parent is selected', async () => {
       const onSubmit = vi.fn();
+      // Provide a team with a member (no role to avoid fetchRoleDetails loop)
+      const teamWithMember = {
+        id: 'team-1',
+        name: 'Child Team',
+        members: [{ id: '1', name: 'Agent', role: '', systemPrompt: '', runtimeType: 'claude-code' }],
+        projectIds: [],
+      };
 
       await act(async () => {
-        render(<TeamModal {...defaultProps} onSubmit={onSubmit} />);
+        render(<TeamModal {...defaultProps} onSubmit={onSubmit} team={teamWithMember} />);
       });
-
-      // Set team name (required)
-      const nameInput = screen.getByLabelText('Team Name');
-      fireEvent.change(nameInput, { target: { name: 'name', value: 'Child Team' } });
 
       // Select parent team
       const parentSelect = screen.getByLabelText('Parent Team');
@@ -837,17 +844,19 @@ describe('TeamModal Component', () => {
 
     it('should send null parentTeamId when no parent selected', async () => {
       const onSubmit = vi.fn();
+      const teamWithMember = {
+        id: 'team-1',
+        name: 'Independent Team',
+        members: [{ id: '1', name: 'Agent', role: '', systemPrompt: '', runtimeType: 'claude-code' }],
+        projectIds: [],
+      };
 
       await act(async () => {
-        render(<TeamModal {...defaultProps} onSubmit={onSubmit} />);
+        render(<TeamModal {...defaultProps} onSubmit={onSubmit} team={teamWithMember} />);
       });
 
-      // Set team name (required)
-      const nameInput = screen.getByLabelText('Team Name');
-      fireEvent.change(nameInput, { target: { name: 'name', value: 'Independent Team' } });
-
       // Submit without selecting parent
-      const form = nameInput.closest('form');
+      const form = screen.getByLabelText('Parent Team').closest('form');
       await act(async () => {
         fireEvent.submit(form!);
       });
@@ -863,8 +872,10 @@ describe('TeamModal Component', () => {
 
     it('should allow clearing parent team selection', async () => {
       const editTeam = {
-        ...mockTeam,
         id: 'team-1',
+        name: 'Test',
+        members: [],
+        projectIds: [],
         parentTeamId: 'team-beta',
       };
 

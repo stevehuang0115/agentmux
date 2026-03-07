@@ -112,6 +112,9 @@ docs/xhs-content/
 docs/remote-agent-prd-*.md
 # secrets/
 
+# Gemini CLI local config
+.gemini/
+
 # Auto-generated MCP config (contains localhost URLs, environment-specific)
 .mcp.json
 
