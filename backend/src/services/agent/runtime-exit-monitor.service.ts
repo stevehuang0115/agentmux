@@ -31,6 +31,8 @@ import {
 	GEMINI_FAILURE_PATTERNS,
 	GEMINI_FORCE_RESTART_PATTERNS,
 	GEMINI_FAILURE_RETRY_CONSTANTS,
+	GEMINI_READY_PATTERNS,
+	WEB_CONSTANTS,
 	type RuntimeType,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -651,12 +653,7 @@ export class RuntimeExitMonitorService {
 		// Check if the CLI has recovered by looking for ready prompt patterns
 		try {
 			const output = helper.capturePane(sessionName, RECOVERY_CHECK_LINES);
-			const geminiReadyPatterns = [
-				'Type your message',
-				'gemini>',
-				'context left)',
-			];
-			const hasRecovered = geminiReadyPatterns.some((pattern) => output.includes(pattern));
+			const hasRecovered = GEMINI_READY_PATTERNS.some((pattern) => output.includes(pattern));
 
 			if (hasRecovered) {
 				this.logger.info('Gemini CLI recovered after transient failure', {
@@ -762,7 +759,7 @@ export class RuntimeExitMonitorService {
 				teamId: monitored.teamId,
 				memberId: monitored.memberId,
 				sessionName,
-				agentStatus: 'active',
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
 			});
 		}
 
@@ -970,7 +967,7 @@ export class RuntimeExitMonitorService {
 		}
 
 		// Use the deliver endpoint for reliable delivery to the orchestrator
-		const baseUrl = process.env.CREWLY_API_URL || 'http://localhost:8787';
+		const baseUrl = process.env.CREWLY_API_URL || `http://localhost:${WEB_CONSTANTS.PORTS.BACKEND}`;
 		const body = JSON.stringify({
 			message,
 			force: true,

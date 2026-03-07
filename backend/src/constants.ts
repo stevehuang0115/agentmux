@@ -17,6 +17,7 @@ import {
   ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS,
   MARKETPLACE_CONSTANTS as CONFIG_MARKETPLACE_CONSTANTS,
   PROCESS_EXIT_CODES as CONFIG_PROCESS_EXIT_CODES,
+  WEB_CONSTANTS as CONFIG_WEB_CONSTANTS,
 } from '../../config/constants.js';
 
 // Re-export the cross-domain constants for backend use
@@ -30,6 +31,7 @@ export const AGENT_SUSPEND_CONSTANTS = CONFIG_AGENT_SUSPEND_CONSTANTS;
 export const VERSION_CHECK_CONSTANTS = CONFIG_VERSION_CHECK_CONSTANTS;
 export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS;
 export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS;
+export const WEB_CONSTANTS = CONFIG_WEB_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
 export const ORCHESTRATOR_SESSION_NAME = CONFIG_CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
@@ -435,6 +437,14 @@ export const GEMINI_FAILURE_RETRY_CONSTANTS = {
 	RECOVERY_CHECK_LINES: 50,
 } as const;
 
+/**
+ * Named pattern for Gemini CLI stuck-connectivity detection (#128).
+ * Matches "Trying to reach <model> (Attempt N/M)" output, indicating
+ * the CLI is in a retry loop and won't recover without intervention.
+ * Used in both GEMINI_FAILURE_PATTERNS and the sendMessageWithRetry guard.
+ */
+export const GEMINI_STUCK_CONNECTIVITY_PATTERN = /Trying to reach .+\(Attempt \d+\/\d+\)/;
+
 export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/Request cancelled/,
 	/RESOURCE_EXHAUSTED/,
@@ -444,10 +454,7 @@ export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/DEADLINE_EXCEEDED/,
 	/PERMISSION_DENIED/,
 	/UNAUTHENTICATED/,
-	// Persistent connectivity failure after auto-update or network issues (#128).
-	// "Trying to reach <model> (Attempt N/10)" indicates the CLI is stuck in
-	// a retry loop and will not recover without intervention.
-	/Trying to reach .+\(Attempt \d+\/\d+\)/,
+	GEMINI_STUCK_CONNECTIVITY_PATTERN,
 ];
 
 /**
@@ -462,6 +469,35 @@ export const GEMINI_FORCE_RESTART_PATTERNS: RegExp[] = [
 	// The session needs a full restart to recover from npm EACCES errors.
 	/Automatic update failed/i,
 ];
+
+/**
+ * Gemini CLI ready-state patterns used for recovery detection.
+ * When any of these strings appear in terminal output, the CLI is
+ * considered operational and ready to accept input.
+ * Shared by RuntimeExitMonitorService and GeminiRuntimeService.
+ */
+export const GEMINI_READY_PATTERNS: readonly string[] = [
+	'Type your message',
+	'shell mode',
+	'gemini>',
+	'Ready for input',
+	'Model loaded',
+	'context left)',
+] as const;
+
+/**
+ * Constants for detecting Gemini CLI error-overlay state (#130).
+ * Used to identify and dismiss MCP connection error overlays
+ * before message delivery.
+ */
+export const GEMINI_ERROR_STATE_CONSTANTS = {
+	/** Unicode marker for error state in Gemini CLI status bar */
+	ERROR_MARKER: '\u2716',
+	/** Regex matching error count in the status area (e.g., "3 errors") */
+	ERROR_COUNT_PATTERN: /\d+ errors?\b/i,
+	/** Number of terminal lines from the bottom to consider as "status area" */
+	STATUS_AREA_LINES: 5,
+} as const;
 
 /**
  * Constants for runtime exit detection monitoring.

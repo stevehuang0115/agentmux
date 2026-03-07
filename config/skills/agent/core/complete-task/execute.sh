@@ -60,13 +60,6 @@ BODY=$(jq -n \
 api_call POST "/task-management/complete" "$BODY"
 
 # Auto-persist the task summary as project knowledge (#127).
-# Fire-and-forget — non-blocking, non-fatal.
 if [ -n "$SUMMARY" ]; then
-  REMEMBER_BODY=$(jq -n \
-    --arg agentId "$SESSION_NAME" \
-    --arg content "Task completed by ${SESSION_NAME}: ${SUMMARY}" \
-    --arg category "task-completion" \
-    --arg scope "project" \
-    '{agentId: $agentId, content: $content, category: $category, scope: $scope}')
-  api_call POST "/memory/remember" "$REMEMBER_BODY" 2>/dev/null || true
+  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}"
 fi

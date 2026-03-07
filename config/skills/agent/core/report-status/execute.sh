@@ -84,15 +84,6 @@ if [ "$STATUS" = "done" ]; then
 fi
 
 # Auto-persist key findings as project knowledge when task is done (#127).
-# Extract a concise learning from the summary and store it via the remember API.
-# This is fire-and-forget (non-blocking, non-fatal) to avoid slowing down
-# the completion flow.
 if [ "$STATUS" = "done" ] && [ -n "$SUMMARY" ]; then
-  REMEMBER_BODY=$(jq -n \
-    --arg agentId "$SESSION_NAME" \
-    --arg content "Task completed by ${SESSION_NAME}: ${SUMMARY}" \
-    --arg category "task-completion" \
-    --arg scope "project" \
-    '{agentId: $agentId, content: $content, category: $category, scope: $scope}')
-  api_call POST "/memory/remember" "$REMEMBER_BODY" 2>/dev/null || true
+  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}"
 fi

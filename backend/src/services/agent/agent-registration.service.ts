@@ -24,6 +24,8 @@ import {
 	EVENT_DELIVERY_CONSTANTS,
 	TERMINAL_PATTERNS,
 	GEMINI_SHELL_MODE_CONSTANTS,
+	GEMINI_STUCK_CONNECTIVITY_PATTERN,
+	GEMINI_ERROR_STATE_CONSTANTS,
 } from '../../constants.js';
 import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -2336,289 +2338,6 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
-	 * @deprecated Replaced by SessionCommandHelper.sendMessage() in sendMessageWithRetry.
-	 * Complex event-driven state machine was fragile — Enter key often got lost.
-	 * Kept as dead code for reference during transition.
-	 */
-	private async _deprecated_sendMessageEventDriven(
-		sessionName: string,
-		message: string,
-		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.TOTAL_DELIVERY_TIMEOUT
-	): Promise<boolean> {
-		const sessionHelper = await this.getSessionHelper();
-		const session = sessionHelper.getSession(sessionName);
-
-		if (!session) {
-			this.logger.error('Session not found for event-driven delivery', { sessionName });
-			return false;
-		}
-
-		return new Promise<boolean>((resolve) => {
-			let buffer = '';
-			let messageSent = false;
-			let enterSent = false;
-			let enterAccepted = false;
-			let deliveryConfirmed = false;
-			let resolved = false;
-
-			// Track all timeouts to prevent memory leaks (P1.1 fix)
-			const pendingTimeouts: NodeJS.Timeout[] = [];
-			const scheduleTimeout = (fn: () => void | Promise<void>, delayMs: number): NodeJS.Timeout => {
-				const id = setTimeout(fn, delayMs);
-				pendingTimeouts.push(id);
-				return id;
-			};
-
-			const cleanup = () => {
-				// Immediately mark as resolved to prevent race conditions (P1.2 fix)
-				const wasResolved = resolved;
-				resolved = true;
-				if (!wasResolved) {
-					// Clear all pending timeouts to prevent memory leaks
-					pendingTimeouts.forEach((id) => clearTimeout(id));
-					clearTimeout(timeoutId);
-					unsubscribe();
-				}
-			};
-
-			// Use centralized patterns from TERMINAL_PATTERNS
-			const PASTE_PATTERN = TERMINAL_PATTERNS.PASTE_INDICATOR;
-			const PROCESSING_PATTERN = TERMINAL_PATTERNS.PROCESSING;
-
-			// Use centralized timing from EVENT_DELIVERY_CONSTANTS
-			const INITIAL_DELAY = EVENT_DELIVERY_CONSTANTS.INITIAL_MESSAGE_DELAY;
-			const PASTE_CHECK_DELAY = EVENT_DELIVERY_CONSTANTS.PASTE_CHECK_DELAY;
-			const ENTER_RETRY_DELAY = EVENT_DELIVERY_CONSTANTS.ENTER_RETRY_DELAY;
-			const MAX_ENTER_RETRIES = EVENT_DELIVERY_CONSTANTS.MAX_ENTER_RETRIES;
-			const MAX_BUFFER_SIZE = EVENT_DELIVERY_CONSTANTS.MAX_BUFFER_SIZE;
-
-		// Helper to send the message when prompt is detected
-			const sendMessageNow = () => {
-				if (messageSent || resolved) return;
-
-				this.logger.debug('Claude at prompt, sending message', {
-					sessionName,
-					messageLength: message.length,
-					isMultiLine: message.includes('\n'),
-				});
-
-				// Send the message text
-				session.write(message);
-				messageSent = true;
-				const isMultiLine = message.includes('\n');
-
-				// Track Enter key state
-				let enterAttempts = 0;
-				let processingDetected = false;
-				const bufferAtSend = buffer;
-
-				// Function to send Enter and track attempts
-				const sendEnterKey = (reason: string) => {
-					if (resolved || processingDetected) return;
-					enterAttempts++;
-					session.write('\r');
-					enterSent = true;
-					this.logger.debug('Enter key sent', {
-						sessionName,
-						attempt: enterAttempts,
-						reason,
-					});
-				};
-
-				// Function to check if Enter was accepted (processing started)
-				const checkProcessingStarted = (): boolean => {
-					const newData = buffer.slice(bufferAtSend.length);
-					return PROCESSING_PATTERN.test(newData);
-				};
-
-				// Function to check for paste indicator
-				const checkPasteIndicator = (): boolean => {
-					const newData = buffer.slice(bufferAtSend.length);
-					return PASTE_PATTERN.test(newData);
-				};
-
-				// Strategy: Send Enter with progressive timing, retry if not accepted
-				const attemptEnter = (attemptNum: number) => {
-					if (resolved || processingDetected) return;
-
-					// Check if processing already started
-					if (checkProcessingStarted()) {
-						processingDetected = true;
-						enterAccepted = true;
-						this.logger.debug('Processing detected, message accepted', { sessionName, attemptNum });
-						buffer = ''; // Reset for processing indicator detection
-						return;
-					}
-
-					if (attemptNum > MAX_ENTER_RETRIES) {
-						this.logger.warn('Max Enter retries reached, verifying message acceptance', { sessionName });
-						scheduleTimeout(async () => {
-							if (resolved) return;
-							const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-							if (stuck) {
-								this.logger.warn('Message stuck at prompt after all Enter retries', { sessionName });
-								const stuckHelper = await this.getSessionHelper();
-								await stuckHelper.clearCurrentCommandLine(sessionName);
-								enterAccepted = false;
-							} else {
-								this.logger.debug('Message appears accepted (no longer at prompt)', { sessionName });
-								enterAccepted = true;
-								buffer = '';
-							}
-						}, EVENT_DELIVERY_CONSTANTS.POST_ENTER_VERIFICATION_DELAY);
-						return;
-					}
-
-					sendEnterKey(attemptNum === 1 ? 'initial' : `retry-${attemptNum}`);
-
-					// Schedule check and possible retry (using tracked timeout to prevent leaks)
-					scheduleTimeout(() => {
-						if (resolved) return;
-
-						if (checkProcessingStarted()) {
-							processingDetected = true;
-							enterAccepted = true;
-							this.logger.debug('Processing detected after Enter', { sessionName, attemptNum });
-							buffer = '';
-						} else {
-							// Not accepted yet, retry
-							this.logger.debug('Enter may not have been accepted, retrying', {
-								sessionName,
-								attemptNum,
-								bufferLength: buffer.length,
-							});
-							attemptEnter(attemptNum + 1);
-						}
-					}, ENTER_RETRY_DELAY);
-				};
-
-				// For multi-line messages, wait longer for paste indicator
-				// For single-line messages, send Enter sooner
-				const initialWait = isMultiLine ? PASTE_CHECK_DELAY : INITIAL_DELAY;
-
-				scheduleTimeout(() => {
-					if (resolved) return;
-
-					// For multi-line: check if paste indicator appeared
-					if (isMultiLine && checkPasteIndicator()) {
-						this.logger.debug('Paste indicator detected', { sessionName });
-					}
-
-					// Start Enter key attempts
-					attemptEnter(1);
-				}, initialWait);
-			};
-
-			const timeoutId = setTimeout(async () => {
-				this.logger.debug('Event-driven delivery timed out', {
-					sessionName,
-					messageSent,
-					enterSent,
-					enterAccepted,
-					deliveryConfirmed,
-					bufferLength: buffer.length,
-				});
-
-				// If Enter was sent but not confirmed accepted, verify via terminal capture
-				if (enterSent && !enterAccepted && !deliveryConfirmed) {
-					const timeoutHelper = await this.getSessionHelper();
-					const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-					if (stuck) {
-						this.logger.warn('Timeout: message stuck at prompt, clearing and failing', { sessionName });
-						await timeoutHelper.clearCurrentCommandLine(sessionName);
-						cleanup();
-						resolve(false);
-						return;
-					}
-					this.logger.debug('Timeout: message not at prompt, treating as accepted', { sessionName });
-				}
-
-				cleanup();
-				resolve(enterAccepted || deliveryConfirmed);
-			}, timeoutMs);
-
-			// IMPORTANT: Check current terminal state, but wait for output to settle first.
-			// If the orchestrator just finished outputting (greeting, notification, status bar),
-			// the prompt may not be cleanly detectable. We capture the pane, wait briefly,
-			// and re-capture. If output is still changing, wait again before checking prompt.
-			// Use 50 lines to account for status bars and notifications that can
-			// wrap across many lines and push the prompt out of a smaller window.
-			const waitForSettled = async () => {
-				let prevOutput = sessionHelper.capturePane(sessionName);
-				for (let i = 0; i < 5; i++) { // Max 5 checks, 500ms apart = 2.5s max
-					if (resolved) return;
-					await delay(500);
-					if (resolved) return;
-					const currentOutput = sessionHelper.capturePane(sessionName);
-					if (currentOutput === prevOutput) {
-						// Output settled
-						if (this.isClaudeAtPrompt(currentOutput)) {
-							this.logger.debug('Claude at prompt after output settled', { sessionName, settleChecks: i + 1 });
-							sendMessageNow();
-						}
-						return;
-					}
-					prevOutput = currentOutput;
-				}
-				// Output still changing after 2.5s - check anyway
-				if (!resolved && this.isClaudeAtPrompt(prevOutput)) {
-					this.logger.debug('Claude at prompt (output still changing, checking anyway)', { sessionName });
-					sendMessageNow();
-				}
-			};
-			waitForSettled();
-
-			const unsubscribe = session.onData((data) => {
-				if (resolved) return;
-
-				// Accumulate data with size limit to prevent memory exhaustion (P2.3 fix)
-				buffer += data;
-				if (buffer.length > MAX_BUFFER_SIZE) {
-					buffer = buffer.slice(-MAX_BUFFER_SIZE);
-				}
-
-				// Phase 1: Wait for Claude to be at prompt before sending
-				if (!messageSent) {
-					const isAtPrompt = buffer.split('\n').some(
-						line => line.trim().length > 0 && isPromptLine(line)
-					);
-
-					if (isAtPrompt) {
-						sendMessageNow();
-					}
-					return;
-				}
-
-				// Phase 2: Only check for processing indicators AFTER Enter has been sent
-				if (!enterSent) {
-					return; // Wait for Enter to be sent
-				}
-
-				// Look for processing indicators confirming delivery
-				const hasProcessingIndicator = containsProcessingIndicator(buffer);
-
-				// Also check if prompt disappeared (Claude is working)
-				const promptStillVisible = buffer.split('\n').some(
-					line => line.trim().length > 0 && isPromptLine(line)
-				);
-
-				// Use constant for minimum buffer check (P3.2 fix)
-				if (hasProcessingIndicator || (!promptStillVisible && buffer.length > EVENT_DELIVERY_CONSTANTS.MIN_BUFFER_FOR_PROCESSING_DETECTION)) {
-					this.logger.debug('Message delivery confirmed (event-driven)', {
-						sessionName,
-						hasProcessingIndicator,
-						promptStillVisible,
-						bufferLength: buffer.length,
-					});
-					deliveryConfirmed = true;
-					cleanup();
-					resolve(true);
-				}
-			});
-		});
-	}
-
-	/**
 	 * Send message with retry logic for reliable delivery to Claude Code.
 	 * Uses SessionCommandHelper.sendMessage() (proven two-step write pattern)
 	 * with stuck-message detection and retry on failure.
@@ -2661,7 +2380,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// "Trying to reach <model>" retry loop, it will never process
 				// new messages. Bail out immediately so the caller gets a clear
 				// failure signal and the runtime-exit-monitor can trigger recovery.
-				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI && /Trying to reach .+\(Attempt \d+\/\d+\)/.test(output)) {
+				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI && GEMINI_STUCK_CONNECTIVITY_PATTERN.test(output)) {
 					this.logger.warn('Gemini CLI stuck in connectivity retry loop, aborting message delivery (#128)', {
 						sessionName,
 						attempt,
@@ -2776,13 +2495,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					const compressDetected = recentOutput.includes('/compress') ||
 						recentOutput.includes('Context compressed') ||
 						recentOutput.includes('Compressing context');
-					// Check for Gemini CLI error indicators in the status bar area.
-					// ✖ is the definitive error marker. Also check for "error" but
-					// only in the bottom status area (last 5 lines) to avoid matching
-					// the word "error" in the agent's response text (#130).
-					const statusArea = recentOutput.split('\n').slice(-5).join('\n');
-					const errorStateDetected = recentOutput.includes('✖') ||
-						/\d+ errors?\b/i.test(statusArea);
+					// Check for Gemini CLI error indicators in the status bar area (#130).
+					const statusArea = recentOutput.split('\n').slice(-GEMINI_ERROR_STATE_CONSTANTS.STATUS_AREA_LINES).join('\n');
+					const errorStateDetected = recentOutput.includes(GEMINI_ERROR_STATE_CONSTANTS.ERROR_MARKER) ||
+						GEMINI_ERROR_STATE_CONSTANTS.ERROR_COUNT_PATTERN.test(statusArea);
 					const needsResize = attempt > 1 || compressDetected || errorStateDetected;
 
 					// Force a PTY resize to trigger SIGWINCH, making Ink
