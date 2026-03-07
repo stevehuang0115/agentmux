@@ -24,11 +24,6 @@ import type {
   ChatSenderType,
   ChatContentType,
 } from '../../types/chat.types.js';
-import {
-  createChatMessage,
-  detectContentType,
-  formatMessageContent,
-} from '../../types/chat.types.js';
 
 // Module-level message queue service instance
 let messageQueueService: MessageQueueService | null = null;
@@ -288,21 +283,7 @@ export async function agentResponse(
       }
     }
 
-    // Format and create the message
     const resolvedSenderType = senderType || 'agent';
-    const formattedContent = formatMessageContent(content);
-    const contentType = detectContentType(formattedContent);
-
-    const message = createChatMessage({
-      conversationId: resolvedConversationId,
-      content: formattedContent,
-      from: {
-        type: resolvedSenderType as ChatSenderType,
-        name: senderName,
-      },
-      contentType,
-      status: 'delivered',
-    });
 
     // Use addDirectMessage to persist and emit events
     const savedMessage = await chatService.addDirectMessage(

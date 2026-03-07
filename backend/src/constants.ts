@@ -407,18 +407,6 @@ export const GEMINI_SHELL_MODE_CONSTANTS = {
 } as const;
 
 /**
- * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
- * These patterns are distinct from exit patterns (which indicate the CLI has shut down
- * cleanly). Failure patterns match error states where the CLI may still be running
- * but is non-functional and requires a restart.
- *
- * Used by GeminiRuntimeService and RuntimeExitMonitorService.
- *
- * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
- * `as const` produces a readonly tuple of regex literals, which complicates
- * usage with array methods like `.some()` and `.find()`.
- */
-/**
  * Constants for Gemini CLI failure retry with exponential backoff.
  * When Gemini API errors (RESOURCE_EXHAUSTED, UNAVAILABLE, etc.) are detected,
  * the system waits and retries before declaring the agent dead. Gemini CLI
@@ -445,6 +433,18 @@ export const GEMINI_FAILURE_RETRY_CONSTANTS = {
  */
 export const GEMINI_STUCK_CONNECTIVITY_PATTERN = /Trying to reach .+\(Attempt \d+\/\d+\)/;
 
+/**
+ * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
+ * These patterns are distinct from exit patterns (which indicate the CLI has shut down
+ * cleanly). Failure patterns match error states where the CLI may still be running
+ * but is non-functional and requires a restart.
+ *
+ * Used by GeminiRuntimeService and RuntimeExitMonitorService.
+ *
+ * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
+ * `as const` produces a readonly tuple of regex literals, which complicates
+ * usage with array methods like `.some()` and `.find()`.
+ */
 export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/Request cancelled/,
 	/RESOURCE_EXHAUSTED/,

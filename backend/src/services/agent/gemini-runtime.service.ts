@@ -230,7 +230,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// that doesn't depend on the CLI being ready for interactive commands.
 		await this.ensureGeminiMcpConfig(effectiveProjectPath);
 
-		// Ensure GOOGLE_GENAI_API_KEY is in the project .env file
+		// Ensure GEMINI_API_KEY is in the project .env file
 		await this.ensureGeminiEnvFile(effectiveProjectPath);
 
 		// Ensure required paths are trusted by Gemini CLI before /directory add.

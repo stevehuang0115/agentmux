@@ -377,8 +377,7 @@ export class RuntimeExitMonitorService {
 				if (isGeminiFailure || isGeminiForceRestart) {
 					// Some Gemini failures are transient; others (auto-update/restart)
 					// should trigger immediate recovery and task re-delivery.
-					const forceRestart = isGeminiForceRestart;
-					if (forceRestart) {
+					if (isGeminiForceRestart) {
 						this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
 							sessionName,
 						});
