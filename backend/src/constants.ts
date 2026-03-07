@@ -16,9 +16,12 @@ import {
   AGENT_HEARTBEAT_MONITOR_CONSTANTS as CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS,
   ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS,
   MARKETPLACE_CONSTANTS as CONFIG_MARKETPLACE_CONSTANTS,
+  PROCESS_EXIT_CODES as CONFIG_PROCESS_EXIT_CODES,
+  WEB_CONSTANTS as CONFIG_WEB_CONSTANTS,
 } from '../../config/constants.js';
 
 // Re-export the cross-domain constants for backend use
+export const PROCESS_EXIT_CODES = CONFIG_PROCESS_EXIT_CODES;
 export const AGENT_IDENTITY_CONSTANTS = CONFIG_AGENT_IDENTITY_CONSTANTS;
 export const TIMING_CONSTANTS = CONFIG_TIMING_CONSTANTS;
 export const MEMORY_CONSTANTS = CONFIG_MEMORY_CONSTANTS;
@@ -28,6 +31,7 @@ export const AGENT_SUSPEND_CONSTANTS = CONFIG_AGENT_SUSPEND_CONSTANTS;
 export const VERSION_CHECK_CONSTANTS = CONFIG_VERSION_CHECK_CONSTANTS;
 export const AGENT_HEARTBEAT_MONITOR_CONSTANTS = CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS;
 export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS;
+export const WEB_CONSTANTS = CONFIG_WEB_CONSTANTS;
 
 // Re-export specific constants that the backend needs from the main config
 export const ORCHESTRATOR_SESSION_NAME = CONFIG_CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME;
@@ -182,8 +186,10 @@ export const EVENT_DELIVERY_CONSTANTS = {
 	USER_MESSAGE_TIMEOUT: 30000,
 	/** Whether to force-deliver user messages after timeout instead of re-queuing */
 	USER_MESSAGE_FORCE_DELIVER: true,
-	/** Shorter timeout for system events to reduce notification delay (ms) */
-	SYSTEM_EVENT_TIMEOUT: 60000,
+	/** Shorter timeout for system events to reduce notification delay (ms).
+	 *  Reduced from 60s to 15s (#124) — agent completion notifications were
+	 *  taking 3-10 minutes because system events waited too long for prompt. */
+	SYSTEM_EVENT_TIMEOUT: 15000,
 	/** Whether to force-deliver system events after timeout instead of re-queuing.
 	 *  System events are fire-and-forget (no response expected), so force-delivery
 	 *  is lower risk than for user messages. Prevents the 5×120s=10min retry loop. */
@@ -292,6 +298,17 @@ export const MESSAGE_QUEUE_CONSTANTS = {
 } as const;
 
 /**
+ * Activity monitor constants for agent idle/busy detection.
+ * Used by ActivityMonitorService for terminal output polling.
+ */
+export const ACTIVITY_MONITOR_CONSTANTS = {
+	/** Polling interval for checking terminal output changes (ms).
+	 *  Reduced from 120s to 30s (#124) to detect agent idle state faster,
+	 *  cutting notification delay from 2min to 30s worst-case. */
+	POLLING_INTERVAL_MS: 30000,
+} as const;
+
+/**
  * Event bus constants for the agent event pub/sub system.
  * Used by EventBusService for subscription management and notification delivery.
  */
@@ -390,18 +407,6 @@ export const GEMINI_SHELL_MODE_CONSTANTS = {
 } as const;
 
 /**
- * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
- * These patterns are distinct from exit patterns (which indicate the CLI has shut down
- * cleanly). Failure patterns match error states where the CLI may still be running
- * but is non-functional and requires a restart.
- *
- * Used by GeminiRuntimeService and RuntimeExitMonitorService.
- *
- * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
- * `as const` produces a readonly tuple of regex literals, which complicates
- * usage with array methods like `.some()` and `.find()`.
- */
-/**
  * Constants for Gemini CLI failure retry with exponential backoff.
  * When Gemini API errors (RESOURCE_EXHAUSTED, UNAVAILABLE, etc.) are detected,
  * the system waits and retries before declaring the agent dead. Gemini CLI
@@ -420,6 +425,26 @@ export const GEMINI_FAILURE_RETRY_CONSTANTS = {
 	RECOVERY_CHECK_LINES: 50,
 } as const;
 
+/**
+ * Named pattern for Gemini CLI stuck-connectivity detection (#128).
+ * Matches "Trying to reach <model> (Attempt N/M)" output, indicating
+ * the CLI is in a retry loop and won't recover without intervention.
+ * Used in both GEMINI_FAILURE_PATTERNS and the sendMessageWithRetry guard.
+ */
+export const GEMINI_STUCK_CONNECTIVITY_PATTERN = /Trying to reach .+\(Attempt \d+\/\d+\)/;
+
+/**
+ * Gemini CLI failure patterns that indicate the CLI is stuck and needs recovery.
+ * These patterns are distinct from exit patterns (which indicate the CLI has shut down
+ * cleanly). Failure patterns match error states where the CLI may still be running
+ * but is non-functional and requires a restart.
+ *
+ * Used by GeminiRuntimeService and RuntimeExitMonitorService.
+ *
+ * Note: Explicitly typed as `RegExp[]` instead of using `as const` because
+ * `as const` produces a readonly tuple of regex literals, which complicates
+ * usage with array methods like `.some()` and `.find()`.
+ */
 export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/Request cancelled/,
 	/RESOURCE_EXHAUSTED/,
@@ -429,6 +454,7 @@ export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/DEADLINE_EXCEEDED/,
 	/PERMISSION_DENIED/,
 	/UNAUTHENTICATED/,
+	GEMINI_STUCK_CONNECTIVITY_PATTERN,
 ];
 
 /**
@@ -439,7 +465,39 @@ export const GEMINI_FORCE_RESTART_PATTERNS: RegExp[] = [
 	/Gemini CLI update available!/i,
 	/Attempting to automatically update now/i,
 	/Gemini CLI is restarting to apply the trust changes/i,
+	// Auto-update failure leaves the CLI in a broken state (#128).
+	// The session needs a full restart to recover from npm EACCES errors.
+	/Automatic update failed/i,
 ];
+
+/**
+ * Gemini CLI ready-state patterns used for recovery detection.
+ * When any of these strings appear in terminal output, the CLI is
+ * considered operational and ready to accept input.
+ * Shared by RuntimeExitMonitorService and GeminiRuntimeService.
+ */
+export const GEMINI_READY_PATTERNS: readonly string[] = [
+	'Type your message',
+	'shell mode',
+	'gemini>',
+	'Ready for input',
+	'Model loaded',
+	'context left)',
+] as const;
+
+/**
+ * Constants for detecting Gemini CLI error-overlay state (#130).
+ * Used to identify and dismiss MCP connection error overlays
+ * before message delivery.
+ */
+export const GEMINI_ERROR_STATE_CONSTANTS = {
+	/** Unicode marker for error state in Gemini CLI status bar */
+	ERROR_MARKER: '\u2716',
+	/** Regex matching error count in the status area (e.g., "3 errors") */
+	ERROR_COUNT_PATTERN: /\d+ errors?\b/i,
+	/** Number of terminal lines from the bottom to consider as "status area" */
+	STATUS_AREA_LINES: 5,
+} as const;
 
 /**
  * Constants for runtime exit detection monitoring.
@@ -534,6 +592,44 @@ export const RUNTIME_COMPACT_COMMANDS: Record<RuntimeType, string> = {
 	'gemini-cli': '/compress',
 	'codex-cli': '/compact',
 } as const;
+
+/**
+ * Constants for OAuth auto-relogin monitoring.
+ * Used by OAuthReloginMonitorService to detect OAuth token expiry errors
+ * in PTY session output and automatically send /login to re-authenticate.
+ */
+export const OAUTH_RELOGIN_CONSTANTS = {
+	/** Maximum rolling buffer size for PTY output (bytes) */
+	MAX_BUFFER_SIZE: 4096,
+	/** Cooldown between /login attempts per session (ms) — 2 minutes */
+	RELOGIN_COOLDOWN_MS: 120_000,
+	/** Grace period after session start before monitoring begins (ms) */
+	STARTUP_GRACE_PERIOD_MS: 30_000,
+	/** Delay after detecting error before sending /login (ms) — debounce */
+	DETECTION_DEBOUNCE_MS: 2_000,
+	/** Maximum /login attempts per cooldown window before giving up */
+	MAX_ATTEMPTS_PER_WINDOW: 3,
+	/** Cooldown window for tracking max attempts (ms) — 10 minutes */
+	ATTEMPT_WINDOW_MS: 600_000,
+	/** Delay after sending Escape before writing /login command (ms) */
+	PRE_COMMAND_DELAY_MS: 200,
+	/** Timeout for waiting for OAuth URL to appear after /login (ms) — 30 seconds */
+	URL_CAPTURE_TIMEOUT_MS: 30_000,
+	/** Max buffer size during URL capture mode (bytes) — larger to capture full URL */
+	URL_CAPTURE_BUFFER_SIZE: 8192,
+} as const;
+
+/**
+ * String patterns that indicate an OAuth token has expired in PTY output.
+ * Uses plain string matching (indexOf) instead of regex to prevent ReDoS.
+ * All patterns must be present (AND logic) within the rolling buffer.
+ */
+export const OAUTH_ERROR_PATTERN_SETS: string[][] = [
+	['authentication_error', 'OAuth token has expired'],
+	['authentication_error', 'oauth token expired'],
+	['401', 'OAuth token has expired'],
+	['invalid_api_key', 'OAuth token has expired'],
+];
 
 /**
  * Constants for sub-agent message queue.
@@ -743,6 +839,95 @@ export const GOOGLE_OAUTH_CONSTANTS = {
 		'https://www.googleapis.com/auth/gmail.send',
 	],
 } as const;
+
+/**
+ * Constants for CrewlyAI Cloud integration.
+ * Used by CloudClientService and CloudAuthMiddleware to connect
+ * the open-source Crewly instance to CrewlyAI Cloud for premium features.
+ */
+export const CLOUD_CONSTANTS = {
+	/** Default CrewlyAI Cloud API base URL */
+	DEFAULT_CLOUD_URL: 'https://cloud.crewly.dev',
+	/** API version prefix for all cloud endpoints */
+	API_VERSION: '/v1',
+	/** Cloud API endpoints */
+	ENDPOINTS: {
+		/** Authentication and token verification */
+		AUTH_TOKEN: '/v1/auth/token',
+		/** Sync local config with cloud subscription status */
+		SYNC: '/v1/cloud/sync',
+		/** List premium templates */
+		TEMPLATES: '/v1/templates/premium',
+		/** Get template detail by ID */
+		TEMPLATE_DETAIL: '/v1/templates/premium/:id',
+	},
+	/** HTTP request timeouts (ms) */
+	TIMEOUTS: {
+		/** Timeout for connect/auth requests */
+		CONNECT: 10000,
+		/** Timeout for fetching template lists */
+		FETCH_TEMPLATES: 15000,
+		/** Timeout for fetching template detail */
+		FETCH_TEMPLATE_DETAIL: 10000,
+		/** Timeout for status/sync requests */
+		STATUS: 5000,
+	},
+	/** Subscription tiers */
+	TIERS: {
+		FREE: 'free',
+		PRO: 'pro',
+		ENTERPRISE: 'enterprise',
+	},
+	/** Connection statuses */
+	CONNECTION_STATUS: {
+		DISCONNECTED: 'disconnected',
+		CONNECTED: 'connected',
+		ERROR: 'error',
+	},
+	/** Relay-specific endpoints */
+	RELAY_ENDPOINTS: {
+		/** Register a local instance as a relay node */
+		REGISTER: '/v1/relay/register',
+		/** Get relay status */
+		STATUS: '/v1/relay/status',
+	},
+	/** Relay WebSocket configuration */
+	RELAY: {
+		/** Default WebSocket relay port */
+		DEFAULT_PORT: 8787,
+		/** Heartbeat interval sent by client (ms) */
+		HEARTBEAT_INTERVAL_MS: 30_000,
+		/** Server considers client dead after this many missed heartbeats */
+		HEARTBEAT_TIMEOUT_MS: 90_000,
+		/** Delay before attempting reconnection after disconnect (ms) */
+		RECONNECT_BASE_DELAY_MS: 1_000,
+		/** Maximum reconnection delay with exponential backoff (ms) */
+		RECONNECT_MAX_DELAY_MS: 30_000,
+		/** Maximum number of reconnection attempts before giving up */
+		MAX_RECONNECT_ATTEMPTS: 10,
+		/** Timeout for the initial WebSocket handshake (ms) */
+		HANDSHAKE_TIMEOUT_MS: 10_000,
+		/** Maximum message payload size (1 MB) */
+		MAX_PAYLOAD_BYTES: 1_048_576,
+		/** E2EE key derivation iterations (PBKDF2) */
+		KEY_DERIVATION_ITERATIONS: 100_000,
+		/** AES-GCM IV length (bytes) */
+		IV_LENGTH: 12,
+		/** AES-GCM auth tag length (bytes) */
+		AUTH_TAG_LENGTH: 16,
+		/** Encryption algorithm */
+		CIPHER_ALGORITHM: 'aes-256-gcm',
+		/** Key length (bytes) */
+		KEY_LENGTH: 32,
+	},
+} as const;
+
+/** Subscription tier type */
+export type CloudTier = (typeof CLOUD_CONSTANTS.TIERS)[keyof typeof CLOUD_CONSTANTS.TIERS];
+
+/** Cloud connection status type */
+export type CloudConnectionStatus =
+	(typeof CLOUD_CONSTANTS.CONNECTION_STATUS)[keyof typeof CLOUD_CONSTANTS.CONNECTION_STATUS];
 
 // Type helpers
 export type AgentStatus =

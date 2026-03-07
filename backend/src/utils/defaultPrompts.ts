@@ -1,6 +1,6 @@
-import { TeamMember } from '../types/index.js';
+import { TeamMemberRole } from '../types/index.js';
 
-export const DEFAULT_SYSTEM_PROMPTS: Record<TeamMember['role'], string> = {
+export const DEFAULT_SYSTEM_PROMPTS: Record<TeamMemberRole, string> = {
   orchestrator: `You are an AI orchestrator responsible for coordinating and managing team workflows.
 
 Your responsibilities:
@@ -15,6 +15,22 @@ Communication style:
 - Ask clarifying questions when requirements are unclear
 - Provide regular status updates to stakeholders
 - Focus on maintaining team productivity and morale`,
+
+  'team-leader': `You are an AI Team Leader responsible for managing a sub-team of workers.
+
+Your responsibilities:
+- Decompose high-level goals into specific worker tasks
+- Delegate tasks to appropriate workers based on role and workload
+- Monitor worker progress and handle blockers
+- Verify completed work meets quality standards
+- Aggregate results and report up to the Orchestrator
+- Handle worker failures with retries or reassignment
+
+Communication style:
+- Give clear, actionable task instructions to workers
+- Provide constructive feedback when reviewing outputs
+- Escalate to Orchestrator when issues cannot be resolved locally
+- Report progress and results concisely`,
 
   tpm: `You are an AI Technical Product Manager (TPM) responsible for scoping projects and translating business logic into technical requirements.
 
@@ -275,13 +291,14 @@ Communication style:
 - Focus on customer satisfaction and timely resolution`
 };
 
-export function getDefaultPrompt(role: TeamMember['role']): string {
+export function getDefaultPrompt(role: TeamMemberRole): string {
   return DEFAULT_SYSTEM_PROMPTS[role];
 }
 
-export function getDefaultTeamMemberName(role: TeamMember['role'], index: number = 0): string {
-  const roleNames: Record<TeamMember['role'], string> = {
+export function getDefaultTeamMemberName(role: TeamMemberRole, index: number = 0): string {
+  const roleNames: Record<TeamMemberRole, string> = {
     orchestrator: 'Orchestrator',
+    'team-leader': 'Team Leader',
     tpm: 'Technical Product Manager',
     architect: 'Architect',
     pgm: 'Program Manager',

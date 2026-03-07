@@ -7,6 +7,11 @@ export class TeamModel implements Team {
   description?: string;
   members: TeamMember[];
   projectIds: string[];
+  hierarchical?: boolean;
+  leaderId?: string;
+  leaderIds?: string[];
+  templateId?: string;
+  parentTeamId?: string;
   createdAt: string;
   updatedAt: string;
 
@@ -16,6 +21,11 @@ export class TeamModel implements Team {
     this.description = data.description;
     this.members = data.members || [];
     this.projectIds = data.projectIds || [];
+    this.hierarchical = data.hierarchical;
+    this.leaderIds = data.leaderIds;
+    this.leaderId = data.leaderId;
+    this.templateId = data.templateId;
+    this.parentTeamId = data.parentTeamId;
     this.createdAt = data.createdAt || new Date().toISOString();
     this.updatedAt = data.updatedAt || new Date().toISOString();
   }
@@ -70,6 +80,11 @@ export class TeamModel implements Team {
       description: this.description,
       members: this.members,
       projectIds: this.projectIds,
+      ...(this.hierarchical !== undefined ? { hierarchical: this.hierarchical } : {}),
+      ...(this.leaderId !== undefined ? { leaderId: this.leaderId } : {}),
+      ...(this.leaderIds !== undefined ? { leaderIds: this.leaderIds } : {}),
+      ...(this.templateId !== undefined ? { templateId: this.templateId } : {}),
+      ...(this.parentTeamId !== undefined ? { parentTeamId: this.parentTeamId } : {}),
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
@@ -84,6 +99,15 @@ export class TeamModel implements Team {
       migratedData.projectIds = [(data as any).currentProject];
     } else {
       migratedData.projectIds = data.projectIds || [];
+    }
+
+    // Migration: sync leaderId and leaderIds
+    if (migratedData.leaderIds && migratedData.leaderIds.length > 0) {
+      // leaderIds is the source of truth; sync leaderId for backward compat
+      migratedData.leaderId = migratedData.leaderIds[0];
+    } else if (migratedData.leaderId && !migratedData.leaderIds) {
+      // Legacy data: only has leaderId, migrate to leaderIds
+      migratedData.leaderIds = [migratedData.leaderId];
     }
 
     // Migrate legacy status fields for team members

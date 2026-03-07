@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import * as http from 'http';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { StorageService } from '../core/storage.service.js';
 import {
@@ -17,6 +18,9 @@ import { TaskTrackingService } from '../project/task-tracking.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { InProgressTask } from '../../types/task-tracking.types.js';
+import type { EventBusService } from '../event-bus/event-bus.service.js';
+import type { AgentEvent } from '../../types/event-bus.types.js';
+import * as crypto from 'crypto';
 import {
 	CREWLY_CONSTANTS,
 	ORCHESTRATOR_SESSION_NAME,
@@ -28,6 +32,8 @@ import {
 	GEMINI_FAILURE_PATTERNS,
 	GEMINI_FORCE_RESTART_PATTERNS,
 	GEMINI_FAILURE_RETRY_CONSTANTS,
+	GEMINI_READY_PATTERNS,
+	WEB_CONSTANTS,
 	type RuntimeType,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -86,6 +92,7 @@ export class RuntimeExitMonitorService {
 	private onExitDetectedCallback?: (sessionName: string) => void;
 	private agentRegistrationService: AgentRegistrationService | null = null;
 	private taskTrackingService: TaskTrackingService | null = null;
+	private eventBusService: EventBusService | null = null;
 
 	private constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('RuntimeExitMonitorService');
@@ -137,6 +144,15 @@ export class RuntimeExitMonitorService {
 	 */
 	setTaskTrackingService(service: TaskTrackingService): void {
 		this.taskTrackingService = service;
+	}
+
+	/**
+	 * Set the EventBusService dependency for publishing agent lifecycle events.
+	 *
+	 * @param service - The EventBusService instance
+	 */
+	setEventBusService(service: EventBusService): void {
+		this.eventBusService = service;
 	}
 
 	/**
@@ -361,8 +377,7 @@ export class RuntimeExitMonitorService {
 				if (isGeminiFailure || isGeminiForceRestart) {
 					// Some Gemini failures are transient; others (auto-update/restart)
 					// should trigger immediate recovery and task re-delivery.
-					const forceRestart = isGeminiForceRestart;
-					if (forceRestart) {
+					if (isGeminiForceRestart) {
 						this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
 							sessionName,
 						});
@@ -370,7 +385,7 @@ export class RuntimeExitMonitorService {
 						// Retry with exponential backoff before declaring exit.
 						// Gemini CLI can recover from transient API errors automatically.
 						const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
-						if (retryResult === 'recovered') {
+						if (retryResult === 'recovered' || retryResult === 'deferred') {
 							return;
 						}
 						// retryResult === 'exhausted' — fall through to exit flow
@@ -415,6 +430,8 @@ export class RuntimeExitMonitorService {
 
 						try {
 							await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
+							// Notify orchestrator that agent was restarted (#129)
+							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
 							// Cleanup this subscription (restart succeeded, skip inactive flow)
 							this.stopMonitoring(sessionName);
 							return;
@@ -423,6 +440,8 @@ export class RuntimeExitMonitorService {
 								sessionName,
 								error: restartError instanceof Error ? restartError.message : String(restartError),
 							});
+							// Notify orchestrator that restart failed — needs manual intervention (#129)
+							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
 							// Fall through to normal inactive flow
 						}
 					}
@@ -512,6 +531,18 @@ export class RuntimeExitMonitorService {
 					CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 				);
 				this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
+
+				// Publish agent:inactive event to EventBus so orchestrator is notified
+				if (this.eventBusService) {
+					try {
+						await this.publishInactiveEvent(sessionName, monitored, storageService);
+					} catch (eventError) {
+						this.logger.warn('Failed to publish agent:inactive event to EventBus', {
+							sessionName,
+							error: eventError instanceof Error ? eventError.message : String(eventError),
+						});
+					}
+				}
 			} catch (error) {
 				this.logger.warn('Failed to update agent status after runtime exit', {
 					sessionName,
@@ -566,19 +597,20 @@ export class RuntimeExitMonitorService {
 	 * Handle a Gemini CLI failure with exponential backoff retry.
 	 *
 	 * Waits with increasing delays and checks if the CLI recovers (returns
-	 * to a ready prompt). Returns 'recovered' if the CLI is back, or
-	 * 'exhausted' if max retries have been reached.
+	 * to a ready prompt). Returns 'recovered' if the CLI is back,
+	 * 'deferred' if retries remain (skip exit flow, re-check on next
+	 * failure detection), or 'exhausted' if max retries have been reached.
 	 *
 	 * @param sessionName - PTY session name
 	 * @param monitored - Monitored session state (retry counter is mutated)
 	 * @param helper - Session command helper for terminal output capture
-	 * @returns 'recovered' if CLI is back, 'exhausted' if retries exhausted
+	 * @returns 'recovered' | 'deferred' | 'exhausted'
 	 */
 	private async handleGeminiFailureWithRetry(
 		sessionName: string,
 		monitored: MonitoredSession,
 		helper: SessionCommandHelper
-	): Promise<'recovered' | 'exhausted'> {
+	): Promise<'recovered' | 'deferred' | 'exhausted'> {
 		const detectedPattern = GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
 		monitored.geminiFailureRetries++;
 
@@ -622,12 +654,7 @@ export class RuntimeExitMonitorService {
 		// Check if the CLI has recovered by looking for ready prompt patterns
 		try {
 			const output = helper.capturePane(sessionName, RECOVERY_CHECK_LINES);
-			const geminiReadyPatterns = [
-				'Type your message',
-				'gemini>',
-				'context left)',
-			];
-			const hasRecovered = geminiReadyPatterns.some((pattern) => output.includes(pattern));
+			const hasRecovered = GEMINI_READY_PATTERNS.some((pattern) => output.includes(pattern));
 
 			if (hasRecovered) {
 				this.logger.info('Gemini CLI recovered after transient failure', {
@@ -651,9 +678,11 @@ export class RuntimeExitMonitorService {
 			});
 		}
 
-		// Not recovered but retries remain — let the next failure detection handle it
+		// Not recovered but retries remain — defer to the next failure detection cycle.
+		// The buffer was cleared above, so a new failure must appear in terminal
+		// output to re-trigger this method.
 		if (monitored.geminiFailureRetries < MAX_RETRIES) {
-			return 'recovered'; // Return 'recovered' to skip exit flow this time
+			return 'deferred';
 		}
 
 		return 'exhausted';
@@ -733,7 +762,7 @@ export class RuntimeExitMonitorService {
 				teamId: monitored.teamId,
 				memberId: monitored.memberId,
 				sessionName,
-				agentStatus: 'active',
+				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
 			});
 		}
 
@@ -894,5 +923,150 @@ export class RuntimeExitMonitorService {
 		} catch {
 			return false;
 		}
+	}
+
+	/**
+	 * Notify the orchestrator about an agent failure via the chat API (#129).
+	 *
+	 * Sends a structured failure notification so the orchestrator can decide
+	 * whether to restart the agent, reassign tasks, or inform the user.
+	 * This is fire-and-forget — failures are logged but do not block the
+	 * exit flow.
+	 *
+	 * @param sessionName - Failed agent's PTY session name
+	 * @param reason - Failure reason (runtime_exited, api_failure, etc.)
+	 * @param activeTasks - In-progress tasks the agent had, if any
+	 * @param restartSucceeded - Whether automatic restart succeeded
+	 */
+	private notifyOrchestratorOfFailure(
+		sessionName: string,
+		reason: string,
+		activeTasks: InProgressTask[],
+		restartSucceeded: boolean
+	): void {
+		// Build notification message for the orchestrator
+		const taskSummary = activeTasks.length > 0
+			? activeTasks.map(t => t.taskName).join(', ')
+			: '';
+
+		const message = [
+			`Agent failure notification: ${sessionName} became inactive.`,
+			`Reason: ${reason}`,
+			activeTasks.length > 0 ? `Active tasks: ${taskSummary}` : 'No active tasks.',
+			restartSucceeded
+				? 'Automatic restart succeeded — agent is recovering.'
+				: 'Automatic restart FAILED — please restart the agent or reassign its tasks.',
+		].join('\n');
+
+		// Send via chat API (fire-and-forget)
+		const backend = getSessionBackendSync();
+		if (!backend) return;
+
+		const helper = createSessionCommandHelper(backend);
+		const orchestratorSession = helper.getSession(ORCHESTRATOR_SESSION_NAME);
+		if (!orchestratorSession) {
+			this.logger.debug('Orchestrator session not found, skipping failure notification', { sessionName });
+			return;
+		}
+
+		// Use the deliver endpoint for reliable delivery to the orchestrator
+		const baseUrl = process.env.CREWLY_API_URL || `http://localhost:${WEB_CONSTANTS.PORTS.BACKEND}`;
+		const body = JSON.stringify({
+			message,
+			force: true,
+		});
+
+		// Fire-and-forget HTTP call
+		try {
+			const url = new URL(`${baseUrl}/api/terminal/${ORCHESTRATOR_SESSION_NAME}/deliver`);
+			const req = http.request(url, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(body).toString(),
+				},
+			});
+			req.on('response', (res) => res.resume()); // Consume response to free socket
+			req.on('error', (err) => {
+				this.logger.debug('Failed to deliver failure notification to orchestrator (non-fatal)', {
+					sessionName,
+					error: err.message,
+				});
+			});
+			req.write(body);
+			req.end();
+		} catch {
+			// Non-fatal — notification delivery is best-effort
+		}
+
+		this.logger.info('Sent agent failure notification to orchestrator (#129)', {
+			sessionName,
+			reason,
+			activeTaskCount: activeTasks.length,
+			restartSucceeded,
+		});
+	}
+
+	/**
+	 * Publish agent:status_changed and agent:inactive events to the EventBus.
+	 *
+	 * Looks up team/member names from StorageService to build the full
+	 * AgentEvent. This mirrors the pattern used in TeamsJsonWatcherService.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param monitored - Monitored session state with teamId/memberId
+	 * @param storageService - StorageService instance for team/member lookup
+	 */
+	private async publishInactiveEvent(
+		sessionName: string,
+		monitored: MonitoredSession,
+		storageService: StorageService
+	): Promise<void> {
+		if (!this.eventBusService) {
+			return;
+		}
+
+		// Look up team and member names
+		let teamName = '';
+		let memberName = '';
+		try {
+			const result = await storageService.findMemberBySessionName(sessionName);
+			if (result) {
+				teamName = result.team.name;
+				memberName = result.member.name;
+			}
+		} catch {
+			// Best-effort — use empty names if lookup fails
+		}
+
+		const baseEvent: AgentEvent = {
+			id: crypto.randomUUID(),
+			type: 'agent:status_changed',
+			timestamp: new Date().toISOString(),
+			teamId: monitored.teamId || '',
+			teamName,
+			memberId: monitored.memberId || '',
+			memberName,
+			sessionName,
+			previousValue: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+			newValue: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+			changedField: 'agentStatus',
+		};
+
+		// Publish generic status_changed event
+		this.eventBusService.publish(baseEvent);
+
+		// Publish specific agent:inactive event
+		this.eventBusService.publish({
+			...baseEvent,
+			id: crypto.randomUUID(),
+			type: 'agent:inactive',
+		});
+
+		this.logger.info('Published agent:inactive event to EventBus', {
+			sessionName,
+			teamId: monitored.teamId,
+			memberId: monitored.memberId,
+		});
 	}
 }

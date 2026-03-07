@@ -509,6 +509,66 @@ describe('Scheduler Handlers', () => {
     });
   });
 
+  describe('taskId passthrough', () => {
+    it('should pass taskId to scheduleRecurringCheck when provided', async () => {
+      const mockCheckId = 'recurring-with-task';
+      mockSchedulerService.scheduleRecurringCheck.mockReturnValue(mockCheckId);
+
+      mockRequest.body = {
+        targetSession: 'session-1',
+        minutes: 30,
+        message: 'Progress check',
+        isRecurring: true,
+        intervalMinutes: 5,
+        taskId: 'task-xyz-123',
+      };
+
+      await schedulerHandlers.scheduleCheck.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.scheduleRecurringCheck).toHaveBeenCalledWith(
+        'session-1',
+        5,
+        'Progress check',
+        'progress-check',
+        undefined,
+        expect.objectContaining({ taskId: 'task-xyz-123' })
+      );
+      expect(mockResponse.status).toHaveBeenCalledWith(201);
+    });
+
+    it('should not pass taskId when not provided', async () => {
+      const mockCheckId = 'recurring-no-task';
+      mockSchedulerService.scheduleRecurringCheck.mockReturnValue(mockCheckId);
+
+      mockRequest.body = {
+        targetSession: 'session-1',
+        minutes: 30,
+        message: 'Progress check',
+        isRecurring: true,
+        intervalMinutes: 5,
+      };
+
+      await schedulerHandlers.scheduleCheck.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Without taskId, hasExtendedSchedule is false, so it takes the non-extended path
+      expect(mockSchedulerService.scheduleRecurringCheck).toHaveBeenCalledWith(
+        'session-1',
+        5,
+        'Progress check',
+        'progress-check',
+        undefined
+      );
+    });
+  });
+
   describe('All handlers availability', () => {
     it('should have all expected handler functions', () => {
       expect(typeof schedulerHandlers.scheduleCheck).toBe('function');

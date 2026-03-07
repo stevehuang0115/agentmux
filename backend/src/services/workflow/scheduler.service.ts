@@ -53,6 +53,14 @@ interface IActivityMonitorLike {
 }
 
 /**
+ * Interface for TaskTrackingService integration.
+ * Used to check whether a scheduled check's linked task is still active.
+ */
+interface ITaskTrackingServiceLike {
+  getAllInProgressTasks(): Promise<{ id: string; status: string; scheduleIds?: string[] }[]>;
+}
+
+/**
  * Enhanced SchedulerService with PTY compatibility
  *
  * Features:
@@ -130,6 +138,7 @@ export class SchedulerService extends EventEmitter {
   private continuationService: IContinuationServiceLike | null = null;
   private activityMonitor: IActivityMonitorLike | null = null;
   private agentRegistrationService: AgentRegistrationService | null = null;
+  private taskTrackingService: ITaskTrackingServiceLike | null = null;
 
   // Per-session delivery guard: prevents concurrent deliveries to the same session.
   // When multiple scheduled checks fire simultaneously (e.g., 25+ checks at once),
@@ -212,6 +221,18 @@ export class SchedulerService extends EventEmitter {
   }
 
   /**
+   * Set the TaskTrackingService for task-aware schedule auto-cleanup.
+   * When set, recurring checks with a taskId will auto-cancel when
+   * their linked task is completed.
+   *
+   * @param service - TaskTrackingService instance
+   */
+  public setTaskTrackingService(service: ITaskTrackingServiceLike): void {
+    this.taskTrackingService = service;
+    this.logger.info('TaskTrackingService integration enabled for task-aware cleanup');
+  }
+
+  /**
    * Resolve the runtime type for a target session by looking up the team member.
    * Falls back to claude-code if the member is not found.
    *
@@ -239,6 +260,36 @@ export class SchedulerService extends EventEmitter {
       });
     }
     return RUNTIME_TYPES.CLAUDE_CODE;
+  }
+
+  /**
+   * Check if a task is completed or no longer active.
+   * Returns true if the task is not found in the active task list (completed/removed)
+   * or if the task's status is 'completed'. Returns false if still active.
+   *
+   * @param taskId - The task ID to check
+   * @returns true if task is done/missing, false if still active
+   */
+  private async isTaskCompleted(taskId: string): Promise<boolean> {
+    if (!this.taskTrackingService) {
+      return false;
+    }
+
+    try {
+      const tasks = await this.taskTrackingService.getAllInProgressTasks();
+      const task = tasks.find(t => t.id === taskId);
+      // Task not found means it was removed (completed)
+      if (!task) {
+        return true;
+      }
+      return task.status === 'completed';
+    } catch (error) {
+      this.logger.debug('Failed to check task completion status', {
+        taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
@@ -353,6 +404,7 @@ export class SchedulerService extends EventEmitter {
       recurrenceType?: 'interval' | 'daily' | 'weekdays' | 'weekly';
       timeOfDay?: string;
       dayOfWeek?: number;
+      taskId?: string;
     }
   ): string {
     const checkId = uuidv4();
@@ -374,6 +426,7 @@ export class SchedulerService extends EventEmitter {
       maxOccurrences,
       currentOccurrence: 0,
       createdAt: new Date().toISOString(),
+      taskId: options?.taskId,
     };
 
     this.recurringChecks.set(checkId, scheduledCheck);
@@ -945,6 +998,21 @@ export class SchedulerService extends EventEmitter {
         return; // Check was cancelled
       }
 
+      // Auto-cancel if the linked task has been completed since last check
+      const recurringCheck = this.recurringChecks.get(checkId);
+      if (recurringCheck?.taskId) {
+        const taskDone = await this.isTaskCompleted(recurringCheck.taskId);
+        if (taskDone) {
+          this.logger.info('Auto-cancelling recurring check — linked task completed', {
+            checkId,
+            taskId: recurringCheck.taskId,
+            targetSession,
+          });
+          this.cancelCheck(checkId);
+          return;
+        }
+      }
+
       // Auto-cancel stale recurring checks when the target stays idle.
       // This avoids indefinite "check again" loops for agents that are no
       // longer actively working on a task.
@@ -1101,9 +1169,29 @@ export class SchedulerService extends EventEmitter {
       }
 
       let restored = 0;
+      let purged = 0;
       for (const check of persisted) {
         if (!check.isRecurring || !check.intervalMinutes) {
           continue;
+        }
+
+        // Skip checks whose linked task is already completed
+        if (check.taskId) {
+          const taskDone = await this.isTaskCompleted(check.taskId);
+          if (taskDone) {
+            this.logger.info('Purging persisted recurring check for completed task', {
+              checkId: check.id,
+              taskId: check.taskId,
+            });
+            this.storageService.deleteRecurringCheck(check.id).catch(err => {
+              this.logger.error('Failed to delete purged recurring check', {
+                checkId: check.id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+            purged++;
+            continue;
+          }
         }
 
         // Re-create the in-memory state and schedule
@@ -1136,6 +1224,7 @@ export class SchedulerService extends EventEmitter {
       this.logger.info('Restored recurring checks from disk', {
         total: persisted.length,
         restored,
+        purgedCompletedTasks: purged,
       });
 
       return restored;

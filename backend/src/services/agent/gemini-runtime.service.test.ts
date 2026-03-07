@@ -687,6 +687,37 @@ describe('GeminiRuntimeService', () => {
 			// Should not throw — errors are handled gracefully
 			await expect(service.ensureGeminiMcpConfig('/test/project')).resolves.not.toThrow();
 		});
+
+		it('should set disableAutoUpdate=true in settings.json (#128)', async () => {
+			const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+			const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+			// MCP config writes first via atomicWriteJson, then our code reads/writes
+			mockReadFile.mockResolvedValue(JSON.stringify({ mcpServers: {} }));
+			mockWriteFile.mockResolvedValue(undefined);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini', 'settings.json'),
+				expect.stringContaining('"disableAutoUpdate": true')
+			);
+		});
+
+		it('should not overwrite disableAutoUpdate if already true (#128)', async () => {
+			const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+			const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+			mockReadFile.mockResolvedValue(JSON.stringify({ mcpServers: {}, disableAutoUpdate: true }));
+			mockWriteFile.mockResolvedValue(undefined);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			// writeFile should NOT be called for settings.json (since disableAutoUpdate is already true)
+			// Note: writeFile may be called for other files like .env, so filter for settings.json
+			const settingsWriteCalls = mockWriteFile.mock.calls.filter(
+				(call) => String(call[0]).includes('settings.json')
+			);
+			expect(settingsWriteCalls).toHaveLength(0);
+		});
 	});
 
 	describe('ensureGeminiEnvFile', () => {
@@ -702,9 +733,9 @@ describe('GeminiRuntimeService', () => {
 
 		beforeEach(() => {
 			jest.clearAllMocks();
-			originalEnv = process.env.GOOGLE_GENAI_API_KEY;
+			originalEnv = process.env.GEMINI_API_KEY;
 			// Default: set the env var so most tests can focus on file behavior
-			process.env.GOOGLE_GENAI_API_KEY = 'test-api-key-123';
+			process.env.GEMINI_API_KEY = 'test-api-key-123';
 
 			// Default mocks: files do not exist (readFile rejects with ENOENT)
 			mockReadFile.mockRejectedValue(new Error('ENOENT'));
@@ -715,14 +746,14 @@ describe('GeminiRuntimeService', () => {
 		afterEach(() => {
 			// Restore original env
 			if (originalEnv !== undefined) {
-				process.env.GOOGLE_GENAI_API_KEY = originalEnv;
+				process.env.GEMINI_API_KEY = originalEnv;
 			} else {
-				delete process.env.GOOGLE_GENAI_API_KEY;
+				delete process.env.GEMINI_API_KEY;
 			}
 		});
 
-		it('should skip when GOOGLE_GENAI_API_KEY is not in process.env', async () => {
-			delete process.env.GOOGLE_GENAI_API_KEY;
+		it('should skip when GEMINI_API_KEY is not in process.env', async () => {
+			delete process.env.GEMINI_API_KEY;
 
 			await service['ensureGeminiEnvFile'](projectPath);
 
@@ -734,7 +765,7 @@ describe('GeminiRuntimeService', () => {
 
 		it('should skip when .env already contains the key', async () => {
 			mockReadFile.mockImplementation(async (p) => {
-				if (p === envPath) return 'SOME_VAR=abc\nGOOGLE_GENAI_API_KEY=existing-key\n';
+				if (p === envPath) return 'SOME_VAR=abc\nGEMINI_API_KEY=existing-key\n';
 				throw new Error('ENOENT');
 			});
 
@@ -757,7 +788,7 @@ describe('GeminiRuntimeService', () => {
 			// Should append to existing .env (content ends with newline, so no extra separator)
 			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'GEMINI_API_KEY="test-api-key-123"\n'
 			);
 			// Should not create a new file
 			expect(mockWriteFile).not.toHaveBeenCalledWith(
@@ -777,7 +808,7 @@ describe('GeminiRuntimeService', () => {
 			// Should prepend a newline separator before the key
 			expect(mockAppendFile).toHaveBeenCalledWith(
 				envPath,
-				'\nGOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'\nGEMINI_API_KEY="test-api-key-123"\n'
 			);
 		});
 
@@ -789,7 +820,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env with writeFile
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'GEMINI_API_KEY="test-api-key-123"\n'
 			);
 			// Should not attempt to append to .env
 			expect(mockAppendFile).not.toHaveBeenCalledWith(
@@ -810,7 +841,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'GEMINI_API_KEY="test-api-key-123"\n'
 			);
 
 			// Should append .env entry to .gitignore
@@ -844,7 +875,7 @@ describe('GeminiRuntimeService', () => {
 			// Should create .env
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'GEMINI_API_KEY="test-api-key-123"\n'
 			);
 
 			// Should NOT append to .gitignore since .env is already there
@@ -881,7 +912,7 @@ describe('GeminiRuntimeService', () => {
 			// Should still have created the .env file
 			expect(mockWriteFile).toHaveBeenCalledWith(
 				envPath,
-				'GOOGLE_GENAI_API_KEY="test-api-key-123"\n'
+				'GEMINI_API_KEY="test-api-key-123"\n'
 			);
 		});
 	});
@@ -932,7 +963,7 @@ describe('GeminiRuntimeService', () => {
 	describe('GEMINI_FAILURE_PATTERNS', () => {
 		it('should export failure patterns as a constant array', () => {
 			expect(GEMINI_FAILURE_PATTERNS).toBeInstanceOf(Array);
-			expect(GEMINI_FAILURE_PATTERNS.length).toBe(8);
+			expect(GEMINI_FAILURE_PATTERNS.length).toBe(9);
 		});
 
 		it('should contain expected failure patterns', () => {
@@ -944,6 +975,7 @@ describe('GeminiRuntimeService', () => {
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('DEADLINE_EXCEEDED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('PERMISSION_DENIED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAUTHENTICATED'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Trying to reach gemini-3.1-pro-preview (Attempt 7/10)'))).toBe(true);
 		});
 
 		it('should not match normal output or non-fatal errors', () => {

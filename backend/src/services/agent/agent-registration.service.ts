@@ -24,6 +24,8 @@ import {
 	EVENT_DELIVERY_CONSTANTS,
 	TERMINAL_PATTERNS,
 	GEMINI_SHELL_MODE_CONSTANTS,
+	GEMINI_STUCK_CONNECTIVITY_PATTERN,
+	GEMINI_ERROR_STATE_CONSTANTS,
 } from '../../constants.js';
 import { WEB_CONSTANTS } from '../../../../config/constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -31,6 +33,7 @@ import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './context-window-monitor.service.js';
+import { OAuthReloginMonitorService } from './oauth-relogin-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
@@ -601,6 +604,9 @@ export class AgentRegistrationService {
 			sessionName, runtimeType, role
 		);
 
+		// Start OAuth relogin monitoring for automatic re-authentication
+		OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 		// Look up per-agent browser automation override from member config
 		let browserAutomationOverride: boolean | undefined;
 		if (memberId) {
@@ -876,6 +882,9 @@ export class AgentRegistrationService {
 				sessionName, runtimeType, role
 			);
 
+			// Start OAuth relogin monitoring for automatic re-authentication
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 			// Additional verification: Use runtime detection to confirm runtime is responding
 			// Wait a bit longer for runtime to fully load after showing welcome message
 			this.logger.debug(
@@ -933,6 +942,9 @@ export class AgentRegistrationService {
 			RuntimeExitMonitorService.getInstance().startMonitoring(
 				sessionName, runtimeType, role
 			);
+
+			// Start OAuth relogin monitoring for automatic re-authentication
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
 		}
 
 		// Look up per-agent browser automation override from member config
@@ -1830,6 +1842,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						);
 					}
 
+					// Start OAuth relogin monitoring for recovered session
+					OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 					return {
 						success: true,
 						sessionName,
@@ -1965,6 +1980,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				);
 			}
 
+			// Start OAuth relogin monitoring for newly created session
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 			return {
 				success: true,
 				sessionName,
@@ -2005,6 +2023,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Stop runtime exit monitoring before killing the session
 			RuntimeExitMonitorService.getInstance().stopMonitoring(sessionName);
+
+			// Stop OAuth relogin monitoring before killing the session
+			OAuthReloginMonitorService.getInstance().stopMonitoring(sessionName);
 
 			// Stop context window monitoring before killing the session
 			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
@@ -2317,289 +2338,6 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	}
 
 	/**
-	 * @deprecated Replaced by SessionCommandHelper.sendMessage() in sendMessageWithRetry.
-	 * Complex event-driven state machine was fragile — Enter key often got lost.
-	 * Kept as dead code for reference during transition.
-	 */
-	private async _deprecated_sendMessageEventDriven(
-		sessionName: string,
-		message: string,
-		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.TOTAL_DELIVERY_TIMEOUT
-	): Promise<boolean> {
-		const sessionHelper = await this.getSessionHelper();
-		const session = sessionHelper.getSession(sessionName);
-
-		if (!session) {
-			this.logger.error('Session not found for event-driven delivery', { sessionName });
-			return false;
-		}
-
-		return new Promise<boolean>((resolve) => {
-			let buffer = '';
-			let messageSent = false;
-			let enterSent = false;
-			let enterAccepted = false;
-			let deliveryConfirmed = false;
-			let resolved = false;
-
-			// Track all timeouts to prevent memory leaks (P1.1 fix)
-			const pendingTimeouts: NodeJS.Timeout[] = [];
-			const scheduleTimeout = (fn: () => void | Promise<void>, delayMs: number): NodeJS.Timeout => {
-				const id = setTimeout(fn, delayMs);
-				pendingTimeouts.push(id);
-				return id;
-			};
-
-			const cleanup = () => {
-				// Immediately mark as resolved to prevent race conditions (P1.2 fix)
-				const wasResolved = resolved;
-				resolved = true;
-				if (!wasResolved) {
-					// Clear all pending timeouts to prevent memory leaks
-					pendingTimeouts.forEach((id) => clearTimeout(id));
-					clearTimeout(timeoutId);
-					unsubscribe();
-				}
-			};
-
-			// Use centralized patterns from TERMINAL_PATTERNS
-			const PASTE_PATTERN = TERMINAL_PATTERNS.PASTE_INDICATOR;
-			const PROCESSING_PATTERN = TERMINAL_PATTERNS.PROCESSING;
-
-			// Use centralized timing from EVENT_DELIVERY_CONSTANTS
-			const INITIAL_DELAY = EVENT_DELIVERY_CONSTANTS.INITIAL_MESSAGE_DELAY;
-			const PASTE_CHECK_DELAY = EVENT_DELIVERY_CONSTANTS.PASTE_CHECK_DELAY;
-			const ENTER_RETRY_DELAY = EVENT_DELIVERY_CONSTANTS.ENTER_RETRY_DELAY;
-			const MAX_ENTER_RETRIES = EVENT_DELIVERY_CONSTANTS.MAX_ENTER_RETRIES;
-			const MAX_BUFFER_SIZE = EVENT_DELIVERY_CONSTANTS.MAX_BUFFER_SIZE;
-
-		// Helper to send the message when prompt is detected
-			const sendMessageNow = () => {
-				if (messageSent || resolved) return;
-
-				this.logger.debug('Claude at prompt, sending message', {
-					sessionName,
-					messageLength: message.length,
-					isMultiLine: message.includes('\n'),
-				});
-
-				// Send the message text
-				session.write(message);
-				messageSent = true;
-				const isMultiLine = message.includes('\n');
-
-				// Track Enter key state
-				let enterAttempts = 0;
-				let processingDetected = false;
-				const bufferAtSend = buffer;
-
-				// Function to send Enter and track attempts
-				const sendEnterKey = (reason: string) => {
-					if (resolved || processingDetected) return;
-					enterAttempts++;
-					session.write('\r');
-					enterSent = true;
-					this.logger.debug('Enter key sent', {
-						sessionName,
-						attempt: enterAttempts,
-						reason,
-					});
-				};
-
-				// Function to check if Enter was accepted (processing started)
-				const checkProcessingStarted = (): boolean => {
-					const newData = buffer.slice(bufferAtSend.length);
-					return PROCESSING_PATTERN.test(newData);
-				};
-
-				// Function to check for paste indicator
-				const checkPasteIndicator = (): boolean => {
-					const newData = buffer.slice(bufferAtSend.length);
-					return PASTE_PATTERN.test(newData);
-				};
-
-				// Strategy: Send Enter with progressive timing, retry if not accepted
-				const attemptEnter = (attemptNum: number) => {
-					if (resolved || processingDetected) return;
-
-					// Check if processing already started
-					if (checkProcessingStarted()) {
-						processingDetected = true;
-						enterAccepted = true;
-						this.logger.debug('Processing detected, message accepted', { sessionName, attemptNum });
-						buffer = ''; // Reset for processing indicator detection
-						return;
-					}
-
-					if (attemptNum > MAX_ENTER_RETRIES) {
-						this.logger.warn('Max Enter retries reached, verifying message acceptance', { sessionName });
-						scheduleTimeout(async () => {
-							if (resolved) return;
-							const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-							if (stuck) {
-								this.logger.warn('Message stuck at prompt after all Enter retries', { sessionName });
-								const stuckHelper = await this.getSessionHelper();
-								await stuckHelper.clearCurrentCommandLine(sessionName);
-								enterAccepted = false;
-							} else {
-								this.logger.debug('Message appears accepted (no longer at prompt)', { sessionName });
-								enterAccepted = true;
-								buffer = '';
-							}
-						}, EVENT_DELIVERY_CONSTANTS.POST_ENTER_VERIFICATION_DELAY);
-						return;
-					}
-
-					sendEnterKey(attemptNum === 1 ? 'initial' : `retry-${attemptNum}`);
-
-					// Schedule check and possible retry (using tracked timeout to prevent leaks)
-					scheduleTimeout(() => {
-						if (resolved) return;
-
-						if (checkProcessingStarted()) {
-							processingDetected = true;
-							enterAccepted = true;
-							this.logger.debug('Processing detected after Enter', { sessionName, attemptNum });
-							buffer = '';
-						} else {
-							// Not accepted yet, retry
-							this.logger.debug('Enter may not have been accepted, retrying', {
-								sessionName,
-								attemptNum,
-								bufferLength: buffer.length,
-							});
-							attemptEnter(attemptNum + 1);
-						}
-					}, ENTER_RETRY_DELAY);
-				};
-
-				// For multi-line messages, wait longer for paste indicator
-				// For single-line messages, send Enter sooner
-				const initialWait = isMultiLine ? PASTE_CHECK_DELAY : INITIAL_DELAY;
-
-				scheduleTimeout(() => {
-					if (resolved) return;
-
-					// For multi-line: check if paste indicator appeared
-					if (isMultiLine && checkPasteIndicator()) {
-						this.logger.debug('Paste indicator detected', { sessionName });
-					}
-
-					// Start Enter key attempts
-					attemptEnter(1);
-				}, initialWait);
-			};
-
-			const timeoutId = setTimeout(async () => {
-				this.logger.debug('Event-driven delivery timed out', {
-					sessionName,
-					messageSent,
-					enterSent,
-					enterAccepted,
-					deliveryConfirmed,
-					bufferLength: buffer.length,
-				});
-
-				// If Enter was sent but not confirmed accepted, verify via terminal capture
-				if (enterSent && !enterAccepted && !deliveryConfirmed) {
-					const timeoutHelper = await this.getSessionHelper();
-					const stuck = await this.isMessageStuckAtPrompt(sessionName, message);
-					if (stuck) {
-						this.logger.warn('Timeout: message stuck at prompt, clearing and failing', { sessionName });
-						await timeoutHelper.clearCurrentCommandLine(sessionName);
-						cleanup();
-						resolve(false);
-						return;
-					}
-					this.logger.debug('Timeout: message not at prompt, treating as accepted', { sessionName });
-				}
-
-				cleanup();
-				resolve(enterAccepted || deliveryConfirmed);
-			}, timeoutMs);
-
-			// IMPORTANT: Check current terminal state, but wait for output to settle first.
-			// If the orchestrator just finished outputting (greeting, notification, status bar),
-			// the prompt may not be cleanly detectable. We capture the pane, wait briefly,
-			// and re-capture. If output is still changing, wait again before checking prompt.
-			// Use 50 lines to account for status bars and notifications that can
-			// wrap across many lines and push the prompt out of a smaller window.
-			const waitForSettled = async () => {
-				let prevOutput = sessionHelper.capturePane(sessionName);
-				for (let i = 0; i < 5; i++) { // Max 5 checks, 500ms apart = 2.5s max
-					if (resolved) return;
-					await delay(500);
-					if (resolved) return;
-					const currentOutput = sessionHelper.capturePane(sessionName);
-					if (currentOutput === prevOutput) {
-						// Output settled
-						if (this.isClaudeAtPrompt(currentOutput)) {
-							this.logger.debug('Claude at prompt after output settled', { sessionName, settleChecks: i + 1 });
-							sendMessageNow();
-						}
-						return;
-					}
-					prevOutput = currentOutput;
-				}
-				// Output still changing after 2.5s - check anyway
-				if (!resolved && this.isClaudeAtPrompt(prevOutput)) {
-					this.logger.debug('Claude at prompt (output still changing, checking anyway)', { sessionName });
-					sendMessageNow();
-				}
-			};
-			waitForSettled();
-
-			const unsubscribe = session.onData((data) => {
-				if (resolved) return;
-
-				// Accumulate data with size limit to prevent memory exhaustion (P2.3 fix)
-				buffer += data;
-				if (buffer.length > MAX_BUFFER_SIZE) {
-					buffer = buffer.slice(-MAX_BUFFER_SIZE);
-				}
-
-				// Phase 1: Wait for Claude to be at prompt before sending
-				if (!messageSent) {
-					const isAtPrompt = buffer.split('\n').some(
-						line => line.trim().length > 0 && isPromptLine(line)
-					);
-
-					if (isAtPrompt) {
-						sendMessageNow();
-					}
-					return;
-				}
-
-				// Phase 2: Only check for processing indicators AFTER Enter has been sent
-				if (!enterSent) {
-					return; // Wait for Enter to be sent
-				}
-
-				// Look for processing indicators confirming delivery
-				const hasProcessingIndicator = containsProcessingIndicator(buffer);
-
-				// Also check if prompt disappeared (Claude is working)
-				const promptStillVisible = buffer.split('\n').some(
-					line => line.trim().length > 0 && isPromptLine(line)
-				);
-
-				// Use constant for minimum buffer check (P3.2 fix)
-				if (hasProcessingIndicator || (!promptStillVisible && buffer.length > EVENT_DELIVERY_CONSTANTS.MIN_BUFFER_FOR_PROCESSING_DETECTION)) {
-					this.logger.debug('Message delivery confirmed (event-driven)', {
-						sessionName,
-						hasProcessingIndicator,
-						promptStillVisible,
-						bufferLength: buffer.length,
-					});
-					deliveryConfirmed = true;
-					cleanup();
-					resolve(true);
-				}
-			});
-		});
-	}
-
-	/**
 	 * Send message with retry logic for reliable delivery to Claude Code.
 	 * Uses SessionCommandHelper.sendMessage() (proven two-step write pattern)
 	 * with stuck-message detection and retry on failure.
@@ -2637,6 +2375,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
+
+				// Gemini CLI stuck-connectivity guard (#128): If the CLI is in a
+				// "Trying to reach <model>" retry loop, it will never process
+				// new messages. Bail out immediately so the caller gets a clear
+				// failure signal and the runtime-exit-monitor can trigger recovery.
+				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI && GEMINI_STUCK_CONNECTIVITY_PATTERN.test(output)) {
+					this.logger.warn('Gemini CLI stuck in connectivity retry loop, aborting message delivery (#128)', {
+						sessionName,
+						attempt,
+					});
+					return false;
+				}
 				if (!this.isClaudeAtPrompt(output, runtimeType)) {
 					if (attempt === maxAttempts) {
 						// On the final attempt, check if the agent is DEFINITELY busy
@@ -2729,19 +2479,27 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						// focusNext() to ensure the InputPrompt is active. This prevents
 						// the "write succeeds but TUI ignores it" failure mode without
 						// the overhead of Ctrl+C or PTY resize.
+						// 300ms settling time to let Ink complete its focus re-render
+						// (200ms was insufficient after state transitions like stop hooks).
 						await sessionHelper.sendKey(sessionName, 'Tab');
-						await delay(200);
+						await delay(300);
 					}
 				} else {
 					// Detect recent /compress — Ink TUI loses internal focus after
 					// /compress re-renders, causing subsequent messages to be silently
 					// dropped even though the prompt `>` is visible (#114).
 					// Always force PTY resize on attempt 1 if /compress detected.
+					// Also detect ✖ error state (#130) — MCP connection errors
+					// cause a persistent error indicator that steals TUI focus.
 					const recentOutput = sessionHelper.capturePane(sessionName, 40);
 					const compressDetected = recentOutput.includes('/compress') ||
 						recentOutput.includes('Context compressed') ||
 						recentOutput.includes('Compressing context');
-					const needsResize = attempt > 1 || compressDetected;
+					// Check for Gemini CLI error indicators in the status bar area (#130).
+					const statusArea = recentOutput.split('\n').slice(-GEMINI_ERROR_STATE_CONSTANTS.STATUS_AREA_LINES).join('\n');
+					const errorStateDetected = recentOutput.includes(GEMINI_ERROR_STATE_CONSTANTS.ERROR_MARKER) ||
+						GEMINI_ERROR_STATE_CONSTANTS.ERROR_COUNT_PATTERN.test(statusArea);
+					const needsResize = attempt > 1 || compressDetected || errorStateDetected;
 
 					// Force a PTY resize to trigger SIGWINCH, making Ink
 					// re-render the TUI and potentially restore focus state.
@@ -2768,11 +2526,32 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						}
 					}
 
+					// If error state detected (✖), dismiss the error overlay first (#130).
+				// F12 toggles the error details panel in Gemini CLI, Enter dismisses
+				// any overlay/notification, and the combination restores the TUI to a
+				// state where the InputPrompt can accept input.
+					if (errorStateDetected) {
+						this.logger.info('Gemini CLI error state detected (✖), dismissing before delivery (#130)', {
+							sessionName,
+							attempt,
+						});
+						// F12 to close error details panel if open
+						await sessionHelper.sendKey(sessionName, 'F12');
+						await delay(300);
+						// Enter to dismiss any remaining overlay/notification
+						await sessionHelper.sendEnter(sessionName);
+						await delay(500);
+					}
+
 					// Send Tab to cycle Ink focus. In Ink v6, Tab triggers
 					// focusNext() in FocusContext, which moves focus to the next
 					// focusable component (InputPrompt). This works even when the
 					// input is defocused because the Tab handler runs at the Ink
 					// framework level, not the component level.
+					// Send two Tabs to cycle through error/notification components
+					// that may be in the focus chain (#130).
+					await sessionHelper.sendKey(sessionName, 'Tab');
+					await delay(200);
 					await sessionHelper.sendKey(sessionName, 'Tab');
 					await delay(300);
 
@@ -2780,8 +2559,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// the input is engaged. Enter on an empty `> ` prompt is a
 					// safe no-op (just shows a new blank prompt line).
 					await sessionHelper.sendEnter(sessionName);
-					// Extra settling time after /compress to let Ink TUI stabilize
-					await delay(compressDetected ? 1000 : 500);
+					// Extra settling time after /compress or error state to let Ink TUI stabilize
+					await delay((compressDetected || errorStateDetected) ? 1000 : 500);
 				}
 
 				// For Gemini CLI: detect and gently escape interactive modes before
@@ -2816,6 +2595,43 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// border redraws that can cause length changes unrelated to delivery.
 				const beforeOutput = sessionHelper.capturePane(sessionName, 20);
 				const beforeLength = beforeOutput.length;
+
+				// Deduplication guard (#128): On retry attempts, check if the agent
+				// is already processing (spinner visible). A previous write may
+				// have succeeded but verification failed (false negative). Re-writing
+				// the same message would create a duplicate in the input buffer.
+				// Only skip re-write when we see definitive processing indicators
+				// (spinners/⏺). Do NOT rely solely on "not at prompt" — the message
+				// text stuck at the prompt line also causes isClaudeAtPrompt() to
+				// return false, but that's a stuck state, not processing.
+				if (attempt > 1) {
+					const retryCheck = sessionHelper.capturePane(sessionName);
+					const hasSpinner = containsSpinnerOrWorkingIndicator(retryCheck);
+					if (hasSpinner) {
+						this.logger.info('Agent already processing on retry — skipping re-write to prevent duplicate (#128)', {
+							sessionName,
+							attempt,
+						});
+						return true;
+					}
+					// Additional check: if agent is not at prompt AND our message
+					// text is NOT stuck at the bottom, the agent is likely processing.
+					const notAtPrompt = !this.isClaudeAtPrompt(retryCheck, runtimeType);
+					if (notAtPrompt) {
+						const msgSnippet = (message.length > 20
+							? message.substring(0, 80)
+							: message).replace(/\s+/g, ' ').trim();
+						const bottomLines = retryCheck.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+						const textStuck = bottomLines.includes(msgSnippet);
+						if (!textStuck) {
+							this.logger.info('Agent not at prompt and message not stuck — skipping re-write to prevent duplicate (#128)', {
+								sessionName,
+								attempt,
+							});
+							return true;
+						}
+					}
+				}
 
 				// Use SessionCommandHelper.sendMessage() — proven two-step write:
 				// 1. session.write(message)    — triggers bracketed paste
@@ -2898,11 +2714,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								: message).replace(/\s+/g, ' ').trim();
 							const promptBottomLines = currentOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
 							if (promptBottomLines.includes(promptMsgSnippet)) {
-								this.logger.warn('At prompt with message text at bottom — pressing Enter', {
+								this.logger.warn('At prompt with message text at bottom — pressing Tab+Enter', {
 									sessionName,
 									attempt,
 									intervalMs,
 								});
+								// Tab restores Ink TUI focus before Enter — without this,
+								// Enter may be consumed by the framework but not routed to
+								// the input component if focus was lost during a re-render
+								// (e.g., after stop hooks, state transitions).
+								await sessionHelper.sendKey(sessionName, 'Tab');
+								await delay(200);
 								await sessionHelper.sendEnter(sessionName);
 								await delay(500);
 								await sessionHelper.sendEnter(sessionName); // backup
@@ -2947,12 +2769,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							// Message text is at the bottom of the terminal but the
 							// prompt is no longer in its idle form — Enter was dropped.
 							// Instead of waiting and doing a full Ctrl+C + resend retry,
-							// press Enter immediately to submit the already-pasted text.
-							this.logger.warn('Message text stuck at bottom — pressing Enter to recover', {
+							// use Tab to restore TUI focus, then Enter to submit.
+							this.logger.warn('Message text stuck at bottom — pressing Tab+Enter to recover', {
 								sessionName,
 								attempt,
 								intervalMs,
 							});
+							await sessionHelper.sendKey(sessionName, 'Tab');
+							await delay(200);
 							await sessionHelper.sendEnter(sessionName);
 							await delay(500);
 							await sessionHelper.sendEnter(sessionName); // backup Enter
@@ -3296,8 +3120,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	private async recoverStuckTuiMessage(sessionName: string, message: string): Promise<boolean> {
 		const sessionHelper = await this.getSessionHelper();
 
-		// Press Enter to submit the stuck text
-		this.logger.info('Pressing Enter to recover stuck TUI message', { sessionName });
+		// Tab restores Ink TUI focus, then Enter to submit the stuck text.
+		// Without Tab, Enter may be consumed by the framework but not routed
+		// to the input component if focus was lost during a re-render.
+		this.logger.info('Pressing Tab+Enter to recover stuck TUI message', { sessionName });
+		await sessionHelper.sendKey(sessionName, 'Tab');
+		await delay(200);
 		await sessionHelper.sendEnter(sessionName);
 		await delay(500);
 
@@ -3422,12 +3250,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								break;
 							}
 
-							this.logger.warn('Background scan: text stuck at TUI prompt, pressing Enter', {
+							this.logger.warn('Background scan: text stuck at TUI prompt, pressing Tab+Enter', {
 								sessionName,
 								promptContent: promptContent.slice(0, 80),
 							});
 
-							// Press Enter to submit the stuck text
+							// Tab restores Ink TUI focus before Enter
+							await sessionHelper.sendKey(sessionName, 'Tab');
+							await delay(200);
 							await sessionHelper.sendEnter(sessionName);
 							await delay(500);
 							// Backup Enter
@@ -3464,12 +3294,15 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					if (now - entry.sentAt < MIN_AGE_MS) continue;
 
 					if (bottomText.includes(entry.snippet)) {
-						this.logger.warn('Background scan: tracked message stuck, pressing Enter', {
+						this.logger.warn('Background scan: tracked message stuck, pressing Tab+Enter', {
 							sessionName,
 							snippet: entry.snippet.slice(0, 50),
 							ageMs: now - entry.sentAt,
 						});
 
+						// Tab restores Ink TUI focus before Enter
+						await sessionHelper.sendKey(sessionName, 'Tab');
+						await delay(200);
 						await sessionHelper.sendEnter(sessionName);
 						await delay(500);
 						await sessionHelper.sendEnter(sessionName); // backup

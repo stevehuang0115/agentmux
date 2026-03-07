@@ -22,6 +22,18 @@ import type {
 import { isValidCreateSubscriptionInput } from '../../types/event-bus.types.js';
 
 /**
+ * Buffered notification entry pending delivery after debounce window.
+ */
+interface BufferedNotification {
+  /** The formatted notification message */
+  message: string;
+  /** The original event that triggered this notification */
+  event: AgentEvent;
+  /** Timestamp when this entry was last updated (for dedup overwrites) */
+  updatedAt: number;
+}
+
+/**
  * EventBusService manages event subscriptions and publishes agent lifecycle
  * events. When an event matches a subscription, a notification message is
  * enqueued into the MessageQueueService for delivery to the subscriber.
@@ -41,18 +53,6 @@ import { isValidCreateSubscriptionInput } from '../../types/event-bus.types.js';
  * eventBus.publish(agentIdleEvent);
  * ```
  */
-/**
- * Buffered notification entry pending delivery after debounce window.
- */
-interface BufferedNotification {
-  /** The formatted notification message */
-  message: string;
-  /** The original event that triggered this notification */
-  event: AgentEvent;
-  /** Timestamp when this entry was last updated (for dedup overwrites) */
-  updatedAt: number;
-}
-
 export class EventBusService extends EventEmitter {
   private logger: ComponentLogger;
   private subscriptions: Map<string, EventSubscription> = new Map();
@@ -427,6 +427,17 @@ export class EventBusService extends EventEmitter {
       return false;
     }
     if (filter.teamId && filter.teamId !== event.teamId) {
+      return false;
+    }
+
+    // Hierarchy filter criteria
+    if (filter.taskId && filter.taskId !== event.taskId) {
+      return false;
+    }
+    if (filter.hierarchyLevel !== undefined && filter.hierarchyLevel !== event.hierarchyLevel) {
+      return false;
+    }
+    if (filter.parentMemberId && filter.parentMemberId !== event.parentMemberId) {
       return false;
     }
 

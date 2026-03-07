@@ -380,15 +380,21 @@ export function matchTuiPromptLine(line: string): string | null {
 		}
 	}
 
-	// Check for > (greater-than followed by space)
-	if (i < len && line.charCodeAt(i) === 0x3E) { // >
-		i++;
-		if (i < len && isWhitespace(line.charCodeAt(i))) {
-			i++;
-			// Skip additional whitespace
-			while (i < len && isWhitespace(line.charCodeAt(i))) i++;
-			if (i < len) {
-				return line.slice(i);
+	// Check for prompt characters followed by space:
+	// > (0x3E greater-than), › (0x203A single right-pointing angle quotation),
+	// ❯ (0x276F heavy right-pointing angle quotation mark),
+	// ! (0x21 exclamation mark — Gemini CLI shell mode prompt)
+	if (i < len) {
+		const cp = line.codePointAt(i)!;
+		if (cp === 0x3E || cp === 0x203A || cp === 0x276F || cp === 0x21) {
+			i += cp > 0xFFFF ? 2 : 1;
+			if (i < len && isWhitespace(line.charCodeAt(i))) {
+				i++;
+				// Skip additional whitespace
+				while (i < len && isWhitespace(line.charCodeAt(i))) i++;
+				if (i < len) {
+					return line.slice(i);
+				}
 			}
 		}
 	}
@@ -421,12 +427,14 @@ export function isPromptLine(line: string, runtimeType?: RuntimeType): boolean {
 
 	// Claude Code prompts
 	if (!isGemini && !isCodex) {
-		if (trimmed === '❯' || trimmed === '⏵' || trimmed === '$' ||
-			stripped === '❯' || stripped === '⏵' || stripped === '$') {
+		if (trimmed === '❯' || trimmed === '⏵' || trimmed === '$' || trimmed === '›' ||
+			stripped === '❯' || stripped === '⏵' || stripped === '$' || stripped === '›') {
 			return true;
 		}
 		// ❯❯ bypass permissions prompt
 		if (trimmed.startsWith('❯❯')) return true;
+		// › prompt with trailing text (e.g., "› some-text")
+		if (trimmed.startsWith('› ') || stripped.startsWith('› ')) return true;
 	}
 
 	// Codex CLI prompts

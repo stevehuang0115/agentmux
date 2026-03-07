@@ -721,6 +721,503 @@ describe('Teams Handlers', () => {
     });
   });
 
+  describe('createTeam - hierarchical teams', () => {
+    let uuidCounter: number;
+
+    beforeEach(() => {
+      // Override uuid to return unique IDs for hierarchy wiring tests
+      uuidCounter = 0;
+      const { v4 } = require('uuid');
+      (v4 as jest.Mock).mockImplementation(() => `hier-uuid-${++uuidCounter}`);
+    });
+
+    it('should create a hierarchical team with team-leader and workers', async () => {
+      mockRequest.body = {
+        name: 'Hierarchical Team',
+        description: 'A team with hierarchy',
+        hierarchical: true,
+        members: [
+          {
+            name: 'Team Lead',
+            role: 'team-leader',
+            systemPrompt: 'You are a team leader',
+          },
+          {
+            name: 'Worker 1',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+          {
+            name: 'Worker 2',
+            role: 'tester',
+            systemPrompt: 'You are a tester',
+          },
+        ],
+        projectPath: '/test/project',
+      };
+
+      let savedTeam: Team;
+      mockStorageService.saveTeam.mockImplementation((team: Team) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+
+      // Verify team-level hierarchy fields
+      expect(savedTeam!.hierarchical).toBe(true);
+      expect(savedTeam!.leaderId).toBeDefined();
+
+      // Verify leader member
+      const leader = savedTeam!.members.find(m => m.role === 'team-leader');
+      expect(leader).toBeDefined();
+      expect(leader!.hierarchyLevel).toBe(1);
+      expect(leader!.canDelegate).toBe(true);
+      expect(leader!.subordinateIds).toHaveLength(2);
+
+      // Verify workers point to leader
+      const workers = savedTeam!.members.filter(m => m.role !== 'team-leader');
+      for (const worker of workers) {
+        expect(worker.parentMemberId).toBe(leader!.id);
+        expect(worker.hierarchyLevel).toBe(2);
+      }
+
+      // Verify leader's subordinateIds contain worker IDs
+      expect(leader!.subordinateIds).toContain(workers[0].id);
+      expect(leader!.subordinateIds).toContain(workers[1].id);
+    });
+
+    it('should reject hierarchical team without team-leader or canDelegate member', async () => {
+      mockRequest.body = {
+        name: 'Bad Hierarchical Team',
+        hierarchical: true,
+        members: [
+          {
+            name: 'Worker 1',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+          {
+            name: 'Worker 2',
+            role: 'tester',
+            systemPrompt: 'You are a tester',
+          },
+        ],
+      };
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Hierarchical teams require at least one team-leader or member with canDelegate=true',
+      });
+    });
+
+    it('should accept canDelegate member as leader alternative', async () => {
+      mockRequest.body = {
+        name: 'Delegate Team',
+        hierarchical: true,
+        members: [
+          {
+            name: 'Senior Dev',
+            role: 'developer',
+            systemPrompt: 'You are a senior developer',
+            canDelegate: true,
+          },
+          {
+            name: 'Junior Dev',
+            role: 'developer',
+            systemPrompt: 'You are a junior developer',
+          },
+        ],
+      };
+
+      let savedTeam: Team;
+      mockStorageService.saveTeam.mockImplementation((team: Team) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+
+      const delegator = savedTeam!.members.find(m => m.canDelegate);
+      expect(delegator).toBeDefined();
+      expect(delegator!.subordinateIds).toHaveLength(1);
+      expect(savedTeam!.leaderId).toBe(delegator!.id);
+    });
+
+    it('should store templateId on the team', async () => {
+      mockRequest.body = {
+        name: 'Template Team',
+        hierarchical: true,
+        templateId: 'core-engineering-v1',
+        members: [
+          {
+            name: 'TL',
+            role: 'team-leader',
+            systemPrompt: 'You are a TL',
+          },
+          {
+            name: 'Dev',
+            role: 'developer',
+            systemPrompt: 'You are a dev',
+          },
+        ],
+      };
+
+      let savedTeam: Team;
+      mockStorageService.saveTeam.mockImplementation((team: Team) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+      expect(savedTeam!.templateId).toBe('core-engineering-v1');
+    });
+
+    it('should NOT set hierarchy fields on non-hierarchical teams', async () => {
+      mockRequest.body = {
+        name: 'Flat Team',
+        members: [
+          {
+            name: 'Dev 1',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+          {
+            name: 'Dev 2',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+        ],
+      };
+
+      let savedTeam: Team;
+      mockStorageService.saveTeam.mockImplementation((team: Team) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+      expect(savedTeam!.hierarchical).toBeUndefined();
+      expect(savedTeam!.leaderId).toBeUndefined();
+
+      for (const member of savedTeam!.members) {
+        expect(member.hierarchyLevel).toBeUndefined();
+        expect(member.canDelegate).toBeUndefined();
+        expect(member.subordinateIds).toBeUndefined();
+        expect(member.parentMemberId).toBeUndefined();
+      }
+    });
+  });
+
+  describe('createTeam - parentTeamId', () => {
+    it('should create a team with parentTeamId', async () => {
+      const parentTeam = {
+        id: 'parent-team-id',
+        name: 'Parent Org',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([parentTeam]);
+
+      mockRequest.body = {
+        name: 'Child Team',
+        parentTeamId: 'parent-team-id',
+        members: [
+          {
+            name: 'Dev',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+        ],
+      };
+
+      let savedTeam: any;
+      mockStorageService.saveTeam.mockImplementation((team: any) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+      expect(savedTeam.parentTeamId).toBe('parent-team-id');
+    });
+
+    it('should reject parentTeamId referencing non-existent team', async () => {
+      mockStorageService.getTeams.mockResolvedValue([]);
+
+      mockRequest.body = {
+        name: 'Orphan Team',
+        parentTeamId: 'non-existent-parent',
+        members: [
+          {
+            name: 'Dev',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+        ],
+      };
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Parent team with id "non-existent-parent" not found',
+      });
+    });
+
+    it('should create top-level team without parentTeamId', async () => {
+      mockRequest.body = {
+        name: 'Standalone Team',
+        members: [
+          {
+            name: 'Dev',
+            role: 'developer',
+            systemPrompt: 'You are a developer',
+          },
+        ],
+      };
+
+      let savedTeam: any;
+      mockStorageService.saveTeam.mockImplementation((team: any) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.createTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(201);
+      expect(savedTeam.parentTeamId).toBeUndefined();
+    });
+  });
+
+  describe('updateTeam - parentTeamId', () => {
+    it('should update parentTeamId on a team', async () => {
+      const parentTeam = {
+        id: 'parent-id',
+        name: 'Parent Org',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const childTeam = {
+        id: 'child-id',
+        name: 'Child Team',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([parentTeam, childTeam]);
+      mockRequest.params = { id: 'child-id' };
+      mockRequest.body = { parentTeamId: 'parent-id' };
+
+      let savedTeam: any;
+      mockStorageService.saveTeam.mockImplementation((team: any) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.updateTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+      expect(savedTeam.parentTeamId).toBe('parent-id');
+    });
+
+    it('should remove parentTeamId when set to null', async () => {
+      const childTeam = {
+        id: 'child-id',
+        name: 'Child Team',
+        members: [],
+        projectIds: [],
+        parentTeamId: 'old-parent',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([childTeam]);
+      mockRequest.params = { id: 'child-id' };
+      mockRequest.body = { parentTeamId: null };
+
+      let savedTeam: any;
+      mockStorageService.saveTeam.mockImplementation((team: any) => {
+        savedTeam = JSON.parse(JSON.stringify(team));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.updateTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true })
+      );
+      expect(savedTeam.parentTeamId).toBeUndefined();
+    });
+
+    it('should reject self-referencing parentTeamId', async () => {
+      const team = {
+        id: 'team-1',
+        name: 'Self Ref',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([team]);
+      mockRequest.params = { id: 'team-1' };
+      mockRequest.body = { parentTeamId: 'team-1' };
+
+      await teamsHandlers.updateTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'A team cannot be its own parent',
+      });
+    });
+
+    it('should reject circular parent reference', async () => {
+      const teamA = {
+        id: 'team-a',
+        name: 'Team A',
+        members: [],
+        projectIds: [],
+        parentTeamId: 'team-b',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const teamB = {
+        id: 'team-b',
+        name: 'Team B',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([teamA, teamB]);
+      mockRequest.params = { id: 'team-b' };
+      mockRequest.body = { parentTeamId: 'team-a' };
+
+      await teamsHandlers.updateTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // teamA.parentTeamId === 'team-b' and we're trying to set teamB.parentTeamId = 'team-a'
+      // This should be rejected as circular
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Circular parent reference detected',
+      });
+    });
+  });
+
+  describe('deleteTeam - parentTeamId cascade', () => {
+    it('should unset parentTeamId on child teams when parent is deleted', async () => {
+      const parentTeam = {
+        id: 'parent-id',
+        name: 'Parent Org',
+        members: [],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const childTeam = {
+        id: 'child-id',
+        name: 'Child Team',
+        members: [],
+        projectIds: [],
+        parentTeamId: 'parent-id',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      mockStorageService.getTeams.mockResolvedValue([parentTeam, childTeam]);
+      mockStorageService.deleteTeam.mockResolvedValue(undefined);
+      mockTmuxService.sessionExists.mockResolvedValue(false);
+
+      mockRequest.params = { id: 'parent-id' };
+
+      const savedTeams: any[] = [];
+      mockStorageService.saveTeam.mockImplementation((team: any) => {
+        savedTeams.push(JSON.parse(JSON.stringify(team)));
+        return Promise.resolve();
+      });
+
+      await teamsHandlers.deleteTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockStorageService.deleteTeam).toHaveBeenCalledWith('parent-id');
+      // Child team should have parentTeamId cleared
+      const savedChild = savedTeams.find(t => t.id === 'child-id');
+      expect(savedChild).toBeDefined();
+      expect(savedChild.parentTeamId).toBeUndefined();
+    });
+  });
+
   describe('getDefaultRuntime (via createTeam and addTeamMember)', () => {
     it('should return configured default runtime from settings', async () => {
       // Configure settings to return gemini-cli as the default runtime

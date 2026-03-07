@@ -8,7 +8,7 @@
  */
 
 import path from 'path';
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 
 // ========================= Types =========================
 
@@ -70,9 +70,14 @@ export function getTemplatesDir(): string {
 /**
  * Lists all available team templates.
  *
- * Reads JSON files from config/templates/ and returns them sorted by name.
+ * Reads templates from config/templates/ in both formats:
+ * - New format: subdirectory/template.json with roles[] and verificationPipeline
+ * - Legacy format: flat JSON files with members[] at root level
  *
- * @returns Array of team templates
+ * New-format templates are converted to the CLI TeamTemplate interface
+ * by mapping roles to members.
+ *
+ * @returns Array of team templates sorted by name
  *
  * @example
  * ```typescript
@@ -83,21 +88,50 @@ export function getTemplatesDir(): string {
 export function listTemplates(): TeamTemplate[] {
   const templatesDir = getTemplatesDir();
 
-  let files: string[];
+  let entries: string[];
   try {
-    files = readdirSync(templatesDir).filter(f => f.endsWith('.json'));
+    entries = readdirSync(templatesDir);
   } catch {
     return [];
   }
 
   const templates: TeamTemplate[] = [];
+  const seenIds = new Set<string>();
 
-  for (const file of files) {
+  // First pass: load new-format templates from subdirectories
+  for (const entry of entries) {
+    const fullPath = path.join(templatesDir, entry);
+    try {
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        const templateJsonPath = path.join(fullPath, 'template.json');
+        if (existsSync(templateJsonPath)) {
+          const content = readFileSync(templateJsonPath, 'utf-8');
+          const parsed = JSON.parse(content);
+          // New format: has roles[] array and verificationPipeline
+          if (parsed.id && parsed.name && Array.isArray(parsed.roles) && parsed.roles.length > 0) {
+            const converted = convertNewFormatTemplate(parsed);
+            if (converted) {
+              templates.push(converted);
+              seenIds.add(converted.id);
+            }
+          }
+        }
+      }
+    } catch {
+      // Skip invalid directories
+    }
+  }
+
+  // Second pass: load legacy flat JSON templates (skip if ID already seen)
+  const jsonFiles = entries.filter(f => f.endsWith('.json') && !f.startsWith('.'));
+  for (const file of jsonFiles) {
     try {
       const content = readFileSync(path.join(templatesDir, file), 'utf-8');
       const parsed = JSON.parse(content) as TeamTemplate;
-      if (parsed.id && parsed.name && Array.isArray(parsed.members)) {
+      if (parsed.id && parsed.name && Array.isArray(parsed.members) && !seenIds.has(parsed.id)) {
         templates.push(parsed);
+        seenIds.add(parsed.id);
       }
     } catch {
       // Skip malformed template files
@@ -105,6 +139,51 @@ export function listTemplates(): TeamTemplate[] {
   }
 
   return templates.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Converts a new-format template (with roles[]) to CLI TeamTemplate (with members[]).
+ *
+ * Maps each role to one or more TemplateMember entries based on the role's count.
+ *
+ * @param data - Raw parsed template.json data
+ * @returns Converted TeamTemplate, or null if conversion fails
+ */
+function convertNewFormatTemplate(data: Record<string, unknown>): TeamTemplate | null {
+  try {
+    const roles = data.roles as Array<{
+      role: string;
+      label: string;
+      defaultName: string;
+      count: number;
+      defaultSkills?: string[];
+      excludedSkills?: string[];
+      promptAdditions?: string;
+    }>;
+
+    const members: TemplateMember[] = [];
+    for (const role of roles) {
+      for (let i = 0; i < (role.count || 1); i++) {
+        const suffix = role.count > 1 ? ` ${i + 1}` : '';
+        members.push({
+          name: `${role.defaultName}${suffix}`,
+          role: role.role,
+          systemPrompt: role.promptAdditions ?? `You are a ${role.label}.`,
+          skillOverrides: role.defaultSkills,
+          excludedRoleSkills: role.excludedSkills,
+        });
+      }
+    }
+
+    return {
+      id: data.id as string,
+      name: data.name as string,
+      description: (data.description as string) ?? '',
+      members,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

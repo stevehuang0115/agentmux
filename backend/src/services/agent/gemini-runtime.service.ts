@@ -5,6 +5,7 @@ import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
 import { CREWLY_CONSTANTS, RUNTIME_TYPES, GEMINI_FAILURE_PATTERNS, type RuntimeType } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
+import { addGeminiTrustedFolders } from '../../utils/gemini-trusted-folders.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -229,7 +230,7 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		// that doesn't depend on the CLI being ready for interactive commands.
 		await this.ensureGeminiMcpConfig(effectiveProjectPath);
 
-		// Ensure GOOGLE_GENAI_API_KEY is in the project .env file
+		// Ensure GEMINI_API_KEY is in the project .env file
 		await this.ensureGeminiEnvFile(effectiveProjectPath);
 
 		// Ensure required paths are trusted by Gemini CLI before /directory add.
@@ -285,6 +286,33 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	async ensureGeminiMcpConfig(projectPath: string): Promise<void> {
 		const settingsPath = path.join(projectPath, '.gemini', 'settings.json');
 		await this.ensureMcpConfig(settingsPath, projectPath);
+
+		// Suppress Gemini CLI auto-update (#128). Auto-update attempts can fail
+		// due to npm permission issues (EACCES), corrupting the session state
+		// and causing persistent API connectivity failures.
+		try {
+			const settingsDir = path.dirname(settingsPath);
+			await fsPromises.mkdir(settingsDir, { recursive: true });
+
+			let existing: Record<string, unknown> = {};
+			try {
+				const content = await fsPromises.readFile(settingsPath, 'utf8');
+				existing = JSON.parse(content);
+			} catch {
+				// File doesn't exist yet or invalid JSON
+			}
+
+			if (existing['disableAutoUpdate'] !== true) {
+				existing['disableAutoUpdate'] = true;
+				await fsPromises.writeFile(settingsPath, JSON.stringify(existing, null, 2) + '\n');
+				this.logger.info('Set disableAutoUpdate=true in Gemini CLI settings (#128)', { projectPath });
+			}
+		} catch (error) {
+			this.logger.warn('Failed to set disableAutoUpdate in Gemini CLI settings (non-fatal)', {
+				projectPath,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/**
@@ -366,51 +394,10 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	/**
 	 * Ensure Gemini trusted folders contain the required paths.
 	 * Gemini blocks `/directory add` for paths that are not pre-trusted.
+	 * Delegates to the shared addGeminiTrustedFolders utility.
 	 */
 	private async ensureGeminiTrustedFolders(paths: string[]): Promise<void> {
-		const trustedFoldersPath = path.join(os.homedir(), '.gemini', 'trustedFolders.json');
-		const normalizedPaths = [...new Set(paths.map((p) => path.resolve(p)))];
-
-		try {
-			let trustedFolders: Record<string, string> = {};
-			try {
-				const raw = await fsPromises.readFile(trustedFoldersPath, 'utf8');
-				const parsed = JSON.parse(raw);
-				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-					trustedFolders = parsed as Record<string, string>;
-				}
-			} catch (readError) {
-				// Missing file is expected on first run; malformed content is reset.
-				if ((readError as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-					this.logger.warn('Failed to read Gemini trusted folders, resetting file', {
-						trustedFoldersPath,
-						error: readError instanceof Error ? readError.message : String(readError),
-					});
-				}
-			}
-
-			let changed = false;
-			for (const folderPath of normalizedPaths) {
-				if (trustedFolders[folderPath] !== 'TRUST_FOLDER') {
-					trustedFolders[folderPath] = 'TRUST_FOLDER';
-					changed = true;
-				}
-			}
-
-			if (!changed) return;
-
-			await fsPromises.mkdir(path.dirname(trustedFoldersPath), { recursive: true });
-			await fsPromises.writeFile(trustedFoldersPath, `${JSON.stringify(trustedFolders, null, 2)}\n`, 'utf8');
-			this.logger.info('Gemini trusted folders updated', {
-				trustedFoldersPath,
-				addedCount: normalizedPaths.length,
-			});
-		} catch (error) {
-			this.logger.warn('Failed to update Gemini trusted folders (non-fatal)', {
-				trustedFoldersPath,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+		await addGeminiTrustedFolders(paths, this.logger);
 	}
 
 	/**

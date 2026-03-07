@@ -16,14 +16,50 @@ require_param "absoluteTaskPath" "$ABSOLUTE_TASK_PATH"
 require_param "sessionName" "$SESSION_NAME"
 require_param "summary" "$SUMMARY"
 
+# Optional structured VerificationRequest fields (for hierarchical workflows)
+TASK_ID=$(echo "$INPUT" | jq -r '.taskId // empty')
+ARTIFACTS=$(echo "$INPUT" | jq -c '.artifacts // empty')
+TEST_RESULTS=$(echo "$INPUT" | jq -r '.testResults // empty')
+USE_STRUCTURED=$(echo "$INPUT" | jq -r '.structured // "false"')
+
+# If structured mode is enabled and taskId is provided, send a [VERIFICATION REQUEST]
+# to the orchestrator/team-leader before completing the task file.
+if [ "$USE_STRUCTURED" = "true" ] && [ -n "$TASK_ID" ]; then
+  VER_MESSAGE="---\n[VERIFICATION REQUEST]\nTask ID: ${TASK_ID}\nRequested by: ${SESSION_NAME}\n---\n\n## Summary\n${SUMMARY}"
+
+  # Add artifacts if provided
+  if [ -n "$ARTIFACTS" ] && [ "$ARTIFACTS" != "" ]; then
+    ARTIFACT_LINES=$(echo "$ARTIFACTS" | jq -r '.[]? | "- **\(.name)** (\(.type)): \(.content)"' 2>/dev/null || true)
+    if [ -n "$ARTIFACT_LINES" ]; then
+      VER_MESSAGE="${VER_MESSAGE}\n\n## Artifacts\n${ARTIFACT_LINES}"
+    fi
+  fi
+
+  # Add test results if provided
+  if [ -n "$TEST_RESULTS" ]; then
+    VER_MESSAGE="${VER_MESSAGE}\n\n## Test Results\n${TEST_RESULTS}"
+  fi
+
+  # Send verification request to orchestrator via chat API
+  VER_BODY=$(jq -n --arg content "$VER_MESSAGE" --arg senderName "$SESSION_NAME" \
+    '{content: $content, senderName: $senderName, senderType: "agent"}')
+  api_call POST "/chat/agent-response" "$VER_BODY" || true
+fi
+
 BODY=$(jq -n \
   --arg absoluteTaskPath "$ABSOLUTE_TASK_PATH" \
+  --arg taskPath "$ABSOLUTE_TASK_PATH" \
   --arg sessionName "$SESSION_NAME" \
   --arg summary "$SUMMARY" \
   --arg skipGates "$SKIP_GATES" \
   --argjson output "${OUTPUT_JSON:-null}" \
-  '{absoluteTaskPath: $absoluteTaskPath, sessionName: $sessionName, summary: $summary} +
+  '{absoluteTaskPath: $absoluteTaskPath, taskPath: $taskPath, sessionName: $sessionName, summary: $summary} +
    (if $skipGates == "true" then {skipGates: true} else {} end) +
    (if $output != null then {output: $output} else {} end)')
 
 api_call POST "/task-management/complete" "$BODY"
+
+# Auto-persist the task summary as project knowledge (#127).
+if [ -n "$SUMMARY" ]; then
+  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}"
+fi

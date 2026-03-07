@@ -63,3 +63,22 @@ require_param() {
     error_exit "Missing required parameter: $1"
   fi
 }
+
+# -----------------------------------------------------------------------------
+# auto_remember agentId content [category] [scope]
+#
+# Fire-and-forget persistence of a learning to project memory.
+# Non-blocking, non-fatal — errors are silently suppressed.
+# -----------------------------------------------------------------------------
+auto_remember() {
+  local agent_id="$1" content="$2"
+  local category="${3:-task-completion}" scope="${4:-project}"
+  local body
+  body=$(jq -n \
+    --arg agentId "$agent_id" \
+    --arg content "$content" \
+    --arg category "$category" \
+    --arg scope "$scope" \
+    '{agentId: $agentId, content: $content, category: $category, scope: $scope}')
+  api_call POST "/memory/remember" "$body" 2>/dev/null || true
+}

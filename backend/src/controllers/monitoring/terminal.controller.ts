@@ -11,7 +11,7 @@ import { Request, Response } from 'express';
 import { ApiResponse } from '../../types/index.js';
 import { getSessionBackendSync, getSessionBackend } from '../../services/session/index.js';
 import { LoggerService, ComponentLogger } from '../../services/core/logger.service.js';
-import { TERMINAL_CONTROLLER_CONSTANTS, ORCHESTRATOR_SESSION_NAME, CREWLY_CONSTANTS, RuntimeType } from '../../constants.js';
+import { TERMINAL_CONTROLLER_CONSTANTS, ORCHESTRATOR_SESSION_NAME, CREWLY_CONSTANTS, RuntimeType, RUNTIME_TYPES } from '../../constants.js';
 import {
 	validateTerminalInput,
 	sanitizeTerminalInput,
@@ -747,10 +747,25 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 				} as ApiResponse);
 				return;
 			}
-			session.write(message + '\r');
+			// For TUI runtimes (Gemini CLI, Codex CLI), use two-step write:
+			// text first, then Enter separately. Bundling message+\r in a single
+			// write causes the \r to be consumed by bracketed paste mode (#130).
+			const isTuiRuntime = resolvedRuntimeType &&
+				resolvedRuntimeType !== RUNTIME_TYPES.CLAUDE_CODE;
+			if (isTuiRuntime) {
+				session.write(message);
+				const enterDelay = Math.min(1000 + Math.ceil(message.length / 10), 5000);
+				await new Promise(resolve => setTimeout(resolve, enterDelay));
+				session.write('\r');
+				await new Promise(resolve => setTimeout(resolve, 500));
+				session.write('\r'); // backup Enter
+			} else {
+				session.write(message + '\r');
+			}
 			logger.info('Message force-delivered via direct PTY write', {
 				sessionName,
 				messageLength: message.length,
+				twoStepWrite: !!isTuiRuntime,
 			});
 			res.json({
 				success: true,
