@@ -1,1 +1,8 @@
-[]
+[
+  {
+    "from": "Superpowers (github.com/obra/superpowers) by Jesse Vincent. MIT, 27K stars in 3 months (2026-03). 定位: coding agent 的开发方法论框架，用可组合 markdown skills 强制 agent 遵循规范开发流程。核心工作流: Discovery→Design→Plan→Execute(subagent+两阶段review)→Verify(TDD)。关键skills: brainstorming, writing-plans/executing-plans, test-driven-development, subagent-driven-development, requesting/receiving-code-review, systematic-debugging, dispatching-parallel-agents。与 Crewly 关系: 非直接竞品，Superpowers=单人编码agent方法论, Crewly=多agent团队协作。Superpowers 的 skills 理念可被 Crewly developer 角色借鉴，特别是两阶段 code review 和 TDD 流程可融入 Quality Gates。来源: Sam 研究 2026-03-02, X @saboo_shubham_",
+    "to": "Superpowers",
+    "relationshipType": "uses",
+    "id": "5d1e215c-cab5-4f81-89b5-1272540c094b"
+  }
+]

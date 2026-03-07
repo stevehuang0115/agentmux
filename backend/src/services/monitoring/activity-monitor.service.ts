@@ -6,7 +6,7 @@ import { writeFile, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, AGENT_IDENTITY_CONSTANTS, PTY_CONSTANTS, type WorkingStatus } from '../../constants.js';
+import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, AGENT_IDENTITY_CONSTANTS, PTY_CONSTANTS, ACTIVITY_MONITOR_CONSTANTS, type WorkingStatus } from '../../constants.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import type { EventBusService } from '../event-bus/event-bus.service.js';
@@ -62,7 +62,7 @@ export class ActivityMonitorService {
   private _sessionBackend: ISessionBackend | null = null;
   private agentHeartbeatService: AgentHeartbeatService;
   private intervalId: NodeJS.Timeout | null = null;
-  private readonly POLLING_INTERVAL = 120000; // 2 minutes
+  private readonly POLLING_INTERVAL = ACTIVITY_MONITOR_CONSTANTS.POLLING_INTERVAL_MS;
   private lastTerminalOutputs: Map<string, string> = new Map();
   private readonly MAX_OUTPUT_SIZE = 512; // 512 bytes max per output
   private readonly ACTIVITY_CHECK_TIMEOUT = 6000; // 6 second timeout per check
@@ -202,7 +202,7 @@ export class ActivityMonitorService {
       return;
     }
 
-    this.logger.info('Starting activity monitoring with 2-minute intervals (NEW ARCHITECTURE: workingStatus only)');
+    this.logger.info(`Starting activity monitoring with ${this.POLLING_INTERVAL / 1000}s intervals (workingStatus only)`);
     
     // Run immediately first
     this.performActivityCheck();

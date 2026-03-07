@@ -147,7 +147,7 @@ describe('ActivityMonitorService', () => {
       service.startPolling();
 
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith('Starting activity monitoring with 2-minute intervals (NEW ARCHITECTURE: workingStatus only)');
+      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('Starting activity monitoring'));
       expect(service.isRunning()).toBe(true);
     });
 
@@ -156,8 +156,8 @@ describe('ActivityMonitorService', () => {
 
       service.startPolling();
 
-      // Fast forward 2 minutes
-      jest.advanceTimersByTime(120000);
+      // Fast forward one polling interval (30s)
+      jest.advanceTimersByTime(30000);
 
       expect(performActivityCheckSpy).toHaveBeenCalledTimes(2); // Initial + 1 interval
     });
@@ -623,7 +623,7 @@ describe('ActivityMonitorService', () => {
 
   describe('getPollingInterval', () => {
     it('should return the correct polling interval', () => {
-      expect(service.getPollingInterval()).toBe(120000); // 2 minutes
+      expect(service.getPollingInterval()).toBe(30000); // 30 seconds (#124: reduced from 2min)
     });
   });
 

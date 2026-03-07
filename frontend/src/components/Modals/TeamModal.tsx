@@ -4,11 +4,14 @@ import { FormLabel, FormInput, FormSelect, Button } from '../UI';
 import { useAlert } from '../UI/Dialog';
 import { useRoles } from '../../hooks/useRoles';
 import { useProjects } from '../../hooks/useProjects';
+import { useTeams } from '../../hooks/useTeams';
 import { useSkills } from '../../hooks/useSkills';
 import { rolesService } from '../../services/roles.service';
-import type { Project } from '../../types';
+import type { Project, TeamMember as AppTeamMember } from '../../types';
 import type { RoleWithPrompt } from '../../types/role.types';
 import type { SkillSummary } from '../../types/skill.types';
+import { HierarchyModeConfig } from '../Hierarchy';
+import type { HierarchyConfig } from '../Hierarchy';
 
 interface TeamRole {
   key: string;
@@ -44,12 +47,19 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
   const { showWarning, AlertComponent } = useAlert();
   const { roles: fetchedRoles, isLoading: rolesLoading } = useRoles();
   const { projects, isLoading: projectsLoading } = useProjects();
+  const { teams: allTeams, loading: teamsLoading } = useTeams();
   const { skills: allSkills, loading: skillsLoading } = useSkills();
   const [formData, setFormData] = useState({
     name: '',
     projectPath: '',
+    parentTeamId: '',
   });
   const [members, setMembers] = useState<TeamMember[]>([]);
+  const [hierarchyConfig, setHierarchyConfig] = useState<HierarchyConfig>({
+    hierarchical: false,
+    leaderId: null,
+    leaderIds: [],
+  });
   const [loading, setLoading] = useState(false);
   // Track expanded skill sections per member
   const [expandedSkills, setExpandedSkills] = useState<Record<string, boolean>>({});
@@ -157,6 +167,12 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
       setFormData({
         name: team.name || '',
         projectPath: team.projectIds?.[0] || team.projectPath || '',
+        parentTeamId: team.parentTeamId || '',
+      });
+      setHierarchyConfig({
+        hierarchical: team.hierarchical || false,
+        leaderId: team.leaderId || null,
+        leaderIds: team.leaderIds || (team.leaderId ? [team.leaderId] : []),
       });
       if (team.members && Array.isArray(team.members)) {
         // Ensure all members have runtimeType, avatar, skillOverrides, and excludedRoleSkills (for backward compatibility)
@@ -299,6 +315,10 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
         })),
         projectIds: formData.projectPath ? [formData.projectPath] : [], // Send project ID, not path
         projectPath: selectedProject ? selectedProject.path : undefined, // Keep path for backend processing
+        parentTeamId: formData.parentTeamId || null, // null clears parent
+        hierarchical: hierarchyConfig.hierarchical,
+        leaderId: hierarchyConfig.hierarchical ? hierarchyConfig.leaderId : undefined,
+        leaderIds: hierarchyConfig.hierarchical ? hierarchyConfig.leaderIds : undefined,
       };
       await onSubmit(submitData);
     } catch (error) {
@@ -371,6 +391,32 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                   Optionally assign a project for this team to work on
                 </p>
               </div>
+
+              <div>
+                <FormLabel htmlFor="parent-team">Parent Team</FormLabel>
+                <FormSelect
+                  id="parent-team"
+                  value={formData.parentTeamId || ''}
+                  onChange={handleInputChange}
+                  name="parentTeamId"
+                >
+                  <option value="">None (Independent Team)</option>
+                  {allTeams
+                    .filter(t => t.id !== team?.id)
+                    .map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                </FormSelect>
+                <p className="text-xs text-text-secondary-dark mt-1">
+                  Optionally link this team under a parent team for organization
+                </p>
+              </div>
+
+              <HierarchyModeConfig
+                config={hierarchyConfig}
+                onChange={setHierarchyConfig}
+                members={members as unknown as AppTeamMember[]}
+              />
 
               <div>
                 <FormLabel>Team Members</FormLabel>
@@ -574,7 +620,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
               variant="primary"
               type="submit"
               onClick={handleFormSubmit}
-              disabled={!formData.name.trim() || members.length === 0 || loading || rolesLoading || projectsLoading}
+              disabled={!formData.name.trim() || members.length === 0 || loading || rolesLoading || projectsLoading || teamsLoading}
             >
               {loading ? (
                 <div className="animate-spin rounded-full h-4 w-4 border-2 border-current border-t-transparent" />

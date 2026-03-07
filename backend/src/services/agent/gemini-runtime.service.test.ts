@@ -687,6 +687,37 @@ describe('GeminiRuntimeService', () => {
 			// Should not throw — errors are handled gracefully
 			await expect(service.ensureGeminiMcpConfig('/test/project')).resolves.not.toThrow();
 		});
+
+		it('should set disableAutoUpdate=true in settings.json (#128)', async () => {
+			const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+			const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+			// MCP config writes first via atomicWriteJson, then our code reads/writes
+			mockReadFile.mockResolvedValue(JSON.stringify({ mcpServers: {} }));
+			mockWriteFile.mockResolvedValue(undefined);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			expect(mockWriteFile).toHaveBeenCalledWith(
+				path.join('/test/project', '.gemini', 'settings.json'),
+				expect.stringContaining('"disableAutoUpdate": true')
+			);
+		});
+
+		it('should not overwrite disableAutoUpdate if already true (#128)', async () => {
+			const mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>;
+			const mockWriteFile = fs.writeFile as jest.MockedFunction<typeof fs.writeFile>;
+			mockReadFile.mockResolvedValue(JSON.stringify({ mcpServers: {}, disableAutoUpdate: true }));
+			mockWriteFile.mockResolvedValue(undefined);
+
+			await service.ensureGeminiMcpConfig('/test/project');
+
+			// writeFile should NOT be called for settings.json (since disableAutoUpdate is already true)
+			// Note: writeFile may be called for other files like .env, so filter for settings.json
+			const settingsWriteCalls = mockWriteFile.mock.calls.filter(
+				(call) => String(call[0]).includes('settings.json')
+			);
+			expect(settingsWriteCalls).toHaveLength(0);
+		});
 	});
 
 	describe('ensureGeminiEnvFile', () => {
@@ -932,7 +963,7 @@ describe('GeminiRuntimeService', () => {
 	describe('GEMINI_FAILURE_PATTERNS', () => {
 		it('should export failure patterns as a constant array', () => {
 			expect(GEMINI_FAILURE_PATTERNS).toBeInstanceOf(Array);
-			expect(GEMINI_FAILURE_PATTERNS.length).toBe(8);
+			expect(GEMINI_FAILURE_PATTERNS.length).toBe(9);
 		});
 
 		it('should contain expected failure patterns', () => {
@@ -944,6 +975,7 @@ describe('GeminiRuntimeService', () => {
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('DEADLINE_EXCEEDED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('PERMISSION_DENIED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAUTHENTICATED'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Trying to reach gemini-3.1-pro-preview (Attempt 7/10)'))).toBe(true);
 		});
 
 		it('should not match normal output or non-fatal errors', () => {

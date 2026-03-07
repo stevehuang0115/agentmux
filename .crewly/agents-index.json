@@ -3,7 +3,7 @@
     {
       "agentId": "crewly-orc",
       "role": "orchestrator",
-      "lastActive": "2026-02-22T12:49:59.810Z"
+      "lastActive": "2026-03-07T19:27:11.672Z"
     },
     {
       "agentId": "crewly-dev-sam-217bfbbf",
@@ -18,12 +18,27 @@
     {
       "agentId": "crewly-core-mia-member-1",
       "role": "product-manager",
-      "lastActive": "2026-02-22T15:28:30.737Z"
+      "lastActive": "2026-03-07T19:55:42.847Z"
     },
     {
       "agentId": "crewly-core-sam-217bfbbf",
       "role": "developer",
-      "lastActive": "2026-02-22T17:31:05.298Z"
+      "lastActive": "2026-03-07T20:24:48.795Z"
+    },
+    {
+      "agentId": "crewly-sales-grace-c90cc95e",
+      "role": "generalist",
+      "lastActive": "2026-03-07T04:30:57.359Z"
+    },
+    {
+      "agentId": "crewly-marketing-luna-6e8fa1d1",
+      "role": "content-strategist",
+      "lastActive": "2026-03-02T03:33:38.032Z"
+    },
+    {
+      "agentId": "crewly-core-leo-member-n",
+      "role": "developer",
+      "lastActive": "2026-03-07T18:46:45.336Z"
     }
   ]
 }

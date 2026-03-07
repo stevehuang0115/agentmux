@@ -169,6 +169,21 @@ export const AGENT_IDENTITY_CONSTANTS = {
 	}
 } as const;
 
+// ========================= PROCESS EXIT CODES =========================
+
+/**
+ * Process exit codes used for inter-process communication between the CLI
+ * parent process and the backend child process.
+ */
+export const PROCESS_EXIT_CODES = {
+	/** Normal shutdown — do not respawn */
+	SUCCESS: 0,
+	/** Error — do not respawn */
+	ERROR: 1,
+	/** Graceful restart requested — CLI should respawn the backend */
+	RESTART_REQUESTED: 120,
+} as const;
+
 // ========================= WEB SERVER CONSTANTS =========================
 
 /**

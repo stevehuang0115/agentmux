@@ -1,0 +1,115 @@
+{
+  "id": "dev-fullstack",
+  "name": "Fullstack Development Team",
+  "description": "Team Leader + developers + QA for building web applications",
+  "category": "development",
+  "version": "1.0.0",
+  "tags": ["development", "web", "fullstack", "testing"],
+  "icon": "laptop",
+  "hierarchical": true,
+  "defaultRuntime": "claude-code",
+  "roles": [
+    {
+      "role": "team-leader",
+      "label": "Tech Lead",
+      "defaultName": "Tech Lead",
+      "count": 1,
+      "hierarchyLevel": 1,
+      "canDelegate": true,
+      "defaultSkills": [
+        "decompose-goal",
+        "delegate-task",
+        "verify-output",
+        "aggregate-results",
+        "handle-failure",
+        "code-review"
+      ],
+      "enableBrowser": true
+    },
+    {
+      "role": "developer",
+      "label": "Developer",
+      "defaultName": "Developer",
+      "count": 2,
+      "hierarchyLevel": 2,
+      "canDelegate": false,
+      "reportsTo": "team-leader",
+      "defaultSkills": [
+        "report-status",
+        "complete-task",
+        "request-help"
+      ],
+      "enableBrowser": false
+    },
+    {
+      "role": "qa-engineer",
+      "label": "QA Engineer",
+      "defaultName": "QA",
+      "count": 1,
+      "hierarchyLevel": 2,
+      "canDelegate": false,
+      "reportsTo": "team-leader",
+      "defaultSkills": [
+        "report-status",
+        "complete-task",
+        "request-help"
+      ],
+      "enableBrowser": true
+    }
+  ],
+  "verificationPipeline": {
+    "name": "Development Quality Pipeline",
+    "steps": [
+      {
+        "id": "quality-gates",
+        "name": "Quality Gates",
+        "description": "Run typecheck, unit tests, lint, and build",
+        "method": "quality_gates",
+        "critical": true,
+        "config": {
+          "gates": ["typecheck", "tests", "build"]
+        }
+      },
+      {
+        "id": "code-review",
+        "name": "Code Review",
+        "description": "TL reviews code diff for patterns and quality",
+        "method": "code_review",
+        "critical": true,
+        "config": {
+          "maxDiffLines": 500,
+          "checkPatterns": true
+        }
+      },
+      {
+        "id": "browser-test",
+        "name": "Browser Verification",
+        "description": "Open in browser, screenshot, verify UI matches spec",
+        "method": "browser_test",
+        "critical": false,
+        "config": {
+          "screenshotTool": "computer-use",
+          "viewports": ["desktop"]
+        }
+      },
+      {
+        "id": "e2e",
+        "name": "E2E Tests",
+        "description": "Run Playwright end-to-end test suite",
+        "method": "e2e_test",
+        "critical": false,
+        "config": {
+          "framework": "playwright",
+          "testDir": "tests/e2e"
+        }
+      }
+    ],
+    "passPolicy": "critical_only",
+    "maxRetries": 2
+  },
+  "monitoringDefaults": {
+    "idleEvent": true,
+    "fallbackCheckMinutes": 5
+  },
+  "maxWorkersPerLeader": 4
+}

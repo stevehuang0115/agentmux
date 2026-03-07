@@ -99,6 +99,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 		await writeFile(taskPath, taskContent, 'utf-8');
 
 		// If assigned, track via TaskTrackingService
+		let trackedTaskId: string | undefined;
 		if (sessionName) {
 			try {
 				const projects = await this.storageService.getProjects();
@@ -116,7 +117,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 						}
 					}
 					if (teamId) {
-						await this.taskTrackingService.assignTask(
+						const trackedTask = await this.taskTrackingService.assignTask(
 							project.id,
 							teamId,
 							taskPath,
@@ -125,6 +126,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 							memberId,
 							sessionName
 						);
+						trackedTaskId = trackedTask?.id;
 					}
 				}
 			} catch (trackingError) {
@@ -140,6 +142,7 @@ export async function createTask(this: ApiController, req: Request, res: Respons
 			fileName,
 			status: statusFolder,
 			milestone,
+			taskId: trackedTaskId,
 		});
 	} catch (error) {
 		logger.error('Error creating task', { error: error instanceof Error ? error.message : String(error) });

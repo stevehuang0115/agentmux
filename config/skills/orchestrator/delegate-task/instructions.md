@@ -70,15 +70,25 @@ When the agent completes the task (via `report-status` with `status: done` or `c
 
 No manual cleanup needed.
 
+## Delivery Strategy
+
+The script uses a two-stage delivery strategy:
+
+1. **Reliable delivery** (15s timeout) — Waits for the agent to be at a prompt, then delivers with verification. This is the preferred path.
+2. **Force fallback** — If the agent is busy or not ready within 15 seconds, the message is written directly to the PTY session without waiting. The task is still delivered, but may appear mid-output.
+
+This ensures tasks are always delivered even when agents are busy processing previous work.
+
 ## Error Handling
 
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `Missing required parameter: to` | `to` not provided | Include target session name |
 | `Missing required parameter: task` | `task` not provided | Include task description |
+| `Failed to deliver task to X` | Session doesn't exist or agent crashed | Check agent status, restart if needed |
 | `curl failed with exit code N` | Backend not running | Start the Crewly backend |
 
-Monitoring setup failures are non-fatal — if subscribe-event or schedule-check fails, the task is still delegated successfully.
+Error messages are output to **stdout** (JSON format) so the orchestrator can read them. Monitoring setup failures are non-fatal — if subscribe-event or schedule-check fails, the task is still delegated successfully.
 
 ## Related Skills
 

@@ -17,10 +17,12 @@ jest.mock('../core/logger.service.js', () => ({
 }));
 
 const mockUpdateAgentStatus = jest.fn();
+const mockFindMemberBySessionName = jest.fn().mockResolvedValue(null);
 jest.mock('../core/storage.service.js', () => ({
 	StorageService: {
 		getInstance: () => ({
 			updateAgentStatus: mockUpdateAgentStatus,
+			findMemberBySessionName: mockFindMemberBySessionName,
 		}),
 	},
 }));
@@ -949,6 +951,131 @@ describe('RuntimeExitMonitorService', () => {
 
 			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
 				'codex-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+	});
+
+	describe('EventBus publish on exit', () => {
+		const mockPublish = jest.fn();
+		const mockEventBusService = {
+			publish: mockPublish,
+		};
+
+		beforeEach(() => {
+			mockPublish.mockClear();
+			mockFindMemberBySessionName.mockReset();
+			mockFindMemberBySessionName.mockResolvedValue(null);
+			// Restore mocks overridden by Gemini failure tests
+			mockCapturePane.mockReturnValue('user@host:~$');
+			mockGetExitPatterns.mockReturnValue([
+				/Agent powering down/i,
+				/Interaction Summary/,
+			]);
+			service.setEventBusService(mockEventBusService as any);
+		});
+
+		it('should publish agent:status_changed and agent:inactive events on exit', async () => {
+			jest.useFakeTimers();
+
+			mockFindMemberBySessionName.mockResolvedValue({
+				team: { id: 'team-1', name: 'Core Team' },
+				member: { id: 'member-1', name: 'Sam' },
+			});
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should have published two events: agent:status_changed and agent:inactive
+			expect(mockPublish).toHaveBeenCalledTimes(2);
+
+			const statusChangedEvent = mockPublish.mock.calls[0][0];
+			expect(statusChangedEvent.type).toBe('agent:status_changed');
+			expect(statusChangedEvent.teamId).toBe('team-1');
+			expect(statusChangedEvent.teamName).toBe('Core Team');
+			expect(statusChangedEvent.memberId).toBe('member-1');
+			expect(statusChangedEvent.memberName).toBe('Sam');
+			expect(statusChangedEvent.sessionName).toBe('test-agent');
+			expect(statusChangedEvent.previousValue).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE);
+			expect(statusChangedEvent.newValue).toBe(CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
+			expect(statusChangedEvent.changedField).toBe('agentStatus');
+
+			const inactiveEvent = mockPublish.mock.calls[1][0];
+			expect(inactiveEvent.type).toBe('agent:inactive');
+			expect(inactiveEvent.teamId).toBe('team-1');
+			expect(inactiveEvent.sessionName).toBe('test-agent');
+
+			jest.useRealTimers();
+		});
+
+		it('should use empty names when member lookup fails', async () => {
+			jest.useFakeTimers();
+
+			mockFindMemberBySessionName.mockResolvedValue(null);
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			expect(mockPublish).toHaveBeenCalledTimes(2);
+
+			const event = mockPublish.mock.calls[0][0];
+			expect(event.teamName).toBe('');
+			expect(event.memberName).toBe('');
+			expect(event.teamId).toBe('team-1');
+			expect(event.memberId).toBe('member-1');
+
+			jest.useRealTimers();
+		});
+
+		it('should not publish events when EventBusService is not set', async () => {
+			jest.useFakeTimers();
+
+			// Create a fresh service without EventBus wired
+			RuntimeExitMonitorService.resetInstance();
+			const freshService = RuntimeExitMonitorService.getInstance();
+			// Do NOT call setEventBusService
+
+			freshService.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[mockOnData.mock.calls.length - 1][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Status should still be updated
+			expect(mockUpdateAgentStatus).toHaveBeenCalled();
+			// But no EventBus publish
+			expect(mockPublish).not.toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should not crash when EventBus publish throws', async () => {
+			jest.useFakeTimers();
+
+			mockPublish.mockImplementation(() => { throw new Error('EventBus down'); });
+			mockFindMemberBySessionName.mockResolvedValue(null);
+
+			service.startMonitoring('test-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should still have updated status despite EventBus failure
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
 				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
 			);
 

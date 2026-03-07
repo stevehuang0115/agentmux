@@ -16,6 +16,7 @@
  * Valid agent lifecycle event types
  */
 export const EVENT_TYPES = [
+  // Agent lifecycle events
   'agent:status_changed',
   'agent:idle',
   'agent:busy',
@@ -23,6 +24,22 @@ export const EVENT_TYPES = [
   'agent:inactive',
   'agent:context_warning',
   'agent:context_critical',
+  'agent:oauth_url',
+
+  // Hierarchical task events
+  'task:submitted',
+  'task:accepted',
+  'task:working',
+  'task:input_required',
+  'task:verification_requested',
+  'task:completed',
+  'task:failed',
+  'task:cancelled',
+
+  // Hierarchy communication events
+  'hierarchy:escalation',
+  'hierarchy:delegation',
+  'hierarchy:report_up',
 ] as const;
 
 /**
@@ -33,7 +50,7 @@ export type EventType = (typeof EVENT_TYPES)[number];
 /**
  * Fields that can trigger events when changed
  */
-export type ChangedField = 'agentStatus' | 'workingStatus' | 'contextUsage';
+export type ChangedField = 'agentStatus' | 'workingStatus' | 'contextUsage' | 'oauthUrl' | 'taskStatus' | 'hierarchyAction';
 
 // =============================================================================
 // Event Interfaces
@@ -75,6 +92,17 @@ export interface AgentEvent {
 
   /** Which field changed to trigger this event */
   changedField: ChangedField;
+
+  // === Hierarchy metadata (optional, used for task/hierarchy events) ===
+
+  /** Task ID associated with this event (for task:* and hierarchy:* events) */
+  taskId?: string;
+
+  /** Hierarchy level of the member who triggered the event */
+  hierarchyLevel?: number;
+
+  /** Parent member ID of the member who triggered the event */
+  parentMemberId?: string;
 }
 
 // =============================================================================
@@ -93,6 +121,15 @@ export interface EventFilter {
 
   /** Match events for a specific team ID */
   teamId?: string;
+
+  /** Match events for a specific task ID (hierarchy task events) */
+  taskId?: string;
+
+  /** Match events at a specific hierarchy level (0=orc, 1=TL, 2=worker) */
+  hierarchyLevel?: number;
+
+  /** Match events from subordinates of a specific parent member */
+  parentMemberId?: string;
 }
 
 /**

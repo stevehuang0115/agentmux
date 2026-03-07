@@ -1,0 +1,88 @@
+{
+  "id": "research-analysis",
+  "name": "Research & Analysis Team",
+  "description": "Research lead + analysts for competitive analysis and strategy",
+  "category": "research",
+  "version": "1.0.0",
+  "tags": ["research", "analysis", "strategy", "competitive"],
+  "icon": "microscope",
+  "hierarchical": true,
+  "defaultRuntime": "claude-code",
+  "roles": [
+    {
+      "role": "team-leader",
+      "label": "Research Lead",
+      "defaultName": "Research Lead",
+      "count": 1,
+      "hierarchyLevel": 1,
+      "canDelegate": true,
+      "defaultSkills": [
+        "decompose-goal",
+        "delegate-task",
+        "verify-output",
+        "aggregate-results",
+        "handle-failure",
+        "fact-check"
+      ],
+      "enableBrowser": true
+    },
+    {
+      "role": "developer",
+      "label": "Research Analyst",
+      "defaultName": "Analyst",
+      "count": 2,
+      "hierarchyLevel": 2,
+      "canDelegate": false,
+      "reportsTo": "team-leader",
+      "defaultSkills": [
+        "report-status",
+        "complete-task",
+        "request-help",
+        "web-search"
+      ],
+      "enableBrowser": true
+    }
+  ],
+  "verificationPipeline": {
+    "name": "Research Quality Pipeline",
+    "steps": [
+      {
+        "id": "source-verify",
+        "name": "Source Verification",
+        "description": "Verify all cited sources exist and are credible",
+        "method": "source_verify",
+        "critical": true,
+        "config": {
+          "minSources": 3,
+          "requirePrimarySources": true
+        }
+      },
+      {
+        "id": "fact-check",
+        "name": "Cross-Reference Check",
+        "description": "Cross-check key claims against multiple independent sources",
+        "method": "fact_check",
+        "critical": true,
+        "config": {
+          "minCrossReferences": 2,
+          "flagContradictions": true
+        }
+      },
+      {
+        "id": "data-validate",
+        "name": "Data Validation",
+        "description": "Check numerical data, dates, and statistics for consistency",
+        "method": "data_validate",
+        "critical": false,
+        "config": {
+          "checkDates": true,
+          "checkNumbers": true,
+          "checkPercentages": true
+        }
+      }
+    ],
+    "passPolicy": "critical_only",
+    "maxRetries": 1
+  },
+  "maxWorkersPerLeader": 3
+}

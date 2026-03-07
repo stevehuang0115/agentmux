@@ -15,6 +15,8 @@ import { EditorView } from '../components/ProjectDetail/EditorView';
 import { TeamsView } from '../components/ProjectDetail/TeamsView';
 import { TaskCreateModal } from '../components/ProjectDetail/TaskCreateModal';
 import { inProgressTasksService } from '../services/in-progress-tasks.service';
+import { TaskFlowView } from '../components/Hierarchy';
+import type { TaskFlowItem } from '../components/Hierarchy';
 
 interface ProjectDetailState {
   project: Project | null;
@@ -99,6 +101,8 @@ export const ProjectDetail: React.FC = () => {
   const [isCreateTaskModalOpen, setIsCreateTaskModalOpen] = useState(false);
   const [isCreateMilestoneModalOpen, setIsCreateMilestoneModalOpen] = useState(false);
   const [selectedMilestoneFilter, setSelectedMilestoneFilter] = useState<string | null>(null);
+  const [taskFlowItems, setTaskFlowItems] = useState<TaskFlowItem[]>([]);
+  const [showTaskFlow, setShowTaskFlow] = useState(false);
 
   // Update activeTab when location changes
   useEffect(() => {
@@ -123,6 +127,37 @@ export const ProjectDetail: React.FC = () => {
       loadProjectData(id);
     }
   }, [activeTab, id]);
+
+  // Load in-progress tasks for task flow view when tasks tab is active
+  useEffect(() => {
+    if (activeTab === 'tasks') {
+      const loadTaskFlow = async () => {
+        try {
+          const tasks = await inProgressTasksService.getInProgressTasks();
+          const items: TaskFlowItem[] = tasks.map((t: any) => ({
+            id: t.id,
+            taskName: t.taskName || t.taskPath?.split('/').pop()?.replace('.md', '') || t.id,
+            status: t.status || 'assigned',
+            assignedSessionName: t.assignedSessionName || '',
+            assignedTeamMemberId: t.assignedTeamMemberId || t.assignedMemberId || '',
+            parentTaskId: t.parentTaskId,
+            childTaskIds: t.childTaskIds,
+            delegatedBy: t.delegatedBy,
+            delegatedBySession: t.delegatedBySession,
+            assigneeHierarchyLevel: t.assigneeHierarchyLevel,
+            priority: t.priority,
+            completedAt: t.completedAt,
+            assignedAt: t.assignedAt || '',
+          }));
+          setTaskFlowItems(items);
+        } catch {
+          // Silent failure — task flow is supplementary
+          setTaskFlowItems([]);
+        }
+      };
+      loadTaskFlow();
+    }
+  }, [activeTab]);
 
   const checkAlignmentStatus = async (projectId: string) => {
     try {
@@ -1481,20 +1516,42 @@ export const ProjectDetail: React.FC = () => {
             setIsMarkdownEditorOpen={setIsMarkdownEditorOpen}
           />
         ) : activeTab === 'tasks' ? (
-          <TasksView
-            project={project}
-            tickets={tickets}
-            onTicketsUpdate={() => loadProjectData(project.id)}
-            onCreateSpecsTasks={handleCreateSpecsTasks}
-            onCreateDevTasks={handleCreateDevTasks}
-            onCreateE2ETasks={handleCreateE2ETasks}
-            loading={state.loading}
-            onTaskClick={handleTaskClick}
-            onTaskAssign={handleTaskAssign}
-            onTaskUnblock={handleTaskUnblock}
-            taskAssignmentLoading={taskAssignmentLoading}
-            taskUnblockLoading={taskUnblockLoading}
-          />
+          <div>
+            {/* Task Flow View — hierarchical task delegation tree */}
+            {taskFlowItems.length > 0 && (
+              <div className="mb-4">
+                <button
+                  className="flex items-center gap-2 text-sm font-medium text-text-secondary-dark hover:text-primary mb-2"
+                  onClick={() => setShowTaskFlow(!showTaskFlow)}
+                >
+                  <svg className={`w-4 h-4 transition-transform ${showTaskFlow ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                  Task Flow ({taskFlowItems.length} active)
+                </button>
+                {showTaskFlow && (
+                  <div className="rounded-lg border border-border-dark bg-surface-dark p-3">
+                    <TaskFlowView tasks={taskFlowItems} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            <TasksView
+              project={project}
+              tickets={tickets}
+              onTicketsUpdate={() => loadProjectData(project.id)}
+              onCreateSpecsTasks={handleCreateSpecsTasks}
+              onCreateDevTasks={handleCreateDevTasks}
+              onCreateE2ETasks={handleCreateE2ETasks}
+              loading={state.loading}
+              onTaskClick={handleTaskClick}
+              onTaskAssign={handleTaskAssign}
+              onTaskUnblock={handleTaskUnblock}
+              taskAssignmentLoading={taskAssignmentLoading}
+              taskUnblockLoading={taskUnblockLoading}
+            />
+          </div>
         ) : (
           <TeamsView 
             assignedTeams={assignedTeams} 

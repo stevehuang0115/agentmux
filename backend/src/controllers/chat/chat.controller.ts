@@ -321,44 +321,54 @@ export async function agentResponse(
       messageId: savedMessage.id,
     });
 
-    // Detect agent completion and trigger immediate orchestrator notification
-    if (resolvedSenderType === 'agent' && content.startsWith('[DONE]')) {
+    // Detect agent status reports and trigger immediate orchestrator notification.
+    // Agents call report-status with [DONE], [IDLE], or structured [STATUS REPORT].
+    // All are forwarded to the orchestrator so it can take follow-up action
+    // (assign next task, notify user, etc.) without waiting for ActivityMonitor polling.
+    const isAgentStatusReport = resolvedSenderType === 'agent' && (
+      content.startsWith('[DONE]') ||
+      content.startsWith('[IDLE]') ||
+      content.includes('[STATUS REPORT]')
+    );
+    if (isAgentStatusReport) {
       try {
         // 1. Enqueue notification to orchestrator via MessageQueueService
         if (messageQueueService) {
           messageQueueService.enqueue({
-            content: `Agent completion: ${content}`,
+            content: `Agent status: ${content}`,
             conversationId: resolvedConversationId,
             source: 'system_event',
           });
         }
 
-        // 2. Send Slack notification to relevant threads
-        const { getSlackThreadStore } = await import(
-          '../../services/slack/slack-thread-store.service.js'
-        );
-        const { getSlackOrchestratorBridge } = await import(
-          '../../services/slack/slack-orchestrator-bridge.js'
-        );
-        const threadStore = getSlackThreadStore();
-        const threads = threadStore ? threadStore.findThreadsForAgent(senderName) : [];
-        if (threads.length > 0) {
-          const bridge = getSlackOrchestratorBridge();
-          if (bridge) {
-            const summaryText = content.replace(/^\[DONE\]\s*Agent\s+\S+:\s*/, '');
-            await bridge.sendNotification({
-              type: 'task_completed',
-              title: 'Agent Completed',
-              message: `Agent ${senderName} completed: ${summaryText}`,
-              urgency: 'normal',
-              timestamp: new Date().toISOString(),
-              channelId: threads[0].channelId,
-              threadTs: threads[0].threadTs,
-            });
+        // 2. Send Slack notification for task completions
+        if (content.startsWith('[DONE]')) {
+          const { getSlackThreadStore } = await import(
+            '../../services/slack/slack-thread-store.service.js'
+          );
+          const { getSlackOrchestratorBridge } = await import(
+            '../../services/slack/slack-orchestrator-bridge.js'
+          );
+          const threadStore = getSlackThreadStore();
+          const threads = threadStore ? threadStore.findThreadsForAgent(senderName) : [];
+          if (threads.length > 0) {
+            const bridge = getSlackOrchestratorBridge();
+            if (bridge) {
+              const summaryText = content.replace(/^\[DONE\]\s*Agent\s+\S+:\s*/, '');
+              await bridge.sendNotification({
+                type: 'task_completed',
+                title: 'Agent Completed',
+                message: `Agent ${senderName} completed: ${summaryText}`,
+                urgency: 'normal',
+                timestamp: new Date().toISOString(),
+                channelId: threads[0].channelId,
+                threadTs: threads[0].threadTs,
+              });
+            }
           }
         }
       } catch (notifyErr) {
-        logger.warn('Failed to send completion notification', {
+        logger.warn('Failed to send agent status notification', {
           error: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
           senderName,
         });

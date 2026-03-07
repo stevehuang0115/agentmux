@@ -6,7 +6,7 @@
  */
 
 import axios from 'axios';
-import { Project, Team, Ticket, ApiResponse, PreviousSession, TeamsBackupStatus, TeamsRestoreResult, QueueStatus, QueuedMessage, KnowledgeDocument, KnowledgeDocumentSummary, KnowledgeScope } from '../types';
+import { Project, Team, Ticket, ApiResponse, PreviousSession, TeamsBackupStatus, TeamsRestoreResult, QueueStatus, QueuedMessage, KnowledgeDocument, KnowledgeDocumentSummary, KnowledgeScope, CloudStatus, CloudConnectResult } from '../types';
 
 /** Base URL for all API requests */
 const API_BASE = '/api';
@@ -643,6 +643,52 @@ class ApiService {
       { params },
     );
     return response.data.data || [];
+  }
+  // ============ Cloud Connection Methods ============
+
+  /**
+   * Get the current CrewlyAI Cloud connection status.
+   *
+   * @returns Promise resolving to cloud connection status
+   * @throws Error if the request fails
+   */
+  async getCloudStatus(): Promise<CloudStatus> {
+    const response = await axios.get<ApiResponse<CloudStatus>>(`${API_BASE}/cloud/status`);
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to get cloud status');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Connect to CrewlyAI Cloud with an API token.
+   *
+   * @param token - Cloud API authentication token
+   * @param cloudUrl - Optional custom cloud API URL
+   * @returns Promise resolving to connection result with tier info
+   * @throws Error if connection fails (invalid token, network error)
+   */
+  async connectToCloud(token: string, cloudUrl?: string): Promise<CloudConnectResult> {
+    const body: { token: string; cloudUrl?: string } = { token };
+    if (cloudUrl) body.cloudUrl = cloudUrl;
+
+    const response = await axios.post<ApiResponse<CloudConnectResult>>(`${API_BASE}/cloud/connect`, body);
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to connect to cloud');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Disconnect from CrewlyAI Cloud.
+   *
+   * @throws Error if disconnect fails
+   */
+  async disconnectFromCloud(): Promise<void> {
+    const response = await axios.post<ApiResponse<void>>(`${API_BASE}/cloud/disconnect`);
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Failed to disconnect from cloud');
+    }
   }
 }
 

@@ -5,7 +5,7 @@
  * providing compile-time type safety for incoming HTTP requests.
  */
 
-import type { TeamMember, Project } from '../types/index.js';
+import type { TeamMember, TeamMemberRole, Project } from '../types/index.js';
 
 // =============================================================================
 // Project Controller Request Types
@@ -107,12 +107,16 @@ export interface ProjectContextOptionsQuery {
  */
 export interface CreateTeamMemberInput {
   name: string;
-  role: TeamMember['role'];
+  role: TeamMemberRole;
   systemPrompt: string;
   runtimeType?: TeamMember['runtimeType'];
   avatar?: string;
   skillOverrides?: string[];
   excludedRoleSkills?: string[];
+  /** Whether this member can delegate tasks (for hierarchical teams). */
+  canDelegate?: boolean;
+  /** Hierarchy level override (auto-set if not provided). */
+  hierarchyLevel?: number;
 }
 
 /**
@@ -125,6 +129,12 @@ export interface CreateTeamRequestBody {
   projectPath?: string;
   currentProject?: string; // Legacy: converted to projectIds on creation
   projectIds?: string[];
+  /** Whether this team uses hierarchical management (TL -> Workers). */
+  hierarchical?: boolean;
+  /** Template ID to create team from. */
+  templateId?: string;
+  /** Parent team ID for organization grouping. */
+  parentTeamId?: string;
 }
 
 /**
@@ -139,8 +149,14 @@ export interface StartTeamRequestBody {
  */
 export interface AddTeamMemberRequestBody {
   name: string;
-  role: TeamMember['role'];
+  role: TeamMemberRole;
   avatar?: string;
+  /** Whether this member can delegate tasks (for hierarchical teams). */
+  canDelegate?: boolean;
+  /** Hierarchy level override. */
+  hierarchyLevel?: number;
+  /** Parent member ID (for hierarchical teams). */
+  parentMemberId?: string;
 }
 
 /**
@@ -222,6 +238,14 @@ export interface UpdateTeamRequestBody {
   description?: string;
   projectIds?: string[];
   members?: TeamMemberUpdate[];
+  /** Toggle hierarchical team management */
+  hierarchical?: boolean;
+  /** @deprecated Use `leaderIds` instead. */
+  leaderId?: string;
+  /** Member IDs of the team leaders (supports multiple TLs). */
+  leaderIds?: string[];
+  /** Parent team ID for organization grouping. */
+  parentTeamId?: string | null;
 }
 
 // =============================================================================
@@ -251,6 +275,11 @@ export interface MutableTeam {
   projectIds: string[];
   createdAt: string;
   updatedAt: string;
+  hierarchical?: boolean;
+  leaderId?: string;
+  leaderIds?: string[];
+  templateId?: string;
+  parentTeamId?: string;
 }
 
 /**

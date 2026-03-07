@@ -11,6 +11,7 @@
 import type { Request, Response } from 'express';
 import { getSessionBackendSync, getSessionBackend, getSessionStatePersistence, createSessionCommandHelper } from '../../services/session/index.js';
 import { LoggerService } from '../../services/core/logger.service.js';
+import { OAuthReloginMonitorService } from '../../services/agent/oauth-relogin-monitor.service.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('SessionController');
@@ -339,6 +340,62 @@ export async function dismissPreviousSessions(
 		res.status(500).json({
 			success: false,
 			error: 'Failed to dismiss previous sessions',
+		});
+	}
+}
+
+/**
+ * Submit an OAuth authorization code to a session.
+ *
+ * After an agent's OAuth token expires and /login is sent, the CLI outputs an
+ * OAuth URL. The user visits the URL, gets an auth code, and sends it back via
+ * this endpoint. The code is written to the agent's PTY session to complete
+ * the re-authentication flow.
+ *
+ * @route POST /api/sessions/:name/oauth-callback
+ * @param name - Session name
+ * @body {code} - OAuth authorization code from the user
+ * @returns {object} JSON response confirming code was submitted
+ */
+export async function submitOAuthCallback(
+	this: unknown,
+	req: Request,
+	res: Response
+): Promise<void> {
+	try {
+		const { name } = req.params;
+		const { code } = req.body;
+
+		if (!code || typeof code !== 'string') {
+			res.status(400).json({ error: 'OAuth code is required and must be a string' });
+			return;
+		}
+
+		// Validate session exists
+		const backend = getSessionBackendSync();
+		if (!backend || !backend.sessionExists(name)) {
+			res.status(404).json({ error: `Session '${name}' not found` });
+			return;
+		}
+
+		// Submit the code to the PTY session
+		const success = OAuthReloginMonitorService.submitOAuthCode(name, code);
+
+		if (!success) {
+			res.status(500).json({ error: 'Failed to write OAuth code to session' });
+			return;
+		}
+
+		logger.info('OAuth code submitted to session', { sessionName: name });
+		res.json({ success: true, message: `OAuth code submitted to session '${name}'` });
+	} catch (error) {
+		logger.error('Failed to submit OAuth code', {
+			name: req.params.name,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({
+			error: 'Failed to submit OAuth code',
+			message: error instanceof Error ? error.message : 'Unknown error',
 		});
 	}
 }

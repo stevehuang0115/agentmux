@@ -31,6 +31,7 @@ import { getSettingsService } from '../settings/settings.service.js';
 import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './context-window-monitor.service.js';
+import { OAuthReloginMonitorService } from './oauth-relogin-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
@@ -601,6 +602,9 @@ export class AgentRegistrationService {
 			sessionName, runtimeType, role
 		);
 
+		// Start OAuth relogin monitoring for automatic re-authentication
+		OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 		// Look up per-agent browser automation override from member config
 		let browserAutomationOverride: boolean | undefined;
 		if (memberId) {
@@ -876,6 +880,9 @@ export class AgentRegistrationService {
 				sessionName, runtimeType, role
 			);
 
+			// Start OAuth relogin monitoring for automatic re-authentication
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 			// Additional verification: Use runtime detection to confirm runtime is responding
 			// Wait a bit longer for runtime to fully load after showing welcome message
 			this.logger.debug(
@@ -933,6 +940,9 @@ export class AgentRegistrationService {
 			RuntimeExitMonitorService.getInstance().startMonitoring(
 				sessionName, runtimeType, role
 			);
+
+			// Start OAuth relogin monitoring for automatic re-authentication
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
 		}
 
 		// Look up per-agent browser automation override from member config
@@ -1830,6 +1840,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						);
 					}
 
+					// Start OAuth relogin monitoring for recovered session
+					OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 					return {
 						success: true,
 						sessionName,
@@ -1965,6 +1978,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				);
 			}
 
+			// Start OAuth relogin monitoring for newly created session
+			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
 			return {
 				success: true,
 				sessionName,
@@ -2005,6 +2021,9 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Stop runtime exit monitoring before killing the session
 			RuntimeExitMonitorService.getInstance().stopMonitoring(sessionName);
+
+			// Stop OAuth relogin monitoring before killing the session
+			OAuthReloginMonitorService.getInstance().stopMonitoring(sessionName);
 
 			// Stop context window monitoring before killing the session
 			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
@@ -2637,6 +2656,18 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 				// Verify agent is at prompt before sending
 				const output = sessionHelper.capturePane(sessionName);
+
+				// Gemini CLI stuck-connectivity guard (#128): If the CLI is in a
+				// "Trying to reach <model>" retry loop, it will never process
+				// new messages. Bail out immediately so the caller gets a clear
+				// failure signal and the runtime-exit-monitor can trigger recovery.
+				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI && /Trying to reach .+\(Attempt \d+\/\d+\)/.test(output)) {
+					this.logger.warn('Gemini CLI stuck in connectivity retry loop, aborting message delivery (#128)', {
+						sessionName,
+						attempt,
+					});
+					return false;
+				}
 				if (!this.isClaudeAtPrompt(output, runtimeType)) {
 					if (attempt === maxAttempts) {
 						// On the final attempt, check if the agent is DEFINITELY busy
@@ -2729,19 +2760,30 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						// focusNext() to ensure the InputPrompt is active. This prevents
 						// the "write succeeds but TUI ignores it" failure mode without
 						// the overhead of Ctrl+C or PTY resize.
+						// 300ms settling time to let Ink complete its focus re-render
+						// (200ms was insufficient after state transitions like stop hooks).
 						await sessionHelper.sendKey(sessionName, 'Tab');
-						await delay(200);
+						await delay(300);
 					}
 				} else {
 					// Detect recent /compress — Ink TUI loses internal focus after
 					// /compress re-renders, causing subsequent messages to be silently
 					// dropped even though the prompt `>` is visible (#114).
 					// Always force PTY resize on attempt 1 if /compress detected.
+					// Also detect ✖ error state (#130) — MCP connection errors
+					// cause a persistent error indicator that steals TUI focus.
 					const recentOutput = sessionHelper.capturePane(sessionName, 40);
 					const compressDetected = recentOutput.includes('/compress') ||
 						recentOutput.includes('Context compressed') ||
 						recentOutput.includes('Compressing context');
-					const needsResize = attempt > 1 || compressDetected;
+					// Check for Gemini CLI error indicators in the status bar area.
+					// ✖ is the definitive error marker. Also check for "error" but
+					// only in the bottom status area (last 5 lines) to avoid matching
+					// the word "error" in the agent's response text (#130).
+					const statusArea = recentOutput.split('\n').slice(-5).join('\n');
+					const errorStateDetected = recentOutput.includes('✖') ||
+						/\d+ errors?\b/i.test(statusArea);
+					const needsResize = attempt > 1 || compressDetected || errorStateDetected;
 
 					// Force a PTY resize to trigger SIGWINCH, making Ink
 					// re-render the TUI and potentially restore focus state.
@@ -2768,11 +2810,32 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						}
 					}
 
+					// If error state detected (✖), dismiss the error overlay first (#130).
+				// F12 toggles the error details panel in Gemini CLI, Enter dismisses
+				// any overlay/notification, and the combination restores the TUI to a
+				// state where the InputPrompt can accept input.
+					if (errorStateDetected) {
+						this.logger.info('Gemini CLI error state detected (✖), dismissing before delivery (#130)', {
+							sessionName,
+							attempt,
+						});
+						// F12 to close error details panel if open
+						await sessionHelper.sendKey(sessionName, 'F12');
+						await delay(300);
+						// Enter to dismiss any remaining overlay/notification
+						await sessionHelper.sendEnter(sessionName);
+						await delay(500);
+					}
+
 					// Send Tab to cycle Ink focus. In Ink v6, Tab triggers
 					// focusNext() in FocusContext, which moves focus to the next
 					// focusable component (InputPrompt). This works even when the
 					// input is defocused because the Tab handler runs at the Ink
 					// framework level, not the component level.
+					// Send two Tabs to cycle through error/notification components
+					// that may be in the focus chain (#130).
+					await sessionHelper.sendKey(sessionName, 'Tab');
+					await delay(200);
 					await sessionHelper.sendKey(sessionName, 'Tab');
 					await delay(300);
 
@@ -2780,8 +2843,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					// the input is engaged. Enter on an empty `> ` prompt is a
 					// safe no-op (just shows a new blank prompt line).
 					await sessionHelper.sendEnter(sessionName);
-					// Extra settling time after /compress to let Ink TUI stabilize
-					await delay(compressDetected ? 1000 : 500);
+					// Extra settling time after /compress or error state to let Ink TUI stabilize
+					await delay((compressDetected || errorStateDetected) ? 1000 : 500);
 				}
 
 				// For Gemini CLI: detect and gently escape interactive modes before
@@ -2816,6 +2879,43 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// border redraws that can cause length changes unrelated to delivery.
 				const beforeOutput = sessionHelper.capturePane(sessionName, 20);
 				const beforeLength = beforeOutput.length;
+
+				// Deduplication guard (#128): On retry attempts, check if the agent
+				// is already processing (spinner visible). A previous write may
+				// have succeeded but verification failed (false negative). Re-writing
+				// the same message would create a duplicate in the input buffer.
+				// Only skip re-write when we see definitive processing indicators
+				// (spinners/⏺). Do NOT rely solely on "not at prompt" — the message
+				// text stuck at the prompt line also causes isClaudeAtPrompt() to
+				// return false, but that's a stuck state, not processing.
+				if (attempt > 1) {
+					const retryCheck = sessionHelper.capturePane(sessionName);
+					const hasSpinner = containsSpinnerOrWorkingIndicator(retryCheck);
+					if (hasSpinner) {
+						this.logger.info('Agent already processing on retry — skipping re-write to prevent duplicate (#128)', {
+							sessionName,
+							attempt,
+						});
+						return true;
+					}
+					// Additional check: if agent is not at prompt AND our message
+					// text is NOT stuck at the bottom, the agent is likely processing.
+					const notAtPrompt = !this.isClaudeAtPrompt(retryCheck, runtimeType);
+					if (notAtPrompt) {
+						const msgSnippet = (message.length > 20
+							? message.substring(0, 80)
+							: message).replace(/\s+/g, ' ').trim();
+						const bottomLines = retryCheck.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+						const textStuck = bottomLines.includes(msgSnippet);
+						if (!textStuck) {
+							this.logger.info('Agent not at prompt and message not stuck — skipping re-write to prevent duplicate (#128)', {
+								sessionName,
+								attempt,
+							});
+							return true;
+						}
+					}
+				}
 
 				// Use SessionCommandHelper.sendMessage() — proven two-step write:
 				// 1. session.write(message)    — triggers bracketed paste
@@ -2898,11 +2998,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								: message).replace(/\s+/g, ' ').trim();
 							const promptBottomLines = currentOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
 							if (promptBottomLines.includes(promptMsgSnippet)) {
-								this.logger.warn('At prompt with message text at bottom — pressing Enter', {
+								this.logger.warn('At prompt with message text at bottom — pressing Tab+Enter', {
 									sessionName,
 									attempt,
 									intervalMs,
 								});
+								// Tab restores Ink TUI focus before Enter — without this,
+								// Enter may be consumed by the framework but not routed to
+								// the input component if focus was lost during a re-render
+								// (e.g., after stop hooks, state transitions).
+								await sessionHelper.sendKey(sessionName, 'Tab');
+								await delay(200);
 								await sessionHelper.sendEnter(sessionName);
 								await delay(500);
 								await sessionHelper.sendEnter(sessionName); // backup
@@ -2947,12 +3053,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 							// Message text is at the bottom of the terminal but the
 							// prompt is no longer in its idle form — Enter was dropped.
 							// Instead of waiting and doing a full Ctrl+C + resend retry,
-							// press Enter immediately to submit the already-pasted text.
-							this.logger.warn('Message text stuck at bottom — pressing Enter to recover', {
+							// use Tab to restore TUI focus, then Enter to submit.
+							this.logger.warn('Message text stuck at bottom — pressing Tab+Enter to recover', {
 								sessionName,
 								attempt,
 								intervalMs,
 							});
+							await sessionHelper.sendKey(sessionName, 'Tab');
+							await delay(200);
 							await sessionHelper.sendEnter(sessionName);
 							await delay(500);
 							await sessionHelper.sendEnter(sessionName); // backup Enter
@@ -3296,8 +3404,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 	private async recoverStuckTuiMessage(sessionName: string, message: string): Promise<boolean> {
 		const sessionHelper = await this.getSessionHelper();
 
-		// Press Enter to submit the stuck text
-		this.logger.info('Pressing Enter to recover stuck TUI message', { sessionName });
+		// Tab restores Ink TUI focus, then Enter to submit the stuck text.
+		// Without Tab, Enter may be consumed by the framework but not routed
+		// to the input component if focus was lost during a re-render.
+		this.logger.info('Pressing Tab+Enter to recover stuck TUI message', { sessionName });
+		await sessionHelper.sendKey(sessionName, 'Tab');
+		await delay(200);
 		await sessionHelper.sendEnter(sessionName);
 		await delay(500);
 
@@ -3422,12 +3534,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 								break;
 							}
 
-							this.logger.warn('Background scan: text stuck at TUI prompt, pressing Enter', {
+							this.logger.warn('Background scan: text stuck at TUI prompt, pressing Tab+Enter', {
 								sessionName,
 								promptContent: promptContent.slice(0, 80),
 							});
 
-							// Press Enter to submit the stuck text
+							// Tab restores Ink TUI focus before Enter
+							await sessionHelper.sendKey(sessionName, 'Tab');
+							await delay(200);
 							await sessionHelper.sendEnter(sessionName);
 							await delay(500);
 							// Backup Enter
@@ -3464,12 +3578,15 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					if (now - entry.sentAt < MIN_AGE_MS) continue;
 
 					if (bottomText.includes(entry.snippet)) {
-						this.logger.warn('Background scan: tracked message stuck, pressing Enter', {
+						this.logger.warn('Background scan: tracked message stuck, pressing Tab+Enter', {
 							sessionName,
 							snippet: entry.snippet.slice(0, 50),
 							ageMs: now - entry.sentAt,
 						});
 
+						// Tab restores Ink TUI focus before Enter
+						await sessionHelper.sendKey(sessionName, 'Tab');
+						await delay(200);
 						await sessionHelper.sendEnter(sessionName);
 						await delay(500);
 						await sessionHelper.sendEnter(sessionName); // backup

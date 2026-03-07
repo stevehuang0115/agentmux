@@ -77,6 +77,7 @@ import { AgentHeartbeatMonitorService } from './services/agent/agent-heartbeat-m
 import { OrchestratorHeartbeatMonitorService } from './services/orchestrator/orchestrator-heartbeat-monitor.service.js';
 import { RuntimeExitMonitorService } from './services/agent/runtime-exit-monitor.service.js';
 import { ContextWindowMonitorService } from './services/agent/context-window-monitor.service.js';
+import { OAuthReloginMonitorService } from './services/agent/oauth-relogin-monitor.service.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { VersionCheckService } from './services/system/version-check.service.js';
 
@@ -231,6 +232,7 @@ export class CrewlyServer {
 		this.schedulerService.setAgentRegistrationService(
 			this.apiController.agentRegistrationService
 		);
+		this.schedulerService.setTaskTrackingService(this.taskTrackingService);
 
 		this.terminalGateway = new TerminalGateway(this.io);
 
@@ -605,11 +607,21 @@ export class CrewlyServer {
 				});
 			}
 
+			// Wire OAuthReloginMonitorService EventBus dependency
+			try {
+				OAuthReloginMonitorService.getInstance().setEventBusService(this.eventBusService);
+			} catch (error) {
+				this.logger.warn('Failed to wire OAuthReloginMonitorService EventBus (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
 			// Wire RuntimeExitMonitorService dependencies for task-aware restart
 			try {
 				const runtimeExitMonitor = RuntimeExitMonitorService.getInstance();
 				runtimeExitMonitor.setAgentRegistrationService(this.apiController.agentRegistrationService);
 				runtimeExitMonitor.setTaskTrackingService(this.taskTrackingService);
+				runtimeExitMonitor.setEventBusService(this.eventBusService);
 			} catch (error) {
 				this.logger.warn('Failed to wire RuntimeExitMonitorService dependencies (non-critical)', {
 					error: error instanceof Error ? error.message : String(error),
@@ -1232,6 +1244,9 @@ export class CrewlyServer {
 
 			// Stop context window monitor
 			ContextWindowMonitorService.getInstance().stop();
+
+			// Stop OAuth relogin monitor
+			OAuthReloginMonitorService.getInstance().destroy();
 
 			// Stop orchestrator heartbeat monitor
 			OrchestratorHeartbeatMonitorService.getInstance().stop();

@@ -10,7 +10,8 @@ import {
   ORCHESTRATOR_SETUP_TIMEOUT,
   DEFAULT_WEB_PORT,
   API_ENDPOINTS,
-  CREWLY_HOME_DIR
+  CREWLY_HOME_DIR,
+  PROCESS_EXIT_CODES,
 } from '../constants.js';
 import { checkForUpdate, printUpdateNotification } from '../utils/version-check.js';
 import { killZombieProcesses } from '../utils/process-cleanup.js';
@@ -144,18 +145,37 @@ export async function startCommand(options: StartOptions) {
 			}
 		}).catch(() => { /* silently ignore version check errors */ });
 
-		// 7. Monitor for shutdown signals
-		setupShutdownHandlers([backendProcess]);
+		// 7. Monitor for shutdown signals and run restart loop.
+		// Use a mutable array so the shutdown handler always kills the current process.
+		const activeProcesses: ChildProcess[] = [backendProcess];
+		setupShutdownHandlers(activeProcesses);
 
-		// Keep process alive until backend exits
-		await new Promise<void>((resolve) => {
-			backendProcess.on('exit', (code, signal) => {
-				console.log(chalk.yellow(`\nBackend process exited (code: ${code}, signal: ${signal})`));
-				resolve();
-			});
-		});
+		// Restart loop: respawn backend when it exits with RESTART_REQUESTED
+		let currentBackend = backendProcess;
+		while (true) {
+			const exitCode = await waitForExit(currentBackend);
 
-		// Backend died — exit CLI with the same code
+			if (exitCode === PROCESS_EXIT_CODES.RESTART_REQUESTED) {
+				console.log(chalk.blue('🔄 Backend requested restart, respawning in 1.5s...'));
+				// Small delay to let OS reclaim the port
+				await new Promise((r) => setTimeout(r, 1500));
+
+				currentBackend = await startBackendServer(webPort);
+				// Update the mutable reference so Ctrl+C kills the new process
+				activeProcesses[0] = currentBackend;
+
+				console.log(chalk.blue('⏳ Waiting for server to come back up...'));
+				await waitForServer(webPort);
+				console.log(chalk.green('✅ Backend restarted successfully'));
+				continue;
+			}
+
+			// Non-restart exit
+			console.log(chalk.yellow(`\nBackend process exited (code: ${exitCode})`));
+			break;
+		}
+
+		// Backend died permanently — exit CLI
 		process.exit(1);
 	} catch (error) {
 		console.error(
@@ -288,7 +308,7 @@ async function startBackendServer(webPort: number): Promise<ChildProcess> {
 	});
 
 	backendProcess.on('exit', (code, signal) => {
-		if (code !== 0) {
+		if (code !== 0 && code !== PROCESS_EXIT_CODES.RESTART_REQUESTED) {
 			console.error(
 				chalk.red(`Backend process exited with code ${code} (signal: ${signal})`)
 			);
@@ -296,6 +316,18 @@ async function startBackendServer(webPort: number): Promise<ChildProcess> {
 	});
 
 	return backendProcess;
+}
+
+/**
+ * Wait for a backend process to exit and return the exit code.
+ *
+ * @param proc - The child process to wait for
+ * @returns The exit code (or null if killed by signal)
+ */
+function waitForExit(proc: ChildProcess): Promise<number | null> {
+	return new Promise<number | null>((resolve) => {
+		proc.on('exit', (code) => resolve(code));
+	});
 }
 
 async function waitForServer(port: number, maxAttempts: number = 30): Promise<void> {
@@ -312,19 +344,25 @@ async function waitForServer(port: number, maxAttempts: number = 30): Promise<vo
 	}
 }
 
-function setupShutdownHandlers(processes: ChildProcess[]): void {
+/**
+ * Set up signal handlers for graceful shutdown.
+ * Uses a mutable array so the restart loop can update the active process.
+ *
+ * @param activeProcesses - Mutable array of processes to kill on shutdown
+ */
+function setupShutdownHandlers(activeProcesses: ChildProcess[]): void {
 	const cleanup = () => {
 		console.log(chalk.yellow('\n🛑 Shutting down Crewly...'));
 
-		processes.forEach((process) => {
-			if (process && !process.killed) {
+		activeProcesses.forEach((proc) => {
+			if (proc && !proc.killed) {
 				console.log(chalk.gray(`Stopping Backend server...`));
-				process.kill('SIGTERM');
+				proc.kill('SIGTERM');
 
 				// Force kill after 5 seconds
 				setTimeout(() => {
-					if (!process.killed) {
-						process.kill('SIGKILL');
+					if (!proc.killed) {
+						proc.kill('SIGKILL');
 					}
 				}, 5000);
 			}

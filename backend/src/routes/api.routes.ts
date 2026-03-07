@@ -20,6 +20,8 @@ import { createMemoryRouter } from '../controllers/memory/memory.routes.js';
 import { createQualityGateRouter } from './modules/quality-gate.routes.js';
 import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
 import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
+import { createTemplateRouter } from '../controllers/template/index.js';
+import { createCloudRouter, createRelayRouter } from '../controllers/cloud/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -79,6 +81,15 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Knowledge document routes for company knowledge management
   router.use('/knowledge', createKnowledgeRouter());
+
+  // Template routes for team template management and team creation
+  router.use('/templates', createTemplateRouter());
+
+  // Cloud routes for CrewlyAI Cloud integration (connect, status, premium templates)
+  router.use('/cloud', createCloudRouter());
+
+  // Relay routes for WebSocket relay registration and status (双机互联)
+  router.use('/relay', createRelayRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here
