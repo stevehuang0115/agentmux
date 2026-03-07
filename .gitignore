@@ -103,6 +103,13 @@ $RECYCLE.BIN/
 
 # Crewly local project data
 .crewly/
+
+# Generated docs (stored in .crewly/docs/)
+docs/blog/
+docs/peer-review/
+docs/roadmap/
+docs/xhs-content/
+docs/remote-agent-prd-*.md
 # secrets/
 
 # Auto-generated MCP config (contains localhost URLs, environment-specific)
