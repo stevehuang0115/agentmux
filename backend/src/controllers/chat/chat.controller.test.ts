@@ -6,6 +6,11 @@
  * @module controllers/chat/chat.controller.test
  */
 
+// Mock node-pty before any imports to prevent native binary load failure
+jest.mock('node-pty', () => ({
+  spawn: jest.fn(),
+}));
+
 import express, { Application } from 'express';
 import request from 'supertest';
 import { promises as fs } from 'fs';
@@ -13,6 +18,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createChatRouter } from './chat.routes.js';
 import { getChatService, resetChatService, ChatService } from '../../services/chat/chat.service.js';
+import { setMessageQueueService } from './chat.controller.js';
 
 // =============================================================================
 // Test Setup
@@ -595,6 +601,151 @@ describe('Chat Controller', () => {
       expect(response.body.data.totalConversations).toBe(3); // 2 created + 1 from send
       expect(response.body.data.archivedConversations).toBe(1);
       expect(response.body.data.totalMessages).toBeGreaterThan(0);
+    });
+  });
+
+  // ===========================================================================
+  // POST /api/chat/agent-response
+  // ===========================================================================
+
+  describe('POST /api/chat/agent-response', () => {
+    it('should store agent response message', async () => {
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: 'Task completed successfully',
+          senderName: 'test-agent',
+          senderType: 'agent',
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.messageId).toBeDefined();
+      expect(response.body.data.conversationId).toBeDefined();
+    });
+
+    it('should return 400 for missing content', async () => {
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({ senderName: 'test-agent' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('Message content is required');
+    });
+
+    it('should return 400 for missing senderName', async () => {
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({ content: 'Hello' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toBe('senderName is required');
+    });
+
+    it('should enqueue [DONE] status to MessageQueueService', async () => {
+      const mockEnqueue = jest.fn().mockReturnValue({ id: 'q1' });
+      setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: '[DONE] Agent test-agent: Finished implementing feature',
+          senderName: 'test-agent',
+          senderType: 'agent',
+        });
+
+      expect(response.status).toBe(201);
+      expect(mockEnqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('Agent status:'),
+          source: 'system_event',
+        })
+      );
+
+      // Cleanup
+      setMessageQueueService(null as any);
+    });
+
+    it('should enqueue [IDLE] status to MessageQueueService', async () => {
+      const mockEnqueue = jest.fn().mockReturnValue({ id: 'q2' });
+      setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: '[IDLE] Agent test-agent: Ready for next task',
+          senderName: 'test-agent',
+          senderType: 'agent',
+        });
+
+      expect(response.status).toBe(201);
+      expect(mockEnqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: expect.stringContaining('[IDLE]'),
+          source: 'system_event',
+        })
+      );
+
+      setMessageQueueService(null as any);
+    });
+
+    it('should enqueue structured [STATUS REPORT] to MessageQueueService', async () => {
+      const mockEnqueue = jest.fn().mockReturnValue({ id: 'q3' });
+      setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: '---\n[STATUS REPORT]\nTask ID: task-1\nState: completed\n---\n\nDone.',
+          senderName: 'test-agent',
+          senderType: 'agent',
+        });
+
+      expect(response.status).toBe(201);
+      expect(mockEnqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: 'system_event',
+        })
+      );
+
+      setMessageQueueService(null as any);
+    });
+
+    it('should not enqueue non-status agent messages', async () => {
+      const mockEnqueue = jest.fn().mockReturnValue({ id: 'q4' });
+      setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: 'Working on the feature now...',
+          senderName: 'test-agent',
+          senderType: 'agent',
+        });
+
+      expect(response.status).toBe(201);
+      expect(mockEnqueue).not.toHaveBeenCalled();
+
+      setMessageQueueService(null as any);
+    });
+
+    it('should not enqueue for orchestrator messages', async () => {
+      const mockEnqueue = jest.fn().mockReturnValue({ id: 'q5' });
+      setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const response = await request(app)
+        .post('/api/chat/agent-response')
+        .send({
+          content: '[DONE] Agent orc: Task complete',
+          senderName: 'orc',
+          senderType: 'orchestrator',
+        });
+
+      expect(response.status).toBe(201);
+      // orchestrator messages should not trigger agent status notification
+      expect(mockEnqueue).not.toHaveBeenCalled();
+
+      setMessageQueueService(null as any);
     });
   });
 });

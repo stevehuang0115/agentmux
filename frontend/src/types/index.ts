@@ -17,6 +17,26 @@ export interface TeamMember {
   lastActivityCheck?: string; // ISO timestamp of last activity monitoring
   createdAt: string;
   updatedAt: string;
+
+  // === Hierarchy fields (for hierarchical team management) ===
+
+  /** Parent member ID in the hierarchy. undefined = root (orchestrator). */
+  parentMemberId?: string;
+
+  /**
+   * Position in hierarchy: 0=orchestrator, 1=team leader, 2=worker.
+   * Supports N-level depth for future expansion.
+   */
+  hierarchyLevel?: number;
+
+  /** IDs of direct subordinate members. Maintained by backend. */
+  subordinateIds?: string[];
+
+  /** Whether this member can delegate tasks to subordinates. */
+  canDelegate?: boolean;
+
+  /** Maximum number of concurrent tasks this member can handle. */
+  maxConcurrentTasks?: number;
 }
 
 export interface Team {
@@ -27,6 +47,26 @@ export interface Team {
   projectIds: string[];
   createdAt: string;
   updatedAt: string;
+
+  // === Hierarchy fields ===
+
+  /** Whether this team uses hierarchical management (TL → Workers). Default: false. */
+  hierarchical?: boolean;
+
+  /**
+   * @deprecated Use `leaderIds` instead. Retained for backward compatibility.
+   * When both exist, `leaderId` equals `leaderIds[0]`.
+   */
+  leaderId?: string;
+
+  /** Member IDs of the team leaders. Supports multiple TLs per team. */
+  leaderIds?: string[];
+
+  /** Template ID this team was created from. */
+  templateId?: string;
+
+  /** Parent team ID for team organization/grouping. null/undefined = top-level team. */
+  parentTeamId?: string;
 }
 
 export interface Project {
@@ -182,6 +222,46 @@ export interface QueueStatus {
   totalFailed: number;
   /** Number of completed messages in history */
   historyCount: number;
+}
+
+// =============================================================================
+// Cloud Connection Types
+// =============================================================================
+
+/**
+ * Cloud subscription tier levels
+ */
+export type CloudTier = 'free' | 'pro' | 'enterprise';
+
+/**
+ * Cloud connection status
+ */
+export type CloudConnectionStatus = 'disconnected' | 'connected' | 'error';
+
+/**
+ * Status of the CrewlyAI Cloud connection
+ */
+export interface CloudStatus {
+  /** Whether the client is currently connected to cloud */
+  connected: boolean;
+  /** Current subscription tier when connected */
+  tier: CloudTier | null;
+  /** Cloud API URL when connected */
+  cloudUrl: string | null;
+  /** Connection status label */
+  status: CloudConnectionStatus;
+}
+
+/**
+ * Result of a cloud connect operation
+ */
+export interface CloudConnectResult {
+  /** Whether the connection succeeded */
+  connected: boolean;
+  /** Subscription tier of the connected account */
+  tier: CloudTier;
+  /** Cloud API URL */
+  cloudUrl: string;
 }
 
 // Re-export factory types

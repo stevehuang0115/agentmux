@@ -290,6 +290,22 @@ describe('matchTuiPromptLine', () => {
 	it('should handle leading whitespace', () => {
 		expect(matchTuiPromptLine('   > text')).toBe('text');
 	});
+
+	it('should match ! shell mode prompt (Gemini CLI)', () => {
+		expect(matchTuiPromptLine('! hello world')).toBe('hello world');
+	});
+
+	it('should match bordered ! shell mode prompt', () => {
+		expect(matchTuiPromptLine('│ ! shell command')).toBe('shell command');
+	});
+
+	it('should return null for lone ! without space', () => {
+		expect(matchTuiPromptLine('!noSpace')).toBeNull();
+	});
+
+	it('should return null for empty ! prompt', () => {
+		expect(matchTuiPromptLine('! ')).toBeNull();
+	});
 });
 
 // ─── isPromptLine ─────────────────────────────────────────────────────────────

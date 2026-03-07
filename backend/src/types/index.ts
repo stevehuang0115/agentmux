@@ -1,8 +1,30 @@
+/**
+ * Role types available for team members.
+ * 'team-leader' manages a sub-team of workers in hierarchical mode.
+ */
+export type TeamMemberRole =
+  | 'orchestrator'
+  | 'team-leader'
+  | 'tpm'
+  | 'architect'
+  | 'pgm'
+  | 'developer'
+  | 'frontend-developer'
+  | 'backend-developer'
+  | 'fullstack-dev'
+  | 'qa'
+  | 'qa-engineer'
+  | 'tester'
+  | 'designer'
+  | 'product-manager'
+  | 'sales'
+  | 'support';
+
 export interface TeamMember {
   id: string;
   name: string;
   sessionName: string; // tmux session name
-  role: 'orchestrator' | 'tpm' | 'architect' | 'pgm' | 'developer' | 'frontend-developer' | 'backend-developer' | 'fullstack-dev' | 'qa' | 'qa-engineer' | 'tester' | 'designer' | 'product-manager' | 'sales' | 'support';
+  role: TeamMemberRole;
   avatar?: string; // URL or emoji for member avatar
   systemPrompt: string;
   agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'suspended' | 'activating'; // Connection/registration status (activating is deprecated)
@@ -17,6 +39,26 @@ export interface TeamMember {
   lastActivityCheck?: string; // ISO timestamp of last activity monitoring
   createdAt: string;
   updatedAt: string;
+
+  // === Hierarchy fields (for hierarchical team management) ===
+
+  /** Parent member ID in the hierarchy. undefined = root (orchestrator). */
+  parentMemberId?: string;
+
+  /**
+   * Position in hierarchy: 0=orchestrator, 1=team leader, 2=worker.
+   * Supports N-level depth for future expansion.
+   */
+  hierarchyLevel?: number;
+
+  /** IDs of direct subordinate members. Maintained by backend. */
+  subordinateIds?: string[];
+
+  /** Whether this member can delegate tasks to subordinates. */
+  canDelegate?: boolean;
+
+  /** Maximum number of concurrent tasks this member can handle. */
+  maxConcurrentTasks?: number;
 }
 
 export interface Team {
@@ -27,6 +69,26 @@ export interface Team {
   projectIds: string[];
   createdAt: string;
   updatedAt: string;
+
+  // === Hierarchy fields ===
+
+  /** Whether this team uses hierarchical management (TL → Workers). Default: false. */
+  hierarchical?: boolean;
+
+  /**
+   * @deprecated Use `leaderIds` instead. Retained for backward compatibility.
+   * When both exist, `leaderId` equals `leaderIds[0]`.
+   */
+  leaderId?: string;
+
+  /** Member IDs of the team leaders. Supports multiple TLs per team. */
+  leaderIds?: string[];
+
+  /** Template ID this team was created from (see TeamTemplate system). */
+  templateId?: string;
+
+  /** Parent team ID for team organization/grouping. null/undefined = top-level team. */
+  parentTeamId?: string;
 }
 
 export interface Project {
@@ -80,6 +142,8 @@ export interface ScheduledCheck {
   createdAt: string;
   /** Optional session name of the agent being monitored (for status enrichment) */
   watchedSession?: string;
+  /** Task ID that this schedule monitors — auto-cancels when task completes */
+  taskId?: string;
 }
 
 export interface ScheduledMessage {
@@ -125,7 +189,7 @@ export interface TicketFilter {
 
 export interface TeamMemberConfig {
   name: string;
-  role: TeamMember['role'];
+  role: TeamMemberRole;
   systemPrompt: string;
   skillOverrides?: string[];
   excludedRoleSkills?: string[];
@@ -140,7 +204,7 @@ export interface TeamConfig {
 
 export interface TeamMemberSessionConfig {
   name: string;
-  role: TeamMember['role'];
+  role: TeamMemberRole;
   systemPrompt: string;
   projectPath?: string;
   memberId?: string;

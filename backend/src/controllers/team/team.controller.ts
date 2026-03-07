@@ -554,7 +554,7 @@ function ensureOrchestratorSubscriptions(): void {
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { name, description, members, projectPath, currentProject, projectIds } = req.body as CreateTeamRequestBody;
+    const { name, description, members, projectPath, currentProject, projectIds, hierarchical, templateId, parentTeamId } = req.body as CreateTeamRequestBody;
 
     if (!name || !members || !Array.isArray(members) || members.length === 0) {
       res.status(400).json({
@@ -574,6 +574,18 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
       }
     }
 
+    // Validate hierarchical team requirements
+    if (hierarchical) {
+      const leaders = members.filter(m => m.role === 'team-leader' || m.canDelegate);
+      if (leaders.length === 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Hierarchical teams require at least one team-leader or member with canDelegate=true'
+        } as ApiResponse);
+        return;
+      }
+    }
+
     const existingTeams = await this.storageService.getTeams();
     if (existingTeams.find(t => t.name === name)) {
       res.status(409).json({
@@ -583,11 +595,25 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
       return;
     }
 
+    // Validate parentTeamId references an existing team
+    if (parentTeamId) {
+      const parentTeam = existingTeams.find(t => t.id === parentTeamId);
+      if (!parentTeam) {
+        res.status(400).json({
+          success: false,
+          error: `Parent team with id "${parentTeamId}" not found`
+        } as ApiResponse);
+        return;
+      }
+    }
+
     const teamId = uuidv4();
     const teamMembers: TeamMember[] = [];
     for (let i = 0; i < members.length; i++) {
       const member = members[i];
       const memberId = uuidv4();
+
+      const isLeaderRole = member.role === 'team-leader' || member.canDelegate === true;
 
       const teamMember: TeamMember = {
         id: memberId,
@@ -602,10 +628,39 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
         skillOverrides: member.skillOverrides || [],
         excludedRoleSkills: member.excludedRoleSkills || [],
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
+        // Hierarchy fields (only set for hierarchical teams)
+        ...(hierarchical ? {
+          hierarchyLevel: member.hierarchyLevel ?? (isLeaderRole ? 1 : 2),
+          canDelegate: isLeaderRole,
+          subordinateIds: [],
+        } : {}),
       };
 
       teamMembers.push(teamMember);
+    }
+
+    // For hierarchical teams: wire up parent-child relationships
+    let leaderId: string | undefined;
+    let leaderIds: string[] | undefined;
+    if (hierarchical) {
+      // Collect all leaders (team-leader role or canDelegate)
+      const leaders = teamMembers.filter(m => m.role === 'team-leader' || m.canDelegate);
+      if (leaders.length > 0) {
+        leaderIds = leaders.map(l => l.id);
+        leaderId = leaderIds[0];
+
+        // For single-leader teams, wire all workers under the one leader
+        if (leaders.length === 1) {
+          const leader = leaders[0];
+          const workers = teamMembers.filter(m => m.id !== leader.id);
+          leader.subordinateIds = workers.map(w => w.id);
+          for (const worker of workers) {
+            worker.parentMemberId = leader.id;
+          }
+        }
+        // For multi-leader teams, subordinateIds are managed via parentMemberId on each worker
+      }
     }
 
     const team: Team = {
@@ -615,7 +670,10 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
       members: teamMembers,
       projectIds: projectIds || (currentProject ? [currentProject] : []),
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      ...(hierarchical ? { hierarchical: true, leaderId, leaderIds } : {}),
+      ...(templateId ? { templateId } : {}),
+      ...(parentTeamId ? { parentTeamId } : {}),
     };
 
     await this.storageService.saveTeam(team);
@@ -989,6 +1047,14 @@ export async function deleteTeam(this: ApiContext, req: Request, res: Response):
         }
       }
     }
+    // Unset parentTeamId on any child teams referencing this team
+    const childTeams = teams.filter(t => t.parentTeamId === id);
+    for (const child of childTeams) {
+      (child as MutableTeam).parentTeamId = undefined;
+      (child as MutableTeam).updatedAt = new Date().toISOString();
+      await this.storageService.saveTeam(child);
+    }
+
     await this.storageService.deleteTeam(id);
     res.json({ success: true, message: 'Team terminated successfully' } as ApiResponse);
   } catch (error) {
@@ -1791,6 +1857,74 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     if (updates.description !== undefined) {
       team.description = updates.description;
     }
+    if (updates.hierarchical !== undefined) {
+      team.hierarchical = updates.hierarchical;
+      if (!updates.hierarchical) {
+        // Disable hierarchy: clear leaderId, leaderIds, and member hierarchy fields
+        team.leaderId = undefined;
+        team.leaderIds = undefined;
+        for (const m of team.members) {
+          (m as any).parentMemberId = undefined;
+          (m as any).hierarchyLevel = undefined;
+          (m as any).canDelegate = undefined;
+          (m as any).subordinateIds = undefined;
+        }
+      }
+    }
+    // Support leaderIds update (multi-TL)
+    if (updates.leaderIds !== undefined && team.hierarchical) {
+      team.leaderIds = updates.leaderIds;
+      team.leaderId = updates.leaderIds[0]; // backward compat
+
+      // Set hierarchy fields on each leader
+      for (const lid of updates.leaderIds) {
+        const leader = team.members.find(m => m.id === lid);
+        if (leader) {
+          (leader as any).hierarchyLevel = 1;
+          (leader as any).canDelegate = true;
+        }
+      }
+
+      // Workers: any member not in leaderIds and not orchestrator
+      const leaderIdSet = new Set(updates.leaderIds);
+      const workers = team.members.filter(m => !leaderIdSet.has(m.id) && m.role !== 'orchestrator');
+      for (const worker of workers) {
+        (worker as any).hierarchyLevel = 2;
+        (worker as any).canDelegate = false;
+        // Assign to first leader if no parentMemberId already set to a valid leader
+        if (!worker.parentMemberId || !leaderIdSet.has(worker.parentMemberId)) {
+          (worker as any).parentMemberId = updates.leaderIds[0];
+        }
+      }
+
+      // Update subordinateIds on each leader
+      for (const lid of updates.leaderIds) {
+        const leader = team.members.find(m => m.id === lid);
+        if (leader) {
+          (leader as any).subordinateIds = workers
+            .filter(w => w.parentMemberId === lid)
+            .map(w => w.id);
+        }
+      }
+    } else if (updates.leaderId !== undefined && team.hierarchical) {
+      // Legacy single-leader update path
+      team.leaderId = updates.leaderId;
+      team.leaderIds = [updates.leaderId]; // keep in sync
+      // Wire parent-child relationships for the new leader
+      const leader = team.members.find(m => m.id === updates.leaderId);
+      if (leader) {
+        (leader as any).hierarchyLevel = 1;
+        (leader as any).canDelegate = true;
+        const workers = team.members.filter(m => m.id !== updates.leaderId && m.role !== 'orchestrator');
+        (leader as any).subordinateIds = workers.map(w => w.id);
+        for (const worker of workers) {
+          (worker as any).parentMemberId = leader.id;
+          (worker as any).hierarchyLevel = 2;
+          (worker as any).canDelegate = false;
+          (worker as any).subordinateIds = [];
+        }
+      }
+    }
 
     // Update members if provided (from TeamModal edit)
     if (updates.members !== undefined && Array.isArray(updates.members)) {
@@ -1828,6 +1962,43 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
           } as MutableTeamMember;
         }
       }));
+    }
+
+    // Handle parentTeamId updates
+    if (updates.parentTeamId !== undefined) {
+      if (updates.parentTeamId === null) {
+        // Explicitly remove parent (make top-level)
+        team.parentTeamId = undefined;
+      } else {
+        // Validate parent team exists and prevent self-reference / circular references
+        if (updates.parentTeamId === id) {
+          res.status(400).json({
+            success: false,
+            error: 'A team cannot be its own parent'
+          } as ApiResponse);
+          return;
+        }
+
+        const parentTeam = teams.find(t => t.id === updates.parentTeamId);
+        if (!parentTeam) {
+          res.status(400).json({
+            success: false,
+            error: `Parent team with id "${updates.parentTeamId}" not found`
+          } as ApiResponse);
+          return;
+        }
+
+        // Prevent circular reference: parent's parentTeamId must not be this team
+        if (parentTeam.parentTeamId === id) {
+          res.status(400).json({
+            success: false,
+            error: 'Circular parent reference detected'
+          } as ApiResponse);
+          return;
+        }
+
+        team.parentTeamId = updates.parentTeamId;
+      }
     }
 
     // Update timestamp

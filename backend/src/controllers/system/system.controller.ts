@@ -7,6 +7,7 @@ import { MonitoringService, ConfigService, LoggerService } from '../../services/
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
 import { ApiResponse } from '../../types/index.js';
 import { SOPService } from '../../services/sop/sop.service.js';
+import { PROCESS_EXIT_CODES } from '../../constants.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('SystemController');
 
@@ -335,30 +336,27 @@ export async function restartServer(
     } as ApiResponse);
 
     // Trigger restart after HTTP response flushes.
-    // Strategy depends on environment:
-    // - Development (tsx watch): touch a source file to trigger file-watcher restart
-    // - Production (pm2/Docker/ECS): process.exit(0) and supervisor restarts
+    // Exit with RESTART_REQUESTED code so the CLI parent process respawns us.
+    // In dev mode (tsx watch), touching a source file triggers file-watcher restart.
     setTimeout(async () => {
-      logger.info('Restarting Crewly server');
+      logger.info('Restarting Crewly server', { exitCode: PROCESS_EXIT_CODES.RESTART_REQUESTED });
 
-      // Try tsx watch restart: touch the entry file to trigger file-watcher
+      // Try tsx watch restart first (dev mode): touch the entry file
       const entryFile = path.resolve(process.cwd(), 'backend/src/index.ts');
       try {
         await fs.utimes(entryFile, new Date(), new Date());
         logger.info('Touched entry file to trigger tsx watch restart');
-        // tsx watch should pick up the mtime change and restart.
-        // If not running under tsx watch (production), fall through to process.exit.
-        // Give tsx watch 2 seconds to detect the change.
+        // Give tsx watch 2 seconds to detect the change
         setTimeout(() => {
-          // If we're still alive, the file watcher didn't restart us.
-          // Fall back to process.exit for production environments.
-          logger.info('File watcher did not restart, falling back to process.exit(0)');
-          process.exit(0);
+          // If we're still alive, tsx watch didn't restart us.
+          // Exit with restart code so CLI respawns the backend.
+          logger.info('File watcher did not restart, exiting with restart code');
+          process.exit(PROCESS_EXIT_CODES.RESTART_REQUESTED);
         }, 2000);
       } catch {
-        // Can't touch the file (e.g., running from dist/), use process.exit
-        logger.info('Cannot touch entry file, using process.exit(0)');
-        process.exit(0);
+        // Can't touch the file (e.g., running from dist/), exit with restart code
+        logger.info('Cannot touch entry file, exiting with restart code');
+        process.exit(PROCESS_EXIT_CODES.RESTART_REQUESTED);
       }
     }, 1000);
   } catch (error) {

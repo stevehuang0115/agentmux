@@ -22,8 +22,8 @@ vi.mock('../UI', () => ({
         <div>Size: {size}</div>
         <form onSubmit={onSubmit}>
           {children}
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={submitDisabled}
             data-testid="submit-button"
           >
@@ -53,7 +53,54 @@ vi.mock('../UI', () => ({
         ))}
       </select>
     </div>
-  )
+  ),
+  FormLabel: ({ children, htmlFor }: any) => <label htmlFor={htmlFor}>{children}</label>,
+  FormInput: (props: any) => <input {...props} />,
+  FormSelect: ({ children, ...props }: any) => <select {...props}>{children}</select>,
+  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+}));
+
+// Mock hooks
+const mockTeamsData = [
+  { id: 'team-alpha', name: 'Alpha Team', members: [], projectIds: [], createdAt: '', updatedAt: '' },
+  { id: 'team-beta', name: 'Beta Team', members: [], projectIds: [], createdAt: '', updatedAt: '' },
+];
+
+vi.mock('../../hooks/useTeams', () => ({
+  useTeams: () => ({ teams: mockTeamsData, loading: false, error: null, refresh: vi.fn() }),
+}));
+
+vi.mock('../../hooks/useRoles', () => ({
+  useRoles: () => ({ roles: [], isLoading: false }),
+}));
+
+vi.mock('../../hooks/useProjects', () => ({
+  useProjects: () => ({
+    projects: [
+      { id: 'project-1', name: 'Frontend App', path: '/path/to/frontend' },
+      { id: 'project-2', name: 'Backend API', path: '/path/to/backend' },
+    ],
+    isLoading: false,
+  }),
+}));
+
+vi.mock('../../hooks/useSkills', () => ({
+  useSkills: () => ({ skills: [], loading: false }),
+}));
+
+vi.mock('../../services/roles.service', () => ({
+  rolesService: { getRole: vi.fn() },
+}));
+
+vi.mock('../UI/Dialog', () => ({
+  useAlert: () => ({
+    showWarning: vi.fn(),
+    AlertComponent: () => null,
+  }),
+}));
+
+vi.mock('../Hierarchy', () => ({
+  HierarchyModeConfig: () => <div data-testid="hierarchy-config">Hierarchy Config</div>,
 }));
 
 // Test data
@@ -682,9 +729,166 @@ describe('TeamModal Component', () => {
       await act(async () => {
         render(<TeamModal {...defaultProps} team={undefined} />);
       });
-      
+
       expect(screen.getByText('Create New Team')).toBeInTheDocument();
       expect(screen.getByLabelText('Team Name *')).toHaveValue('');
+    });
+  });
+
+  describe('Parent Team Dropdown', () => {
+    it('should render Parent Team dropdown with all teams listed', async () => {
+      await act(async () => {
+        render(<TeamModal {...defaultProps} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      expect(parentSelect).toBeInTheDocument();
+
+      // Should have "None" option plus the two mock teams
+      const options = parentSelect.querySelectorAll('option');
+      expect(options).toHaveLength(3); // None + Alpha + Beta
+      expect(options[0].textContent).toBe('None (Independent Team)');
+      expect(options[1].textContent).toBe('Alpha Team');
+      expect(options[2].textContent).toBe('Beta Team');
+    });
+
+    it('should default to no parent team selected', async () => {
+      await act(async () => {
+        render(<TeamModal {...defaultProps} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      expect(parentSelect.value).toBe('');
+    });
+
+    it('should allow selecting a parent team', async () => {
+      await act(async () => {
+        render(<TeamModal {...defaultProps} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      fireEvent.change(parentSelect, { target: { name: 'parentTeamId', value: 'team-alpha' } });
+      expect(parentSelect.value).toBe('team-alpha');
+    });
+
+    it('should exclude current team from parent dropdown when editing', async () => {
+      // Use a team with empty members to avoid fetchRoleDetails infinite loop
+      const editTeam = {
+        id: 'team-alpha',
+        name: 'Alpha Edit',
+        members: [],
+        projectIds: [],
+      };
+
+      await act(async () => {
+        render(<TeamModal {...defaultProps} team={editTeam} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      const options = parentSelect.querySelectorAll('option');
+      // Should exclude team-alpha (self) — only None + Beta
+      expect(options).toHaveLength(2);
+      expect(options[0].textContent).toBe('None (Independent Team)');
+      expect(options[1].textContent).toBe('Beta Team');
+    });
+
+    it('should pre-select parent team when editing team with parentTeamId', async () => {
+      const editTeam = {
+        id: 'team-1',
+        name: 'Test',
+        members: [],
+        projectIds: [],
+        parentTeamId: 'team-beta',
+      };
+
+      await act(async () => {
+        render(<TeamModal {...defaultProps} team={editTeam} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      expect(parentSelect.value).toBe('team-beta');
+    });
+
+    it('should include parentTeamId in submit data when parent is selected', async () => {
+      const onSubmit = vi.fn();
+      // Provide a team with a member (no role to avoid fetchRoleDetails loop)
+      const teamWithMember = {
+        id: 'team-1',
+        name: 'Child Team',
+        members: [{ id: '1', name: 'Agent', role: '', systemPrompt: '', runtimeType: 'claude-code' }],
+        projectIds: [],
+      };
+
+      await act(async () => {
+        render(<TeamModal {...defaultProps} onSubmit={onSubmit} team={teamWithMember} />);
+      });
+
+      // Select parent team
+      const parentSelect = screen.getByLabelText('Parent Team');
+      fireEvent.change(parentSelect, { target: { name: 'parentTeamId', value: 'team-alpha' } });
+
+      // Submit the form
+      const form = parentSelect.closest('form');
+      await act(async () => {
+        fireEvent.submit(form!);
+      });
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            parentTeamId: 'team-alpha',
+          })
+        );
+      });
+    });
+
+    it('should send null parentTeamId when no parent selected', async () => {
+      const onSubmit = vi.fn();
+      const teamWithMember = {
+        id: 'team-1',
+        name: 'Independent Team',
+        members: [{ id: '1', name: 'Agent', role: '', systemPrompt: '', runtimeType: 'claude-code' }],
+        projectIds: [],
+      };
+
+      await act(async () => {
+        render(<TeamModal {...defaultProps} onSubmit={onSubmit} team={teamWithMember} />);
+      });
+
+      // Submit without selecting parent
+      const form = screen.getByLabelText('Parent Team').closest('form');
+      await act(async () => {
+        fireEvent.submit(form!);
+      });
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            parentTeamId: null,
+          })
+        );
+      });
+    });
+
+    it('should allow clearing parent team selection', async () => {
+      const editTeam = {
+        id: 'team-1',
+        name: 'Test',
+        members: [],
+        projectIds: [],
+        parentTeamId: 'team-beta',
+      };
+
+      await act(async () => {
+        render(<TeamModal {...defaultProps} team={editTeam} />);
+      });
+
+      const parentSelect = screen.getByLabelText('Parent Team') as HTMLSelectElement;
+      expect(parentSelect.value).toBe('team-beta');
+
+      // Clear selection
+      fireEvent.change(parentSelect, { target: { name: 'parentTeamId', value: '' } });
+      expect(parentSelect.value).toBe('');
     });
   });
 });

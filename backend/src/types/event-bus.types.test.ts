@@ -18,6 +18,7 @@ describe('Event Bus Types', () => {
   describe('Constants', () => {
     it('should have correct event types', () => {
       expect(EVENT_TYPES).toEqual([
+        // Agent lifecycle events
         'agent:status_changed',
         'agent:idle',
         'agent:busy',
@@ -25,6 +26,20 @@ describe('Event Bus Types', () => {
         'agent:inactive',
         'agent:context_warning',
         'agent:context_critical',
+        'agent:oauth_url',
+        // Hierarchical task events
+        'task:submitted',
+        'task:accepted',
+        'task:working',
+        'task:input_required',
+        'task:verification_requested',
+        'task:completed',
+        'task:failed',
+        'task:cancelled',
+        // Hierarchy communication events
+        'hierarchy:escalation',
+        'hierarchy:delegation',
+        'hierarchy:report_up',
       ]);
     });
   });
@@ -38,6 +53,24 @@ describe('Event Bus Types', () => {
       expect(isValidEventType('agent:inactive')).toBe(true);
       expect(isValidEventType('agent:context_warning')).toBe(true);
       expect(isValidEventType('agent:context_critical')).toBe(true);
+      expect(isValidEventType('agent:oauth_url')).toBe(true);
+    });
+
+    it('should return true for new task event types', () => {
+      expect(isValidEventType('task:submitted')).toBe(true);
+      expect(isValidEventType('task:accepted')).toBe(true);
+      expect(isValidEventType('task:working')).toBe(true);
+      expect(isValidEventType('task:input_required')).toBe(true);
+      expect(isValidEventType('task:verification_requested')).toBe(true);
+      expect(isValidEventType('task:completed')).toBe(true);
+      expect(isValidEventType('task:failed')).toBe(true);
+      expect(isValidEventType('task:cancelled')).toBe(true);
+    });
+
+    it('should return true for hierarchy event types', () => {
+      expect(isValidEventType('hierarchy:escalation')).toBe(true);
+      expect(isValidEventType('hierarchy:delegation')).toBe(true);
+      expect(isValidEventType('hierarchy:report_up')).toBe(true);
     });
 
     it('should return false for invalid event types', () => {

@@ -22,6 +22,7 @@ export {
   ENV_CONSTANTS,
   BACKEND_CONSTANTS,
   VERSION_CHECK_CONSTANTS,
+  PROCESS_EXIT_CODES,
 } from '../../config/index.js';
 
 // Import for creating convenience aliases
@@ -32,6 +33,7 @@ import {
   ENV_CONSTANTS,
   TIMING_CONSTANTS,
   MESSAGE_CONSTANTS,
+  PROCESS_EXIT_CODES,
 } from '../../config/index.js';
 
 // ========================= CLI-SPECIFIC CONSTANTS =========================

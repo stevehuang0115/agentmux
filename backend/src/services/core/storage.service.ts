@@ -12,6 +12,7 @@ import { CREWLY_CONSTANTS, RUNTIME_TYPES, type AgentStatus, type WorkingStatus, 
 import { LoggerService, ComponentLogger } from './logger.service.js';
 import { TeamsBackupService } from './teams-backup.service.js';
 import { atomicWriteFile, withOperationLock } from '../../utils/file-io.utils.js';
+import { addGeminiTrustedFolders, getProjectTrustPaths } from '../../utils/gemini-trusted-folders.js';
 
 export class StorageService {
   private static instance: StorageService | null = null;
@@ -669,6 +670,12 @@ export class StorageService {
       }
 
       await this.saveProject(project.toJSON());
+
+      // Pre-trust the project path (and its parent directory) for Gemini CLI
+      // so that agent sessions launched in this project do not hit the
+      // interactive trust prompt. This is fire-and-forget (non-fatal).
+      await addGeminiTrustedFolders(getProjectTrustPaths(resolvedProjectPath), this.logger);
+
       return project.toJSON();
     } catch (error) {
       this.logger.error('Error adding project', { error: error instanceof Error ? error.message : String(error) });

@@ -1286,4 +1286,190 @@ describe('SchedulerService', () => {
       );
     });
   });
+
+  describe('setTaskTrackingService', () => {
+    it('should set TaskTrackingService for task-aware cleanup', () => {
+      const newService = new SchedulerService(mockStorageService);
+      const mockTTS = { getAllInProgressTasks: jest.fn() };
+
+      newService.setTaskTrackingService(mockTTS);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'TaskTrackingService integration enabled for task-aware cleanup'
+      );
+    });
+  });
+
+  describe('task-aware schedule cleanup', () => {
+    let mockTaskTrackingService: { getAllInProgressTasks: jest.Mock };
+
+    beforeEach(() => {
+      mockTaskTrackingService = {
+        getAllInProgressTasks: jest.fn().mockResolvedValue([]),
+      };
+      service.setTaskTrackingService(mockTaskTrackingService);
+    });
+
+    it('should accept taskId in scheduleRecurringCheck options', () => {
+      const checkId = service.scheduleRecurringCheck(
+        'test-session', 10, 'Progress check', 'progress-check', undefined,
+        { taskId: 'task-123' }
+      );
+
+      const checks = service.listScheduledChecks();
+      const check = checks.find(c => c.id === checkId);
+      expect(check?.taskId).toBe('task-123');
+    });
+
+    it('should auto-cancel recurring check when linked task is completed (on execution)', async () => {
+      // Task is still active initially
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([
+        { id: 'task-abc', status: 'assigned' },
+      ]);
+
+      const checkId = service.scheduleRecurringCheck(
+        'test-session', 1, 'Progress check', 'progress-check', undefined,
+        { taskId: 'task-abc' }
+      );
+
+      expect(service.getStats().recurringChecks).toBe(1);
+
+      // Now simulate task completion — task no longer in active list
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([]);
+
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 15; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      // Trigger first execution
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      // Check should have been cancelled
+      expect(service.getStats().recurringChecks).toBe(0);
+      // executeCheck should NOT have been called since we cancelled before delivery
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+    });
+
+    it('should not auto-cancel recurring check when linked task is still active', async () => {
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([
+        { id: 'task-active', status: 'assigned' },
+      ]);
+
+      service.scheduleRecurringCheck(
+        'test-session', 1, 'Progress check', 'progress-check', undefined,
+        { taskId: 'task-active' }
+      );
+
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 15; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      // Check should still be active — task is not completed
+      expect(service.getStats().recurringChecks).toBe(1);
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should behave normally for recurring checks without taskId', async () => {
+      service.scheduleRecurringCheck('test-session', 1, 'No task check');
+
+      const flushMicrotasks = async () => {
+        for (let i = 0; i < 15; i++) {
+          await Promise.resolve();
+        }
+      };
+
+      jest.advanceTimersByTime(60000);
+      await flushMicrotasks();
+
+      // Should execute normally
+      expect(service.getStats().recurringChecks).toBe(1);
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should purge persisted recurring check on restore when task is completed', async () => {
+      // Task is completed (not in active list)
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([]);
+
+      const persistedChecks = [
+        {
+          id: 'restored-with-task',
+          targetSession: 'session-1',
+          message: 'Progress check',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 5,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+          taskId: 'completed-task-id',
+        },
+      ];
+      mockStorageService.getRecurringChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(0);
+      expect(service.getStats().recurringChecks).toBe(0);
+      expect(mockStorageService.deleteRecurringCheck).toHaveBeenCalledWith('restored-with-task');
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Purging persisted recurring check for completed task',
+        expect.objectContaining({
+          checkId: 'restored-with-task',
+          taskId: 'completed-task-id',
+        })
+      );
+    });
+
+    it('should restore persisted recurring check when task is still active', async () => {
+      mockTaskTrackingService.getAllInProgressTasks.mockResolvedValue([
+        { id: 'active-task-id', status: 'assigned' },
+      ]);
+
+      const persistedChecks = [
+        {
+          id: 'restored-active-task',
+          targetSession: 'session-1',
+          message: 'Progress check',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 5,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+          taskId: 'active-task-id',
+        },
+      ];
+      mockStorageService.getRecurringChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(1);
+      expect(service.getStats().recurringChecks).toBe(1);
+      expect(mockStorageService.deleteRecurringCheck).not.toHaveBeenCalled();
+    });
+
+    it('should restore persisted recurring check without taskId normally', async () => {
+      const persistedChecks = [
+        {
+          id: 'restored-no-task',
+          targetSession: 'session-1',
+          message: 'Regular check',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 10,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      mockStorageService.getRecurringChecks.mockResolvedValue(persistedChecks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(1);
+      expect(service.getStats().recurringChecks).toBe(1);
+    });
+  });
 });

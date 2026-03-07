@@ -5,6 +5,7 @@ import { useTerminal } from '../contexts/TerminalContext';
 import { StartTeamModal } from '../components/StartTeamModal';
 import { TeamModal } from '../components/Modals/TeamModal';
 import { TeamHeader, TeamOverview, TeamStatus, AgentDetailModal } from '../components/TeamDetail';
+import { HierarchyDashboard } from '../components/Hierarchy';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
 import { webSocketService } from '../services/websocket.service';
 
@@ -627,6 +628,16 @@ export const TeamDetail: React.FC = () => {
         isStoppingTeam={stopTeamLoading}
         isStartingTeam={startTeamLoading}
       />
+
+      {/* Hierarchy Dashboard — show tree view and stats for hierarchical teams */}
+      {team.hierarchical && (
+        <div className="mb-6">
+          <HierarchyDashboard
+            team={team}
+            onMemberClick={handleViewAgent}
+          />
+        </div>
+      )}
 
       <TeamOverview
         team={team}

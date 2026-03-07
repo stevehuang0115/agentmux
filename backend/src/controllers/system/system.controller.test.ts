@@ -776,7 +776,7 @@ describe('System Handlers', () => {
       // Advance past outer setTimeout (1000ms), flush microtasks for async fs.utimes,
       // then advance past inner setTimeout (2000ms)
       await jest.advanceTimersByTimeAsync(4000);
-      expect(process.exit).toHaveBeenCalledWith(0);
+      expect(process.exit).toHaveBeenCalledWith(120);
     });
 
     it('should handle missing session backend gracefully', async () => {

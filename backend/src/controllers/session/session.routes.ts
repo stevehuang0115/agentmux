@@ -19,6 +19,7 @@ import {
 	killSession,
 	getPreviousSessions,
 	dismissPreviousSessions,
+	submitOAuthCallback,
 } from './session.controller.js';
 
 /**
@@ -43,6 +44,9 @@ export function createSessionRouter(context: ApiContext): Router {
 	// Session I/O endpoints
 	router.post('/:name/write', writeToSession.bind(context));
 	router.get('/:name/output', getSessionOutput.bind(context));
+
+	// OAuth callback endpoint
+	router.post('/:name/oauth-callback', submitOAuthCallback.bind(context));
 
 	return router;
 }

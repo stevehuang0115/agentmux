@@ -63,6 +63,7 @@ export async function scheduleCheck(this: ApiContext, req: Request, res: Respons
       timezone,
       label,
       persistent,
+      taskId,
     } = req.body as any;
     const isCalendarMode = recurrenceType && recurrenceType !== 'interval';
     if (!targetSession || !message || (!isCalendarMode && !minutes)) {
@@ -92,7 +93,8 @@ export async function scheduleCheck(this: ApiContext, req: Request, res: Respons
       || typeof dayOfWeek === 'number'
       || timezone
       || label
-      || typeof persistent === 'boolean';
+      || typeof persistent === 'boolean'
+      || taskId;
 
     if (isRecurring && normalizedInterval) {
       if (hasExtendedSchedule) {
@@ -102,7 +104,7 @@ export async function scheduleCheck(this: ApiContext, req: Request, res: Respons
           message,
           'progress-check',
           maxOccurrences,
-          { recurrenceType: normalizedRecurrence, timeOfDay, dayOfWeek, timezone, label, persistent }
+          { recurrenceType: normalizedRecurrence, timeOfDay, dayOfWeek, timezone, label, persistent, taskId }
         );
       } else {
         checkId = this.schedulerService.scheduleRecurringCheck(

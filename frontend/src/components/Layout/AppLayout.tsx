@@ -5,6 +5,7 @@ import { Navigation } from './Navigation';
 import { TerminalPanel } from '../TerminalPanel/TerminalPanel';
 import { OrchestratorStatusBanner } from '../OrchestratorStatusBanner';
 import { UpdateBanner } from '../UpdateBanner';
+import { CloudConnectionBanner } from '../CloudConnectionBanner';
 import { SessionResumePopup } from '../SessionResumePopup';
 import { TeamsRestorePopup } from '../TeamsRestorePopup';
 import { useTerminal } from '../../contexts/TerminalContext';
@@ -70,6 +71,7 @@ export const AppLayout: React.FC = () => {
 
         <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <UpdateBanner />
+          <CloudConnectionBanner />
           <OrchestratorStatusBanner />
           <div className="flex-1 p-4 md:p-6 min-h-0 overflow-y-auto">
             <Outlet />

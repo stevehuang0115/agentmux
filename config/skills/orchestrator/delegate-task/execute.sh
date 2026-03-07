@@ -17,6 +17,14 @@ PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
 require_param "to" "$TO"
 require_param "task" "$TASK"
 
+# Structured message parameters (for hierarchical teams)
+TITLE=$(echo "$INPUT" | jq -r '.title // empty')
+PARENT_TASK_ID=$(echo "$INPUT" | jq -r '.parentTaskId // empty')
+EXPECTED_ARTIFACTS=$(echo "$INPUT" | jq -c '.expectedArtifacts // empty')
+CONTEXT_FILES=$(echo "$INPUT" | jq -c '.contextFiles // empty')
+DEADLINE_HINT=$(echo "$INPUT" | jq -r '.deadlineHint // empty')
+USE_STRUCTURED=$(echo "$INPUT" | jq -r '.structured // "false"')
+
 # Monitor parameters — enabled by default to ensure proactive progress notifications.
 # Use explicit null-check so that `false` / `0` are respected as opt-out values,
 # while omitted fields default to enabled (idleEvent=true, fallbackCheckMinutes=5).
@@ -43,18 +51,65 @@ if [ -n "$CONTEXT" ]; then
   CONTEXT="$(CREWLY_ROOT="$CREWLY_ROOT" resolve_skill_paths "$CONTEXT")"
 fi
 
-# Build a structured task message
-TASK_MESSAGE="New task from orchestrator (priority: ${PRIORITY}):\n\n${TASK}"
-[ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
-TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
+# Build the task message
+# If structured=true and title is provided, use the [TASK ASSIGNMENT] format
+# Otherwise, use the legacy free-text format for backwards compatibility
+DELEGATOR="${CREWLY_SESSION_NAME:-crewly-orc}"
 
-# waitTimeout matches EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT (120000ms)
-BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message, waitForReady: true, waitTimeout: 120000}')
+if [ "$USE_STRUCTURED" = "true" ] && [ -n "$TITLE" ]; then
+  # Structured TaskAssignment format for hierarchical teams
+  TASK_MESSAGE="---\n[TASK ASSIGNMENT]\nTask ID: ${TASK_ID:-pending}\nTitle: ${TITLE}\nPriority: ${PRIORITY}\nDelegated by: ${DELEGATOR}\nParent Task: ${PARENT_TASK_ID:-none}\n---\n\n## Instructions\n${TASK}"
 
-api_call POST "/terminal/${TO}/deliver" "$BODY"
+  # Add expected artifacts if provided
+  if [ -n "$EXPECTED_ARTIFACTS" ] && [ "$EXPECTED_ARTIFACTS" != "" ]; then
+    ARTIFACT_LIST=$(echo "$EXPECTED_ARTIFACTS" | jq -r '.[]? // empty' 2>/dev/null | while read -r a; do echo "- ${a}"; done)
+    if [ -n "$ARTIFACT_LIST" ]; then
+      TASK_MESSAGE="${TASK_MESSAGE}\n\n## Expected Deliverables\n${ARTIFACT_LIST}"
+    fi
+  fi
 
-# Track the task file path from create response for monitoring linkage
+  # Add context files if provided
+  if [ -n "$CONTEXT_FILES" ] && [ "$CONTEXT_FILES" != "" ]; then
+    FILE_LIST=$(echo "$CONTEXT_FILES" | jq -r '.[]? // empty' 2>/dev/null | while read -r f; do echo "- ${f}"; done)
+    if [ -n "$FILE_LIST" ]; then
+      TASK_MESSAGE="${TASK_MESSAGE}\n\n## Context\nRead these files first:\n${FILE_LIST}"
+    fi
+  fi
+
+  [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nAdditional context: ${CONTEXT}"
+  [ -n "$DEADLINE_HINT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\n**Deadline hint**: ${DEADLINE_HINT}"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\n---\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"task-insight\",\"scope\":\"project\"}'"
+else
+  # Legacy free-text format (backwards compatible)
+  TASK_MESSAGE="New task from orchestrator (priority: ${PRIORITY}):\n\n${TASK}"
+  [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"task-insight\",\"scope\":\"project\"}'"
+fi
+
+# Deliver the task message with fallback strategy:
+# 1. Try reliable delivery with waitForReady (15s timeout)
+# 2. If agent not ready, fall back to force mode (direct PTY write)
+# 3. If both fail, output error to stdout (so orchestrator can see it) and exit 1
+BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message, waitForReady: true, waitTimeout: 15000}')
+
+DELIVER_OK=true
+api_call POST "/terminal/${TO}/deliver" "$BODY" || DELIVER_OK=false
+
+if [ "$DELIVER_OK" = "false" ]; then
+  # Agent not ready or session not found — retry with force mode (direct PTY write)
+  FORCE_BODY=$(jq -n --arg message "$TASK_MESSAGE" '{message: $message, force: true}')
+  api_call POST "/terminal/${TO}/deliver" "$FORCE_BODY" || {
+    # Both delivery attempts failed — output error to stdout for orchestrator visibility
+    echo '{"error":"Failed to deliver task to '"$TO"'. Session may not exist or agent is not running."}'
+    exit 1
+  }
+fi
+
+# Track the task file path and task ID from create response for monitoring linkage
 TASK_FILE_PATH=""
+TASK_ID=""
 
 # Create task file in project's .crewly/tasks/ directory
 if [ -n "$PROJECT_PATH" ]; then
@@ -67,6 +122,7 @@ if [ -n "$PROJECT_PATH" ]; then
     '{projectPath: $projectPath, task: $task, priority: $priority, sessionName: $sessionName, milestone: $milestone}')
   CREATE_RESULT=$(api_call POST "/task-management/create" "$CREATE_BODY" 2>/dev/null || true)
   TASK_FILE_PATH=$(echo "$CREATE_RESULT" | jq -r '.taskPath // empty' 2>/dev/null || true)
+  TASK_ID=$(echo "$CREATE_RESULT" | jq -r '.taskId // empty' 2>/dev/null || true)
 fi
 
 # --- Auto-monitoring setup ---
@@ -96,8 +152,9 @@ if [ "$MONITOR_FALLBACK_MINUTES" != "0" ] && [ -n "$MONITOR_FALLBACK_MINUTES" ];
     --arg target "$SCHEDULE_TARGET" \
     --arg minutes "$MONITOR_FALLBACK_MINUTES" \
     --arg message "Progress check: review ${TO} status — task: ${TASK:0:100}" \
-    '{targetSession: $target, minutes: ($minutes | tonumber), intervalMinutes: ($minutes | tonumber), message: $message, isRecurring: true}')
-  SCHED_RESULT=$(api_call POST "/schedule" "$SCHED_BODY" 2>/dev/null || true)
+    --arg taskId "$TASK_ID" \
+    '{targetSession: $target, minutes: ($minutes | tonumber), intervalMinutes: ($minutes | tonumber), message: $message, isRecurring: true} + (if $taskId != "" then {taskId: $taskId} else {} end)' 2>/dev/null) || true
+  [ -n "$SCHED_BODY" ] && SCHED_RESULT=$(api_call POST "/schedule" "$SCHED_BODY" 2>/dev/null || true)
   SCHED_ID=$(echo "$SCHED_RESULT" | jq -r '.checkId // .data.checkId // empty' 2>/dev/null || true)
   if [ -n "$SCHED_ID" ]; then
     COLLECTED_SCHEDULE_IDS=$(echo "$COLLECTED_SCHEDULE_IDS" | jq --arg id "$SCHED_ID" '. + [$id]')

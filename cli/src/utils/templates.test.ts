@@ -22,11 +22,13 @@ jest.mock('fs', () => ({
   readFileSync: jest.fn(),
   readdirSync: jest.fn(),
   existsSync: jest.fn(),
+  statSync: jest.fn(),
 }));
 
 const mockReadFileSync = readFileSync as jest.MockedFunction<typeof readFileSync>;
 const mockReaddirSync = readdirSync as jest.MockedFunction<typeof readdirSync>;
 const mockExistsSync = existsSync as jest.MockedFunction<typeof existsSync>;
+const { statSync: mockStatSync } = require('fs') as { statSync: jest.MockedFunction<typeof import('fs').statSync> };
 
 // ---------------------------------------------------------------------------
 // Test data
@@ -72,6 +74,8 @@ describe('templates', () => {
     jest.clearAllMocks();
     // Default: existsSync returns false so getTemplatesDir falls back to CWD
     mockExistsSync.mockReturnValue(false);
+    // Default: statSync returns a file (not directory) so legacy loading works
+    mockStatSync.mockReturnValue({ isDirectory: () => false } as any);
   });
 
   // -----------------------------------------------------------------------
@@ -199,6 +203,150 @@ describe('templates', () => {
     it('returns undefined for unknown id', () => {
       const template = getTemplate('nonexistent');
       expect(template).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // New-format template loading
+  // -----------------------------------------------------------------------
+
+  describe('new-format templates (subdirectory with template.json)', () => {
+    const NEW_FORMAT_TEMPLATE = {
+      id: 'dev-fullstack',
+      name: 'Fullstack Dev Team',
+      description: 'TL + 2 devs',
+      category: 'development',
+      version: '1.0.0',
+      hierarchical: true,
+      roles: [
+        {
+          role: 'team-leader',
+          label: 'Tech Lead',
+          defaultName: 'Tech Lead',
+          count: 1,
+          hierarchyLevel: 1,
+          canDelegate: true,
+          defaultSkills: ['delegate-task', 'verify-output'],
+        },
+        {
+          role: 'developer',
+          label: 'Developer',
+          defaultName: 'Dev',
+          count: 2,
+          hierarchyLevel: 2,
+          canDelegate: false,
+          reportsTo: 'team-leader',
+          defaultSkills: ['complete-task'],
+          promptAdditions: 'You are a skilled developer.',
+        },
+      ],
+      defaultRuntime: 'claude-code',
+      verificationPipeline: {
+        name: 'Dev Pipeline',
+        steps: [],
+        passPolicy: 'all',
+        maxRetries: 2,
+      },
+    };
+
+    it('loads new-format template from subdirectory', () => {
+      mockReaddirSync.mockImplementation(() => {
+        return ['dev-fullstack'] as unknown as ReturnType<typeof readdirSync>;
+      });
+      mockStatSync.mockReturnValue({ isDirectory: () => true } as any);
+      mockExistsSync.mockImplementation((p) => {
+        return String(p).endsWith('template.json');
+      });
+      mockReadFileSync.mockImplementation(() => {
+        return JSON.stringify(NEW_FORMAT_TEMPLATE);
+      });
+
+      const templates = listTemplates();
+      expect(templates).toHaveLength(1);
+      expect(templates[0].id).toBe('dev-fullstack');
+      expect(templates[0].name).toBe('Fullstack Dev Team');
+    });
+
+    it('converts roles to members correctly', () => {
+      mockReaddirSync.mockImplementation(() => {
+        return ['dev-fullstack'] as unknown as ReturnType<typeof readdirSync>;
+      });
+      mockStatSync.mockReturnValue({ isDirectory: () => true } as any);
+      mockExistsSync.mockImplementation((p) => {
+        return String(p).endsWith('template.json');
+      });
+      mockReadFileSync.mockImplementation(() => {
+        return JSON.stringify(NEW_FORMAT_TEMPLATE);
+      });
+
+      const templates = listTemplates();
+      // 1 TL + 2 devs = 3 members
+      expect(templates[0].members).toHaveLength(3);
+      expect(templates[0].members[0].name).toBe('Tech Lead');
+      expect(templates[0].members[0].role).toBe('team-leader');
+      expect(templates[0].members[1].name).toBe('Dev 1');
+      expect(templates[0].members[1].role).toBe('developer');
+      expect(templates[0].members[2].name).toBe('Dev 2');
+    });
+
+    it('uses promptAdditions as systemPrompt when available', () => {
+      mockReaddirSync.mockImplementation(() => {
+        return ['dev-fullstack'] as unknown as ReturnType<typeof readdirSync>;
+      });
+      mockStatSync.mockReturnValue({ isDirectory: () => true } as any);
+      mockExistsSync.mockImplementation((p) => {
+        return String(p).endsWith('template.json');
+      });
+      mockReadFileSync.mockImplementation(() => {
+        return JSON.stringify(NEW_FORMAT_TEMPLATE);
+      });
+
+      const templates = listTemplates();
+      // Dev role has promptAdditions
+      expect(templates[0].members[1].systemPrompt).toBe('You are a skilled developer.');
+      // TL role has no promptAdditions, falls back to label
+      expect(templates[0].members[0].systemPrompt).toBe('You are a Tech Lead.');
+    });
+
+    it('carries over skillOverrides from defaultSkills', () => {
+      mockReaddirSync.mockImplementation(() => {
+        return ['dev-fullstack'] as unknown as ReturnType<typeof readdirSync>;
+      });
+      mockStatSync.mockReturnValue({ isDirectory: () => true } as any);
+      mockExistsSync.mockImplementation((p) => {
+        return String(p).endsWith('template.json');
+      });
+      mockReadFileSync.mockImplementation(() => {
+        return JSON.stringify(NEW_FORMAT_TEMPLATE);
+      });
+
+      const templates = listTemplates();
+      expect(templates[0].members[0].skillOverrides).toEqual(['delegate-task', 'verify-output']);
+      expect(templates[0].members[1].skillOverrides).toEqual(['complete-task']);
+    });
+
+    it('does not duplicate template when new-format and legacy have same id', () => {
+      mockReaddirSync.mockImplementation(() => {
+        return ['dev-fullstack', 'dev-fullstack.json'] as unknown as ReturnType<typeof readdirSync>;
+      });
+      mockStatSync.mockImplementation((p) => {
+        return { isDirectory: () => String(p).endsWith('dev-fullstack') && !String(p).endsWith('.json') } as any;
+      });
+      mockExistsSync.mockImplementation((p) => {
+        return String(p).endsWith('template.json');
+      });
+      mockReadFileSync.mockImplementation((filePath) => {
+        const p = String(filePath);
+        if (p.endsWith('template.json')) {
+          return JSON.stringify(NEW_FORMAT_TEMPLATE);
+        }
+        return JSON.stringify({ ...SAMPLE_TEMPLATE, id: 'dev-fullstack' });
+      });
+
+      const templates = listTemplates();
+      // Only one entry for dev-fullstack (new format wins)
+      const devTemplates = templates.filter(t => t.id === 'dev-fullstack');
+      expect(devTemplates).toHaveLength(1);
     });
   });
 });

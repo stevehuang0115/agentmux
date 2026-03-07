@@ -430,6 +430,17 @@ export class EventBusService extends EventEmitter {
       return false;
     }
 
+    // Hierarchy filter criteria
+    if (filter.taskId && filter.taskId !== event.taskId) {
+      return false;
+    }
+    if (filter.hierarchyLevel !== undefined && filter.hierarchyLevel !== event.hierarchyLevel) {
+      return false;
+    }
+    if (filter.parentMemberId && filter.parentMemberId !== event.parentMemberId) {
+      return false;
+    }
+
     return true;
   }
 
