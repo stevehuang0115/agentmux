@@ -238,6 +238,7 @@ function parseBulletList(text: string): string[] {
  */
 function parseArtifactList(text: string): TaskArtifact[] {
   const items = parseBulletList(text);
+  const now = new Date().toISOString();
   return items.map((item, index) => {
     const match = item.match(/^\*\*(.+?)\*\*\s*\((\w+)\):\s*(.+)$/);
     if (match) {
@@ -246,7 +247,7 @@ function parseArtifactList(text: string): TaskArtifact[] {
         name: match[1],
         type: match[2] as TaskArtifact['type'],
         content: match[3],
-        createdAt: new Date().toISOString(),
+        createdAt: now,
       };
     }
     return {
@@ -254,7 +255,7 @@ function parseArtifactList(text: string): TaskArtifact[] {
       name: item,
       type: 'text' as const,
       content: item,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
     };
   });
 }

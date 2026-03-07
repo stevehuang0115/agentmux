@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import * as http from 'http';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { StorageService } from '../core/storage.service.js';
 import {
@@ -385,7 +386,7 @@ export class RuntimeExitMonitorService {
 						// Retry with exponential backoff before declaring exit.
 						// Gemini CLI can recover from transient API errors automatically.
 						const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
-						if (retryResult === 'recovered') {
+						if (retryResult === 'recovered' || retryResult === 'deferred') {
 							return;
 						}
 						// retryResult === 'exhausted' — fall through to exit flow
@@ -597,19 +598,20 @@ export class RuntimeExitMonitorService {
 	 * Handle a Gemini CLI failure with exponential backoff retry.
 	 *
 	 * Waits with increasing delays and checks if the CLI recovers (returns
-	 * to a ready prompt). Returns 'recovered' if the CLI is back, or
-	 * 'exhausted' if max retries have been reached.
+	 * to a ready prompt). Returns 'recovered' if the CLI is back,
+	 * 'deferred' if retries remain (skip exit flow, re-check on next
+	 * failure detection), or 'exhausted' if max retries have been reached.
 	 *
 	 * @param sessionName - PTY session name
 	 * @param monitored - Monitored session state (retry counter is mutated)
 	 * @param helper - Session command helper for terminal output capture
-	 * @returns 'recovered' if CLI is back, 'exhausted' if retries exhausted
+	 * @returns 'recovered' | 'deferred' | 'exhausted'
 	 */
 	private async handleGeminiFailureWithRetry(
 		sessionName: string,
 		monitored: MonitoredSession,
 		helper: SessionCommandHelper
-	): Promise<'recovered' | 'exhausted'> {
+	): Promise<'recovered' | 'deferred' | 'exhausted'> {
 		const detectedPattern = GEMINI_FAILURE_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
 		monitored.geminiFailureRetries++;
 
@@ -677,9 +679,11 @@ export class RuntimeExitMonitorService {
 			});
 		}
 
-		// Not recovered but retries remain — let the next failure detection handle it
+		// Not recovered but retries remain — defer to the next failure detection cycle.
+		// The buffer was cleared above, so a new failure must appear in terminal
+		// output to re-trigger this method.
 		if (monitored.geminiFailureRetries < MAX_RETRIES) {
-			return 'recovered'; // Return 'recovered' to skip exit flow this time
+			return 'deferred';
 		}
 
 		return 'exhausted';
@@ -973,13 +977,17 @@ export class RuntimeExitMonitorService {
 			force: true,
 		});
 
-		// Fire-and-forget HTTP call using dynamic import
-		import('http').then((http) => {
+		// Fire-and-forget HTTP call
+		try {
 			const url = new URL(`${baseUrl}/api/terminal/${ORCHESTRATOR_SESSION_NAME}/deliver`);
 			const req = http.request(url, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: {
+					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(body).toString(),
+				},
 			});
+			req.on('response', (res) => res.resume()); // Consume response to free socket
 			req.on('error', (err) => {
 				this.logger.debug('Failed to deliver failure notification to orchestrator (non-fatal)', {
 					sessionName,
@@ -988,9 +996,9 @@ export class RuntimeExitMonitorService {
 			});
 			req.write(body);
 			req.end();
-		}).catch(() => {
-			// Module import failed — non-fatal
-		});
+		} catch {
+			// Non-fatal — notification delivery is best-effort
+		}
 
 		this.logger.info('Sent agent failure notification to orchestrator (#129)', {
 			sessionName,
