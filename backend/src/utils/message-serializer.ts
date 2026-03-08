@@ -213,7 +213,7 @@ function extractSection(body: string, sectionName: string): string | undefined {
 
   // Find the section header line
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trimEnd() === marker) {
+    if (lines[i].trim() === marker) {
       startIdx = i + 1;
       break;
     }
