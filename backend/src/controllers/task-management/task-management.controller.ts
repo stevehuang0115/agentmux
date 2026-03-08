@@ -9,7 +9,7 @@ import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.servi
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { TaskOutputValidatorService } from '../../services/quality/task-output-validator.service.js';
-import { TASK_OUTPUT_CONSTANTS, type TaskOutputRetryInfo } from '../../types/task-output.types.js';
+import { TASK_OUTPUT_CONSTANTS, type TaskOutputRetryInfo, type TaskOutputSchema } from '../../types/task-output.types.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TaskManagementController');
@@ -709,7 +709,6 @@ export async function takeNextTask(
 		res.json({
 			success: true,
 			task: {
-				fileName: nextTaskFile,
 				taskPath,
 				...taskInfo,
 			},
@@ -1205,8 +1204,44 @@ async function ensureDirectoryExists(dirPath: string): Promise<void> {
 	}
 }
 
+/** Shape of a build step from the project config. */
+interface BuildStep {
+	id: number;
+	name: string;
+	targetRole: string;
+	delayMinutes?: number;
+	prompts?: string[];
+	prompt_file?: string;
+	verification?: {
+		type: string;
+		paths?: string[];
+		min_files?: number;
+		file_pattern?: string;
+	};
+	conditional?: string;
+	outputSchema?: TaskOutputSchema;
+}
+
+/** Variables resolved from the project context. */
+interface ProjectVars {
+	projectId: string;
+	projectName: string;
+	projectPath: string;
+	initialGoal: string;
+	userJourney: string;
+}
+
+/** Parsed task info extracted from markdown content. */
+interface ParsedTaskInfo {
+	fileName: string;
+	title?: string;
+	targetRole?: string;
+	estimatedDelay?: string;
+	[key: string]: string | undefined;
+}
+
 // Helper function to generate task markdown content
-async function generateTaskMarkdown(step: any, projectVars: any): Promise<string> {
+async function generateTaskMarkdown(step: BuildStep, projectVars: ProjectVars): Promise<string> {
 	const { projectId, projectName, projectPath, initialGoal, userJourney } = projectVars;
 
 	// Resolve prompts using the prompt resolver utility
@@ -1311,9 +1346,9 @@ function addTaskUnblockInfo(content: string, unblockNote?: string): string {
 }
 
 // Helper function to parse basic task information from markdown content
-function parseTaskInfo(content: string, fileName: string): any {
+function parseTaskInfo(content: string, fileName: string): ParsedTaskInfo {
 	const lines = content.split('\n');
-	const info: any = { fileName };
+	const info: ParsedTaskInfo = { fileName };
 
 	// Extract title (first # heading)
 	const titleMatch = lines.find((line) => line.startsWith('# '));

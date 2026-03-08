@@ -8,7 +8,20 @@ export async function getAssignments(this: ApiController, req: Request, res: Res
   try {
     const projects = await this.storageService.getProjects();
     const teams = await this.storageService.getTeams();
-    const assignments: any[] = [];
+    interface AssignmentEntry {
+      id: string;
+      title: string;
+      description: string;
+      status: string;
+      assignedTo: string;
+      priority: 'medium';
+      teamId: string;
+      teamName: string;
+      createdAt: string;
+      dueDate: undefined;
+      tags: string[];
+    }
+    const assignments: AssignmentEntry[] = [];
     for (const project of projects) {
       for (const teamId of Object.values(project.teams).flat() as string[]) {
         const team = teams.find(t => t.id === teamId);

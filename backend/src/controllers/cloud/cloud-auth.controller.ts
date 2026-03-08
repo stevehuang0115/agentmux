@@ -18,14 +18,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import { CloudAuthService } from '../../services/cloud/cloud-auth.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
+import { MIN_PASSWORD_LENGTH, EMAIL_REGEX } from '../../services/cloud/auth/auth.utils.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('CloudAuthController');
-
-/** Minimum password length for registration. */
-const MIN_PASSWORD_LENGTH = 8;
-
-/** Simple email format check. */
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * POST /api/cloud/register

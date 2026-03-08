@@ -22,37 +22,15 @@ const logger: ComponentLogger = LoggerService.getInstance().createComponentLogge
 // Extend Express Request to carry authenticated user info
 // ---------------------------------------------------------------------------
 
-/** Authenticated user info attached to the request by requireAuth. */
-export interface AuthenticatedUser {
-  /** User ID */
-  userId: string;
-  /** User email */
-  email: string;
-  /** User plan */
-  plan: UserPlan;
-}
+// Re-export shared auth types for backwards compatibility
+export type { AuthenticatedUser, AuthenticatedRequest } from './auth.utils.js';
 
-/** Extended request type with authenticated user. */
-export interface AuthenticatedRequest extends Request {
-  /** Authenticated user data (set by requireAuth middleware) */
-  user: AuthenticatedUser;
-}
+import { extractBearerToken } from './auth.utils.js';
+import type { AuthenticatedUser } from './auth.utils.js';
 
 // ---------------------------------------------------------------------------
 // Middleware
 // ---------------------------------------------------------------------------
-
-/**
- * Extract the Bearer token from an Authorization header.
- *
- * @param req - Express request
- * @returns Token string or null
- */
-function extractBearerToken(req: Request): string | null {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  return header.slice(7);
-}
 
 /**
  * Express middleware that requires a valid JWT access token.

@@ -109,7 +109,7 @@ export class PromptBuilderService {
 	buildOrchestratorPrompt(projectData: {
 		projectName: string;
 		projectPath: string;
-		teamDetails: any;
+		teamDetails: { name?: string; members?: Array<{ name: string; role: string; skills?: string }> };
 		requirements?: string;
 	}): string {
 		const { projectName, projectPath, teamDetails, requirements } = projectData;
@@ -117,7 +117,7 @@ export class PromptBuilderService {
 		const teamMembers = Array.isArray(teamDetails.members)
 			? teamDetails.members
 					.map(
-						(member: any) =>
+						(member) =>
 							`- ${member.name}: ${member.role} (${member.skills || 'General'})`
 					)
 					.join('\n')
@@ -835,7 +835,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.
 	buildProjectStartPrompt(projectData: {
 		projectName: string;
 		projectPath: string;
-		teamDetails: any;
+		teamDetails: { name?: string; members?: Array<{ name: string; role: string; skills?: string }> };
 		requirements?: string;
 	}): string {
 		return this.buildOrchestratorPrompt(projectData);

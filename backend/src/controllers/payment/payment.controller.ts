@@ -14,27 +14,7 @@ import type { Request, Response } from 'express';
 import { StripeService } from '../../services/payment/stripe.service.js';
 import { isValidPlanId, isValidBillingInterval } from './payment.types.js';
 import type { SupabaseAuthenticatedRequest } from '../../services/cloud/auth/supabase-auth.middleware.js';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Wraps an async route handler with standard error handling.
- *
- * @param fn - Async handler function
- * @returns Wrapped handler that catches unhandled errors
- */
-function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
-	return async (req: Request, res: Response): Promise<void> => {
-		try {
-			await fn(req, res);
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			res.status(500).json({ success: false, error: msg });
-		}
-	};
-}
+import { asyncHandler } from '../../utils/async-handler.js';
 
 // ---------------------------------------------------------------------------
 // Handlers

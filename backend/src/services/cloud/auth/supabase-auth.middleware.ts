@@ -73,40 +73,21 @@ export function clearPlanCache(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Types (re-exported for consumers)
+// Types (re-exported for consumers — using shared AuthenticatedUser)
 // ---------------------------------------------------------------------------
 
-/** Authenticated user info attached to the request by requireSupabaseAuth. */
-export interface SupabaseAuthenticatedUser {
-  /** Supabase user ID */
-  userId: string;
-  /** User email */
-  email: string;
-  /** User plan (resolved from licenses table, defaults to 'free') */
-  plan: UserPlan;
-}
+import { extractBearerToken } from './auth.utils.js';
+import type { AuthenticatedUser, AuthenticatedRequest } from './auth.utils.js';
 
-/** Extended request type with authenticated Supabase user. */
-export interface SupabaseAuthenticatedRequest extends Request {
-  /** Authenticated user data (set by requireSupabaseAuth middleware) */
-  user: SupabaseAuthenticatedUser;
-}
+/** Supabase authenticated user (same shape as AuthenticatedUser). */
+export type SupabaseAuthenticatedUser = AuthenticatedUser;
+
+/** Supabase authenticated request (same shape as AuthenticatedRequest). */
+export type SupabaseAuthenticatedRequest = AuthenticatedRequest;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Extract the Bearer token from an Authorization header.
- *
- * @param req - Express request
- * @returns Token string or null
- */
-function extractBearerToken(req: Request): string | null {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) return null;
-  return header.slice(7);
-}
 
 /**
  * Resolve the user's plan from the Supabase `licenses` table.

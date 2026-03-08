@@ -20,6 +20,7 @@ import {
 	publishTemplate,
 } from '../../services/marketplace/index.js';
 import type { TemplateCategory, PublishStatus } from '../../types/marketplace.types.js';
+import { asyncHandler } from '../../utils/async-handler.js';
 
 const VALID_CATEGORIES: TemplateCategory[] = [
 	'content-creation', 'development', 'marketing', 'operations',
@@ -29,24 +30,6 @@ const VALID_CATEGORIES: TemplateCategory[] = [
 const VALID_STATUSES: PublishStatus[] = ['draft', 'review', 'published', 'archived'];
 
 const VALID_SORT_OPTIONS = ['popular', 'rating', 'newest'] as const;
-
-/**
- * Wraps an async route handler with a standard try/catch that returns
- * a consistent JSON error response on unhandled exceptions.
- *
- * @param fn - The async handler function to wrap
- * @returns A wrapped handler that catches errors and responds with 500
- */
-function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
-	return async (req: Request, res: Response): Promise<void> => {
-		try {
-			await fn(req, res);
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			res.status(500).json({ success: false, error: msg });
-		}
-	};
-}
 
 /**
  * POST /api/marketplace/templates - Create a new template.

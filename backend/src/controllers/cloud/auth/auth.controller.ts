@@ -24,15 +24,10 @@ import type {
   RefreshRequest,
   UpdateProfileRequest,
 } from '../../../services/cloud/auth/auth.types.js';
-import type { SupabaseAuthenticatedRequest as AuthenticatedRequest } from '../../../services/cloud/auth/supabase-auth.middleware.js';
+import type { AuthenticatedRequest } from '../../../services/cloud/auth/auth.utils.js';
+import { MIN_PASSWORD_LENGTH, EMAIL_REGEX } from '../../../services/cloud/auth/auth.utils.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('AuthController');
-
-/** Minimum password length for registration. */
-const MIN_PASSWORD_LENGTH = 8;
-
-/** Simple email format check. */
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * POST /api/auth/register

@@ -60,6 +60,8 @@ function mockRes(): Response {
 	} as unknown as Response;
 }
 
+const next = jest.fn();
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -77,7 +79,7 @@ describe('Payment Controller', () => {
 		it('should return 400 when planId is missing', async () => {
 			const req = mockReq({ interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('planId') }));
 		});
@@ -85,14 +87,14 @@ describe('Payment Controller', () => {
 		it('should return 400 when planId is invalid', async () => {
 			const req = mockReq({ planId: 'invalid', interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 		});
 
 		it('should return 400 when interval is missing', async () => {
 			const req = mockReq({ planId: 'pro', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('interval') }));
 		});
@@ -100,14 +102,14 @@ describe('Payment Controller', () => {
 		it('should return 400 when interval is invalid', async () => {
 			const req = mockReq({ planId: 'pro', interval: 'weekly', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 		});
 
 		it('should return 400 when successUrl is missing', async () => {
 			const req = mockReq({ planId: 'pro', interval: 'month', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('successUrl') }));
 		});
@@ -115,7 +117,7 @@ describe('Payment Controller', () => {
 		it('should return 400 when cancelUrl is missing', async () => {
 			const req = mockReq({ planId: 'pro', interval: 'month', successUrl: 'http://ok' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 		});
 
@@ -123,7 +125,7 @@ describe('Payment Controller', () => {
 			mockCreateCheckoutSession.mockResolvedValue({ success: false, message: 'Stripe is not configured. Set STRIPE_SECRET_KEY to enable payments.' });
 			const req = mockReq({ planId: 'pro', interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(503);
 		});
 
@@ -131,7 +133,7 @@ describe('Payment Controller', () => {
 			mockCreateCheckoutSession.mockResolvedValue({ success: false, message: 'Cannot create checkout session for free plan' });
 			const req = mockReq({ planId: 'pro', interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 		});
 
@@ -140,7 +142,7 @@ describe('Payment Controller', () => {
 			mockCreateCheckoutSession.mockResolvedValue({ success: true, message: 'ok', data });
 			const req = mockReq({ planId: 'pro', interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(res.json).toHaveBeenCalledWith({ success: true, data });
 		});
 
@@ -148,7 +150,7 @@ describe('Payment Controller', () => {
 			mockCreateCheckoutSession.mockResolvedValue({ success: true, message: 'ok', data: {} });
 			const req = mockReq({ planId: 'pro', interval: 'month', successUrl: 'http://ok', cancelUrl: 'http://cancel' });
 			const res = mockRes();
-			await handleCreateCheckout(req, res);
+			await handleCreateCheckout(req, res, next);
 			expect(mockCreateCheckoutSession).toHaveBeenCalledWith('user-123', 'pro', 'month', 'http://ok', 'http://cancel');
 		});
 	});
@@ -161,7 +163,7 @@ describe('Payment Controller', () => {
 		it('should return 400 when body is not a Buffer', async () => {
 			const req = mockReq({ some: 'json' });
 			const res = mockRes();
-			await handleWebhook(req, res);
+			await handleWebhook(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('raw body') }));
 		});
@@ -170,7 +172,7 @@ describe('Payment Controller', () => {
 			mockHandleWebhookEvent.mockResolvedValue({ success: false, message: 'Missing Stripe-Signature header' });
 			const req = { body: Buffer.from('{}'), headers: {} } as unknown as Request;
 			const res = mockRes();
-			await handleWebhook(req, res);
+			await handleWebhook(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 		});
 
@@ -178,7 +180,7 @@ describe('Payment Controller', () => {
 			mockHandleWebhookEvent.mockResolvedValue({ success: true, message: 'Processed', data: {} });
 			const req = { body: Buffer.from('{}'), headers: { 'stripe-signature': 'sig' } } as unknown as Request;
 			const res = mockRes();
-			await handleWebhook(req, res);
+			await handleWebhook(req, res, next);
 			expect(res.json).toHaveBeenCalledWith({ success: true, received: true });
 		});
 
@@ -187,7 +189,7 @@ describe('Payment Controller', () => {
 			const rawBody = Buffer.from('{"type":"test"}');
 			const req = { body: rawBody, headers: { 'stripe-signature': 'sig_abc' } } as unknown as Request;
 			const res = mockRes();
-			await handleWebhook(req, res);
+			await handleWebhook(req, res, next);
 			expect(mockHandleWebhookEvent).toHaveBeenCalledWith(rawBody, 'sig_abc');
 		});
 	});
@@ -201,7 +203,7 @@ describe('Payment Controller', () => {
 			mockGetSubscription.mockResolvedValue({ success: false, message: 'Service unavailable' });
 			const req = mockReq();
 			const res = mockRes();
-			await handleGetSubscription(req, res);
+			await handleGetSubscription(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(503);
 		});
 
@@ -210,7 +212,7 @@ describe('Payment Controller', () => {
 			mockGetSubscription.mockResolvedValue({ success: true, data });
 			const req = mockReq();
 			const res = mockRes();
-			await handleGetSubscription(req, res);
+			await handleGetSubscription(req, res, next);
 			expect(res.json).toHaveBeenCalledWith({ success: true, data });
 		});
 
@@ -218,7 +220,7 @@ describe('Payment Controller', () => {
 			mockGetSubscription.mockResolvedValue({ success: true, data: {} });
 			const req = mockReq();
 			const res = mockRes();
-			await handleGetSubscription(req, res);
+			await handleGetSubscription(req, res, next);
 			expect(mockGetSubscription).toHaveBeenCalledWith('user-123');
 		});
 	});
@@ -231,7 +233,7 @@ describe('Payment Controller', () => {
 		it('should return 400 when returnUrl is missing', async () => {
 			const req = mockReq({});
 			const res = mockRes();
-			await handleCreatePortal(req, res);
+			await handleCreatePortal(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining('returnUrl') }));
 		});
@@ -240,7 +242,7 @@ describe('Payment Controller', () => {
 			mockCreatePortalSession.mockResolvedValue({ success: false, message: 'Stripe is not configured. Set STRIPE_SECRET_KEY to enable payments.' });
 			const req = mockReq({ returnUrl: 'http://return' });
 			const res = mockRes();
-			await handleCreatePortal(req, res);
+			await handleCreatePortal(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(503);
 		});
 
@@ -249,7 +251,7 @@ describe('Payment Controller', () => {
 			mockCreatePortalSession.mockResolvedValue({ success: true, message: 'ok', data });
 			const req = mockReq({ returnUrl: 'http://return' });
 			const res = mockRes();
-			await handleCreatePortal(req, res);
+			await handleCreatePortal(req, res, next);
 			expect(res.json).toHaveBeenCalledWith({ success: true, data });
 		});
 
@@ -257,7 +259,7 @@ describe('Payment Controller', () => {
 			mockCreatePortalSession.mockResolvedValue({ success: true, message: 'ok', data: {} });
 			const req = mockReq({ returnUrl: 'http://return' });
 			const res = mockRes();
-			await handleCreatePortal(req, res);
+			await handleCreatePortal(req, res, next);
 			expect(mockCreatePortalSession).toHaveBeenCalledWith('user-123', 'http://return');
 		});
 	});
@@ -271,7 +273,7 @@ describe('Payment Controller', () => {
 			mockGetSubscription.mockRejectedValue(new Error('Unexpected DB error'));
 			const req = mockReq();
 			const res = mockRes();
-			await handleGetSubscription(req, res);
+			await handleGetSubscription(req, res, next);
 			expect(res.status).toHaveBeenCalledWith(500);
 			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Unexpected DB error' }));
 		});

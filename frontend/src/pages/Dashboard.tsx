@@ -12,14 +12,13 @@ import { useNavigate, Link } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
 import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
-import { Team, Project, ApiResponse } from '@/types';
-import axios from 'axios';
+import { Team, Project } from '@/types';
 import { Factory, Cloud, Crown } from 'lucide-react';
+import { apiService } from '@/services/api.service';
 import { useAuth } from '@/contexts/AuthContext';
 import { Badge } from '@/components/UI';
 import { CloudAuthModal } from '@/components/Auth/CloudAuthModal';
 
-const API_BASE = '/api';
 
 interface ProjectProgress {
   projectId: string;
@@ -72,8 +71,7 @@ export const Dashboard: React.FC = () => {
 
   const calculateProjectProgress = async (projectId: string): Promise<ProjectProgress> => {
     try {
-      const tasksResponse = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks`);
-      const tasks = tasksResponse.data.data || [];
+      const tasks = await apiService.getAllTasks(projectId);
 
       // Count tasks by status
       const breakdown = {
@@ -121,30 +119,23 @@ export const Dashboard: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [projectsResponse, teamsResponse] = await Promise.all([
-        axios.get<ApiResponse<Project[]>>(`${API_BASE}/projects`),
-        axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`)
+      const [projectList, teamList] = await Promise.all([
+        apiService.getProjects(),
+        apiService.getTeams()
       ]);
 
-      if (projectsResponse.data.success) {
-        const projectList = projectsResponse.data.data || [];
-        setProjects(projectList);
+      setProjects(projectList);
 
-        // Calculate progress for each project
-        const progressPromises = projectList.map(project => calculateProjectProgress(project.id));
-        const progressResults = await Promise.all(progressPromises);
+      // Calculate progress for each project
+      const progressPromises = projectList.map(project => calculateProjectProgress(project.id));
+      const progressResults = await Promise.all(progressPromises);
 
-        const progressMap = progressResults.reduce((acc, progress) => {
-          acc[progress.projectId] = progress;
-          return acc;
-        }, {} as Record<string, ProjectProgress>);
+      const progressMap = progressResults.reduce((acc, progress) => {
+        acc[progress.projectId] = progress;
+        return acc;
+      }, {} as Record<string, ProjectProgress>);
 
-        setProjectProgress(progressMap);
-      }
-
-      // Process teams data - migrate teams without avatars for backward compatibility
-      const projectList = projectsResponse.data.success ? projectsResponse.data.data || [] : [];
-      const teamList = teamsResponse.data.success ? teamsResponse.data.data || [] : [];
+      setProjectProgress(progressMap);
 
       // Avatar choices for migration (only need to define once)
       const avatarChoices = [
@@ -159,29 +150,25 @@ export const Dashboard: React.FC = () => {
       // Migrate teams without avatars (do once, reuse for both teams and teamsMap)
       const migratedTeams = teamList.map(team => ({
         ...team,
-        members: team.members.map((member: any, index: number) => ({
+        members: team.members.map((member, index) => ({
           ...member,
           avatar: member.avatar || avatarChoices[index % avatarChoices.length]
         }))
       }));
 
-      if (teamsResponse.data.success) {
-        setTeams(migratedTeams);
-      }
+      setTeams(migratedTeams);
 
       // Create teams map for projects (reuse migratedTeams)
-      if (projectsResponse.data.success && teamsResponse.data.success) {
-        const teamsMapping = projectList.reduce((acc, project) => {
-          const assignedTeams = migratedTeams.filter(team => {
-            const matchesById = team.projectIds?.includes(project.id);
-            const matchesByName = team.projectIds?.includes(project.name);
-            return matchesById || matchesByName;
-          });
-          acc[project.id] = assignedTeams;
-          return acc;
-        }, {} as Record<string, Team[]>);
-        setTeamsMap(teamsMapping);
-      }
+      const teamsMapping = projectList.reduce((acc, project) => {
+        const assignedTeams = migratedTeams.filter(team => {
+          const matchesById = team.projectIds?.includes(project.id);
+          const matchesByName = team.projectIds?.includes(project.name);
+          return matchesById || matchesByName;
+        });
+        acc[project.id] = assignedTeams;
+        return acc;
+      }, {} as Record<string, Team[]>);
+      setTeamsMap(teamsMapping);
     } catch (error) {
       console.error('Error loading dashboard data:', error);
     } finally {
