@@ -1,6 +1,16 @@
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
-import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS, CLAUDE_FATAL_PATTERNS, AGENT_HEARTBEAT_MONITOR_CONSTANTS } from '../../constants.js';
+
+// Mock http module to prevent real HTTP requests during tests (e.g. notifyOrchestratorOfFailure)
+jest.mock('http', () => ({
+	...jest.requireActual('http'),
+	request: jest.fn().mockReturnValue({
+		on: jest.fn().mockReturnThis(),
+		write: jest.fn(),
+		end: jest.fn(),
+	}),
+}));
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -721,6 +731,151 @@ describe('RuntimeExitMonitorService', () => {
 		});
 	});
 
+	describe('restart cooldown (prevents infinite restart loops)', () => {
+		const mockCreateAgentSession = jest.fn().mockResolvedValue({ success: true, sessionName: 'test-agent' });
+		const mockAgentRegistrationService = {
+			createAgentSession: mockCreateAgentSession,
+		};
+		const mockTaskTrackingServiceInstance = {
+			getTasksForTeamMember: mockGetTasksForTeamMember,
+		};
+		const activeTasks = [
+			{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'assigned', assignedTeamMemberId: 'member-1' },
+		];
+
+		beforeEach(() => {
+			mockCreateAgentSession.mockClear().mockResolvedValue({ success: true, sessionName: 'test-agent' });
+			mockGetTasksForTeamMember.mockReset().mockResolvedValue(activeTasks);
+			mockClearSession.mockClear();
+			mockKillSession.mockClear();
+			mockWrite.mockClear();
+			mockUpdateAgentStatus.mockClear();
+			mockSessionExists.mockReturnValue(true);
+			service.setAgentRegistrationService(mockAgentRegistrationService as any);
+			service.setTaskTrackingService(mockTaskTrackingServiceInstance as any);
+		});
+
+		/**
+		 * Helper: trigger an exit detection cycle for a monitored agent.
+		 * Sends exit pattern data and advances past debounce.
+		 */
+		async function triggerExitCycle(agentName: string): Promise<void> {
+			// Re-register monitoring (previous cycle stopped it)
+			if (!service.isMonitoring(agentName)) {
+				service.startMonitoring(agentName, RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			}
+			const lastCallIndex = mockOnData.mock.calls.length - 1;
+			const onDataCallback = mockOnData.mock.calls[lastCallIndex][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+		}
+
+		it('should allow restarts up to MAX_RESTARTS_PER_WINDOW', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			for (let i = 0; i < maxRestarts; i++) {
+				mockCreateAgentSession.mockClear();
+				await triggerExitCycle('test-agent');
+				expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+			}
+
+			jest.useRealTimers();
+		});
+
+		it('should block restarts after MAX_RESTARTS_PER_WINDOW reached', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust all allowed restarts
+			for (let i = 0; i < maxRestarts; i++) {
+				await triggerExitCycle('test-agent');
+			}
+
+			// Next restart should be blocked — agent goes inactive instead
+			mockCreateAgentSession.mockClear();
+			mockUpdateAgentStatus.mockClear();
+			await triggerExitCycle('test-agent');
+
+			expect(mockCreateAgentSession).not.toHaveBeenCalled();
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should allow restarts again after cooldown window expires', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust all allowed restarts
+			for (let i = 0; i < maxRestarts; i++) {
+				await triggerExitCycle('test-agent');
+			}
+
+			// Advance past the cooldown window
+			jest.advanceTimersByTime(AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS + 1000);
+
+			// Should be allowed to restart again
+			mockCreateAgentSession.mockClear();
+			await triggerExitCycle('test-agent');
+
+			expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+
+			jest.useRealTimers();
+		});
+
+		it('should track restarts per session independently', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust restarts for agent-a
+			for (let i = 0; i < maxRestarts; i++) {
+				mockGetTasksForTeamMember.mockResolvedValue(activeTasks);
+				if (!service.isMonitoring('agent-a')) {
+					service.startMonitoring('agent-a', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-a');
+				}
+				const callIdx = mockOnData.mock.calls.length - 1;
+				const cb = mockOnData.mock.calls[callIdx][0];
+				jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+				cb('Agent powering down');
+				await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+			}
+
+			// agent-b should still be able to restart
+			mockCreateAgentSession.mockClear();
+			mockGetTasksForTeamMember.mockResolvedValue(activeTasks);
+			service.startMonitoring('agent-b', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-b');
+			const cbIdx = mockOnData.mock.calls.length - 1;
+			const cbB = mockOnData.mock.calls[cbIdx][0];
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			cbB('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+
+			jest.useRealTimers();
+		});
+
+		it('should clear restartHistory on destroy', () => {
+			// Pre-populate restart history via private access
+			(service as any).restartHistory.set('test-agent', [Date.now()]);
+			expect((service as any).restartHistory.size).toBe(1);
+
+			service.destroy();
+
+			expect((service as any).restartHistory.size).toBe(0);
+		});
+	});
+
 	describe('Gemini failure pattern detection with retry', () => {
 		beforeEach(() => {
 			// Include Gemini failure patterns in the mocked exit patterns
@@ -1086,18 +1241,9 @@ describe('RuntimeExitMonitorService', () => {
 	describe('notifyOrchestratorOfFailure (via private access)', () => {
 		it('should build correct message with active tasks and restart succeeded', () => {
 			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
-			// Spy on the http dynamic import to capture the request body
-			const httpRequestSpy = jest.fn().mockReturnValue({
-				on: jest.fn(),
-				write: jest.fn(),
-				end: jest.fn(),
-			});
-			jest.mock('http', () => ({
-				request: httpRequestSpy,
-			}), { virtual: true });
 
 			// notifyOrchestratorOfFailure is fire-and-forget, so we verify
-			// it does not throw for various inputs
+			// it does not throw for various inputs (http is mocked at module level)
 			expect(() => notify(
 				'agent-sam',
 				'runtime_exited',
@@ -1190,6 +1336,103 @@ describe('RuntimeExitMonitorService', () => {
 			expect(pattern).toBeDefined();
 			expect(pattern.test('Automatic update failed due to npm EACCES')).toBe(true);
 			expect(pattern.test('automatic update failed')).toBe(true); // case insensitive
+		});
+	});
+
+	describe('Claude Code fatal error detection (thinking block corruption)', () => {
+		beforeEach(() => {
+			// Include Claude fatal patterns in the mocked exit patterns
+			mockGetExitPatterns.mockReturnValue([
+				/Claude\s+(Code\s+)?exited/i,
+				/Session\s+ended/i,
+				...CLAUDE_FATAL_PATTERNS,
+			]);
+		});
+
+		it('should detect "thinking blocks cannot be modified" as a Claude fatal pattern', () => {
+			const pattern = CLAUDE_FATAL_PATTERNS.find(
+				p => p.source.includes('thinking')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern!.test(
+				'`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified'
+			)).toBe(true);
+		});
+
+		it('should detect "redacted_thinking blocks cannot be modified" pattern', () => {
+			const pattern = CLAUDE_FATAL_PATTERNS.find(
+				p => p.source.includes('redacted_thinking')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern!.test(
+				'redacted_thinking blocks cannot be modified. These blocks must remain as they were'
+			)).toBe(true);
+		});
+
+		it('should trigger immediate recovery (no retry) for Claude fatal error on orchestrator', async () => {
+			jest.useFakeTimers();
+
+			// No shell prompt visible — Claude Code is still running but broken
+			const errorOutput = 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+			mockCapturePane.mockReturnValue(errorOutput);
+
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback(errorOutput);
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should trigger orchestrator restart immediately (no retry/backoff)
+			expect(mockAttemptRestart).toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should trigger immediate recovery for non-orchestrator Claude agent', async () => {
+			jest.useFakeTimers();
+
+			const errorOutput = 'thinking blocks cannot be modified. These blocks must remain as they were in the original response.';
+			mockCapturePane.mockReturnValue(errorOutput);
+
+			service.startMonitoring('claude-dev', RUNTIME_TYPES.CLAUDE_CODE, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback(errorOutput);
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should set status to inactive (no task restart path since no tasks configured)
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'claude-dev',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should NOT trigger Claude fatal detection for non-Claude runtimes', async () => {
+			jest.useFakeTimers();
+
+			// Gemini runtime with Claude fatal pattern text but no shell prompt
+			mockCapturePane.mockReturnValue('thinking blocks cannot be modified');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('thinking blocks cannot be modified');
+
+			// Advance past debounce but NOT enough for Gemini retry
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Should NOT trigger — Gemini runtime doesn't use Claude fatal check
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('gemini-agent');
+			jest.useRealTimers();
 		});
 	});
 

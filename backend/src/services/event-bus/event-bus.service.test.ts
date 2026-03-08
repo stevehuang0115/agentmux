@@ -200,6 +200,46 @@ describe('EventBusService', () => {
       expect(mockQueueService.enqueue).not.toHaveBeenCalled();
     });
 
+    it('should not deliver self-events (subscriber === event source)', () => {
+      // Orchestrator subscribes to all events with empty filter
+      eventBus.subscribe(createTestSubscriptionInput({
+        eventType: ['agent:idle', 'agent:busy'],
+        filter: {},
+        subscriberSession: 'crewly-orc',
+      }));
+      // Event from the orchestrator itself
+      eventBus.publish(createTestEvent({
+        sessionName: 'crewly-orc',
+        memberName: 'Orchestrator',
+        type: 'agent:busy',
+      }));
+
+      jest.advanceTimersByTime(5000);
+
+      // Should NOT be delivered — subscriber === event source
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should deliver events from other agents to subscriber', () => {
+      // Orchestrator subscribes to all events
+      eventBus.subscribe(createTestSubscriptionInput({
+        eventType: ['agent:idle', 'agent:busy'],
+        filter: {},
+        subscriberSession: 'crewly-orc',
+      }));
+      // Event from a different agent
+      eventBus.publish(createTestEvent({
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        type: 'agent:idle',
+      }));
+
+      jest.advanceTimersByTime(5000);
+
+      // Should be delivered — different session
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
     it('should remove one-shot subscription after delivery', () => {
       eventBus.subscribe(createTestSubscriptionInput({ oneShot: true }));
       expect(eventBus.listSubscriptions()).toHaveLength(1);

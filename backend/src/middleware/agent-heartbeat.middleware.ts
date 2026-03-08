@@ -39,9 +39,9 @@ export function agentHeartbeatMiddleware(req: Request, res: Response, next: Next
 		});
 
 		// Record API call as activity for idle detection.
-		// This prevents false idle suspend when agents are actively calling
-		// skills/APIs but not producing PTY output.
-		PtyActivityTrackerService.getInstance().recordActivity(sessionName);
+		// Uses recordApiActivity so the heartbeat monitor can distinguish
+		// real API calls from PTY echo noise.
+		PtyActivityTrackerService.getInstance().recordApiActivity(sessionName);
 	}
 
 	next();

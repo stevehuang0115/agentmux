@@ -16,6 +16,7 @@ import {
   AGENT_HEARTBEAT_MONITOR_CONSTANTS as CONFIG_AGENT_HEARTBEAT_MONITOR_CONSTANTS,
   ORCHESTRATOR_HEARTBEAT_CONSTANTS as CONFIG_ORCHESTRATOR_HEARTBEAT_CONSTANTS,
   MARKETPLACE_CONSTANTS as CONFIG_MARKETPLACE_CONSTANTS,
+  TEMPLATE_MARKETPLACE_CONSTANTS as CONFIG_TEMPLATE_MARKETPLACE_CONSTANTS,
   PROCESS_EXIT_CODES as CONFIG_PROCESS_EXIT_CODES,
   WEB_CONSTANTS as CONFIG_WEB_CONSTANTS,
 } from '../../config/constants.js';
@@ -471,6 +472,24 @@ export const GEMINI_FORCE_RESTART_PATTERNS: RegExp[] = [
 ];
 
 /**
+ * Claude Code fatal error patterns that indicate the CLI is stuck in an
+ * unrecoverable state. Unlike transient API errors, these require an
+ * immediate restart — no retry will resolve them.
+ *
+ * Example: When conversation history gets compacted and thinking blocks
+ * are modified, the Claude API permanently rejects all subsequent requests
+ * with a 400 error. The only recovery is to kill and restart the session.
+ *
+ * Used by RuntimeExitMonitorService to detect stuck Claude Code sessions.
+ */
+export const CLAUDE_FATAL_PATTERNS: RegExp[] = [
+	// Thinking block corruption: once modified, every subsequent API call fails with 400
+	/thinking.*blocks.*cannot be modified/i,
+	// Redacted thinking block corruption (same root cause)
+	/redacted_thinking.*blocks.*cannot be modified/i,
+];
+
+/**
  * Gemini CLI ready-state patterns used for recovery detection.
  * When any of these strings appear in terminal output, the CLI is
  * considered operational and ready to accept input.
@@ -795,6 +814,7 @@ export const MESSAGE_SOURCES = {
 
 // Re-export marketplace constants from shared config
 export const MARKETPLACE_CONSTANTS = CONFIG_MARKETPLACE_CONSTANTS;
+export const TEMPLATE_MARKETPLACE_CONSTANTS = CONFIG_TEMPLATE_MARKETPLACE_CONSTANTS;
 
 /** Typed message source value */
 export type MessageSource = (typeof MESSAGE_SOURCES)[keyof typeof MESSAGE_SOURCES];
@@ -846,8 +866,10 @@ export const GOOGLE_OAUTH_CONSTANTS = {
  * the open-source Crewly instance to CrewlyAI Cloud for premium features.
  */
 export const CLOUD_CONSTANTS = {
-	/** Default CrewlyAI Cloud API base URL */
-	DEFAULT_CLOUD_URL: 'https://cloud.crewly.dev',
+	/** Default CrewlyAI Cloud API base URL (env: CREWLY_CLOUD_URL) */
+	get DEFAULT_CLOUD_URL(): string {
+		return process.env['CREWLY_CLOUD_URL'] || 'https://cloud.crewly.dev';
+	},
 	/** API version prefix for all cloud endpoints */
 	API_VERSION: '/v1',
 	/** Cloud API endpoints */
@@ -928,6 +950,98 @@ export type CloudTier = (typeof CLOUD_CONSTANTS.TIERS)[keyof typeof CLOUD_CONSTA
 /** Cloud connection status type */
 export type CloudConnectionStatus =
 	(typeof CLOUD_CONSTANTS.CONNECTION_STATUS)[keyof typeof CLOUD_CONSTANTS.CONNECTION_STATUS];
+
+/**
+ * Constants for CrewlyAI Cloud account authentication and licensing.
+ * Used by AuthService and JwtAuthMiddleware for user registration,
+ * login, JWT management, and plan-based feature gating.
+ */
+export const AUTH_CONSTANTS = {
+	/** JWT configuration */
+	JWT: {
+		/** JWT secret (env: CREWLY_JWT_SECRET, falls back to dev default) */
+		get DEFAULT_SECRET(): string {
+			return process.env['CREWLY_JWT_SECRET'] || 'crewly-dev-jwt-secret-change-in-production';
+		},
+		/** Access token expiry in seconds (1 hour) */
+		ACCESS_TOKEN_EXPIRY_S: 3600,
+		/** Refresh token expiry in seconds (30 days) */
+		REFRESH_TOKEN_EXPIRY_S: 2_592_000,
+		/** JWT algorithm identifier */
+		ALGORITHM: 'HS256',
+		/** JWT issuer claim */
+		ISSUER: 'crewly-cloud',
+	},
+	/** Password hashing configuration (scrypt) */
+	PASSWORD: {
+		/** Scrypt key length (bytes) */
+		KEY_LENGTH: 64,
+		/** Scrypt cost parameter */
+		COST: 16384,
+		/** Salt length (bytes) */
+		SALT_LENGTH: 16,
+	},
+	/** User plans */
+	PLANS: {
+		FREE: 'free',
+		PRO: 'pro',
+	},
+	/** Storage paths relative to ~/.crewly/ */
+	STORAGE: {
+		/** Directory for cloud user data */
+		CLOUD_DIR: 'cloud',
+		/** Directory for user accounts */
+		USERS_DIR: 'cloud/users',
+		/** File storing user index (email → id mapping) */
+		USER_INDEX_FILE: 'cloud/users/index.json',
+	},
+	/** Pro features list */
+	PRO_FEATURES: [
+		'template-marketplace',
+		'cloud-relay',
+		'premium-templates',
+		'priority-support',
+	],
+} as const;
+
+/** User plan type */
+export type UserPlan = (typeof AUTH_CONSTANTS.PLANS)[keyof typeof AUTH_CONSTANTS.PLANS];
+
+/**
+ * Constants for Supabase-backed Cloud Auth.
+ * Used by CloudAuthService for user registration, login,
+ * session management, and license verification via Supabase.
+ *
+ * Supabase credentials are read from env vars (CREWLY_SUPABASE_URL,
+ * CREWLY_SUPABASE_ANON_KEY) with dev-project defaults as fallback.
+ */
+export const CLOUD_AUTH_CONSTANTS = {
+	/** Supabase project configuration (env-var driven) */
+	SUPABASE: {
+		/** Supabase project URL (env: CREWLY_SUPABASE_URL) */
+		get URL(): string {
+			return process.env['CREWLY_SUPABASE_URL'] || 'https://npveywncozhjzcxrhkuc.supabase.co';
+		},
+		/** Supabase anonymous key (env: CREWLY_SUPABASE_ANON_KEY) */
+		get ANON_KEY(): string {
+			return process.env['CREWLY_SUPABASE_ANON_KEY'] || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wdmV5d25jb3poanpjeHJoa3VjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5MzUwNzIsImV4cCI6MjA4ODUxMTA3Mn0.xinT1XB9RaZ13CWQjbo95i_dJN7i463l9gAWQce32Yg';
+		},
+	},
+	/** Database table names */
+	TABLES: {
+		/** Licenses table in Supabase */
+		LICENSES: 'licenses',
+	},
+	/** License statuses */
+	LICENSE_STATUS: {
+		ACTIVE: 'active',
+		EXPIRED: 'expired',
+		CANCELLED: 'cancelled',
+	},
+} as const;
+
+/** License status type */
+export type CloudLicenseStatus = (typeof CLOUD_AUTH_CONSTANTS.LICENSE_STATUS)[keyof typeof CLOUD_AUTH_CONSTANTS.LICENSE_STATUS];
 
 // Type helpers
 export type AgentStatus =

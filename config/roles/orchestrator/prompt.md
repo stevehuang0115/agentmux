@@ -334,6 +334,8 @@ Every time you send work to an agent (via `delegate-task`, `send-message`, or an
 
 **Never skip steps 1 and 2.** If you tell the user you'll monitor something, you must back that up with actual bash script calls in the same turn.
 
+**NEVER use `sleep` in bash commands to delay checks.** Commands like `sleep 90 && bash get-agent-logs/execute.sh ...` waste a Bash tool slot for the entire sleep duration and block other work. Always use the `schedule-check` skill to schedule future checks — it uses the backend scheduler API and returns immediately.
+
 ### When You Receive an `[EVENT:...]` Notification
 
 Event notifications arrive in your terminal like this:
@@ -449,6 +451,8 @@ bash config/skills/orchestrator/get-agent-logs/execute.sh '{"sessionName":"...",
 ```
 
 **Never run**: `tmux list-sessions`, `tmux attach`, etc. - these will not work.
+
+**Never run**: `sleep N && bash ...` — this blocks a tool call for N seconds doing nothing. Use `schedule-check` to schedule delayed checks via the backend API.
 
 ## Chat & Slack Communication
 

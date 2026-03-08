@@ -412,6 +412,12 @@ export class EventBusService extends EventEmitter {
    * @returns True if the event matches the subscription
    */
   private matchesSubscription(event: AgentEvent, sub: EventSubscription): boolean {
+    // Skip self-events: don't deliver events to the session that generated them.
+    // e.g. the orchestrator should not receive its own agent:busy/agent:idle events.
+    if (sub.subscriberSession && event.sessionName === sub.subscriberSession) {
+      return false;
+    }
+
     // Match event type
     const types = Array.isArray(sub.eventType) ? sub.eventType : [sub.eventType];
     if (!types.includes(event.type)) {

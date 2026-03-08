@@ -97,8 +97,9 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			mockSessionBackend as any,
 		);
 
-		// Record initial activity so the tracker has a baseline
-		PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+		// Record initial API activity so the tracker has a baseline.
+		// The heartbeat monitor now uses getApiIdleTimeMs() to verify responses.
+		PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 	});
 
 	afterEach(() => {
@@ -195,8 +196,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			service.start();
 			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
 
-			// Record recent activity
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Record recent API activity (heartbeat monitor checks API idle time, not PTY)
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 
 			await service.performCheck();
 
@@ -252,8 +253,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			await performCheckAndFlush(service);
 			expect(service.getState().heartbeatRequestSentAt).not.toBeNull();
 
-			// Simulate orchestrator responding
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Simulate orchestrator responding (must be API activity, not just PTY echo)
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 			await service.performCheck();
 
 			expect(service.getState().heartbeatRequestSentAt).toBeNull();
@@ -398,8 +399,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 
 			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
 
-			// Record recent activity so idleTime is low
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Record recent API activity so apiIdleTime is low
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 
 			await service.performCheck();
 
@@ -412,8 +413,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 
 			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
 
-			// Record activity so idleTime is low
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Record API activity so apiIdleTime is low
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 
 			// First performCheck sets inProgressSince
 			await service.performCheck();
@@ -422,8 +423,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			// Backdate inProgressSince to simulate being stuck past the timeout
 			(service as any).inProgressSince = Date.now() - ORCHESTRATOR_HEARTBEAT_CONSTANTS.IN_PROGRESS_TIMEOUT_MS - 1;
 
-			// Record activity again so idleTime stays low on the next check
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Record API activity again so apiIdleTime stays low on the next check
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 
 			await performCheckAndFlush(service);
 
@@ -443,8 +444,8 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 
 			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
 
-			// Record activity, performCheck sets inProgressSince
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			// Record API activity, performCheck sets inProgressSince
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 			await service.performCheck();
 			expect(service.getState().inProgressSince).not.toBeNull();
 
@@ -463,7 +464,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 
 			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
 
-			PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+			PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
 			await service.performCheck();
 			expect(service.getState().inProgressSince).not.toBeNull();
 

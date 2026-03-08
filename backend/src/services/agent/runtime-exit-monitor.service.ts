@@ -31,9 +31,11 @@ import {
 	RUNTIME_TYPES,
 	GEMINI_FAILURE_PATTERNS,
 	GEMINI_FORCE_RESTART_PATTERNS,
+	CLAUDE_FATAL_PATTERNS,
 	GEMINI_FAILURE_RETRY_CONSTANTS,
 	GEMINI_READY_PATTERNS,
 	WEB_CONSTANTS,
+	AGENT_HEARTBEAT_MONITOR_CONSTANTS,
 	type RuntimeType,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -77,6 +79,10 @@ interface MonitoredSession {
  * needs recovery. These failure patterns bypass the shell prompt verification
  * since the CLI may still be running but non-functional.
  *
+ * For Claude Code, the service detects fatal API errors (e.g. thinking
+ * block corruption) that make the CLI permanently non-functional within
+ * the current session. These trigger immediate recovery without retry.
+ *
  * @example
  * ```typescript
  * const monitor = RuntimeExitMonitorService.getInstance();
@@ -93,6 +99,14 @@ export class RuntimeExitMonitorService {
 	private agentRegistrationService: AgentRegistrationService | null = null;
 	private taskTrackingService: TaskTrackingService | null = null;
 	private eventBusService: EventBusService | null = null;
+
+	/**
+	 * Restart timestamps per session, persisted across monitoring cycles.
+	 * Unlike MonitoredSession (which is recreated on each startMonitoring call),
+	 * this map survives agent restarts to prevent infinite restart loops
+	 * when agents keep crashing (e.g. during network outages).
+	 */
+	private restartHistory = new Map<string, number[]>();
 
 	private constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('RuntimeExitMonitorService');
@@ -281,6 +295,7 @@ export class RuntimeExitMonitorService {
 		for (const sessionName of sessionNames) {
 			this.stopMonitoring(sessionName);
 		}
+		this.restartHistory.clear();
 		this.logger.debug('All runtime exit monitors destroyed');
 	}
 
@@ -333,6 +348,10 @@ export class RuntimeExitMonitorService {
 	 * dead. Gemini CLI often recovers automatically from transient API errors
 	 * (RESOURCE_EXHAUSTED, UNAVAILABLE, Connection error). Only after
 	 * MAX_RETRIES does the system proceed with the exit/restart flow.
+	 *
+	 * For Claude Code fatal patterns (thinking block corruption, etc.),
+	 * the system skips retry and forces immediate recovery since these
+	 * errors are permanently unrecoverable within the same session.
 	 */
 	private async confirmAndReact(
 		sessionName: string,
@@ -362,14 +381,28 @@ export class RuntimeExitMonitorService {
 					// fall through to exit/restart handling below
 				}
 
-				// For Gemini CLI: detect either retryable failure patterns or forced
+				// Claude Code: detect fatal API errors that make the CLI permanently
+			// non-functional (e.g. thinking block corruption). These are unrecoverable
+			// — no retry will help, immediate restart is required.
+			const isClaudeFatal = monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE
+				&& CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+			if (isClaudeFatal) {
+				const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
+				this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
+					sessionName,
+					detectedPattern,
+				});
+				// fall through to exit/restart handling below (no retry)
+			}
+
+			// For Gemini CLI: detect either retryable failure patterns or forced
 				// restart/update markers that require immediate recovery handling.
 				const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
 					&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 				const isGeminiForceRestart = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
 					&& GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 
-				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted) {
+				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted && !isClaudeFatal) {
 					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
 					return;
 				}
@@ -423,26 +456,42 @@ export class RuntimeExitMonitorService {
 					);
 
 					if (activeTasks.length > 0) {
-						this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
-							sessionName,
-							activeTaskCount: activeTasks.length,
-						});
-
-						try {
-							await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
-							// Notify orchestrator that agent was restarted (#129)
-							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
-							// Cleanup this subscription (restart succeeded, skip inactive flow)
-							this.stopMonitoring(sessionName);
-							return;
-						} catch (restartError) {
-							this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+						// Check cooldown before attempting restart to prevent infinite
+						// restart loops (e.g. during network outages where agents keep crashing)
+						if (!this.isAgentRestartAllowed(sessionName)) {
+							this.logger.warn('Agent restart cooldown active, skipping restart', {
 								sessionName,
-								error: restartError instanceof Error ? restartError.message : String(restartError),
+								activeTaskCount: activeTasks.length,
+								maxRestartsPerWindow: AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW,
+								cooldownWindowMs: AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS,
 							});
-							// Notify orchestrator that restart failed — needs manual intervention (#129)
-							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
+							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited_cooldown', activeTasks, false);
 							// Fall through to normal inactive flow
+						} else {
+							this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
+								sessionName,
+								activeTaskCount: activeTasks.length,
+							});
+
+							try {
+								await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
+								this.recordAgentRestart(sessionName);
+								// Notify orchestrator that agent was restarted (#129)
+								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
+								// Cleanup this subscription (restart succeeded, skip inactive flow)
+								this.stopMonitoring(sessionName);
+								return;
+							} catch (restartError) {
+								this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+									sessionName,
+									error: restartError instanceof Error ? restartError.message : String(restartError),
+								});
+								// Record the attempt even on failure to prevent rapid retry loops
+								this.recordAgentRestart(sessionName);
+								// Notify orchestrator that restart failed — needs manual intervention (#129)
+								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
+								// Fall through to normal inactive flow
+							}
 						}
 					}
 				} catch (error) {
@@ -923,6 +972,37 @@ export class RuntimeExitMonitorService {
 		} catch {
 			return false;
 		}
+	}
+
+	/**
+	 * Check if an agent restart is allowed based on cooldown window.
+	 * Prevents infinite restart loops when agents keep crashing (e.g. during
+	 * network outages). Uses the same limits as AgentHeartbeatMonitorService.
+	 *
+	 * @param sessionName - PTY session name
+	 * @returns True if restart is allowed, false if cooldown is active
+	 */
+	private isAgentRestartAllowed(sessionName: string): boolean {
+		const now = Date.now();
+		const windowStart = now - AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS;
+		const timestamps = this.restartHistory.get(sessionName) || [];
+
+		// Prune old timestamps outside the cooldown window
+		const recent = timestamps.filter(ts => ts > windowStart);
+		this.restartHistory.set(sessionName, recent);
+
+		return recent.length < AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+	}
+
+	/**
+	 * Record a restart attempt for cooldown tracking.
+	 *
+	 * @param sessionName - PTY session name
+	 */
+	private recordAgentRestart(sessionName: string): void {
+		const timestamps = this.restartHistory.get(sessionName) || [];
+		timestamps.push(Date.now());
+		this.restartHistory.set(sessionName, timestamps);
 	}
 
 	/**
