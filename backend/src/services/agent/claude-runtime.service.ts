@@ -2,7 +2,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { RuntimeAgentService, type McpConfigResult } from './runtime-agent.service.abstract.js';
 import { SessionCommandHelper } from '../session/index.js';
-import { RUNTIME_TYPES, type RuntimeType } from '../../constants.js';
+import { RUNTIME_TYPES, CLAUDE_FATAL_PATTERNS, type RuntimeType } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
 
 /**
@@ -69,12 +69,21 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
-	 * Claude Code specific exit patterns for runtime exit detection
+	 * Claude Code specific exit patterns for runtime exit detection.
+	 *
+	 * Includes both clean exit patterns (e.g. "Claude Code exited") and
+	 * fatal error patterns that indicate the CLI is stuck in an unrecoverable
+	 * state (e.g. thinking block corruption).
+	 *
+	 * @returns Array of RegExp patterns that match runtime exit or fatal output
 	 */
 	protected getRuntimeExitPatterns(): RegExp[] {
 		return [
+			// Clean exit patterns
 			/Claude\s+(Code\s+)?exited/i,
 			/Session\s+ended/i,
+			// Fatal error patterns — CLI is running but permanently broken
+			...CLAUDE_FATAL_PATTERNS,
 		];
 	}
 

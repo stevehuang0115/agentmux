@@ -84,12 +84,16 @@ describe('ClaudeRuntimeService', () => {
 	});
 
 	describe('getRuntimeExitPatterns', () => {
-		it('should return Claude-specific exit patterns', () => {
+		it('should return Claude-specific exit patterns including fatal patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			expect(patterns).toHaveLength(2);
+			// 2 clean exit patterns + CLAUDE_FATAL_PATTERNS
+			expect(patterns.length).toBeGreaterThanOrEqual(4);
 			expect(patterns[0].test('Claude Code exited')).toBe(true);
 			expect(patterns[0].test('Claude exited')).toBe(true);
 			expect(patterns[1].test('Session ended')).toBe(true);
+			// Fatal patterns included
+			expect(patterns.some(p => p.test('thinking blocks cannot be modified'))).toBe(true);
+			expect(patterns.some(p => p.test('redacted_thinking blocks cannot be modified'))).toBe(true);
 		});
 
 		it('should not match unrelated text', () => {
@@ -101,7 +105,7 @@ describe('ClaudeRuntimeService', () => {
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			expect(patterns).toHaveLength(2);
+			expect(patterns.length).toBeGreaterThanOrEqual(4);
 		});
 	});
 

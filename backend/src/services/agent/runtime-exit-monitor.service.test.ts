@@ -1,6 +1,6 @@
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
-import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS, CLAUDE_FATAL_PATTERNS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -1190,6 +1190,103 @@ describe('RuntimeExitMonitorService', () => {
 			expect(pattern).toBeDefined();
 			expect(pattern.test('Automatic update failed due to npm EACCES')).toBe(true);
 			expect(pattern.test('automatic update failed')).toBe(true); // case insensitive
+		});
+	});
+
+	describe('Claude Code fatal error detection (thinking block corruption)', () => {
+		beforeEach(() => {
+			// Include Claude fatal patterns in the mocked exit patterns
+			mockGetExitPatterns.mockReturnValue([
+				/Claude\s+(Code\s+)?exited/i,
+				/Session\s+ended/i,
+				...CLAUDE_FATAL_PATTERNS,
+			]);
+		});
+
+		it('should detect "thinking blocks cannot be modified" as a Claude fatal pattern', () => {
+			const pattern = CLAUDE_FATAL_PATTERNS.find(
+				p => p.source.includes('thinking')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern!.test(
+				'`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified'
+			)).toBe(true);
+		});
+
+		it('should detect "redacted_thinking blocks cannot be modified" pattern', () => {
+			const pattern = CLAUDE_FATAL_PATTERNS.find(
+				p => p.source.includes('redacted_thinking')
+			);
+			expect(pattern).toBeDefined();
+			expect(pattern!.test(
+				'redacted_thinking blocks cannot be modified. These blocks must remain as they were'
+			)).toBe(true);
+		});
+
+		it('should trigger immediate recovery (no retry) for Claude fatal error on orchestrator', async () => {
+			jest.useFakeTimers();
+
+			// No shell prompt visible — Claude Code is still running but broken
+			const errorOutput = 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.3.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+			mockCapturePane.mockReturnValue(errorOutput);
+
+			service.startMonitoring(ORCHESTRATOR_SESSION_NAME, RUNTIME_TYPES.CLAUDE_CODE, 'orchestrator');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback(errorOutput);
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should trigger orchestrator restart immediately (no retry/backoff)
+			expect(mockAttemptRestart).toHaveBeenCalled();
+
+			jest.useRealTimers();
+		});
+
+		it('should trigger immediate recovery for non-orchestrator Claude agent', async () => {
+			jest.useFakeTimers();
+
+			const errorOutput = 'thinking blocks cannot be modified. These blocks must remain as they were in the original response.';
+			mockCapturePane.mockReturnValue(errorOutput);
+
+			service.startMonitoring('claude-dev', RUNTIME_TYPES.CLAUDE_CODE, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback(errorOutput);
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			// Should set status to inactive (no task restart path since no tasks configured)
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'claude-dev',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should NOT trigger Claude fatal detection for non-Claude runtimes', async () => {
+			jest.useFakeTimers();
+
+			// Gemini runtime with Claude fatal pattern text but no shell prompt
+			mockCapturePane.mockReturnValue('thinking blocks cannot be modified');
+
+			service.startMonitoring('gemini-agent', RUNTIME_TYPES.GEMINI_CLI, 'developer');
+			const onDataCallback = mockOnData.mock.calls[0][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('thinking blocks cannot be modified');
+
+			// Advance past debounce but NOT enough for Gemini retry
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 100);
+			await Promise.resolve();
+			await Promise.resolve();
+
+			// Should NOT trigger — Gemini runtime doesn't use Claude fatal check
+			expect(mockUpdateAgentStatus).not.toHaveBeenCalled();
+
+			service.stopMonitoring('gemini-agent');
+			jest.useRealTimers();
 		});
 	});
 

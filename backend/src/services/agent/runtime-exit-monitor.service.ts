@@ -31,6 +31,7 @@ import {
 	RUNTIME_TYPES,
 	GEMINI_FAILURE_PATTERNS,
 	GEMINI_FORCE_RESTART_PATTERNS,
+	CLAUDE_FATAL_PATTERNS,
 	GEMINI_FAILURE_RETRY_CONSTANTS,
 	GEMINI_READY_PATTERNS,
 	WEB_CONSTANTS,
@@ -76,6 +77,10 @@ interface MonitoredSession {
  * quota exhaustion, network issues) that indicate the CLI is stuck and
  * needs recovery. These failure patterns bypass the shell prompt verification
  * since the CLI may still be running but non-functional.
+ *
+ * For Claude Code, the service detects fatal API errors (e.g. thinking
+ * block corruption) that make the CLI permanently non-functional within
+ * the current session. These trigger immediate recovery without retry.
  *
  * @example
  * ```typescript
@@ -333,6 +338,10 @@ export class RuntimeExitMonitorService {
 	 * dead. Gemini CLI often recovers automatically from transient API errors
 	 * (RESOURCE_EXHAUSTED, UNAVAILABLE, Connection error). Only after
 	 * MAX_RETRIES does the system proceed with the exit/restart flow.
+	 *
+	 * For Claude Code fatal patterns (thinking block corruption, etc.),
+	 * the system skips retry and forces immediate recovery since these
+	 * errors are permanently unrecoverable within the same session.
 	 */
 	private async confirmAndReact(
 		sessionName: string,
@@ -362,14 +371,28 @@ export class RuntimeExitMonitorService {
 					// fall through to exit/restart handling below
 				}
 
-				// For Gemini CLI: detect either retryable failure patterns or forced
+				// Claude Code: detect fatal API errors that make the CLI permanently
+			// non-functional (e.g. thinking block corruption). These are unrecoverable
+			// — no retry will help, immediate restart is required.
+			const isClaudeFatal = monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE
+				&& CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+			if (isClaudeFatal) {
+				const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
+				this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
+					sessionName,
+					detectedPattern,
+				});
+				// fall through to exit/restart handling below (no retry)
+			}
+
+			// For Gemini CLI: detect either retryable failure patterns or forced
 				// restart/update markers that require immediate recovery handling.
 				const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
 					&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 				const isGeminiForceRestart = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
 					&& GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
 
-				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted) {
+				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted && !isClaudeFatal) {
 					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
 					return;
 				}
