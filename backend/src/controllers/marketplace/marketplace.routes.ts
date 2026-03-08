@@ -23,6 +23,7 @@ import {
   handleGetSubmission,
   handleReviewSubmission,
 } from './marketplace.controller.js';
+import { createTemplateMarketplaceRouter } from './template-marketplace.routes.js';
 
 /**
  * Creates the marketplace router with all marketplace endpoints.
@@ -56,6 +57,9 @@ export function createMarketplaceRouter(): Router {
   router.get('/submissions', handleListSubmissions);
   router.get('/submissions/:id', handleGetSubmission);
   router.post('/submissions/:id/review', handleReviewSubmission);
+
+  // Template marketplace routes (mounted at /templates, must come before /:id)
+  router.use('/templates', createTemplateMarketplaceRouter());
 
   // Parameterized routes after static routes
   router.get('/:id', handleGetItem);

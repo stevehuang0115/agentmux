@@ -58,15 +58,24 @@ function findPackageRoot(startDir: string): string {
 interface StartOptions {
 	port?: string;
 	browser?: boolean;
+	headless?: boolean;
 	autoUpgrade?: boolean;
 }
 
 export async function startCommand(options: StartOptions) {
 	const webPort = parseInt(options.port || DEFAULT_WEB_PORT.toString());
-	const openBrowser = options.browser !== false;
+	const headless = options.headless === true;
+	const openBrowser = headless ? false : options.browser !== false;
 
-	console.log(chalk.blue('🚀 Starting Crewly...'));
+	if (headless) {
+		console.log(chalk.blue('🚀 Starting Crewly in headless mode (API-only)...'));
+	} else {
+		console.log(chalk.blue('🚀 Starting Crewly...'));
+	}
 	console.log(chalk.gray(`Web Port: ${webPort}`));
+	if (headless) {
+		console.log(chalk.gray('Mode: headless (API-only, no frontend)'));
+	}
 
 	try {
 		// 1. Ensure ~/.crewly directory exists
@@ -88,7 +97,7 @@ export async function startCommand(options: StartOptions) {
 
 		// 3. Start backend server
 		console.log(chalk.blue('📡 Starting backend server...'));
-		const backendProcess = await startBackendServer(webPort);
+		const backendProcess = await startBackendServer(webPort, headless);
 
 		// 4. Wait for servers to be ready
 		console.log(chalk.blue('⏳ Waiting for servers to initialize...'));
@@ -117,7 +126,12 @@ export async function startCommand(options: StartOptions) {
 		}
 
 		console.log(chalk.green('✅ Crewly started successfully!'));
-		console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
+		if (headless) {
+			console.log(chalk.cyan(`📡 API: http://localhost:${webPort}/api`));
+			console.log(chalk.cyan(`🏥 Health: http://localhost:${webPort}/health`));
+		} else {
+			console.log(chalk.cyan(`📊 Dashboard: http://localhost:${webPort}`));
+		}
 		console.log(chalk.cyan(`⚡ WebSocket: ws://localhost:${webPort}`));
 		console.log(chalk.gray(`🎯 Orchestrator: Setting up in background...`));
 		console.log('');
@@ -160,7 +174,7 @@ export async function startCommand(options: StartOptions) {
 				// Small delay to let OS reclaim the port
 				await new Promise((r) => setTimeout(r, 1500));
 
-				currentBackend = await startBackendServer(webPort);
+				currentBackend = await startBackendServer(webPort, headless);
 				// Update the mutable reference so Ctrl+C kills the new process
 				activeProcesses[0] = currentBackend;
 
@@ -264,7 +278,7 @@ async function checkIfRunning(port: number): Promise<boolean> {
 	}
 }
 
-async function startBackendServer(webPort: number): Promise<ChildProcess> {
+async function startBackendServer(webPort: number, headless = false): Promise<ChildProcess> {
 	// Get the project root directory — works in both dev and compiled mode
 	const projectRoot = findPackageRoot(__dirname);
 
@@ -272,6 +286,7 @@ async function startBackendServer(webPort: number): Promise<ChildProcess> {
 		...process.env,
 		WEB_PORT: webPort.toString(),
 		NODE_ENV: process.env.NODE_ENV || 'development',
+		...(headless ? { CREWLY_HEADLESS: 'true' } : {}),
 	};
 
 	const backendProcess = spawn(

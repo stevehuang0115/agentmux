@@ -18,6 +18,7 @@ import clsx from 'clsx';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { IconButton } from '../UI';
 import { QRCodeDisplay } from './QRCodeDisplay';
+import { AuthStatusIndicator } from '../Auth/AuthStatusIndicator';
 
 const navigationItems = [
 	{ name: 'Dashboard', href: '/', icon: Home },
@@ -181,8 +182,11 @@ export const Navigation: React.FC<NavigationProps> = ({ isMobileOpen, onMobileCl
           </div>
         </nav>
 
-			{/* Bottom Section - Settings, QR Code and Toggle button */}
+			{/* Bottom Section - Cloud Auth, Settings, QR Code and Toggle button */}
 			<div className="p-2 border-t border-border-dark space-y-1">
+				{/* Cloud Auth Status */}
+				<AuthStatusIndicator isCollapsed={isCollapsed && !isMobileOpen} />
+
 				{/* Settings Link */}
 				<NavLink
 					to="/settings"

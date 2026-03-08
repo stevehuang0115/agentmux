@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { Project, Team, Ticket, ApiResponse, PreviousSession, TeamsBackupStatus, TeamsRestoreResult, QueueStatus, QueuedMessage, KnowledgeDocument, KnowledgeDocumentSummary, KnowledgeScope, CloudStatus, CloudConnectResult } from '../types';
+import type { AuthTokenResponse, UserProfile, LicenseStatus } from '../types/auth.types';
 
 /** Base URL for all API requests */
 const API_BASE = '/api';
@@ -689,6 +690,117 @@ class ApiService {
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to disconnect from cloud');
     }
+  }
+
+  // ============ Auth Methods ============
+
+  /**
+   * Register a new user account.
+   *
+   * @param email - User email
+   * @param password - User password (min 8 chars)
+   * @param displayName - Display name
+   * @returns Promise resolving to auth tokens and user profile
+   * @throws Error if registration fails (e.g., email already taken)
+   */
+  async authRegister(email: string, password: string, displayName: string): Promise<AuthTokenResponse> {
+    const response = await axios.post<ApiResponse<AuthTokenResponse>>(`${API_BASE}/auth/register`, {
+      email,
+      password,
+      displayName,
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Registration failed');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Log in with email and password.
+   *
+   * @param email - User email
+   * @param password - User password
+   * @returns Promise resolving to auth tokens and user profile
+   * @throws Error if credentials are invalid
+   */
+  async authLogin(email: string, password: string): Promise<AuthTokenResponse> {
+    const response = await axios.post<ApiResponse<AuthTokenResponse>>(`${API_BASE}/auth/login`, {
+      email,
+      password,
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Login failed');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Refresh access token using a refresh token.
+   *
+   * @param refreshToken - Valid refresh token
+   * @returns Promise resolving to new auth tokens
+   * @throws Error if refresh token is invalid or expired
+   */
+  async authRefresh(refreshToken: string): Promise<AuthTokenResponse> {
+    const response = await axios.post<ApiResponse<AuthTokenResponse>>(`${API_BASE}/auth/refresh`, {
+      refreshToken,
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Token refresh failed');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Get the current user's profile.
+   *
+   * @param accessToken - Valid access token
+   * @returns Promise resolving to user profile
+   * @throws Error if token is invalid or user not found
+   */
+  async authGetProfile(accessToken: string): Promise<UserProfile> {
+    const response = await axios.get<ApiResponse<UserProfile>>(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to get profile');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Update the current user's profile.
+   *
+   * @param accessToken - Valid access token
+   * @param updates - Profile fields to update
+   * @returns Promise resolving to updated user profile
+   * @throws Error if token is invalid or update fails
+   */
+  async authUpdateProfile(accessToken: string, updates: { displayName?: string }): Promise<UserProfile> {
+    const response = await axios.put<ApiResponse<UserProfile>>(`${API_BASE}/auth/me`, updates, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to update profile');
+    }
+    return response.data.data;
+  }
+
+  /**
+   * Get the current user's license/plan status.
+   *
+   * @param accessToken - Valid access token
+   * @returns Promise resolving to license status with features
+   * @throws Error if token is invalid or user not found
+   */
+  async authGetLicense(accessToken: string): Promise<LicenseStatus> {
+    const response = await axios.get<ApiResponse<LicenseStatus>>(`${API_BASE}/auth/license`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to get license status');
+    }
+    return response.data.data;
   }
 }
 

@@ -238,8 +238,11 @@ export async function ensureTools(rl: ReadlineInterface, provider: ProviderChoic
     const versionStr = tmuxVersion ? ` (${tmuxVersion})` : '';
     console.log(chalk.green(`  ✓ tmux detected${versionStr}`));
   } else {
-    console.log(chalk.yellow('  ⚠ tmux not found — required for running agents'));
-    console.log(chalk.gray('  Install: brew install tmux (macOS) or apt install tmux (Linux)'));
+    console.log(chalk.red('  ✖ tmux not found!'));
+    console.log(chalk.yellow('    tmux is required to manage agent terminal sessions.'));
+    console.log(chalk.gray('    Install: brew install tmux (macOS) or sudo apt install tmux (Linux)'));
+    console.log(chalk.gray('    Setup cannot continue without tmux.\n'));
+    process.exit(1);
   }
 
   const tools = PROVIDER_TOOLS[provider] || [];
@@ -382,11 +385,23 @@ export async function selectTemplate(rl: ReadlineInterface): Promise<TeamTemplat
  * and default status fields. The team is immediately available when `crewly start` runs.
  *
  * @param template - The team template to create from
+ * @param provider - The chosen AI provider to set as default runtime for members
  * @returns True if the team was created successfully
  */
-export function createTeamFromTemplate(template: TeamTemplate): boolean {
+export function createTeamFromTemplate(template: TeamTemplate, provider: ProviderChoice = 'claude'): boolean {
   const now = new Date().toISOString();
   const teamsDir = join(homedir(), '.crewly', 'teams', template.id);
+
+  // Map ProviderChoice to RuntimeType
+  const runtimeTypeMap: Record<string, string> = {
+    'claude': 'claude-code',
+    'gemini': 'gemini-cli',
+    'codex': 'codex-cli',
+    'both': 'claude-code', // Default to Claude if both are selected
+    'skip': 'claude-code',
+  };
+
+  const runtimeType = runtimeTypeMap[provider] || 'claude-code';
 
   try {
     mkdirSync(teamsDir, { recursive: true });
@@ -400,13 +415,13 @@ export function createTeamFromTemplate(template: TeamTemplate): boolean {
         role: m.role,
         sessionName,
         systemPrompt: m.systemPrompt,
-        runtimeType: 'claude-code',
-        agentStatus: 'inactive',
-        workingStatus: 'idle',
+        runtimeType,
         skillOverrides: m.skillOverrides || [],
         excludedRoleSkills: m.excludedRoleSkills || [],
         createdAt: now,
         updatedAt: now,
+        agentStatus: 'inactive',
+        workingStatus: 'idle',
       };
     });
 
@@ -568,7 +583,7 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
     const selectedTemplate = preselectedTemplate ?? listTemplates()[0] ?? null;
     if (selectedTemplate) {
       console.log(chalk.green(`  ✓ Using template: ${selectedTemplate.name}\n`));
-      const created = createTeamFromTemplate(selectedTemplate);
+      const created = createTeamFromTemplate(selectedTemplate, provider);
       if (created) {
         console.log(chalk.green(`  ✓ Team "${selectedTemplate.name}" created\n`));
       }
@@ -609,7 +624,7 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
 
     // Create team from selected template
     if (selectedTemplate) {
-      const created = createTeamFromTemplate(selectedTemplate);
+      const created = createTeamFromTemplate(selectedTemplate, provider);
       if (created) {
         console.log(chalk.green(`  ✓ Team "${selectedTemplate.name}" created\n`));
       }

@@ -86,7 +86,7 @@ export async function fetchRegistry(forceRefresh = false): Promise<MarketplaceRe
  *
  * Fetches from two sources in parallel:
  * 1. Public registry -- GitHub raw content (config/skills/registry.json in crewly repo)
- * 2. Premium registry -- crewly.stevesprompt.com/api/registry/skills (private/paid skills)
+ * 2. Premium registry -- crewlyai.com/api/registry/skills (private/paid skills)
  *
  * Results are merged with local registry items (locally published skills).
  *
@@ -162,7 +162,7 @@ async function fetchPublicRegistry(): Promise<MarketplaceItem[]> {
 }
 
 /**
- * Fetches items from the premium registry (crewly.stevesprompt.com).
+ * Fetches items from the premium registry (crewlyai.com).
  *
  * @returns Array of premium marketplace items with premium flag, empty on failure
  */

@@ -264,6 +264,9 @@ export interface CloudConnectResult {
   cloudUrl: string;
 }
 
+// Re-export auth types
+export * from './auth.types';
+
 // Re-export factory types
 export * from './factory.types';
 

@@ -9,7 +9,7 @@ INPUT="${1:-}"
 
 ACTION=$(echo "$INPUT" | jq -r '.action // "publish"')
 SKILL_PATH=$(echo "$INPUT" | jq -r '.skillPath // empty')
-REMOTE_URL=$(echo "$INPUT" | jq -r '.remoteUrl // "https://crewly.stevesprompt.com"')
+REMOTE_URL=$(echo "$INPUT" | jq -r '.remoteUrl // "https://crewlyai.com"')
 
 case "$ACTION" in
   validate)

@@ -53,6 +53,7 @@ jest.mock('../../services/marketplace/index.js', () => ({
 
 describe('MarketplaceController', () => {
   let mockRes: { json: jest.Mock; status: jest.Mock };
+  const next = jest.fn();
 
   beforeEach(() => {
     mockRes = {
@@ -80,6 +81,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockListItems).toHaveBeenCalledWith({
@@ -97,6 +99,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: { type: 'skill', category: 'development', search: 'deploy', sort: 'popular' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockListItems).toHaveBeenCalledWith({
@@ -111,6 +114,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: { type: 'invalid' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -120,6 +124,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: { sort: 'invalid' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -131,6 +136,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -146,6 +152,7 @@ describe('MarketplaceController', () => {
       await handleListItems(
         { query: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -166,6 +173,7 @@ describe('MarketplaceController', () => {
       await handleListInstalled(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetInstalledItems).toHaveBeenCalled();
@@ -178,6 +186,7 @@ describe('MarketplaceController', () => {
       await handleListInstalled(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -198,6 +207,7 @@ describe('MarketplaceController', () => {
       await handleListUpdates(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetUpdatableItems).toHaveBeenCalled();
@@ -210,6 +220,7 @@ describe('MarketplaceController', () => {
       await handleListUpdates(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -230,6 +241,7 @@ describe('MarketplaceController', () => {
       await handleGetItem(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
@@ -242,6 +254,7 @@ describe('MarketplaceController', () => {
       await handleGetItem(
         { params: { id: 'nonexistent' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -257,6 +270,7 @@ describe('MarketplaceController', () => {
       await handleGetItem(
         { params: { id: 'nonexistent' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -268,6 +282,7 @@ describe('MarketplaceController', () => {
       await handleGetItem(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -290,6 +305,7 @@ describe('MarketplaceController', () => {
       await handleRefresh(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockFetchRegistry).toHaveBeenCalledWith(true);
@@ -305,6 +321,7 @@ describe('MarketplaceController', () => {
       await handleRefresh(
         {} as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -327,6 +344,7 @@ describe('MarketplaceController', () => {
       await handleInstall(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
@@ -340,6 +358,7 @@ describe('MarketplaceController', () => {
       await handleInstall(
         { params: { id: 'nonexistent' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -358,6 +377,7 @@ describe('MarketplaceController', () => {
       await handleInstall(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -373,6 +393,7 @@ describe('MarketplaceController', () => {
       await handleInstall(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -390,6 +411,7 @@ describe('MarketplaceController', () => {
       await handleUninstall(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockUninstallItem).toHaveBeenCalledWith('skill-deploy');
@@ -402,6 +424,7 @@ describe('MarketplaceController', () => {
       await handleUninstall(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -424,6 +447,7 @@ describe('MarketplaceController', () => {
       await handleUpdate(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetItem).toHaveBeenCalledWith('skill-deploy');
@@ -437,6 +461,7 @@ describe('MarketplaceController', () => {
       await handleUpdate(
         { params: { id: 'nonexistent' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -455,6 +480,7 @@ describe('MarketplaceController', () => {
       await handleUpdate(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -470,6 +496,7 @@ describe('MarketplaceController', () => {
       await handleUpdate(
         { params: { id: 'skill-deploy' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -489,6 +516,7 @@ describe('MarketplaceController', () => {
       await handleSubmit(
         { body: { archivePath } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockSubmitSkill).toHaveBeenCalledWith(archivePath);
@@ -499,6 +527,7 @@ describe('MarketplaceController', () => {
       await handleSubmit(
         { body: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -512,6 +541,7 @@ describe('MarketplaceController', () => {
       await handleSubmit(
         { body: { archivePath: '/etc/passwd' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -528,6 +558,7 @@ describe('MarketplaceController', () => {
       await handleSubmit(
         { body: { archivePath } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -544,6 +575,7 @@ describe('MarketplaceController', () => {
       await handleListSubmissions(
         { query: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockListSubmissions).toHaveBeenCalledWith(undefined);
@@ -556,6 +588,7 @@ describe('MarketplaceController', () => {
       await handleListSubmissions(
         { query: { status: 'pending' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockListSubmissions).toHaveBeenCalledWith('pending');
@@ -565,6 +598,7 @@ describe('MarketplaceController', () => {
       await handleListSubmissions(
         { query: { status: 'invalid' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -576,6 +610,7 @@ describe('MarketplaceController', () => {
       await handleListSubmissions(
         { query: {} } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -592,6 +627,7 @@ describe('MarketplaceController', () => {
       await handleGetSubmission(
         { params: { id: 'sub-1' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockGetSubmission).toHaveBeenCalledWith('sub-1');
@@ -604,6 +640,7 @@ describe('MarketplaceController', () => {
       await handleGetSubmission(
         { params: { id: 'nonexistent' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -620,6 +657,7 @@ describe('MarketplaceController', () => {
       await handleReviewSubmission(
         { params: { id: 'sub-1' }, body: { action: 'approve' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockReviewSubmission).toHaveBeenCalledWith('sub-1', 'approve', undefined);
@@ -633,6 +671,7 @@ describe('MarketplaceController', () => {
       await handleReviewSubmission(
         { params: { id: 'sub-1' }, body: { action: 'reject', notes: 'Needs work' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockReviewSubmission).toHaveBeenCalledWith('sub-1', 'reject', 'Needs work');
@@ -642,6 +681,7 @@ describe('MarketplaceController', () => {
       await handleReviewSubmission(
         { params: { id: 'sub-1' }, body: { action: 'invalid' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -657,6 +697,7 @@ describe('MarketplaceController', () => {
       await handleReviewSubmission(
         { params: { id: 'x' }, body: { action: 'approve' } } as any,
         mockRes as any,
+        next,
       );
 
       expect(mockRes.status).toHaveBeenCalledWith(404);

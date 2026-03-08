@@ -22,6 +22,14 @@ jest.mock('../../services/marketplace/index.js', () => ({
   listSubmissions: jest.fn(),
   getSubmission: jest.fn(),
   reviewSubmission: jest.fn(),
+  createTemplate: jest.fn(),
+  listTemplates: jest.fn(),
+  getTemplate: jest.fn(),
+  updateTemplate: jest.fn(),
+  archiveTemplate: jest.fn(),
+  addVersion: jest.fn(),
+  listVersions: jest.fn(),
+  publishTemplate: jest.fn(),
 }));
 
 describe('Marketplace Controller index exports', () => {
@@ -88,5 +96,22 @@ describe('Marketplace Controller index exports', () => {
   it('should export handleReviewSubmission handler', () => {
     expect(marketplaceIndex.handleReviewSubmission).toBeDefined();
     expect(typeof marketplaceIndex.handleReviewSubmission).toBe('function');
+  });
+
+  // Template marketplace exports
+  it('should export createTemplateMarketplaceRouter', () => {
+    expect(marketplaceIndex.createTemplateMarketplaceRouter).toBeDefined();
+    expect(typeof marketplaceIndex.createTemplateMarketplaceRouter).toBe('function');
+  });
+
+  it('should export template marketplace handlers', () => {
+    expect(typeof marketplaceIndex.handleCreateTemplate).toBe('function');
+    expect(typeof marketplaceIndex.handleListTemplates).toBe('function');
+    expect(typeof marketplaceIndex.handleGetTemplate).toBe('function');
+    expect(typeof marketplaceIndex.handleUpdateTemplate).toBe('function');
+    expect(typeof marketplaceIndex.handleArchiveTemplate).toBe('function');
+    expect(typeof marketplaceIndex.handleAddVersion).toBe('function');
+    expect(typeof marketplaceIndex.handleListVersions).toBe('function');
+    expect(typeof marketplaceIndex.handlePublishTemplate).toBe('function');
   });
 });

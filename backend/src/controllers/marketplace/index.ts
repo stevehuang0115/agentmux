@@ -22,3 +22,16 @@ export {
   handleGetSubmission,
   handleReviewSubmission,
 } from './marketplace.controller.js';
+
+// Template marketplace exports
+export { createTemplateMarketplaceRouter } from './template-marketplace.routes.js';
+export {
+  handleCreateTemplate,
+  handleListTemplates,
+  handleGetTemplate,
+  handleUpdateTemplate,
+  handleArchiveTemplate,
+  handleAddVersion,
+  handleListVersions,
+  handlePublishTemplate,
+} from './template-marketplace.controller.js';

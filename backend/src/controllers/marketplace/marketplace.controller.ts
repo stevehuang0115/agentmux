@@ -27,28 +27,11 @@ import {
   reviewSubmission,
 } from '../../services/marketplace/index.js';
 import type { MarketplaceItemType, MarketplaceCategory, SortOption, SubmissionStatus } from '../../types/marketplace.types.js';
+import { asyncHandler } from '../../utils/async-handler.js';
 
 const VALID_TYPES: MarketplaceItemType[] = ['skill', 'model', 'role'];
 const VALID_SORTS: SortOption[] = ['popular', 'rating', 'newest'];
 const VALID_SUBMISSION_STATUSES: SubmissionStatus[] = ['pending', 'approved', 'rejected'];
-
-/**
- * Wraps an async route handler with a standard try/catch that returns
- * a consistent JSON error response on unhandled exceptions.
- *
- * @param fn - The async handler function to wrap
- * @returns A wrapped handler that catches errors and responds with 500
- */
-function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
-  return async (req: Request, res: Response): Promise<void> => {
-    try {
-      await fn(req, res);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ success: false, error: msg });
-    }
-  };
-}
 
 /**
  * GET /api/marketplace - List marketplace items with optional filters.

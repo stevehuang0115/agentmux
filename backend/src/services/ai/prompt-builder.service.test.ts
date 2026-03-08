@@ -701,4 +701,462 @@ describe('PromptBuilderService', () => {
 			expect(result).toContain('get-sops');
 		});
 	});
+
+	describe('buildTeamLeadSection', () => {
+		const tlAddonContent = `## Team Leader Add-on
+
+You are a **player-coach**: delegate 50–70% of tasks.
+
+### Your Workers
+
+{{WORKER_LIST}}
+
+### Your Management Skills
+
+Skills at \`{{TL_SKILLS_PATH}}/\`:
+
+#### 1. delegate-task
+\`\`\`bash
+bash {{TL_SKILLS_PATH}}/delegate-task/execute.sh '{"teamId":"{{TEAM_ID}}","tlMemberId":"{{MEMBER_ID}}","projectPath":"{{PROJECT_PATH}}"}'
+\`\`\`
+
+### MANDATORY Behaviors
+
+1. After receiving a goal: MUST decompose and delegate.
+2. After every delegation: MUST schedule-check.
+3. When worker reports done: MUST verify-output.`;
+
+		it('should load TL addon from file when canDelegate is true and subordinates exist', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(tlAddonContent);
+
+			const config: TeamMemberSessionConfig = {
+				name: 'crewly-product-sam',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'tl-001',
+				teamId: 'team-abc',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Leo', sessionName: 'crewly-product-leo', role: 'developer' },
+					{ name: 'Nick', sessionName: 'crewly-product-nick', role: 'frontend-developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toContain('Team Leader Add-on');
+			expect(result).toContain('player-coach');
+			expect(result).toContain('**Leo**');
+			expect(result).toContain('crewly-product-leo');
+			expect(result).toContain('**Nick**');
+			expect(result).toContain('crewly-product-nick');
+			expect(result).toContain('MANDATORY Behaviors');
+			// Verify tl-addon.md was read
+			expect(mockReadFile).toHaveBeenCalledWith(
+				expect.stringContaining('/config/roles/team-leader/tl-addon.md'),
+				'utf8'
+			);
+		});
+
+		it('should resolve all template variables in TL addon', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(tlAddonContent);
+
+			const config: TeamMemberSessionConfig = {
+				name: 'sam-session',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/my/project',
+				memberId: 'member-xyz',
+				teamId: 'team-123',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			// WORKER_LIST resolved
+			expect(result).toContain('**Worker** (session: `worker-session`) — developer');
+			// TL_SKILLS_PATH resolved
+			expect(result).toContain('/test/project/config/skills/team-leader/');
+			// TEAM_ID resolved
+			expect(result).toContain('"teamId":"team-123"');
+			// MEMBER_ID resolved
+			expect(result).toContain('"tlMemberId":"member-xyz"');
+			// PROJECT_PATH resolved
+			expect(result).toContain('"projectPath":"/my/project"');
+			// No unresolved template variables remain
+			expect(result).not.toContain('{{');
+		});
+
+		it('should fall back to inline section when tl-addon.md is not found', async () => {
+			mockAccess.mockRejectedValue(new Error('File not found'));
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			// Fallback inline section should contain basic TL content
+			expect(result).toContain('Team Lead Responsibilities');
+			expect(result).toContain('Task Decomposition');
+			expect(result).toContain('Delegation');
+			expect(result).toContain('Quality Review');
+			expect(result).toContain('**Worker**');
+			expect(result).toContain('worker-session');
+		});
+
+		it('should include delegation duties in inline fallback', async () => {
+			mockAccess.mockRejectedValue(new Error('File not found'));
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toContain('Task Decomposition');
+			expect(result).toContain('Delegation');
+			expect(result).toContain('Quality Review');
+			expect(result).toContain('Progress Reporting');
+			expect(result).toContain('send-message');
+			expect(result).toContain('report-status');
+		});
+
+		it('should include task assignment template in inline fallback', async () => {
+			mockAccess.mockRejectedValue(new Error('File not found'));
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toContain('[TASK]');
+			expect(result).toContain('Priority:');
+			expect(result).toContain('Task Assignment Template');
+		});
+
+		it('should include delegation guidelines in inline fallback', async () => {
+			mockAccess.mockRejectedValue(new Error('File not found'));
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toContain('Delegate by default');
+			expect(result).toContain('Be specific');
+			expect(result).toContain('Monitor progress');
+		});
+
+		it('should return empty string when canDelegate is false', async () => {
+			const config: TeamMemberSessionConfig = {
+				name: 'dev-session',
+				role: 'developer',
+				systemPrompt: '',
+				canDelegate: false,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toBe('');
+		});
+
+		it('should return empty string when canDelegate is undefined', async () => {
+			const config: TeamMemberSessionConfig = {
+				name: 'dev-session',
+				role: 'developer',
+				systemPrompt: '',
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toBe('');
+		});
+
+		it('should return empty string when subordinates is empty', async () => {
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				subordinates: [],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toBe('');
+		});
+
+		it('should return empty string when subordinates is undefined', async () => {
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toBe('');
+		});
+
+		it('should handle single subordinate with file addon', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(tlAddonContent);
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				canDelegate: true,
+				teamId: 'team-1',
+				memberId: 'm-1',
+				projectPath: '/proj',
+				subordinates: [
+					{ name: 'Solo Worker', sessionName: 'solo-session', role: 'qa' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			expect(result).toContain('**Solo Worker**');
+			expect(result).toContain('solo-session');
+			expect(result).toContain('qa');
+			// Should only have one subordinate listed
+			expect(result.match(/\*\*.*\*\* \(session:/g)?.length).toBe(1);
+		});
+
+		it('should auto-stack TL addon for a developer role with canDelegate', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(tlAddonContent);
+
+			const config: TeamMemberSessionConfig = {
+				name: 'dev-tl-session',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'dev-tl-001',
+				teamId: 'team-dev',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Junior', sessionName: 'junior-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			// Developer with canDelegate should still get TL addon
+			expect(result).toContain('Team Leader Add-on');
+			expect(result).toContain('player-coach');
+			expect(result).toContain('**Junior**');
+			expect(result).toContain('MANDATORY Behaviors');
+		});
+
+		it('should handle missing teamId gracefully in template resolution', async () => {
+			mockAccess.mockResolvedValue(undefined);
+			mockReadFile.mockResolvedValue(tlAddonContent);
+
+			const config: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'tl-001',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildTeamLeadSection(config);
+
+			// Should not crash — teamId defaults to empty string
+			expect(result).toContain('Team Leader Add-on');
+			expect(result).toContain('"teamId":""');
+		});
+	});
+
+	describe('buildSystemPromptWithMemory with TL context', () => {
+		beforeEach(() => {
+			mockInitializeForSession.mockClear();
+			mockGetFullContext.mockClear();
+			mockGenerateSOPContext.mockClear();
+			mockInitializeForSession.mockResolvedValue(undefined);
+			mockGetFullContext.mockResolvedValue('');
+			mockGenerateSOPContext.mockResolvedValue('');
+			mockAccess.mockRejectedValue(new Error('File not found')); // Use fallback prompt
+		});
+
+		it('should inject TL section into composed prompt when canDelegate is true', async () => {
+			const tlConfig: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'tl-001',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Leo', sessionName: 'leo-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildSystemPromptWithMemory(tlConfig);
+
+			expect(result).toContain('Team Lead Responsibilities');
+			expect(result).toContain('**Leo**');
+			expect(result).toContain('leo-session');
+			expect(result).toContain('Your Identity');
+			expect(result).toContain('Communication');
+		});
+
+		it('should NOT inject TL section for regular developers', async () => {
+			const devConfig: TeamMemberSessionConfig = {
+				name: 'dev-session',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'dev-001',
+			};
+
+			// Need at least memory or SOP context for composePromptWithMemory to run
+			mockGetFullContext.mockResolvedValue('Some memory');
+
+			const result = await service.buildSystemPromptWithMemory(devConfig);
+
+			expect(result).not.toContain('Team Lead Responsibilities');
+			expect(result).not.toContain('Delegation');
+		});
+
+		it('should include TL section alongside memory and SOP context', async () => {
+			mockGetFullContext.mockResolvedValue('## Knowledge\nImportant fact');
+			mockGenerateSOPContext.mockResolvedValue('## SOPs\nFollow these steps');
+
+			const tlConfig: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'tl-001',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildSystemPromptWithMemory(tlConfig);
+
+			expect(result).toContain('Your Knowledge Base');
+			expect(result).toContain('Important fact');
+			expect(result).toContain('SOPs');
+			expect(result).toContain('Team Lead Responsibilities');
+			expect(result).toContain('**Worker**');
+		});
+
+		it('should compose prompt with TL section even when memory and SOPs are empty', async () => {
+			const tlConfig: TeamMemberSessionConfig = {
+				name: 'tl-session',
+				role: 'team-leader',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'tl-001',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Worker', sessionName: 'worker-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildSystemPromptWithMemory(tlConfig);
+
+			// Should still compose full prompt because TL context is non-empty
+			expect(result).toContain('Team Lead Responsibilities');
+			expect(result).toContain('Your Identity');
+			expect(result).toContain('Communication');
+		});
+
+		it('should auto-stack file-based TL addon into composed prompt for developer with TL hierarchy', async () => {
+			const tlAddonFileContent = `## TL Addon
+
+### Workers
+{{WORKER_LIST}}
+
+### Skills at {{TL_SKILLS_PATH}}
+delegate-task for team {{TEAM_ID}}
+
+### MANDATORY
+Decompose and delegate.`;
+
+			// Allow tl-addon.md access but reject role prompt access (use fallback)
+			mockAccess.mockImplementation((filePath: string) => {
+				if (filePath.includes('tl-addon.md')) {
+					return Promise.resolve(undefined);
+				}
+				return Promise.reject(new Error('File not found'));
+			});
+			mockReadFile.mockImplementation((filePath: string) => {
+				if (filePath.includes('tl-addon.md')) {
+					return Promise.resolve(tlAddonFileContent);
+				}
+				return Promise.reject(new Error('File not found'));
+			});
+
+			const devTlConfig: TeamMemberSessionConfig = {
+				name: 'dev-tl-session',
+				role: 'developer',
+				systemPrompt: '',
+				projectPath: '/test/project',
+				memberId: 'dev-tl-001',
+				teamId: 'team-xyz',
+				canDelegate: true,
+				subordinates: [
+					{ name: 'Junior', sessionName: 'junior-session', role: 'developer' },
+				],
+			};
+
+			const result = await service.buildSystemPromptWithMemory(devTlConfig);
+
+			// Should have dev fallback prompt + TL addon stacked
+			expect(result).toContain('developer tasks'); // from fallback dev prompt
+			expect(result).toContain('TL Addon'); // from tl-addon.md
+			expect(result).toContain('**Junior** (session: `junior-session`) — developer');
+			expect(result).toContain('team-xyz');
+			expect(result).toContain('MANDATORY');
+			expect(result).toContain('Your Identity');
+			expect(result).toContain('Communication');
+		});
+	});
 });

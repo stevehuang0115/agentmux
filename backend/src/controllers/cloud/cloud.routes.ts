@@ -19,6 +19,7 @@ import {
   getCloudStatus,
   getCloudTemplates,
 } from './cloud.controller.js';
+import { createCloudAuthRouter } from './cloud-auth.routes.js';
 
 /**
  * Creates the cloud router with all CrewlyAI Cloud endpoints.
@@ -32,6 +33,9 @@ export function createCloudRouter(): Router {
   router.post('/disconnect', disconnectFromCloud);
   router.get('/status', getCloudStatus);
   router.get('/templates', getCloudTemplates);
+
+  // Supabase-backed cloud auth endpoints (register, login, logout, session, license)
+  router.use('/', createCloudAuthRouter());
 
   return router;
 }

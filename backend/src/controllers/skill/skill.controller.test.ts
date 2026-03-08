@@ -256,6 +256,7 @@ describe('Skill Controller', () => {
     skillService = new SkillService({
       builtinSkillsDir,
       userSkillsDir,
+      marketplaceSkillsDir: path.join(testDir, 'marketplace'),
     });
     await skillService.initialize();
 

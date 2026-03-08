@@ -37,3 +37,20 @@ export {
   loadSubmissionsManifest,
   saveSubmissionsManifest,
 } from './marketplace-submission.service.js';
+
+// Template marketplace operations
+export {
+  createTemplate,
+  listTemplates,
+  getTemplate,
+  updateTemplate,
+  archiveTemplate,
+  addVersion,
+  listVersions,
+  publishTemplate,
+  deleteTemplate,
+  loadTemplateStore,
+  saveTemplateStore,
+  loadVersionStore,
+  saveVersionStore,
+} from './template-marketplace.service.js';

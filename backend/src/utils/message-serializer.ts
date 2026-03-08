@@ -207,18 +207,30 @@ function splitHeaderAndBody(text: string): { headerLines: string[]; body: string
  * Returns the content between the section header and the next section or end.
  */
 function extractSection(body: string, sectionName: string): string | undefined {
-  const pattern = new RegExp(`^## ${sectionName}\\s*$`, 'm');
-  const match = body.match(pattern);
-  if (!match || match.index === undefined) return undefined;
+  const marker = `## ${sectionName}`;
+  const lines = body.split('\n');
+  let startIdx = -1;
 
-  const start = match.index + match[0].length;
-  const rest = body.slice(start);
-  const nextSection = rest.match(/^## /m);
-  const content = nextSection && nextSection.index !== undefined
-    ? rest.slice(0, nextSection.index)
-    : rest;
+  // Find the section header line
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === marker) {
+      startIdx = i + 1;
+      break;
+    }
+  }
 
-  return content.trim();
+  if (startIdx === -1) return undefined;
+
+  // Find the next section header (## ...)
+  let endIdx = lines.length;
+  for (let i = startIdx; i < lines.length; i++) {
+    if (lines[i].startsWith('## ')) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  return lines.slice(startIdx, endIdx).join('\n').trim();
 }
 
 /**

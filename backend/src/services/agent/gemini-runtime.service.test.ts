@@ -481,8 +481,8 @@ describe('GeminiRuntimeService', () => {
 	describe('getRuntimeExitPatterns', () => {
 		it('should return Gemini-specific exit and failure patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			// 2 clean exit + 8 failure patterns
-			expect(patterns).toHaveLength(10);
+			// 2 clean exit + 9 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN)
+			expect(patterns).toHaveLength(11);
 			// Clean exit patterns
 			expect(patterns[0].test('Agent powering down')).toBe(true);
 			expect(patterns[1].test('Interaction Summary')).toBe(true);
@@ -516,8 +516,8 @@ describe('GeminiRuntimeService', () => {
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			// 2 clean exit + 8 failure patterns
-			expect(patterns).toHaveLength(10);
+			// 2 clean exit + 9 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN)
+			expect(patterns).toHaveLength(11);
 		});
 	});
 
@@ -658,9 +658,10 @@ describe('GeminiRuntimeService', () => {
 
 			await service.ensureGeminiMcpConfig('/test/project');
 
-			// Should not write anything since no servers are needed
+			// Should not write MCP config with playwright servers
 			expect(mockAtomicWriteJson).not.toHaveBeenCalled();
-			expect(mockMkdir).not.toHaveBeenCalled();
+			// mkdir is still called for the disableAutoUpdate settings write
+			expect(mockMkdir).toHaveBeenCalled();
 		});
 
 		it('should default to enabled when settings service is unavailable', async () => {

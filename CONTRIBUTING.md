@@ -1,20 +1,20 @@
 # Contributing to Crewly
 
-Thank you for your interest in contributing to Crewly! This guide will help you get started.
+Welcome to Crewly! Crewly is a multi-agent orchestration platform that coordinates AI coding agents (Claude Code, Gemini CLI, Codex) with a real-time web dashboard. We appreciate your interest in contributing and look forward to your involvement.
 
-## Getting Started
+## Development Environment Setup
 
 ### Prerequisites
 
-- **Node.js** v20+ and **npm** v9+
+- **Node.js** 18+ and **npm**
 - **Git** for version control
-- One of the supported AI coding CLIs (Claude Code, Gemini CLI, or Codex)
+- Optionally, one of the supported AI coding CLIs (Claude Code, Gemini CLI, or Codex)
 
-### Development Setup
+### Getting Started
 
 ```bash
-# Clone the repository
-git clone https://github.com/stevehuang0115/crewly.git
+# Fork the repository on GitHub, then clone your fork
+git clone https://github.com/<your-username>/crewly.git
 cd crewly
 
 # Install dependencies
@@ -29,103 +29,51 @@ npm run dev
 
 The development server starts at `http://localhost:8787` by default.
 
-### Project Structure
+## Project Structure
 
 ```
 crewly/
 ├── backend/src/       # Express.js server (TypeScript)
+│   ├── controllers/   # HTTP request handlers
+│   ├── services/      # Business logic layer
+│   └── websocket/     # WebSocket gateway
 ├── frontend/src/      # React dashboard (TypeScript)
+│   ├── components/    # UI components
+│   ├── pages/         # Route pages
+│   └── services/      # API client services
 ├── cli/src/           # CLI entry point (Commander.js)
+├── mcp-server/src/    # MCP protocol server (TypeScript)
 ├── config/            # Shared constants, roles, and skills
 │   ├── constants.ts   # Cross-domain constants
-│   ├── roles/         # Agent role prompts
-│   └── skills/        # Agent and orchestrator skills
+│   ├── roles/         # Agent role prompts and configs
+│   └── skills/        # Agent and orchestrator skill scripts
 ├── specs/             # System design specifications
-└── tests/             # Integration and E2E tests
+└── CLAUDE.md          # Full coding standards reference
 ```
 
-## Development Workflow
+## Code Standards
 
-### 1. Create a Branch
+- **TypeScript strict mode** enabled everywhere — no `any` types, use `unknown` with type guards
+- **Co-located test files** — every source file (`*.ts` / `*.tsx`) must have a corresponding `*.test.ts` / `*.test.tsx` in the same directory
+- **JSDoc on all public functions** — include description, `@param`, `@returns`, and `@throws` where applicable
+- **No hardcoded values** — use `config/constants.ts` for ports, timeouts, paths, status strings, and other magic values
+- **ES modules only** — use `import`/`export`, no CommonJS `require()`
+- **Include `.js` extensions** in relative imports for Node.js ESM compatibility
+
+See [CLAUDE.md](CLAUDE.md) for the full coding standards, including constants organization, documentation requirements, and enforcement policies.
+
+## Git Workflow and PR Process
+
+### 1. Fork and Branch
 
 ```bash
+# Fork the repo on GitHub, then create a feature branch
 git checkout -b feature/your-feature-name
-# or
+# or for bug fixes
 git checkout -b fix/your-bug-fix
 ```
 
-### 2. Make Your Changes
-
-- Follow TypeScript strict mode (no `any` types)
-- Write tests alongside your code (see Testing below)
-- Add JSDoc documentation to public functions
-- Use constants from `config/constants.ts` instead of hardcoded values
-
-### 3. Run the Checks
-
-```bash
-# Build all components
-npm run build
-
-# Run unit tests
-npm run test:unit
-
-# Type-check without emitting
-npm run typecheck
-
-# Lint
-npm run lint
-```
-
-### 4. Submit a Pull Request
-
-- Use a descriptive title and explain the "why" in the description
-- Reference any related issues
-- Ensure all CI checks pass
-
-## Testing
-
-### Test File Placement
-
-Every source file must have a corresponding test file **in the same directory**:
-
-```
-src/services/
-├── my-service.ts
-└── my-service.test.ts      # Right here, not in a tests/ folder
-```
-
-### Running Tests
-
-```bash
-npm run test:unit            # All unit tests
-npx jest path/to/file.test.ts  # Single test file
-npm test                     # Full test suite
-```
-
-### Coverage
-
-Aim for **80%+** coverage on new code. Critical business logic should have **100%** coverage.
-
-## Code Style
-
-### TypeScript
-
-- **Strict mode** enabled everywhere
-- Use explicit types and interfaces for data structures
-- No `any` — use `unknown` with type guards instead
-- ES modules only (`import`/`export`, no `require()`)
-- Include `.js` extensions in relative imports for Node.js ESM compatibility
-
-### Constants
-
-No hardcoded values. Use the centralized constants:
-
-```typescript
-import { CREWLY_CONSTANTS } from '../config/constants.js';
-```
-
-### Commits
+### 2. Commit Conventions
 
 Follow conventional commit format:
 
@@ -137,22 +85,42 @@ refactor: extract session management into service
 docs: update API endpoint documentation
 ```
 
-## Architecture Overview
+### 3. Write Tests
 
-Crewly follows a service-oriented architecture:
+Every source file needs a test file. Write tests alongside your code, not in a separate `tests/` directory.
 
-- **Services** contain business logic (`backend/src/services/`)
-- **Controllers** handle HTTP requests (`backend/src/controllers/`)
-- **Gateways** manage WebSocket connections (`backend/src/websocket/`)
-- **Singletons** use `getInstance()` / `clearInstance()` pattern
+### 4. Submit a Pull Request
 
-Read the specs in `/specs/` before making architectural changes.
+- Push your branch to your fork
+- Open a PR against `main` with a descriptive title
+- Explain the "why" in the PR description, not just the "what"
+- Reference any related issues (e.g., `Closes #42`)
+- Ensure all CI checks pass before requesting review
 
-## Reporting Issues
+## Testing
 
-- Use [GitHub Issues](https://github.com/stevehuang0115/crewly/issues)
-- Include steps to reproduce, expected vs. actual behavior
-- Attach logs if relevant (`crewly logs`)
+### Running Tests
+
+```bash
+npm run test:unit            # All unit tests
+npm test                     # Full test suite
+npm run typecheck            # Type-check without emitting
+npm run lint                 # Lint check
+```
+
+### Test File Placement
+
+Every source file must have a corresponding test file **in the same directory**:
+
+```
+src/services/
+├── my-service.ts
+└── my-service.test.ts      # Right here, not in a tests/ folder
+```
+
+### Coverage
+
+Aim for **80%+** coverage on new code. Critical business logic should have **100%** coverage.
 
 ## Code of Conduct
 

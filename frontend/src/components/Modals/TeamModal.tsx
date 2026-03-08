@@ -402,7 +402,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                 >
                   <option value="">None (Independent Team)</option>
                   {allTeams
-                    .filter(t => t.id !== team?.id)
+                    .filter(t => t.id !== team?.id && t.id !== 'orchestrator')
                     .map(t => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}

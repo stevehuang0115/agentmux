@@ -32,6 +32,16 @@ import {
 
 const RELAY = CLOUD_CONSTANTS.RELAY;
 
+/** Named WebSocket close codes used by the relay server. */
+const WS_CLOSE = {
+  /** Normal server shutdown */
+  SERVER_SHUTDOWN: 1001,
+  /** Client failed to register within the handshake window */
+  HANDSHAKE_TIMEOUT: 4001,
+  /** Client missed heartbeat deadline */
+  HEARTBEAT_TIMEOUT: 4002,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -155,7 +165,7 @@ export class RelayServerService {
       if (client.heartbeatTimer) {
         clearTimeout(client.heartbeatTimer);
       }
-      client.ws.close(1001, 'Server shutting down');
+      client.ws.close(WS_CLOSE.SERVER_SHUTDOWN, 'Server shutting down');
     }
 
     this.clients.clear();
@@ -222,7 +232,7 @@ export class RelayServerService {
     // Handshake timeout: client must register within the window
     const handshakeTimer = setTimeout(() => {
       this.sendError(ws, 'HANDSHAKE_TIMEOUT', 'Registration timeout — send a register message');
-      ws.close(4001, 'Handshake timeout');
+      ws.close(WS_CLOSE.HANDSHAKE_TIMEOUT, 'Handshake timeout');
     }, RELAY.HANDSHAKE_TIMEOUT_MS);
 
     ws.on('message', (data: Buffer | string) => {
@@ -539,7 +549,7 @@ export class RelayServerService {
       this.logger.warn('Heartbeat timeout', { sessionId });
       const client = this.clients.get(sessionId);
       if (client) {
-        client.ws.close(4002, 'Heartbeat timeout');
+        client.ws.close(WS_CLOSE.HEARTBEAT_TIMEOUT, 'Heartbeat timeout');
         this.handleDisconnect(sessionId);
       }
     }, RELAY.HEARTBEAT_TIMEOUT_MS);

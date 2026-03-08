@@ -185,9 +185,16 @@ export class PluginService {
     const handlers = this.hooks.get(hookName) ?? [];
     const errors: Error[] = [];
 
+    const HOOK_TIMEOUT_MS = 30_000;
+
     for (const { handler } of handlers) {
       try {
-        await handler(payload);
+        await Promise.race([
+          handler(payload),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Hook handler timed out after ${HOOK_TIMEOUT_MS}ms`)), HOOK_TIMEOUT_MS)
+          ),
+        ]);
       } catch (error) {
         errors.push(error instanceof Error ? error : new Error(String(error)));
       }

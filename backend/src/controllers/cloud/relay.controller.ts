@@ -1,22 +1,33 @@
 /**
  * Relay REST Controller
  *
- * Handles HTTP requests for the WebSocket Relay registration and status.
- * Provides the REST API surface that clients hit before upgrading to
- * a WebSocket connection for the actual relay communication.
+ * Handles HTTP requests for both the WebSocket Relay server management
+ * and the relay client lifecycle (connecting to a remote relay).
  *
- * Endpoints:
- * - POST /v1/relay/register — register a local instance as a relay node
- * - GET  /relay/status      — get relay server status and active sessions
+ * Server-side endpoints:
+ * - POST /relay/register — register a local instance as a relay node
+ * - GET  /relay/status   — get relay server status and active sessions
+ *
+ * Client-side endpoints:
+ * - POST /relay/connect    — connect to a remote relay server
+ * - POST /relay/disconnect — disconnect from the relay server
+ * - GET  /relay/devices    — list paired/connected devices
+ * - POST /relay/send       — send a message to the paired peer
  *
  * @module controllers/cloud/relay.controller
  */
 
 import type { Request, Response, NextFunction } from 'express';
 import { RelayServerService } from '../../services/cloud/relay-server.service.js';
+import { RelayClientService } from '../../services/cloud/relay-client.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { CLOUD_CONSTANTS } from '../../constants.js';
-import type { RelayRegisterRequest, RelayRegisterResponse, RelayNodeRole } from '../../services/cloud/relay.types.js';
+import type {
+  RelayRegisterRequest,
+  RelayRegisterResponse,
+  RelayNodeRole,
+  RelayClientConfig,
+} from '../../services/cloud/relay.types.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('RelayController');
 
@@ -109,6 +120,212 @@ export async function getRelayStatus(req: Request, res: Response, next: NextFunc
     });
   } catch (error) {
     logger.error('Failed to get relay status', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Client-side endpoints
+// ---------------------------------------------------------------------------
+
+/** Request body for POST /relay/connect. */
+interface ConnectRelayRequestBody {
+  wsUrl: string;
+  pairingCode: string;
+  role: 'orchestrator' | 'agent';
+  token: string;
+  sharedSecret: string;
+}
+
+/**
+ * POST /relay/connect
+ *
+ * Connect the local Crewly instance to a remote relay server as a client.
+ * Initiates WebSocket connection, registration, and waits for pairing.
+ *
+ * @param req - Request with body: { wsUrl, pairingCode, role, token, sharedSecret }
+ * @param res - Response with connection status
+ * @param next - Next function for error propagation
+ */
+export async function connectToRelay(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { wsUrl, pairingCode, role, token, sharedSecret } = req.body as Partial<ConnectRelayRequestBody>;
+
+    if (!wsUrl || !pairingCode || !role || !token || !sharedSecret) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: wsUrl, pairingCode, role, token, sharedSecret',
+      });
+      return;
+    }
+
+    if (!VALID_ROLES.has(role)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid role: "${role}". Must be "orchestrator" or "agent".`,
+      });
+      return;
+    }
+
+    const client = RelayClientService.getInstance();
+    const currentState = client.getState();
+
+    if (currentState !== 'disconnected' && currentState !== 'error') {
+      res.status(409).json({
+        success: false,
+        error: `Relay client is already in "${currentState}" state. Disconnect first.`,
+      });
+      return;
+    }
+
+    const config: RelayClientConfig = { wsUrl, pairingCode, role, token, sharedSecret };
+    client.connect(config);
+
+    logger.info('Relay client connecting', { wsUrl, pairingCode, role });
+
+    res.json({
+      success: true,
+      data: {
+        state: client.getState(),
+        message: 'Relay client connection initiated',
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to connect relay client', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * POST /relay/disconnect
+ *
+ * Disconnect the local relay client from the remote relay server.
+ * Closes the WebSocket cleanly and stops heartbeats and reconnection.
+ *
+ * @param req - Express request (no body required)
+ * @param res - Response with disconnection confirmation
+ * @param next - Next function for error propagation
+ */
+export async function disconnectFromRelay(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const client = RelayClientService.getInstance();
+    const previousState = client.getState();
+
+    client.disconnect();
+
+    logger.info('Relay client disconnected', { previousState });
+
+    res.json({
+      success: true,
+      data: {
+        previousState,
+        state: client.getState(),
+        message: 'Relay client disconnected',
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to disconnect relay client', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * GET /relay/devices
+ *
+ * List connected devices visible through the relay. Returns both the local
+ * relay client state and the relay server sessions (if a local server is running).
+ *
+ * @param req - Express request (no params required)
+ * @param res - Response with device list
+ * @param next - Next function for error propagation
+ */
+export async function getRelayDevices(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const client = RelayClientService.getInstance();
+    const server = RelayServerService.getInstance();
+
+    const clientInfo = {
+      state: client.getState(),
+      sessionId: client.getSessionId(),
+    };
+
+    const serverSessions = server.isRunning() ? server.getSessions() : [];
+
+    res.json({
+      success: true,
+      data: {
+        client: clientInfo,
+        serverRunning: server.isRunning(),
+        devices: serverSessions.map((session) => ({
+          sessionId: session.sessionId,
+          role: session.role,
+          state: session.state,
+          pairedWith: session.pairedWith,
+          registeredAt: session.registeredAt,
+          lastHeartbeatAt: session.lastHeartbeatAt,
+        })),
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to get relay devices', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    next(error);
+  }
+}
+
+/**
+ * POST /relay/send
+ *
+ * Send an encrypted message to the paired peer via the relay.
+ * The message is encrypted locally using the shared secret before
+ * being forwarded through the relay server.
+ *
+ * @param req - Request with body: { message }
+ * @param res - Response with send confirmation
+ * @param next - Next function for error propagation
+ */
+export async function sendRelayMessage(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const { message } = req.body as { message?: string };
+
+    if (typeof message !== 'string' || message.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing or empty required parameter: message',
+      });
+      return;
+    }
+
+    const client = RelayClientService.getInstance();
+
+    if (client.getState() !== 'paired') {
+      res.status(409).json({
+        success: false,
+        error: `Cannot send — relay client is in "${client.getState()}" state, must be "paired".`,
+      });
+      return;
+    }
+
+    client.send(message);
+
+    logger.info('Relay message sent', { messageLength: message.length });
+
+    res.json({
+      success: true,
+      data: {
+        sent: true,
+        messageLength: message.length,
+      },
+    });
+  } catch (error) {
+    logger.error('Failed to send relay message', {
       error: error instanceof Error ? error.message : String(error),
     });
     next(error);

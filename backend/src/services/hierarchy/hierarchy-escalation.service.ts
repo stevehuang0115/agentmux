@@ -317,9 +317,12 @@ export class HierarchyEscalationService {
     allMembers: TeamMember[]
   ): TeamMember[] {
     const chain: TeamMember[] = [];
+    const visited = new Set<string>();
     let current = member;
 
     while (current.parentMemberId) {
+      if (visited.has(current.id)) break; // Cycle detected
+      visited.add(current.id);
       const parent = allMembers.find(m => m.id === current.parentMemberId);
       if (!parent) break;
       chain.push(parent);

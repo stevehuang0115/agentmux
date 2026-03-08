@@ -8,7 +8,7 @@ const logger = LoggerService.getInstance().createComponentLogger('TasksControlle
 
 export async function getAllTasks(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { projectId } = req.params as any;
+    const { projectId } = req.params;
     if (!projectId) { res.status(400).json({ success: false, error: 'Project ID is required' } as ApiResponse); return; }
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === projectId);
@@ -24,7 +24,7 @@ export async function getAllTasks(this: ApiContext, req: Request, res: Response)
 
 export async function getMilestones(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { projectId } = req.params as any;
+    const { projectId } = req.params;
     if (!projectId) { res.status(400).json({ success: false, error: 'Project ID is required' } as ApiResponse); return; }
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === projectId);
@@ -40,7 +40,7 @@ export async function getMilestones(this: ApiContext, req: Request, res: Respons
 
 export async function getTasksByStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { projectId, status } = req.params as any;
+    const { projectId, status } = req.params;
     if (!projectId) { res.status(400).json({ success: false, error: 'Project ID is required' } as ApiResponse); return; }
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === projectId);
@@ -56,7 +56,7 @@ export async function getTasksByStatus(this: ApiContext, req: Request, res: Resp
 
 export async function getTasksByMilestone(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { projectId, milestoneId } = req.params as any;
+    const { projectId, milestoneId } = req.params;
     if (!projectId) { res.status(400).json({ success: false, error: 'Project ID is required' } as ApiResponse); return; }
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === projectId);
@@ -72,7 +72,7 @@ export async function getTasksByMilestone(this: ApiContext, req: Request, res: R
 
 export async function getProjectTasksStatus(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { projectId } = req.params as any;
+    const { projectId } = req.params;
     if (!projectId) { res.status(400).json({ success: false, error: 'Project ID is required' } as ApiResponse); return; }
     const projects = await this.storageService.getProjects();
     const project = projects.find(p => p.id === projectId);
@@ -83,7 +83,7 @@ export async function getProjectTasksStatus(this: ApiContext, req: Request, res:
       svc.getAllTasks(),
       svc.getMilestones()
     ]);
-    const byStatus = all.reduce((acc: any, t: any) => { acc[t.status] = (acc[t.status]||0)+1; return acc; }, {});
+    const byStatus = all.reduce<Record<string, number>>((acc, t) => { acc[t.status] = (acc[t.status]||0)+1; return acc; }, {});
     res.json({ success: true, data: { totals: { all: all.length, ...byStatus }, milestones } } as ApiResponse);
   } catch (error) {
     logger.error('Error getting project task status', { error: error instanceof Error ? error.message : String(error) });

@@ -37,4 +37,20 @@ describe('marketplace barrel exports', () => {
 		expect(typeof MarketplaceExports.loadSubmissionsManifest).toBe('function');
 		expect(typeof MarketplaceExports.saveSubmissionsManifest).toBe('function');
 	});
+
+	it('exports template marketplace service functions', () => {
+		expect(typeof MarketplaceExports.createTemplate).toBe('function');
+		expect(typeof MarketplaceExports.listTemplates).toBe('function');
+		expect(typeof MarketplaceExports.getTemplate).toBe('function');
+		expect(typeof MarketplaceExports.updateTemplate).toBe('function');
+		expect(typeof MarketplaceExports.archiveTemplate).toBe('function');
+		expect(typeof MarketplaceExports.addVersion).toBe('function');
+		expect(typeof MarketplaceExports.listVersions).toBe('function');
+		expect(typeof MarketplaceExports.publishTemplate).toBe('function');
+		expect(typeof MarketplaceExports.deleteTemplate).toBe('function');
+		expect(typeof MarketplaceExports.loadTemplateStore).toBe('function');
+		expect(typeof MarketplaceExports.saveTemplateStore).toBe('function');
+		expect(typeof MarketplaceExports.loadVersionStore).toBe('function');
+		expect(typeof MarketplaceExports.saveVersionStore).toBe('function');
+	});
 });

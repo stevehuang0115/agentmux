@@ -12,11 +12,13 @@ import { useNavigate, Link } from 'react-router-dom';
 import { ProjectCard } from '@/components/Cards/ProjectCard';
 import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { CreateCard } from '@/components/Cards/CreateCard';
-import { Team, Project, ApiResponse } from '@/types';
-import axios from 'axios';
-import { Factory } from 'lucide-react';
+import { Team, Project } from '@/types';
+import { Factory, Cloud, Crown } from 'lucide-react';
+import { apiService } from '@/services/api.service';
+import { useAuth } from '@/contexts/AuthContext';
+import { Badge } from '@/components/UI';
+import { CloudAuthModal } from '@/components/Auth/CloudAuthModal';
 
-const API_BASE = '/api';
 
 interface ProjectProgress {
   projectId: string;
@@ -55,6 +57,8 @@ const StatCard: React.FC<{title: string; value: string | number}> = ({title, val
  */
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
+  const { isAuthenticated, user } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [teamsMap, setTeamsMap] = useState<Record<string, Team[]>>({});
@@ -67,8 +71,7 @@ export const Dashboard: React.FC = () => {
 
   const calculateProjectProgress = async (projectId: string): Promise<ProjectProgress> => {
     try {
-      const tasksResponse = await axios.get<ApiResponse<any[]>>(`${API_BASE}/projects/${projectId}/tasks`);
-      const tasks = tasksResponse.data.data || [];
+      const tasks = await apiService.getAllTasks(projectId);
 
       // Count tasks by status
       const breakdown = {
@@ -116,30 +119,23 @@ export const Dashboard: React.FC = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [projectsResponse, teamsResponse] = await Promise.all([
-        axios.get<ApiResponse<Project[]>>(`${API_BASE}/projects`),
-        axios.get<ApiResponse<Team[]>>(`${API_BASE}/teams`)
+      const [projectList, teamList] = await Promise.all([
+        apiService.getProjects(),
+        apiService.getTeams()
       ]);
 
-      if (projectsResponse.data.success) {
-        const projectList = projectsResponse.data.data || [];
-        setProjects(projectList);
+      setProjects(projectList);
 
-        // Calculate progress for each project
-        const progressPromises = projectList.map(project => calculateProjectProgress(project.id));
-        const progressResults = await Promise.all(progressPromises);
+      // Calculate progress for each project
+      const progressPromises = projectList.map(project => calculateProjectProgress(project.id));
+      const progressResults = await Promise.all(progressPromises);
 
-        const progressMap = progressResults.reduce((acc, progress) => {
-          acc[progress.projectId] = progress;
-          return acc;
-        }, {} as Record<string, ProjectProgress>);
+      const progressMap = progressResults.reduce((acc, progress) => {
+        acc[progress.projectId] = progress;
+        return acc;
+      }, {} as Record<string, ProjectProgress>);
 
-        setProjectProgress(progressMap);
-      }
-
-      // Process teams data - migrate teams without avatars for backward compatibility
-      const projectList = projectsResponse.data.success ? projectsResponse.data.data || [] : [];
-      const teamList = teamsResponse.data.success ? teamsResponse.data.data || [] : [];
+      setProjectProgress(progressMap);
 
       // Avatar choices for migration (only need to define once)
       const avatarChoices = [
@@ -154,29 +150,25 @@ export const Dashboard: React.FC = () => {
       // Migrate teams without avatars (do once, reuse for both teams and teamsMap)
       const migratedTeams = teamList.map(team => ({
         ...team,
-        members: team.members.map((member: any, index: number) => ({
+        members: team.members.map((member, index) => ({
           ...member,
           avatar: member.avatar || avatarChoices[index % avatarChoices.length]
         }))
       }));
 
-      if (teamsResponse.data.success) {
-        setTeams(migratedTeams);
-      }
+      setTeams(migratedTeams);
 
       // Create teams map for projects (reuse migratedTeams)
-      if (projectsResponse.data.success && teamsResponse.data.success) {
-        const teamsMapping = projectList.reduce((acc, project) => {
-          const assignedTeams = migratedTeams.filter(team => {
-            const matchesById = team.projectIds?.includes(project.id);
-            const matchesByName = team.projectIds?.includes(project.name);
-            return matchesById || matchesByName;
-          });
-          acc[project.id] = assignedTeams;
-          return acc;
-        }, {} as Record<string, Team[]>);
-        setTeamsMap(teamsMapping);
-      }
+      const teamsMapping = projectList.reduce((acc, project) => {
+        const assignedTeams = migratedTeams.filter(team => {
+          const matchesById = team.projectIds?.includes(project.id);
+          const matchesByName = team.projectIds?.includes(project.name);
+          return matchesById || matchesByName;
+        });
+        acc[project.id] = assignedTeams;
+        return acc;
+      }, {} as Record<string, Team[]>);
+      setTeamsMap(teamsMapping);
     } catch (error) {
       console.error('Error loading dashboard data:', error);
     } finally {
@@ -219,7 +211,7 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-10">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-10">
         <StatCard title="Projects" value={projects.length} />
         <StatCard title="Teams" value={teams.length} />
         <StatCard title="Active Projects" value={projects.filter(p => p.status === 'active').length} />
@@ -237,7 +229,39 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </button>
+        {isAuthenticated && user ? (
+          <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 p-6 rounded-lg border border-emerald-500/30">
+            <div className="flex items-center gap-3">
+              <Cloud className="w-8 h-8 text-emerald-400" />
+              <div className="text-left">
+                <p className="text-sm font-medium text-text-secondary-dark">Cloud</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-lg font-bold text-emerald-400">{user.displayName}</p>
+                  <Badge variant={user.plan === 'pro' ? 'primary' : 'default'} size="sm">
+                    {user.plan === 'pro' ? <><Crown size={10} className="mr-0.5" />Pro</> : 'Free'}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setShowAuthModal(true)}
+            className="bg-gradient-to-br from-violet-500/15 to-indigo-500/15 p-6 rounded-lg border border-violet-500/30 transition-all hover:shadow-lg hover:shadow-violet-500/20 hover:border-violet-500 hover:scale-[1.02] group"
+          >
+            <div className="flex items-center gap-3">
+              <Cloud className="w-8 h-8 text-violet-400 group-hover:scale-110 transition-transform" />
+              <div className="text-left">
+                <p className="text-sm font-medium text-text-secondary-dark">CrewlyAI</p>
+                <p className="text-lg font-bold text-violet-400">Connect to Cloud</p>
+              </div>
+            </div>
+          </button>
+        )}
       </div>
+
+      <CloudAuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
 
       <div className="space-y-10">
         <section>
