@@ -2,6 +2,16 @@ import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
 import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS, CLAUDE_FATAL_PATTERNS, AGENT_HEARTBEAT_MONITOR_CONSTANTS } from '../../constants.js';
 
+// Mock http module to prevent real HTTP requests during tests (e.g. notifyOrchestratorOfFailure)
+jest.mock('http', () => ({
+	...jest.requireActual('http'),
+	request: jest.fn().mockReturnValue({
+		on: jest.fn().mockReturnThis(),
+		write: jest.fn(),
+		end: jest.fn(),
+	}),
+}));
+
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
 	LoggerService: {
@@ -1231,18 +1241,9 @@ describe('RuntimeExitMonitorService', () => {
 	describe('notifyOrchestratorOfFailure (via private access)', () => {
 		it('should build correct message with active tasks and restart succeeded', () => {
 			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
-			// Spy on the http dynamic import to capture the request body
-			const httpRequestSpy = jest.fn().mockReturnValue({
-				on: jest.fn(),
-				write: jest.fn(),
-				end: jest.fn(),
-			});
-			jest.mock('http', () => ({
-				request: httpRequestSpy,
-			}), { virtual: true });
 
 			// notifyOrchestratorOfFailure is fire-and-forget, so we verify
-			// it does not throw for various inputs
+			// it does not throw for various inputs (http is mocked at module level)
 			expect(() => notify(
 				'agent-sam',
 				'runtime_exited',
