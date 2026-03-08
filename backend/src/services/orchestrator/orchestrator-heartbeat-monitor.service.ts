@@ -245,12 +245,19 @@ export class OrchestratorHeartbeatMonitorService {
 
 		const activityTracker = PtyActivityTrackerService.getInstance();
 		const idleTimeMs = activityTracker.getIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
+		// Use API-specific idle time for heartbeat response detection.
+		// PTY activity alone is unreliable because heartbeat messages written
+		// to the PTY echo back and reset the general activity timer.
+		const apiIdleTimeMs = activityTracker.getApiIdleTimeMs(ORCHESTRATOR_SESSION_NAME);
 
-		// If recent activity detected, clear any pending heartbeat request
-		if (idleTimeMs < ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS) {
+		// If recent API activity detected, clear any pending heartbeat request.
+		// Only API calls count as proof that the orchestrator is responsive —
+		// PTY output alone may just be echoed heartbeat messages.
+		if (apiIdleTimeMs < ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS) {
 			if (this.heartbeatRequestSentAt !== null) {
-				this.logger.info('Orchestrator responded to heartbeat request, clearing pending state');
+				this.logger.info('Orchestrator responded to heartbeat request (API activity detected), clearing pending state');
 				this.heartbeatRequestSentAt = null;
+				this.heartbeatRequestCount = 0;
 			}
 
 			// Track continuous in_progress duration. Spinner animation counts as
@@ -285,16 +292,32 @@ export class OrchestratorHeartbeatMonitorService {
 				this.logger.warn('Orchestrator did not respond to heartbeat request, triggering auto-restart', {
 					timeSinceRequestMs: timeSinceRequest,
 					idleTimeMs,
+					apiIdleTimeMs,
 					heartbeatRequestCount: this.heartbeatRequestCount,
 				});
 
 				this.heartbeatRequestSentAt = null;
+				this.heartbeatRequestCount = 0;
 				await this.triggerAutoRestart();
 			}
 			return;
 		}
 
-		// No activity for HEARTBEAT_REQUEST_THRESHOLD_MS. If there's no queued
+		// Cap consecutive heartbeat requests to prevent spam when the
+		// orchestrator is stuck (e.g., ENOSPC). After MAX attempts without
+		// a real API response, trigger auto-restart instead.
+		const MAX_HEARTBEAT_REQUESTS = 3;
+		if (this.heartbeatRequestCount >= MAX_HEARTBEAT_REQUESTS) {
+			this.logger.warn('Max heartbeat requests reached without API response, triggering auto-restart', {
+				heartbeatRequestCount: this.heartbeatRequestCount,
+				apiIdleTimeMs,
+			});
+			this.heartbeatRequestCount = 0;
+			await this.triggerAutoRestart();
+			return;
+		}
+
+		// No API activity for HEARTBEAT_REQUEST_THRESHOLD_MS. If there's no queued
 		// work, skip synthetic heartbeat pings to avoid idle token burn.
 		const pendingWork = this.hasPendingWork ? this.hasPendingWork() : true;
 		if (!pendingWork) {
@@ -303,8 +326,10 @@ export class OrchestratorHeartbeatMonitorService {
 		}
 
 		// Otherwise, send a heartbeat request.
-		this.logger.info('Orchestrator idle, sending heartbeat request', {
+		this.logger.info('Orchestrator idle (no API activity), sending heartbeat request', {
 			idleTimeMs,
+			apiIdleTimeMs,
+			heartbeatRequestCount: this.heartbeatRequestCount,
 		});
 
 		await this.sendHeartbeatRequest();

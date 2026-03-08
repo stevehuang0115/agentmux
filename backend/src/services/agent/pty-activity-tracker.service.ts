@@ -23,8 +23,11 @@ export class PtyActivityTrackerService {
 	private static instance: PtyActivityTrackerService | null = null;
 	private logger: ComponentLogger;
 
-	/** Map of session name to last activity timestamp (epoch ms) */
+	/** Map of session name to last activity timestamp (epoch ms) — includes both PTY and API */
 	private lastActivityMap: Map<string, number> = new Map();
+
+	/** Map of session name to last API-only activity timestamp (epoch ms) */
+	private lastApiActivityMap: Map<string, number> = new Map();
 
 	private constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('PtyActivityTracker');
@@ -57,6 +60,36 @@ export class PtyActivityTrackerService {
 	 */
 	recordActivity(sessionName: string): void {
 		this.lastActivityMap.set(sessionName, Date.now());
+	}
+
+	/**
+	 * Record API-specific activity for a session.
+	 * Called by the agent heartbeat middleware when an actual API call is made.
+	 * Also records general activity.
+	 *
+	 * @param sessionName - The session that made an API call
+	 */
+	recordApiActivity(sessionName: string): void {
+		const now = Date.now();
+		this.lastActivityMap.set(sessionName, now);
+		this.lastApiActivityMap.set(sessionName, now);
+	}
+
+	/**
+	 * Get the API-only idle time in milliseconds for a session.
+	 * Unlike getIdleTimeMs(), this only considers API calls — not PTY output.
+	 * Used by the heartbeat monitor to distinguish real orchestrator responses
+	 * from PTY echo noise (e.g., heartbeat messages echoing back).
+	 *
+	 * @param sessionName - The session to check
+	 * @returns Milliseconds since last API call, or 0 if never recorded
+	 */
+	getApiIdleTimeMs(sessionName: string): number {
+		const lastApi = this.lastApiActivityMap.get(sessionName);
+		if (lastApi === undefined) {
+			return 0;
+		}
+		return Date.now() - lastApi;
 	}
 
 	/**
@@ -128,6 +161,7 @@ export class PtyActivityTrackerService {
 	 */
 	clearSession(sessionName: string): void {
 		this.lastActivityMap.delete(sessionName);
+		this.lastApiActivityMap.delete(sessionName);
 		this.logger.debug('Cleared activity tracking for session', { sessionName });
 	}
 
