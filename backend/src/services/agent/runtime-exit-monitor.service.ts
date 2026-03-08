@@ -35,6 +35,7 @@ import {
 	GEMINI_FAILURE_RETRY_CONSTANTS,
 	GEMINI_READY_PATTERNS,
 	WEB_CONSTANTS,
+	AGENT_HEARTBEAT_MONITOR_CONSTANTS,
 	type RuntimeType,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
@@ -98,6 +99,14 @@ export class RuntimeExitMonitorService {
 	private agentRegistrationService: AgentRegistrationService | null = null;
 	private taskTrackingService: TaskTrackingService | null = null;
 	private eventBusService: EventBusService | null = null;
+
+	/**
+	 * Restart timestamps per session, persisted across monitoring cycles.
+	 * Unlike MonitoredSession (which is recreated on each startMonitoring call),
+	 * this map survives agent restarts to prevent infinite restart loops
+	 * when agents keep crashing (e.g. during network outages).
+	 */
+	private restartHistory = new Map<string, number[]>();
 
 	private constructor() {
 		this.logger = LoggerService.getInstance().createComponentLogger('RuntimeExitMonitorService');
@@ -286,6 +295,7 @@ export class RuntimeExitMonitorService {
 		for (const sessionName of sessionNames) {
 			this.stopMonitoring(sessionName);
 		}
+		this.restartHistory.clear();
 		this.logger.debug('All runtime exit monitors destroyed');
 	}
 
@@ -446,26 +456,42 @@ export class RuntimeExitMonitorService {
 					);
 
 					if (activeTasks.length > 0) {
-						this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
-							sessionName,
-							activeTaskCount: activeTasks.length,
-						});
-
-						try {
-							await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
-							// Notify orchestrator that agent was restarted (#129)
-							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
-							// Cleanup this subscription (restart succeeded, skip inactive flow)
-							this.stopMonitoring(sessionName);
-							return;
-						} catch (restartError) {
-							this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+						// Check cooldown before attempting restart to prevent infinite
+						// restart loops (e.g. during network outages where agents keep crashing)
+						if (!this.isAgentRestartAllowed(sessionName)) {
+							this.logger.warn('Agent restart cooldown active, skipping restart', {
 								sessionName,
-								error: restartError instanceof Error ? restartError.message : String(restartError),
+								activeTaskCount: activeTasks.length,
+								maxRestartsPerWindow: AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW,
+								cooldownWindowMs: AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS,
 							});
-							// Notify orchestrator that restart failed — needs manual intervention (#129)
-							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
+							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited_cooldown', activeTasks, false);
 							// Fall through to normal inactive flow
+						} else {
+							this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
+								sessionName,
+								activeTaskCount: activeTasks.length,
+							});
+
+							try {
+								await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
+								this.recordAgentRestart(sessionName);
+								// Notify orchestrator that agent was restarted (#129)
+								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
+								// Cleanup this subscription (restart succeeded, skip inactive flow)
+								this.stopMonitoring(sessionName);
+								return;
+							} catch (restartError) {
+								this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+									sessionName,
+									error: restartError instanceof Error ? restartError.message : String(restartError),
+								});
+								// Record the attempt even on failure to prevent rapid retry loops
+								this.recordAgentRestart(sessionName);
+								// Notify orchestrator that restart failed — needs manual intervention (#129)
+								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
+								// Fall through to normal inactive flow
+							}
 						}
 					}
 				} catch (error) {
@@ -946,6 +972,37 @@ export class RuntimeExitMonitorService {
 		} catch {
 			return false;
 		}
+	}
+
+	/**
+	 * Check if an agent restart is allowed based on cooldown window.
+	 * Prevents infinite restart loops when agents keep crashing (e.g. during
+	 * network outages). Uses the same limits as AgentHeartbeatMonitorService.
+	 *
+	 * @param sessionName - PTY session name
+	 * @returns True if restart is allowed, false if cooldown is active
+	 */
+	private isAgentRestartAllowed(sessionName: string): boolean {
+		const now = Date.now();
+		const windowStart = now - AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS;
+		const timestamps = this.restartHistory.get(sessionName) || [];
+
+		// Prune old timestamps outside the cooldown window
+		const recent = timestamps.filter(ts => ts > windowStart);
+		this.restartHistory.set(sessionName, recent);
+
+		return recent.length < AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+	}
+
+	/**
+	 * Record a restart attempt for cooldown tracking.
+	 *
+	 * @param sessionName - PTY session name
+	 */
+	private recordAgentRestart(sessionName: string): void {
+		const timestamps = this.restartHistory.get(sessionName) || [];
+		timestamps.push(Date.now());
+		this.restartHistory.set(sessionName, timestamps);
 	}
 
 	/**

@@ -1,6 +1,6 @@
 import { RuntimeExitMonitorService } from './runtime-exit-monitor.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
-import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS, CLAUDE_FATAL_PATTERNS } from '../../constants.js';
+import { CREWLY_CONSTANTS, RUNTIME_EXIT_CONSTANTS, RUNTIME_TYPES, ORCHESTRATOR_SESSION_NAME, GEMINI_FAILURE_PATTERNS, GEMINI_FAILURE_RETRY_CONSTANTS, CLAUDE_FATAL_PATTERNS, AGENT_HEARTBEAT_MONITOR_CONSTANTS } from '../../constants.js';
 
 // Mock dependencies
 jest.mock('../core/logger.service.js', () => ({
@@ -718,6 +718,151 @@ describe('RuntimeExitMonitorService', () => {
 			);
 
 			jest.useRealTimers();
+		});
+	});
+
+	describe('restart cooldown (prevents infinite restart loops)', () => {
+		const mockCreateAgentSession = jest.fn().mockResolvedValue({ success: true, sessionName: 'test-agent' });
+		const mockAgentRegistrationService = {
+			createAgentSession: mockCreateAgentSession,
+		};
+		const mockTaskTrackingServiceInstance = {
+			getTasksForTeamMember: mockGetTasksForTeamMember,
+		};
+		const activeTasks = [
+			{ id: 'task-1', taskName: 'Fix bug', taskFilePath: '/tmp/task.md', status: 'assigned', assignedTeamMemberId: 'member-1' },
+		];
+
+		beforeEach(() => {
+			mockCreateAgentSession.mockClear().mockResolvedValue({ success: true, sessionName: 'test-agent' });
+			mockGetTasksForTeamMember.mockReset().mockResolvedValue(activeTasks);
+			mockClearSession.mockClear();
+			mockKillSession.mockClear();
+			mockWrite.mockClear();
+			mockUpdateAgentStatus.mockClear();
+			mockSessionExists.mockReturnValue(true);
+			service.setAgentRegistrationService(mockAgentRegistrationService as any);
+			service.setTaskTrackingService(mockTaskTrackingServiceInstance as any);
+		});
+
+		/**
+		 * Helper: trigger an exit detection cycle for a monitored agent.
+		 * Sends exit pattern data and advances past debounce.
+		 */
+		async function triggerExitCycle(agentName: string): Promise<void> {
+			// Re-register monitoring (previous cycle stopped it)
+			if (!service.isMonitoring(agentName)) {
+				service.startMonitoring(agentName, RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-1');
+			}
+			const lastCallIndex = mockOnData.mock.calls.length - 1;
+			const onDataCallback = mockOnData.mock.calls[lastCallIndex][0];
+
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			onDataCallback('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+		}
+
+		it('should allow restarts up to MAX_RESTARTS_PER_WINDOW', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			for (let i = 0; i < maxRestarts; i++) {
+				mockCreateAgentSession.mockClear();
+				await triggerExitCycle('test-agent');
+				expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+			}
+
+			jest.useRealTimers();
+		});
+
+		it('should block restarts after MAX_RESTARTS_PER_WINDOW reached', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust all allowed restarts
+			for (let i = 0; i < maxRestarts; i++) {
+				await triggerExitCycle('test-agent');
+			}
+
+			// Next restart should be blocked — agent goes inactive instead
+			mockCreateAgentSession.mockClear();
+			mockUpdateAgentStatus.mockClear();
+			await triggerExitCycle('test-agent');
+
+			expect(mockCreateAgentSession).not.toHaveBeenCalled();
+			expect(mockUpdateAgentStatus).toHaveBeenCalledWith(
+				'test-agent',
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+
+			jest.useRealTimers();
+		});
+
+		it('should allow restarts again after cooldown window expires', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust all allowed restarts
+			for (let i = 0; i < maxRestarts; i++) {
+				await triggerExitCycle('test-agent');
+			}
+
+			// Advance past the cooldown window
+			jest.advanceTimersByTime(AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS + 1000);
+
+			// Should be allowed to restart again
+			mockCreateAgentSession.mockClear();
+			await triggerExitCycle('test-agent');
+
+			expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+
+			jest.useRealTimers();
+		});
+
+		it('should track restarts per session independently', async () => {
+			jest.useFakeTimers();
+
+			const maxRestarts = AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW;
+
+			// Exhaust restarts for agent-a
+			for (let i = 0; i < maxRestarts; i++) {
+				mockGetTasksForTeamMember.mockResolvedValue(activeTasks);
+				if (!service.isMonitoring('agent-a')) {
+					service.startMonitoring('agent-a', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-a');
+				}
+				const callIdx = mockOnData.mock.calls.length - 1;
+				const cb = mockOnData.mock.calls[callIdx][0];
+				jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+				cb('Agent powering down');
+				await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+			}
+
+			// agent-b should still be able to restart
+			mockCreateAgentSession.mockClear();
+			mockGetTasksForTeamMember.mockResolvedValue(activeTasks);
+			service.startMonitoring('agent-b', RUNTIME_TYPES.GEMINI_CLI, 'developer', 'team-1', 'member-b');
+			const cbIdx = mockOnData.mock.calls.length - 1;
+			const cbB = mockOnData.mock.calls[cbIdx][0];
+			jest.advanceTimersByTime(RUNTIME_EXIT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 100);
+			cbB('Agent powering down');
+			await jest.advanceTimersByTimeAsync(RUNTIME_EXIT_CONSTANTS.CONFIRMATION_DELAY_MS + 200);
+
+			expect(mockCreateAgentSession).toHaveBeenCalledTimes(1);
+
+			jest.useRealTimers();
+		});
+
+		it('should clear restartHistory on destroy', () => {
+			// Pre-populate restart history via private access
+			(service as any).restartHistory.set('test-agent', [Date.now()]);
+			expect((service as any).restartHistory.size).toBe(1);
+
+			service.destroy();
+
+			expect((service as any).restartHistory.size).toBe(0);
 		});
 	});
 
