@@ -182,7 +182,7 @@ export class QueueProcessorService extends EventEmitter {
     // one activity ping before the monitor considers the orchestrator idle.
     const KEEPALIVE_INTERVAL_MS = ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS / 2;
     const keepaliveInterval = setInterval(() => {
-      PtyActivityTrackerService.getInstance().recordActivity(ORCHESTRATOR_SESSION_NAME);
+      PtyActivityTrackerService.getInstance().recordApiActivity(ORCHESTRATOR_SESSION_NAME);
     }, KEEPALIVE_INTERVAL_MS);
 
     try {

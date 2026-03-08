@@ -11,11 +11,13 @@ import { ResponseRouterService } from './response-router.service.js';
 
 // Mock PtyActivityTrackerService
 const mockRecordActivity = jest.fn();
+const mockRecordApiActivity = jest.fn();
 let mockIdleTimeMs = 0;
 jest.mock('../agent/pty-activity-tracker.service.js', () => ({
   PtyActivityTrackerService: {
     getInstance: () => ({
       recordActivity: mockRecordActivity,
+      recordApiActivity: mockRecordApiActivity,
       getIdleTimeMs: jest.fn().mockImplementation(() => mockIdleTimeMs),
     }),
   },
@@ -766,11 +768,11 @@ describe('QueueProcessorService', () => {
 
       // Keepalive interval is HEARTBEAT_REQUEST_THRESHOLD_MS / 2 = 150000ms
       // Advance past one keepalive tick
-      mockRecordActivity.mockClear();
+      mockRecordApiActivity.mockClear();
       jest.advanceTimersByTime(150_000);
 
-      expect(mockRecordActivity).toHaveBeenCalledWith('crewly-orc');
-      const callCountDuringProcessing = mockRecordActivity.mock.calls.length;
+      expect(mockRecordApiActivity).toHaveBeenCalledWith('crewly-orc');
+      const callCountDuringProcessing = mockRecordApiActivity.mock.calls.length;
       expect(callCountDuringProcessing).toBeGreaterThanOrEqual(1);
 
       // Simulate response to complete processing
@@ -786,9 +788,9 @@ describe('QueueProcessorService', () => {
       await flushPromises();
 
       // Clear mock and advance another keepalive period — should NOT fire again
-      mockRecordActivity.mockClear();
+      mockRecordApiActivity.mockClear();
       jest.advanceTimersByTime(150_000);
-      expect(mockRecordActivity).not.toHaveBeenCalled();
+      expect(mockRecordApiActivity).not.toHaveBeenCalled();
     });
 
     it('should clear keepalive interval even on processing error', async () => {
@@ -811,9 +813,9 @@ describe('QueueProcessorService', () => {
       await flushPromises();
 
       // Processing should be done (error path). Verify keepalive is cleared.
-      mockRecordActivity.mockClear();
+      mockRecordApiActivity.mockClear();
       jest.advanceTimersByTime(150_000);
-      expect(mockRecordActivity).not.toHaveBeenCalled();
+      expect(mockRecordApiActivity).not.toHaveBeenCalled();
     });
 
     it('should increment retryCount on each requeue', async () => {
