@@ -14,6 +14,7 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
 import { join, resolve } from 'path';
+import { LoggerService } from '../core/logger.service.js';
 import { randomUUID } from 'crypto';
 import type { TeamTemplate, TemplateRole } from '../../types/team-template.types.js';
 import { isValidTeamTemplate } from '../../types/team-template.types.js';
@@ -25,6 +26,8 @@ import type { CloudTier } from '../../constants.js';
 // =============================================================================
 // Constants
 // =============================================================================
+
+const logger = LoggerService.getInstance().createComponentLogger('TemplateService');
 
 /** Default path to templates directory */
 const DEFAULT_TEMPLATES_DIR = resolve(process.cwd(), 'config/templates');
@@ -389,8 +392,8 @@ export class TemplateService {
 
       // It might be an education-smb/insurance-smb style template.json (metadata only)
       // These don't have roles/verificationPipeline, skip them
-    } catch {
-      // Silently skip invalid files
+    } catch (error) {
+      logger.warn('Skipped invalid template file', { dirName, filePath, error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -443,8 +446,8 @@ export class TemplateService {
       };
 
       this.templates.set(id, template);
-    } catch {
-      // Silently skip invalid files
+    } catch (error) {
+      logger.warn('Skipped invalid legacy template', { fileName, filePath, error: error instanceof Error ? error.message : String(error) });
     }
   }
 }

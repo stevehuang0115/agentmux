@@ -53,6 +53,20 @@ export const handleCreateCheckout = asyncHandler(async (req: Request, res: Respo
 		return;
 	}
 
+	// Validate URLs to prevent open redirects
+	for (const url of [successUrl, cancelUrl]) {
+		try {
+			const parsed = new URL(url);
+			if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+				res.status(400).json({ success: false, error: 'URLs must use http or https protocol' });
+				return;
+			}
+		} catch {
+			res.status(400).json({ success: false, error: 'Invalid URL format' });
+			return;
+		}
+	}
+
 	const userId = (req as SupabaseAuthenticatedRequest).user.userId;
 	const stripe = StripeService.getInstance();
 	const result = await stripe.createCheckoutSession(userId, planId, interval, successUrl, cancelUrl);

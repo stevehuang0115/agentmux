@@ -289,11 +289,13 @@ export class StripeService {
 		}
 
 		try {
-			// In production this calls:
-			// const stripe = new Stripe(this.secretKey);
-			// const event = stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
-			//
-			// For now, parse the raw body as JSON (for testing):
+			// TODO(security): Enable Stripe signature verification before production deployment.
+			// When the Stripe SDK is available, replace the JSON.parse below with:
+			//   const stripe = new Stripe(this.secretKey);
+			//   const event = stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
+			// This prevents forged webhook events from unauthorized sources.
+			this.logger.warn('Webhook signature verification not yet implemented — accepting unverified events');
+
 			const eventData = JSON.parse(rawBody.toString()) as {
 				id?: string;
 				type?: string;
