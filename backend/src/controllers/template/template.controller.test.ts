@@ -14,14 +14,14 @@ import {
 } from './template.controller.js';
 
 // Mock TemplateService
-const mockListTemplates = jest.fn();
+const mockListAllTemplates = jest.fn();
 const mockGetTemplate = jest.fn();
 const mockCreateTeamFromTemplate = jest.fn();
 
 jest.mock('../../services/template/template.service.js', () => ({
   TemplateService: {
     getInstance: () => ({
-      listTemplates: mockListTemplates,
+      listAllTemplates: mockListAllTemplates,
       getTemplate: mockGetTemplate,
       createTeamFromTemplate: mockCreateTeamFromTemplate,
     }),
@@ -89,7 +89,7 @@ describe('TemplateController', () => {
 
   beforeEach(() => {
     mockRes = createMockRes();
-    mockListTemplates.mockReset();
+    mockListAllTemplates.mockReset();
     mockGetTemplate.mockReset();
     mockCreateTeamFromTemplate.mockReset();
   });
@@ -98,7 +98,7 @@ describe('TemplateController', () => {
 
   describe('handleListTemplates', () => {
     it('should return all templates with success envelope', async () => {
-      mockListTemplates.mockReturnValue([sampleSummary]);
+      mockListAllTemplates.mockReturnValue([sampleSummary]);
 
       const req = createMockReq();
       await handleListTemplates(req as any, mockRes as any);
@@ -110,7 +110,7 @@ describe('TemplateController', () => {
     });
 
     it('should return empty array when no templates exist', async () => {
-      mockListTemplates.mockReturnValue([]);
+      mockListAllTemplates.mockReturnValue([]);
 
       const req = createMockReq();
       await handleListTemplates(req as any, mockRes as any);
@@ -124,7 +124,7 @@ describe('TemplateController', () => {
     it('should filter by category when provided', async () => {
       const devTemplate = { ...sampleSummary, category: 'development' };
       const contentTemplate = { ...sampleSummary, id: 'blog-team', category: 'content' };
-      mockListTemplates.mockReturnValue([devTemplate, contentTemplate]);
+      mockListAllTemplates.mockReturnValue([devTemplate, contentTemplate]);
 
       const req = createMockReq({ query: { category: 'development' } });
       await handleListTemplates(req as any, mockRes as any);
@@ -136,7 +136,7 @@ describe('TemplateController', () => {
     });
 
     it('should return empty array when category filter matches nothing', async () => {
-      mockListTemplates.mockReturnValue([sampleSummary]);
+      mockListAllTemplates.mockReturnValue([sampleSummary]);
 
       const req = createMockReq({ query: { category: 'research' } });
       await handleListTemplates(req as any, mockRes as any);
@@ -148,7 +148,7 @@ describe('TemplateController', () => {
     });
 
     it('should return 500 when service throws', async () => {
-      mockListTemplates.mockImplementation(() => { throw new Error('Load failed'); });
+      mockListAllTemplates.mockImplementation(() => { throw new Error('Load failed'); });
 
       const req = createMockReq();
       await handleListTemplates(req as any, mockRes as any);

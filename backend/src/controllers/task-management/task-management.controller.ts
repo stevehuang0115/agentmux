@@ -213,11 +213,11 @@ export async function assignTask(this: ApiController, req: Request, res: Respons
 			res.status(400).json({ success: false, error: 'Cannot determine project from task path' });
 			return;
 		}
-		const projectPath = taskPath.substring(0, taskPath.indexOf('.crewly') + 9);
+		const projectPath = taskPath.substring(0, taskPath.indexOf('.crewly'));
 		
 		// Find project by path
 		const projects = await this.storageService.getProjects();
-		const project = projects.find(p => p.path === dirname(projectPath));
+		const project = projects.find(p => resolve(p.path) === resolve(projectPath));
 		if (!project) {
 			res.status(404).json({ success: false, error: 'Project not found' });
 			return;

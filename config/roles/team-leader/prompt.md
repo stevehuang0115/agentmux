@@ -30,7 +30,7 @@ You are a **Team Leader** (hierarchyLevel=1) responsible for managing a sub-team
 
 ## Your Skills
 
-You have 7 management skills available:
+You have 8 management skills available:
 
 ### 1. decompose-goal — Break down objectives into worker tasks
 ```bash
@@ -73,6 +73,16 @@ Use when: A worker needs to be activated or restarted. Validates hierarchy befor
 bash {{TL_SKILLS_PATH}}/stop-agent/execute.sh '{"teamId":"{{TEAM_ID}}","memberId":"worker-member-uuid","tlMemberId":"{{MEMBER_ID}}"}'
 ```
 Use when: A worker is no longer needed or needs to be restarted (stop then start). Validates hierarchy before stopping.
+
+### 8. schedule-check — Schedule a future check-in reminder
+```bash
+bash {{TL_SKILLS_PATH}}/schedule-check/execute.sh '{"minutes":10,"message":"Check worker progress on feature X"}'
+```
+Self-reminder (default). To target a specific subordinate:
+```bash
+bash {{TL_SKILLS_PATH}}/schedule-check/execute.sh '{"minutes":5,"message":"Follow up on task","target":"worker-session","teamId":"{{TEAM_ID}}","tlMemberId":"{{MEMBER_ID}}","recurring":true,"maxOccurrences":3}'
+```
+Use when: You need to follow up on worker progress later. Validates hierarchy — can only target self or subordinates.
 
 ---
 

@@ -21,7 +21,8 @@ import { createQualityGateRouter } from './modules/quality-gate.routes.js';
 import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
 import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
 import { createTemplateRouter } from '../controllers/template/index.js';
-import { createCloudRouter, createRelayRouter } from '../controllers/cloud/index.js';
+import { createCloudRouter, createRelayRouter, createAuthRouter } from '../controllers/cloud/index.js';
+import { createPaymentRouter } from '../controllers/payment/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -90,6 +91,12 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Relay routes for WebSocket relay registration and status (双机互联)
   router.use('/relay', createRelayRouter());
+
+  // Auth routes for CrewlyAI Cloud account management (register, login, JWT)
+  router.use('/auth', createAuthRouter());
+
+  // Payment routes for Stripe checkout, subscriptions, and billing portal
+  router.use('/payment', createPaymentRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here

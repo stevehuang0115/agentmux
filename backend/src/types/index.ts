@@ -202,6 +202,16 @@ export interface TeamConfig {
   projectPath?: string;
 }
 
+/**
+ * Subordinate info resolved from TeamMember data, used by the prompt builder
+ * to tell a Team Lead who their direct reports are.
+ */
+export interface SubordinateInfo {
+  name: string;
+  sessionName: string;
+  role: TeamMemberRole;
+}
+
 export interface TeamMemberSessionConfig {
   name: string;
   role: TeamMemberRole;
@@ -211,6 +221,17 @@ export interface TeamMemberSessionConfig {
   runtimeType?: TeamMember['runtimeType'];
   skillOverrides?: string[];
   excludedRoleSkills?: string[];
+
+  // === Team Lead fields (for TL-aware prompt building) ===
+
+  /** The team ID this member belongs to (used for TL skill template variables). */
+  teamId?: string;
+
+  /** Whether this member can delegate tasks to subordinates. */
+  canDelegate?: boolean;
+
+  /** Resolved subordinate details for prompt injection. */
+  subordinates?: SubordinateInfo[];
 }
 
 export interface TerminalOutput {
@@ -242,6 +263,8 @@ export interface StartupConfig {
   crewlyHome: string;
   defaultCheckInterval: number;
   autoCommitInterval: number;
+  /** When true, skip frontend serving (API-only mode for cloud deployment) */
+  headless: boolean;
 }
 
 // Re-export memory types

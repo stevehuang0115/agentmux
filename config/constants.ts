@@ -885,7 +885,7 @@ export const MARKETPLACE_CONSTANTS = {
 	/** GitHub raw content base URL for downloading public skill files */
 	PUBLIC_CDN_BASE: 'https://raw.githubusercontent.com/stevehuang0115/crewly/main',
 	/** Base URL for the Crewly marketplace webapp (premium/private registry) */
-	PREMIUM_BASE_URL: 'https://crewly.stevesprompt.com',
+	PREMIUM_BASE_URL: 'https://crewlyai.com',
 	/** API endpoint for premium skills registry */
 	PREMIUM_REGISTRY_ENDPOINT: '/api/registry/skills',
 	/** API endpoint for downloading marketplace assets */
@@ -927,6 +927,34 @@ export const MARKETPLACE_CONSTANTS = {
 		'research': 'research',
 		'analysis': 'analysis',
 	} as Record<string, string>,
+} as const;
+
+/**
+ * Template Marketplace constants for creating, versioning, and publishing
+ * team configuration templates. Templates are stored as JSON files under
+ * ~/.crewly/marketplace/templates/.
+ */
+export const TEMPLATE_MARKETPLACE_CONSTANTS = {
+	/** Subdirectory under marketplace dir for template data */
+	TEMPLATES_DIR: 'templates',
+	/** File name for the template store index */
+	STORE_FILE: 'templates.json',
+	/** Subdirectory under each template for version files */
+	VERSIONS_DIR: 'versions',
+	/** File name for the version store within each template dir */
+	VERSIONS_FILE: 'versions.json',
+	/** Schema version for template store files */
+	SCHEMA_VERSION: 1,
+	/** Maximum template name length */
+	MAX_NAME_LENGTH: 100,
+	/** Maximum template description length */
+	MAX_DESCRIPTION_LENGTH: 2000,
+	/** Maximum changelog length per version */
+	MAX_CHANGELOG_LENGTH: 5000,
+	/** Maximum number of tags per template */
+	MAX_TAGS: 20,
+	/** Maximum tag length */
+	MAX_TAG_LENGTH: 50,
 } as const;
 
 /** Shorthand for debounce value */

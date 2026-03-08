@@ -36,9 +36,10 @@ jest.mock('./agent/runtime-service.factory.js', () => ({
 			'claude-code',
 			'gemini-cli',
 			'codex-cli',
+			'openhands',
 		]),
 		isRuntimeTypeSupported: jest.fn((type: string) =>
-			['claude-code', 'gemini-cli', 'codex-cli'].includes(type),
+			['claude-code', 'gemini-cli', 'codex-cli', 'openhands'].includes(type),
 		),
 	},
 }));
@@ -458,13 +459,14 @@ describe('RuntimeAdapter', () => {
 	// -----------------------------------------------------------------------
 
 	describe('getSupportedRuntimeTypes', () => {
-		it('returns all three runtime types', () => {
+		it('returns all supported runtime types', () => {
 			const types = getSupportedRuntimeTypes();
 
 			expect(types).toContain('claude-code');
 			expect(types).toContain('gemini-cli');
 			expect(types).toContain('codex-cli');
-			expect(types).toHaveLength(3);
+			expect(types).toContain('openhands');
+			expect(types).toHaveLength(4);
 		});
 	});
 

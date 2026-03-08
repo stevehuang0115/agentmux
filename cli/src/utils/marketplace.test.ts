@@ -127,7 +127,7 @@ describe('cli/utils/marketplace', () => {
       const fakeRegistry = {
         schemaVersion: 1,
         lastUpdated: '2025-01-01',
-        cdnBaseUrl: 'https://crewly.stevesprompt.com',
+        cdnBaseUrl: 'https://crewlyai.com',
         items: [makeFakeItem()],
       };
 

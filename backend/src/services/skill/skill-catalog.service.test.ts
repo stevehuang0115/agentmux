@@ -12,6 +12,15 @@
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+
+// Mock os.homedir() to isolate tests from real marketplace skills.
+// We store the fake home dir in a module-level variable that tests update in beforeEach.
+let fakeHomeDir = os.tmpdir();
+jest.mock('os', () => ({
+  ...jest.requireActual('os'),
+  homedir: () => fakeHomeDir,
+}));
+
 import { SkillCatalogService, CatalogGenerationResult } from './skill-catalog.service.js';
 
 /**
@@ -161,6 +170,9 @@ describe('SkillCatalogService', () => {
     testDir = path.join(os.tmpdir(), `skill-catalog-test-${Date.now()}-${Math.random()}`);
     projectRoot = path.join(testDir, 'project');
     catalogOutputDir = path.join(testDir, 'home', '.crewly', 'skills');
+
+    // Point fakeHomeDir to the test's home directory to isolate marketplace scans
+    fakeHomeDir = path.join(testDir, 'home');
 
     // Create the orchestrator skills directory
     await fs.mkdir(path.join(projectRoot, 'config', 'skills', 'orchestrator'), {

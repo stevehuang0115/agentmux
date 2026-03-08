@@ -2,7 +2,7 @@
 # Crewly installer — one-liner install script
 #
 # Usage:
-#   curl -fsSL https://crewly.stevesprompt.com/install.sh | bash
+#   curl -fsSL https://crewlyai.com/install.sh | bash
 #
 # What it does:
 #   1. Detects OS (macOS / Linux only)

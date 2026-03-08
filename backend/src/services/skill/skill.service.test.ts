@@ -91,6 +91,7 @@ describe('SkillService', () => {
     service = new SkillService({
       builtinSkillsDir,
       userSkillsDir,
+      marketplaceSkillsDir: path.join(testDir, 'marketplace'),
     });
 
     await service.initialize();
@@ -134,6 +135,7 @@ describe('SkillService', () => {
       const newService = new SkillService({
         builtinSkillsDir,
         userSkillsDir: newUserDir,
+        marketplaceSkillsDir: path.join(testDir, 'marketplace'),
       });
 
       await newService.initialize();
@@ -149,6 +151,7 @@ describe('SkillService', () => {
       const newService = new SkillService({
         builtinSkillsDir: '/nonexistent/path',
         userSkillsDir,
+        marketplaceSkillsDir: path.join(testDir, 'marketplace'),
       });
 
       // Should not throw

@@ -1,7 +1,7 @@
 import { readFile, access } from 'fs/promises';
 import * as path from 'path';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
-import { TeamMemberSessionConfig, SOPRole } from '../../types/index.js';
+import { TeamMemberSessionConfig, SubordinateInfo, SOPRole } from '../../types/index.js';
 import { MemoryService } from '../memory/memory.service.js';
 import { SOPService } from '../sop/sop.service.js';
 import { getRoleService } from '../settings/role.service.js';
@@ -40,6 +40,8 @@ interface PromptParts {
   memoryContext?: string;
   /** SOP context (for future use) */
   sopContext?: string;
+  /** Team Lead responsibilities section (injected when canDelegate=true) */
+  teamLeadContext?: string;
   /** Project name */
   projectName?: string;
   /** Project path */
@@ -64,6 +66,8 @@ export class PromptBuilderService {
 	private readonly rolesDirectory: string;
 	/** Absolute path to agent skill scripts (used in prompts so agents can find them from any working directory) */
 	private readonly agentSkillsPath: string;
+	/** Absolute path to team-leader skill scripts (used in TL addon template variables) */
+	private readonly tlSkillsPath: string;
 	private memoryService: MemoryService | null = null;
 	private sopService: SOPService | null = null;
 
@@ -72,6 +76,7 @@ export class PromptBuilderService {
 		this.projectRoot = projectRoot;
 		this.rolesDirectory = path.join(projectRoot, 'config', 'roles');
 		this.agentSkillsPath = path.join(projectRoot, 'config', 'skills', 'agent');
+		this.tlSkillsPath = path.join(projectRoot, 'config', 'skills', 'team-leader');
 	}
 
 	/**
@@ -249,16 +254,21 @@ Start all teams on Phase 1 simultaneously.`.trim();
 			);
 		}
 
-		// Compose final prompt with memory and SOPs
-		if (memoryContext || sopContext) {
+		// Build Team Lead section if applicable (loads tl-addon.md when available)
+		const teamLeadContext = await this.buildTeamLeadSection(config);
+
+		// Compose final prompt with memory, SOPs, and TL context
+		if (memoryContext || sopContext || teamLeadContext) {
 			return this.composePromptWithMemory({
 				basePrompt,
 				memoryContext,
 				sopContext,
+				teamLeadContext,
 				sessionName: config.name,
 				memberId: config.memberId,
 				role: config.role,
 				projectPath: config.projectPath,
+				teamId: config.teamId,
 			});
 		}
 
@@ -370,6 +380,130 @@ ${fullContext}
 	}
 
 	/**
+	 * Build the Team Lead responsibilities section for agents that can delegate.
+	 *
+	 * Loads the comprehensive TL management addon from `config/roles/team-leader/tl-addon.md`,
+	 * resolves template variables (WORKER_LIST, TL_SKILLS_PATH, TEAM_ID, MEMBER_ID, PROJECT_PATH),
+	 * and returns the formatted section. Falls back to a minimal inline section if the addon
+	 * file is not found.
+	 *
+	 * This enables "auto-stacking": a developer with TL hierarchy gets BOTH their dev role
+	 * prompt AND full management instructions without changing their role.
+	 *
+	 * @param config - Session config with optional TL fields
+	 * @returns Formatted TL section string, or empty string if not a TL
+	 */
+	async buildTeamLeadSection(config: TeamMemberSessionConfig): Promise<string> {
+		if (!config.canDelegate || !config.subordinates || config.subordinates.length === 0) {
+			return '';
+		}
+
+		const workerList = this.buildWorkerList(config.subordinates);
+
+		// Try loading the comprehensive TL addon from file
+		const addonPath = path.join(this.rolesDirectory, 'team-leader', 'tl-addon.md');
+		try {
+			await access(addonPath);
+			let addonContent = await readFile(addonPath, 'utf8');
+
+			// Resolve template variables
+			addonContent = this.replaceTemplateVariables(addonContent, {
+				WORKER_LIST: workerList,
+				TL_SKILLS_PATH: this.tlSkillsPath,
+				TEAM_ID: config.teamId || '',
+				MEMBER_ID: config.memberId || '',
+				PROJECT_PATH: config.projectPath || '',
+				AGENT_SKILLS_PATH: this.agentSkillsPath,
+			});
+
+			this.logger.info('Loaded TL addon from file', {
+				sessionName: config.name,
+				subordinateCount: config.subordinates.length,
+				addonLength: addonContent.length,
+			});
+
+			return addonContent.trim();
+		} catch {
+			// Fallback to minimal inline section if addon file not found
+			this.logger.warn('TL addon file not found, using inline fallback', {
+				addonPath,
+				sessionName: config.name,
+			});
+
+			return this.buildInlineTeamLeadSection(config.name, workerList, config.subordinates.length);
+		}
+	}
+
+	/**
+	 * Build a formatted worker list string from subordinate info.
+	 *
+	 * @param subordinates - Array of subordinate details
+	 * @returns Formatted markdown list of workers
+	 */
+	private buildWorkerList(subordinates: SubordinateInfo[]): string {
+		return subordinates
+			.map((sub) => `- **${sub.name}** (session: \`${sub.sessionName}\`) — ${sub.role}`)
+			.join('\n');
+	}
+
+	/**
+	 * Build a minimal inline TL section as fallback when tl-addon.md is not available.
+	 *
+	 * @param sessionName - The TL's session name
+	 * @param workerList - Pre-formatted worker list
+	 * @param subordinateCount - Number of subordinates
+	 * @returns Formatted inline TL section
+	 */
+	private buildInlineTeamLeadSection(
+		sessionName: string,
+		workerList: string,
+		subordinateCount: number
+	): string {
+		const section = `## Team Lead Responsibilities
+
+You are the **Team Lead** for this team. You manage the following subordinates:
+
+${workerList}
+
+### Your TL Duties
+
+1. **Task Decomposition** — Break down large Sprint-level tasks from the orchestrator into concrete, actionable sub-tasks
+2. **Delegation** — Assign sub-tasks to subordinates using the \`send-message\` skill. Do NOT do work that a subordinate can handle
+3. **Quality Review** — Review subordinates' work output before reporting completion upstream
+4. **Progress Reporting** — Report overall Sprint progress to the orchestrator via \`report-status\`
+5. **Unblocking** — Help subordinates when they are stuck or need guidance
+
+### Delegation Guidelines
+
+- **Delegate by default.** Only do work yourself when it requires TL-level judgment, cross-cutting coordination, or when no subordinate has the right skills.
+- **Be specific.** Each delegated task should have a clear description, acceptance criteria, and priority.
+- **Monitor progress.** Check on delegated tasks periodically using \`send-message\`.
+
+### Task Assignment Template
+
+When delegating a task to a subordinate, use this format:
+
+\`\`\`
+New task from TL:
+
+[TASK] <concise task title>
+
+Description: <what needs to be done, including acceptance criteria>
+Priority: <high|normal|low>
+Context: <any relevant background or links to related work>
+
+Report back via report-status when done.
+\`\`\``;
+
+		this.logger.info('Built inline Team Lead section (fallback)', {
+			sessionName,
+			subordinateCount,
+		});
+
+		return section;
+	}
+
+	/**
 	 * Compose a prompt with memory and SOP context included
 	 *
 	 * @param parts - Prompt parts to compose
@@ -391,6 +525,12 @@ ${fullContext}
 		if (parts.sopContext && parts.sopContext.trim()) {
 			sections.push('\n---\n');
 			sections.push(parts.sopContext);
+		}
+
+		// Add Team Lead responsibilities if applicable
+		if (parts.teamLeadContext && parts.teamLeadContext.trim()) {
+			sections.push('\n---\n');
+			sections.push(parts.teamLeadContext);
 		}
 
 		// Add agent identity section

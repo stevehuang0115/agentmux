@@ -5,7 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/crewly.svg)](https://www.npmjs.com/package/crewly)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org/)
 
-**Website:** [crewly.stevesprompt.com](https://crewly.stevesprompt.com/)
+**Website:** [crewlyai.com](https://crewlyai.com/)
 
 Crewly is an open-source multi-agent orchestration platform that coordinates AI coding agents (Claude Code, Gemini CLI, Codex) to work together as a team. It provides a web dashboard for real-time monitoring, task management, and team coordination — all running locally on your machine.
 

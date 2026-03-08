@@ -26,7 +26,7 @@ This creates a tar.gz archive and submits it to the local Crewly backend for rev
 bash {{AGENT_SKILLS_PATH}}/marketplace/marketplace-publish/execute.sh '{"action":"publish-remote","skillPath":"{{PROJECT_PATH}}/config/skills/agent/my-skill"}'
 ```
 
-Publishes to the local backend AND to the remote registry at crewly.stevesprompt.com, making the skill available to all Crewly users.
+Publishes to the local backend AND to the remote registry at crewlyai.com, making the skill available to all Crewly users.
 
 ### `list-submissions` — View submission status
 

@@ -15,9 +15,11 @@ import { Knowledge } from './pages/Knowledge';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ChatProvider } from './contexts/ChatContext';
+import { AuthProvider } from './contexts/AuthContext';
 
 function App() {
   return (
+    <AuthProvider>
     <TerminalProvider>
       <SidebarProvider>
         <Router>
@@ -47,6 +49,7 @@ function App() {
         </Router>
       </SidebarProvider>
     </TerminalProvider>
+    </AuthProvider>
   );
 }
 

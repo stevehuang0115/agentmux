@@ -35,6 +35,7 @@ program
   .description('Start Crewly backend and open dashboard')
   .option('-p, --port <port>', 'Web server port', DEFAULT_WEB_PORT.toString())
   .option('--no-browser', 'Don\'t open browser automatically')
+  .option('--headless', 'Start in headless/API-only mode (no frontend, no browser)')
   .option('--auto-upgrade', 'Automatically upgrade before starting if a new version is available')
   .action(startCommand);
 

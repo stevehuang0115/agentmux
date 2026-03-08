@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Grid, List, ChevronDown, ChevronRight, Building2 } from 'lucide-react';
+import { Plus, Grid, List, ChevronDown, ChevronRight, Building2, Shield } from 'lucide-react';
 import { useAlert } from '../components/UI/Dialog';
 import TeamsGridCard from '@/components/Teams/TeamsGridCard';
 import { TeamModal } from '../components/Modals/TeamModal';
@@ -39,13 +39,23 @@ export const Teams: React.FC = () => {
   /**
    * Group filtered teams into organizations (parent + children) and standalone teams.
    */
-  const { organizations, standaloneTeams } = useMemo(() => {
+  const { organizations, standaloneTeams, systemTeam } = useMemo(() => {
     const orgs: TeamOrganization[] = [];
     const standalone: Team[] = [];
+    let sysTeam: Team | null = null;
+
+    // Separate orchestrator (system) team from regular teams
+    const regularTeams = filteredTeams.filter(t => {
+      if (t.id === 'orchestrator') {
+        sysTeam = t;
+        return false;
+      }
+      return true;
+    });
 
     // Build a set of all team IDs that are referenced as parents
     const parentIds = new Set<string>();
-    for (const team of filteredTeams) {
+    for (const team of regularTeams) {
       if (team.parentTeamId) {
         parentIds.add(team.parentTeamId);
       }
@@ -55,7 +65,7 @@ export const Teams: React.FC = () => {
     const childrenMap = new Map<string, Team[]>();
     const childTeamIds = new Set<string>();
 
-    for (const team of filteredTeams) {
+    for (const team of regularTeams) {
       if (team.parentTeamId) {
         childTeamIds.add(team.id);
         const existing = childrenMap.get(team.parentTeamId) || [];
@@ -64,7 +74,7 @@ export const Teams: React.FC = () => {
       }
     }
 
-    for (const team of filteredTeams) {
+    for (const team of regularTeams) {
       // Skip child teams (they'll be shown under their parent)
       if (childTeamIds.has(team.id)) continue;
 
@@ -78,7 +88,7 @@ export const Teams: React.FC = () => {
       }
     }
 
-    return { organizations: orgs, standaloneTeams: standalone };
+    return { organizations: orgs, standaloneTeams: standalone, systemTeam: sysTeam };
   }, [filteredTeams]);
 
   /**
@@ -332,6 +342,36 @@ export const Teams: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* System Team (Orchestrator) */}
+      {systemTeam && (
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-yellow-500/10 rounded-lg">
+              <Shield className="w-5 h-5 text-yellow-400" />
+            </div>
+            <div className="flex-grow">
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-semibold text-text-primary-dark">{systemTeam.name}</h3>
+                <span className="text-xs font-medium text-yellow-400 bg-yellow-500/10 px-2 py-0.5 rounded-full">
+                  System Team
+                </span>
+              </div>
+              {systemTeam.description && (
+                <p className="text-sm text-text-secondary-dark mt-0.5">{systemTeam.description}</p>
+              )}
+            </div>
+          </div>
+          <div className="ml-6 pl-4 border-l-2 border-yellow-500/20">
+            <TeamsGridCard
+              team={systemTeam}
+              onClick={() => handleTeamClick(systemTeam)}
+              onViewTeam={(teamId) => navigate(`/teams/${teamId}`)}
+              onEditTeam={(teamId) => navigate(`/teams/${teamId}?edit=true`)}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Organization groups */}
       {organizations.map(org => {

@@ -175,6 +175,7 @@ export class CrewlyServer {
 				parseIntWithFallback(process.env.DEFAULT_CHECK_INTERVAL, 30, 'DEFAULT_CHECK_INTERVAL'),
 			autoCommitInterval:
 				config?.autoCommitInterval || parseIntWithFallback(process.env.AUTO_COMMIT_INTERVAL, 30, 'AUTO_COMMIT_INTERVAL'),
+			headless: config?.headless ?? process.env.CREWLY_HEADLESS === 'true',
 		};
 
 		this.app = express();
@@ -347,10 +348,23 @@ export class CrewlyServer {
 		// API routes
 		this.app.use('/api', createApiRoutes(this.apiController));
 
-		// Health check
+		// Health check (enhanced with mode and agent info)
 		this.app.get('/health', (req, res) => {
 			const versionService = VersionCheckService.getInstance();
 			const cachedCheck = versionService.getCachedCheckResult();
+
+			// Count active agents from the session backend.
+			// listSessions() returns names of all active sessions, so
+			// total and active counts are equal (only live sessions are listed).
+			let agentCount = 0;
+			try {
+				const sessionBackend = getSessionBackendSync();
+				if (sessionBackend) {
+					agentCount = sessionBackend.listSessions().length;
+				}
+			} catch {
+				// Session backend may not be initialized yet
+			}
 
 			res.json({
 				status: 'healthy',
@@ -359,21 +373,30 @@ export class CrewlyServer {
 				version: cachedCheck?.currentVersion ?? versionService.getLocalVersion(),
 				latestVersion: cachedCheck?.latestVersion ?? null,
 				updateAvailable: cachedCheck?.updateAvailable ?? false,
+				mode: this.config.headless ? 'headless' : 'standard',
+				agents: {
+					active: agentCount,
+					total: agentCount,
+				},
 			});
 		});
 
-		// Static files for frontend (after API routes)
-		// Use findPackageRoot() so this works both in dev mode (backend/src/)
-		// and in compiled/npm-installed mode (dist/backend/backend/src/)
-		const projectRoot = findPackageRoot(__dirname);
-		const frontendPath = path.join(projectRoot, 'frontend/dist');
-		this.app.use(express.static(frontendPath));
+		// Static files for frontend (skip in headless mode)
+		if (!this.config.headless) {
+			// Use findPackageRoot() so this works both in dev mode (backend/src/)
+			// and in compiled/npm-installed mode (dist/backend/backend/src/)
+			const projectRoot = findPackageRoot(__dirname);
+			const frontendPath = path.join(projectRoot, 'frontend/dist');
+			this.app.use(express.static(frontendPath));
 
-		// Serve frontend for all other routes (SPA)
-		this.app.get('*', (req, res) => {
-			const frontendIndexPath = path.join(projectRoot, 'frontend/dist/index.html');
-			res.sendFile(frontendIndexPath);
-		});
+			// Serve frontend for all other routes (SPA)
+			this.app.get('*', (req, res) => {
+				const frontendIndexPath = path.join(projectRoot, 'frontend/dist/index.html');
+				res.sendFile(frontendIndexPath);
+			});
+		} else {
+			this.logger.info('Headless mode: frontend serving disabled (API-only)');
+		}
 
 		// Error handling middleware
 		this.app.use(
@@ -422,12 +445,25 @@ export class CrewlyServer {
 
 	async start(): Promise<void> {
 		try {
+			// Validate environment configuration (fail fast with clear errors)
+			const { validateEnvConfig, logEnvValidation } = await import('./services/core/env.config.js');
+			const envValidation = validateEnvConfig();
+			logEnvValidation(envValidation);
+			if (!envValidation.valid) {
+				throw new Error('Environment configuration validation failed — see errors above');
+			}
+
 			this.logger.info('Starting Crewly server...');
 			this.logger.info('Server startup info', {
 				pid: process.pid,
 				memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-				targetPort: this.config.webPort
+				targetPort: this.config.webPort,
+				headless: this.config.headless,
 			});
+
+			if (this.config.headless) {
+				this.logger.info('Headless mode active: API-only, no frontend serving');
+			}
 
 			// Check for pending self-improvement (hot-reload recovery)
 			await this.checkPendingSelfImprovement();
