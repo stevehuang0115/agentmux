@@ -95,9 +95,16 @@ export class OrchestratorRestartService {
 	 * Reset the singleton instance (for testing).
 	 */
 	static resetInstance(): void {
+		if (OrchestratorRestartService.instance) {
+			// Clear internal state to prevent stale references
+			OrchestratorRestartService.instance.agentRegistrationService = null;
+			OrchestratorRestartService.instance.sessionBackend = null;
+			OrchestratorRestartService.instance.socketIO = null;
+			OrchestratorRestartService.instance.restartTimestamps = [];
+			OrchestratorRestartService.instance.isRestarting = false;
+		}
 		OrchestratorRestartService.instance = null;
 	}
-
 	/**
 	 * Inject external dependencies.
 	 *

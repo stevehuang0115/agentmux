@@ -128,6 +128,14 @@ export const TERMINAL_CONTROLLER_CONSTANTS = {
 	MAX_OUTPUT_SIZE: 131072, // 128KB max output per request
 } as const;
 
+/** Constants for the TerminalGateway orchestrator output buffer management. */
+export const TERMINAL_GATEWAY_CONSTANTS = {
+	/** Maximum buffer size for orchestrator output (bytes) */
+	MAX_BUFFER_SIZE: 100 * 1024,
+	/** Trim threshold for partial line buffer (characters) */
+	BUFFER_TRIM_THRESHOLD: 1000,
+} as const;
+
 // Chat routing constants (message markers and patterns for orchestrator communication)
 export const CHAT_ROUTING_CONSTANTS = {
 	/** Message format prefix for chat routing */

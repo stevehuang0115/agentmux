@@ -16,7 +16,7 @@ import {
 	type ISessionBackend,
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
-import { ORCHESTRATOR_SESSION_NAME, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS, TERMINAL_GATEWAY_CONSTANTS } from '../constants.js';
 import { getSlackOrchestratorBridge } from '../services/slack/slack-orchestrator-bridge.js';
 import { getChatService } from '../services/chat/chat.service.js';
 import type { SlackNotification } from '../types/slack.types.js';
@@ -54,7 +54,7 @@ export class TerminalGateway {
 	private orchestratorOutputBuffer: string = '';
 
 	/** Maximum buffer size to prevent memory issues (100KB) */
-	private readonly MAX_BUFFER_SIZE = 100 * 1024;
+	private readonly MAX_BUFFER_SIZE = TERMINAL_GATEWAY_CONSTANTS.MAX_BUFFER_SIZE;
 
 	/** Deduplicator for recently sent chat responses */
 	private responseDeduplicator = new ResponseDeduplicator();
@@ -775,7 +775,7 @@ export class TerminalGateway {
 		if (!hasPendingMarker) {
 			// Keep a small trailing buffer in case the tag is split across chunks
 			const lastNewline = this.orchestratorOutputBuffer.lastIndexOf('\n');
-			if (lastNewline > 1000) {
+			if (lastNewline > TERMINAL_GATEWAY_CONSTANTS.BUFFER_TRIM_THRESHOLD) {
 				this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastNewline);
 			}
 		}

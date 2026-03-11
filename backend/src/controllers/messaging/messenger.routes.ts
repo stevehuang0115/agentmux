@@ -8,6 +8,7 @@ import { SlackMessengerAdapter } from '../../services/messaging/adapters/slack-m
 import { TelegramMessengerAdapter } from '../../services/messaging/adapters/telegram-messenger.adapter.js';
 import { DiscordMessengerAdapter } from '../../services/messaging/adapters/discord-messenger.adapter.js';
 import { GoogleChatMessengerAdapter } from '../../services/messaging/adapters/google-chat-messenger.adapter.js';
+import { formatError } from '../../utils/format-error.js';
 import type { MessageQueueService } from '../../services/messaging/message-queue.service.js';
 import type { MessengerPlatform, IncomingMessage } from '../../services/messaging/messenger-adapter.interface.js';
 
@@ -99,8 +100,9 @@ function createGoogleChatIncomingCallback(
     replyPromise.then(async (response: string) => {
       try {
         await adapter.sendMessage(msg.channelId, response, { threadId: msg.threadId });
-      } catch {
-        // Reply send failure is logged by the adapter — no further action needed
+      } catch (err) {
+        // Log reply failure - the error is not propagated since there's no caller to propagate to
+        console.error(`[GoogleChat] Failed to send reply to ${msg.channelId}: ${formatError(err)}`);
       }
     });
   };
@@ -150,7 +152,7 @@ export function createMessengerRouter(): Router {
       const credentialsToSave = { ...(req.body || {}) };
       const crewlyDir = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
       await fs.mkdir(crewlyDir, { recursive: true });
-      await fs.writeFile(getCredentialPath(platform), JSON.stringify(credentialsToSave, null, 2) + '\n', 'utf8');
+      await fs.writeFile(getCredentialPath(platform), JSON.stringify(credentialsToSave, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
       res.json({ success: true, data: adapter.getStatus(), message: `${platform} connected` });
     } catch (error) {
       next(error);
