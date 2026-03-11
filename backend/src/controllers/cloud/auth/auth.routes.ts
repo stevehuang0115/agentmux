@@ -8,7 +8,7 @@
  * - POST /login     — authenticate (via Supabase)
  * - POST /refresh   — refresh token (via Supabase)
  *
- * Protected endpoints (requireSupabaseAuth middleware):
+ * Protected endpoints (requireCloudConnection middleware):
  * - GET  /me        — get profile
  * - PUT  /me        — update profile
  * - GET  /license   — check license status
@@ -25,7 +25,7 @@ import {
   updateProfile,
   getLicense,
 } from './auth.controller.js';
-import { requireSupabaseAuth } from '../../../services/cloud/auth/supabase-auth.middleware.js';
+import { requireCloudConnection } from '../../../services/cloud/cloud-auth.middleware.js';
 
 /**
  * Creates the auth router with all account management endpoints.
@@ -41,9 +41,9 @@ export function createAuthRouter(): Router {
   router.post('/refresh', refresh);
 
   // Protected endpoints (require valid Supabase JWT)
-  router.get('/me', requireSupabaseAuth, getProfile);
-  router.put('/me', requireSupabaseAuth, updateProfile);
-  router.get('/license', requireSupabaseAuth, getLicense);
+  router.get('/me', requireCloudConnection, getProfile);
+  router.put('/me', requireCloudConnection, updateProfile);
+  router.get('/license', requireCloudConnection, getLicense);
 
   return router;
 }

@@ -214,6 +214,7 @@ export class MessageQueueService extends EventEmitter {
       status: 'pending',
       sourceMetadata: input.sourceMetadata,
       enqueuedAt: new Date().toISOString(),
+      targetSession: input.targetSession,
     };
 
     this.queue.push(message);

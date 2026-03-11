@@ -11,6 +11,7 @@ import {
 } from '../session/index.js';
 import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { RuntimeServiceFactory } from './runtime-service.factory.js';
+import { CrewlyAgentRuntimeService } from './crewly-agent/crewly-agent-runtime.service.js';
 import { StorageService } from '../core/storage.service.js';
 import {
 	CREWLY_CONSTANTS,
@@ -102,6 +103,9 @@ export class AgentRegistrationService {
 	// which causes multiple Ctrl+C presses that can crash the runtime.
 	private sessionDeliveryMutex = new Map<string, Promise<void>>();
 
+	// Track in-process Crewly Agent runtimes (no PTY session needed)
+	private inProcessRuntimes = new Map<string, CrewlyAgentRuntimeService>();
+
 
 	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
 	// Keeping prompt chars as static getter for backwards compatibility within the class
@@ -129,6 +133,16 @@ export class AgentRegistrationService {
 				}
 			}
 		);
+	}
+
+	/**
+	 * Get an in-process Crewly Agent runtime by session name.
+	 *
+	 * @param sessionName - The session name to look up
+	 * @returns The CrewlyAgentRuntimeService instance, or undefined if not found
+	 */
+	getInProcessRuntime(sessionName: string): CrewlyAgentRuntimeService | undefined {
+		return this.inProcessRuntimes.get(sessionName);
 	}
 
 	/**
@@ -1863,6 +1877,30 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				await delay(1000); // Wait for cleanup
 			}
 
+			// In-process Crewly Agent: skip PTY creation entirely
+			if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+				const crewlyRuntime = this.createRuntimeService(runtimeType) as CrewlyAgentRuntimeService;
+				const roleName = role === ORCHESTRATOR_ROLE ? 'orchestrator' : role.toLowerCase().replace(/\s+/g, '-');
+				await crewlyRuntime.initializeInProcess(sessionName, undefined, roleName);
+				this.inProcessRuntimes.set(sessionName, crewlyRuntime);
+
+				// Load and deliver registration prompt
+				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+				if (prompt) {
+					await crewlyRuntime.handleMessage(prompt);
+				}
+
+				this.logger.info('Crewly Agent in-process runtime initialized', {
+					sessionName, role, runtimeType,
+				});
+
+				return {
+					success: true,
+					sessionName,
+					message: 'Crewly Agent in-process runtime initialized and registered',
+				};
+			}
+
 			// Create new session (same approach for both orchestrator and team members)
 			const cwdToUse = projectPath || process.cwd();
 			this.logger.info('Creating PTY session', {
@@ -2030,6 +2068,14 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Stop context window monitoring before killing the session
 			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
 
+			// Shutdown in-process Crewly Agent runtime if present
+			const inProcessRuntime = this.inProcessRuntimes.get(sessionName);
+			if (inProcessRuntime) {
+				await inProcessRuntime.shutdown();
+				this.inProcessRuntimes.delete(sessionName);
+				this.logger.info('In-process Crewly Agent runtime shut down', { sessionName });
+			}
+
 			// Get session helper once to avoid repeated async calls
 			const sessionHelper = await this.getSessionHelper();
 			const sessionExists = sessionHelper.sessionExists(sessionName);
@@ -2038,7 +2084,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// Kill the tmux session
 				await sessionHelper.killSession(sessionName);
 				this.logger.info('Session terminated successfully', { sessionName });
-			} else {
+			} else if (!inProcessRuntime) {
 				this.logger.info('Session already terminated or does not exist', { sessionName });
 			}
 
@@ -2156,6 +2202,19 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				runtimeType = await this.resolveSessionRuntimeType(sessionName);
 			}
 
+			// In-process Crewly Agent: deliver directly without PTY
+			if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+				const crewlyRuntime = this.inProcessRuntimes.get(sessionName);
+				if (!crewlyRuntime || !crewlyRuntime.isReady()) {
+					return {
+						success: false,
+						error: `Crewly Agent runtime for '${sessionName}' is not initialized`,
+					};
+				}
+				await crewlyRuntime.handleMessage(message);
+				return { success: true, message: 'Message delivered to Crewly Agent' };
+			}
+
 			// Get session helper once for this method
 			const sessionHelper = await this.getSessionHelper();
 
@@ -2249,6 +2308,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
 		runtimeType?: RuntimeType
 	): Promise<boolean> {
+		// In-process Crewly Agent: ready if initialized
+		const inProcessRuntime = this.inProcessRuntimes.get(sessionName);
+		if (inProcessRuntime) {
+			return inProcessRuntime.isReady();
+		}
+
 		const sessionHelper = await this.getSessionHelper();
 
 		// Check if session exists

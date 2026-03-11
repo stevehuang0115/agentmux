@@ -15,7 +15,7 @@ import {
   updateProfile,
   getLicense,
 } from './auth.controller.js';
-import type { SupabaseAuthenticatedRequest as AuthenticatedRequest } from '../../../services/cloud/auth/supabase-auth.middleware.js';
+import type { AuthenticatedRequest } from '../../../services/cloud/auth/auth.utils.js';
 
 // ---------------------------------------------------------------------------
 // Mocks

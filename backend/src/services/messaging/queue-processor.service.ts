@@ -225,11 +225,14 @@ export class QueueProcessorService extends EventEmitter {
           ? EVENT_DELIVERY_CONSTANTS.SYSTEM_EVENT_TIMEOUT
           : EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT;
 
-      // Wait for orchestrator to be at prompt before attempting delivery.
-      // After processing a previous message the orchestrator may still be busy
+      // Determine delivery target: use targetSession if specified, else orchestrator
+      const deliveryTarget = message.targetSession || ORCHESTRATOR_SESSION_NAME;
+
+      // Wait for target agent to be at prompt before attempting delivery.
+      // After processing a previous message the agent may still be busy
       // (managing agents, running commands) before returning to the input prompt.
       const isReady = await this.agentRegistrationService.waitForAgentReady(
-        ORCHESTRATOR_SESSION_NAME,
+        deliveryTarget,
         readyTimeout,
         runtimeType
       );
@@ -344,7 +347,7 @@ export class QueueProcessorService extends EventEmitter {
       }
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
-        ORCHESTRATOR_SESSION_NAME,
+        deliveryTarget,
         deliveryContent,
         runtimeType
       );

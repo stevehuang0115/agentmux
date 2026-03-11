@@ -2112,4 +2112,170 @@ describe('AgentRegistrationService', () => {
 			expect(tracker.has('dead-session')).toBe(false);
 		});
 	});
+
+	describe('Crewly Agent in-process runtime integration', () => {
+		let mockCrewlyRuntime: any;
+
+		beforeEach(() => {
+			mockCrewlyRuntime = {
+				initializeInProcess: jest.fn().mockResolvedValue(undefined),
+				handleMessage: jest.fn().mockResolvedValue({
+					text: 'Done',
+					steps: 1,
+					usage: { input: 50, output: 25 },
+					toolCalls: [],
+					finishReason: 'stop',
+				}),
+				isReady: jest.fn().mockReturnValue(true),
+				shutdown: jest.fn(),
+			};
+
+			(RuntimeServiceFactory.create as jest.Mock).mockImplementation(
+				(runtimeType: string) => {
+					if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+						return mockCrewlyRuntime;
+					}
+					return mockRuntimeService;
+				}
+			);
+		});
+
+		it('should initialize in-process runtime for crewly-agent type', async () => {
+			mockReadFile.mockResolvedValue('You are the orchestrator. {{SESSION_NAME}}');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			const result = await service.createAgentSession({
+				sessionName: 'crewly-assistant',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.message).toContain('in-process');
+			expect(mockCrewlyRuntime.initializeInProcess).toHaveBeenCalledWith(
+				'crewly-assistant',
+				undefined,
+				'orchestrator'
+			);
+			expect(mockSessionHelper.createSession).not.toHaveBeenCalled();
+		});
+
+		it('should deliver registration prompt to in-process runtime', async () => {
+			mockReadFile.mockResolvedValue('Test prompt for {{SESSION_NAME}}');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-assistant',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalled();
+			const promptArg = mockCrewlyRuntime.handleMessage.mock.calls[0][0];
+			expect(promptArg).toContain('crewly-assistant');
+		});
+
+		it('should route messages to in-process runtime via sendMessageToAgent', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-assistant',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			const result = await service.sendMessageToAgent(
+				'crewly-assistant',
+				'Check team status',
+				RUNTIME_TYPES.CREWLY_AGENT as any
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalledWith('Check team status');
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('should return error when in-process runtime not initialized', async () => {
+			const result = await service.sendMessageToAgent(
+				'nonexistent-session',
+				'Hello',
+				RUNTIME_TYPES.CREWLY_AGENT as any
+			);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('not initialized');
+		});
+
+		it('should handle in-process runtime errors in sendMessageToAgent', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-err',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			mockCrewlyRuntime.handleMessage.mockRejectedValueOnce(new Error('Model API rate limited'));
+
+			const result = await service.sendMessageToAgent(
+				'crewly-err',
+				'test',
+				RUNTIME_TYPES.CREWLY_AGENT as any
+			);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('rate limited');
+		});
+
+		it('should shutdown in-process runtime on terminateAgentSession', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-terminate',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			const result = await service.terminateAgentSession('crewly-terminate', 'orchestrator');
+
+			expect(result.success).toBe(true);
+			expect(mockCrewlyRuntime.shutdown).toHaveBeenCalled();
+		});
+
+		it('should return true immediately for waitForAgentReady with in-process runtime', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-ready',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			const ready = await service.waitForAgentReady('crewly-ready');
+
+			expect(ready).toBe(true);
+			expect(mockSessionHelper.capturePane).not.toHaveBeenCalled();
+		});
+
+		it('should expose in-process runtime via getInProcessRuntime', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-getter',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			const runtime = service.getInProcessRuntime('crewly-getter');
+			expect(runtime).toBe(mockCrewlyRuntime);
+
+			const missing = service.getInProcessRuntime('nonexistent');
+			expect(missing).toBeUndefined();
+		});
+	});
 });

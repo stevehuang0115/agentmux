@@ -1,0 +1,107 @@
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { ModelManager } from './model-manager.js';
+
+// Mock the provider imports
+jest.unstable_mockModule('@ai-sdk/anthropic', () => ({
+  anthropic: jest.fn((modelId: string) => ({ provider: 'anthropic', modelId })),
+}));
+
+jest.unstable_mockModule('@ai-sdk/openai', () => ({
+  openai: jest.fn((modelId: string) => ({ provider: 'openai', modelId })),
+}));
+
+jest.unstable_mockModule('@ai-sdk/google', () => ({
+  google: jest.fn((modelId: string) => ({ provider: 'google', modelId })),
+}));
+
+describe('ModelManager', () => {
+  let manager: ModelManager;
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    manager = new ModelManager();
+  });
+
+  afterEach(() => {
+    manager.clearCache();
+    process.env = { ...originalEnv };
+  });
+
+  describe('getModel', () => {
+    it('should create an Anthropic model', async () => {
+      const model = await manager.getModel({ provider: 'anthropic', modelId: 'claude-sonnet-4-20250514' });
+      expect(model).toBeDefined();
+      expect((model as any).modelId).toBe('claude-sonnet-4-20250514');
+    });
+
+    it('should create an OpenAI model', async () => {
+      const model = await manager.getModel({ provider: 'openai', modelId: 'gpt-4o' });
+      expect(model).toBeDefined();
+      expect((model as any).modelId).toBe('gpt-4o');
+    });
+
+    it('should create a Google model', async () => {
+      const model = await manager.getModel({ provider: 'google', modelId: 'gemini-2.5-flash' });
+      expect(model).toBeDefined();
+      expect((model as any).modelId).toBe('gemini-2.5-flash');
+    });
+
+    it('should use default config when none provided', async () => {
+      const model = await manager.getModel();
+      expect(model).toBeDefined();
+    });
+
+    it('should throw for unknown provider', async () => {
+      await expect(
+        manager.getModel({ provider: 'azure' as any, modelId: 'test' })
+      ).rejects.toThrow('Unknown model provider: azure');
+    });
+
+    it('should cache provider imports', async () => {
+      await manager.getModel({ provider: 'anthropic', modelId: 'model-1' });
+      await manager.getModel({ provider: 'anthropic', modelId: 'model-2' });
+      // Should only import once — the second call uses cached provider function
+      // We verify by checking the model is still created correctly
+      const model = await manager.getModel({ provider: 'anthropic', modelId: 'model-3' });
+      expect((model as any).modelId).toBe('model-3');
+    });
+  });
+
+  describe('getAvailableProviders', () => {
+    it('should report providers based on environment variables', () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      delete process.env.GEMINI_API_KEY;
+
+      const available = manager.getAvailableProviders();
+
+      expect(available.anthropic).toBe(false);
+      expect(available.openai).toBe(false);
+      expect(available.google).toBe(false);
+    });
+
+    it('should detect Anthropic API key', () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      const available = manager.getAvailableProviders();
+      expect(available.anthropic).toBe(true);
+    });
+
+    it('should detect Google via GEMINI_API_KEY fallback', () => {
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      process.env.GEMINI_API_KEY = 'test-key';
+      const available = manager.getAvailableProviders();
+      expect(available.google).toBe(true);
+    });
+  });
+
+  describe('clearCache', () => {
+    it('should clear the provider cache', async () => {
+      await manager.getModel({ provider: 'anthropic', modelId: 'test' });
+      manager.clearCache();
+      // After clear, the next call should re-import
+      const model = await manager.getModel({ provider: 'anthropic', modelId: 'test-2' });
+      expect((model as any).modelId).toBe('test-2');
+    });
+  });
+});

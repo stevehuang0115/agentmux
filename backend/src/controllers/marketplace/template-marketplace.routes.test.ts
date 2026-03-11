@@ -22,8 +22,9 @@ jest.mock('./template-marketplace.controller.js', () => ({
 	handlePublishTemplate: jest.fn((_req: unknown, _res: unknown) => {}),
 }));
 
-jest.mock('../../services/cloud/auth/supabase-auth.middleware.js', () => ({
-	requireSupabaseAuth: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+jest.mock('../../services/cloud/cloud-auth.middleware.js', () => ({
+	requireCloudConnection: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+	requireTier: jest.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
 }));
 
 interface RouteInfo {

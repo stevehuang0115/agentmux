@@ -20,6 +20,13 @@
       "welcomeMessage": "OpenAI Codex",
       "timeout": 90000,
       "description": "OpenAI's Codex CLI for advanced code understanding"
+    },
+    "crewly-agent": {
+      "displayName": "Crewly Agent",
+      "initScript": "",
+      "welcomeMessage": "",
+      "timeout": 30000,
+      "description": "In-process AI agent using Vercel AI SDK (no PTY session needed)"
     }
   },
   "defaultRuntime": "claude-code"

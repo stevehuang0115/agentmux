@@ -10,7 +10,7 @@
 /**
  * Available AI runtime options
  */
-export type AIRuntime = 'claude-code' | 'gemini-cli' | 'codex-cli';
+export type AIRuntime = 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
 
 /**
  * Array of all valid AI runtimes
@@ -19,6 +19,7 @@ export const AI_RUNTIMES: readonly AIRuntime[] = [
   'claude-code',
   'gemini-cli',
   'codex-cli',
+  'crewly-agent',
 ] as const;
 
 /**
@@ -199,6 +200,7 @@ export function getDefaultSettings(): CrewlySettings {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
         'codex-cli': 'codex -a never -s danger-full-access',
+        'crewly-agent': 'crewly-agent',
       },
       agentIdleTimeoutMinutes: 10,
       enableProactiveCompact: true,
@@ -371,6 +373,8 @@ export function getAIRuntimeDisplayName(runtime: AIRuntime): string {
       return 'Gemini CLI';
     case 'codex-cli':
       return 'Codex CLI';
+    case 'crewly-agent':
+      return 'Crewly Agent';
     default:
       return runtime;
   }

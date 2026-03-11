@@ -1211,5 +1211,62 @@ describe('QueueProcessorService', () => {
       );
       expect(requeueSpy).not.toHaveBeenCalled();
     });
+
+    it('should deliver system events to targetSession when specified', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+
+      processor.start();
+
+      queueService.enqueue({
+        content: '[EVENT:agent_idle] Agent Leo idle',
+        conversationId: 'system',
+        source: 'system_event',
+        targetSession: 'crewly-assistant',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Should deliver to the target session, not orchestrator
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-assistant',
+        '[EVENT:agent_idle] Agent Leo idle',
+        expect.any(String)
+      );
+      // waitForAgentReady should also target the subscriber
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'crewly-assistant',
+        expect.any(Number),
+        expect.any(String)
+      );
+    });
+
+    it('should default to orchestrator when no targetSession', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+
+      processor.start();
+
+      queueService.enqueue({
+        content: '[EVENT:agent_idle] Agent idle',
+        conversationId: 'system',
+        source: 'system_event',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+      await flushPromises();
+
+      // Should default to orchestrator
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-orc',
+        expect.any(String),
+        'claude-code'
+      );
+    });
   });
 });

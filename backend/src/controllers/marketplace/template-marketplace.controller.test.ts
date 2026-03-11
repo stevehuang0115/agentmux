@@ -42,6 +42,8 @@ jest.mock('../../services/marketplace/index.js', () => ({
 describe('TemplateMarketplaceController', () => {
 	let mockRes: { json: jest.Mock; status: jest.Mock };
 
+	const mockNext = jest.fn();
+
 	beforeEach(() => {
 		mockRes = {
 			json: jest.fn().mockReturnThis(),
@@ -61,6 +63,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleCreateTemplate(
 				{ body: { name: 'Test', description: 'Desc', author: 'A', category: 'development' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(201);
@@ -73,6 +76,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleCreateTemplate(
 				{ body: {} } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -84,6 +88,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleCreateTemplate(
 				{ body: { name: 'X', description: 'X', author: 'X', category: 'custom' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(500);
@@ -101,6 +106,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListTemplates(
 				{ query: {} } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: templates });
@@ -112,6 +118,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListTemplates(
 				{ query: { category: 'development', status: 'published', search: 'test', sort: 'popular' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockListTemplates).toHaveBeenCalledWith({
@@ -127,6 +134,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListTemplates(
 				{ query: { category: 'invalid' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -137,6 +145,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListTemplates(
 				{ query: { status: 'invalid' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -146,6 +155,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListTemplates(
 				{ query: { sort: 'invalid' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -162,6 +172,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleGetTemplate(
 				{ params: { id: 't1' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: template });
@@ -173,6 +184,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleGetTemplate(
 				{ params: { id: 'missing' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -189,6 +201,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleUpdateTemplate(
 				{ params: { id: 't1' }, body: { name: 'Updated' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
@@ -200,6 +213,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleUpdateTemplate(
 				{ params: { id: 'missing' }, body: { name: 'x' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -211,6 +225,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleUpdateTemplate(
 				{ params: { id: 't1' }, body: { name: 'x' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -226,6 +241,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleArchiveTemplate(
 				{ params: { id: 't1' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
@@ -237,6 +253,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleArchiveTemplate(
 				{ params: { id: 'missing' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -253,6 +270,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleAddVersion(
 				{ params: { id: 't1' }, body: { semver: '1.1.0', config: {}, changelog: 'New' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(201);
@@ -265,6 +283,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleAddVersion(
 				{ params: { id: 't1' }, body: { semver: 'bad', config: {}, changelog: 'x' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -276,6 +295,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleAddVersion(
 				{ params: { id: 'missing' }, body: { semver: '1.0.0', config: {}, changelog: 'x' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -292,6 +312,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListVersions(
 				{ params: { id: 't1' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith({ success: true, data: versions });
@@ -303,6 +324,7 @@ describe('TemplateMarketplaceController', () => {
 			await handleListVersions(
 				{ params: { id: 'missing' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);
@@ -318,6 +340,7 @@ describe('TemplateMarketplaceController', () => {
 			await handlePublishTemplate(
 				{ params: { id: 't1' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
@@ -329,6 +352,7 @@ describe('TemplateMarketplaceController', () => {
 			await handlePublishTemplate(
 				{ params: { id: 't1' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(400);
@@ -340,6 +364,7 @@ describe('TemplateMarketplaceController', () => {
 			await handlePublishTemplate(
 				{ params: { id: 'missing' } } as any,
 				mockRes as any,
+				mockNext,
 			);
 
 			expect(mockRes.status).toHaveBeenCalledWith(404);

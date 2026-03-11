@@ -737,6 +737,25 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 		// Force mode: write directly to PTY, skipping waitForReady and verification.
 		// Use when the agent is busy and waitForReady would time out (#113).
 		if (force) {
+			// In-process Crewly Agent: deliver via handleMessage instead of PTY write
+			if (resolvedRuntimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+				const inProcessRuntime = this.agentRegistrationService.getInProcessRuntime(sessionName);
+				if (!inProcessRuntime || !inProcessRuntime.isReady()) {
+					res.status(404).json({
+						success: false,
+						error: `In-process agent '${sessionName}' not found or not ready`,
+					} as ApiResponse);
+					return;
+				}
+				await inProcessRuntime.handleMessage(message);
+				res.json({
+					success: true,
+					verified: true,
+					force: true,
+				} as ApiResponse);
+				return;
+			}
+
 			const { getSessionBackendSync } = await import('../../services/session/index.js');
 			const backend = getSessionBackendSync();
 			const session = backend?.getSession(sessionName);

@@ -1,12 +1,9 @@
 /**
- * Relay REST Controller
+ * Relay REST Controller (Client-side only)
  *
- * Handles HTTP requests for both the WebSocket Relay server management
- * and the relay client lifecycle (connecting to a remote relay).
- *
- * Server-side endpoints:
- * - POST /relay/register — register a local instance as a relay node
- * - GET  /relay/status   — get relay server status and active sessions
+ * Handles HTTP requests for the relay client lifecycle (connecting
+ * to a remote relay server). Server-side relay management has been
+ * moved to the cloud services repository.
  *
  * Client-side endpoints:
  * - POST /relay/connect    — connect to a remote relay server
@@ -18,14 +15,9 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import { RelayServerService } from '../../services/cloud/relay-server.service.js';
 import { RelayClientService } from '../../services/cloud/relay-client.service.js';
 import { LoggerService } from '../../services/core/logger.service.js';
-import { CLOUD_CONSTANTS } from '../../constants.js';
 import type {
-  RelayRegisterRequest,
-  RelayRegisterResponse,
-  RelayNodeRole,
   RelayClientConfig,
 } from '../../services/cloud/relay.types.js';
 
@@ -33,98 +25,6 @@ const logger = LoggerService.getInstance().createComponentLogger('RelayControlle
 
 /** Valid relay node roles for request validation. */
 const VALID_ROLES: ReadonlySet<string> = new Set(['orchestrator', 'agent']);
-
-/**
- * POST /relay/register
- *
- * Register a local Crewly instance as a relay node. Returns a session ID
- * and the WebSocket URL to connect to for relay communication.
- *
- * @param req - Request with body: { role, pairingCode }
- * @param res - Response returning RelayRegisterResponse
- * @param next - Next function for error propagation
- */
-export async function registerRelayNode(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const { role, pairingCode } = req.body as Partial<RelayRegisterRequest>;
-
-    if (!role || !pairingCode) {
-      res.status(400).json({
-        success: false,
-        error: 'Missing required parameters: role, pairingCode',
-      });
-      return;
-    }
-
-    if (!VALID_ROLES.has(role)) {
-      res.status(400).json({
-        success: false,
-        error: `Invalid role: "${role}". Must be "orchestrator" or "agent".`,
-      });
-      return;
-    }
-
-    const relay = RelayServerService.getInstance();
-
-    if (!relay.isRunning()) {
-      res.status(503).json({
-        success: false,
-        error: 'Relay server is not running. Start it first.',
-      });
-      return;
-    }
-
-    // Build the WebSocket URL from the request
-    const protocol = req.secure ? 'wss' : 'ws';
-    const host = req.get('host') ?? 'localhost';
-    const wsUrl = `${protocol}://${host}/relay`;
-
-    // Generate a session ID (the actual WS registration happens on connect)
-    const response: RelayRegisterResponse = {
-      success: true,
-      sessionId: `pending-${Date.now()}`,
-      wsUrl,
-    };
-
-    logger.info('Relay node registration via REST', { role, pairingCode });
-    res.json(response);
-  } catch (error) {
-    logger.error('Failed to register relay node', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    next(error);
-  }
-}
-
-/**
- * GET /relay/status
- *
- * Get the current relay server status, including whether it's running,
- * the number of connected clients, and active session details.
- *
- * @param req - Express request (no params required)
- * @param res - Response returning relay status object
- * @param next - Next function for error propagation
- */
-export async function getRelayStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const relay = RelayServerService.getInstance();
-
-    res.json({
-      success: true,
-      data: {
-        running: relay.isRunning(),
-        clientCount: relay.getClientCount(),
-        sessions: relay.getSessions(),
-      },
-    });
-  } catch (error) {
-    logger.error('Failed to get relay status', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    next(error);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Client-side endpoints
@@ -238,8 +138,8 @@ export async function disconnectFromRelay(req: Request, res: Response, next: Nex
 /**
  * GET /relay/devices
  *
- * List connected devices visible through the relay. Returns both the local
- * relay client state and the relay server sessions (if a local server is running).
+ * List connected devices visible through the relay. Returns the local
+ * relay client state.
  *
  * @param req - Express request (no params required)
  * @param res - Response with device list
@@ -248,28 +148,16 @@ export async function disconnectFromRelay(req: Request, res: Response, next: Nex
 export async function getRelayDevices(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const client = RelayClientService.getInstance();
-    const server = RelayServerService.getInstance();
 
     const clientInfo = {
       state: client.getState(),
       sessionId: client.getSessionId(),
     };
 
-    const serverSessions = server.isRunning() ? server.getSessions() : [];
-
     res.json({
       success: true,
       data: {
         client: clientInfo,
-        serverRunning: server.isRunning(),
-        devices: serverSessions.map((session) => ({
-          sessionId: session.sessionId,
-          role: session.role,
-          state: session.state,
-          pairedWith: session.pairedWith,
-          registeredAt: session.registeredAt,
-          lastHeartbeatAt: session.lastHeartbeatAt,
-        })),
       },
     });
   } catch (error) {

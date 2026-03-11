@@ -23,8 +23,9 @@ jest.mock('./auth.controller.js', () => ({
   getLicense: jest.fn((_req, res) => res.status(200).json({ success: true })),
 }));
 
-jest.mock('../../../services/cloud/auth/supabase-auth.middleware.js', () => ({
-  requireSupabaseAuth: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+jest.mock('../../../services/cloud/cloud-auth.middleware.js', () => ({
+  requireCloudConnection: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  requireTier: jest.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
 }));
 
 // ---------------------------------------------------------------------------
@@ -84,23 +85,23 @@ describe('Auth Routes', () => {
     expect(routes).toContainEqual(expect.objectContaining({ method: 'POST', path: '/refresh' }));
   });
 
-  // Protected routes (requireSupabaseAuth middleware + handler = 2 handlers in stack)
+  // Protected routes (requireCloudConnection middleware + handler = 2 handlers in stack)
   it('should register GET /me route with auth middleware', () => {
     const route = routes.find((r) => r.method === 'GET' && r.path === '/me');
     expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(2); // requireSupabaseAuth + getProfile
+    expect(route!.middlewareCount).toBe(2); // requireCloudConnection + getProfile
   });
 
   it('should register PUT /me route with auth middleware', () => {
     const route = routes.find((r) => r.method === 'PUT' && r.path === '/me');
     expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(2); // requireSupabaseAuth + updateProfile
+    expect(route!.middlewareCount).toBe(2); // requireCloudConnection + updateProfile
   });
 
   it('should register GET /license route with auth middleware', () => {
     const route = routes.find((r) => r.method === 'GET' && r.path === '/license');
     expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(2); // requireSupabaseAuth + getLicense
+    expect(route!.middlewareCount).toBe(2); // requireCloudConnection + getLicense
   });
 
   it('should register exactly 6 routes', () => {
