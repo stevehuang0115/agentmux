@@ -5,6 +5,7 @@ import {
   MODEL_PROVIDERS,
   CREWLY_AGENT_DEFAULTS,
 } from './types.js';
+import type { ToolDefinition } from './types.js';
 
 describe('Crewly Agent Types', () => {
   describe('MODEL_PROVIDERS', () => {
@@ -64,6 +65,18 @@ describe('Crewly Agent Types', () => {
       expect(isModelConfig({ modelId: 'gpt-4o' })).toBe(false);
       expect(isModelConfig({ provider: 'invalid', modelId: 'test' })).toBe(false);
       expect(isModelConfig({ provider: 'anthropic', modelId: '' })).toBe(false);
+    });
+  });
+
+  describe('ToolDefinition', () => {
+    it('should be usable as a type for tool objects', () => {
+      const tool: ToolDefinition = {
+        description: 'A test tool',
+        inputSchema: { parse: () => ({}) } as any,
+        execute: async () => ({ result: 'ok' }),
+      };
+      expect(tool.description).toBe('A test tool');
+      expect(typeof tool.execute).toBe('function');
     });
   });
 });

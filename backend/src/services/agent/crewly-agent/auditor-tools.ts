@@ -12,15 +12,7 @@ import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
-
-/**
- * Tool definition shape matching AI SDK Tool interface.
- */
-interface ToolDefinition {
-  description: string;
-  inputSchema: z.ZodType;
-  execute: (args: Record<string, unknown>) => Promise<unknown>;
-}
+import type { ToolDefinition } from './types.js';
 
 /** Severity levels for audit findings */
 const AUDIT_SEVERITIES = ['critical', 'high', 'medium', 'low'] as const;

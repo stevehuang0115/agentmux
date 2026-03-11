@@ -10,7 +10,7 @@ import { DiscordMessengerAdapter } from '../../services/messaging/adapters/disco
 import type { MessengerPlatform } from '../../services/messaging/messenger-adapter.interface.js';
 
 /** Known messenger platforms for input validation. */
-const VALID_PLATFORMS: ReadonlySet<string> = new Set<MessengerPlatform>(['slack', 'telegram', 'discord']);
+const VALID_PLATFORMS: ReadonlySet<string> = new Set<MessengerPlatform>(['slack', 'telegram', 'discord', 'google-chat']);
 
 /**
  * Validate that a string is a known messenger platform.

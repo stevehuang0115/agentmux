@@ -8,6 +8,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import type { z } from 'zod';
 
 /**
  * Supported model providers for Crewly Agent
@@ -113,6 +114,19 @@ export interface ApiCallResult<T = unknown> {
   error?: string;
   /** HTTP status code */
   status: number;
+}
+
+/**
+ * Tool definition shape matching AI SDK Tool interface.
+ * Shared by both the main tool registry and the auditor tool registry.
+ */
+export interface ToolDefinition {
+  /** Human-readable description of what the tool does */
+  description: string;
+  /** Zod schema for validating tool input */
+  inputSchema: z.ZodType;
+  /** Execute the tool with the given validated arguments */
+  execute: (args: Record<string, unknown>) => Promise<unknown>;
 }
 
 /**

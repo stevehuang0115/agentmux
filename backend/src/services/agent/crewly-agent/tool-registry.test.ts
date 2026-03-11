@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { createTools, getToolNames } from './tool-registry.js';
 import { CrewlyApiClient } from './api-client.js';
 
@@ -460,7 +460,7 @@ describe('Tool Registry', () => {
       expect(result.error).toContain('not found');
     });
 
-    it('should fail when old_string has multiple matches', async () => {
+    it('should fail when old_string has multiple matches and replace_all is false', async () => {
       mockReadFile.mockResolvedValue('foo bar foo baz foo' as any);
 
       const result = await (tools.edit_file as any).execute({
@@ -473,6 +473,41 @@ describe('Tool Registry', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('3 times');
       expect(result.occurrences).toBe(3);
+    });
+
+    it('should replace all occurrences when replace_all is true', async () => {
+      mockReadFile.mockResolvedValue('foo bar foo baz foo' as any);
+      mockWriteFile.mockResolvedValue(undefined as any);
+
+      const result = await (tools.edit_file as any).execute({
+        file_path: '/test/file.ts',
+        old_string: 'foo',
+        new_string: 'qux',
+        replace_all: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.replacements).toBe(3);
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        '/test/file.ts',
+        'qux bar qux baz qux',
+        'utf8',
+      );
+    });
+
+    it('should handle single occurrence with replace_all true', async () => {
+      mockReadFile.mockResolvedValue('Hello World\nGoodbye World' as any);
+      mockWriteFile.mockResolvedValue(undefined as any);
+
+      const result = await (tools.edit_file as any).execute({
+        file_path: '/test/file.ts',
+        old_string: 'Hello World',
+        new_string: 'Hi World',
+        replace_all: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.replacements).toBe(1);
     });
 
     it('should handle file not found error', async () => {

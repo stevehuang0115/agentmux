@@ -11,6 +11,7 @@
 import { promises as fsPromises } from 'fs';
 import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
+import type { ToolDefinition } from './types.js';
 
 /**
  * Create the complete set of AI SDK tools for the Crewly Agent.
@@ -22,17 +23,6 @@ import type { CrewlyApiClient } from './api-client.js';
  * @param sessionName - Agent session name for identity context
  * @returns Object of named tools ready to pass to generateText
  */
-/**
- * Tool definition shape matching AI SDK Tool interface.
- * Defined locally to avoid importing the heavy 'ai' module.
- */
-interface ToolDefinition {
-  description: string;
-  inputSchema: z.ZodType;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  execute: (args: any) => Promise<unknown>;
-}
-
 export function createTools(client: CrewlyApiClient, sessionName: string): Record<string, ToolDefinition> {
   return {
     // ===== Core Orchestration Tools =====
@@ -47,7 +37,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         projectPath: z.string().optional().describe('Project path for task tracking'),
       }),
       execute: async ({ to, task, priority, context, projectPath }) => {
-        const taskMessage = buildTaskMessage(to, task, priority, context, projectPath);
+        const taskMessage = buildTaskMessage(to as string, task as string, priority as string, context as string | undefined, projectPath as string | undefined);
 
         // Deliver the task message
         const deliverResult = await client.post(`/terminal/${to}/deliver`, {
@@ -163,8 +153,8 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         threadTs: z.string().optional().describe('Thread timestamp for replies'),
       }),
       execute: async ({ channelId, text, threadTs }) => {
-        const body: Record<string, string> = { channelId, text };
-        if (threadTs) body.threadTs = threadTs;
+        const body: Record<string, string> = { channelId: channelId as string, text: text as string };
+        if (threadTs) body.threadTs = threadTs as string;
         const result = await client.post('/slack/send', body);
         return result.success
           ? { success: true, sent: true }
@@ -321,8 +311,8 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         status: z.string().optional().describe('Filter by status (e.g., "in_progress", "done")'),
       }),
       execute: async ({ projectPath, status }) => {
-        let endpoint = `/task-management/tasks?projectPath=${encodeURIComponent(projectPath)}`;
-        if (status) endpoint += `&status=${encodeURIComponent(status)}`;
+        let endpoint = `/task-management/tasks?projectPath=${encodeURIComponent(projectPath as string)}`;
+        if (status) endpoint += `&status=${encodeURIComponent(status as string)}`;
         const result = await client.get(endpoint);
         return result.success ? result.data : { error: result.error };
       },
@@ -402,18 +392,29 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         new_string: z.string().describe('Replacement string'),
         replace_all: z.boolean().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
       }),
-      execute: async ({ file_path, old_string, new_string }) => {
+      execute: async ({ file_path, old_string, new_string, replace_all }) => {
         try {
           // Read the file
-          const content = await fsPromises.readFile(file_path, 'utf8');
+          const content = await fsPromises.readFile(file_path as string, 'utf8');
 
           // Count occurrences
-          const occurrences = content.split(old_string).length - 1;
+          const occurrences = content.split(old_string as string).length - 1;
 
           if (occurrences === 0) {
             return {
               success: false,
               error: `old_string not found in ${file_path}. Make sure the string matches exactly (including whitespace and indentation).`,
+            };
+          }
+
+          // When replace_all is true, replace all occurrences
+          if (replace_all && occurrences > 1) {
+            const newContent = content.replaceAll(old_string as string, new_string as string);
+            await fsPromises.writeFile(file_path as string, newContent, 'utf8');
+            return {
+              success: true,
+              file: file_path,
+              replacements: occurrences,
             };
           }
 
@@ -426,11 +427,11 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
             };
           }
 
-          // Perform the replacement
-          const newContent = content.replace(old_string, new_string);
+          // Perform the replacement (single occurrence)
+          const newContent = content.replace(old_string as string, new_string as string);
 
           // Write back
-          await fsPromises.writeFile(file_path, newContent, 'utf8');
+          await fsPromises.writeFile(file_path as string, newContent, 'utf8');
 
           return {
             success: true,
@@ -459,12 +460,12 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
       }),
       execute: async ({ file_path, offset, limit }) => {
         try {
-          const content = await fsPromises.readFile(file_path, 'utf8');
+          const content = await fsPromises.readFile(file_path as string, 'utf8');
           const lines = content.split('\n');
 
           if (offset || limit) {
-            const start = (offset || 1) - 1;
-            const end = limit ? start + limit : lines.length;
+            const start = ((offset as number) || 1) - 1;
+            const end = limit ? start + (limit as number) : lines.length;
             const sliced = lines.slice(start, end);
             return {
               success: true,
@@ -497,12 +498,12 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
       execute: async ({ file_path, content }) => {
         try {
           // Ensure parent directory exists
-          const dir = file_path.substring(0, file_path.lastIndexOf('/'));
+          const dir = (file_path as string).substring(0, (file_path as string).lastIndexOf('/'));
           if (dir) {
             await fsPromises.mkdir(dir, { recursive: true });
           }
-          await fsPromises.writeFile(file_path, content, 'utf8');
-          return { success: true, file: file_path, bytes: Buffer.byteLength(content, 'utf8') };
+          await fsPromises.writeFile(file_path as string, content as string, 'utf8');
+          return { success: true, file: file_path, bytes: Buffer.byteLength(content as string, 'utf8') };
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
