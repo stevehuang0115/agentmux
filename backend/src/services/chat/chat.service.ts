@@ -355,6 +355,15 @@ export class ChatService extends EventEmitter {
     });
 
     await this.saveMessage(message);
+
+    // Persist to disk — saveMessage only updates in-memory state;
+    // callers that also call updateConversationWithMessage get persistence
+    // from there, but system messages skip that path.
+    const conversation = this.conversations.get(conversationId);
+    if (conversation) {
+      await this.saveConversation(conversation);
+    }
+
     this.emitChatMessageEvent(message);
 
     return message;
@@ -858,7 +867,13 @@ export class ChatService extends EventEmitter {
   }
 
   /**
-   * Save a message to the in-memory store and persist to disk
+   * Save a message to the in-memory store.
+   *
+   * Only updates the in-memory messages array. Disk persistence is handled
+   * by the caller (typically via updateConversationWithMessage which calls
+   * saveConversation). For code paths that skip updateConversationWithMessage
+   * (e.g. addSystemMessage), the caller is responsible for triggering
+   * saveConversation separately.
    *
    * @param message - Message to save
    */
@@ -866,11 +881,6 @@ export class ChatService extends EventEmitter {
     const messages = this.messages.get(message.conversationId) ?? [];
     messages.push(message);
     this.messages.set(message.conversationId, messages);
-
-    const conversation = this.conversations.get(message.conversationId);
-    if (conversation) {
-      await this.saveConversation(conversation);
-    }
   }
 
   /**

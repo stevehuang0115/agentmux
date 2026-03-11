@@ -259,6 +259,10 @@ export class RuntimeExitMonitorService {
 	/**
 	 * Stop monitoring a PTY session.
 	 *
+	 * Also prunes the restartHistory entry for this session if it has no
+	 * recent timestamps within the cooldown window, preventing slow memory
+	 * leak for terminated sessions.
+	 *
 	 * @param sessionName - PTY session name
 	 */
 	stopMonitoring(sessionName: string): void {
@@ -276,6 +280,21 @@ export class RuntimeExitMonitorService {
 
 		monitored.unsubscribe();
 		this.sessions.delete(sessionName);
+
+		// Fix 3: Clean up restartHistory for terminated sessions to prevent
+		// unbounded Map growth. Keep the entry only if it has recent timestamps
+		// within the cooldown window (they may still be needed if the session
+		// is restarted soon). Delete the entry entirely otherwise.
+		const timestamps = this.restartHistory.get(sessionName);
+		if (timestamps) {
+			const windowStart = Date.now() - AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS;
+			const recent = timestamps.filter(ts => ts > windowStart);
+			if (recent.length === 0) {
+				this.restartHistory.delete(sessionName);
+			} else {
+				this.restartHistory.set(sessionName, recent);
+			}
+		}
 
 		this.logger.debug('Stopped runtime exit monitoring', { sessionName });
 	}
@@ -343,6 +362,10 @@ export class RuntimeExitMonitorService {
 	/**
 	 * Confirm exit by checking for a shell prompt, then react.
 	 *
+	 * Runtime-specific failure checks are gated by runtimeType so that
+	 * patterns for one runtime cannot accidentally match another (e.g. a
+	 * Codex exit matching Claude or Gemini patterns).
+	 *
 	 * For Gemini CLI failure patterns (API errors, quota exhaustion, etc.),
 	 * the system retries with exponential backoff before declaring the agent
 	 * dead. Gemini CLI often recovers automatically from transient API errors
@@ -369,60 +392,64 @@ export class RuntimeExitMonitorService {
 			const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
 
 			if (!shellPromptConfirmed) {
-				// Codex: "Conversation interrupted" indicates the run was aborted and
-				// often leaves the agent stranded without completion callbacks. Treat it
-				// as an actionable runtime failure even if shell prompt isn't visible.
-				const isCodexInterrupted = monitored.runtimeType === RUNTIME_TYPES.CODEX_CLI
-					&& /Conversation interrupted/i.test(monitored.buffer);
-				if (isCodexInterrupted) {
-					this.logger.warn('Codex interruption detected, proceeding with recovery flow', {
-						sessionName,
-					});
-					// fall through to exit/restart handling below
-				}
+				// Gate runtime-specific failure checks by runtimeType so that
+				// patterns for one runtime cannot accidentally match another.
+				let runtimeSpecificMatch = false;
 
-				// Claude Code: detect fatal API errors that make the CLI permanently
-			// non-functional (e.g. thinking block corruption). These are unrecoverable
-			// — no retry will help, immediate restart is required.
-			const isClaudeFatal = monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE
-				&& CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-			if (isClaudeFatal) {
-				const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
-				this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
-					sessionName,
-					detectedPattern,
-				});
-				// fall through to exit/restart handling below (no retry)
-			}
-
-			// For Gemini CLI: detect either retryable failure patterns or forced
-				// restart/update markers that require immediate recovery handling.
-				const isGeminiFailure = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
-					&& GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-				const isGeminiForceRestart = monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI
-					&& GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-
-				if (!isGeminiFailure && !isGeminiForceRestart && !isCodexInterrupted && !isClaudeFatal) {
-					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
-					return;
-				}
-
-				if (isGeminiFailure || isGeminiForceRestart) {
-					// Some Gemini failures are transient; others (auto-update/restart)
-					// should trigger immediate recovery and task re-delivery.
-					if (isGeminiForceRestart) {
-						this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
+				if (monitored.runtimeType === RUNTIME_TYPES.CODEX_CLI) {
+					// Codex: "Conversation interrupted" indicates the run was aborted and
+					// often leaves the agent stranded without completion callbacks. Treat it
+					// as an actionable runtime failure even if shell prompt isn't visible.
+					const isCodexInterrupted = /Conversation interrupted/i.test(monitored.buffer);
+					if (isCodexInterrupted) {
+						this.logger.warn('Codex interruption detected, proceeding with recovery flow', {
 							sessionName,
 						});
-					} else {
-						// Retry with exponential backoff before declaring exit.
-						// Gemini CLI can recover from transient API errors automatically.
-						const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
-						if (retryResult === 'recovered' || retryResult === 'deferred') {
-							return;
-						}
-						// retryResult === 'exhausted' — fall through to exit flow
+						runtimeSpecificMatch = true;
 					}
+				} else if (monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+					// Claude Code: detect fatal API errors that make the CLI permanently
+					// non-functional (e.g. thinking block corruption). These are unrecoverable
+					// — no retry will help, immediate restart is required.
+					const isClaudeFatal = CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+					if (isClaudeFatal) {
+						const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
+						this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
+							sessionName,
+							detectedPattern,
+						});
+						runtimeSpecificMatch = true;
+					}
+				} else if (monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+					// For Gemini CLI: detect either retryable failure patterns or forced
+					// restart/update markers that require immediate recovery handling.
+					const isGeminiFailure = GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+					const isGeminiForceRestart = GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+
+					if (isGeminiFailure || isGeminiForceRestart) {
+						runtimeSpecificMatch = true;
+
+						// Some Gemini failures are transient; others (auto-update/restart)
+						// should trigger immediate recovery and task re-delivery.
+						if (isGeminiForceRestart) {
+							this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
+								sessionName,
+							});
+						} else {
+							// Retry with exponential backoff before declaring exit.
+							// Gemini CLI can recover from transient API errors automatically.
+							const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
+							if (retryResult === 'recovered' || retryResult === 'deferred') {
+								return;
+							}
+							// retryResult === 'exhausted' — fall through to exit flow
+						}
+					}
+				}
+
+				if (!runtimeSpecificMatch) {
+					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
+					return;
 				}
 			}
 
