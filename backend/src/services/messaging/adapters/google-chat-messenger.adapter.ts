@@ -82,6 +82,9 @@ export class GoogleChatMessengerAdapter implements MessengerAdapter {
   /** OAuth2 scopes for the current mode */
   private tokenScopes: string = GOOGLE_CHAT_PUBSUB_CONSTANTS.CHAT_SCOPE;
 
+  /** Pending token refresh promise to deduplicate concurrent requests (RL2) */
+  private pendingTokenRefresh: Promise<string> | null = null;
+
   /** Full Pub/Sub subscription resource name (e.g. projects/PROJECT/subscriptions/SUB) */
   private subscriptionName: string | null = null;
 
@@ -481,6 +484,25 @@ export class GoogleChatMessengerAdapter implements MessengerAdapter {
       return this.accessToken;
     }
 
+    // Deduplicate concurrent refresh requests (RL2)
+    if (this.pendingTokenRefresh) {
+      return this.pendingTokenRefresh;
+    }
+
+    this.pendingTokenRefresh = this.refreshAccessToken();
+    try {
+      return await this.pendingTokenRefresh;
+    } finally {
+      this.pendingTokenRefresh = null;
+    }
+  }
+
+  /**
+   * Perform the actual token refresh via JWT-based OAuth2 flow.
+   *
+   * @returns Fresh access token string
+   */
+  private async refreshAccessToken(): Promise<string> {
     if (!this.serviceAccountKey) {
       throw new Error('Service account key not configured');
     }
@@ -558,6 +580,7 @@ export class GoogleChatMessengerAdapter implements MessengerAdapter {
     this.accessToken = null;
     this.tokenExpiresAt = 0;
     this.tokenScopes = GOOGLE_CHAT_PUBSUB_CONSTANTS.CHAT_SCOPE;
+    this.pendingTokenRefresh = null;
     this.subscriptionName = null;
     this.projectId = null;
     this.onIncomingMessage = null;

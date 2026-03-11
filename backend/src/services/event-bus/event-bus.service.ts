@@ -201,7 +201,7 @@ export class EventBusService extends EventEmitter {
     this.recentPublishMap.set(dedupKey, nowMs);
 
     // Clean up old entries periodically (keep map small)
-    if (this.recentPublishMap.size > 100) {
+    if (this.recentPublishMap.size > EVENT_BUS_CONSTANTS.DEDUP_MAP_CLEANUP_THRESHOLD) {
       for (const [key, ts] of this.recentPublishMap) {
         if (nowMs - ts > EVENT_BUS_CONSTANTS.EVENT_DEBOUNCE_WINDOW_MS) {
           this.recentPublishMap.delete(key);

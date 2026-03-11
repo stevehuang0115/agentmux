@@ -339,6 +339,8 @@ export const EVENT_BUS_CONSTANTS = {
 	CLEANUP_INTERVAL: 60000,
 	/** Prefix for event notification messages delivered to orchestrator */
 	EVENT_MESSAGE_PREFIX: 'EVENT',
+	/** Threshold for cleaning stale entries from recentPublishMap */
+	DEDUP_MAP_CLEANUP_THRESHOLD: 100,
 } as const;
 
 /**

@@ -17,6 +17,7 @@
 
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { AUDITOR_SCHEDULER_CONSTANTS } from '../../constants.js';
+import { formatError } from '../../utils/format-error.js';
 import type { EventBusService } from '../event-bus/event-bus.service.js';
 import type { CrewlyAgentRuntimeService } from './crewly-agent/crewly-agent-runtime.service.js';
 
@@ -223,6 +224,17 @@ export class AuditorSchedulerService {
     this.lastAuditStart = Date.now();
     this.auditCount++;
 
+    // Start timeout timer to prevent audit from hanging forever (RL5)
+    this.auditTimeoutTimer = setTimeout(() => {
+      if (this.status === 'running_audit') {
+        this.logger.error('Audit timed out, resetting to idle', {
+          source,
+          timeoutMs: AUDITOR_SCHEDULER_CONSTANTS.AUDIT_TIMEOUT_MS,
+        });
+        this.status = 'idle';
+      }
+    }, AUDITOR_SCHEDULER_CONSTANTS.AUDIT_TIMEOUT_MS);
+
     try {
       // Ensure auditor is ready (should already be from start(), defensive check)
       if (!this.auditorRuntime.isReady()) {
@@ -246,7 +258,7 @@ export class AuditorSchedulerService {
 
       return { triggered: true, source, timestamp };
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
+      const errMsg = formatError(error);
       this.logger.error('Audit failed', { source, error: errMsg });
 
       // Stay idle — do NOT shutdown on error (always-active mode)
@@ -302,7 +314,7 @@ export class AuditorSchedulerService {
       await this.auditorRuntime.handleMessage(slackPrefix + message);
       return { triggered: true, source: 'api', timestamp };
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
+      const errMsg = formatError(error);
       this.logger.error('Auditor user message failed', { error: errMsg });
       return { triggered: false, reason: `Auditor error: ${errMsg}`, source: 'api', timestamp };
     }
@@ -352,7 +364,7 @@ export class AuditorSchedulerService {
       }
     } catch (error) {
       this.logger.error('Failed to initialize auditor runtime', {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatError(error),
       });
     }
   }
