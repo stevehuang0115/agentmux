@@ -36,6 +36,15 @@ jest.mock('../slack/slack.service.js', () => ({
 	}),
 }));
 
+const mockClearSession = jest.fn();
+jest.mock('../agent/pty-activity-tracker.service.js', () => ({
+	PtyActivityTrackerService: {
+		getInstance: () => ({
+			clearSession: mockClearSession,
+		}),
+	},
+}));
+
 const mockGetOrchestratorStatus = jest.fn();
 jest.mock('../core/storage.service.js', () => ({
 	StorageService: {
@@ -85,6 +94,8 @@ describe('OrchestratorRestartService', () => {
 		mockGetOrchestratorStatus.mockResolvedValue({
 			runtimeType: RUNTIME_TYPES.CLAUDE_CODE,
 		});
+
+		mockClearSession.mockClear();
 	});
 
 	afterEach(() => {
@@ -100,6 +111,14 @@ describe('OrchestratorRestartService', () => {
 	});
 
 	describe('isRestartAllowed', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should allow restart when no restarts have occurred', () => {
 			expect(service.isRestartAllowed()).toBe(true);
 		});
@@ -107,7 +126,9 @@ describe('OrchestratorRestartService', () => {
 		it('should deny restart after max restarts in window', async () => {
 			// Exhaust restart allowance
 			for (let i = 0; i < ORCHESTRATOR_RESTART_CONSTANTS.MAX_RESTARTS_PER_WINDOW; i++) {
-				await service.attemptRestart();
+				const p = service.attemptRestart();
+				await jest.advanceTimersByTimeAsync(6000);
+				await p;
 			}
 
 			expect(service.isRestartAllowed()).toBe(false);
@@ -115,8 +136,18 @@ describe('OrchestratorRestartService', () => {
 	});
 
 	describe('attemptRestart', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should successfully restart the orchestrator', async () => {
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(true);
 			expect(mockSessionBackend.killSession).toHaveBeenCalled();
@@ -129,7 +160,9 @@ describe('OrchestratorRestartService', () => {
 			const freshService = OrchestratorRestartService.getInstance();
 			// Don't set dependencies
 
-			const result = await freshService.attemptRestart();
+			const resultPromise = freshService.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(false);
 		});
@@ -140,7 +173,9 @@ describe('OrchestratorRestartService', () => {
 				error: 'session creation failed',
 			});
 
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(false);
 		});
@@ -148,10 +183,14 @@ describe('OrchestratorRestartService', () => {
 		it('should return false when cooldown is active', async () => {
 			// Exhaust restarts
 			for (let i = 0; i < ORCHESTRATOR_RESTART_CONSTANTS.MAX_RESTARTS_PER_WINDOW; i++) {
-				await service.attemptRestart();
+				const p = service.attemptRestart();
+				await jest.advanceTimersByTimeAsync(6000);
+				await p;
 			}
 
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(false);
 		});
@@ -161,6 +200,7 @@ describe('OrchestratorRestartService', () => {
 			const promise1 = service.attemptRestart();
 			const promise2 = service.attemptRestart();
 
+			await jest.advanceTimersByTimeAsync(6000);
 			const [result1, result2] = await Promise.all([promise1, promise2]);
 
 			// One should succeed, the other should be rejected as concurrent
@@ -171,7 +211,9 @@ describe('OrchestratorRestartService', () => {
 		it('should handle killSession error gracefully', async () => {
 			mockSessionBackend.killSession.mockRejectedValueOnce(new Error('kill failed'));
 
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			// Should still succeed even if kill fails
 			expect(result).toBe(true);
@@ -180,10 +222,39 @@ describe('OrchestratorRestartService', () => {
 		it('should continue when session does not exist', async () => {
 			mockSessionBackend.sessionExists.mockReturnValue(false);
 
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(true);
 			expect(mockSessionBackend.killSession).not.toHaveBeenCalled();
+		});
+
+		it('should clear PtyActivityTracker data after killing old session', async () => {
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
+
+			expect(result).toBe(true);
+			expect(mockClearSession).toHaveBeenCalledWith('crewly-orc');
+			// clearSession should be called after kill but before creating new session
+			const killOrder = mockSessionBackend.killSession.mock.invocationCallOrder[0];
+			const clearOrder = mockClearSession.mock.invocationCallOrder[0];
+			const createOrder = mockAgentRegistrationService.createAgentSession.mock.invocationCallOrder[0];
+			expect(clearOrder).toBeGreaterThan(killOrder);
+			expect(clearOrder).toBeLessThan(createOrder);
+		});
+
+		it('should clear PtyActivityTracker even when session does not exist', async () => {
+			mockSessionBackend.sessionExists.mockReturnValue(false);
+
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
+
+			expect(result).toBe(true);
+			// Should still clear tracker data even if kill was skipped
+			expect(mockClearSession).toHaveBeenCalledWith('crewly-orc');
 		});
 
 		it('should restart orchestrator with stored runtime type', async () => {
@@ -191,7 +262,9 @@ describe('OrchestratorRestartService', () => {
 				runtimeType: RUNTIME_TYPES.GEMINI_CLI,
 			});
 
-			const result = await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			const result = await resultPromise;
 
 			expect(result).toBe(true);
 			expect(mockAgentRegistrationService.createAgentSession).toHaveBeenCalledWith(
@@ -201,6 +274,14 @@ describe('OrchestratorRestartService', () => {
 	});
 
 	describe('getRestartStats', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should return initial stats with zero restarts', () => {
 			const stats = service.getRestartStats();
 
@@ -212,7 +293,9 @@ describe('OrchestratorRestartService', () => {
 		});
 
 		it('should track restart count after successful restart', async () => {
-			await service.attemptRestart();
+			const resultPromise = service.attemptRestart();
+			await jest.advanceTimersByTimeAsync(6000);
+			await resultPromise;
 
 			const stats = service.getRestartStats();
 

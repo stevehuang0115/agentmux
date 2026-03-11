@@ -12,10 +12,43 @@ import { TaskOutputValidatorService } from '../../services/quality/task-output-v
 import { TASK_OUTPUT_CONSTANTS, type TaskOutputRetryInfo, type TaskOutputSchema } from '../../types/task-output.types.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
 
+import type { InProgressTask } from '../../types/task-tracking.types.js';
+
 const logger = LoggerService.getInstance().createComponentLogger('TaskManagementController');
 
 /** Module-level reference to EventBusService for auto-cleanup on task completion */
 let eventBusService: EventBusService | null = null;
+
+/**
+ * Publish a task:completed event to the EventBus (#137).
+ * Fire-and-forget — errors are logged but do not block task completion.
+ *
+ * @param task - The completed task metadata
+ * @param sessionName - The session that completed the task
+ */
+function publishTaskCompletedEvent(task: InProgressTask, sessionName?: string): void {
+	if (!eventBusService) return;
+	try {
+		eventBusService.publish({
+			id: `task-completed-${task.id}-${Date.now()}`,
+			type: 'task:completed' as any,
+			timestamp: new Date().toISOString(),
+			teamId: task.teamId || '',
+			teamName: '',
+			memberId: task.assignedTeamMemberId || '',
+			memberName: '',
+			sessionName: sessionName || task.assignedSessionName || '',
+			previousValue: task.status,
+			newValue: 'completed',
+			changedField: 'taskStatus',
+		});
+	} catch (err) {
+		logger.warn('Failed to publish task:completed event (non-fatal)', {
+			taskId: task.id,
+			error: err instanceof Error ? err.message : String(err),
+		});
+	}
+}
 
 /**
  * Set the EventBusService instance for task monitoring cleanup.
@@ -458,6 +491,7 @@ export async function completeTask(
 			const taskToRemoveWithSchema = allTasksWithSchema.find(t => t.taskFilePath === taskPath);
 			let cleanupResultSchema = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 			if (taskToRemoveWithSchema) {
+				publishTaskCompletedEvent(taskToRemoveWithSchema, sessionName);
 				cleanupResultSchema = await cleanupTaskMonitoring(this, taskToRemoveWithSchema);
 				await this.taskTrackingService.removeTask(taskToRemoveWithSchema.id);
 			}
@@ -494,6 +528,7 @@ export async function completeTask(
 		const taskToRemove = allTasks.find(t => t.taskFilePath === taskPath);
 		let cleanupResult = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 		if (taskToRemove) {
+			publishTaskCompletedEvent(taskToRemove, sessionName);
 			cleanupResult = await cleanupTaskMonitoring(this, taskToRemove);
 			await this.taskTrackingService.removeTask(taskToRemove.id);
 		}

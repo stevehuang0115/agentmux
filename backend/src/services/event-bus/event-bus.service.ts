@@ -19,7 +19,7 @@ import type {
   EventSubscription,
   CreateSubscriptionInput,
 } from '../../types/event-bus.types.js';
-import { isValidCreateSubscriptionInput } from '../../types/event-bus.types.js';
+import { isValidCreateSubscriptionInput, isCriticalEventType } from '../../types/event-bus.types.js';
 
 /**
  * Buffered notification entry pending delivery after debounce window.
@@ -316,14 +316,20 @@ export class EventBusService extends EventEmitter {
 
   /**
    * Buffer a notification for debounced delivery with per-agent deduplication.
-   * If the same agent already has a pending notification for this subscriber,
-   * it is overwritten with the latest event (only final state matters).
+   * Critical events (task:completed, task:failed, agent:inactive, etc.) bypass
+   * the debounce buffer and are delivered immediately to avoid notification delay.
    *
    * @param sub - The subscription whose subscriber should receive the message
    * @param message - The formatted notification message
    * @param event - The original agent event
    */
   private bufferNotification(sub: EventSubscription, message: string, event: AgentEvent): void {
+    // Critical events bypass debounce — deliver immediately
+    if (isCriticalEventType(event.type)) {
+      this.deliverImmediately(sub.subscriberSession, message);
+      return;
+    }
+
     // Dedup key: same subscriber + same agent = keep only the latest event.
     // If agent-joe transitions idle→active→idle in 5 seconds, the orchestrator
     // only receives the final "idle" notification, not all three.
@@ -344,6 +350,37 @@ export class EventBusService extends EventEmitter {
     this.batchTimer = setTimeout(() => {
       this.flushNotifications();
     }, EVENT_BUS_CONSTANTS.EVENT_DEBOUNCE_WINDOW_MS);
+  }
+
+  /**
+   * Deliver a notification immediately without debouncing.
+   * Used for critical events that must reach the subscriber ASAP.
+   *
+   * @param subscriberSession - The session to deliver to
+   * @param message - The formatted notification message
+   */
+  private deliverImmediately(subscriberSession: string, message: string): void {
+    if (!this.messageQueueService) {
+      this.logger.warn('MessageQueueService not set, discarding critical notification', {
+        subscriberSession,
+      });
+      return;
+    }
+
+    try {
+      this.messageQueueService.enqueue({
+        content: message,
+        conversationId: 'system',
+        source: 'system_event',
+        targetSession: subscriberSession,
+      });
+      this.logger.info('Critical event delivered immediately', { subscriberSession });
+    } catch (error) {
+      this.logger.error('Failed to deliver critical event notification', {
+        error: error instanceof Error ? error.message : String(error),
+        subscriberSession,
+      });
+    }
   }
 
   /**

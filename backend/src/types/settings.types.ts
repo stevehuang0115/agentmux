@@ -200,7 +200,7 @@ export function getDefaultSettings(): CrewlySettings {
         'claude-code': 'claude --dangerously-skip-permissions',
         'gemini-cli': 'gemini --yolo',
         'codex-cli': 'codex -a never -s danger-full-access',
-        'crewly-agent': 'crewly-agent',
+        'crewly-agent': 'crewly-agent-in-process',
       },
       agentIdleTimeoutMinutes: 10,
       enableProactiveCompact: true,

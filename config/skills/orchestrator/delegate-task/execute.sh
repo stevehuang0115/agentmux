@@ -78,14 +78,14 @@ if [ "$USE_STRUCTURED" = "true" ] && [ -n "$TITLE" ]; then
 
   [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nAdditional context: ${CONTEXT}"
   [ -n "$DEADLINE_HINT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\n**Deadline hint**: ${DEADLINE_HINT}"
-  TASK_MESSAGE="${TASK_MESSAGE}\n\n---\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
-  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"task-insight\",\"scope\":\"project\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\n---\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\",\"projectPath\":\"${PROJECT_PATH}\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"pattern\",\"scope\":\"project\"}'"
 else
   # Legacy free-text format (backwards compatible)
   TASK_MESSAGE="New task from orchestrator (priority: ${PRIORITY}):\n\n${TASK}"
   [ -n "$CONTEXT" ] && TASK_MESSAGE="${TASK_MESSAGE}\n\nContext: ${CONTEXT}"
-  TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\"}'"
-  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"task-insight\",\"scope\":\"project\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nWhen done, report back using: bash ${CREWLY_ROOT}/config/skills/agent/core/report-status/execute.sh '{\"sessionName\":\"${TO}\",\"status\":\"done\",\"summary\":\"<brief summary>\",\"projectPath\":\"${PROJECT_PATH}\"}'"
+  TASK_MESSAGE="${TASK_MESSAGE}\n\nBefore reporting done, persist key findings using: bash ${CREWLY_ROOT}/config/skills/agent/core/remember/execute.sh '{\"agentId\":\"${TO}\",\"content\":\"<key findings>\",\"category\":\"pattern\",\"scope\":\"project\"}'"
 fi
 
 # Deliver the task message with fallback strategy:
@@ -123,6 +123,14 @@ if [ -n "$PROJECT_PATH" ]; then
   CREATE_RESULT=$(api_call POST "/task-management/create" "$CREATE_BODY" 2>/dev/null || true)
   TASK_FILE_PATH=$(echo "$CREATE_RESULT" | jq -r '.taskPath // empty' 2>/dev/null || true)
   TASK_ID=$(echo "$CREATE_RESULT" | jq -r '.taskId // empty' 2>/dev/null || true)
+
+  # Deliver a follow-up message with complete-task instructions now that taskPath is known (#137).
+  # This ensures agents call complete-task with the exact path, not just report-status.
+  if [ -n "$TASK_FILE_PATH" ]; then
+    COMPLETE_INSTR="After finishing and calling report-status, also run: bash ${CREWLY_ROOT}/config/skills/agent/core/complete-task/execute.sh '{\"absoluteTaskPath\":\"${TASK_FILE_PATH}\",\"sessionName\":\"${TO}\",\"summary\":\"<brief summary>\"}'"
+    FOLLOWUP_BODY=$(jq -n --arg message "$COMPLETE_INSTR" '{message: $message, force: true}')
+    api_call POST "/terminal/${TO}/deliver" "$FOLLOWUP_BODY" 2>/dev/null || true
+  fi
 fi
 
 # --- Auto-monitoring setup ---

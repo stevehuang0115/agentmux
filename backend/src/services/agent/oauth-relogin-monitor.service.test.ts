@@ -206,6 +206,19 @@ describe('OAuthReloginMonitorService', () => {
 			expect(mockSessionWrite).toHaveBeenCalledWith('/login\r');
 		});
 
+		it('detects "authentication_error" + "Invalid authentication credentials"', async () => {
+			feedData('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid authentication credentials"},"request_id":"req_test"} · Please run /login');
+			await advancePastRelogin();
+			expect(mockSessionWrite).toHaveBeenCalledWith('\x1b');
+			expect(mockSessionWrite).toHaveBeenCalledWith('/login\r');
+		});
+
+		it('detects "401" + "Invalid authentication credentials"', async () => {
+			feedData('HTTP 401: Invalid authentication credentials');
+			await advancePastRelogin();
+			expect(mockSessionWrite).toHaveBeenCalledWith('/login\r');
+		});
+
 		it('does not trigger on partial matches', async () => {
 			feedData('authentication_error: invalid credentials');
 			await advancePastRelogin();

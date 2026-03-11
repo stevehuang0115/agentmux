@@ -17,7 +17,8 @@ describe('Scheduler Handlers', () => {
       scheduleRecurringCheck: jest.fn<any>(),
       getChecksForSession: jest.fn<any>(),
       listScheduledChecks: jest.fn<any>(),
-      cancelCheck: jest.fn<any>()
+      cancelCheck: jest.fn<any>(),
+      cancelAllChecks: jest.fn<any>(),
     };
 
     mockApiContext = {
@@ -401,6 +402,107 @@ describe('Scheduler Handlers', () => {
     });
   });
 
+  describe('cancelAllScheduledChecks', () => {
+    it('should cancel all checks without filters', async () => {
+      mockSchedulerService.cancelAllChecks.mockReturnValue(5);
+      mockRequest.query = {};
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.cancelAllChecks).toHaveBeenCalledWith(undefined);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: { cancelled: 5 },
+        message: 'Cancelled 5 scheduled check(s)',
+      });
+    });
+
+    it('should cancel checks filtered by session', async () => {
+      mockSchedulerService.cancelAllChecks.mockReturnValue(3);
+      mockRequest.query = { session: 'agent-sam' };
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.cancelAllChecks).toHaveBeenCalledWith({ session: 'agent-sam' });
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: { cancelled: 3 },
+        message: 'Cancelled 3 scheduled check(s)',
+      });
+    });
+
+    it('should cancel checks filtered by age', async () => {
+      mockSchedulerService.cancelAllChecks.mockReturnValue(2);
+      mockRequest.query = { olderThanMinutes: '60' };
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.cancelAllChecks).toHaveBeenCalledWith({ olderThanMinutes: 60 });
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: true,
+        data: { cancelled: 2 },
+        message: 'Cancelled 2 scheduled check(s)',
+      });
+    });
+
+    it('should handle combined filters', async () => {
+      mockSchedulerService.cancelAllChecks.mockReturnValue(1);
+      mockRequest.query = { session: 'agent-sam', olderThanMinutes: '30' };
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.cancelAllChecks).toHaveBeenCalledWith({ session: 'agent-sam', olderThanMinutes: 30 });
+    });
+
+    it('should ignore invalid olderThanMinutes', async () => {
+      mockSchedulerService.cancelAllChecks.mockReturnValue(5);
+      mockRequest.query = { olderThanMinutes: 'invalid' };
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockSchedulerService.cancelAllChecks).toHaveBeenCalledWith(undefined);
+    });
+
+    it('should handle service errors', async () => {
+      mockSchedulerService.cancelAllChecks.mockImplementation(() => {
+        throw new Error('Cancel all error');
+      });
+      mockRequest.query = {};
+
+      await schedulerHandlers.cancelAllScheduledChecks.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(500);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'Failed to cancel scheduled checks',
+      });
+    });
+  });
+
   describe('Error handling', () => {
     it('should handle unexpected errors gracefully', async () => {
       mockSchedulerService.scheduleCheck.mockImplementation(() => {
@@ -574,6 +676,7 @@ describe('Scheduler Handlers', () => {
       expect(typeof schedulerHandlers.scheduleCheck).toBe('function');
       expect(typeof schedulerHandlers.getScheduledChecks).toBe('function');
       expect(typeof schedulerHandlers.cancelScheduledCheck).toBe('function');
+      expect(typeof schedulerHandlers.cancelAllScheduledChecks).toBe('function');
       expect(typeof schedulerHandlers.restoreScheduledChecks).toBe('function');
     });
 
@@ -663,6 +766,54 @@ describe('Scheduler Handlers', () => {
         data: { checkId: mockCheckId },
         message: 'Check-in scheduled successfully'
       });
+    });
+  });
+
+  describe('recordManualCheck', () => {
+    beforeEach(() => {
+      mockSchedulerService.recordManualCheck = jest.fn<any>();
+    });
+
+    it('should record manual check and return success', async () => {
+      mockRequest.body = { agentSession: 'agent-sam' };
+
+      await schedulerHandlers.recordManualCheck.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response,
+      );
+
+      expect(mockSchedulerService.recordManualCheck).toHaveBeenCalledWith('agent-sam');
+      expect(mockResponse.json).toHaveBeenCalledWith({ success: true });
+    });
+
+    it('should return 400 when agentSession is missing', async () => {
+      mockRequest.body = {};
+
+      await schedulerHandlers.recordManualCheck.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response,
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(400);
+      expect(mockResponse.json).toHaveBeenCalledWith({
+        success: false,
+        error: 'agentSession is required',
+      });
+      expect(mockSchedulerService.recordManualCheck).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 when agentSession is not a string', async () => {
+      mockRequest.body = { agentSession: 123 };
+
+      await schedulerHandlers.recordManualCheck.call(
+        mockApiContext as ApiContext,
+        mockRequest as Request,
+        mockResponse as Response,
+      );
+
+      expect(mockResponse.status).toHaveBeenCalledWith(400);
     });
   });
 });

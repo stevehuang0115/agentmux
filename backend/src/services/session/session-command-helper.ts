@@ -194,6 +194,71 @@ export class SessionCommandHelper {
 	}
 
 	/**
+	 * Gemini-specific message delivery (#130).
+	 *
+	 * Handles Ink TUI quirks:
+	 * 1. Sends Escape to exit sub-modes (shell mode, error overlay)
+	 * 2. Writes the message text
+	 * 3. Uses a longer delay before Enter (Ink TUI needs processing time)
+	 * 4. Verifies the message text left the input area (accepted)
+	 *
+	 * @param sessionName - The session to send to
+	 * @param message - The message to send
+	 * @returns true if post-write verification shows message was accepted
+	 */
+	async sendMessageGemini(sessionName: string, message: string): Promise<boolean> {
+		const session = this.getSessionOrThrow(sessionName);
+
+		this.logger.debug('Gemini-specific message delivery', {
+			sessionName,
+			messageLength: message.length,
+		});
+
+		// Step 1: Escape to ensure we're not in a sub-mode
+		session.write('\x1b');
+		await delay(200);
+
+		// Step 2: Write the message text
+		session.write(message);
+
+		// Step 3: Longer delay for Ink TUI to process the paste
+		const scaledDelay = Math.min(
+			SESSION_COMMAND_DELAYS.MESSAGE_DELAY + Math.ceil(message.length / 10),
+			5000
+		);
+		await delay(scaledDelay);
+
+		// Step 4: Send Enter with extra delay for Ink TUI
+		session.write('\r');
+		await delay(SESSION_COMMAND_DELAYS.KEY_DELAY * 2);
+
+		// Step 5: Verify — check if message text disappeared from input area
+		try {
+			const postOutput = this.capturePane(sessionName, 10);
+			const msgSnippet = (message.length > 30
+				? message.substring(0, 60)
+				: message).replace(/\s+/g, ' ').trim();
+			const bottomLines = postOutput.split('\n').slice(-5).join(' ').replace(/\s+/g, ' ');
+			const textStillPresent = bottomLines.includes(msgSnippet);
+
+			if (textStillPresent) {
+				this.logger.warn('Gemini message text still in input after send — Enter may have been dropped', {
+					sessionName,
+				});
+				return false;
+			}
+
+			this.logger.debug('Gemini message delivery verified — text accepted', {
+				sessionName,
+			});
+			return true;
+		} catch {
+			// Verification failed, but message may have been delivered
+			return true;
+		}
+	}
+
+	/**
 	 * Detect and dismiss interactive prompts (e.g., plan mode) before message delivery.
 	 * Checks the last terminal output for plan mode patterns and sends Escape to exit
 	 * if detected. This prevents agents from getting permanently stuck in plan mode.

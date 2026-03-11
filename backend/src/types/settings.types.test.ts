@@ -29,6 +29,7 @@ describe('Settings Types', () => {
       expect(AI_RUNTIMES).toContain('claude-code');
       expect(AI_RUNTIMES).toContain('gemini-cli');
       expect(AI_RUNTIMES).toContain('codex-cli');
+      expect(AI_RUNTIMES).toContain('crewly-agent');
     });
 
     it('should have exactly 4 runtimes', () => {
@@ -58,7 +59,7 @@ describe('Settings Types', () => {
           'claude-code': 'claude --dangerously-skip-permissions',
           'gemini-cli': 'gemini --yolo',
           'codex-cli': 'codex -a never -s danger-full-access',
-          'crewly-agent': 'crewly-agent',
+          'crewly-agent': 'crewly-agent-in-process',
         },
         agentIdleTimeoutMinutes: 10,
         enableProactiveCompact: true,
@@ -87,7 +88,7 @@ describe('Settings Types', () => {
           'claude-code': '/custom/path/to/claude --dangerously-skip-permissions',
           'gemini-cli': '/custom/gemini --custom-flag',
           'codex-cli': '/custom/codex --custom-flag',
-          'crewly-agent': 'crewly-agent',
+          'crewly-agent': 'crewly-agent-in-process',
         },
         agentIdleTimeoutMinutes: 15,
         enableProactiveCompact: true,
@@ -148,7 +149,7 @@ describe('Settings Types', () => {
             'claude-code': 'claude --dangerously-skip-permissions',
             'gemini-cli': 'gemini --yolo',
             'codex-cli': 'codex -a never -s danger-full-access',
-            'crewly-agent': 'crewly-agent',
+            'crewly-agent': 'crewly-agent-in-process',
           },
           agentIdleTimeoutMinutes: 10,
           enableProactiveCompact: true,

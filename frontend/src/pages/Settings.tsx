@@ -1,22 +1,22 @@
 /**
  * Settings Page
  *
- * Main settings page with tab navigation for General, Roles, Skills, and Slack sections.
+ * Main settings page with tab navigation for General, Roles, Skills, and Integrations sections.
  *
  * @module pages/Settings
  */
 
 import React, { useState } from 'react';
-import { Settings as SettingsIcon, User, Wrench, MessageSquare, LucideIcon } from 'lucide-react';
+import { Settings as SettingsIcon, User, Wrench, Link2, LucideIcon } from 'lucide-react';
 import { GeneralTab } from '../components/Settings/GeneralTab';
 import { RolesTab } from '../components/Settings/RolesTab';
 import { SkillsTab } from '../components/Settings/SkillsTab';
-import { SlackTab } from '../components/Settings/SlackTab';
+import { IntegrationsTab } from '../components/Settings/IntegrationsTab';
 
 /**
  * Available settings tabs
  */
-type SettingsTab = 'general' | 'roles' | 'skills' | 'slack';
+type SettingsTab = 'general' | 'roles' | 'skills' | 'integrations';
 
 /**
  * Tab configuration
@@ -39,7 +39,7 @@ export const Settings: React.FC = () => {
     { id: 'general', label: 'General', icon: SettingsIcon },
     { id: 'roles', label: 'Roles', icon: User },
     { id: 'skills', label: 'Skills', icon: Wrench },
-    { id: 'slack', label: 'Slack', icon: MessageSquare },
+    { id: 'integrations', label: 'Integrations', icon: Link2 },
   ];
 
   /**
@@ -53,8 +53,8 @@ export const Settings: React.FC = () => {
         return <RolesTab />;
       case 'skills':
         return <SkillsTab />;
-      case 'slack':
-        return <SlackTab />;
+      case 'integrations':
+        return <IntegrationsTab />;
       default:
         return null;
     }

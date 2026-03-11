@@ -620,6 +620,64 @@ describe('SchedulerService', () => {
     });
   });
 
+  describe('cancelAllChecks', () => {
+    it('should cancel all checks when no filter is provided', () => {
+      service.scheduleCheck('session-1', 5, 'One-time 1');
+      service.scheduleCheck('session-2', 10, 'One-time 2');
+      service.scheduleRecurringCheck('session-1', 5, 'Recurring 1');
+
+      const cancelled = service.cancelAllChecks();
+
+      expect(cancelled).toBe(3);
+      expect(service.listScheduledChecks()).toHaveLength(0);
+    });
+
+    it('should filter by session', () => {
+      service.scheduleCheck('session-1', 5, 'One-time 1');
+      service.scheduleCheck('session-2', 10, 'One-time 2');
+      service.scheduleRecurringCheck('session-1', 5, 'Recurring 1');
+
+      const cancelled = service.cancelAllChecks({ session: 'session-1' });
+
+      expect(cancelled).toBe(2);
+      const remaining = service.listScheduledChecks();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].targetSession).toBe('session-2');
+    });
+
+    it('should filter by olderThanMinutes', () => {
+      // Create two checks — one "old" (by backdating createdAt) and one recent
+      const oldId = service.scheduleCheck('session-1', 5, 'Old check');
+      service.scheduleCheck('session-1', 5, 'New check');
+
+      // Backdate the first check's createdAt by 2 hours
+      const allChecks = service.listScheduledChecks();
+      const oldCheck = allChecks.find(c => c.id === oldId);
+      if (oldCheck) {
+        (oldCheck as any).createdAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      }
+
+      const cancelled = service.cancelAllChecks({ olderThanMinutes: 60 });
+
+      expect(cancelled).toBe(1);
+      expect(service.listScheduledChecks()).toHaveLength(1);
+    });
+
+    it('should return 0 when no checks match filter', () => {
+      service.scheduleCheck('session-1', 5, 'Check 1');
+
+      const cancelled = service.cancelAllChecks({ session: 'non-existent' });
+
+      expect(cancelled).toBe(0);
+      expect(service.listScheduledChecks()).toHaveLength(1);
+    });
+
+    it('should return 0 when no checks exist', () => {
+      const cancelled = service.cancelAllChecks();
+      expect(cancelled).toBe(0);
+    });
+  });
+
   describe('listScheduledChecks', () => {
     it('should list scheduled checks sorted by time', () => {
       service.scheduleRecurringCheck('session-1', 10, 'Message 1');
@@ -1474,6 +1532,101 @@ describe('SchedulerService', () => {
 
       expect(restored).toBe(1);
       expect(service.getStats().recurringChecks).toBe(1);
+    });
+  });
+
+  describe('manual check suppression', () => {
+    it('should record manual check timestamp', () => {
+      service.recordManualCheck('agent-sam');
+      // No error, internal map updated — verified via suppression tests below
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        'Recorded manual agent check',
+        { agentSession: 'agent-sam' }
+      );
+    });
+
+    it('should suppress recurring check when agent was recently manually checked', async () => {
+      // Schedule a recurring check that mentions agent-sam
+      const checkId = service.scheduleRecurringCheck(
+        ORCHESTRATOR_SESSION_NAME,
+        5,
+        'Check on agent-sam progress'
+      );
+
+      // Advance 3 min, then record manual check (so check at 5 min is only 2 min after)
+      await jest.advanceTimersByTimeAsync(3 * 60 * 1000);
+      service.recordManualCheck('agent-sam');
+
+      // Advance to first recurring execution (2 more min to hit 5 min mark)
+      await jest.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+      // executeCheck should NOT have been called — suppressed (2 min < 5 min interval)
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Suppressing recurring check — agent was recently checked manually',
+        expect.objectContaining({ checkId, intervalMinutes: 5 })
+      );
+    });
+
+    it('should NOT suppress recurring check when manual check is older than interval', async () => {
+      // Schedule a recurring check that mentions agent-sam (5 min interval)
+      service.scheduleRecurringCheck(
+        ORCHESTRATOR_SESSION_NAME,
+        5,
+        'Check on agent-sam progress'
+      );
+
+      // Record manual check NOW
+      service.recordManualCheck('agent-sam');
+
+      // Advance past the interval (manual check happened 5 min ago)
+      // First execution fires at 5 min, but manual check was at t=0 so 5 min elapsed = at boundary
+      // Advance a bit more to be clearly past
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+
+      // executeCheck SHOULD have been called — manual check is stale
+      // Note: the check fires at exactly 5 min, and manual check was at t=0,
+      // so elapsedMs = 5min which equals the interval. The condition is < interval,
+      // so at exactly the boundary it should NOT suppress.
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
+    });
+
+    it('should not suppress checks for different agents', async () => {
+      // Schedule a recurring check for agent-leo
+      service.scheduleRecurringCheck(
+        ORCHESTRATOR_SESSION_NAME,
+        5,
+        'Check on agent-leo progress'
+      );
+
+      // Record manual check for agent-sam (different agent)
+      service.recordManualCheck('agent-sam');
+
+      // Advance to first recurring execution
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+      // Should NOT be suppressed — different agent
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
+    });
+
+    it('should schedule next execution after suppression (not cancel)', async () => {
+      service.scheduleRecurringCheck(
+        ORCHESTRATOR_SESSION_NAME,
+        5,
+        'Check on agent-sam progress'
+      );
+
+      // Advance 3 min, then manual check
+      await jest.advanceTimersByTimeAsync(3 * 60 * 1000);
+      service.recordManualCheck('agent-sam');
+
+      // First execution at 5 min (2 min after manual check) — suppressed
+      await jest.advanceTimersByTimeAsync(2 * 60 * 1000);
+      expect(mockAgentRegistrationService.sendMessageToAgent).not.toHaveBeenCalled();
+
+      // Second execution at 10 min — manual check was at 3 min, now 7 min elapsed (> 5 min interval)
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
     });
   });
 });

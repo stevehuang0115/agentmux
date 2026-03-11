@@ -35,6 +35,10 @@ jest.mock('../../services/messaging/adapters/discord-messenger.adapter.js', () =
   DiscordMessengerAdapter: jest.fn(),
 }));
 
+jest.mock('../../services/messaging/adapters/google-chat-messenger.adapter.js', () => ({
+  GoogleChatMessengerAdapter: jest.fn(),
+}));
+
 jest.mock('fs', () => ({
   promises: {
     mkdir: jest.fn().mockResolvedValue(undefined as never),

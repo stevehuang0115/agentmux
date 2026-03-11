@@ -23,7 +23,9 @@ import type {
   ConversationFilter,
   ChatSenderType,
   ChatContentType,
+  ChatChannelType,
 } from '../../types/chat.types.js';
+import { isValidChannelType } from '../../types/chat.types.js';
 
 // Module-level message queue service instance
 let messageQueueService: MessageQueueService | null = null;
@@ -171,12 +173,25 @@ export async function getMessages(
     };
 
     const chatService = getChatService();
-    const messages = await chatService.getMessages(filter);
+    const [messages, totalCount] = await Promise.all([
+      chatService.getMessages(filter),
+      chatService.getMessageCount(filter),
+    ]);
+
+    // hasMore is true when there are older messages not included in this response.
+    // For default loads (no offset), the returned messages are the newest tail,
+    // so hasMore = totalCount > messages.length. For explicit offset loads,
+    // hasMore = offset > 0 (there are messages before the offset window).
+    const hasMore = offset
+      ? parseInt(offset as string, 10) > 0
+      : totalCount > messages.length;
 
     res.json({
       success: true,
       data: messages,
       count: messages.length,
+      totalCount,
+      hasMore,
     });
   } catch (error) {
     next(error);
@@ -285,33 +300,45 @@ export async function agentResponse(
 
     const resolvedSenderType = senderType || 'agent';
 
-    // Use addDirectMessage to persist and emit events
-    const savedMessage = await chatService.addDirectMessage(
-      resolvedConversationId,
-      content,
-      {
-        type: resolvedSenderType as ChatSenderType,
-        name: senderName,
-      }
-    );
+    // Agent messages (status reports, [DONE], [WORKING], [IDLE], etc.) are internal
+    // system communications that should be routed to the orchestrator only — NOT
+    // saved to the user-facing chat conversation. Only orchestrator/system messages
+    // appear in the user's chat.
+    const isAgentSender = resolvedSenderType === 'agent';
 
-    logger.info('Agent response stored via REST', {
-      senderName,
-      senderType: resolvedSenderType,
-      conversationId: resolvedConversationId,
-      messageId: savedMessage.id,
-    });
+    let savedMessageId: string | undefined;
 
-    // Detect agent status reports and trigger immediate orchestrator notification.
-    // Agents call report-status with [DONE], [IDLE], or structured [STATUS REPORT].
-    // All are forwarded to the orchestrator so it can take follow-up action
+    if (!isAgentSender) {
+      // Save orchestrator/system messages to the chat conversation
+      const savedMessage = await chatService.addDirectMessage(
+        resolvedConversationId,
+        content,
+        {
+          type: resolvedSenderType as ChatSenderType,
+          name: senderName,
+        }
+      );
+      savedMessageId = savedMessage.id;
+
+      logger.info('Agent response stored via REST', {
+        senderName,
+        senderType: resolvedSenderType,
+        conversationId: resolvedConversationId,
+        messageId: savedMessage.id,
+      });
+    }
+
+    // Forward agent status reports to the orchestrator queue and Slack.
+    // Agents call report-status with [DONE], [IDLE], [WORKING], or structured [STATUS REPORT].
+    // All are forwarded so the orchestrator can take follow-up action
     // (assign next task, notify user, etc.) without waiting for ActivityMonitor polling.
-    const isAgentStatusReport = resolvedSenderType === 'agent' && (
-      content.startsWith('[DONE]') ||
-      content.startsWith('[IDLE]') ||
-      content.includes('[STATUS REPORT]')
-    );
-    if (isAgentStatusReport) {
+    if (isAgentSender) {
+      logger.info('Agent status routed to orchestrator (not saved to chat)', {
+        senderName,
+        conversationId: resolvedConversationId,
+        preview: content.substring(0, 80),
+      });
+
       try {
         // 1. Enqueue notification to orchestrator via MessageQueueService
         if (messageQueueService) {
@@ -359,7 +386,7 @@ export async function agentResponse(
     res.status(201).json({
       success: true,
       data: {
-        messageId: savedMessage.id,
+        messageId: savedMessageId,
         conversationId: resolvedConversationId,
       },
     });
@@ -389,11 +416,14 @@ export async function getConversations(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { includeArchived, search, limit, offset } = req.query;
+    const { includeArchived, search, limit, offset, channelType } = req.query;
 
     const filter: ConversationFilter = {
       includeArchived: includeArchived === 'true',
       search: search as string | undefined,
+      channelType: (typeof channelType === 'string' && isValidChannelType(channelType))
+        ? channelType as ChatChannelType
+        : undefined,
       limit: limit ? parseInt(limit as string, 10) : undefined,
       offset: offset ? parseInt(offset as string, 10) : undefined,
     };

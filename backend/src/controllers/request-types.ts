@@ -214,7 +214,7 @@ export interface GenerateMemberContextQuery {
  * Request body for updating team member runtime type
  */
 export interface UpdateTeamMemberRuntimeRequestBody {
-  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
 }
 
 /**
@@ -224,7 +224,7 @@ export interface TeamMemberUpdate {
   name: string;
   role: string;
   systemPrompt: string;
-  runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  runtimeType?: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
   avatar?: string;
   skillOverrides?: string[];
   excludedRoleSkills?: string[];

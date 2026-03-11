@@ -1145,7 +1145,7 @@ describe('SlackOrchestratorBridge', () => {
           content: 'hello orchestrator',
         })
       );
-    });
+    }, 30000);
 
     it('should timeout if slackResolve is never called', async () => {
       // enqueue does NOT call slackResolve — so the bridge times out
@@ -1177,7 +1177,7 @@ describe('SlackOrchestratorBridge', () => {
 
       const response = await messagePromise;
       expect(response).toBe('The orchestrator is taking longer than expected. Please try again.');
-    });
+    }, 30000);
 
     it('should handle enqueue failure gracefully', async () => {
       mockQueueService.enqueue.mockImplementation(() => {
@@ -1212,7 +1212,7 @@ describe('SlackOrchestratorBridge', () => {
 
       const response = await messagePromise;
       expect(response).toContain('Failed to enqueue message');
-    });
+    }, 30000);
   });
 
   describe('sendSlackResponse fallback', () => {
@@ -1328,6 +1328,55 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('sanitizeForSlack', () => {
+    let sanitizeBridge: SlackOrchestratorBridge;
+    let sanitize: (raw: string) => string;
+
+    beforeEach(() => {
+      sanitizeBridge = new SlackOrchestratorBridge();
+      sanitize = (sanitizeBridge as any).sanitizeForSlack.bind(sanitizeBridge);
+    });
+
+    it('should strip NOTIFY tags and metadata headers', () => {
+      const input = '[NOTIFY]\nconversationId: slack-C123\ntype: update\ntitle: Test\n---\nActual message\n[/NOTIFY]';
+      expect(sanitize(input)).toBe('Actual message');
+    });
+
+    it('should strip Claude Code satisfaction survey', () => {
+      const input = 'Real response\n● How is Claude doing this session? (optional)\n1: Bad   2: Fine   3: Good   0: Dismiss';
+      expect(sanitize(input)).toBe('Real response');
+    });
+
+    it('should strip Claude Code permission and status bar text', () => {
+      const input = 'Real text\n⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt\nUse meta+t to toggle thinking';
+      expect(sanitize(input)).toBe('Real text');
+    });
+
+    it('should strip Claude Code tool indicators', () => {
+      const input = '⏺ Bash(some command)\n⏺ Read(file.ts)\nActual content';
+      expect(sanitize(input)).toBe('Actual content');
+    });
+
+    it('should strip Osmosing and Baked lines', () => {
+      const input = 'Done\n✻ Baked for 1m 0s\n✢ Osmosing… (running stop hook)';
+      expect(sanitize(input)).toBe('Done');
+    });
+
+    it('should strip CHAT session headers and thread context lines', () => {
+      const input = '[CHAT:slack-D0AC7NF5N7L-1772987441-763389] 填写了\n[Thread context file: /path/to/file.md]\nReal response';
+      expect(sanitize(input)).toBe('Real response');
+    });
+
+    it('should return empty string when only UI chrome remains', () => {
+      const input = '● How is Claude doing this session? (optional)\n1: Bad   2: Fine   3: Good   0: Dismiss\n───────────';
+      expect(sanitize(input)).toBe('');
+    });
+
+    it('should preserve clean messages unchanged', () => {
+      expect(sanitize('Sam 已接单')).toBe('Sam 已接单');
+    });
+  });
+
   describe('markDeliveredBySkill / wasDeliveredBySkill', () => {
     it('should mark and detect delivery', () => {
       const bridge = new SlackOrchestratorBridge();
@@ -1357,6 +1406,33 @@ describe('SlackOrchestratorBridge', () => {
       expect(bridge.wasDeliveredBySkill('C0', 'ts-0')).toBe(false);
       // Recent entry should still exist
       expect(bridge.wasDeliveredBySkill('C50', 'ts-50')).toBe(true);
+    });
+  });
+
+  describe('auditor prefix routing', () => {
+    const pattern = /^\/?auditor\s+(.*)/is;
+
+    it('should match "auditor ..." prefix and extract message', () => {
+      const match = 'auditor show me the latest audit report'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('show me the latest audit report');
+    });
+
+    it('should not route messages without auditor prefix', () => {
+      expect('hello world'.match(pattern)).toBeNull();
+      expect('status check'.match(pattern)).toBeNull();
+      expect('the auditor found issues'.match(pattern)).toBeNull();
+    });
+
+    it('should handle /auditor prefix with slash', () => {
+      const match = '/auditor check system health'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('check system health');
+    });
+
+    it('should be case-insensitive', () => {
+      expect('Auditor check status'.match(pattern)).not.toBeNull();
+      expect('AUDITOR run audit'.match(pattern)).not.toBeNull();
     });
   });
 });

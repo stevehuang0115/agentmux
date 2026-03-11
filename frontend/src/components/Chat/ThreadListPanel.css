@@ -1,0 +1,73 @@
+/**
+ * Thread List Panel Styles
+ */
+
+.thread-list-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  background-color: var(--color-bg-primary);
+}
+
+.thread-list-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.new-thread-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.new-thread-button:hover {
+  background: var(--color-bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--color-text-primary);
+  border-color: var(--color-accent, #6366f1);
+}
+
+.thread-list-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.thread-list-empty {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.thread-list-empty p {
+  margin: 0;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .thread-list-panel {
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+}

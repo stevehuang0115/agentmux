@@ -9,6 +9,7 @@
 import {
   ChatMessage,
   ChatConversation,
+  ChatChannelType,
   SendMessageInput,
   SendMessageResult,
 } from '../types/chat.types';
@@ -73,7 +74,7 @@ class ChatApiService {
    * @param conversationId - ID of the conversation
    * @param limit - Optional maximum number of messages to return
    * @param before - Optional timestamp to get messages before
-   * @returns Promise resolving to array of messages
+   * @returns Promise resolving to messages with pagination metadata
    * @throws Error if the request fails
    */
   async getMessages(
@@ -81,6 +82,24 @@ class ChatApiService {
     limit?: number,
     before?: string
   ): Promise<ChatMessage[]> {
+    const result = await this.getMessagesWithMeta(conversationId, limit, before);
+    return result.messages;
+  }
+
+  /**
+   * Get messages with pagination metadata (hasMore, totalCount).
+   *
+   * @param conversationId - ID of the conversation
+   * @param limit - Optional maximum number of messages to return
+   * @param before - Optional timestamp to get messages before
+   * @returns Promise resolving to messages, hasMore flag, and totalCount
+   * @throws Error if the request fails
+   */
+  async getMessagesWithMeta(
+    conversationId: string,
+    limit?: number,
+    before?: string
+  ): Promise<{ messages: ChatMessage[]; hasMore: boolean; totalCount: number }> {
     const params = new URLSearchParams({ conversationId });
     if (limit) params.set('limit', limit.toString());
     if (before) params.set('before', before);
@@ -92,7 +111,11 @@ class ChatApiService {
       throw new Error(data.error || 'Failed to load messages');
     }
 
-    return data.data;
+    return {
+      messages: data.data,
+      hasMore: data.hasMore ?? false,
+      totalCount: data.totalCount ?? data.data.length,
+    };
   }
 
   /**
@@ -102,9 +125,12 @@ class ChatApiService {
    * @returns Promise resolving to array of conversations
    * @throws Error if the request fails
    */
-  async getConversations(includeArchived = false): Promise<ChatConversation[]> {
-    const params = includeArchived ? '?includeArchived=true' : '';
-    const response = await fetch(`${API_BASE}/conversations${params}`);
+  async getConversations(includeArchived = false, channelType?: ChatChannelType): Promise<ChatConversation[]> {
+    const params = new URLSearchParams();
+    if (includeArchived) params.set('includeArchived', 'true');
+    if (channelType) params.set('channelType', channelType);
+    const queryStr = params.toString();
+    const response = await fetch(`${API_BASE}/conversations${queryStr ? '?' + queryStr : ''}`);
     const data = await this.parseResponse(response, 'Failed to load conversations');
 
     if (!data.success) {

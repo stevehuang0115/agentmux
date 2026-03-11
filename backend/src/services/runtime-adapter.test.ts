@@ -36,10 +36,10 @@ jest.mock('./agent/runtime-service.factory.js', () => ({
 			'claude-code',
 			'gemini-cli',
 			'codex-cli',
-			'openhands',
+			'crewly-agent',
 		]),
 		isRuntimeTypeSupported: jest.fn((type: string) =>
-			['claude-code', 'gemini-cli', 'codex-cli', 'openhands'].includes(type),
+			['claude-code', 'gemini-cli', 'codex-cli', 'crewly-agent'].includes(type),
 		),
 	},
 }));
@@ -465,7 +465,7 @@ describe('RuntimeAdapter', () => {
 			expect(types).toContain('claude-code');
 			expect(types).toContain('gemini-cli');
 			expect(types).toContain('codex-cli');
-			expect(types).toContain('openhands');
+			expect(types).toContain('crewly-agent');
 			expect(types).toHaveLength(4);
 		});
 	});

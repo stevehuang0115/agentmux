@@ -472,7 +472,7 @@ npx crewly init
 
 ```
 GitHub:  github.com/stevehuang0115/crewly
-Docs:    crewly.stevesprompt.com/docs
+Docs:    crewlyai.com/docs
 X:       @stevesprompt
 ```
 

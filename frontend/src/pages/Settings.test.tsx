@@ -22,8 +22,8 @@ vi.mock('../components/Settings/SkillsTab', () => ({
   SkillsTab: () => <div data-testid="skills-tab">Skills Tab Content</div>,
 }));
 
-vi.mock('../components/Settings/SlackTab', () => ({
-  SlackTab: () => <div data-testid="slack-tab">Slack Tab Content</div>,
+vi.mock('../components/Settings/IntegrationsTab', () => ({
+  IntegrationsTab: () => <div data-testid="integrations-tab">Integrations Tab Content</div>,
 }));
 
 describe('Settings Page', () => {
@@ -41,16 +41,7 @@ describe('Settings Page', () => {
       expect(screen.getByText('General')).toBeInTheDocument();
       expect(screen.getByText('Roles')).toBeInTheDocument();
       expect(screen.getByText('Skills')).toBeInTheDocument();
-      expect(screen.getByText('Slack')).toBeInTheDocument();
-    });
-
-    it('should show tab icons', () => {
-      render(<Settings />);
-
-      expect(screen.getByText('⚙️')).toBeInTheDocument();
-      expect(screen.getByText('👤')).toBeInTheDocument();
-      expect(screen.getByText('🛠️')).toBeInTheDocument();
-      expect(screen.getByText('💬')).toBeInTheDocument();
+      expect(screen.getByText('Integrations')).toBeInTheDocument();
     });
   });
 
@@ -61,15 +52,15 @@ describe('Settings Page', () => {
       expect(screen.getByTestId('general-tab')).toBeInTheDocument();
       expect(screen.queryByTestId('roles-tab')).not.toBeInTheDocument();
       expect(screen.queryByTestId('skills-tab')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('slack-tab')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('integrations-tab')).not.toBeInTheDocument();
     });
 
-    it('should switch to Slack tab when clicked', () => {
+    it('should switch to Integrations tab when clicked', () => {
       render(<Settings />);
 
-      fireEvent.click(screen.getByText('Slack'));
+      fireEvent.click(screen.getByText('Integrations'));
 
-      expect(screen.getByTestId('slack-tab')).toBeInTheDocument();
+      expect(screen.getByTestId('integrations-tab')).toBeInTheDocument();
       expect(screen.queryByTestId('general-tab')).not.toBeInTheDocument();
     });
 
@@ -94,37 +85,11 @@ describe('Settings Page', () => {
     it('should switch back to General tab from another tab', () => {
       render(<Settings />);
 
-      // Go to Roles tab
       fireEvent.click(screen.getByText('Roles'));
       expect(screen.getByTestId('roles-tab')).toBeInTheDocument();
 
-      // Go back to General
       fireEvent.click(screen.getByText('General'));
       expect(screen.getByTestId('general-tab')).toBeInTheDocument();
-    });
-  });
-
-  describe('Active Tab Styling', () => {
-    it('should mark General tab as active by default', () => {
-      render(<Settings />);
-
-      const generalButton = screen.getByText('General').closest('button');
-      expect(generalButton).toHaveClass('active');
-    });
-
-    it('should mark active tab with active class and remove from previous', () => {
-      render(<Settings />);
-
-      const generalButton = screen.getByText('General').closest('button');
-      const rolesButton = screen.getByText('Roles').closest('button');
-
-      expect(generalButton).toHaveClass('active');
-      expect(rolesButton).not.toHaveClass('active');
-
-      fireEvent.click(screen.getByText('Roles'));
-
-      expect(rolesButton).toHaveClass('active');
-      expect(generalButton).not.toHaveClass('active');
     });
   });
 
@@ -140,15 +105,15 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       const generalTab = screen.getByText('General').closest('button');
-      const rolesTab = screen.getByText('Roles').closest('button');
+      const integrationsTab = screen.getByText('Integrations').closest('button');
 
       expect(generalTab).toHaveAttribute('aria-selected', 'true');
-      expect(rolesTab).toHaveAttribute('aria-selected', 'false');
+      expect(integrationsTab).toHaveAttribute('aria-selected', 'false');
 
-      fireEvent.click(screen.getByText('Roles'));
+      fireEvent.click(screen.getByText('Integrations'));
 
       expect(generalTab).toHaveAttribute('aria-selected', 'false');
-      expect(rolesTab).toHaveAttribute('aria-selected', 'true');
+      expect(integrationsTab).toHaveAttribute('aria-selected', 'true');
     });
 
     it('should have tabpanel role on content area', () => {

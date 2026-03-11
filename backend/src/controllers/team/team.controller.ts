@@ -33,6 +33,7 @@ import { MemoryService } from '../../services/memory/memory.service.js';
 import { SubAgentMessageQueue } from '../../services/messaging/sub-agent-message-queue.service.js';
 import { SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
 import type { EventBusService } from '../../services/event-bus/event-bus.service.js';
+import { getCriticalEventTypes } from '../../types/event-bus.types.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('TeamController');
@@ -536,11 +537,17 @@ async function _stopTeamMemberCore(
 }
 
 /**
- * Creates (or refreshes) orchestrator subscriptions to agent lifecycle events.
+ * Creates (or refreshes) orchestrator subscriptions to critical agent events.
  *
  * Clears any existing subscriptions for the orchestrator session first to avoid
- * duplicates on re-registration, then subscribes to all agent status change events
- * with the maximum TTL (24 hours). Re-created each time the orchestrator registers.
+ * duplicates on re-registration, then subscribes to only CRITICAL event types
+ * (task completions, failures, agent crashes, escalations) with the maximum
+ * TTL (24 hours). Info events (idle/busy toggles, minor status changes) are
+ * intentionally excluded to prevent flooding the orchestrator terminal.
+ *
+ * Critical events are also delivered immediately (no debounce delay) by the
+ * EventBusService, ensuring the orchestrator learns about task completions
+ * within seconds.
  */
 function ensureOrchestratorSubscriptions(): void {
   if (!eventBusService) return;
@@ -551,9 +558,10 @@ function ensureOrchestratorSubscriptions(): void {
     eventBusService.unsubscribe(sub.id);
   }
 
-  // Subscribe to all agent lifecycle events with max TTL
+  // Subscribe to CRITICAL events only — task completions, failures, agent crashes, escalations.
+  // Info events (idle/busy, status_changed) are excluded to prevent terminal flooding.
   eventBusService.subscribe({
-    eventType: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
+    eventType: getCriticalEventTypes(),
     filter: {},
     subscriberSession: ORCHESTRATOR_SESSION_NAME,
     oneShot: false,

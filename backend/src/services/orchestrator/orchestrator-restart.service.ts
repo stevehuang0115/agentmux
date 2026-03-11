@@ -22,6 +22,7 @@ import { MemoryService } from '../memory/memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
+import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { delay } from '../../utils/async.utils.js';
 
 /**
@@ -181,6 +182,12 @@ export class OrchestratorRestartService {
 					error: killErr instanceof Error ? killErr.message : String(killErr),
 				});
 			}
+
+			// Step 2b: Clear stale activity tracking data so the new session
+			// starts fresh. Without this, the heartbeat monitor inherits the
+			// old session's last API timestamp and immediately sees 50+ min
+			// idle time, triggering another restart loop.
+			PtyActivityTrackerService.getInstance().clearSession(ORCHESTRATOR_SESSION_NAME);
 
 			// Step 3: Determine runtime type (preserve the orchestrator's configured runtime).
 			const runtimeType = await this.resolveOrchestratorRuntimeType();

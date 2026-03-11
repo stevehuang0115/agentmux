@@ -7,6 +7,7 @@ import { MessengerRegistryService } from '../../services/messaging/messenger-reg
 import { SlackMessengerAdapter } from '../../services/messaging/adapters/slack-messenger.adapter.js';
 import { TelegramMessengerAdapter } from '../../services/messaging/adapters/telegram-messenger.adapter.js';
 import { DiscordMessengerAdapter } from '../../services/messaging/adapters/discord-messenger.adapter.js';
+import { GoogleChatMessengerAdapter } from '../../services/messaging/adapters/google-chat-messenger.adapter.js';
 import type { MessengerPlatform } from '../../services/messaging/messenger-adapter.interface.js';
 
 /** Known messenger platforms for input validation. */
@@ -41,6 +42,7 @@ function registerDefaultAdapters(registry: MessengerRegistryService): void {
   if (!registry.get('slack')) registry.register(new SlackMessengerAdapter());
   if (!registry.get('telegram')) registry.register(new TelegramMessengerAdapter());
   if (!registry.get('discord')) registry.register(new DiscordMessengerAdapter());
+  if (!registry.get('google-chat')) registry.register(new GoogleChatMessengerAdapter());
 }
 
 /**

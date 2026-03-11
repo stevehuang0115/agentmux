@@ -456,6 +456,8 @@ export const GEMINI_FAILURE_PATTERNS: RegExp[] = [
 	/DEADLINE_EXCEEDED/,
 	/PERMISSION_DENIED/,
 	/UNAUTHENTICATED/,
+	/API connection failed/i,
+	/Authentication expired/i,
 	GEMINI_STUCK_CONNECTIVITY_PATTERN,
 ];
 
@@ -611,7 +613,7 @@ export const RUNTIME_COMPACT_COMMANDS: Record<RuntimeType, string> = {
 	'claude-code': '/compact',
 	'gemini-cli': '/compress',
 	'codex-cli': '/compact',
-	'crewly-agent': '/compact',
+	'crewly-agent': '',
 } as const;
 
 /**
@@ -641,7 +643,8 @@ export const OAUTH_RELOGIN_CONSTANTS = {
 } as const;
 
 /**
- * String patterns that indicate an OAuth token has expired in PTY output.
+ * String patterns that indicate authentication failure in PTY output.
+ * Covers OAuth token expiry AND invalid/revoked credentials.
  * Uses plain string matching (indexOf) instead of regex to prevent ReDoS.
  * All patterns must be present (AND logic) within the rolling buffer.
  */
@@ -650,6 +653,8 @@ export const OAUTH_ERROR_PATTERN_SETS: string[][] = [
 	['authentication_error', 'oauth token expired'],
 	['401', 'OAuth token has expired'],
 	['invalid_api_key', 'OAuth token has expired'],
+	['authentication_error', 'Invalid authentication credentials'],
+	['401', 'Invalid authentication credentials'],
 ];
 
 /**
@@ -1018,21 +1023,17 @@ export type UserPlan = (typeof AUTH_CONSTANTS.PLANS)[keyof typeof AUTH_CONSTANTS
  * CREWLY_SUPABASE_ANON_KEY) with dev-project defaults as fallback.
  */
 export const CLOUD_AUTH_CONSTANTS = {
-	/** Supabase project configuration (env-var driven) */
-	SUPABASE: {
-		/** Supabase project URL (env: CREWLY_SUPABASE_URL) */
-		get URL(): string {
-			return process.env['CREWLY_SUPABASE_URL'] || 'https://npveywncozhjzcxrhkuc.supabase.co';
-		},
-		/** Supabase anonymous key (env: CREWLY_SUPABASE_ANON_KEY) */
-		get ANON_KEY(): string {
-			return process.env['CREWLY_SUPABASE_ANON_KEY'] || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wdmV5d25jb3poanpjeHJoa3VjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5MzUwNzIsImV4cCI6MjA4ODUxMTA3Mn0.xinT1XB9RaZ13CWQjbo95i_dJN7i463l9gAWQce32Yg';
+	/** Google OAuth configuration for Cloud Portal login */
+	GOOGLE: {
+		/** Google OAuth Client ID (env: GOOGLE_CLIENT_ID) */
+		get CLIENT_ID(): string {
+			return process.env['GOOGLE_CLIENT_ID'] || '';
 		},
 	},
-	/** Database table names */
-	TABLES: {
-		/** Licenses table in Supabase */
-		LICENSES: 'licenses',
+	/** MongoDB collections */
+	COLLECTIONS: {
+		USERS: 'users',
+		SESSIONS: 'sessions',
 	},
 	/** License statuses */
 	LICENSE_STATUS: {
@@ -1040,6 +1041,51 @@ export const CLOUD_AUTH_CONSTANTS = {
 		EXPIRED: 'expired',
 		CANCELLED: 'cancelled',
 	},
+} as const;
+
+/**
+ * Constants for the Auditor Scheduler Service.
+ * Controls periodic, event-driven, and API audit triggers.
+ *
+ * The auditor operates in always-active mode: initialized at server start,
+ * remains alive between audits, and only shuts down when the service stops.
+ */
+export const AUDITOR_SCHEDULER_CONSTANTS = {
+	/** Periodic full-sweep audit interval (30 minutes) */
+	AUDIT_INTERVAL_MS: 30 * 60 * 1000,
+	/** Debounce window for event-driven triggers (30 seconds) */
+	EVENT_DEBOUNCE_MS: 30_000,
+	/** Maximum time a single audit run can take before timeout (10 minutes).
+	 *  Note: timeout does NOT shutdown the runtime (always-active mode). */
+	AUDIT_TIMEOUT_MS: 10 * 60 * 1000,
+	/** Session name for the auditor agent */
+	AUDITOR_SESSION_NAME: 'crewly-auditor',
+	/** Event types that trigger an audit run */
+	TRIGGER_EVENT_TYPES: ['agent:inactive', 'task:failed'] as readonly string[],
+	/** Command message sent to the auditor agent to start an audit cycle */
+	AUDIT_COMMAND: 'Run a full audit cycle: check team status, review agent logs for errors, verify task alignment with goals, and write findings to the audit report.',
+	/** Slack auditor prefix regex pattern (used in SlackOrchestratorBridge) */
+	SLACK_PREFIX_PATTERN: /^\/?auditor\s+(.*)/is,
+} as const;
+
+/** Log rotation service constants for managing session log file sizes */
+export const LOG_ROTATION_CONSTANTS = {
+	/** Maximum size for active session logs before truncation (20MB) */
+	MAX_LOG_SIZE_BYTES: 20 * 1024 * 1024,
+	/** Maximum size for orphan logs (no active session) before truncation (5MB) */
+	ORPHAN_LOG_MAX_SIZE_BYTES: 5 * 1024 * 1024,
+	/** Days to retain archived log files before deletion */
+	ARCHIVE_RETENTION_DAYS: 7,
+	/** Interval between rotation checks in milliseconds (1 hour) */
+	LOG_ROTATION_INTERVAL_MS: 60 * 60 * 1000,
+	/** Whether to archive old log content before truncation */
+	LOG_ROTATION_ARCHIVE_ENABLED: true,
+	/** Directory name for session logs under ~/.crewly/logs/ */
+	SESSIONS_LOG_DIR: 'sessions',
+	/** Directory name for archived logs under ~/.crewly/logs/ */
+	ARCHIVE_DIR: 'archive',
+	/** Base log directory under ~/.crewly/ */
+	LOGS_DIR: 'logs',
 } as const;
 
 /** License status type */

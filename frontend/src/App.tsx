@@ -24,6 +24,7 @@ function App() {
       <SidebarProvider>
         <Router>
           <Routes>
+            {/* Admin / Internal UI */}
             <Route path="/" element={<AppLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="projects" element={<Projects />} />

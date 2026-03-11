@@ -158,6 +158,58 @@ export async function cancelScheduledCheck(this: ApiContext, req: Request, res: 
 }
 
 /**
+ * Cancel all scheduled checks with optional filters.
+ *
+ * Query params:
+ * - session: only cancel checks for this session
+ * - olderThanMinutes: only cancel checks older than N minutes
+ *
+ * @param req - Request with optional query filters
+ * @param res - Response with cancelled count
+ */
+export async function cancelAllScheduledChecks(this: ApiContext, req: Request, res: Response): Promise<void> {
+  try {
+    const { session, olderThanMinutes } = req.query as { session?: string; olderThanMinutes?: string };
+    const filter: { session?: string; olderThanMinutes?: number } = {};
+    if (session) {
+      filter.session = session;
+    }
+    if (olderThanMinutes) {
+      const parsed = Number(olderThanMinutes);
+      if (!isNaN(parsed) && parsed > 0) {
+        filter.olderThanMinutes = parsed;
+      }
+    }
+    const cancelled = this.schedulerService.cancelAllChecks(Object.keys(filter).length > 0 ? filter : undefined);
+    res.json({
+      success: true,
+      data: { cancelled },
+      message: `Cancelled ${cancelled} scheduled check(s)`,
+    } as ApiResponse<{ cancelled: number }>);
+  } catch (error) {
+    logger.error('Error cancelling all checks', { error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({ success: false, error: 'Failed to cancel scheduled checks' } as ApiResponse);
+  }
+}
+
+/**
+ * Record that the orchestrator manually checked an agent's status or logs.
+ * Prevents redundant recurring checks from firing within the same interval.
+ *
+ * @param req - Request with { agentSession: string }
+ * @param res - Response confirming the recording
+ */
+export async function recordManualCheck(this: ApiContext, req: Request, res: Response): Promise<void> {
+  const { agentSession } = req.body as { agentSession?: string };
+  if (!agentSession || typeof agentSession !== 'string') {
+    res.status(400).json({ success: false, error: 'agentSession is required' } as ApiResponse);
+    return;
+  }
+  this.schedulerService.recordManualCheck(agentSession);
+  res.json({ success: true } as ApiResponse);
+}
+
+/**
  * Restores persisted scheduled checks (both recurring and one-time) after a restart.
  *
  * @param req - Request (no body required)

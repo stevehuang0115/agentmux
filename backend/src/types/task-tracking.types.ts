@@ -112,6 +112,14 @@ export interface InProgressTask {
   completedAt?: string;
   /** Verification result from the delegator. */
   verificationResult?: TaskVerificationResult;
+
+  // === Communication context ===
+
+  /** Slack thread context for threaded notifications (#137). */
+  slackContext?: {
+    channelId: string;
+    threadTs: string;
+  };
 }
 
 export interface TaskTrackingData {

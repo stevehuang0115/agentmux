@@ -24,6 +24,7 @@ import type { ApiContext } from '../types.js';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { PtySessionBackend } from '../../services/session/pty/pty-session-backend.js';
+import { InProcessLogBuffer } from '../../services/agent/crewly-agent/in-process-log-buffer.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -166,8 +167,12 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 		const requestedLines = parseInt(lines as string) || TERMINAL_CONTROLLER_CONSTANTS.DEFAULT_CAPTURE_LINES;
 		const maxLines = Math.min(requestedLines, TERMINAL_CONTROLLER_CONSTANTS.MAX_CAPTURE_LINES);
 
-		// Check if session exists
-		if (!backend.sessionExists(sessionName)) {
+		// Check if session exists (PTY or in-process)
+		const inProcessBuffer = InProcessLogBuffer.getInstance();
+		const isPtySession = backend.sessionExists(sessionName);
+		const isInProcessSession = !isPtySession && inProcessBuffer.hasSession(sessionName);
+
+		if (!isPtySession && !isInProcessSession) {
 			res.status(404).json({
 				success: false,
 				error: `Session '${sessionName}' not found`,
@@ -175,8 +180,10 @@ export async function captureTerminal(req: Request, res: Response): Promise<void
 			return;
 		}
 
-		// Capture output from session
-		const output = backend.captureOutput(sessionName, maxLines);
+		// Capture output from PTY session or in-process log buffer
+		const output = isPtySession
+			? backend.captureOutput(sessionName, maxLines)
+			: inProcessBuffer.capture(sessionName, maxLines);
 
 		// Limit output size to prevent memory issues
 		const wasTruncated = output.length > TERMINAL_CONTROLLER_CONSTANTS.MAX_OUTPUT_SIZE;
@@ -737,7 +744,7 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 		// Force mode: write directly to PTY, skipping waitForReady and verification.
 		// Use when the agent is busy and waitForReady would time out (#113).
 		if (force) {
-			// In-process Crewly Agent: deliver via handleMessage instead of PTY write
+			// In-process Crewly Agent: route via handleMessage (no PTY)
 			if (resolvedRuntimeType === RUNTIME_TYPES.CREWLY_AGENT) {
 				const inProcessRuntime = this.agentRegistrationService.getInProcessRuntime(sessionName);
 				if (!inProcessRuntime || !inProcessRuntime.isReady()) {
@@ -747,12 +754,15 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 					} as ApiResponse);
 					return;
 				}
-				await inProcessRuntime.handleMessage(message);
-				res.json({
-					success: true,
-					verified: true,
-					force: true,
-				} as ApiResponse);
+				try {
+					await inProcessRuntime.handleMessage(message);
+					res.json({ success: true, verified: true, force: true } as ApiResponse);
+				} catch (agentErr) {
+					res.status(500).json({
+						success: false,
+						error: `Crewly Agent error: ${agentErr instanceof Error ? agentErr.message : String(agentErr)}`,
+					} as ApiResponse);
+				}
 				return;
 			}
 

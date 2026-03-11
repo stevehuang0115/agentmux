@@ -429,6 +429,126 @@ describe('EventBusService', () => {
     });
   });
 
+  describe('critical event immediate delivery', () => {
+    it('should deliver task:completed events immediately without debounce', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['task:completed'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'task:completed' as any,
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        newValue: 'completed',
+        changedField: 'taskStatus',
+      }));
+
+      // Should be delivered IMMEDIATELY — no need to advance timers
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+      const call = mockQueueService.enqueue.mock.calls[0][0];
+      expect(call.targetSession).toBe('crewly-orc');
+      expect(call.source).toBe('system_event');
+    });
+
+    it('should deliver task:failed events immediately without debounce', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['task:failed'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'task:failed' as any,
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        newValue: 'failed',
+        changedField: 'taskStatus',
+      }));
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should deliver agent:inactive events immediately', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['agent:inactive'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'agent:inactive',
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        newValue: 'inactive',
+        changedField: 'agentStatus',
+      }));
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should deliver agent:context_critical events immediately', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['agent:context_critical'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'agent:context_critical',
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        newValue: '95%',
+        changedField: 'contextUsage',
+      }));
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should still debounce info events (agent:idle)', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['agent:idle'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'agent:idle',
+        sessionName: 'agent-sam',
+        memberName: 'Sam',
+        newValue: 'idle',
+      }));
+
+      // NOT delivered yet — still in debounce buffer
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+
+      // Advance past debounce window
+      jest.advanceTimersByTime(5000);
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not buffer critical events in pendingNotifications', () => {
+      eventBus.subscribe(createTestSubscriptionInput({
+        oneShot: false,
+        filter: {},
+        eventType: ['task:completed'],
+      }));
+
+      eventBus.publish(createTestEvent({
+        type: 'task:completed' as any,
+        sessionName: 'agent-sam',
+        newValue: 'completed',
+        changedField: 'taskStatus',
+      }));
+
+      // Critical event should NOT be in pending buffer
+      expect((eventBus as any).pendingNotifications.size).toBe(0);
+      // But should have been delivered
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('publish dedup and flush', () => {
     it('should suppress duplicate publish events within debounce window', () => {
       eventBus.subscribe(createTestSubscriptionInput({ oneShot: false }));

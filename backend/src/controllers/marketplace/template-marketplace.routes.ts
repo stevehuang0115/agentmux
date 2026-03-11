@@ -7,7 +7,11 @@
  *
  * Read endpoints (list, get, versions) are public — anyone can browse.
  * Write endpoints (create, update, archive, add version, publish)
- * require Supabase authentication.
+ * require authentication.
+ *
+ * Note: Supabase auth middleware was removed when cloud services were
+ * deleted. Write endpoints currently use a pass-through placeholder
+ * that must be replaced with a real auth middleware before production.
  *
  * @module controllers/marketplace/template-marketplace.routes
  */
@@ -33,7 +37,7 @@ import { requireCloudConnection } from '../../services/cloud/cloud-auth.middlewa
  * - GET  /:id           - Get template details
  * - GET  /:id/versions  - List template versions
  *
- * Protected endpoints (require Supabase auth):
+ * Protected endpoints (require auth):
  * - POST /              - Create a new template
  * - PUT  /:id           - Update template metadata
  * - DELETE /:id         - Archive template (soft delete)

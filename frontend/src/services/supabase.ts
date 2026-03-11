@@ -1,51 +1,59 @@
 /**
- * Supabase Client
+ * Cloud Auth Client (HTTP-based)
  *
- * Singleton Supabase client for frontend authentication.
- * Reads URL and anon key from Vite env vars with dev-project defaults.
+ * OSS builds authenticate via HTTP calls to the Cloud API
+ * (api.crewlyai.com). No direct Supabase SDK dependency.
+ *
+ * Tokens are stored in localStorage and attached as Bearer
+ * tokens to subsequent API calls.
  *
  * @module services/supabase
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-
 // ---------------------------------------------------------------------------
-// Defaults (dev project — safe to embed; RLS enforces security)
+// Token storage keys
 // ---------------------------------------------------------------------------
 
-/** Default Supabase URL matching backend env.config.ts. */
-const DEFAULT_SUPABASE_URL = 'https://npveywncozhjzcxrhkuc.supabase.co';
-
-/** Default Supabase anon key matching backend env.config.ts. */
-const DEFAULT_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wdmV5d25jb3poanpjeHJoa3VjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5MzUwNzIsImV4cCI6MjA4ODUxMTA3Mn0.xinT1XB9RaZ13CWQjbo95i_dJN7i463l9gAWQce32Yg';
+const ACCESS_TOKEN_KEY = 'crewly_access_token';
+const REFRESH_TOKEN_KEY = 'crewly_refresh_token';
 
 // ---------------------------------------------------------------------------
-// Client
+// Token helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the Supabase URL from Vite env or default.
+ * Get the stored access token.
  *
- * @returns Supabase project URL
+ * @returns Access token string or null
  */
-export function getSupabaseUrl(): string {
-  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || DEFAULT_SUPABASE_URL;
+export function getAccessToken(): string | null {
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
 }
 
 /**
- * Resolve the Supabase anon key from Vite env or default.
+ * Get the stored refresh token.
  *
- * @returns Supabase anonymous key
+ * @returns Refresh token string or null
  */
-export function getSupabaseAnonKey(): string {
-  return (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) || DEFAULT_SUPABASE_ANON_KEY;
+export function getRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
 }
 
 /**
- * Singleton Supabase client instance.
+ * Store auth tokens from a login/register/refresh response.
  *
- * Uses VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY when available,
- * falling back to the dev-project defaults.
+ * @param accessToken - JWT access token
+ * @param refreshToken - Refresh token for renewal
  */
-export const supabase: SupabaseClient = createClient(getSupabaseUrl(), getSupabaseAnonKey());
+export function storeTokens(accessToken: string, refreshToken: string): void {
+  localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
+  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+}
+
+/**
+ * Clear stored auth tokens (on logout).
+ */
+export function clearTokens(): void {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}

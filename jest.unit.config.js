@@ -1,3 +1,12 @@
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+
+/** Check if an npm package is installed. */
+function hasPackage(name) {
+  try { require.resolve(name); return true; } catch { return false; }
+}
+
 export default {
   preset: 'ts-jest',
   testEnvironment: 'node',
@@ -19,22 +28,27 @@ export default {
   },
   moduleNameMapper: {
     '^@backend/(.*)$': '<rootDir>/backend/src/$1',
-    '^@mcp/(.*)$': '<rootDir>/mcp-server/src/$1',
     '^@types/(.*)$': '<rootDir>/types/$1',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
+  // Skip Cloud SDK test files when their packages are not installed (OSS mode)
+  testPathIgnorePatterns: [
+    '/node_modules/',
+    ...(hasPackage('stripe') ? [] : ['stripe\\.service\\.test\\.ts$']),
+    ...(hasPackage('@anthropic-ai/sdk') ? [] : ['cloud-task-processor\\.service\\.test\\.ts$']),
+    ...(hasPackage('mongodb') ? [] : ['cloud-auth\\.service\\.test\\.ts$', 'supabase-auth\\.middleware\\.test\\.ts$', 'mongodb\\.service\\.test\\.ts$']),
+  ],
   transformIgnorePatterns: [
     'node_modules/(?!(@modelcontextprotocol)/)',
   ],
   collectCoverageFrom: [
     'backend/src/**/*.ts',
-    'mcp-server/src/**/*.ts',
     '!**/*.d.ts',
     '!**/node_modules/**',
     '!**/*.test.ts'
   ],
   coverageDirectory: 'coverage-unit',
   coverageReporters: ['text', 'lcov', 'html'],
-  testTimeout: 30000,
-  maxWorkers: 1, // Run tests serially to avoid port conflicts
+  testTimeout: 10000,
+  maxWorkers: '50%',
 };

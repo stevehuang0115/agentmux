@@ -265,6 +265,7 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
                 <option value="claude-code">Claude CLI</option>
                 <option value="gemini-cli">Gemini CLI</option>
                 <option value="codex-cli">Codex CLI</option>
+                <option value="crewly-agent">Crewly Agent</option>
               </select>
             ) : (
               <div className="bg-background-dark/50 rounded-lg px-4 py-2">
@@ -272,6 +273,7 @@ export const AgentDetailModal: React.FC<AgentDetailModalProps> = ({ member, onCl
                   {member.runtimeType === 'claude-code' ? 'Claude CLI' :
                    member.runtimeType === 'gemini-cli' ? 'Gemini CLI' :
                    member.runtimeType === 'codex-cli' ? 'Codex CLI' :
+                   member.runtimeType === 'crewly-agent' ? 'Crewly Agent' :
                    member.runtimeType || 'Claude CLI'}
                 </span>
               </div>

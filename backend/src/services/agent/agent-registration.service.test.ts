@@ -61,6 +61,13 @@ jest.mock('./runtime-service.factory.js', () => ({
 	},
 }));
 
+// Mock PromptBuilderService for TL addon injection
+jest.mock('../ai/prompt-builder.service.js', () => ({
+	PromptBuilderService: jest.fn().mockImplementation(() => ({
+		buildTeamLeadSection: jest.fn().mockResolvedValue('## TL ADDON INJECTED\n\nYou are the Team Lead.'),
+	})),
+}));
+
 // Mock PtyActivityTrackerService — default to high idle time (agent not busy)
 const mockGetIdleTimeMs = jest.fn().mockReturnValue(999999);
 jest.mock('./pty-activity-tracker.service.js', () => ({
@@ -257,6 +264,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendRegistrationPromptAsync', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should send kickoff instruction for Claude Code (not raw prompt or file-read)', async () => {
 			mockRuntimeService.waitForRuntimeReady.mockResolvedValue(true);
 			mockReadFile.mockResolvedValue('Register {{SESSION_ID}} as {{ROLE}}');
@@ -270,8 +285,8 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.CLAUDE_CODE
 			);
 
-			// Give time for async operation to complete (file write + delays in sendPromptRobustly)
-			await new Promise(resolve => setTimeout(resolve, 1000));
+			// Advance fake timers to flush async delays in sendPromptRobustly
+			await jest.advanceTimersByTimeAsync(1000);
 
 			// Should have called sendMessage with kickoff instruction (not raw prompt or file-read)
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
@@ -296,9 +311,8 @@ describe('AgentRegistrationService', () => {
 				RUNTIME_TYPES.GEMINI_CLI
 			);
 
-			// Give time for async operation to complete. Gemini prompt delivery
-			// does a pre-send Enter flush with a 1000ms delay before sendMessage.
-			await new Promise(resolve => setTimeout(resolve, 2000));
+			// Advance fake timers to flush Gemini pre-send Enter flush + sendMessage delays
+			await jest.advanceTimersByTimeAsync(2000);
 
 			// Should have called sendMessage with file-read instruction for Gemini
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalled();
@@ -609,6 +623,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendMessageToAgent', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		// Helper to create a mock session with configurable onData behavior
 		// Timings account for: prompt detection -> message sent -> Enter sent (500ms) -> processing
 		const createMockSession = (outputSequence: Array<{ output: string; delayMs: number }>) => {
@@ -634,13 +656,17 @@ describe('AgentRegistrationService', () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			// Call 1: pre-send isClaudeAtPrompt — prompt visible
 			// Call 2: beforeOutput capture (20 lines)
-			// Call 3: 1st interval — processing indicator ⏺ found → success
+			// Call 3: dedup guard (#128) — no spinner, proceeds to write
+			// Call 4: 1st interval — processing indicator ⏺ found → success
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ \n')                // pre-send: at prompt
 				.mockReturnValueOnce('❯ \n')                // beforeOutput capture
+				.mockReturnValueOnce('❯ \n')                // dedup guard (#128): no spinner
 				.mockReturnValueOnce('⏺ Processing...\n');  // 1st interval: ⏺ found → success
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello, agent!');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello, agent!');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledWith('test-session', 'Hello, agent!');
@@ -650,13 +676,17 @@ describe('AgentRegistrationService', () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			// Call 1: pre-send — at prompt
 			// Call 2: beforeOutput capture
-			// Call 3: 1st interval — ⠋ spinner found → success (even though ❯ is still visible)
+			// Call 3: dedup guard (#128) — no spinner, proceeds to write
+			// Call 4: 1st interval — ⠋ spinner found → success (even though ❯ is still visible)
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ \n')                      // pre-send: at prompt
 				.mockReturnValueOnce('❯ \n')                      // beforeOutput capture
+				.mockReturnValueOnce('❯ \n')                      // dedup guard (#128): no spinner
 				.mockReturnValueOnce('❯ \n⠋ loading context\n');  // 1st interval: ⠋ matches PROCESSING → success
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 		});
@@ -668,20 +698,24 @@ describe('AgentRegistrationService', () => {
 			// then isClaudeAtPrompt, then message-text-stuck).
 			// Call 1: pre-send: at prompt
 			// Call 2: beforeOutput
-			// Call 3: 1st interval — prompt still there, no indicators → wait 1s
-			// Call 4: 2nd interval — prompt still there → wait 2s
-			// Call 5: 3rd interval — processing indicator ⏺ found → success
+			// Call 3: dedup guard (#128) — no spinner, proceeds to write
+			// Call 4: 1st interval — prompt still there, no indicators → wait 1s
+			// Call 5: 2nd interval — prompt still there → wait 2s
+			// Call 6: 3rd interval — processing indicator ⏺ found → success
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ \n')               // pre-send: at prompt
 				.mockReturnValueOnce('❯ \n')               // beforeOutput
+				.mockReturnValueOnce('❯ \n')               // dedup guard (#128): no spinner
 				.mockReturnValueOnce('❯ \n')               // 1st interval: still at prompt
 				.mockReturnValueOnce('❯ \n')               // 2nd interval: still at prompt
 				.mockReturnValueOnce('⏺ Processing...\n'); // 3rd interval: processing → success
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
-		}, 15000);
+		});
 
 		it('should NOT declare success from raw output-change alone (pasted text false positive)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
@@ -702,7 +736,9 @@ describe('AgentRegistrationService', () => {
 				return '❯ Hello world\n';
 			});
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello world');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello world');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			// Should FAIL — message stuck at prompt, not processing
 			expect(result.success).toBe(false);
@@ -714,7 +750,9 @@ describe('AgentRegistrationService', () => {
 			// capturePane shows non-prompt content (agent is busy/modal)
 			mockSessionHelper.capturePane.mockReturnValue('Some modal text...');
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			// On final attempt, prompt detection failure falls through to direct delivery
 			// rather than returning a 502 error
@@ -758,11 +796,13 @@ describe('AgentRegistrationService', () => {
 			// On final attempt, falls through to direct delivery instead of failing
 			mockSessionHelper.capturePane.mockReturnValue('Loading...\nPlease wait');
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			// On final attempt, prompt detection failure falls through to direct delivery
 			expect(result.success).toBe(true);
-		}, 40000);  // Increase timeout for event-driven retry test
+		});
 	});
 
 	describe('sendKeyToAgent', () => {
@@ -851,6 +891,99 @@ describe('AgentRegistrationService', () => {
 			expect(result).toContain('register-self');
 			expect(result).toContain('"role":"dev"');
 			expect(result).toContain('"sessionName":"test-session"');
+		});
+
+		it('should inject TL addon when member has canDelegate=true and subordinates', async () => {
+			const promptTemplate = 'Base prompt for {{SESSION_NAME}} role={{ROLE}}';
+			mockReadFile.mockResolvedValue(promptTemplate);
+
+			// Mock team with TL member (Sam) and subordinate (Leo)
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-product',
+				name: 'Crewly Product',
+				members: [
+					{
+						id: 'member-sam',
+						name: 'Sam',
+						sessionName: 'sam-session',
+						role: 'developer',
+						canDelegate: true,
+						subordinateIds: ['member-leo'],
+						agentStatus: 'active',
+						workingStatus: 'idle',
+						runtimeType: 'claude-code',
+						systemPrompt: '',
+					},
+					{
+						id: 'member-leo',
+						name: 'Leo',
+						sessionName: 'leo-session',
+						role: 'developer',
+						canDelegate: false,
+						subordinateIds: [],
+						agentStatus: 'active',
+						workingStatus: 'idle',
+						runtimeType: 'claude-code',
+						systemPrompt: '',
+					},
+				],
+				projectIds: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			} as any]);
+
+			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
+			const result = await loadRegistrationPrompt('developer', 'sam-session', 'member-sam');
+
+			// Verify TL addon was injected
+			expect(result).toContain('TL ADDON INJECTED');
+			expect(result).toContain('You are the Team Lead');
+		});
+
+		it('should NOT inject TL addon when member has canDelegate=false', async () => {
+			const promptTemplate = 'Base prompt for {{SESSION_NAME}}';
+			mockReadFile.mockResolvedValue(promptTemplate);
+
+			// Mock team with non-TL member (Leo)
+			mockStorageService.getTeams.mockResolvedValue([{
+				id: 'team-product',
+				name: 'Crewly Product',
+				members: [
+					{
+						id: 'member-leo',
+						name: 'Leo',
+						sessionName: 'leo-session',
+						role: 'developer',
+						canDelegate: false,
+						subordinateIds: [],
+						agentStatus: 'active',
+						workingStatus: 'idle',
+						runtimeType: 'claude-code',
+						systemPrompt: '',
+					},
+				],
+				projectIds: [],
+				createdAt: new Date().toISOString(),
+				updatedAt: new Date().toISOString(),
+			} as any]);
+
+			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
+			const result = await loadRegistrationPrompt('developer', 'leo-session', 'member-leo');
+
+			// Verify TL addon was NOT injected
+			expect(result).not.toContain('TL ADDON');
+			expect(result).not.toContain('Team Lead');
+		});
+
+		it('should NOT inject TL addon for orchestrator role', async () => {
+			const promptTemplate = 'Orchestrator prompt for {{SESSION_NAME}}';
+			mockReadFile.mockResolvedValue(promptTemplate);
+
+			const loadRegistrationPrompt = (service as any).loadRegistrationPrompt.bind(service);
+			const result = await loadRegistrationPrompt('orchestrator', 'crewly-orc');
+
+			// Orchestrator has no team member entry, so no TL addon
+			expect(result).not.toContain('TL ADDON');
 		});
 	});
 
@@ -1177,6 +1310,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 		describe('waitForRegistration (private method)', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should return true when registration is confirmed', async () => {
 			mockStorageService.getOrchestratorStatus.mockResolvedValue({
 				agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
@@ -1194,12 +1335,11 @@ describe('AgentRegistrationService', () => {
 			} as any);
 
 			const waitForRegistration = (service as any).waitForRegistration.bind(service);
-			const startTime = Date.now();
-			const result = await waitForRegistration('test-session', 'orchestrator', 1000);
-			const elapsed = Date.now() - startTime;
+			const resultPromise = waitForRegistration('test-session', 'orchestrator', 1000);
+			await jest.advanceTimersByTimeAsync(5000);
+			const result = await resultPromise;
 
 			expect(result).toBe(false);
-			expect(elapsed).toBeGreaterThanOrEqual(900);
 		});
 	});
 
@@ -1249,6 +1389,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('stuck Enter detection in message delivery', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		// Helper to create a mock session with configurable onData behavior
 		const createMockSession = (outputSequence: Array<{ output: string; delayMs: number }>) => {
 			return {
@@ -1275,10 +1423,12 @@ describe('AgentRegistrationService', () => {
 			// All return prompt → stuck after 3 intervals exhausted on every attempt.
 			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
-			const result = await service.sendMessageToAgent(
+			const resultPromise = service.sendMessageToAgent(
 				'test-session',
 				'[CHAT:abc] Hello orchestrator'
 			);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
@@ -1298,47 +1448,56 @@ describe('AgentRegistrationService', () => {
 				return '⏺ Processing...\n';
 			});
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
-		}, 30000);
+		});
 
 		it('should accept when prompt gone on first progressive check (no false negative)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
 			// Call 1: pre-send — at prompt
 			// Call 2: beforeOutput capture
-			// Call 3: 1st interval — ⏺ found → success
+			// Call 3: dedup guard (#128) — no spinner, proceeds to write
+			// Call 4: 1st interval — ⏺ found → success
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ \n')                // pre-send: at prompt
 				.mockReturnValueOnce('❯ \n')                // beforeOutput capture
+				.mockReturnValueOnce('❯ \n')                // dedup guard (#128): no spinner
 				.mockReturnValueOnce('⏺ Processing...\n');  // 1st interval: processing → success
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
-		}, 40000);
+		});
 
 		it('should clear leftover input on retry when at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 calls.
-			// Attempt 1: calls 1-5 → all prompt → stuck, cleanup + clearCurrentCommandLine
-			// Attempt 2: calls 6-7 → prompt, call 8 → processing → success
+			// Each attempt: 1 pre-send + 1 beforeOutput + 1 dedup guard + 3 intervals = 6 calls.
+			// Attempt 1: calls 1-6 → all prompt → stuck, cleanup + clearCurrentCommandLine
+			// Attempt 2: calls 7-9 → prompt (pre-send + beforeOutput + dedup guard),
+			//   call 10 → processing → success
 			let capturePaneCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				capturePaneCount++;
-				if (capturePaneCount <= 7) return '❯ \n';
+				if (capturePaneCount <= 9) return '❯ \n';
 				return '⏺ Processing...\n';
 			});
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello stuck message');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello stuck message');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			// clearCurrentCommandLine should have been called during retry after stuck detection
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
 			// Second attempt succeeds
 			expect(result.success).toBe(true);
-		}, 30000);
+		});
 
 		it('should run retry cleanup on every failed attempt, not just first', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
@@ -1347,7 +1506,9 @@ describe('AgentRegistrationService', () => {
 			// All attempts always show prompt → stuck on every attempt
 			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
 			// clearCurrentCommandLine should be called on every failed attempt
@@ -1716,6 +1877,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendMessageWithRetry — busy agent protection', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should not force-deliver when agent is busy (low idle time)', async () => {
 			// Simulate agent actively processing — PTY output within the busy threshold
 			mockGetIdleTimeMs.mockReturnValue(1000); // 1s idle < 5s threshold = busy
@@ -1723,7 +1892,9 @@ describe('AgentRegistrationService', () => {
 			// No prompt visible (agent is working)
 			mockSessionHelper.capturePane.mockReturnValue('Tool output line 1\nTool output line 2');
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
 			// Should not have called sendMessage (no force delivery when busy)
@@ -1736,7 +1907,9 @@ describe('AgentRegistrationService', () => {
 
 			mockSessionHelper.capturePane.mockReturnValue('⏺ Running Bash command...\n  $ npm test');
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
 			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
@@ -1744,6 +1917,14 @@ describe('AgentRegistrationService', () => {
 	});
 
 	describe('sendMessageWithRetry — retry deduplication guard (#128)', () => {
+		beforeEach(() => {
+			jest.useFakeTimers();
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
+		});
+
 		it('should skip re-write on retry when spinner is visible (definitive processing)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			let callCount = 0;
@@ -1766,7 +1947,9 @@ describe('AgentRegistrationService', () => {
 				return '⏺ Processing your request...\n';
 			});
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			// sendMessage should only be called ONCE (attempt 1), not twice
@@ -1788,7 +1971,9 @@ describe('AgentRegistrationService', () => {
 				return 'Reading file src/index.ts\nAnalyzing code...\n';
 			});
 
-			const result = await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			// sendMessage should only be called ONCE (attempt 1), not twice
@@ -1810,7 +1995,9 @@ describe('AgentRegistrationService', () => {
 				return '❯ Hello\n';
 			});
 
-			await service.sendMessageToAgent('test-session', 'Hello');
+			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
+			await jest.advanceTimersByTimeAsync(60000);
+			await resultPromise;
 
 			// sendMessage should be called more than once since dedup guard allows re-write
 			expect(mockSessionHelper.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(1);
@@ -1821,14 +2008,21 @@ describe('AgentRegistrationService', () => {
 		let escapeGeminiShellMode: (sessionName: string, helper: any) => Promise<boolean>;
 
 		beforeEach(() => {
+			jest.useFakeTimers();
 			escapeGeminiShellMode = (service as any).escapeGeminiShellMode.bind(service);
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
 		});
 
 		it('should send Escape and return true when shell mode exits', async () => {
 			// First capturePane: still in shell mode (but isGeminiInShellMode will see normal prompt)
 			mockSessionHelper.capturePane.mockReturnValue('│ > Type your message │');
 
-			const result = await escapeGeminiShellMode('crewly-orc', mockSessionHelper);
+			const resultPromise = escapeGeminiShellMode('crewly-orc', mockSessionHelper);
+			await jest.advanceTimersByTimeAsync(5000);
+			const result = await resultPromise;
 
 			expect(result).toBe(true);
 			expect(mockSessionHelper.sendEscape).toHaveBeenCalledWith('crewly-orc');
@@ -1838,7 +2032,9 @@ describe('AgentRegistrationService', () => {
 			// capturePane always shows shell mode
 			mockSessionHelper.capturePane.mockReturnValue('│ ! │');
 
-			const result = await escapeGeminiShellMode('crewly-orc', mockSessionHelper);
+			const resultPromise = escapeGeminiShellMode('crewly-orc', mockSessionHelper);
+			await jest.advanceTimersByTimeAsync(5000);
+			const result = await resultPromise;
 
 			expect(result).toBe(false);
 			expect(mockSessionHelper.sendEscape).toHaveBeenCalledTimes(3); // MAX_ESCAPE_ATTEMPTS
@@ -1847,7 +2043,12 @@ describe('AgentRegistrationService', () => {
 
 	describe('sendMessageToAgent with Gemini shell mode', () => {
 		beforeEach(() => {
+			jest.useFakeTimers();
 			mockSessionHelper.sessionExists.mockReturnValue(true);
+		});
+
+		afterEach(() => {
+			jest.useRealTimers();
 		});
 
 		it('should detect and escape shell mode before sending message to Gemini CLI', async () => {
@@ -1866,11 +2067,13 @@ describe('AgentRegistrationService', () => {
 				return '⠋ Thinking about your request...\nReading files...';
 			});
 
-			const result = await service.sendMessageToAgent(
+			const resultPromise = service.sendMessageToAgent(
 				'crewly-orc',
 				'Hello!',
 				RUNTIME_TYPES.GEMINI_CLI
 			);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			expect(mockSessionHelper.sendEscape).toHaveBeenCalled();
@@ -1880,13 +2083,16 @@ describe('AgentRegistrationService', () => {
 			mockSessionHelper.capturePane
 				.mockReturnValueOnce('❯ ')              // pre-send: prompt check
 				.mockReturnValueOnce('❯ ')              // beforeOutput capture
+				.mockReturnValueOnce('❯ ')              // dedup guard (#128): no spinner
 				.mockReturnValueOnce('⏺ Processing');   // 1st interval: ⏺ found → success
 
-			const result = await service.sendMessageToAgent(
+			const resultPromise = service.sendMessageToAgent(
 				'crewly-orc',
 				'Hello',
 				RUNTIME_TYPES.CLAUDE_CODE
 			);
+			await jest.advanceTimersByTimeAsync(60000);
+			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			// sendEscape should NOT have been called for shell mode escape
@@ -2130,6 +2336,7 @@ describe('AgentRegistrationService', () => {
 				shutdown: jest.fn(),
 			};
 
+			// When RuntimeServiceFactory.create is called with CREWLY_AGENT, return the mock
 			(RuntimeServiceFactory.create as jest.Mock).mockImplementation(
 				(runtimeType: string) => {
 					if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
@@ -2141,6 +2348,7 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should initialize in-process runtime for crewly-agent type', async () => {
+			// Mock readFile for registration prompt
 			mockReadFile.mockResolvedValue('You are the orchestrator. {{SESSION_NAME}}');
 			mockAccess.mockRejectedValue(new Error('ENOENT'));
 
@@ -2157,6 +2365,7 @@ describe('AgentRegistrationService', () => {
 				undefined,
 				'orchestrator'
 			);
+			// Should NOT create a PTY session
 			expect(mockSessionHelper.createSession).not.toHaveBeenCalled();
 		});
 
@@ -2176,6 +2385,7 @@ describe('AgentRegistrationService', () => {
 		});
 
 		it('should route messages to in-process runtime via sendMessageToAgent', async () => {
+			// Setup: create the in-process runtime first
 			mockReadFile.mockResolvedValue('System prompt');
 			mockAccess.mockRejectedValue(new Error('ENOENT'));
 
@@ -2185,6 +2395,7 @@ describe('AgentRegistrationService', () => {
 				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
 			});
 
+			// Now send a message
 			const result = await service.sendMessageToAgent(
 				'crewly-assistant',
 				'Check team status',
@@ -2193,6 +2404,7 @@ describe('AgentRegistrationService', () => {
 
 			expect(result.success).toBe(true);
 			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalledWith('Check team status');
+			// Should NOT write to PTY
 			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
 		});
 
@@ -2217,6 +2429,7 @@ describe('AgentRegistrationService', () => {
 				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
 			});
 
+			// Make handleMessage throw
 			mockCrewlyRuntime.handleMessage.mockRejectedValueOnce(new Error('Model API rate limited'));
 
 			const result = await service.sendMessageToAgent(
@@ -2258,6 +2471,7 @@ describe('AgentRegistrationService', () => {
 			const ready = await service.waitForAgentReady('crewly-ready');
 
 			expect(ready).toBe(true);
+			// Should NOT check PTY terminal output
 			expect(mockSessionHelper.capturePane).not.toHaveBeenCalled();
 		});
 

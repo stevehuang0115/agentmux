@@ -100,6 +100,7 @@ describe('ChatPanel', () => {
       isSending: false,
       error: null,
       isTyping: false,
+      channelFilter: null,
       sendMessage: vi.fn(),
       selectConversation: vi.fn(),
       createConversation: vi.fn(),
@@ -107,7 +108,11 @@ describe('ChatPanel', () => {
       archiveConversation: vi.fn(),
       clearConversation: vi.fn(),
       refreshMessages: vi.fn(),
+      loadOlderMessages: vi.fn(),
+      hasMoreMessages: false,
+      isLoadingMore: false,
       clearError: vi.fn(),
+      setChannelFilter: vi.fn(),
     });
 
     // Default: orchestrator is active

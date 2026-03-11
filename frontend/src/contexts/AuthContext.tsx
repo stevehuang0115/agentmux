@@ -2,44 +2,19 @@
  * Auth Context
  *
  * React context that manages CrewlyAI Cloud authentication state
- * using the Supabase JS client. Session persistence, token refresh,
- * and auth-state changes are handled by the Supabase SDK.
+ * using HTTP calls to the Cloud API. No direct Supabase SDK dependency.
  *
- * License / feature checks still go through the backend API
- * (which validates the Supabase JWT).
+ * Tokens are stored in localStorage via the supabase.ts token helpers.
+ * On mount the context checks for a stored token, validates it via
+ * the /auth/me endpoint, and restores the session.
  *
  * @module contexts/AuthContext
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
-import type { Session, User, AuthChangeEvent } from '@supabase/supabase-js';
-import { supabase } from '../services/supabase';
+import { getAccessToken, getRefreshToken, storeTokens, clearTokens } from '../services/supabase';
 import { apiService } from '../services/api.service';
-import type { UserProfile, LicenseStatus, AuthState } from '../types/auth.types';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * Map a Supabase User to our UserProfile shape.
- *
- * @param user - Supabase user object
- * @returns Mapped UserProfile
- */
-function mapUser(user: User): UserProfile {
-  return {
-    id: user.id,
-    email: user.email ?? '',
-    displayName:
-      (user.user_metadata?.['display_name'] as string) ??
-      (user.user_metadata?.['displayName'] as string) ??
-      user.email ??
-      '',
-    plan: (user.user_metadata?.['plan'] as 'free' | 'pro') ?? 'free',
-    createdAt: user.created_at,
-  };
-}
+import type { UserProfile, LicenseStatus, AuthState, AuthTokenResponse } from '../types/auth.types';
 
 // ---------------------------------------------------------------------------
 // Context type
@@ -77,8 +52,9 @@ export interface AuthProviderProps {
 /**
  * Provides auth state and actions to the component tree.
  *
- * Subscribes to Supabase's onAuthStateChange for reactive session
- * management. Token refresh is handled automatically by the SDK.
+ * On mount, checks localStorage for a stored access token and
+ * validates it via the Cloud API. Token refresh is handled
+ * automatically when the access token expires.
  *
  * @param props - Provider props
  * @returns AuthProvider component
@@ -88,65 +64,75 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [license, setLicense] = useState<LicenseStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const sessionRef = useRef<Session | null>(null);
+  const accessTokenRef = useRef<string | null>(null);
 
-  /** Fetch license status from the backend using the Supabase access token. */
-  const fetchLicense = useCallback(async (accessToken: string) => {
+  /** Apply an auth token response — store tokens and update state. */
+  const applyAuthResponse = useCallback(async (response: AuthTokenResponse) => {
+    storeTokens(response.accessToken, response.refreshToken);
+    accessTokenRef.current = response.accessToken;
+    setUser(response.user);
+
+    // Fetch license status
     try {
-      const status = await apiService.authGetLicense(accessToken);
+      const status = await apiService.authGetLicense(response.accessToken);
       setLicense(status);
     } catch {
       // Non-critical — license check failure is OK
     }
   }, []);
 
-  /**
-   * Handle a session change (sign-in, sign-out, token refresh).
-   * Updates local state and fetches license when signed in.
-   */
-  const handleSession = useCallback(
-    async (session: Session | null) => {
-      sessionRef.current = session;
-
-      if (session?.user) {
-        setUser(mapUser(session.user));
-        await fetchLicense(session.access_token);
-      } else {
-        setUser(null);
-        setLicense(null);
-      }
-    },
-    [fetchLicense],
-  );
-
   // -----------------------------------------------------------------------
-  // Subscribe to auth state changes
+  // Restore session on mount
   // -----------------------------------------------------------------------
 
   useEffect(() => {
-    // 1. Get the current session on mount
     let cancelled = false;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!cancelled) {
-        handleSession(session).finally(() => setIsLoading(false));
+    const restoreSession = async () => {
+      const storedToken = getAccessToken();
+      if (!storedToken) {
+        setIsLoading(false);
+        return;
       }
-    });
 
-    // 2. Listen for future changes (sign-in, sign-out, token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event: AuthChangeEvent, session: Session | null) => {
-        if (!cancelled) {
-          handleSession(session);
+      try {
+        // Validate stored token by fetching profile
+        const profile = await apiService.authGetProfile(storedToken);
+        if (cancelled) return;
+
+        accessTokenRef.current = storedToken;
+        setUser(profile);
+
+        // Fetch license
+        try {
+          const status = await apiService.authGetLicense(storedToken);
+          if (!cancelled) setLicense(status);
+        } catch {
+          // Non-critical
         }
-      },
-    );
-
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
+      } catch {
+        // Token invalid — try refresh
+        const refreshToken = getRefreshToken();
+        if (refreshToken && !cancelled) {
+          try {
+            const response = await apiService.authRefresh(refreshToken);
+            if (!cancelled) await applyAuthResponse(response);
+          } catch {
+            // Refresh also failed — clear tokens
+            clearTokens();
+          }
+        } else {
+          clearTokens();
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
     };
-  }, [handleSession]);
+
+    restoreSession();
+
+    return () => { cancelled = true; };
+  }, [applyAuthResponse]);
 
   // -----------------------------------------------------------------------
   // Actions
@@ -154,39 +140,38 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const register = useCallback(async (email: string, password: string, displayName: string) => {
     setError(null);
-    const { error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { data: { display_name: displayName } },
-    });
-    if (signUpError) {
-      setError(signUpError.message);
-      throw signUpError;
+    try {
+      const response = await apiService.authRegister(email, password, displayName);
+      await applyAuthResponse(response);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Registration failed';
+      setError(msg);
+      throw err;
     }
-    // onAuthStateChange will fire and update state
-  }, []);
+  }, [applyAuthResponse]);
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    if (signInError) {
-      setError(signInError.message);
-      throw signInError;
+    try {
+      const response = await apiService.authLogin(email, password);
+      await applyAuthResponse(response);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Login failed';
+      setError(msg);
+      throw err;
     }
-    // onAuthStateChange will fire and update state
-  }, []);
+  }, [applyAuthResponse]);
 
   const logout = useCallback(() => {
     setError(null);
-    supabase.auth.signOut();
-    // onAuthStateChange will fire and clear state
+    clearTokens();
+    accessTokenRef.current = null;
+    setUser(null);
+    setLicense(null);
   }, []);
 
-  const getAccessToken = useCallback((): string | null => {
-    return sessionRef.current?.access_token ?? null;
+  const getToken = useCallback((): string | null => {
+    return accessTokenRef.current;
   }, []);
 
   const hasFeature = useCallback((feature: string): boolean => {
@@ -207,7 +192,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     register,
     login,
     logout,
-    getAccessToken,
+    getAccessToken: getToken,
     hasFeature,
   };
 

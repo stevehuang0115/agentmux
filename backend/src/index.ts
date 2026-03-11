@@ -80,6 +80,9 @@ import { ContextWindowMonitorService } from './services/agent/context-window-mon
 import { OAuthReloginMonitorService } from './services/agent/oauth-relogin-monitor.service.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { VersionCheckService } from './services/system/version-check.service.js';
+import { LogRotationService } from './services/session/log-rotation.service.js';
+import { AuditorSchedulerService } from './services/agent/auditor-scheduler.service.js';
+import { setAuditorSchedulerService } from './controllers/auditor/auditor.controller.js';
 
 // ESM __dirname equivalent using import.meta.url
 const __filename = fileURLToPath(import.meta.url);
@@ -235,6 +238,7 @@ export class CrewlyServer {
 		);
 		this.schedulerService.setTaskTrackingService(this.taskTrackingService);
 		this.schedulerService.setMessageQueueService(this.messageQueueService);
+		this.schedulerService.setActivityMonitor(this.activityMonitorService);
 
 		this.terminalGateway = new TerminalGateway(this.io);
 
@@ -380,6 +384,13 @@ export class CrewlyServer {
 				},
 			});
 		});
+
+		// H5 quick entry static page (served regardless of headless mode)
+		{
+			const projectRoot = findPackageRoot(__dirname);
+			const h5StaticPath = path.join(projectRoot, 'backend/src/static/h5');
+			this.app.use('/h5', express.static(h5StaticPath));
+		}
 
 		// Static files for frontend (skip in headless mode)
 		if (!this.config.headless) {
@@ -745,8 +756,12 @@ export class CrewlyServer {
 				// Silently ignore — version check is non-critical
 			});
 
+			// Start periodic task file system sync (#137) — cleans up stale tracking entries
+			this.taskTrackingService.startAutoSync();
+
 			// Start HTTP server with enhanced error handling
 			await this.startHttpServer();
+
 
 			// Register cleanup handlers
 			this.registerSignalHandlers();
@@ -759,6 +774,32 @@ export class CrewlyServer {
 
 			// Auto-restore agent sessions that were running before the last shutdown
 			await this.autoRestoreAgentSessionsIfEnabled();
+
+			// Start log rotation service (non-critical — logs cleanup)
+			try {
+				const logRotation = LogRotationService.getInstance();
+				const backend = getSessionBackendSync();
+				const activeNames = backend ? backend.listSessions() : [];
+				await logRotation.start(activeNames);
+				this.logger.info('LogRotationService started');
+			} catch (error) {
+				this.logger.warn('Failed to start LogRotationService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+
+			// Start AuditorSchedulerService (non-critical — audit scheduling)
+			try {
+				const auditorScheduler = AuditorSchedulerService.getInstance();
+				auditorScheduler.setEventBusService(this.eventBusService);
+				setAuditorSchedulerService(auditorScheduler);
+				auditorScheduler.start();
+				this.logger.info('AuditorSchedulerService started');
+			} catch (error) {
+				this.logger.warn('Failed to start AuditorSchedulerService (non-critical)', {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
 
 		} catch (error) {
 			this.logger.error('Failed to start server', { error: error instanceof Error ? error.message : String(error) });
@@ -1294,6 +1335,12 @@ export class CrewlyServer {
 			// Stop teams.json file watcher
 			this.teamsJsonWatcherService.stop();
 
+			// Stop log rotation service
+			LogRotationService.getInstance().stop();
+
+			// Stop auditor scheduler
+			AuditorSchedulerService.getInstance().stop();
+
 			// Clean up tmux service resources
 			this.tmuxService.destroy();
 
@@ -1312,6 +1359,8 @@ export class CrewlyServer {
 			// Shutdown WhatsApp integration
 			this.logger.info('Shutting down WhatsApp integration...');
 			await shutdownWhatsApp();
+
+			// Note: Cloud Task Processor has been migrated to services/tasks/
 
 			// Kill all tmux sessions
 			const sessions = await this.tmuxService.listSessions();

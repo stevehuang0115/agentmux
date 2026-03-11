@@ -61,5 +61,6 @@ api_call POST "/task-management/complete" "$BODY"
 
 # Auto-persist the task summary as project knowledge (#127).
 if [ -n "$SUMMARY" ]; then
-  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}"
+  PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
+  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}" "pattern" "project" "$PROJECT_PATH"
 fi

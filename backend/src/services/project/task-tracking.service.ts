@@ -11,10 +11,78 @@ import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 export class TaskTrackingService extends EventEmitter {
   private readonly taskTrackingPath: string;
   private readonly logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TaskTrackingService');
+  private autoSyncInterval?: ReturnType<typeof setInterval>;
 
   constructor() {
     super();
     this.taskTrackingPath = path.join(os.homedir(), '.crewly', 'in_progress_tasks.json');
+  }
+
+  /**
+   * Start periodic file system sync for all projects (#137).
+   * Cleans up stale task tracking entries whose files have been moved or deleted.
+   *
+   * @param intervalMs - Sync interval in milliseconds (default: 30 minutes)
+   */
+  startAutoSync(intervalMs: number = 30 * 60 * 1000): void {
+    if (this.autoSyncInterval) {
+      clearInterval(this.autoSyncInterval);
+    }
+
+    this.autoSyncInterval = setInterval(() => {
+      this.runAutoSync().catch((err) => {
+        this.logger.warn('Auto-sync failed (non-critical)', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, intervalMs);
+
+    this.logger.info('Task auto-sync started', { intervalMs });
+  }
+
+  /**
+   * Stop periodic file system sync.
+   */
+  stopAutoSync(): void {
+    if (this.autoSyncInterval) {
+      clearInterval(this.autoSyncInterval);
+      this.autoSyncInterval = undefined;
+      this.logger.info('Task auto-sync stopped');
+    }
+  }
+
+  /**
+   * Run auto-sync: iterate all tracked tasks and sync with file system.
+   * Groups tasks by projectId and calls syncTasksWithFileSystem for each.
+   */
+  private async runAutoSync(): Promise<void> {
+    const data = await this.loadTaskData();
+    if (data.tasks.length === 0) return;
+
+    // Group tasks by projectId and extract unique project paths
+    const projectPaths = new Map<string, string>();
+    for (const task of data.tasks) {
+      if (!projectPaths.has(task.projectId) && task.taskFilePath) {
+        // Derive project path from task file path:
+        // taskFilePath looks like /path/to/project/.crewly/tasks/milestone/status/file.md
+        const crewlyIdx = task.taskFilePath.indexOf('/.crewly/');
+        if (crewlyIdx > 0) {
+          projectPaths.set(task.projectId, task.taskFilePath.substring(0, crewlyIdx));
+        }
+      }
+    }
+
+    for (const [projectId, projectPath] of projectPaths) {
+      try {
+        await this.syncTasksWithFileSystem(projectPath, projectId);
+      } catch (err) {
+        this.logger.warn('Sync failed for project', {
+          projectId,
+          projectPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   async loadTaskData(): Promise<TaskTrackingData> {

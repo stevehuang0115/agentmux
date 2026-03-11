@@ -1,5 +1,5 @@
 /**
- * Tests for AuthContext (Supabase)
+ * Tests for AuthContext (HTTP-based Cloud API)
  *
  * @module contexts/AuthContext.test
  */
@@ -7,71 +7,79 @@
 import React from 'react';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import type { AuthChangeEvent, Session, User } from '@supabase/supabase-js';
+import type { UserProfile, AuthTokenResponse, LicenseStatus } from '../types/auth.types';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-/** Captured onAuthStateChange callback so tests can trigger it. */
-let authChangeCallback: ((event: AuthChangeEvent, session: Session | null) => void) | null = null;
-
-const mockGetSession = vi.fn();
-const mockSignInWithPassword = vi.fn();
-const mockSignUp = vi.fn();
-const mockSignOut = vi.fn();
-const mockUnsubscribe = vi.fn();
+const mockAuthLogin = vi.fn();
+const mockAuthRegister = vi.fn();
+const mockAuthRefresh = vi.fn();
+const mockAuthGetProfile = vi.fn();
 const mockAuthGetLicense = vi.fn();
-
-vi.mock('../services/supabase', () => ({
-  supabase: {
-    auth: {
-      getSession: (...args: unknown[]) => mockGetSession(...args),
-      signInWithPassword: (...args: unknown[]) => mockSignInWithPassword(...args),
-      signUp: (...args: unknown[]) => mockSignUp(...args),
-      signOut: (...args: unknown[]) => mockSignOut(...args),
-      onAuthStateChange: (cb: (event: AuthChangeEvent, session: Session | null) => void) => {
-        authChangeCallback = cb;
-        return { data: { subscription: { unsubscribe: mockUnsubscribe } } };
-      },
-    },
-  },
-}));
 
 vi.mock('../services/api.service', () => ({
   apiService: {
+    authLogin: (...args: unknown[]) => mockAuthLogin(...args),
+    authRegister: (...args: unknown[]) => mockAuthRegister(...args),
+    authRefresh: (...args: unknown[]) => mockAuthRefresh(...args),
+    authGetProfile: (...args: unknown[]) => mockAuthGetProfile(...args),
     authGetLicense: (...args: unknown[]) => mockAuthGetLicense(...args),
   },
 }));
+
+vi.mock('../services/supabase', () => {
+  const store: Record<string, string> = {};
+  return {
+    getAccessToken: () => store['access'] ?? null,
+    getRefreshToken: () => store['refresh'] ?? null,
+    storeTokens: (access: string, refresh: string) => {
+      store['access'] = access;
+      store['refresh'] = refresh;
+    },
+    clearTokens: () => {
+      delete store['access'];
+      delete store['refresh'];
+    },
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Create a fake Supabase User. */
-function fakeUser(overrides: Partial<User> = {}): User {
+/** Create a fake UserProfile. */
+function fakeUser(overrides: Partial<UserProfile> = {}): UserProfile {
   return {
     id: 'user-123',
     email: 'test@example.com',
-    user_metadata: { display_name: 'Test User' },
-    created_at: '2026-01-01T00:00:00Z',
-    app_metadata: {},
-    aud: 'authenticated',
+    displayName: 'Test User',
+    plan: 'free',
+    createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
-  } as User;
+  };
 }
 
-/** Create a fake Supabase Session. */
-function fakeSession(overrides: Partial<Session> = {}): Session {
+/** Create a fake AuthTokenResponse. */
+function fakeAuthResponse(overrides: Partial<AuthTokenResponse> = {}): AuthTokenResponse {
   return {
-    access_token: 'sb-access-token',
-    refresh_token: 'sb-refresh-token',
-    token_type: 'bearer',
-    expires_in: 3600,
-    expires_at: Math.floor(Date.now() / 1000) + 3600,
+    accessToken: 'access-token-123',
+    refreshToken: 'refresh-token-456',
+    expiresIn: 3600,
     user: fakeUser(),
     ...overrides,
-  } as Session;
+  };
+}
+
+/** Create a fake LicenseStatus. */
+function fakeLicense(overrides: Partial<LicenseStatus> = {}): LicenseStatus {
+  return {
+    plan: 'pro',
+    features: ['cloud-relay'],
+    active: true,
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +87,7 @@ function fakeSession(overrides: Partial<Session> = {}): Session {
 // ---------------------------------------------------------------------------
 
 import { AuthProvider, useAuth } from './AuthContext';
+import { storeTokens, clearTokens } from '../services/supabase';
 
 /** Test consumer component that renders auth state. */
 const TestConsumer: React.FC = () => {
@@ -99,16 +108,13 @@ const TestConsumer: React.FC = () => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('AuthContext (Supabase)', () => {
+describe('AuthContext (HTTP Cloud API)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    authChangeCallback = null;
-    mockSignOut.mockResolvedValue({ error: null });
+    clearTokens();
   });
 
-  it('should resolve to unauthenticated when no session exists', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-
+  it('should resolve to unauthenticated when no stored token exists', async () => {
     render(
       <AuthProvider>
         <TestConsumer />
@@ -123,14 +129,10 @@ describe('AuthContext (Supabase)', () => {
     expect(screen.getByTestId('user').textContent).toBe('none');
   });
 
-  it('should restore session from Supabase on mount', async () => {
-    const session = fakeSession();
-    mockGetSession.mockResolvedValue({ data: { session } });
-    mockAuthGetLicense.mockResolvedValue({
-      plan: 'pro',
-      features: ['cloud-relay'],
-      active: true,
-    });
+  it('should restore session from stored token on mount', async () => {
+    storeTokens('stored-access', 'stored-refresh');
+    mockAuthGetProfile.mockResolvedValue(fakeUser());
+    mockAuthGetLicense.mockResolvedValue(fakeLicense());
 
     render(
       <AuthProvider>
@@ -145,12 +147,33 @@ describe('AuthContext (Supabase)', () => {
     expect(screen.getByTestId('user').textContent).toBe('test@example.com');
     expect(screen.getByTestId('displayName').textContent).toBe('Test User');
     expect(screen.getByTestId('plan').textContent).toBe('pro');
-    expect(mockAuthGetLicense).toHaveBeenCalledWith('sb-access-token');
+    expect(mockAuthGetProfile).toHaveBeenCalledWith('stored-access');
+    expect(mockAuthGetLicense).toHaveBeenCalledWith('stored-access');
   });
 
-  it('should update state when onAuthStateChange fires SIGNED_IN', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-    mockAuthGetLicense.mockResolvedValue({ plan: 'free', features: [], active: true });
+  it('should try refresh when stored access token is invalid', async () => {
+    storeTokens('expired-access', 'valid-refresh');
+    mockAuthGetProfile.mockRejectedValue(new Error('Token expired'));
+    mockAuthRefresh.mockResolvedValue(fakeAuthResponse());
+    mockAuthGetLicense.mockResolvedValue(fakeLicense({ plan: 'free', features: [] }));
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('authenticated').textContent).toBe('true');
+    });
+
+    expect(mockAuthRefresh).toHaveBeenCalledWith('valid-refresh');
+  });
+
+  it('should clear tokens when both access and refresh fail', async () => {
+    storeTokens('bad-access', 'bad-refresh');
+    mockAuthGetProfile.mockRejectedValue(new Error('Token expired'));
+    mockAuthRefresh.mockRejectedValue(new Error('Refresh failed'));
 
     render(
       <AuthProvider>
@@ -163,50 +186,11 @@ describe('AuthContext (Supabase)', () => {
     });
 
     expect(screen.getByTestId('authenticated').textContent).toBe('false');
-
-    // Simulate sign-in event
-    await act(async () => {
-      authChangeCallback?.('SIGNED_IN', fakeSession());
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('authenticated').textContent).toBe('true');
-    });
-
-    expect(screen.getByTestId('user').textContent).toBe('test@example.com');
   });
 
-  it('should clear state when onAuthStateChange fires SIGNED_OUT', async () => {
-    const session = fakeSession();
-    mockGetSession.mockResolvedValue({ data: { session } });
-    mockAuthGetLicense.mockResolvedValue({ plan: 'free', features: [], active: true });
-
-    render(
-      <AuthProvider>
-        <TestConsumer />
-      </AuthProvider>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('authenticated').textContent).toBe('true');
-    });
-
-    // Simulate sign-out event
-    await act(async () => {
-      authChangeCallback?.('SIGNED_OUT', null);
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('authenticated').textContent).toBe('false');
-    });
-
-    expect(screen.getByTestId('user').textContent).toBe('none');
-    expect(screen.getByTestId('plan').textContent).toBe('none');
-  });
-
-  it('should call supabase.auth.signInWithPassword on login', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-    mockSignInWithPassword.mockResolvedValue({ data: { session: fakeSession() }, error: null });
+  it('should call apiService.authLogin on login', async () => {
+    mockAuthLogin.mockResolvedValue(fakeAuthResponse());
+    mockAuthGetLicense.mockResolvedValue(fakeLicense({ plan: 'free', features: [] }));
 
     const LoginTester: React.FC = () => {
       const { login } = useAuth();
@@ -219,24 +203,17 @@ describe('AuthContext (Supabase)', () => {
       </AuthProvider>,
     );
 
-    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('login')).toBeTruthy());
 
     await act(async () => {
       screen.getByText('login').click();
     });
 
-    expect(mockSignInWithPassword).toHaveBeenCalledWith({
-      email: 'a@b.com',
-      password: 'pass1234',
-    });
+    expect(mockAuthLogin).toHaveBeenCalledWith('a@b.com', 'pass1234');
   });
 
-  it('should set error and throw when login fails', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-    mockSignInWithPassword.mockResolvedValue({
-      data: { session: null },
-      error: { message: 'Invalid credentials', status: 400 },
-    });
+  it('should set error when login fails', async () => {
+    mockAuthLogin.mockRejectedValue(new Error('Invalid credentials'));
 
     const LoginTester: React.FC = () => {
       const { login, error } = useAuth();
@@ -257,7 +234,7 @@ describe('AuthContext (Supabase)', () => {
       </AuthProvider>,
     );
 
-    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('login')).toBeTruthy());
 
     await act(async () => {
       screen.getByText('login').click();
@@ -268,9 +245,9 @@ describe('AuthContext (Supabase)', () => {
     });
   });
 
-  it('should call supabase.auth.signUp on register', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-    mockSignUp.mockResolvedValue({ data: { session: fakeSession() }, error: null });
+  it('should call apiService.authRegister on register', async () => {
+    mockAuthRegister.mockResolvedValue(fakeAuthResponse());
+    mockAuthGetLicense.mockResolvedValue(fakeLicense({ plan: 'free', features: [] }));
 
     const RegisterTester: React.FC = () => {
       const { register } = useAuth();
@@ -283,27 +260,28 @@ describe('AuthContext (Supabase)', () => {
       </AuthProvider>,
     );
 
-    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('register')).toBeTruthy());
 
     await act(async () => {
       screen.getByText('register').click();
     });
 
-    expect(mockSignUp).toHaveBeenCalledWith({
-      email: 'a@b.com',
-      password: 'pass1234',
-      options: { data: { display_name: 'New User' } },
-    });
+    expect(mockAuthRegister).toHaveBeenCalledWith('a@b.com', 'pass1234', 'New User');
   });
 
-  it('should call supabase.auth.signOut on logout', async () => {
-    const session = fakeSession();
-    mockGetSession.mockResolvedValue({ data: { session } });
-    mockAuthGetLicense.mockResolvedValue({ plan: 'free', features: [], active: true });
+  it('should clear state and tokens on logout', async () => {
+    storeTokens('stored-access', 'stored-refresh');
+    mockAuthGetProfile.mockResolvedValue(fakeUser());
+    mockAuthGetLicense.mockResolvedValue(fakeLicense());
 
     const LogoutTester: React.FC = () => {
-      const { logout } = useAuth();
-      return <button onClick={logout}>logout</button>;
+      const { logout, isAuthenticated } = useAuth();
+      return (
+        <>
+          <span data-testid="auth">{String(isAuthenticated)}</span>
+          <button onClick={logout}>logout</button>
+        </>
+      );
     };
 
     render(
@@ -312,31 +290,15 @@ describe('AuthContext (Supabase)', () => {
       </AuthProvider>,
     );
 
-    await waitFor(() => expect(mockGetSession).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(screen.getByTestId('auth').textContent).toBe('true');
+    });
 
     await act(async () => {
       screen.getByText('logout').click();
     });
 
-    expect(mockSignOut).toHaveBeenCalled();
-  });
-
-  it('should unsubscribe from auth state changes on unmount', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: null } });
-
-    const { unmount } = render(
-      <AuthProvider>
-        <TestConsumer />
-      </AuthProvider>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('loading').textContent).toBe('false');
-    });
-
-    unmount();
-
-    expect(mockUnsubscribe).toHaveBeenCalled();
+    expect(screen.getByTestId('auth').textContent).toBe('false');
   });
 
   it('should throw if useAuth is used outside AuthProvider', () => {
@@ -346,8 +308,8 @@ describe('AuthContext (Supabase)', () => {
   });
 
   it('should handle license fetch failure gracefully', async () => {
-    const session = fakeSession();
-    mockGetSession.mockResolvedValue({ data: { session } });
+    storeTokens('stored-access', 'stored-refresh');
+    mockAuthGetProfile.mockResolvedValue(fakeUser());
     mockAuthGetLicense.mockRejectedValue(new Error('Network error'));
 
     render(

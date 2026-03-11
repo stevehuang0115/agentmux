@@ -2088,13 +2088,26 @@ describe('Teams Handlers', () => {
       expect(mockEventBusService.listSubscriptions).toHaveBeenCalledWith(
         CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
       );
-      expect(mockEventBusService.subscribe).toHaveBeenCalledWith({
-        eventType: ['agent:status_changed', 'agent:idle', 'agent:busy', 'agent:active', 'agent:inactive'],
-        filter: {},
-        subscriberSession: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-        oneShot: false,
-        ttlMinutes: 1440,
-      });
+      // Should subscribe to CRITICAL events only (not noisy idle/busy toggles)
+      expect(mockEventBusService.subscribe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filter: {},
+          subscriberSession: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
+          oneShot: false,
+          ttlMinutes: 1440,
+        })
+      );
+      // Verify critical event types are included
+      const subscribedTypes = (mockEventBusService.subscribe.mock.calls[0][0] as any).eventType;
+      expect(subscribedTypes).toContain('task:completed');
+      expect(subscribedTypes).toContain('task:failed');
+      expect(subscribedTypes).toContain('agent:inactive');
+      expect(subscribedTypes).toContain('agent:context_critical');
+      expect(subscribedTypes).toContain('hierarchy:escalation');
+      // Verify noisy info events are NOT included
+      expect(subscribedTypes).not.toContain('agent:idle');
+      expect(subscribedTypes).not.toContain('agent:busy');
+      expect(subscribedTypes).not.toContain('agent:status_changed');
     });
 
     it('should clear existing subscriptions before re-subscribing', async () => {

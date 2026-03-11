@@ -8,7 +8,7 @@ export interface TeamMember {
   systemPrompt: string;
   agentStatus: 'inactive' | 'starting' | 'started' | 'active' | 'suspended' | 'activating'; // Connection/registration status (activating is deprecated)
   workingStatus: 'idle' | 'in_progress'; // Activity level status
-  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli'; // AI runtime to use
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent'; // AI runtime to use
   skillOverrides?: string[]; // Additional skill IDs beyond what the role provides
   excludedRoleSkills?: string[]; // Role skills to exclude for this specific member
   currentTickets?: string[];
