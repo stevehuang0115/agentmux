@@ -101,8 +101,30 @@ $RECYCLE.BIN/
 # Example: agentmux data directories if they contain sensitive info
 .agentmux/
 
+# Claude Code local config
+.claude/
+
 # Crewly local project data
 .crewly/
+
+# Payment/billing (private, not for OSS)
+backend/src/controllers/payment/
+backend/src/services/payment/
+
+# Cloud server-side (belongs in services repo)
+backend/src/services/cloud/relay-server.service.ts
+backend/src/services/cloud/relay-server.service.test.ts
+backend/src/services/cloud/admin-seed.service.ts
+backend/src/services/cloud/mongodb.service.ts
+
+# Static assets (not for OSS)
+backend/src/static/
+
+# Deployment configs (private)
+deploy/
+
+# Internal docs
+docs/
 
 # Generated docs (stored in .crewly/docs/)
 docs/blog/
