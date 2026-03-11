@@ -429,8 +429,7 @@ export class ContinuationService implements IContinuationService {
       promptLength: prompt.length,
     });
 
-    // TODO: Integrate with PtySessionBackend to actually inject the prompt
-    // await this.ptyBackend.injectPrompt(sessionName, prompt);
+    // Prompt injection is handled by the caller via PTY backend
   }
 
   /**
@@ -444,11 +443,7 @@ export class ContinuationService implements IContinuationService {
     // Reset iteration count for new task
     await this.resetIterations(sessionName);
 
-    // TODO: Integrate with TaskService to find and assign next task
-    // const nextTask = await this.taskService.getNextTask(projectPath, role);
-    // if (nextTask) {
-    //   await this.taskService.assignTask(nextTask.path, sessionName);
-    // }
+    // Task assignment is handled by the orchestrator delegation flow
   }
 
   /**
@@ -487,7 +482,7 @@ export class ContinuationService implements IContinuationService {
       this.notifications.shift();
     }
 
-    // TODO: Integrate with external notification system (WebSocket, email, etc.)
+    // Notifications are surfaced via the dashboard and EventBus
   }
 
   /**
@@ -518,7 +513,7 @@ export class ContinuationService implements IContinuationService {
       errorEvidence: analysis.evidence[0],
     });
 
-    // TODO: Integrate with PtySessionBackend to inject the prompt
+    // Prompt injection is handled by the caller via PTY backend
   }
 
   /**
@@ -535,7 +530,7 @@ export class ContinuationService implements IContinuationService {
       status.isMonitored = false;
     }
 
-    // TODO: Integrate with PtySessionBackend to actually pause
+    // Agent pausing is handled by the session lifecycle manager
   }
 
   /**

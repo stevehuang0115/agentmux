@@ -14,7 +14,7 @@ import { SessionMemoryService } from '../memory/session-memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import { SHELL_PROMPT_PATTERNS } from '../continuation/patterns/idle-patterns.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
-import { TaskTrackingService } from '../project/task-tracking.service.js';
+import type { TaskTrackingService } from '../project/task-tracking.service.js';
 import { OrchestratorRestartService } from '../orchestrator/orchestrator-restart.service.js';
 import type { AgentRegistrationService } from './agent-registration.service.js';
 import type { InProgressTask } from '../../types/task-tracking.types.js';
@@ -392,61 +392,7 @@ export class RuntimeExitMonitorService {
 			const shellPromptConfirmed = this.verifyExitWithShellPrompt(sessionName, helper);
 
 			if (!shellPromptConfirmed) {
-				// Gate runtime-specific failure checks by runtimeType so that
-				// patterns for one runtime cannot accidentally match another.
-				let runtimeSpecificMatch = false;
-
-				if (monitored.runtimeType === RUNTIME_TYPES.CODEX_CLI) {
-					// Codex: "Conversation interrupted" indicates the run was aborted and
-					// often leaves the agent stranded without completion callbacks. Treat it
-					// as an actionable runtime failure even if shell prompt isn't visible.
-					const isCodexInterrupted = /Conversation interrupted/i.test(monitored.buffer);
-					if (isCodexInterrupted) {
-						this.logger.warn('Codex interruption detected, proceeding with recovery flow', {
-							sessionName,
-						});
-						runtimeSpecificMatch = true;
-					}
-				} else if (monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
-					// Claude Code: detect fatal API errors that make the CLI permanently
-					// non-functional (e.g. thinking block corruption). These are unrecoverable
-					// — no retry will help, immediate restart is required.
-					const isClaudeFatal = CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-					if (isClaudeFatal) {
-						const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
-						this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
-							sessionName,
-							detectedPattern,
-						});
-						runtimeSpecificMatch = true;
-					}
-				} else if (monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
-					// For Gemini CLI: detect either retryable failure patterns or forced
-					// restart/update markers that require immediate recovery handling.
-					const isGeminiFailure = GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-					const isGeminiForceRestart = GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
-
-					if (isGeminiFailure || isGeminiForceRestart) {
-						runtimeSpecificMatch = true;
-
-						// Some Gemini failures are transient; others (auto-update/restart)
-						// should trigger immediate recovery and task re-delivery.
-						if (isGeminiForceRestart) {
-							this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', {
-								sessionName,
-							});
-						} else {
-							// Retry with exponential backoff before declaring exit.
-							// Gemini CLI can recover from transient API errors automatically.
-							const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
-							if (retryResult === 'recovered' || retryResult === 'deferred') {
-								return;
-							}
-							// retryResult === 'exhausted' — fall through to exit flow
-						}
-					}
-				}
-
+				const runtimeSpecificMatch = await this.checkRuntimeSpecificFailure(sessionName, monitored, helper);
 				if (!runtimeSpecificMatch) {
 					this.logger.debug('Exit pattern matched but shell prompt not confirmed, ignoring', { sessionName });
 					return;
@@ -463,209 +409,305 @@ export class RuntimeExitMonitorService {
 			});
 
 			// Fire the exit-detected callback (used to cancel pending registrations)
-			if (this.onExitDetectedCallback) {
-				try {
-					this.onExitDetectedCallback(sessionName);
-				} catch (error) {
-					this.logger.warn('onExitDetected callback error', {
-						sessionName,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-			}
+			this.fireExitDetectedCallback(sessionName);
 
-			// Check for in-progress tasks — restart agent if any exist (non-orchestrator only)
+			// Try agent restart if it has in-progress tasks (non-orchestrator only)
 			if (monitored.role !== ORCHESTRATOR_ROLE && this.agentRegistrationService && this.taskTrackingService) {
-				try {
-					const tasks = await this.taskTrackingService.getTasksForTeamMember(monitored.memberId || '');
-					const activeTasks = tasks.filter(
-						t => t.status === 'assigned' || t.status === 'active' || t.status === 'pending_assignment'
-					);
-
-					if (activeTasks.length > 0) {
-						// Check cooldown before attempting restart to prevent infinite
-						// restart loops (e.g. during network outages where agents keep crashing)
-						if (!this.isAgentRestartAllowed(sessionName)) {
-							this.logger.warn('Agent restart cooldown active, skipping restart', {
-								sessionName,
-								activeTaskCount: activeTasks.length,
-								maxRestartsPerWindow: AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW,
-								cooldownWindowMs: AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS,
-							});
-							this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited_cooldown', activeTasks, false);
-							// Fall through to normal inactive flow
-						} else {
-							this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
-								sessionName,
-								activeTaskCount: activeTasks.length,
-							});
-
-							try {
-								await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
-								this.recordAgentRestart(sessionName);
-								// Notify orchestrator that agent was restarted (#129)
-								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
-								// Cleanup this subscription (restart succeeded, skip inactive flow)
-								this.stopMonitoring(sessionName);
-								return;
-							} catch (restartError) {
-								this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
-									sessionName,
-									error: restartError instanceof Error ? restartError.message : String(restartError),
-								});
-								// Record the attempt even on failure to prevent rapid retry loops
-								this.recordAgentRestart(sessionName);
-								// Notify orchestrator that restart failed — needs manual intervention (#129)
-								this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
-								// Fall through to normal inactive flow
-							}
-						}
-					}
-				} catch (error) {
-					this.logger.warn('Failed to check in-progress tasks after runtime exit', {
-						sessionName,
-						error: error instanceof Error ? error.message : String(error),
-					});
-					// Fall through to normal inactive flow
-				}
+				const restarted = await this.tryAgentRestartWithTasks(sessionName, monitored);
+				if (restarted) return;
 			}
 
-			// Orchestrator-specific restart: attempt auto-restart when runtime exits
+			// Orchestrator-specific restart
 			if (sessionName === ORCHESTRATOR_SESSION_NAME) {
-				// CRITICAL: Set status to inactive BEFORE restart so the queue
-				// processor doesn't deliver messages during postInitialize.
-				// Without this, the old 'active' status persists in storage and
-				// the queue processor sends chat messages that get concatenated
-				// into /directory add commands in the new Gemini CLI session.
-				try {
-					const storageService = StorageService.getInstance();
-					await storageService.updateAgentStatus(
-						sessionName,
-						CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
-					);
-				} catch {
-					// Best-effort — continue with restart
-				}
-
-				// Capture session memory before restart
-				try {
-					const sessionMemoryService = SessionMemoryService.getInstance();
-					await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
-				} catch (error) {
-					this.logger.warn('Failed to capture session memory before orchestrator restart', {
-						sessionName,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-
-				try {
-					const restartService = OrchestratorRestartService.getInstance();
-					const success = await restartService.attemptRestart();
-
-					if (success) {
-						this.logger.info('Orchestrator restarted after runtime exit', { sessionName });
-
-						// Broadcast restarted status as STARTED (not ACTIVE).
-						// The agent becomes ACTIVE only after the registration prompt
-						// is fully processed and the MCP registration call completes.
-						// Broadcasting ACTIVE prematurely causes the queue processor
-						// to deliver messages during postInitialize.
-						try {
-							const terminalGateway = getTerminalGateway();
-							if (terminalGateway) {
-								terminalGateway.broadcastOrchestratorStatus({
-									sessionName,
-									agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.STARTED,
-									reason: 'runtime_exit_restart',
-								});
-							}
-						} catch {
-							// Best-effort broadcast
-						}
-
-						this.stopMonitoring(sessionName);
-						return;
-					}
-
-					this.logger.warn('Orchestrator restart after runtime exit failed or not allowed, falling back to inactive', {
-						sessionName,
-					});
-				} catch (error) {
-					this.logger.warn('Orchestrator restart attempt threw error, falling back to inactive', {
-						sessionName,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-				// Fall through to normal inactive flow
+				const restarted = await this.tryOrchestratorRestart(sessionName, monitored);
+				if (restarted) return;
 			}
 
-			// Update agent status to inactive
-			try {
-				const storageService = StorageService.getInstance();
-				await storageService.updateAgentStatus(
-					sessionName,
-					CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
-				);
-				this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
-
-				// Publish agent:inactive event to EventBus so orchestrator is notified
-				if (this.eventBusService) {
-					try {
-						await this.publishInactiveEvent(sessionName, monitored, storageService);
-					} catch (eventError) {
-						this.logger.warn('Failed to publish agent:inactive event to EventBus', {
-							sessionName,
-							error: eventError instanceof Error ? eventError.message : String(eventError),
-						});
-					}
-				}
-			} catch (error) {
-				this.logger.warn('Failed to update agent status after runtime exit', {
-					sessionName,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-
-			// Capture session memory (skip for orchestrator — already captured above)
-			if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
-				try {
-					const sessionMemoryService = SessionMemoryService.getInstance();
-					await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
-				} catch (error) {
-					this.logger.warn('Failed to capture session memory after runtime exit', {
-						sessionName,
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-			}
-
-			// Broadcast WebSocket event
-			try {
-				const terminalGateway = getTerminalGateway();
-				if (terminalGateway) {
-					const statusPayload = {
-						sessionName,
-						agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
-						reason: 'runtime_exited',
-					};
-
-					if (sessionName === ORCHESTRATOR_SESSION_NAME) {
-						terminalGateway.broadcastOrchestratorStatus(statusPayload);
-					} else {
-						terminalGateway.broadcastTeamMemberStatus(statusPayload);
-					}
-				}
-			} catch (error) {
-				this.logger.warn('Failed to broadcast runtime exit event', {
-					sessionName,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			// Normal inactive flow: update status, capture memory, broadcast
+			await this.transitionToInactive(sessionName, monitored);
 
 			// Cleanup this subscription
 			this.stopMonitoring(sessionName);
 		} finally {
 			monitored.confirmationInFlight = false;
+		}
+	}
+
+	/**
+	 * Check for runtime-specific failure patterns when shell prompt is not confirmed.
+	 *
+	 * Gated by runtimeType so patterns for one runtime cannot accidentally
+	 * match another. Returns true if a runtime-specific failure was detected,
+	 * or 'deferred' handling occurred (Gemini retry).
+	 *
+	 * @param sessionName - PTY session name
+	 * @param monitored - Monitored session state
+	 * @param helper - Session command helper
+	 * @returns True if a runtime-specific failure was confirmed
+	 */
+	private async checkRuntimeSpecificFailure(
+		sessionName: string,
+		monitored: MonitoredSession,
+		helper: SessionCommandHelper
+	): Promise<boolean> {
+		if (monitored.runtimeType === RUNTIME_TYPES.CODEX_CLI) {
+			const isCodexInterrupted = /Conversation interrupted/i.test(monitored.buffer);
+			if (isCodexInterrupted) {
+				this.logger.warn('Codex interruption detected, proceeding with recovery flow', { sessionName });
+				return true;
+			}
+		} else if (monitored.runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
+			const isClaudeFatal = CLAUDE_FATAL_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+			if (isClaudeFatal) {
+				const detectedPattern = CLAUDE_FATAL_PATTERNS.find((p) => p.test(monitored.buffer))?.source;
+				this.logger.warn('Claude Code fatal error detected, forcing immediate recovery', {
+					sessionName,
+					detectedPattern,
+				});
+				return true;
+			}
+		} else if (monitored.runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+			const isGeminiFailure = GEMINI_FAILURE_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+			const isGeminiForceRestart = GEMINI_FORCE_RESTART_PATTERNS.some((pattern) => pattern.test(monitored.buffer));
+
+			if (isGeminiFailure || isGeminiForceRestart) {
+				if (isGeminiForceRestart) {
+					this.logger.warn('Gemini auto-update interruption detected, forcing recovery flow', { sessionName });
+				} else {
+					const retryResult = await this.handleGeminiFailureWithRetry(sessionName, monitored, helper);
+					if (retryResult === 'recovered' || retryResult === 'deferred') {
+						return false; // Not a confirmed exit — caller should return early
+					}
+				}
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Fire the onExitDetected callback safely.
+	 *
+	 * @param sessionName - PTY session name
+	 */
+	private fireExitDetectedCallback(sessionName: string): void {
+		if (!this.onExitDetectedCallback) return;
+		try {
+			this.onExitDetectedCallback(sessionName);
+		} catch (error) {
+			this.logger.warn('onExitDetected callback error', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
+	 * Try to restart an agent that has in-progress tasks.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param monitored - Monitored session state
+	 * @returns True if the agent was successfully restarted (caller should return)
+	 */
+	private async tryAgentRestartWithTasks(
+		sessionName: string,
+		monitored: MonitoredSession
+	): Promise<boolean> {
+		try {
+			const tasks = await this.taskTrackingService!.getTasksForTeamMember(monitored.memberId || '');
+			const activeTasks = tasks.filter(
+				t => t.status === 'assigned' || t.status === 'active' || t.status === 'pending_assignment'
+			);
+
+			if (activeTasks.length === 0) return false;
+
+			if (!this.isAgentRestartAllowed(sessionName)) {
+				this.logger.warn('Agent restart cooldown active, skipping restart', {
+					sessionName,
+					activeTaskCount: activeTasks.length,
+					maxRestartsPerWindow: AGENT_HEARTBEAT_MONITOR_CONSTANTS.MAX_RESTARTS_PER_WINDOW,
+					cooldownWindowMs: AGENT_HEARTBEAT_MONITOR_CONSTANTS.COOLDOWN_WINDOW_MS,
+				});
+				this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited_cooldown', activeTasks, false);
+				return false;
+			}
+
+			this.logger.info('Runtime exit with in-progress tasks, attempting restart', {
+				sessionName,
+				activeTaskCount: activeTasks.length,
+			});
+
+			try {
+				await this.restartAgentWithTasks(sessionName, monitored, activeTasks);
+				this.recordAgentRestart(sessionName);
+				this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, true);
+				this.stopMonitoring(sessionName);
+				return true;
+			} catch (restartError) {
+				this.logger.warn('Agent restart after runtime exit failed, falling back to inactive', {
+					sessionName,
+					error: restartError instanceof Error ? restartError.message : String(restartError),
+				});
+				this.recordAgentRestart(sessionName);
+				this.notifyOrchestratorOfFailure(sessionName, 'runtime_exited', activeTasks, false);
+				return false;
+			}
+		} catch (error) {
+			this.logger.warn('Failed to check in-progress tasks after runtime exit', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+	}
+
+	/**
+	 * Try to restart the orchestrator after runtime exit.
+	 *
+	 * Sets status to inactive before restart to prevent queue processor
+	 * from delivering messages during postInitialize, captures session
+	 * memory, and broadcasts restart status.
+	 *
+	 * @param sessionName - PTY session name (should be ORCHESTRATOR_SESSION_NAME)
+	 * @param monitored - Monitored session state
+	 * @returns True if orchestrator was successfully restarted (caller should return)
+	 */
+	private async tryOrchestratorRestart(
+		sessionName: string,
+		monitored: MonitoredSession
+	): Promise<boolean> {
+		// Set status to inactive BEFORE restart so the queue processor
+		// doesn't deliver messages during postInitialize.
+		try {
+			const storageService = StorageService.getInstance();
+			await storageService.updateAgentStatus(sessionName, CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE);
+		} catch {
+			// Best-effort — continue with restart
+		}
+
+		// Capture session memory before restart
+		try {
+			const sessionMemoryService = SessionMemoryService.getInstance();
+			await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+		} catch (error) {
+			this.logger.warn('Failed to capture session memory before orchestrator restart', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		try {
+			const restartService = OrchestratorRestartService.getInstance();
+			const success = await restartService.attemptRestart();
+
+			if (success) {
+				this.logger.info('Orchestrator restarted after runtime exit', { sessionName });
+
+				// Broadcast STARTED (not ACTIVE) — agent becomes ACTIVE only
+				// after registration prompt is processed and MCP call completes.
+				try {
+					const terminalGateway = getTerminalGateway();
+					if (terminalGateway) {
+						terminalGateway.broadcastOrchestratorStatus({
+							sessionName,
+							agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.STARTED,
+							reason: 'runtime_exit_restart',
+						});
+					}
+				} catch {
+					// Best-effort broadcast
+				}
+
+				this.stopMonitoring(sessionName);
+				return true;
+			}
+
+			this.logger.warn('Orchestrator restart after runtime exit failed or not allowed, falling back to inactive', {
+				sessionName,
+			});
+		} catch (error) {
+			this.logger.warn('Orchestrator restart attempt threw error, falling back to inactive', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		return false;
+	}
+
+	/**
+	 * Transition agent to inactive state: update storage, capture memory,
+	 * publish events, and broadcast WebSocket status.
+	 *
+	 * @param sessionName - PTY session name
+	 * @param monitored - Monitored session state
+	 */
+	private async transitionToInactive(
+		sessionName: string,
+		monitored: MonitoredSession
+	): Promise<void> {
+		// Update agent status to inactive
+		try {
+			const storageService = StorageService.getInstance();
+			await storageService.updateAgentStatus(
+				sessionName,
+				CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+			);
+			this.logger.info('Agent status updated to inactive after runtime exit', { sessionName });
+
+			// Publish agent:inactive event to EventBus so orchestrator is notified
+			if (this.eventBusService) {
+				try {
+					await this.publishInactiveEvent(sessionName, monitored, storageService);
+				} catch (eventError) {
+					this.logger.warn('Failed to publish agent:inactive event to EventBus', {
+						sessionName,
+						error: eventError instanceof Error ? eventError.message : String(eventError),
+					});
+				}
+			}
+		} catch (error) {
+			this.logger.warn('Failed to update agent status after runtime exit', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+
+		// Capture session memory (skip for orchestrator — already captured above)
+		if (sessionName !== ORCHESTRATOR_SESSION_NAME) {
+			try {
+				const sessionMemoryService = SessionMemoryService.getInstance();
+				await sessionMemoryService.onSessionEnd(sessionName, monitored.role, process.cwd());
+			} catch (error) {
+				this.logger.warn('Failed to capture session memory after runtime exit', {
+					sessionName,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		// Broadcast WebSocket event
+		try {
+			const terminalGateway = getTerminalGateway();
+			if (terminalGateway) {
+				const statusPayload = {
+					sessionName,
+					agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+					reason: 'runtime_exited',
+				};
+
+				if (sessionName === ORCHESTRATOR_SESSION_NAME) {
+					terminalGateway.broadcastOrchestratorStatus(statusPayload);
+				} else {
+					terminalGateway.broadcastTeamMemberStatus(statusPayload);
+				}
+			}
+		} catch (error) {
+			this.logger.warn('Failed to broadcast runtime exit event', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 

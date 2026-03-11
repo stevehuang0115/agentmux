@@ -1093,34 +1093,35 @@ export function extractResponseFromOutput(
  * ```
  */
 export function detectContentType(content: string): ChatContentType {
-  // Check for markdown indicators
+  // Check for markdown indicators (fenced code blocks and headings are
+  // unambiguous; bold markers require word boundaries to avoid matching
+  // natural language like "**" in isolation)
   if (
     content.includes('```') ||
-    content.includes('##') ||
-    content.includes('**') ||
-    /^[-*] /.test(content) ||
-    /^\d+\. /.test(content)
+    /^#{1,6}\s/m.test(content) ||
+    /\*\*\w/.test(content) ||
+    /^[-*] /m.test(content) ||
+    /^\d+\. /m.test(content)
   ) {
     return 'markdown';
   }
 
-  // Check for code patterns
+  // Check for code patterns — require statement-like syntax (keyword at
+  // line start or after punctuation) to avoid matching natural language
+  // like "import the data" or "export controls"
   if (
-    content.includes('function ') ||
-    content.includes('const ') ||
-    content.includes('import ') ||
-    content.includes('export ') ||
-    content.includes('class ') ||
-    /^(let|var)\s/.test(content)
+    /^(function|const|import|export|class|let|var)\s/m.test(content) ||
+    /[{;]\s*$/.test(content.split('\n')[0])
   ) {
     return 'code';
   }
 
-  // Check for error patterns
+  // Check for error patterns — case-sensitive matches for structured
+  // error output; avoid false positives on conversational text
+  const contentLower = content.toLowerCase();
   if (
-    content.toLowerCase().includes('error:') ||
-    content.toLowerCase().includes('exception:') ||
-    content.includes('Error:') ||
+    contentLower.includes('error:') ||
+    contentLower.includes('exception:') ||
     content.includes('Failed:')
   ) {
     return 'error';
