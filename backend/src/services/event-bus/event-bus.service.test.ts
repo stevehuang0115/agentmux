@@ -514,5 +514,50 @@ describe('EventBusService', () => {
 
       busNoQueue.cleanup();
     });
+
+    it('should set targetSession to subscriberSession when flushing', () => {
+      // Subscribe with a specific subscriber session
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'crewly-assistant',
+        oneShot: false,
+      }));
+
+      // Publish event
+      eventBus.publish(createTestEvent());
+
+      // Advance timers to trigger flush
+      jest.advanceTimersByTime(5000);
+
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(1);
+      const enqueueArg = mockQueueService.enqueue.mock.calls[0][0];
+      expect(enqueueArg.targetSession).toBe('crewly-assistant');
+      expect(enqueueArg.source).toBe('system_event');
+    });
+
+    it('should group notifications by subscriber and deliver separately', () => {
+      // Two subscribers watching the same agent
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'crewly-orc',
+        oneShot: false,
+      }));
+      eventBus.subscribe(createTestSubscriptionInput({
+        subscriberSession: 'crewly-assistant',
+        oneShot: false,
+      }));
+
+      // Publish event — both subscribers should get it
+      eventBus.publish(createTestEvent());
+
+      // Advance timers to trigger flush
+      jest.advanceTimersByTime(5000);
+
+      // Should enqueue separately for each subscriber
+      expect(mockQueueService.enqueue).toHaveBeenCalledTimes(2);
+      const targets = mockQueueService.enqueue.mock.calls.map(
+        (c: any) => c[0].targetSession
+      );
+      expect(targets).toContain('crewly-orc');
+      expect(targets).toContain('crewly-assistant');
+    });
   });
 });

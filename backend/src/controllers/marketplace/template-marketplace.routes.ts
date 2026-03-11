@@ -23,7 +23,7 @@ import {
 	handleListVersions,
 	handlePublishTemplate,
 } from './template-marketplace.controller.js';
-import { requireSupabaseAuth } from '../../services/cloud/auth/supabase-auth.middleware.js';
+import { requireCloudConnection } from '../../services/cloud/cloud-auth.middleware.js';
 
 /**
  * Creates the template marketplace router with all template endpoints.
@@ -49,17 +49,17 @@ export function createTemplateMarketplaceRouter(): Router {
 	router.get('/', handleListTemplates);
 
 	// Protected collection routes (require auth to create)
-	router.post('/', requireSupabaseAuth, handleCreateTemplate);
+	router.post('/', requireCloudConnection, handleCreateTemplate);
 
 	// Public item routes (browse details)
 	router.get('/:id', handleGetTemplate);
 	router.get('/:id/versions', handleListVersions);
 
 	// Protected item routes (require auth to modify)
-	router.put('/:id', requireSupabaseAuth, handleUpdateTemplate);
-	router.delete('/:id', requireSupabaseAuth, handleArchiveTemplate);
-	router.post('/:id/versions', requireSupabaseAuth, handleAddVersion);
-	router.post('/:id/publish', requireSupabaseAuth, handlePublishTemplate);
+	router.put('/:id', requireCloudConnection, handleUpdateTemplate);
+	router.delete('/:id', requireCloudConnection, handleArchiveTemplate);
+	router.post('/:id/versions', requireCloudConnection, handleAddVersion);
+	router.post('/:id/publish', requireCloudConnection, handlePublishTemplate);
 
 	return router;
 }

@@ -1,8 +1,8 @@
 /**
  * Tests for Relay Routes
  *
- * Validates that all relay endpoints are registered on the router,
- * and that client-side endpoints include Supabase auth middleware.
+ * Validates that all relay client endpoints are registered on the router
+ * with cloud connection and tier middleware.
  *
  * @module controllers/cloud/relay.routes.test
  */
@@ -15,19 +15,17 @@ import { createRelayRouter } from './relay.routes.js';
 // ---------------------------------------------------------------------------
 
 jest.mock('./relay.controller.js', () => ({
-  registerRelayNode: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
-  getRelayStatus: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
   connectToRelay: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
   disconnectFromRelay: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
   getRelayDevices: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
   sendRelayMessage: jest.fn((_req: unknown, res: { status: (s: number) => { json: (d: unknown) => void } }) => res.status(200).json({ success: true })),
 }));
 
-const mockPlanMiddleware = jest.fn((_req: unknown, _res: unknown, next: () => void) => next());
+const mockTierMiddleware = jest.fn((_req: unknown, _res: unknown, next: () => void) => next());
 
-jest.mock('../../services/cloud/auth/supabase-auth.middleware.js', () => ({
-  requireSupabaseAuth: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
-  requireSupabasePlan: jest.fn(() => mockPlanMiddleware),
+jest.mock('../../services/cloud/cloud-auth.middleware.js', () => ({
+  requireCloudConnection: jest.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  requireTier: jest.fn(() => mockTierMiddleware),
 }));
 
 // ---------------------------------------------------------------------------
@@ -74,24 +72,10 @@ describe('Relay Routes', () => {
     routes = getRegisteredRoutes(router);
   });
 
-  // Server-side routes (public — no middleware)
-  it('should register POST /register route without auth middleware', () => {
-    const route = routes.find(r => r.method === 'POST' && r.path === '/register');
-    expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(1); // Only the handler, no auth middleware
-  });
-
-  it('should register GET /status route without auth middleware', () => {
-    const route = routes.find(r => r.method === 'GET' && r.path === '/status');
-    expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(1); // Only the handler
-  });
-
-  // Client-side routes (with Supabase auth + plan middleware)
   it('should register POST /connect with auth middleware', () => {
     const route = routes.find(r => r.method === 'POST' && r.path === '/connect');
     expect(route).toBeDefined();
-    expect(route!.middlewareCount).toBe(3); // requireSupabaseAuth + requireSupabasePlan + handler
+    expect(route!.middlewareCount).toBe(3); // requireCloudConnection + requireTier + handler
   });
 
   it('should register POST /disconnect with auth middleware', () => {
@@ -112,13 +96,12 @@ describe('Relay Routes', () => {
     expect(route!.middlewareCount).toBe(3);
   });
 
-  it('should register exactly 6 routes', () => {
-    expect(routes).toHaveLength(6);
+  it('should register exactly 4 client-side routes', () => {
+    expect(routes).toHaveLength(4);
   });
 
-  it('should call requireSupabasePlan with "pro" for client-side routes', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { requireSupabasePlan } = jest.requireMock('../../services/cloud/auth/supabase-auth.middleware.js');
-    expect(requireSupabasePlan).toHaveBeenCalledWith('pro');
+  it('should call requireTier with "pro" for client-side routes', () => {
+    const { requireTier } = jest.requireMock('../../services/cloud/cloud-auth.middleware.js');
+    expect(requireTier).toHaveBeenCalledWith('pro');
   });
 });

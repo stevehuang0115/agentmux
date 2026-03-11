@@ -10,6 +10,7 @@
 
 import type { Request, Response } from 'express';
 import { TemplateService } from '../../services/template/template.service.js';
+import type { TemplateSummary } from '../../services/template/template.service.js';
 
 /**
  * Wraps an async route handler with a standard try/catch that returns
@@ -49,11 +50,11 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<void>) {
  */
 export const handleListTemplates = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const service = TemplateService.getInstance();
-  let templates = await service.listAllTemplates();
+  let templates = service.listTemplates();
 
   const category = req.query.category as string | undefined;
   if (category) {
-    templates = templates.filter(t => t.category === category);
+    templates = templates.filter((t: TemplateSummary) => t.category === category);
   }
 
   res.json({ success: true, data: templates });

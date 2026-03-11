@@ -2,6 +2,7 @@ import { RuntimeServiceFactory } from './runtime-service.factory.js';
 import { ClaudeRuntimeService } from './claude-runtime.service.js';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { CodexRuntimeService } from './codex-runtime.service.js';
+import { CrewlyAgentRuntimeService } from './crewly-agent/crewly-agent-runtime.service.js';
 import { RUNTIME_TYPES } from '../../constants.js';
 import type { SessionCommandHelper } from '../session/index.js';
 
@@ -71,6 +72,16 @@ describe('RuntimeServiceFactory', () => {
 			);
 
 			expect(service).toBeInstanceOf(CodexRuntimeService);
+		});
+
+		it('should create CrewlyAgentRuntimeService for CREWLY_AGENT runtime type', () => {
+			const service = RuntimeServiceFactory.create(
+				RUNTIME_TYPES.CREWLY_AGENT,
+				null,
+				testProjectRoot
+			);
+
+			expect(service).toBeInstanceOf(CrewlyAgentRuntimeService);
 		});
 
 		it('should fallback to ClaudeRuntimeService for unknown runtime type', () => {
@@ -203,7 +214,8 @@ describe('RuntimeServiceFactory', () => {
 			expect(types).toContain(RUNTIME_TYPES.CLAUDE_CODE);
 			expect(types).toContain(RUNTIME_TYPES.GEMINI_CLI);
 			expect(types).toContain(RUNTIME_TYPES.CODEX_CLI);
-			expect(types).toHaveLength(3);
+			expect(types).toContain(RUNTIME_TYPES.CREWLY_AGENT);
+			expect(types).toHaveLength(4);
 		});
 	});
 
@@ -212,6 +224,7 @@ describe('RuntimeServiceFactory', () => {
 			expect(RuntimeServiceFactory.isRuntimeTypeSupported(RUNTIME_TYPES.CLAUDE_CODE)).toBe(true);
 			expect(RuntimeServiceFactory.isRuntimeTypeSupported(RUNTIME_TYPES.GEMINI_CLI)).toBe(true);
 			expect(RuntimeServiceFactory.isRuntimeTypeSupported(RUNTIME_TYPES.CODEX_CLI)).toBe(true);
+			expect(RuntimeServiceFactory.isRuntimeTypeSupported(RUNTIME_TYPES.CREWLY_AGENT)).toBe(true);
 		});
 
 		it('should return false for unsupported runtime types', () => {

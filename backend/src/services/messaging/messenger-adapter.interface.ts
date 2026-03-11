@@ -1,7 +1,7 @@
 /**
  * Supported messenger platforms.
  */
-export type MessengerPlatform = 'slack' | 'telegram' | 'discord';
+export type MessengerPlatform = 'slack' | 'telegram' | 'discord' | 'google-chat';
 
 /**
  * A message received from any messenger platform.

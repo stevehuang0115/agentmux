@@ -73,6 +73,9 @@ export interface EnqueueMessageInput {
 
   /** Source-specific metadata */
   sourceMetadata?: SourceMetadata;
+
+  /** Target agent session for delivery (defaults to orchestrator if omitted) */
+  targetSession?: string;
 }
 
 /**
@@ -117,6 +120,9 @@ export interface QueuedMessage {
 
   /** ISO timestamp when the message was delivered to the orchestrator terminal */
   deliveredAt?: string;
+
+  /** Target agent session for delivery (defaults to orchestrator if omitted) */
+  targetSession?: string;
 }
 
 /**

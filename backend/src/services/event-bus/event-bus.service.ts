@@ -365,21 +365,19 @@ export class EventBusService extends EventEmitter {
       return;
     }
 
-    // Group messages by subscriber session
+    // Group messages by subscriber session (extracted from dedup key format: subscriberSession:agentSession)
     const bySubscriber = new Map<string, string[]>();
-    for (const [, entry] of this.pendingNotifications) {
-      // Extract subscriber from the dedup key isn't possible cleanly,
-      // so we just collect all messages (all go to orchestrator in practice)
-      const subscriber = 'system'; // All event notifications use conversationId 'system'
-      const existing = bySubscriber.get(subscriber) ?? [];
+    for (const [dedupKey, entry] of this.pendingNotifications) {
+      const subscriberSession = dedupKey.split(':')[0];
+      const existing = bySubscriber.get(subscriberSession) ?? [];
       existing.push(entry.message);
-      bySubscriber.set(subscriber, existing);
+      bySubscriber.set(subscriberSession, existing);
     }
 
     const totalCount = this.pendingNotifications.size;
 
-    // Deliver one combined message per subscriber
-    for (const [, messages] of bySubscriber) {
+    // Deliver one combined message per subscriber, with targetSession set
+    for (const [subscriberSession, messages] of bySubscriber) {
       const combinedContent = messages.join('\n');
 
       try {
@@ -387,11 +385,13 @@ export class EventBusService extends EventEmitter {
           content: combinedContent,
           conversationId: 'system',
           source: 'system_event',
+          targetSession: subscriberSession,
         });
       } catch (error) {
         this.logger.error('Failed to enqueue batched event notifications', {
           error: error instanceof Error ? error.message : String(error),
           messageCount: messages.length,
+          subscriberSession,
         });
       }
     }

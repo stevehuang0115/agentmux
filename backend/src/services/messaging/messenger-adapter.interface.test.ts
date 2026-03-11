@@ -11,8 +11,8 @@ import type { MessengerPlatform, IncomingMessage, SendOptions, MessengerAdapter 
 
 describe('MessengerAdapter interface types', () => {
   it('should accept valid MessengerPlatform values', () => {
-    const platforms: MessengerPlatform[] = ['slack', 'telegram', 'discord'];
-    expect(platforms).toHaveLength(3);
+    const platforms: MessengerPlatform[] = ['slack', 'telegram', 'discord', 'google-chat'];
+    expect(platforms).toHaveLength(4);
   });
 
   it('should allow constructing a valid IncomingMessage', () => {
@@ -26,6 +26,17 @@ describe('MessengerAdapter interface types', () => {
     expect(msg.platform).toBe('slack');
     expect(msg.userId).toBeUndefined();
     expect(msg.threadId).toBeUndefined();
+  });
+
+  it('should allow constructing IncomingMessage with google-chat platform', () => {
+    const msg: IncomingMessage = {
+      platform: 'google-chat',
+      conversationId: 'spaces/abc',
+      channelId: 'spaces/abc',
+      text: 'hello from gchat',
+      timestamp: new Date().toISOString(),
+    };
+    expect(msg.platform).toBe('google-chat');
   });
 
   it('should allow constructing SendOptions with threadId', () => {

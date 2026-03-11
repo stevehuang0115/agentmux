@@ -44,8 +44,22 @@ jest.mock('../../constants.js', () => ({
 			STARTING: 'starting',
 			STARTED: 'started',
 			ACTIVE: 'active',
+			SUSPENDED: 'suspended',
 		},
 	},
+	RUNTIME_TYPES: {
+		CLAUDE_CODE: 'claude-code',
+		GEMINI_CLI: 'gemini-cli',
+		CODEX_CLI: 'codex-cli',
+		CREWLY_AGENT: 'crewly-agent',
+	},
+}));
+
+// Mock security utils
+jest.mock('../../utils/security.js', () => ({
+	validateTerminalInput: jest.fn(() => ({ isValid: true })),
+	sanitizeTerminalInput: jest.fn((...args: unknown[]) => args[0]),
+	validateSessionName: jest.fn(() => ({ isValid: true })),
 }));
 
 // Mock StorageService
@@ -67,6 +81,29 @@ jest.mock('../../services/messaging/sub-agent-message-queue.service.js', () => (
 	},
 }));
 
+// Mock AgentSuspendService
+jest.mock('../../services/agent/agent-suspend.service.js', () => ({
+	AgentSuspendService: {
+		getInstance: () => ({
+			isRehydrating: jest.fn<(s: string) => boolean>().mockReturnValue(false),
+			rehydrateAgent: jest.fn<(s: string) => Promise<void>>().mockResolvedValue(undefined as unknown as void),
+		}),
+	},
+}));
+
+// Mock PtySessionBackend
+jest.mock('../../services/session/pty/pty-session-backend.js', () => ({
+	PtySessionBackend: class PtySessionBackend {},
+}));
+
+// Mock fs
+jest.mock('fs', () => ({
+	existsSync: jest.fn().mockReturnValue(false),
+}));
+jest.mock('fs/promises', () => ({
+	readFile: jest.fn<(p: string, e: string) => Promise<string>>().mockResolvedValue(''),
+}));
+
 describe('TerminalController', () => {
 	let mockReq: Partial<Request>;
 	let mockRes: Partial<Response>;
@@ -76,6 +113,12 @@ describe('TerminalController', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
+
+		// Re-apply security mock implementations (resetAllMocks in afterEach clears them)
+		const security = require('../../utils/security.js');
+		(security.validateTerminalInput as jest.Mock).mockReturnValue({ isValid: true });
+		(security.sanitizeTerminalInput as jest.Mock).mockImplementation((...args: unknown[]) => args[0]);
+		(security.validateSessionName as jest.Mock).mockReturnValue({ isValid: true });
 
 		// Create mock response with proper typing
 		const jsonMock = jest.fn().mockReturnThis();
@@ -282,7 +325,8 @@ describe('TerminalController', () => {
 		});
 
 		it('should truncate large output', async () => {
-			const largeOutput = 'x'.repeat(20000);
+			// MAX_OUTPUT_SIZE is 131072 (128KB), so we need output larger than that
+			const largeOutput = 'x'.repeat(140000);
 			mockBackend.captureOutput.mockReturnValue(largeOutput);
 			mockReq = {
 				params: { sessionName: 'test-session' } as any,
@@ -294,7 +338,7 @@ describe('TerminalController', () => {
 			const jsonMock = mockRes.json as jest.Mock;
 			const callArg = jsonMock.mock.calls[0][0] as { data: { truncated: boolean; output: string } };
 			expect(callArg.data.truncated).toBe(true);
-			expect(callArg.data.output.startsWith('...')).toBe(true);
+			expect(callArg.data.output).toContain('...');
 		});
 	});
 

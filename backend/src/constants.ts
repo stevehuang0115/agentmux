@@ -72,6 +72,7 @@ export const RUNTIME_TYPES = {
 	CLAUDE_CODE: 'claude-code',
 	GEMINI_CLI: 'gemini-cli',
 	CODEX_CLI: 'codex-cli',
+	CREWLY_AGENT: 'crewly-agent',
 } as const;
 
 /** Error patterns indicating non-recoverable failures (e.g. missing CLI binary) that should not be retried. */
@@ -610,6 +611,7 @@ export const RUNTIME_COMPACT_COMMANDS: Record<RuntimeType, string> = {
 	'claude-code': '/compact',
 	'gemini-cli': '/compress',
 	'codex-cli': '/compact',
+	'crewly-agent': '/compact',
 } as const;
 
 /**

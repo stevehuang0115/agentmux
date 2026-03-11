@@ -2,6 +2,7 @@ import { RuntimeAgentService } from './runtime-agent.service.abstract.js';
 import { ClaudeRuntimeService } from './claude-runtime.service.js';
 import { GeminiRuntimeService } from './gemini-runtime.service.js';
 import { CodexRuntimeService } from './codex-runtime.service.js';
+import { CrewlyAgentRuntimeService } from './crewly-agent/crewly-agent-runtime.service.js';
 import {
 	SessionCommandHelper,
 	createSessionCommandHelper,
@@ -88,6 +89,10 @@ export class RuntimeServiceFactory {
 				runtimeService = new CodexRuntimeService(sessionHelper, projectRoot);
 				break;
 
+			case RUNTIME_TYPES.CREWLY_AGENT:
+				runtimeService = new CrewlyAgentRuntimeService(sessionHelper, projectRoot);
+				break;
+
 			default:
 				// Fallback to Claude Code for unknown runtime types
 				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
@@ -126,6 +131,9 @@ export class RuntimeServiceFactory {
 			case RUNTIME_TYPES.CODEX_CLI:
 				return new CodexRuntimeService(sessionHelper, projectRoot);
 
+			case RUNTIME_TYPES.CREWLY_AGENT:
+				return new CrewlyAgentRuntimeService(sessionHelper, projectRoot);
+
 			default:
 				// Fallback to Claude Code for unknown runtime types
 				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
@@ -141,6 +149,7 @@ export class RuntimeServiceFactory {
 			RUNTIME_TYPES.CLAUDE_CODE,
 			RUNTIME_TYPES.GEMINI_CLI,
 			RUNTIME_TYPES.CODEX_CLI,
+			RUNTIME_TYPES.CREWLY_AGENT,
 		];
 	}
 
@@ -205,6 +214,9 @@ export class RuntimeServiceFactory {
 
 			case RUNTIME_TYPES.CODEX_CLI:
 				return new CodexRuntimeService(sessionHelper, projectRoot);
+
+			case RUNTIME_TYPES.CREWLY_AGENT:
+				return new CrewlyAgentRuntimeService(sessionHelper, projectRoot);
 
 			default:
 				this.logger.warn('Unknown runtime type, falling back to Claude Code', { runtimeType });
