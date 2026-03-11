@@ -817,6 +817,31 @@ export const MESSAGE_SOURCES = {
 	WHATSAPP: 'whatsapp',
 	WEB_CHAT: 'web_chat',
 	SYSTEM_EVENT: 'system_event',
+	GOOGLE_CHAT: 'google_chat',
+} as const;
+
+/**
+ * Constants for Google Chat Pub/Sub integration.
+ * Used by GoogleChatMessengerAdapter for pulling messages from a Pub/Sub subscription
+ * and replying via the Chat API.
+ */
+export const GOOGLE_CHAT_PUBSUB_CONSTANTS = {
+	/** Interval between Pub/Sub pull requests (ms) */
+	PULL_INTERVAL_MS: 5_000,
+	/** Maximum messages to pull per request */
+	MAX_MESSAGES_PER_PULL: 10,
+	/** OAuth2 scope for Pub/Sub API access */
+	PUBSUB_SCOPE: 'https://www.googleapis.com/auth/pubsub',
+	/** OAuth2 scope for Google Chat API access */
+	CHAT_SCOPE: 'https://www.googleapis.com/auth/chat.bot',
+	/** Pub/Sub REST API base URL */
+	PUBSUB_API_BASE: 'https://pubsub.googleapis.com/v1',
+	/** Google Chat REST API base URL */
+	CHAT_API_BASE: 'https://chat.googleapis.com/v1',
+	/** Timeout for Pub/Sub API calls (ms) */
+	FETCH_TIMEOUT_MS: 15_000,
+	/** Max consecutive pull failures before pausing */
+	MAX_CONSECUTIVE_FAILURES: 5,
 } as const;
 
 // Re-export marketplace constants from shared config

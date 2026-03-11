@@ -42,6 +42,9 @@ export class ResponseRouterService {
       case 'slack':
         this.routeToSlack(message, response);
         break;
+      case 'google_chat':
+        this.routeToGoogleChat(message, response);
+        break;
       case 'system_event':
         this.logger.debug('System event response routed (no-op)', {
           messageId: message.id,
@@ -104,6 +107,38 @@ export class ResponseRouterService {
   }
 
   /**
+   * Route response to Google Chat by calling the googleChatResolve callback.
+   * This unblocks the promise that sends the reply back to the Chat thread.
+   *
+   * @param message - The completed QueuedMessage
+   * @param response - The response content
+   */
+  private routeToGoogleChat(message: QueuedMessage, response: string): void {
+    const googleChatResolve = message.sourceMetadata?.googleChatResolve;
+
+    if (typeof googleChatResolve === 'function') {
+      try {
+        googleChatResolve(response);
+        this.logger.debug('Google Chat response resolved', {
+          messageId: message.id,
+          conversationId: message.conversationId,
+          responseLength: response.length,
+        });
+      } catch (error) {
+        this.logger.error('Failed to resolve Google Chat response', {
+          messageId: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      this.logger.warn('Google Chat message has no googleChatResolve callback', {
+        messageId: message.id,
+        conversationId: message.conversationId,
+      });
+    }
+  }
+
+  /**
    * Route an error to the appropriate destination.
    *
    * @param message - The failed QueuedMessage
@@ -121,6 +156,13 @@ export class ResponseRouterService {
         const slackResolve = message.sourceMetadata?.slackResolve;
         if (typeof slackResolve === 'function') {
           slackResolve(`Error: ${error}`);
+        }
+        break;
+      }
+      case 'google_chat': {
+        const gchatResolve = message.sourceMetadata?.googleChatResolve;
+        if (typeof gchatResolve === 'function') {
+          gchatResolve(`Error: ${error}`);
         }
         break;
       }
