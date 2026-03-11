@@ -2,15 +2,31 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { CREWLY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, MESSAGE_SOURCES } from '../../constants.js';
+import { LoggerService } from '../../services/core/logger.service.js';
 import { MessengerRegistryService } from '../../services/messaging/messenger-registry.service.js';
 import { SlackMessengerAdapter } from '../../services/messaging/adapters/slack-messenger.adapter.js';
 import { TelegramMessengerAdapter } from '../../services/messaging/adapters/telegram-messenger.adapter.js';
 import { DiscordMessengerAdapter } from '../../services/messaging/adapters/discord-messenger.adapter.js';
-import type { MessengerPlatform } from '../../services/messaging/messenger-adapter.interface.js';
+import { GoogleChatMessengerAdapter } from '../../services/messaging/adapters/google-chat-messenger.adapter.js';
+import { formatError } from '../../utils/format-error.js';
+import type { MessageQueueService } from '../../services/messaging/message-queue.service.js';
+import type { MessengerPlatform, IncomingMessage } from '../../services/messaging/messenger-adapter.interface.js';
 
 /** Known messenger platforms for input validation. */
 const VALID_PLATFORMS: ReadonlySet<string> = new Set<MessengerPlatform>(['slack', 'telegram', 'discord', 'google-chat']);
+
+/** Module-level reference to the message queue service, set externally. */
+let messageQueueService: MessageQueueService | null = null;
+
+/**
+ * Set the message queue service for Google Chat Pub/Sub incoming message handling.
+ *
+ * @param service - The MessageQueueService instance
+ */
+export function setMessengerRouterQueueService(service: MessageQueueService): void {
+  messageQueueService = service;
+}
 
 /**
  * Validate that a string is a known messenger platform.
@@ -41,6 +57,56 @@ function registerDefaultAdapters(registry: MessengerRegistryService): void {
   if (!registry.get('slack')) registry.register(new SlackMessengerAdapter());
   if (!registry.get('telegram')) registry.register(new TelegramMessengerAdapter());
   if (!registry.get('discord')) registry.register(new DiscordMessengerAdapter());
+  if (!registry.get('google-chat')) registry.register(new GoogleChatMessengerAdapter());
+}
+
+/**
+ * Create an incoming message callback for Google Chat Pub/Sub mode.
+ *
+ * When a message arrives from the Pub/Sub subscription, this callback enqueues
+ * it into the MessageQueueService with source 'google_chat'. The queue processor
+ * will deliver it to the orchestrator, and the response router will resolve
+ * the reply back to Google Chat via the adapter.
+ *
+ * Thread tracking: the threadId from the incoming message is stored in
+ * sourceMetadata so the response can be posted back to the same Chat thread.
+ *
+ * @param queueService - The message queue service to enqueue into
+ * @param adapter - The Google Chat adapter for sending replies
+ * @returns Callback function for incoming messages
+ */
+function createGoogleChatIncomingCallback(
+  queueService: MessageQueueService,
+  adapter: GoogleChatMessengerAdapter,
+): (msg: IncomingMessage) => void {
+  return (msg: IncomingMessage) => {
+    // Create a resolve callback that sends the reply back to the Chat thread
+    const replyPromise = new Promise<string>((resolve) => {
+      const sourceMetadata: Record<string, unknown> = {
+        channelId: msg.channelId,
+        userId: msg.userId,
+        threadId: msg.threadId,
+        googleChatResolve: resolve,
+      };
+
+      queueService.enqueue({
+        content: msg.text,
+        conversationId: msg.conversationId,
+        source: MESSAGE_SOURCES.GOOGLE_CHAT,
+        sourceMetadata,
+      });
+    });
+
+    // When the orchestrator responds, send it back to the same Chat thread
+    replyPromise.then(async (response: string) => {
+      try {
+        await adapter.sendMessage(msg.channelId, response, { threadId: msg.threadId });
+      } catch (err) {
+        const logger = LoggerService.getInstance().createComponentLogger('GoogleChatReply');
+        logger.error('Failed to send reply', { channelId: msg.channelId, error: formatError(err) });
+      }
+    });
+  };
 }
 
 /**
@@ -73,10 +139,21 @@ export function createMessengerRouter(): Router {
         return;
       }
 
-      await adapter.initialize(req.body || {});
+      const config = { ...(req.body || {}) };
+
+      // For Google Chat Pub/Sub mode, inject the incoming message callback
+      if (platform === 'google-chat' && config.subscriptionName && config.projectId && messageQueueService) {
+        const gchatAdapter = adapter as GoogleChatMessengerAdapter;
+        config.onIncomingMessage = createGoogleChatIncomingCallback(messageQueueService, gchatAdapter);
+      }
+
+      await adapter.initialize(config);
+
+      // Persist credentials (excluding the callback function)
+      const credentialsToSave = { ...(req.body || {}) };
       const crewlyDir = path.join(os.homedir(), CREWLY_CONSTANTS.PATHS.CREWLY_HOME);
       await fs.mkdir(crewlyDir, { recursive: true });
-      await fs.writeFile(getCredentialPath(platform), JSON.stringify(req.body || {}, null, 2) + '\n', 'utf8');
+      await fs.writeFile(getCredentialPath(platform), JSON.stringify(credentialsToSave, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
       res.json({ success: true, data: adapter.getStatus(), message: `${platform} connected` });
     } catch (error) {
       next(error);

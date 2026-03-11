@@ -695,6 +695,62 @@ describe('SessionCommandHelper', () => {
 		});
 	});
 
+	describe('sendMessageGemini', () => {
+		it('should send Escape before writing message', async () => {
+			mockBackend.captureOutput.mockReturnValue('Type your message');
+
+			await helper.sendMessageGemini('test-session', 'hello gemini');
+
+			// First write: Escape to exit sub-modes
+			expect(mockSession.write).toHaveBeenNthCalledWith(1, '\x1b');
+			// Second write: message text
+			expect(mockSession.write).toHaveBeenNthCalledWith(2, 'hello gemini');
+			// Third write: Enter key
+			expect(mockSession.write).toHaveBeenNthCalledWith(3, '\r');
+		});
+
+		it('should return true when message text leaves input area', async () => {
+			// Post-write capture shows no message text in bottom lines
+			mockBackend.captureOutput.mockReturnValue('Processing your request...\n> ');
+
+			const result = await helper.sendMessageGemini('test-session', 'hello gemini');
+			expect(result).toBe(true);
+		});
+
+		it('should return false when message text is still in input area', async () => {
+			// Post-write capture shows message text still present
+			mockBackend.captureOutput.mockReturnValue('hello gemini\n> ');
+
+			const result = await helper.sendMessageGemini('test-session', 'hello gemini');
+			expect(result).toBe(false);
+		});
+
+		it('should throw error if session does not exist', async () => {
+			mockBackend.getSession.mockReturnValue(undefined);
+			await expect(helper.sendMessageGemini('non-existent', 'test')).rejects.toThrow(
+				"Session 'non-existent' does not exist"
+			);
+		});
+
+		it('should handle long messages with truncated snippet for verification', async () => {
+			const longMessage = 'A'.repeat(100);
+			// Capture shows no trace of the message
+			mockBackend.captureOutput.mockReturnValue('Model is thinking...\n> ');
+
+			const result = await helper.sendMessageGemini('test-session', longMessage);
+			expect(result).toBe(true);
+			expect(mockSession.write).toHaveBeenNthCalledWith(2, longMessage);
+		});
+
+		it('should return true when capturePane throws (verification fails gracefully)', async () => {
+			mockBackend.captureOutput.mockImplementation(() => { throw new Error('capture failed'); });
+
+			const result = await helper.sendMessageGemini('test-session', 'hello');
+			// Verification failure is non-fatal — returns true
+			expect(result).toBe(true);
+		});
+	});
+
 	describe('sendMessageWithSmartRetry', () => {
 		it('should throw error if session does not exist', async () => {
 			mockBackend.getSession.mockReturnValue(undefined);

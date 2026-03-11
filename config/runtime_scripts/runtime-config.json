@@ -24,9 +24,9 @@
     "crewly-agent": {
       "displayName": "Crewly Agent",
       "initScript": "",
-      "welcomeMessage": "",
-      "timeout": 30000,
-      "description": "In-process AI agent using Vercel AI SDK (no PTY session needed)"
+      "welcomeMessage": "Crewly Agent Ready",
+      "timeout": 120000,
+      "description": "In-process AI SDK-based orchestrator agent with multi-model support"
     }
   },
   "defaultRuntime": "claude-code"

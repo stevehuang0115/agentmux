@@ -591,7 +591,7 @@ Now that you're up and running:
 
 - **GitHub Issues** -- [github.com/stevehuang0115/crewly/issues](https://github.com/stevehuang0115/crewly/issues)
 - **GitHub Discussions** -- [github.com/stevehuang0115/crewly/discussions](https://github.com/stevehuang0115/crewly/discussions)
-- **Website** -- [crewly.stevesprompt.com](https://crewly.stevesprompt.com)
+- **Website** -- [crewlyai.com](https://crewlyai.com)
 
 ---
 

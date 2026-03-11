@@ -1,7 +1,7 @@
 /**
  * Chat Page Styles
  *
- * Messenger-style chat interface without conversation history sidebar.
+ * Thread-based two-pane layout with responsive design.
  * Uses design token CSS variables for consistent dark theming.
  */
 
@@ -18,6 +18,7 @@
 
 .chat-page-header {
   margin-bottom: 24px;
+  flex-shrink: 0;
 }
 
 .chat-page-header h1 {
@@ -44,13 +45,24 @@
   border: 1px solid var(--color-border);
 }
 
-/* Messenger-style layout - full width single conversation */
-.chat-page.messenger-style .chat-page-content {
-  max-width: 900px;
+/* Two-pane thread layout */
+.chat-page.thread-layout .chat-page-content {
+  max-width: 1200px;
   margin: 0 auto;
   width: 100%;
 }
 
+/* Sidebar (thread list) */
+.chat-page-sidebar {
+  width: 340px;
+  min-width: 280px;
+  max-width: 400px;
+  flex-shrink: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Main (thread detail) */
 .chat-page-main {
   flex: 1;
   min-width: 0;
@@ -60,17 +72,53 @@
   overflow: hidden;
 }
 
-/* Responsive design */
+/* Desktop: both panes visible */
+@media (min-width: 769px) {
+  .chat-page-sidebar.mobile-hidden,
+  .chat-page-main.mobile-hidden {
+    display: flex;
+  }
+}
+
+/* Mobile responsive */
 @media (max-width: 768px) {
   .chat-page {
     padding: 16px;
+  }
+
+  .chat-page-header {
+    margin-bottom: 16px;
   }
 
   .chat-page-header h1 {
     font-size: 24px;
   }
 
-  .chat-page.messenger-style .chat-page-content {
+  .chat-page.thread-layout .chat-page-content {
     max-width: 100%;
+  }
+
+  /* Mobile: single pane toggle */
+  .chat-page-sidebar {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .chat-page-sidebar.mobile-hidden {
+    display: none;
+  }
+
+  .chat-page-main.mobile-hidden {
+    display: none;
+  }
+
+  .chat-page-sidebar.mobile-visible {
+    display: flex;
+    flex: 1;
+  }
+
+  .chat-page-main.mobile-visible {
+    display: flex;
+    flex: 1;
   }
 }

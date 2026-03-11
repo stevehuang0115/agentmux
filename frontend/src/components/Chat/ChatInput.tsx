@@ -22,6 +22,8 @@ interface ChatInputProps {
   disabled?: boolean;
   /** Placeholder text when disabled */
   disabledPlaceholder?: string;
+  /** Custom placeholder text (e.g., "Reply in thread...") */
+  placeholder?: string;
 }
 
 // =============================================================================
@@ -43,6 +45,7 @@ interface ChatInputProps {
 export const ChatInput: React.FC<ChatInputProps> = ({
   disabled = false,
   disabledPlaceholder,
+  placeholder: customPlaceholder,
 }) => {
   const { sendMessage, isSending, error, clearError } = useChat();
   const [input, setInput] = useState('');
@@ -123,7 +126,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           placeholder={
             disabled && disabledPlaceholder
               ? disabledPlaceholder
-              : 'Type a message... (Enter to send, Shift+Enter for new line)'
+              : customPlaceholder ?? 'Type a message... (Enter to send, Shift+Enter for new line)'
           }
           disabled={isDisabled}
           rows={1}

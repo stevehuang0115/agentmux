@@ -1218,6 +1218,7 @@ describe('QueueProcessorService', () => {
 
       processor.start();
 
+      // Enqueue a system event with a custom target session
       queueService.enqueue({
         content: '[EVENT:agent_idle] Agent Leo idle',
         conversationId: 'system',
@@ -1254,6 +1255,7 @@ describe('QueueProcessorService', () => {
         content: '[EVENT:agent_idle] Agent idle',
         conversationId: 'system',
         source: 'system_event',
+        // No targetSession specified
       });
 
       jest.advanceTimersByTime(0);

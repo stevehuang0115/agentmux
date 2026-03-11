@@ -8,6 +8,10 @@ import {
   EVENT_TYPES,
   isValidEventType,
   isValidCreateSubscriptionInput,
+  CRITICAL_EVENT_TYPES,
+  INFO_EVENT_TYPES,
+  isCriticalEventType,
+  getCriticalEventTypes,
 } from './event-bus.types.js';
 import type {
   EventType,
@@ -80,6 +84,81 @@ describe('Event Bus Types', () => {
       expect(isValidEventType(undefined)).toBe(false);
       expect(isValidEventType(123)).toBe(false);
       expect(isValidEventType('idle')).toBe(false);
+    });
+  });
+
+  describe('Event Priority Classification', () => {
+    it('should have every EVENT_TYPE classified as either critical or info', () => {
+      for (const eventType of EVENT_TYPES) {
+        const isCritical = CRITICAL_EVENT_TYPES.has(eventType);
+        const isInfo = INFO_EVENT_TYPES.has(eventType);
+        expect(isCritical || isInfo).toBe(true);
+        // No event should be in both sets
+        expect(isCritical && isInfo).toBe(false);
+      }
+    });
+
+    it('should classify task completions and failures as critical', () => {
+      expect(CRITICAL_EVENT_TYPES.has('task:completed')).toBe(true);
+      expect(CRITICAL_EVENT_TYPES.has('task:failed')).toBe(true);
+      expect(CRITICAL_EVENT_TYPES.has('task:cancelled')).toBe(true);
+      expect(CRITICAL_EVENT_TYPES.has('task:input_required')).toBe(true);
+    });
+
+    it('should classify agent crashes and context exhaustion as critical', () => {
+      expect(CRITICAL_EVENT_TYPES.has('agent:inactive')).toBe(true);
+      expect(CRITICAL_EVENT_TYPES.has('agent:context_critical')).toBe(true);
+    });
+
+    it('should classify hierarchy escalations as critical', () => {
+      expect(CRITICAL_EVENT_TYPES.has('hierarchy:escalation')).toBe(true);
+    });
+
+    it('should classify idle/busy toggles as info (not critical)', () => {
+      expect(CRITICAL_EVENT_TYPES.has('agent:idle' as EventType)).toBe(false);
+      expect(CRITICAL_EVENT_TYPES.has('agent:busy' as EventType)).toBe(false);
+      expect(CRITICAL_EVENT_TYPES.has('agent:status_changed' as EventType)).toBe(false);
+      expect(INFO_EVENT_TYPES.has('agent:idle')).toBe(true);
+      expect(INFO_EVENT_TYPES.has('agent:busy')).toBe(true);
+    });
+  });
+
+  describe('isCriticalEventType', () => {
+    it('should return true for critical event types', () => {
+      expect(isCriticalEventType('task:completed')).toBe(true);
+      expect(isCriticalEventType('task:failed')).toBe(true);
+      expect(isCriticalEventType('agent:inactive')).toBe(true);
+      expect(isCriticalEventType('agent:context_critical')).toBe(true);
+      expect(isCriticalEventType('hierarchy:escalation')).toBe(true);
+    });
+
+    it('should return false for info event types', () => {
+      expect(isCriticalEventType('agent:idle')).toBe(false);
+      expect(isCriticalEventType('agent:busy')).toBe(false);
+      expect(isCriticalEventType('agent:status_changed')).toBe(false);
+      expect(isCriticalEventType('agent:active')).toBe(false);
+    });
+
+    it('should return false for unknown event types', () => {
+      expect(isCriticalEventType('unknown:event')).toBe(false);
+    });
+  });
+
+  describe('getCriticalEventTypes', () => {
+    it('should return an array of all critical event types', () => {
+      const types = getCriticalEventTypes();
+      expect(Array.isArray(types)).toBe(true);
+      expect(types.length).toBe(CRITICAL_EVENT_TYPES.size);
+      for (const type of types) {
+        expect(CRITICAL_EVENT_TYPES.has(type)).toBe(true);
+      }
+    });
+
+    it('should return a new array each time (not shared reference)', () => {
+      const a = getCriticalEventTypes();
+      const b = getCriticalEventTypes();
+      expect(a).not.toBe(b);
+      expect(a).toEqual(b);
     });
   });
 

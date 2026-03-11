@@ -37,6 +37,8 @@ import { ContextWindowMonitorService } from './context-window-monitor.service.js
 import { OAuthReloginMonitorService } from './oauth-relogin-monitor.service.js';
 import { SubAgentMessageQueue } from '../messaging/sub-agent-message-queue.service.js';
 import { AgentSuspendService } from './agent-suspend.service.js';
+import { PromptBuilderService } from '../ai/prompt-builder.service.js';
+import type { SubordinateInfo, TeamMemberSessionConfig, Team, TeamMember } from '../../types/index.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import {
 	isPromptLine,
@@ -103,7 +105,12 @@ export class AgentRegistrationService {
 	// which causes multiple Ctrl+C presses that can crash the runtime.
 	private sessionDeliveryMutex = new Map<string, Promise<void>>();
 
-	// Track in-process Crewly Agent runtimes (no PTY session needed)
+	// Per-session hash of last sent message to prevent duplicate writes (#128).
+	// Key: sessionName, Value: { hash, sentAt }
+	private lastSentMessageHash = new Map<string, { hash: string; sentAt: number }>();
+
+	// In-process Crewly Agent runtimes (sessionName → runtime instance).
+	// Used for crewly-agent runtimeType agents that run without PTY sessions.
 	private inProcessRuntimes = new Map<string, CrewlyAgentRuntimeService>();
 
 
@@ -133,16 +140,6 @@ export class AgentRegistrationService {
 				}
 			}
 		);
-	}
-
-	/**
-	 * Get an in-process Crewly Agent runtime by session name.
-	 *
-	 * @param sessionName - The session name to look up
-	 * @returns The CrewlyAgentRuntimeService instance, or undefined if not found
-	 */
-	getInProcessRuntime(sessionName: string): CrewlyAgentRuntimeService | undefined {
-		return this.inProcessRuntimes.get(sessionName);
 	}
 
 	/**
@@ -345,6 +342,17 @@ export class AgentRegistrationService {
 	 */
 	private createRuntimeService(runtimeType: RuntimeType): RuntimeAgentService {
 		return RuntimeServiceFactory.create(runtimeType, null, this.projectRoot);
+	}
+
+	/**
+	 * Get an in-process Crewly Agent runtime by session name.
+	 * Used by the terminal controller for force-delivery to in-process agents.
+	 *
+	 * @param sessionName - Session name to look up
+	 * @returns The CrewlyAgentRuntimeService if it exists, undefined otherwise
+	 */
+	getInProcessRuntime(sessionName: string): CrewlyAgentRuntimeService | undefined {
+		return this.inProcessRuntimes.get(sessionName);
 	}
 
 	/**
@@ -1081,17 +1089,23 @@ export class AgentRegistrationService {
 				prompt = prompt.replace(/,\s*"memberId":\s*"\{\{MEMBER_ID\}\}"/g, '');
 			}
 
-			// Look up project path for team members
+			// Look up project path and TL hierarchy for team members
 			let projectPath = process.cwd();
+			let foundTeam: Team | null = null;
+			let foundMember: TeamMember | null = null;
 			try {
 				const teams = await this.storageService.getTeams();
 				for (const team of teams) {
 					const member = team.members?.find((m) => m.sessionName === sessionName);
-					if (member && team.projectIds[0]) {
-						const projects = await this.storageService.getProjects();
-						const project = projects.find((p) => p.id === team.projectIds[0]);
-						if (project?.path) {
-							projectPath = project.path;
+					if (member) {
+						foundTeam = team;
+						foundMember = member;
+						if (team.projectIds[0]) {
+							const projects = await this.storageService.getProjects();
+							const project = projects.find((p) => p.id === team.projectIds[0]);
+							if (project?.path) {
+								projectPath = project.path;
+							}
 						}
 						break;
 					}
@@ -1135,6 +1149,55 @@ export class AgentRegistrationService {
 			// Replace marketplace skills path placeholder
 			const marketplaceSkillsPath = path.join(os.homedir(), '.crewly', 'marketplace', 'skills');
 			prompt = prompt.replace(/\{\{MARKETPLACE_SKILLS_PATH\}\}/g, marketplaceSkillsPath);
+
+			// Inject Team Lead addon for members with canDelegate=true and subordinates
+			if (foundMember?.canDelegate && foundMember.subordinateIds && foundMember.subordinateIds.length > 0 && foundTeam) {
+				try {
+					// Resolve subordinateIds to SubordinateInfo[]
+					const subordinates: SubordinateInfo[] = foundMember.subordinateIds
+						.map((subId) => {
+							const subMember = foundTeam!.members?.find((m) => m.id === subId);
+							if (!subMember) return null;
+							return {
+								name: subMember.name,
+								sessionName: subMember.sessionName || '',
+								role: subMember.role || 'developer',
+							} as SubordinateInfo;
+						})
+						.filter((s): s is SubordinateInfo => s !== null);
+
+					if (subordinates.length > 0) {
+						const tlConfig: TeamMemberSessionConfig = {
+							name: sessionName,
+							role: role as TeamMemberSessionConfig['role'],
+							systemPrompt: '',
+							projectPath,
+							memberId,
+							teamId: foundTeam.id,
+							canDelegate: true,
+							subordinates,
+						};
+
+						const promptBuilder = new PromptBuilderService(this.projectRoot);
+						const tlSection = await promptBuilder.buildTeamLeadSection(tlConfig);
+
+						if (tlSection) {
+							prompt += `\n\n---\n\n${tlSection}`;
+							this.logger.info('TL addon injected into init prompt', {
+								sessionName,
+								subordinateCount: subordinates.length,
+								subordinateNames: subordinates.map((s) => s.name),
+								tlSectionLength: tlSection.length,
+							});
+						}
+					}
+				} catch (tlError) {
+					this.logger.warn('Failed to inject TL addon (non-critical)', {
+						sessionName,
+						error: tlError instanceof Error ? tlError.message : String(tlError),
+					});
+				}
+			}
 
 			// Generate and inject startup briefing from session memory
 			try {
@@ -1877,22 +1940,40 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				await delay(1000); // Wait for cleanup
 			}
 
-			// In-process Crewly Agent: skip PTY creation entirely
+			// ===== In-process Crewly Agent branch =====
+			// Crewly Agent runs inside the Node.js process — no PTY session needed.
 			if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+				this.logger.info('Starting in-process Crewly Agent runtime', { sessionName, role });
+
 				const crewlyRuntime = this.createRuntimeService(runtimeType) as CrewlyAgentRuntimeService;
+
+				// Determine role name for system prompt lookup
 				const roleName = role === ORCHESTRATOR_ROLE ? 'orchestrator' : role.toLowerCase().replace(/\s+/g, '-');
 				await crewlyRuntime.initializeInProcess(sessionName, undefined, roleName);
+
+				// Track the in-process runtime for message routing
 				this.inProcessRuntimes.set(sessionName, crewlyRuntime);
 
-				// Load and deliver registration prompt
-				const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-				if (prompt) {
+				// Load and deliver registration prompt as the first message
+				try {
+					const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
+					this.logger.info('Delivering registration prompt to Crewly Agent', {
+						sessionName, promptLength: prompt.length,
+					});
 					await crewlyRuntime.handleMessage(prompt);
+				} catch (promptError) {
+					this.logger.warn('Registration prompt delivery failed (non-fatal for crewly-agent)', {
+						sessionName,
+						error: promptError instanceof Error ? promptError.message : String(promptError),
+					});
 				}
 
-				this.logger.info('Crewly Agent in-process runtime initialized', {
-					sessionName, role, runtimeType,
-				});
+				// Start context window monitoring if applicable
+				if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
+					ContextWindowMonitorService.getInstance().startSessionMonitoring(
+						sessionName, config.memberId, config.teamId, role, runtimeType
+					);
+				}
 
 				return {
 					success: true,
@@ -2068,10 +2149,10 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Stop context window monitoring before killing the session
 			ContextWindowMonitorService.getInstance().stopSessionMonitoring(sessionName);
 
-			// Shutdown in-process Crewly Agent runtime if present
+			// Shut down in-process Crewly Agent runtime if present
 			const inProcessRuntime = this.inProcessRuntimes.get(sessionName);
 			if (inProcessRuntime) {
-				await inProcessRuntime.shutdown();
+				inProcessRuntime.shutdown();
 				this.inProcessRuntimes.delete(sessionName);
 				this.logger.info('In-process Crewly Agent runtime shut down', { sessionName });
 			}
@@ -2202,7 +2283,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				runtimeType = await this.resolveSessionRuntimeType(sessionName);
 			}
 
-			// In-process Crewly Agent: deliver directly without PTY
+			// ===== In-process Crewly Agent delivery =====
+			// Route directly to the in-process runtime, bypassing PTY entirely.
 			if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
 				const crewlyRuntime = this.inProcessRuntimes.get(sessionName);
 				if (!crewlyRuntime || !crewlyRuntime.isReady()) {
@@ -2211,8 +2293,20 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						error: `Crewly Agent runtime for '${sessionName}' is not initialized`,
 					};
 				}
-				await crewlyRuntime.handleMessage(message);
-				return { success: true, message: 'Message delivered to Crewly Agent' };
+
+				try {
+					await crewlyRuntime.handleMessage(message);
+					this.logger.info('Message delivered to in-process Crewly Agent', {
+						sessionName, messageLength: message.length,
+					});
+					return { success: true, message: 'Message delivered to Crewly Agent' };
+				} catch (agentError) {
+					const errMsg = agentError instanceof Error ? agentError.message : String(agentError);
+					this.logger.error('Crewly Agent message handling failed', {
+						sessionName, error: errMsg,
+					});
+					return { success: false, error: `Crewly Agent error: ${errMsg}` };
+				}
 			}
 
 			// Get session helper once for this method
@@ -2308,7 +2402,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		timeoutMs: number = EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT,
 		runtimeType?: RuntimeType
 	): Promise<boolean> {
-		// In-process Crewly Agent: ready if initialized
+		// In-process Crewly Agent is always "ready" (no prompt to wait for)
 		const inProcessRuntime = this.inProcessRuntimes.get(sessionName);
 		if (inProcessRuntime) {
 			return inProcessRuntime.isReady();
@@ -2528,27 +2622,28 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						// TUI re-render (SIGWINCH), then Tab to cycle Ink focus.
 						await sessionHelper.sendCtrlC(sessionName);
 						await delay(300);
-						try {
-							const session = sessionHelper.getSession(sessionName);
-							if (session) {
-								session.resize(81, 25);
-								await delay(200);
-								session.resize(80, 24);
-								await delay(300);
-							}
-						} catch { /* non-fatal */ }
-						await sessionHelper.sendKey(sessionName, 'Tab');
-						await delay(300);
-					} else {
-						// First attempt: lightweight focus nudge — Tab key cycles Ink's
-						// focusNext() to ensure the InputPrompt is active. This prevents
-						// the "write succeeds but TUI ignores it" failure mode without
-						// the overhead of Ctrl+C or PTY resize.
-						// 300ms settling time to let Ink complete its focus re-render
-						// (200ms was insufficient after state transitions like stop hooks).
-						await sessionHelper.sendKey(sessionName, 'Tab');
-						await delay(300);
 					}
+
+					// PTY resize on ALL attempts to force SIGWINCH → Ink TUI re-render.
+					// Claude Code's Ink TUI can lose internal input focus after stop hooks
+					// (especially ones that error), state transitions, or idle periods.
+					// When defocused, the `❯` prompt is visible in the terminal buffer
+					// but writes are silently consumed by the framework — NOT routed to
+					// the InputPrompt. Tab alone was insufficient; PTY resize forces a
+					// full TUI re-render that reliably restores focus state.
+					// This matches the manual workaround where pressing a key in the
+					// frontend terminal "wakes up" the input handler.
+					try {
+						const session = sessionHelper.getSession(sessionName);
+						if (session) {
+							session.resize(81, 25);
+							await delay(200);
+							session.resize(80, 24);
+							await delay(300);
+						}
+					} catch { /* non-fatal */ }
+					await sessionHelper.sendKey(sessionName, 'Tab');
+					await delay(300);
 				} else {
 					// Detect recent /compress — Ink TUI loses internal focus after
 					// /compress re-renders, causing subsequent messages to be silently
@@ -2661,39 +2756,50 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				const beforeOutput = sessionHelper.capturePane(sessionName, 20);
 				const beforeLength = beforeOutput.length;
 
-				// Deduplication guard (#128): On retry attempts, check if the agent
-				// is already processing (spinner visible). A previous write may
-				// have succeeded but verification failed (false negative). Re-writing
-				// the same message would create a duplicate in the input buffer.
-				// Only skip re-write when we see definitive processing indicators
-				// (spinners/⏺). Do NOT rely solely on "not at prompt" — the message
-				// text stuck at the prompt line also causes isClaudeAtPrompt() to
-				// return false, but that's a stuck state, not processing.
-				if (attempt > 1) {
-					const retryCheck = sessionHelper.capturePane(sessionName);
-					const hasSpinner = containsSpinnerOrWorkingIndicator(retryCheck);
+				// Deduplication guard (#128): Check if the agent is already
+				// processing on ALL attempts (not just retries). A previous
+				// write may have succeeded but verification failed. Re-writing
+				// the same message creates a duplicate in the input buffer.
+				{
+					const preWriteCheck = sessionHelper.capturePane(sessionName);
+					const hasSpinner = containsSpinnerOrWorkingIndicator(preWriteCheck);
+
 					if (hasSpinner) {
-						this.logger.info('Agent already processing on retry — skipping re-write to prevent duplicate (#128)', {
-							sessionName,
-							attempt,
-						});
-						return true;
-					}
-					// Additional check: if agent is not at prompt AND our message
-					// text is NOT stuck at the bottom, the agent is likely processing.
-					const notAtPrompt = !this.isClaudeAtPrompt(retryCheck, runtimeType);
-					if (notAtPrompt) {
-						const msgSnippet = (message.length > 20
-							? message.substring(0, 80)
-							: message).replace(/\s+/g, ' ').trim();
-						const bottomLines = retryCheck.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
-						const textStuck = bottomLines.includes(msgSnippet);
-						if (!textStuck) {
-							this.logger.info('Agent not at prompt and message not stuck — skipping re-write to prevent duplicate (#128)', {
+						// Hash-based dedup: if the same message was recently sent
+						// and the agent is processing, it's very likely our message.
+						const msgHash = message.substring(0, 200);
+						const lastSent = this.lastSentMessageHash.get(sessionName);
+						const isRecentDuplicate = lastSent
+							&& lastSent.hash === msgHash
+							&& (Date.now() - lastSent.sentAt) < 60000;
+
+						if (isRecentDuplicate || attempt > 1) {
+							this.logger.info('Agent already processing — skipping write to prevent duplicate (#128)', {
 								sessionName,
 								attempt,
+								isRecentDuplicate: !!isRecentDuplicate,
 							});
 							return true;
+						}
+					}
+
+					// On retries: also check if agent is not at prompt AND our
+					// message text is NOT stuck at the bottom.
+					if (attempt > 1) {
+						const notAtPrompt = !this.isClaudeAtPrompt(preWriteCheck, runtimeType);
+						if (notAtPrompt) {
+							const msgSnippet = (message.length > 20
+								? message.substring(0, 80)
+								: message).replace(/\s+/g, ' ').trim();
+							const bottomLines = preWriteCheck.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+							const textStuck = bottomLines.includes(msgSnippet);
+							if (!textStuck) {
+								this.logger.info('Agent not at prompt and message not stuck — skipping re-write (#128)', {
+									sessionName,
+									attempt,
+								});
+								return true;
+							}
 						}
 					}
 				}
@@ -2709,6 +2815,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				// If progressive verification below misses an Enter drop, the
 				// background scanner will catch it within 30s.
 				this.trackSentMessage(sessionName, message);
+
+				// Track message hash for deduplication on retry (#128)
+				this.lastSentMessageHash.set(sessionName, {
+					hash: message.substring(0, 200),
+					sentAt: Date.now(),
+				});
 
 				// Wait for agent to start processing, then verify delivery.
 				// TUI runtimes need a longer delay (3s) for the TUI to redraw

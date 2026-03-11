@@ -63,7 +63,7 @@ describe('createTemplateMarketplaceRouter', () => {
 		expect(listVersionsRoute).toBeDefined();
 		expect(listVersionsRoute!.middlewareCount).toBe(1);
 
-		// Protected write routes (requireSupabaseAuth + handler = 2)
+		// Protected write routes (requireAuth + handler = 2)
 		const createRoute = routes.find(r => r.path === '/' && r.methods.includes('post'));
 		expect(createRoute).toBeDefined();
 		expect(createRoute!.middlewareCount).toBe(2);

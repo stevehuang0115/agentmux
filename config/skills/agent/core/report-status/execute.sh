@@ -85,5 +85,6 @@ fi
 
 # Auto-persist key findings as project knowledge when task is done (#127).
 if [ "$STATUS" = "done" ] && [ -n "$SUMMARY" ]; then
-  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}"
+  PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
+  auto_remember "$SESSION_NAME" "Task completed by ${SESSION_NAME}: ${SUMMARY}" "pattern" "project" "$PROJECT_PATH"
 fi

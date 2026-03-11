@@ -481,8 +481,8 @@ describe('GeminiRuntimeService', () => {
 	describe('getRuntimeExitPatterns', () => {
 		it('should return Gemini-specific exit and failure patterns', () => {
 			const patterns = service['getRuntimeExitPatterns']();
-			// 2 clean exit + 9 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN)
-			expect(patterns).toHaveLength(11);
+			// 2 clean exit + 11 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN + API connection failed + Authentication expired)
+			expect(patterns).toHaveLength(13);
 			// Clean exit patterns
 			expect(patterns[0].test('Agent powering down')).toBe(true);
 			expect(patterns[1].test('Interaction Summary')).toBe(true);
@@ -516,8 +516,8 @@ describe('GeminiRuntimeService', () => {
 	describe('getExitPatterns', () => {
 		it('should expose exit patterns via public accessor', () => {
 			const patterns = service.getExitPatterns();
-			// 2 clean exit + 9 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN)
-			expect(patterns).toHaveLength(11);
+			// 2 clean exit + 11 failure patterns (includes GEMINI_STUCK_CONNECTIVITY_PATTERN + API connection failed + Authentication expired)
+			expect(patterns).toHaveLength(13);
 		});
 	});
 
@@ -964,7 +964,7 @@ describe('GeminiRuntimeService', () => {
 	describe('GEMINI_FAILURE_PATTERNS', () => {
 		it('should export failure patterns as a constant array', () => {
 			expect(GEMINI_FAILURE_PATTERNS).toBeInstanceOf(Array);
-			expect(GEMINI_FAILURE_PATTERNS.length).toBe(9);
+			expect(GEMINI_FAILURE_PATTERNS.length).toBe(11);
 		});
 
 		it('should contain expected failure patterns', () => {
@@ -977,6 +977,8 @@ describe('GeminiRuntimeService', () => {
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('PERMISSION_DENIED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('UNAUTHENTICATED'))).toBe(true);
 			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Trying to reach gemini-3.1-pro-preview (Attempt 7/10)'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('API connection failed'))).toBe(true);
+			expect(GEMINI_FAILURE_PATTERNS.some(p => p.test('Authentication expired'))).toBe(true);
 		});
 
 		it('should not match normal output or non-fatal errors', () => {

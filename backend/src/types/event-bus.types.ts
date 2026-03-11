@@ -48,6 +48,67 @@ export const EVENT_TYPES = [
 export type EventType = (typeof EVENT_TYPES)[number];
 
 /**
+ * Event priority levels used for subscriber filtering.
+ * Critical events are delivered immediately; info events may be suppressed
+ * or debounced for subscribers that opt into critical-only mode.
+ */
+export type EventPriority = 'critical' | 'info';
+
+/**
+ * Critical event types that the orchestrator MUST receive.
+ * These indicate actionable state changes: task completions, failures,
+ * agent crashes, context exhaustion, and escalations.
+ */
+export const CRITICAL_EVENT_TYPES: ReadonlySet<EventType> = new Set([
+  'task:completed',
+  'task:failed',
+  'task:cancelled',
+  'task:input_required',
+  'agent:inactive',
+  'agent:context_critical',
+  'hierarchy:escalation',
+]);
+
+/**
+ * Info event types that are noisy for the orchestrator terminal.
+ * Repeated idle/busy toggles, minor status changes, and routine hierarchy
+ * updates fall here. Subscribers can still opt-in via explicit subscription.
+ */
+export const INFO_EVENT_TYPES: ReadonlySet<EventType> = new Set([
+  'agent:status_changed',
+  'agent:idle',
+  'agent:busy',
+  'agent:active',
+  'agent:context_warning',
+  'agent:oauth_url',
+  'task:submitted',
+  'task:accepted',
+  'task:working',
+  'task:verification_requested',
+  'hierarchy:delegation',
+  'hierarchy:report_up',
+]);
+
+/**
+ * Check if an event type is critical (requires immediate delivery).
+ *
+ * @param eventType - The event type to check
+ * @returns True if the event type is critical
+ */
+export function isCriticalEventType(eventType: EventType | string): boolean {
+  return CRITICAL_EVENT_TYPES.has(eventType as EventType);
+}
+
+/**
+ * Get the list of critical event types as an array (for subscription creation).
+ *
+ * @returns Array of critical EventType values
+ */
+export function getCriticalEventTypes(): EventType[] {
+  return Array.from(CRITICAL_EVENT_TYPES);
+}
+
+/**
  * Fields that can trigger events when changed
  */
 export type ChangedField = 'agentStatus' | 'workingStatus' | 'contextUsage' | 'oauthUrl' | 'taskStatus' | 'hierarchyAction';

@@ -16,7 +16,7 @@ import {
 	type ISessionBackend,
 } from '../services/session/index.js';
 import { getChatGateway } from './chat.gateway.js';
-import { ORCHESTRATOR_SESSION_NAME, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS } from '../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, NOTIFY_CONSTANTS, SLACK_NOTIFY_CONSTANTS, TERMINAL_GATEWAY_CONSTANTS } from '../constants.js';
 import { getSlackOrchestratorBridge } from '../services/slack/slack-orchestrator-bridge.js';
 import { getChatService } from '../services/chat/chat.service.js';
 import type { SlackNotification } from '../types/slack.types.js';
@@ -54,7 +54,7 @@ export class TerminalGateway {
 	private orchestratorOutputBuffer: string = '';
 
 	/** Maximum buffer size to prevent memory issues (100KB) */
-	private readonly MAX_BUFFER_SIZE = 100 * 1024;
+	private readonly MAX_BUFFER_SIZE = TERMINAL_GATEWAY_CONSTANTS.MAX_BUFFER_SIZE;
 
 	/** Deduplicator for recently sent chat responses */
 	private responseDeduplicator = new ResponseDeduplicator();
@@ -583,10 +583,10 @@ export class TerminalGateway {
 	 * Parses header+body (or legacy JSON) payload via `parseNotifyContent()` and
 	 * routes to chat, Slack, or both based on which fields are present:
 	 * - `conversationId` present → route to chat UI
-	 * - `channelId` present → route to Slack
-	 * - Both → both (common case)
-	 * - Neither + activeConversationId exists → fallback to chat
-	 * - `type` alone (no channelId) → chat only (type is metadata, not a routing signal)
+	 * - `channelId` present → route to Slack (via skill)
+	 * - Both → both (common case for Slack conversation replies)
+	 * - No conversationId + activeConversationId exists → fallback to chat
+	 * - `type` alone (no conversationId) → dropped (system event, not a conversation reply)
 	 *
 	 * @param sessionName - The orchestrator session name
 	 */
@@ -679,9 +679,12 @@ export class TerminalGateway {
 	 * @param payload - Parsed NOTIFY payload
 	 */
 	private async handleNotifyPayload(sessionName: string, payload: NotifyPayload): Promise<void> {
+		// Fallback to activeConversationId unless payload.type is set without
+		// a conversationId — those are system event notifications (e.g. status
+		// updates) that should NOT land in a chat conversation.
+		// channelId / threadTs are Slack routing hints and do NOT prevent
+		// the message from also appearing in the chat UI.
 		const canFallbackToActiveConversation = !payload.conversationId
-			&& !payload.channelId
-			&& !payload.threadTs
 			&& !payload.type;
 		const conversationId = payload.conversationId
 			|| (canFallbackToActiveConversation ? this.activeConversationId : null);
@@ -772,7 +775,7 @@ export class TerminalGateway {
 		if (!hasPendingMarker) {
 			// Keep a small trailing buffer in case the tag is split across chunks
 			const lastNewline = this.orchestratorOutputBuffer.lastIndexOf('\n');
-			if (lastNewline > 1000) {
+			if (lastNewline > TERMINAL_GATEWAY_CONSTANTS.BUFFER_TRIM_THRESHOLD) {
 				this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastNewline);
 			}
 		}

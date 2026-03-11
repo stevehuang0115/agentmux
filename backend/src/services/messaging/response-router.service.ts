@@ -9,6 +9,7 @@
  */
 
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { formatError } from '../../utils/format-error.js';
 import type { QueuedMessage } from '../../types/messaging.types.js';
 
 /**
@@ -41,6 +42,9 @@ export class ResponseRouterService {
         break;
       case 'slack':
         this.routeToSlack(message, response);
+        break;
+      case 'google_chat':
+        this.routeToGoogleChat(message, response);
         break;
       case 'system_event':
         this.logger.debug('System event response routed (no-op)', {
@@ -79,24 +83,49 @@ export class ResponseRouterService {
    * @param response - The response content
    */
   private routeToSlack(message: QueuedMessage, response: string): void {
-    const slackResolve = message.sourceMetadata?.slackResolve;
+    this.resolveCallback(message, response, 'slackResolve', 'Slack');
+  }
 
-    if (typeof slackResolve === 'function') {
+  /**
+   * Route response to Google Chat by calling the googleChatResolve callback.
+   * This unblocks the promise that sends the reply back to the Chat thread.
+   *
+   * @param message - The completed QueuedMessage
+   * @param response - The response content
+   */
+  private routeToGoogleChat(message: QueuedMessage, response: string): void {
+    this.resolveCallback(message, response, 'googleChatResolve', 'Google Chat');
+  }
+
+  /**
+   * Resolve a source-specific callback stored in the message's sourceMetadata.
+   *
+   * Shared helper used by routeToSlack, routeToGoogleChat, and routeError
+   * to avoid duplicating the resolve-callback pattern.
+   *
+   * @param message - The QueuedMessage containing the callback in sourceMetadata
+   * @param response - The response string to pass to the callback
+   * @param callbackKey - The key in sourceMetadata that holds the resolve function
+   * @param label - Human-readable label for log messages (e.g. "Slack", "Google Chat")
+   */
+  private resolveCallback(message: QueuedMessage, response: string, callbackKey: string, label: string): void {
+    const resolve = message.sourceMetadata?.[callbackKey];
+    if (typeof resolve === 'function') {
       try {
-        slackResolve(response);
-        this.logger.debug('Slack response resolved', {
+        resolve(response);
+        this.logger.debug(`${label} response resolved`, {
           messageId: message.id,
           conversationId: message.conversationId,
           responseLength: response.length,
         });
       } catch (error) {
-        this.logger.error('Failed to resolve Slack response', {
+        this.logger.error(`Failed to resolve ${label} response`, {
           messageId: message.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatError(error),
         });
       }
     } else {
-      this.logger.warn('Slack message has no slackResolve callback', {
+      this.logger.warn(`${label} message has no ${callbackKey} callback`, {
         messageId: message.id,
         conversationId: message.conversationId,
       });
@@ -117,13 +146,12 @@ export class ResponseRouterService {
           error,
         });
         break;
-      case 'slack': {
-        const slackResolve = message.sourceMetadata?.slackResolve;
-        if (typeof slackResolve === 'function') {
-          slackResolve(`Error: ${error}`);
-        }
+      case 'slack':
+        this.resolveCallback(message, `Error: ${error}`, 'slackResolve', 'Slack');
         break;
-      }
+      case 'google_chat':
+        this.resolveCallback(message, `Error: ${error}`, 'googleChatResolve', 'Google Chat');
+        break;
       case 'system_event':
         this.logger.debug('System event error routed (no-op)', {
           messageId: message.id,

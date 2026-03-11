@@ -5,10 +5,6 @@
  * Supports both the new TeamTemplate format (with verificationPipeline)
  * and legacy flat JSON format (backward compatible).
  *
- * When connected to CrewlyAI Cloud, also fetches premium templates
- * and merges them with local templates. Premium templates are held
- * in memory only and never written to disk.
- *
  * @module services/template/template
  */
 
@@ -19,9 +15,6 @@ import { randomUUID } from 'crypto';
 import type { TeamTemplate, TemplateRole } from '../../types/team-template.types.js';
 import { isValidTeamTemplate } from '../../types/team-template.types.js';
 import type { TeamMember, Team, TeamMemberRole } from '../../types/index.js';
-import { CloudClientService } from '../cloud/cloud-client.service.js';
-import type { CloudTemplateSummary, CloudTemplateDetail } from '../cloud/cloud-client.service.js';
-import type { CloudTier } from '../../constants.js';
 
 // =============================================================================
 // Constants
@@ -46,8 +39,8 @@ export interface CreateFromTemplateResult {
   memberCount: number;
 }
 
-/** Template source — local disk or CrewlyAI Cloud */
-export type TemplateSource = 'local' | 'cloud';
+/** Template source — local disk */
+export type TemplateSource = 'local';
 
 /** Minimal template summary for listing */
 export interface TemplateSummary {
@@ -62,8 +55,6 @@ export interface TemplateSummary {
   icon?: string;
   /** Where this template was loaded from */
   source: TemplateSource;
-  /** Minimum subscription tier required (cloud templates only) */
-  requiredTier?: CloudTier;
 }
 
 // =============================================================================
@@ -153,9 +144,6 @@ export class TemplateService {
   /**
    * List local templates as summaries.
    *
-   * Returns only templates loaded from disk. For a combined list
-   * that includes cloud premium templates, use {@link listAllTemplates}.
-   *
    * @returns Array of local template summaries
    */
   listTemplates(): TemplateSummary[] {
@@ -176,63 +164,6 @@ export class TemplateService {
   }
 
   /**
-   * List all templates — local templates merged with cloud premium templates.
-   *
-   * When connected to CrewlyAI Cloud, concurrently fetches premium templates
-   * and merges them with local ones. Cloud templates are marked with
-   * `source: 'cloud'` and include `requiredTier`.
-   *
-   * Graceful degradation: if the cloud fetch fails, returns local templates
-   * only without throwing.
-   *
-   * @returns Array of all template summaries (local + cloud)
-   */
-  async listAllTemplates(): Promise<TemplateSummary[]> {
-    const localTemplates = this.listTemplates();
-
-    const cloudClient = CloudClientService.getInstance();
-    if (!cloudClient.isConnected()) {
-      return localTemplates;
-    }
-
-    try {
-      const cloudTemplates = await cloudClient.getTemplates();
-      const cloudSummaries = this.mapCloudTemplatesToSummaries(cloudTemplates);
-
-      // Merge: local first, then cloud (skip cloud IDs that collide with local)
-      const localIds = new Set(localTemplates.map(t => t.id));
-      const uniqueCloudSummaries = cloudSummaries.filter(t => !localIds.has(t.id));
-
-      return [...localTemplates, ...uniqueCloudSummaries];
-    } catch {
-      // Graceful degradation — cloud fetch failed, return local only
-      return localTemplates;
-    }
-  }
-
-  /**
-   * Get a premium template's full detail from CrewlyAI Cloud.
-   *
-   * The returned data is held in memory only and MUST NOT be persisted
-   * to disk (security requirement from PRD Section 3.1).
-   *
-   * @param id - Cloud template identifier
-   * @returns Template detail, or null if not connected or not found
-   */
-  async getCloudTemplateDetail(id: string): Promise<CloudTemplateDetail | null> {
-    const cloudClient = CloudClientService.getInstance();
-    if (!cloudClient.isConnected()) {
-      return null;
-    }
-
-    try {
-      return await cloudClient.getTemplateDetail(id);
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Get a specific template by ID.
    *
    * @param id - Template ID
@@ -250,7 +181,7 @@ export class TemplateService {
    *
    * @param templateId - ID of the template to use
    * @param teamName - Name for the new team
-   * @param nameOverrides - Optional map of role → custom name
+   * @param nameOverrides - Optional map of role to custom name
    * @returns The created team result, or null if template not found
    */
   createTeamFromTemplate(
@@ -357,27 +288,10 @@ export class TemplateService {
   // ===========================================================================
 
   /**
-   * Convert cloud template summaries to the local TemplateSummary format.
-   *
-   * @param cloudTemplates - Array of cloud template summaries from the API
-   * @returns Array of TemplateSummary with source 'cloud'
-   */
-  private mapCloudTemplatesToSummaries(cloudTemplates: CloudTemplateSummary[]): TemplateSummary[] {
-    return cloudTemplates.map(ct => ({
-      id: ct.id,
-      name: ct.name,
-      description: ct.description,
-      category: ct.category,
-      hierarchical: false,
-      roleCount: 0,
-      version: '1.0.0',
-      source: 'cloud' as TemplateSource,
-      requiredTier: ct.requiredTier,
-    }));
-  }
-
-  /**
    * Load a new-format template.json file.
+   *
+   * @param filePath - Absolute path to the template.json file
+   * @param dirName - Directory name containing the template
    */
   private loadTemplateFile(filePath: string, dirName: string): void {
     try {
@@ -400,6 +314,9 @@ export class TemplateService {
   /**
    * Load a legacy flat JSON template (e.g., web-dev-team.json).
    * Converts to TeamTemplate format with sensible defaults.
+   *
+   * @param filePath - Absolute path to the JSON file
+   * @param fileName - File name of the template
    */
   private loadLegacyTemplate(filePath: string, fileName: string): void {
     try {

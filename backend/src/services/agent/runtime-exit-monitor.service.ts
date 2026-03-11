@@ -1075,12 +1075,41 @@ export class RuntimeExitMonitorService {
 	}
 
 	/**
+	 * Classify an error reason as transient or persistent.
+	 *
+	 * Transient errors (connectivity, timeout, quota) may resolve on retry.
+	 * Persistent errors (auth, config, crash loop) require manual intervention.
+	 *
+	 * @param reason - The failure reason string
+	 * @returns 'TRANSIENT' | 'PERSISTENT' | 'UNKNOWN'
+	 */
+	private classifyError(reason: string): 'TRANSIENT' | 'PERSISTENT' | 'UNKNOWN' {
+		const transientPatterns = [
+			'timeout', 'connectivity', 'connection', 'quota', 'RESOURCE_EXHAUSTED',
+			'UNAVAILABLE', 'DEADLINE_EXCEEDED', 'network', 'INTERNAL',
+		];
+		const persistentPatterns = [
+			'auth', 'UNAUTHENTICATED', 'PERMISSION_DENIED', 'config',
+			'crash', 'cooldown', 'corruption', 'thinking.*blocks',
+		];
+
+		const lowerReason = reason.toLowerCase();
+		if (transientPatterns.some(p => lowerReason.includes(p.toLowerCase()))) {
+			return 'TRANSIENT';
+		}
+		if (persistentPatterns.some(p => new RegExp(p, 'i').test(reason))) {
+			return 'PERSISTENT';
+		}
+		return 'UNKNOWN';
+	}
+
+	/**
 	 * Notify the orchestrator about an agent failure via the chat API (#129).
 	 *
-	 * Sends a structured failure notification so the orchestrator can decide
-	 * whether to restart the agent, reassign tasks, or inform the user.
-	 * This is fire-and-forget — failures are logged but do not block the
-	 * exit flow.
+	 * Sends a structured failure notification with error classification so the
+	 * orchestrator can decide whether to restart the agent, reassign tasks,
+	 * or inform the user. This is fire-and-forget — failures are logged but
+	 * do not block the exit flow.
 	 *
 	 * @param sessionName - Failed agent's PTY session name
 	 * @param reason - Failure reason (runtime_exited, api_failure, etc.)
@@ -1093,14 +1122,15 @@ export class RuntimeExitMonitorService {
 		activeTasks: InProgressTask[],
 		restartSucceeded: boolean
 	): void {
-		// Build notification message for the orchestrator
+		const errorClass = this.classifyError(reason);
 		const taskSummary = activeTasks.length > 0
-			? activeTasks.map(t => t.taskName).join(', ')
+			? activeTasks.map(t => `${t.taskName} (${t.status})`).join(', ')
 			: '';
 
 		const message = [
 			`Agent failure notification: ${sessionName} became inactive.`,
 			`Reason: ${reason}`,
+			`Error classification: ${errorClass}`,
 			activeTasks.length > 0 ? `Active tasks: ${taskSummary}` : 'No active tasks.',
 			restartSucceeded
 				? 'Automatic restart succeeded — agent is recovering.'

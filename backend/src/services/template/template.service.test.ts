@@ -9,7 +9,6 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { TemplateService } from './template.service.js';
 import type { TeamTemplate } from '../../types/team-template.types.js';
-import { CloudClientService } from '../cloud/cloud-client.service.js';
 
 // =============================================================================
 // Mocks
@@ -25,21 +24,6 @@ jest.mock('../core/logger.service.js', () => ({
         debug: jest.fn(),
       }),
     }),
-  },
-}));
-
-const mockIsConnected = jest.fn<boolean, []>();
-const mockGetTemplates = jest.fn();
-const mockGetTemplateDetail = jest.fn();
-
-jest.mock('../cloud/cloud-client.service.js', () => ({
-  CloudClientService: {
-    getInstance: () => ({
-      isConnected: mockIsConnected,
-      getTemplates: mockGetTemplates,
-      getTemplateDetail: mockGetTemplateDetail,
-    }),
-    resetInstance: jest.fn(),
   },
 }));
 
@@ -116,13 +100,6 @@ function createLegacyTemplateJson() {
   };
 }
 
-function createCloudTemplates() {
-  return [
-    { id: 'cloud-tiktok', name: 'TikTok Ops', description: 'TikTok team', requiredTier: 'pro', category: 'social' },
-    { id: 'cloud-sap', name: 'SAP Integration', description: 'SAP team', requiredTier: 'enterprise', category: 'enterprise' },
-  ];
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -135,7 +112,6 @@ describe('TemplateService', () => {
     TemplateService.clearInstance();
     tempDir = join(tmpdir(), `crewly-template-test-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
-    mockIsConnected.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -236,153 +212,6 @@ describe('TemplateService', () => {
       expect(list).toHaveLength(1);
     });
   });
-
-  // =========================================================================
-  // Cloud integration tests
-  // =========================================================================
-
-  describe('listAllTemplates', () => {
-    it('should return only local templates when not connected to cloud', async () => {
-      const templateDir = join(tempDir, 'test-dev');
-      mkdirSync(templateDir);
-      writeFileSync(join(templateDir, 'template.json'), JSON.stringify(createValidTemplateJson()));
-
-      mockIsConnected.mockReturnValue(false);
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      expect(result).toHaveLength(1);
-      expect(result[0].source).toBe('local');
-      expect(mockGetTemplates).not.toHaveBeenCalled();
-    });
-
-    it('should merge local and cloud templates when connected', async () => {
-      const templateDir = join(tempDir, 'test-dev');
-      mkdirSync(templateDir);
-      writeFileSync(join(templateDir, 'template.json'), JSON.stringify(createValidTemplateJson()));
-
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplates.mockResolvedValue(createCloudTemplates());
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      expect(result).toHaveLength(3); // 1 local + 2 cloud
-      expect(result[0].source).toBe('local');
-      expect(result[0].id).toBe('test-dev');
-      expect(result[1].source).toBe('cloud');
-      expect(result[1].id).toBe('cloud-tiktok');
-      expect(result[1].requiredTier).toBe('pro');
-      expect(result[2].source).toBe('cloud');
-      expect(result[2].id).toBe('cloud-sap');
-      expect(result[2].requiredTier).toBe('enterprise');
-    });
-
-    it('should deduplicate cloud templates that share IDs with local', async () => {
-      const templateDir = join(tempDir, 'test-dev');
-      mkdirSync(templateDir);
-      writeFileSync(join(templateDir, 'template.json'), JSON.stringify(createValidTemplateJson()));
-
-      // Cloud returns a template with the same ID as a local one
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplates.mockResolvedValue([
-        { id: 'test-dev', name: 'Cloud Test Dev', description: 'dup', requiredTier: 'pro', category: 'dev' },
-        { id: 'cloud-unique', name: 'Unique', description: 'unique', requiredTier: 'pro', category: 'dev' },
-      ]);
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      expect(result).toHaveLength(2); // local 'test-dev' + cloud 'cloud-unique'
-      expect(result[0].id).toBe('test-dev');
-      expect(result[0].source).toBe('local'); // local takes precedence
-      expect(result[1].id).toBe('cloud-unique');
-      expect(result[1].source).toBe('cloud');
-    });
-
-    it('should gracefully degrade when cloud fetch fails', async () => {
-      const templateDir = join(tempDir, 'test-dev');
-      mkdirSync(templateDir);
-      writeFileSync(join(templateDir, 'template.json'), JSON.stringify(createValidTemplateJson()));
-
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplates.mockRejectedValue(new Error('Network timeout'));
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      // Should return local templates only, no error thrown
-      expect(result).toHaveLength(1);
-      expect(result[0].source).toBe('local');
-    });
-
-    it('should return empty array when no local and no cloud connection', async () => {
-      mockIsConnected.mockReturnValue(false);
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      expect(result).toEqual([]);
-    });
-
-    it('should return only cloud templates when no local templates exist', async () => {
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplates.mockResolvedValue(createCloudTemplates());
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.listAllTemplates();
-
-      expect(result).toHaveLength(2);
-      expect(result.every(t => t.source === 'cloud')).toBe(true);
-    });
-  });
-
-  describe('getCloudTemplateDetail', () => {
-    it('should return null when not connected', async () => {
-      mockIsConnected.mockReturnValue(false);
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.getCloudTemplateDetail('cloud-tiktok');
-
-      expect(result).toBeNull();
-      expect(mockGetTemplateDetail).not.toHaveBeenCalled();
-    });
-
-    it('should return template detail from cloud when connected', async () => {
-      const detail = {
-        id: 'cloud-tiktok',
-        name: 'TikTok Ops',
-        description: 'Full TikTok ops team',
-        requiredTier: 'pro',
-        category: 'social',
-        roles: [{ role: 'content-writer', prompt: 'Write TikTok scripts' }],
-        orchestration: { strategy: 'parallel' },
-      };
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplateDetail.mockResolvedValue(detail);
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.getCloudTemplateDetail('cloud-tiktok');
-
-      expect(result).toEqual(detail);
-      expect(mockGetTemplateDetail).toHaveBeenCalledWith('cloud-tiktok');
-    });
-
-    it('should return null when cloud fetch fails', async () => {
-      mockIsConnected.mockReturnValue(true);
-      mockGetTemplateDetail.mockRejectedValue(new Error('Template not found: xyz'));
-
-      const service = TemplateService.getInstance(tempDir);
-      const result = await service.getCloudTemplateDetail('xyz');
-
-      expect(result).toBeNull();
-    });
-  });
-
-  // =========================================================================
-  // Existing tests (unchanged)
-  // =========================================================================
 
   describe('getTemplate', () => {
     it('should return template by ID', () => {

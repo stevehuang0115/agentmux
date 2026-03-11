@@ -157,6 +157,12 @@ export class SchedulerService extends EventEmitter {
   private recurringIdleStreak = new Map<string, number>();
   /** Auto-cancel recurring checks after this many consecutive idle observations. */
   private static readonly RECURRING_IDLE_AUTO_CANCEL_THRESHOLD = 3;
+  /**
+   * Per-agent manual check timestamps. Updated when orchestrator calls
+   * get_agent_status or get_agent_logs via tool registry. Recurring checks
+   * whose message mentions a recently-checked session are suppressed.
+   */
+  private lastManualCheck = new Map<string, number>();
 
   /**
    * Creates a new SchedulerService
@@ -167,6 +173,38 @@ export class SchedulerService extends EventEmitter {
     super();
     this.storageService = storageService;
     this.logger = LoggerService.getInstance().createComponentLogger('SchedulerService');
+  }
+
+  /**
+   * Record that the orchestrator manually checked an agent's status or logs.
+   * Recurring checks whose message mentions this session will be suppressed
+   * if they fire within the agent's recurring interval.
+   *
+   * @param agentSession - The agent session name that was checked
+   */
+  recordManualCheck(agentSession: string): void {
+    this.lastManualCheck.set(agentSession, Date.now());
+    this.logger.debug('Recorded manual agent check', { agentSession });
+  }
+
+  /**
+   * Check whether a recurring check should be suppressed because the
+   * orchestrator recently checked the same agent manually.
+   *
+   * @param message - The check message content
+   * @param intervalMinutes - The recurring interval in minutes
+   * @returns true if a manual check happened within the interval
+   */
+  private wasRecentlyManuallyChecked(message: string, intervalMinutes: number): boolean {
+    for (const [session, timestamp] of this.lastManualCheck) {
+      if (message.includes(session)) {
+        const elapsedMs = Date.now() - timestamp;
+        if (elapsedMs < intervalMinutes * 60 * 1000) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -800,6 +838,95 @@ export class SchedulerService extends EventEmitter {
   }
 
   /**
+   * Cancel all scheduled checks, optionally filtered by session or minimum age.
+   *
+   * @param filter - Optional filter criteria
+   * @param filter.session - Only cancel checks targeting this session
+   * @param filter.olderThanMinutes - Only cancel checks created more than N minutes ago
+   * @returns Number of checks cancelled
+   */
+  cancelAllChecks(filter?: { session?: string; olderThanMinutes?: number }): number {
+    const now = Date.now();
+    let cancelled = 0;
+
+    const shouldCancel = (check: ScheduledCheck): boolean => {
+      if (filter?.session && check.targetSession !== filter.session) {
+        return false;
+      }
+      if (filter?.olderThanMinutes) {
+        const ageMs = now - new Date(check.createdAt).getTime();
+        if (ageMs < filter.olderThanMinutes * 60 * 1000) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    // Cancel matching one-time checks
+    for (const [checkId, check] of this.oneTimeChecksData.entries()) {
+      if (shouldCancel(check)) {
+        const timeout = this.scheduledChecks.get(checkId);
+        if (timeout) {
+          clearTimeout(timeout);
+          this.scheduledChecks.delete(checkId);
+        }
+        this.oneTimeChecksData.delete(checkId);
+        this.enhancedMessages.delete(checkId);
+        cancelled++;
+      }
+    }
+
+    // Cancel matching recurring checks
+    for (const [checkId, check] of this.recurringChecks.entries()) {
+      if (shouldCancel(check)) {
+        const timeout = this.recurringTimeouts.get(checkId);
+        if (timeout) {
+          clearTimeout(timeout);
+          this.recurringTimeouts.delete(checkId);
+        }
+        this.recurringChecks.delete(checkId);
+        this.enhancedMessages.delete(checkId);
+        this.recurringIdleStreak.delete(checkId);
+        this.storageService.deleteRecurringCheck(checkId).catch(err => {
+          this.logger.error('Failed to delete persisted recurring check during cancelAll', {
+            checkId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+        cancelled++;
+      }
+    }
+
+    // Cancel matching continuation checks
+    for (const [checkId, timeout] of this.continuationChecks.entries()) {
+      const enhanced = this.enhancedMessages.get(checkId);
+      if (enhanced) {
+        const checkAsScheduled: ScheduledCheck = {
+          id: checkId,
+          targetSession: enhanced.sessionName,
+          message: enhanced.message,
+          scheduledFor: enhanced.scheduledFor.toISOString(),
+          isRecurring: false,
+          createdAt: enhanced.createdAt,
+        };
+        if (shouldCancel(checkAsScheduled)) {
+          clearTimeout(timeout);
+          this.continuationChecks.delete(checkId);
+          this.enhancedMessages.delete(checkId);
+          cancelled++;
+        }
+      }
+    }
+
+    this.logger.info('Bulk cancel completed', {
+      cancelled,
+      filter: filter ?? 'all',
+    });
+
+    return cancelled;
+  }
+
+  /**
    * List all scheduled check-ins
    *
    * @returns Array of scheduled checks
@@ -1089,6 +1216,22 @@ export class SchedulerService extends EventEmitter {
             error: error instanceof Error ? error.message : String(error),
           });
         }
+      }
+
+      // Skip this occurrence if orchestrator recently checked the same agent manually.
+      // The next execution will fire after a full interval from now.
+      if (this.wasRecentlyManuallyChecked(message, intervalMinutes)) {
+        this.logger.info('Suppressing recurring check — agent was recently checked manually', {
+          checkId,
+          targetSession,
+          intervalMinutes,
+        });
+        // Schedule next execution normally (don't cancel the recurring check)
+        if (this.recurringChecks.has(checkId)) {
+          const nextTimeout = setTimeout(executeRecurring, intervalMinutes * 60 * 1000);
+          this.recurringTimeouts.set(checkId, nextTimeout);
+        }
+        return;
       }
 
       await this.executeCheck(targetSession, message);

@@ -805,8 +805,10 @@ export const ORCHESTRATOR_HEARTBEAT_CONSTANTS = {
 	RESTART_THRESHOLD_MS: 60_000,
 	/** Message sent to orchestrator PTY to request a heartbeat */
 	HEARTBEAT_REQUEST_MESSAGE: 'Please run your heartbeat skill now: bash config/skills/orchestrator/heartbeat/execute.sh',
-	/** Grace period after server start before monitoring begins (30 seconds) */
-	STARTUP_GRACE_PERIOD_MS: 30_000,
+	/** Grace period after server start before monitoring begins (120 seconds).
+	 *  Increased from 30s to account for orchestrator boot time + first API call delay,
+	 *  preventing false-positive heartbeat timeouts on slow starts or restarts. */
+	STARTUP_GRACE_PERIOD_MS: 120_000,
 	/** Maximum time the orchestrator can stay in_progress before triggering
 	 *  a heartbeat/restart (30 minutes). Spinner animation counts as "activity"
 	 *  in the idle tracker, so a stuck orchestrator may appear active forever.

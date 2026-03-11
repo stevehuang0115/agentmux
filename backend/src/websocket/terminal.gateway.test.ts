@@ -737,6 +737,29 @@ describe('TerminalGateway', () => {
 			);
 		});
 
+		it('should fallback to activeConversationId when channelId is present but conversationId is missing', async () => {
+			gateway.setActiveConversationId('slack-D0AC7NF5N7L-1772987441-763389');
+
+			const output = `[NOTIFY]\nchannelId: D0AC7NF5N7L\nthreadTs: 1772987441.763389\n---\nOrchestrator reply to Slack user\n[/NOTIFY]`;
+
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			// Should route to chat using activeConversationId fallback
+			expect(mockChatGateway.processNotifyMessage).toHaveBeenCalledWith(
+				'crewly-orc',
+				'Orchestrator reply to Slack user',
+				'slack-D0AC7NF5N7L-1772987441-763389',
+				expect.objectContaining({
+					slackChannelId: 'D0AC7NF5N7L',
+					slackThreadTs: '1772987441.763389',
+					slackDeliveryStatus: 'pending',
+				})
+			);
+		});
+
 		it('should not fallback to activeConversationId for typed event payloads', async () => {
 			gateway.setActiveConversationId('active-conv-fallback');
 

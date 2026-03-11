@@ -1,7 +1,7 @@
 /**
  * Chat Page Tests
  *
- * Tests for the dedicated Chat page (messenger-style without sidebar).
+ * Tests for the thread-based Chat page with two-pane layout.
  *
  * @module pages/Chat.test
  */
@@ -17,8 +17,12 @@ import * as useChatHook from '../contexts/ChatContext';
 vi.mock('../contexts/ChatContext');
 
 // Mock child components
-vi.mock('../components/Chat/ChatPanel', () => ({
-  ChatPanel: () => <div data-testid="chat-panel">Chat Panel</div>,
+vi.mock('../components/Chat/ThreadListPanel', () => ({
+  ThreadListPanel: () => <div data-testid="thread-list-panel">Thread List</div>,
+}));
+
+vi.mock('../components/Chat/ThreadDetailPanel', () => ({
+  ThreadDetailPanel: () => <div data-testid="thread-detail-panel">Thread Detail</div>,
 }));
 
 const TestWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -34,6 +38,7 @@ describe('Chat Page', () => {
     isSending: false,
     error: null,
     isTyping: false,
+    channelFilter: null,
     sendMessage: vi.fn(),
     selectConversation: vi.fn(),
     createConversation: vi.fn(),
@@ -41,7 +46,11 @@ describe('Chat Page', () => {
     archiveConversation: vi.fn(),
     clearConversation: vi.fn(),
     refreshMessages: vi.fn(),
+    loadOlderMessages: vi.fn(),
+    hasMoreMessages: false,
+    isLoadingMore: false,
     clearError: vi.fn(),
+    setChannelFilter: vi.fn(),
   };
 
   beforeEach(() => {
@@ -72,19 +81,29 @@ describe('Chat Page', () => {
       ).toBeInTheDocument();
     });
 
-    it('should render the chat panel', () => {
+    it('should render the thread list panel', () => {
       render(
         <TestWrapper>
           <Chat />
         </TestWrapper>
       );
 
-      expect(screen.getByTestId('chat-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('thread-list-panel')).toBeInTheDocument();
+    });
+
+    it('should render the thread detail panel', () => {
+      render(
+        <TestWrapper>
+          <Chat />
+        </TestWrapper>
+      );
+
+      expect(screen.getByTestId('thread-detail-panel')).toBeInTheDocument();
     });
   });
 
   describe('Structure', () => {
-    it('should have correct class structure for messenger-style layout', () => {
+    it('should have correct class structure for thread-based layout', () => {
       const { container } = render(
         <TestWrapper>
           <Chat />
@@ -92,20 +111,20 @@ describe('Chat Page', () => {
       );
 
       expect(container.querySelector('.chat-page')).toBeInTheDocument();
-      expect(container.querySelector('.chat-page.messenger-style')).toBeInTheDocument();
+      expect(container.querySelector('.chat-page.thread-layout')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-header')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-content')).toBeInTheDocument();
       expect(container.querySelector('.chat-page-main')).toBeInTheDocument();
     });
 
-    it('should NOT have sidebar (messenger-style)', () => {
+    it('should have sidebar (thread-layout)', () => {
       const { container } = render(
         <TestWrapper>
           <Chat />
         </TestWrapper>
       );
 
-      expect(container.querySelector('.chat-page-sidebar')).not.toBeInTheDocument();
+      expect(container.querySelector('.chat-page-sidebar')).toBeInTheDocument();
     });
   });
 });

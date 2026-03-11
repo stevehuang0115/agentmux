@@ -17,11 +17,13 @@ import {
 	type RuntimeType,
 } from '../../constants.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { formatError } from '../../utils/format-error.js';
 import { StorageService } from '../core/storage.service.js';
 import { MemoryService } from '../memory/memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type { AgentRegistrationService } from '../agent/agent-registration.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
+import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { delay } from '../../utils/async.utils.js';
 
 /**
@@ -94,9 +96,16 @@ export class OrchestratorRestartService {
 	 * Reset the singleton instance (for testing).
 	 */
 	static resetInstance(): void {
+		if (OrchestratorRestartService.instance) {
+			// Clear internal state to prevent stale references
+			OrchestratorRestartService.instance.agentRegistrationService = null;
+			OrchestratorRestartService.instance.sessionBackend = null;
+			OrchestratorRestartService.instance.socketIO = null;
+			OrchestratorRestartService.instance.restartTimestamps = [];
+			OrchestratorRestartService.instance.isRestarting = false;
+		}
 		OrchestratorRestartService.instance = null;
 	}
-
 	/**
 	 * Inject external dependencies.
 	 *
@@ -182,6 +191,12 @@ export class OrchestratorRestartService {
 				});
 			}
 
+			// Step 2b: Clear stale activity tracking data so the new session
+			// starts fresh. Without this, the heartbeat monitor inherits the
+			// old session's last API timestamp and immediately sees 50+ min
+			// idle time, triggering another restart loop.
+			PtyActivityTrackerService.getInstance().clearSession(ORCHESTRATOR_SESSION_NAME);
+
 			// Step 3: Determine runtime type (preserve the orchestrator's configured runtime).
 			const runtimeType = await this.resolveOrchestratorRuntimeType();
 
@@ -199,7 +214,7 @@ export class OrchestratorRestartService {
 					}
 				} catch (error) {
 					this.logger.warn('Failed to get projects for Gemini CLI allowlist (continuing without)', {
-						error: error instanceof Error ? error.message : String(error),
+						error: formatError(error),
 					});
 				}
 			}
@@ -271,7 +286,7 @@ export class OrchestratorRestartService {
 			return true;
 		} catch (error) {
 			this.logger.error('Orchestrator restart failed', {
-				error: error instanceof Error ? error.message : String(error),
+				error: formatError(error),
 				stack: error instanceof Error ? error.stack : undefined,
 			});
 			return false;
@@ -293,7 +308,7 @@ export class OrchestratorRestartService {
 			}
 		} catch (error) {
 			this.logger.warn('Failed to resolve orchestrator runtime type from storage, using default', {
-				error: error instanceof Error ? error.message : String(error),
+				error: formatError(error),
 			});
 		}
 

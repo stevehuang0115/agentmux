@@ -225,7 +225,7 @@ export class QueueProcessorService extends EventEmitter {
           ? EVENT_DELIVERY_CONSTANTS.SYSTEM_EVENT_TIMEOUT
           : EVENT_DELIVERY_CONSTANTS.AGENT_READY_TIMEOUT;
 
-      // Determine delivery target: use targetSession if specified, else orchestrator
+      // Resolve delivery target — system events may target non-orchestrator agents
       const deliveryTarget = message.targetSession || ORCHESTRATOR_SESSION_NAME;
 
       // Wait for target agent to be at prompt before attempting delivery.
@@ -346,10 +346,27 @@ export class QueueProcessorService extends EventEmitter {
         deliveryContent = `[${CHAT_ROUTING_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
       }
 
+      // Route to the correct target session. System events may target
+      // non-orchestrator agents (e.g. crewly-agent subscribers).
+      const targetSession = message.targetSession || ORCHESTRATOR_SESSION_NAME;
+
+      // Resolve runtime type for non-orchestrator targets
+      let deliveryRuntimeType = runtimeType;
+      if (targetSession !== ORCHESTRATOR_SESSION_NAME) {
+        try {
+          const memberResult = await StorageService.getInstance().findMemberBySessionName(targetSession);
+          if (memberResult?.member?.runtimeType) {
+            deliveryRuntimeType = memberResult.member.runtimeType as RuntimeType;
+          }
+        } catch {
+          // Fall back to orchestrator's runtime type
+        }
+      }
+
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
         deliveryTarget,
         deliveryContent,
-        runtimeType
+        deliveryRuntimeType
       );
 
       // Record delivery timestamp for ACK detection

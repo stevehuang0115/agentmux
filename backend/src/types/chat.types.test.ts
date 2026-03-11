@@ -13,6 +13,7 @@ import {
   CHAT_CONTENT_TYPES,
   CHAT_MESSAGE_STATUSES,
   CHAT_CONSTANTS,
+  CHAT_CHANNEL_TYPES,
   DEFAULT_RESPONSE_PATTERNS,
   NOTIFY_URGENCY_LEVELS,
   SLACK_DELIVERY_STATUSES,
@@ -20,6 +21,7 @@ import {
   ChatSenderType,
   ChatContentType,
   ChatMessageStatus,
+  ChatChannelType,
   ChatSender,
   ChatMessage,
   ChatConversation,
@@ -44,10 +46,12 @@ import {
   isValidChatMessage,
   isValidChatConversation,
   isValidNotifyPayload,
+  isValidChannelType,
   // Utility functions
   generateChatId,
   createChatMessage,
   createConversation,
+  inferChannelTypeFromConversationId,
   formatMessageContent,
   extractResponseFromOutput,
   detectContentType,
@@ -1574,6 +1578,242 @@ describe('Edge Cases', () => {
 
     it('should handle whitespace-only content', () => {
       expect(detectContentType('   \n\t  ')).toBe('text');
+    });
+  });
+});
+
+// =============================================================================
+// ChatChannelType Tests
+// =============================================================================
+
+describe('ChatChannelType', () => {
+  describe('CHAT_CHANNEL_TYPES', () => {
+    it('should contain all expected channel types', () => {
+      expect(CHAT_CHANNEL_TYPES).toContain('crewly_chat');
+      expect(CHAT_CHANNEL_TYPES).toContain('slack');
+      expect(CHAT_CHANNEL_TYPES).toContain('google_chat');
+      expect(CHAT_CHANNEL_TYPES).toContain('telegram');
+      expect(CHAT_CHANNEL_TYPES).toContain('api');
+      expect(CHAT_CHANNEL_TYPES).toHaveLength(5);
+    });
+
+    it('should be a readonly tuple at compile time', () => {
+      expect(Array.isArray(CHAT_CHANNEL_TYPES)).toBe(true);
+      expect(CHAT_CHANNEL_TYPES).toHaveLength(5);
+    });
+
+    it('should derive ChatChannelType type from the constant', () => {
+      const crewlyChat: ChatChannelType = 'crewly_chat';
+      const slack: ChatChannelType = 'slack';
+      const googleChat: ChatChannelType = 'google_chat';
+      const telegram: ChatChannelType = 'telegram';
+      const api: ChatChannelType = 'api';
+
+      expect(crewlyChat).toBe('crewly_chat');
+      expect(slack).toBe('slack');
+      expect(googleChat).toBe('google_chat');
+      expect(telegram).toBe('telegram');
+      expect(api).toBe('api');
+    });
+  });
+
+  describe('inferChannelTypeFromConversationId', () => {
+    it('should infer slack for conversation IDs starting with slack-', () => {
+      expect(inferChannelTypeFromConversationId('slack-D0AC7NF5N7L-1772987441-763389')).toBe('slack');
+      expect(inferChannelTypeFromConversationId('slack-channel-thread')).toBe('slack');
+      expect(inferChannelTypeFromConversationId('slack-')).toBe('slack');
+    });
+
+    it('should infer telegram for conversation IDs starting with telegram-', () => {
+      expect(inferChannelTypeFromConversationId('telegram-12345678')).toBe('telegram');
+      expect(inferChannelTypeFromConversationId('telegram-group-chat')).toBe('telegram');
+      expect(inferChannelTypeFromConversationId('telegram-')).toBe('telegram');
+    });
+
+    it('should infer api for conversation IDs starting with api-', () => {
+      expect(inferChannelTypeFromConversationId('api-webhook-123')).toBe('api');
+      expect(inferChannelTypeFromConversationId('api-external-client')).toBe('api');
+      expect(inferChannelTypeFromConversationId('api-')).toBe('api');
+    });
+
+    it('should infer crewly_chat for UUID-format conversation IDs', () => {
+      expect(inferChannelTypeFromConversationId('a1b2c3d4-e5f6-7890-abcd-ef1234567890')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('98ce3d99-a083-479a-bd14-93152eef65af')).toBe('crewly_chat');
+    });
+
+    it('should infer crewly_chat for any unrecognized prefix', () => {
+      expect(inferChannelTypeFromConversationId('conv-123')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('random-id')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('some-other-format')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('')).toBe('crewly_chat');
+    });
+
+    it('should be case-sensitive for prefix matching', () => {
+      // Prefixes must be lowercase to match
+      expect(inferChannelTypeFromConversationId('Slack-channel')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('SLACK-channel')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('Telegram-chat')).toBe('crewly_chat');
+      expect(inferChannelTypeFromConversationId('API-endpoint')).toBe('crewly_chat');
+    });
+  });
+
+  describe('isValidChannelType', () => {
+    it('should return true for all valid channel types', () => {
+      expect(isValidChannelType('crewly_chat')).toBe(true);
+      expect(isValidChannelType('slack')).toBe(true);
+      expect(isValidChannelType('telegram')).toBe(true);
+      expect(isValidChannelType('api')).toBe(true);
+    });
+
+    it('should return false for invalid channel types', () => {
+      expect(isValidChannelType('invalid')).toBe(false);
+      expect(isValidChannelType('')).toBe(false);
+      expect(isValidChannelType('discord')).toBe(false);
+      expect(isValidChannelType('email')).toBe(false);
+      expect(isValidChannelType('SLACK')).toBe(false);
+      expect(isValidChannelType('Crewly_Chat')).toBe(false);
+    });
+  });
+
+  describe('createConversation with channelType', () => {
+    it('should store explicit channelType when provided', () => {
+      const conv = createConversation('Test', undefined, 'slack');
+
+      expect(conv.channelType).toBe('slack');
+      expect(conv.title).toBe('Test');
+    });
+
+    it('should store each valid channelType correctly', () => {
+      const slackConv = createConversation(undefined, undefined, 'slack');
+      const telegramConv = createConversation(undefined, undefined, 'telegram');
+      const apiConv = createConversation(undefined, undefined, 'api');
+      const crewlyConv = createConversation(undefined, undefined, 'crewly_chat');
+
+      expect(slackConv.channelType).toBe('slack');
+      expect(telegramConv.channelType).toBe('telegram');
+      expect(apiConv.channelType).toBe('api');
+      expect(crewlyConv.channelType).toBe('crewly_chat');
+    });
+
+    it('should infer channelType from generated UUID when not provided', () => {
+      const conv = createConversation('Test');
+
+      // Generated UUID does not start with slack-, telegram-, or api-
+      // so it should be inferred as crewly_chat
+      expect(conv.channelType).toBe('crewly_chat');
+    });
+
+    it('should infer channelType from idOverride when channelType not provided', () => {
+      const slackConv = createConversation('Slack Thread', 'slack-D0AC7NF5N7L-1772987441');
+      const telegramConv = createConversation('Telegram Chat', 'telegram-12345678');
+      const apiConv = createConversation('API Session', 'api-webhook-456');
+      const uuidConv = createConversation('Chat', 'a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+
+      expect(slackConv.channelType).toBe('slack');
+      expect(telegramConv.channelType).toBe('telegram');
+      expect(apiConv.channelType).toBe('api');
+      expect(uuidConv.channelType).toBe('crewly_chat');
+    });
+
+    it('should use explicit channelType over inferred type from idOverride', () => {
+      // Even though ID starts with slack-, explicit channelType takes precedence
+      const conv = createConversation('Override Test', 'slack-channel-123', 'api');
+
+      expect(conv.channelType).toBe('api');
+      expect(conv.id).toBe('slack-channel-123');
+    });
+
+    it('should use idOverride as the conversation ID', () => {
+      const conv = createConversation('Test', 'custom-id-123', 'slack');
+
+      expect(conv.id).toBe('custom-id-123');
+      expect(conv.channelType).toBe('slack');
+    });
+  });
+
+  describe('ChatConversation with channelType field', () => {
+    it('should pass isValidChatConversation with channelType set', () => {
+      const conv: ChatConversation = {
+        id: 'conv-1',
+        participantIds: ['user-1'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isArchived: false,
+        messageCount: 0,
+        channelType: 'slack',
+      };
+
+      expect(isValidChatConversation(conv)).toBe(true);
+    });
+
+    it('should pass isValidChatConversation without channelType (optional field)', () => {
+      const conv: ChatConversation = {
+        id: 'conv-1',
+        participantIds: ['user-1'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isArchived: false,
+        messageCount: 5,
+      };
+
+      expect(isValidChatConversation(conv)).toBe(true);
+      expect(conv.channelType).toBeUndefined();
+    });
+
+    it('should pass isValidChatConversation for all channel type values', () => {
+      for (const ct of CHAT_CHANNEL_TYPES) {
+        const conv: ChatConversation = {
+          id: `conv-${ct}`,
+          participantIds: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          isArchived: false,
+          messageCount: 0,
+          channelType: ct,
+        };
+        expect(isValidChatConversation(conv)).toBe(true);
+      }
+    });
+  });
+
+  describe('ChatMessageFilter with channelType field', () => {
+    it('should compile ChatMessageFilter with channelType', () => {
+      const filter: ChatMessageFilter = {
+        conversationId: 'conv-1',
+        channelType: 'slack',
+        limit: 50,
+      };
+
+      expect(filter.channelType).toBe('slack');
+    });
+
+    it('should compile ChatMessageFilter without channelType', () => {
+      const filter: ChatMessageFilter = {
+        conversationId: 'conv-1',
+        limit: 50,
+      };
+
+      expect(filter.channelType).toBeUndefined();
+    });
+  });
+
+  describe('ConversationFilter with channelType field', () => {
+    it('should compile ConversationFilter with channelType', () => {
+      const filter: ConversationFilter = {
+        channelType: 'telegram',
+        includeArchived: false,
+      };
+
+      expect(filter.channelType).toBe('telegram');
+    });
+
+    it('should compile ConversationFilter without channelType', () => {
+      const filter: ConversationFilter = {
+        includeArchived: true,
+        search: 'test',
+      };
+
+      expect(filter.channelType).toBeUndefined();
     });
   });
 });

@@ -62,10 +62,13 @@ RUN npm ci --omit=dev
 # ---------------------------------------------------------------------------
 FROM node:20-slim
 
-# Runtime system dependencies
+# Runtime system dependencies (tmux needed for legacy session backend)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl bash \
+    git curl bash tmux \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI globally (agent runtime)
+RUN npm install -g @anthropic-ai/claude-code@latest 2>/dev/null || true
 
 WORKDIR /app
 
@@ -84,8 +87,9 @@ COPY config ./config
 # Package manifest (needed for npm start / version detection)
 COPY package.json ./
 
-# Create .crewly directory for persistence
-RUN mkdir -p /home/node/.crewly && chown -R node:node /home/node/.crewly
+# Create .crewly directory for persistence and projects workspace
+RUN mkdir -p /home/node/.crewly /home/node/projects \
+    && chown -R node:node /home/node/.crewly /home/node/projects
 
 # Run as non-root user
 USER node

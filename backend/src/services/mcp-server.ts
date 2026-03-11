@@ -108,7 +108,7 @@ const TOOL_DEFINITIONS = [
               },
               runtimeType: {
                 type: 'string',
-                enum: ['claude-code', 'gemini-cli', 'codex-cli'],
+                enum: ['claude-code', 'gemini-cli', 'codex-cli', 'crewly-agent'],
                 description: 'AI runtime to use (default: claude-code)',
               },
             },

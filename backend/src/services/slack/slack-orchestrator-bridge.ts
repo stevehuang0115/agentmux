@@ -236,6 +236,29 @@ export class SlackOrchestratorBridge extends EventEmitter {
       // Override message text with enriched version for downstream processing
       message.text = enrichedText;
 
+      // Auditor prefix routing — intercept "auditor ..." messages
+      const auditorMatch = enrichedText.match(/^\/?auditor\s+(.*)/is);
+      if (auditorMatch) {
+        const auditorMessage = auditorMatch[1].trim();
+        try {
+          if (this.config.showTypingIndicator) {
+            await this.addTypingIndicator(message);
+          }
+          const { AuditorSchedulerService } = await import('../agent/auditor-scheduler.service.js');
+          const scheduler = AuditorSchedulerService.getInstance();
+          await scheduler.handleUserMessage(auditorMessage, {
+            channelId: message.channelId,
+            threadTs: message.threadTs || message.ts,
+          });
+          if (this.config.showTypingIndicator) {
+            await this.markComplete(message);
+          }
+        } catch (error) {
+          await this.sendErrorResponse(message, error as Error);
+        }
+        return;
+      }
+
       // Parse command intent
       const command = this.parseCommand(message.text);
 
@@ -467,8 +490,13 @@ Just type naturally to chat with the orchestrator!`;
       // The QueueProcessorService will call slackResolve() when the
       // orchestrator responds, unblocking this promise.
       const response = await new Promise<string>((resolve) => {
+        let resolved = false;
+
         const timeoutId = setTimeout(() => {
-          resolve('The orchestrator is taking longer than expected. Please try again.');
+          if (!resolved) {
+            resolved = true;
+            resolve('The orchestrator is taking longer than expected. Please try again.');
+          }
         }, this.config.responseTimeoutMs);
 
         try {
@@ -478,16 +506,22 @@ Just type naturally to chat with the orchestrator!`;
             source: 'slack',
             sourceMetadata: {
               slackResolve: (resp: string) => {
-                clearTimeout(timeoutId);
-                resolve(resp);
+                if (!resolved) {
+                  resolved = true;
+                  clearTimeout(timeoutId);
+                  resolve(resp);
+                }
               },
               userId: context?.userId,
               channelId: context?.channelId,
             },
           });
         } catch (enqueueErr) {
-          clearTimeout(timeoutId);
-          resolve(`Failed to enqueue message: ${enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)}`);
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeoutId);
+            resolve(`Failed to enqueue message: ${enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr)}`);
+          }
         }
       });
 
@@ -884,9 +918,14 @@ Just type naturally to chat with the orchestrator!`;
     // Fallback: send the response directly to Slack
     try {
       this.logger.info('reply-slack skill did not deliver, sending fallback response to Slack');
+      const sanitized = this.sanitizeForSlack(trimmed);
+      if (!sanitized) {
+        this.logger.info('Fallback response empty after sanitization, skipping Slack send');
+        return;
+      }
       await this.slackService.sendMessage({
         channelId: originalMessage.channelId,
-        text: trimmed,
+        text: sanitized,
         threadTs,
       });
     } catch (err) {
@@ -975,6 +1014,61 @@ Just type naturally to chat with the orchestrator!`;
 
       return Boolean(payload.message && payload.message.trim());
     });
+  }
+
+  /**
+   * Sanitize raw terminal output for Slack delivery.
+   *
+   * Strips NOTIFY markers/headers, Claude Code UI elements (satisfaction survey,
+   * permission prompts, status bar), Gemini CLI TUI elements, box-drawing
+   * decoration, and orphaned ANSI sequences.
+   *
+   * @param raw - Raw terminal text
+   * @returns Cleaned text suitable for Slack, or empty string if nothing meaningful remains
+   */
+  private sanitizeForSlack(raw: string): string {
+    return raw
+      // Strip [NOTIFY] / [/NOTIFY] tags
+      .replace(/\[\/?NOTIFY\]/g, '')
+      // Strip NOTIFY metadata headers
+      .replace(/^conversationId:.*$/gm, '')
+      .replace(/^channelId:.*$/gm, '')
+      .replace(/^threadTs:.*$/gm, '')
+      .replace(/^type:.*$/gm, '')
+      .replace(/^title:.*$/gm, '')
+      .replace(/^urgency:.*$/gm, '')
+      .replace(/^---$/gm, '')
+      // Strip Claude Code UI elements
+      .replace(/^.*How is Claude doing this session\?.*$/gm, '')
+      .replace(/^.*\d:\s*Bad\s+\d:\s*Fine\s+\d:\s*Good\s+\d:\s*Dismiss.*$/gm, '')
+      .replace(/^.*bypass permissions on.*$/gm, '')
+      .replace(/^.*shift\+tab to cycle.*$/gm, '')
+      .replace(/^.*esc to (?:interrupt|cancel|\.\.\.).*$/gmi, '')
+      .replace(/^.*Use meta\+t to toggle.*$/gmi, '')
+      .replace(/^.*ctrl\+g to edi.*$/gmi, '')
+      .replace(/^.*Osmosing.*$/gm, '')
+      .replace(/^.*✻ Baked for.*$/gm, '')
+      .replace(/^.*✢ Osmosing.*$/gm, '')
+      .replace(/^.*running stop hook.*$/gmi, '')
+      // Strip Claude Code tool indicators and prompt markers
+      .replace(/^[⏺⏵❯✻✢✽●·]\s*$/gm, '')
+      .replace(/^[⏺⏵]\s+.*$/gm, '')
+      // Strip Gemini CLI TUI elements
+      .replace(/^.*(?:Type\s+your\s+message|YOLO\s+mode|no\s+sandbox|context\s+left\)).*$/gmi, '')
+      .replace(/^.*(?:Initiating\s+File\s+Inspection).*$/gmi, '')
+      // Strip TUI box-drawing border characters
+      .replace(/^[\s│┃║|]+|[\s│┃║|]+$/gm, '')
+      // Remove pure decoration lines (corners, horizontal rules, dots)
+      .replace(/^[─━┄┅┈┉╌╍═┌┐└┘├┤┬┴┼╔╗╚╝╠╣╦╩╬╭╮╰╯\-+\s▪▫■□●○◆◇•·]+$/gm, '')
+      // Strip orphaned ANSI CSI sequences
+      .replace(/\[\d+(?:;\d+)*[A-BJKHfm]/g, '')
+      // Strip CHAT: session header lines
+      .replace(/^.*\[CHAT:slack-[^\]]+\].*$/gm, '')
+      // Strip thread context file lines
+      .replace(/^\[Thread context file:.*\]$/gm, '')
+      // Collapse multiple blank lines
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
   }
 
   /**

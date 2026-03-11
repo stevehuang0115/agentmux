@@ -18,6 +18,7 @@ import {
   ChatMessage,
   ChatConversation,
   ChatSender,
+  ChatChannelType,
   SendMessageInput,
   SendMessageResult,
   ChatMessageFilter,
@@ -34,6 +35,7 @@ import {
   extractResponseFromOutput,
   detectContentType,
   validateSendMessageInput,
+  inferChannelTypeFromConversationId,
   CHAT_CONSTANTS,
 } from '../../types/chat.types.js';
 
@@ -199,7 +201,7 @@ export class ChatService extends EventEmitter {
         conversation = await this.createNewConversation(undefined, input.conversationId);
       }
     } else {
-      conversation = await this.createNewConversation();
+      conversation = await this.createNewConversation(undefined, undefined, 'crewly_chat');
     }
 
     const message = createChatMessage({
@@ -410,14 +412,52 @@ export class ChatService extends EventEmitter {
       messages = messages.filter((m) => m.timestamp < filter.before!);
     }
 
-    // Sort by timestamp
+    // Sort by timestamp (oldest first)
     messages.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
-    // Apply pagination
-    const offset = filter.offset ?? 0;
     const limit = filter.limit ?? CHAT_CONSTANTS.DEFAULTS.MESSAGE_LIMIT;
+    const totalCount = messages.length;
 
-    return messages.slice(offset, offset + limit);
+    // When no offset is explicitly provided, return the most recent messages
+    // (tail of the sorted array). This is the default for chat UIs so users
+    // see the latest conversation on initial load.
+    if (filter.offset === undefined || filter.offset === null) {
+      const start = Math.max(0, totalCount - limit);
+      return messages.slice(start);
+    }
+
+    // When offset IS provided, use traditional pagination for loading older messages
+    return messages.slice(filter.offset, filter.offset + limit);
+  }
+
+  /**
+   * Get the total count of messages in a conversation, applying the same
+   * filters as getMessages (senderType, contentType, after, before).
+   *
+   * @param filter - Message filter options
+   * @returns Total number of messages matching the filter
+   */
+  async getMessageCount(filter: ChatMessageFilter): Promise<number> {
+    await this.ensureInitialized();
+
+    if (!filter.conversationId) return 0;
+
+    let messages = this.messages.get(filter.conversationId) ?? [];
+
+    if (filter.senderType) {
+      messages = messages.filter((m) => m.from.type === filter.senderType);
+    }
+    if (filter.contentType) {
+      messages = messages.filter((m) => m.contentType === filter.contentType);
+    }
+    if (filter.after) {
+      messages = messages.filter((m) => m.timestamp > filter.after!);
+    }
+    if (filter.before) {
+      messages = messages.filter((m) => m.timestamp < filter.before!);
+    }
+
+    return messages.length;
   }
 
   /**
@@ -530,6 +570,11 @@ export class ChatService extends EventEmitter {
       conversations = conversations.filter((c) => !c.isArchived);
     }
 
+    // Filter by channel type
+    if (filter?.channelType) {
+      conversations = conversations.filter((c) => c.channelType === filter.channelType);
+    }
+
     // Search
     if (filter?.search) {
       const searchLower = filter.search.toLowerCase();
@@ -572,10 +617,10 @@ export class ChatService extends EventEmitter {
    * const conversation = await chatService.createNewConversation('Project Discussion');
    * ```
    */
-  async createNewConversation(title?: string, idOverride?: string): Promise<ChatConversation> {
+  async createNewConversation(title?: string, idOverride?: string, channelType?: ChatChannelType): Promise<ChatConversation> {
     await this.ensureInitialized();
 
-    const conversation = createConversation(title, idOverride);
+    const conversation = createConversation(title, idOverride, channelType);
 
     this.conversations.set(conversation.id, conversation);
     this.messages.set(conversation.id, []);
@@ -825,6 +870,10 @@ export class ChatService extends EventEmitter {
         const data = await safeReadJson<ChatStorageFormat | null>(filePath, null);
 
         if (data?.conversation) {
+          // Lazy channelType inference for existing data (in-memory only, no file rewrite)
+          if (!data.conversation.channelType) {
+            data.conversation.channelType = inferChannelTypeFromConversationId(data.conversation.id);
+          }
           this.conversations.set(data.conversation.id, data.conversation);
           this.messages.set(data.conversation.id, data.messages ?? []);
         }

@@ -28,7 +28,7 @@ interface TeamMember {
   name: string;
   role: string;
   systemPrompt: string;
-  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  runtimeType: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
   avatar?: string;
   skillOverrides?: string[]; // Additional skill IDs beyond what the role provides
   excludedRoleSkills?: string[]; // Role skills to exclude for this specific member
@@ -482,6 +482,7 @@ export const TeamModal: React.FC<TeamModalProps> = ({ isOpen, onClose, onSubmit,
                           <option value="claude-code">Claude CLI</option>
                           <option value="gemini-cli">Gemini CLI</option>
                           <option value="codex-cli">Codex CLI</option>
+                          <option value="crewly-agent">Crewly Agent</option>
                         </FormSelect>
                       </div>
 

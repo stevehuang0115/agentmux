@@ -11,11 +11,17 @@ SESSION_NAME=$(echo "$INPUT" | jq -r '.sessionName // empty')
 require_param "sessionName" "$SESSION_NAME"
 
 TEAM_MEMBER_ID=$(echo "$INPUT" | jq -r '.teamMemberId // empty')
+PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
+TASK_GROUP=$(echo "$INPUT" | jq -r '.taskGroup // empty')
 
 BODY=$(jq -n \
   --arg sessionName "$SESSION_NAME" \
   --arg teamMemberId "$TEAM_MEMBER_ID" \
+  --arg projectPath "$PROJECT_PATH" \
+  --arg taskGroup "$TASK_GROUP" \
   '{sessionName: $sessionName} +
-   (if $teamMemberId != "" then {teamMemberId: $teamMemberId} else {} end)')
+   (if $teamMemberId != "" then {teamMemberId: $teamMemberId} else {} end) +
+   (if $projectPath != "" then {projectPath: $projectPath} else {} end) +
+   (if $taskGroup != "" then {taskGroup: $taskGroup} else {} end)')
 
 api_call POST "/task-management/take-next" "$BODY"

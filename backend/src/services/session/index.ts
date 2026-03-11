@@ -79,3 +79,11 @@ export {
 } from './session-state-persistence.js';
 
 export type { PersistedSessionInfo, PersistedState } from './session-state-persistence.js';
+
+// Re-export log rotation service
+export { LogRotationService } from './log-rotation.service.js';
+export type {
+	LogFileInfo,
+	RotationRunResult,
+	LogRotationStatus,
+} from './log-rotation.service.js';

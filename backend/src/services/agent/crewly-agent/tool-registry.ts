@@ -109,6 +109,9 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         sessionName: z.string().describe('Agent session name to check'),
       }),
       execute: async ({ sessionName: target }) => {
+        // Record manual check so redundant scheduled checks are suppressed (fire-and-forget)
+        Promise.resolve(client.post('/schedule/manual-check', { agentSession: target })).catch(() => {});
+
         const result = await client.get('/teams');
         if (!result.success) return { error: result.error };
 
@@ -140,6 +143,9 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         lines: z.number().default(50).describe('Number of lines to retrieve'),
       }),
       execute: async ({ sessionName: target, lines }) => {
+        // Record manual check so redundant scheduled checks are suppressed (fire-and-forget)
+        Promise.resolve(client.post('/schedule/manual-check', { agentSession: target })).catch(() => {});
+
         const result = await client.get(`/terminal/${target}/output?lines=${lines}`);
         return result.success ? result.data : { error: result.error };
       },
@@ -393,27 +399,28 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         replace_all: z.boolean().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
       }),
       execute: async ({ file_path, old_string, new_string, replace_all }) => {
+        const fp = file_path as string, os = old_string as string, ns = new_string as string;
         try {
           // Read the file
-          const content = await fsPromises.readFile(file_path as string, 'utf8');
+          const content = await fsPromises.readFile(fp, 'utf8');
 
           // Count occurrences
-          const occurrences = content.split(old_string as string).length - 1;
+          const occurrences = content.split(os).length - 1;
 
           if (occurrences === 0) {
             return {
               success: false,
-              error: `old_string not found in ${file_path}. Make sure the string matches exactly (including whitespace and indentation).`,
+              error: `old_string not found in ${fp}. Make sure the string matches exactly (including whitespace and indentation).`,
             };
           }
 
           // When replace_all is true, replace all occurrences
           if (replace_all && occurrences > 1) {
-            const newContent = content.replaceAll(old_string as string, new_string as string);
-            await fsPromises.writeFile(file_path as string, newContent, 'utf8');
+            const newContent = content.replaceAll(os, ns);
+            await fsPromises.writeFile(fp, newContent, 'utf8');
             return {
               success: true,
-              file: file_path,
+              file: fp,
               replacements: occurrences,
             };
           }
@@ -422,29 +429,29 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
           if (occurrences > 1) {
             return {
               success: false,
-              error: `old_string found ${occurrences} times in ${file_path}. Provide a larger unique string with more surrounding context, or set replace_all=true.`,
+              error: `old_string found ${occurrences} times in ${fp}. Provide a larger unique string with more surrounding context, or set replace_all=true.`,
               occurrences,
             };
           }
 
           // Perform the replacement (single occurrence)
-          const newContent = content.replace(old_string as string, new_string as string);
+          const newContent = content.replace(os, ns);
 
           // Write back
-          await fsPromises.writeFile(file_path as string, newContent, 'utf8');
+          await fsPromises.writeFile(fp, newContent, 'utf8');
 
           return {
             success: true,
-            file: file_path,
+            file: fp,
             replacements: 1,
           };
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           if (msg.includes('ENOENT')) {
-            return { success: false, error: `File not found: ${file_path}` };
+            return { success: false, error: `File not found: ${fp}` };
           }
           if (msg.includes('EACCES')) {
-            return { success: false, error: `Permission denied: ${file_path}` };
+            return { success: false, error: `Permission denied: ${fp}` };
           }
           return { success: false, error: msg };
         }
@@ -459,8 +466,9 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         limit: z.number().optional().describe('Maximum number of lines to read'),
       }),
       execute: async ({ file_path, offset, limit }) => {
+        const fp = file_path as string;
         try {
-          const content = await fsPromises.readFile(file_path as string, 'utf8');
+          const content = await fsPromises.readFile(fp, 'utf8');
           const lines = content.split('\n');
 
           if (offset || limit) {
@@ -482,7 +490,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
           if (msg.includes('ENOENT')) {
-            return { success: false, error: `File not found: ${file_path}` };
+            return { success: false, error: `File not found: ${fp}` };
           }
           return { success: false, error: msg };
         }
@@ -496,14 +504,15 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         content: z.string().describe('Full file content to write'),
       }),
       execute: async ({ file_path, content }) => {
+        const fp = file_path as string, ct = content as string;
         try {
           // Ensure parent directory exists
-          const dir = (file_path as string).substring(0, (file_path as string).lastIndexOf('/'));
+          const dir = fp.substring(0, fp.lastIndexOf('/'));
           if (dir) {
             await fsPromises.mkdir(dir, { recursive: true });
           }
-          await fsPromises.writeFile(file_path as string, content as string, 'utf8');
-          return { success: true, file: file_path, bytes: Buffer.byteLength(content as string, 'utf8') };
+          await fsPromises.writeFile(fp, ct, 'utf8');
+          return { success: true, file: fp, bytes: Buffer.byteLength(ct, 'utf8') };
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }

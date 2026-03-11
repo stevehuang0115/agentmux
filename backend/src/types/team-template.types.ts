@@ -134,7 +134,7 @@ export interface TemplateRole {
   /** Custom system prompt additions */
   promptAdditions?: string;
   /** AI runtime override for this role */
-  runtimeOverride?: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  runtimeOverride?: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
   /** Whether to enable browser automation for this role */
   enableBrowser?: boolean;
 }
@@ -168,7 +168,7 @@ export interface TeamTemplate {
   /** Role definitions with hierarchy configuration */
   roles: TemplateRole[];
   /** Default runtime for all members */
-  defaultRuntime: 'claude-code' | 'gemini-cli' | 'codex-cli';
+  defaultRuntime: 'claude-code' | 'gemini-cli' | 'codex-cli' | 'crewly-agent';
   /** Verification pipeline configuration */
   verificationPipeline: VerificationPipeline;
   /** Default monitoring configuration */
@@ -278,7 +278,7 @@ export function isValidTeamTemplate(value: unknown): value is TeamTemplate {
   if (typeof t.hierarchical !== 'boolean') return false;
   if (!Array.isArray(t.roles) || t.roles.length === 0) return false;
   if (!t.roles.every((r: unknown) => isValidTemplateRole(r))) return false;
-  if (!['claude-code', 'gemini-cli', 'codex-cli'].includes(t.defaultRuntime as string)) return false;
+  if (!['claude-code', 'gemini-cli', 'codex-cli', 'crewly-agent'].includes(t.defaultRuntime as string)) return false;
   if (!isValidVerificationPipeline(t.verificationPipeline)) return false;
   return true;
 }

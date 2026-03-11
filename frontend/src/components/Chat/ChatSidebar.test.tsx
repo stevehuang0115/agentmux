@@ -75,7 +75,12 @@ describe('ChatSidebar', () => {
       archiveConversation: mockArchiveConversation,
       clearConversation: vi.fn(),
       refreshMessages: vi.fn(),
+      loadOlderMessages: vi.fn(),
+      hasMoreMessages: false,
+      isLoadingMore: false,
       clearError: vi.fn(),
+      channelFilter: null,
+      setChannelFilter: vi.fn(),
     });
   });
 

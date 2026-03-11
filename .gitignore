@@ -107,6 +107,10 @@ $RECYCLE.BIN/
 # Crewly local project data
 .crewly/
 
+
+# Static assets (built/generated, not for OSS)
+backend/src/static/
+
 # Payment/billing (private, not for OSS)
 backend/src/controllers/payment/
 backend/src/services/payment/
@@ -116,9 +120,6 @@ backend/src/services/cloud/relay-server.service.ts
 backend/src/services/cloud/relay-server.service.test.ts
 backend/src/services/cloud/admin-seed.service.ts
 backend/src/services/cloud/mongodb.service.ts
-
-# Static assets (not for OSS)
-backend/src/static/
 
 # Deployment configs (private)
 deploy/

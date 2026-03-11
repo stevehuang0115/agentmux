@@ -16,6 +16,58 @@ import { stripAnsiCodes } from '../utils/terminal-output.utils.js';
 // =============================================================================
 
 /**
+ * Valid channel types for chat conversations
+ */
+export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'google_chat', 'telegram', 'api'] as const;
+
+/**
+ * Channel type for a chat conversation
+ */
+export type ChatChannelType = (typeof CHAT_CHANNEL_TYPES)[number];
+
+/**
+ * Infer the channel type from a conversation ID.
+ *
+ * Conversation IDs follow naming conventions:
+ * - `slack-{channel}-{threadTs}` → 'slack'
+ * - UUIDs or other formats → 'crewly_chat'
+ *
+ * @param conversationId - The conversation ID to analyze
+ * @returns The inferred ChatChannelType
+ *
+ * @example
+ * ```typescript
+ * inferChannelTypeFromConversationId('slack-D0AC7NF5N7L-1772987441-763389'); // 'slack'
+ * inferChannelTypeFromConversationId('a1b2c3d4-e5f6-7890-abcd-ef1234567890'); // 'crewly_chat'
+ * ```
+ */
+export function inferChannelTypeFromConversationId(conversationId: string): ChatChannelType {
+  if (conversationId.startsWith('slack-')) {
+    return 'slack';
+  }
+  if (conversationId.startsWith('gchat-') || conversationId.startsWith('google-chat-')) {
+    return 'google_chat';
+  }
+  if (conversationId.startsWith('telegram-')) {
+    return 'telegram';
+  }
+  if (conversationId.startsWith('api-')) {
+    return 'api';
+  }
+  return 'crewly_chat';
+}
+
+/**
+ * Check if a value is a valid ChatChannelType
+ *
+ * @param value - Value to check
+ * @returns True if value is a valid ChatChannelType
+ */
+export function isValidChannelType(value: string): value is ChatChannelType {
+  return CHAT_CHANNEL_TYPES.includes(value as ChatChannelType);
+}
+
+/**
  * Valid sender types for chat messages
  */
 export const CHAT_SENDER_TYPES = ['user', 'orchestrator', 'agent', 'system'] as const;
@@ -232,6 +284,9 @@ export interface ChatConversation {
 
   /** Last message preview */
   lastMessage?: LastMessagePreview;
+
+  /** Channel type (slack, crewly_chat, etc.) — inferred from conversationId if not set */
+  channelType?: ChatChannelType;
 }
 
 /**
@@ -272,6 +327,9 @@ export interface ChatMessageFilter {
   /** Filter by content type */
   contentType?: ChatContentType;
 
+  /** Filter by channel type (via conversation lookup) */
+  channelType?: ChatChannelType;
+
   /** Messages after this timestamp */
   after?: string;
 
@@ -294,6 +352,9 @@ export interface ConversationFilter {
 
   /** Search in title and messages */
   search?: string;
+
+  /** Filter by channel type */
+  channelType?: ChatChannelType;
 
   /** Limit number of results */
   limit?: number;
@@ -915,16 +976,18 @@ export function createChatMessage(input: CreateChatMessageInput): ChatMessage {
  * const conversation = createConversation('Project Discussion');
  * ```
  */
-export function createConversation(title?: string, idOverride?: string): ChatConversation {
+export function createConversation(title?: string, idOverride?: string, channelType?: ChatChannelType): ChatConversation {
+  const id = idOverride ?? generateChatId();
   const now = new Date().toISOString();
   return {
-    id: idOverride ?? generateChatId(),
+    id,
     title,
     participantIds: [],
     createdAt: now,
     updatedAt: now,
     isArchived: false,
     messageCount: 0,
+    channelType: channelType ?? inferChannelTypeFromConversationId(id),
   };
 }
 

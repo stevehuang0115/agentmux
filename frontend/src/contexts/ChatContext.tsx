@@ -18,6 +18,7 @@ import React, {
 import {
   ChatMessage,
   ChatConversation,
+  ChatChannelType,
   ChatSender,
 } from '../types/chat.types';
 import { chatService } from '../services/chat.service';
@@ -45,6 +46,12 @@ interface ChatContextValue {
   error: string | null;
   /** Whether the orchestrator is typing */
   isTyping: boolean;
+  /** Active channel type filter (null = show all) */
+  channelFilter: ChatChannelType | null;
+  /** Whether there are older messages to load */
+  hasMoreMessages: boolean;
+  /** Whether older messages are currently being loaded */
+  isLoadingMore: boolean;
 
   /** Send a new message */
   sendMessage: (content: string) => Promise<void>;
@@ -60,8 +67,12 @@ interface ChatContextValue {
   clearConversation: (id: string) => Promise<void>;
   /** Refresh messages from server */
   refreshMessages: () => Promise<void>;
+  /** Load older messages (infinite scroll up) */
+  loadOlderMessages: () => Promise<void>;
   /** Clear error state */
   clearError: () => void;
+  /** Set channel filter */
+  setChannelFilter: (filter: ChatChannelType | null) => void;
 }
 
 // =============================================================================
@@ -101,6 +112,9 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
+  const [channelFilter, setChannelFilter] = useState<ChatChannelType | null>(null);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
   // Ref to track current conversation for event handlers
   const currentConversationRef = useRef<ChatConversation | null>(null);
@@ -254,8 +268,9 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
         setConversations(convs);
         if (current) {
           setCurrentConversation(current);
-          const msgs = await chatService.getMessages(current.id);
-          setMessages(msgs);
+          const result = await chatService.getMessagesWithMeta(current.id);
+          setMessages(result.messages);
+          setHasMoreMessages(result.hasMore);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load chat');
@@ -323,8 +338,9 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     setError(null);
 
     try {
-      const msgs = await chatService.getMessages(id);
-      setMessages(msgs);
+      const result = await chatService.getMessagesWithMeta(id);
+      setMessages(result.messages);
+      setHasMoreMessages(result.hasMore);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
     } finally {
@@ -395,9 +411,43 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
   const refreshMessages = useCallback(async () => {
     if (!currentConversation) return;
 
-    const msgs = await chatService.getMessages(currentConversation.id);
-    setMessages(msgs);
+    const result = await chatService.getMessagesWithMeta(currentConversation.id);
+    setMessages(result.messages);
+    setHasMoreMessages(result.hasMore);
   }, [currentConversation]);
+
+  /**
+   * Load older messages for infinite scroll up
+   */
+  const loadOlderMessages = useCallback(async () => {
+    if (!currentConversation || !hasMoreMessages || isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    try {
+      const oldestMessage = messages[0];
+      if (!oldestMessage) return;
+
+      const result = await chatService.getMessagesWithMeta(
+        currentConversation.id,
+        50,
+        oldestMessage.timestamp
+      );
+
+      if (result.messages.length > 0) {
+        setMessages((prev) => {
+          // Deduplicate by id
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newMessages = result.messages.filter((m) => !existingIds.has(m.id));
+          return [...newMessages, ...prev];
+        });
+      }
+      setHasMoreMessages(result.hasMore);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load older messages');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [currentConversation, hasMoreMessages, isLoadingMore, messages]);
 
   /**
    * Clear error state
@@ -418,6 +468,9 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     isSending,
     error,
     isTyping,
+    channelFilter,
+    hasMoreMessages,
+    isLoadingMore,
     sendMessage,
     selectConversation,
     createConversation,
@@ -425,7 +478,9 @@ export const ChatProvider: React.FC<ChatProviderProps> = ({ children }) => {
     archiveConversation,
     clearConversation,
     refreshMessages,
+    loadOlderMessages,
     clearError,
+    setChannelFilter,
   };
 
   return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;

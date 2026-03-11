@@ -7,6 +7,42 @@
  */
 
 // =============================================================================
+// Channel Types
+// =============================================================================
+
+/**
+ * Valid channel types for chat conversations
+ */
+export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'google_chat', 'telegram', 'api'] as const;
+
+/**
+ * Channel type for a chat conversation
+ */
+export type ChatChannelType = (typeof CHAT_CHANNEL_TYPES)[number];
+
+/**
+ * Infer the channel type from a conversation ID.
+ *
+ * @param conversationId - The conversation ID to analyze
+ * @returns The inferred ChatChannelType
+ */
+export function inferChannelTypeFromConversationId(conversationId: string): ChatChannelType {
+  if (conversationId.startsWith('slack-')) {
+    return 'slack';
+  }
+  if (conversationId.startsWith('gchat-') || conversationId.startsWith('google-chat-')) {
+    return 'google_chat';
+  }
+  if (conversationId.startsWith('telegram-')) {
+    return 'telegram';
+  }
+  if (conversationId.startsWith('api-')) {
+    return 'api';
+  }
+  return 'crewly_chat';
+}
+
+// =============================================================================
 // Type Definitions
 // =============================================================================
 
@@ -141,6 +177,9 @@ export interface ChatConversation {
 
   /** Last message preview */
   lastMessage?: LastMessagePreview;
+
+  /** Channel type (slack, crewly_chat, etc.) */
+  channelType?: ChatChannelType;
 }
 
 /**

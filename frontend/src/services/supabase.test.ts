@@ -1,44 +1,39 @@
 /**
- * Tests for Supabase Client
+ * Tests for Cloud Auth Client (token helpers)
  *
  * @module services/supabase.test
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { getAccessToken, getRefreshToken, storeTokens, clearTokens } from './supabase';
 
-// Mock createClient before importing the module
-const mockCreateClient = vi.fn().mockReturnValue({ auth: {} });
-
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: (...args: unknown[]) => mockCreateClient(...args),
-}));
-
-describe('Supabase Client', () => {
-  it('should export getSupabaseUrl that returns a URL string', async () => {
-    const { getSupabaseUrl } = await import('./supabase');
-    const url = getSupabaseUrl();
-    expect(typeof url).toBe('string');
-    expect(url).toContain('supabase.co');
+describe('Cloud Auth Token Helpers', () => {
+  beforeEach(() => {
+    localStorage.clear();
   });
 
-  it('should export getSupabaseAnonKey that returns a non-empty string', async () => {
-    const { getSupabaseAnonKey } = await import('./supabase');
-    const key = getSupabaseAnonKey();
-    expect(typeof key).toBe('string');
-    expect(key.length).toBeGreaterThan(0);
+  it('should return null when no tokens are stored', () => {
+    expect(getAccessToken()).toBeNull();
+    expect(getRefreshToken()).toBeNull();
   });
 
-  it('should export a supabase client instance', async () => {
-    const { supabase } = await import('./supabase');
-    expect(supabase).toBeDefined();
-    expect(mockCreateClient).toHaveBeenCalled();
+  it('should store and retrieve tokens', () => {
+    storeTokens('access-abc', 'refresh-xyz');
+    expect(getAccessToken()).toBe('access-abc');
+    expect(getRefreshToken()).toBe('refresh-xyz');
   });
 
-  it('should call createClient with URL and anon key', async () => {
-    const { getSupabaseUrl, getSupabaseAnonKey } = await import('./supabase');
-    expect(mockCreateClient).toHaveBeenCalledWith(
-      getSupabaseUrl(),
-      getSupabaseAnonKey(),
-    );
+  it('should overwrite existing tokens', () => {
+    storeTokens('old-access', 'old-refresh');
+    storeTokens('new-access', 'new-refresh');
+    expect(getAccessToken()).toBe('new-access');
+    expect(getRefreshToken()).toBe('new-refresh');
+  });
+
+  it('should clear tokens', () => {
+    storeTokens('access-abc', 'refresh-xyz');
+    clearTokens();
+    expect(getAccessToken()).toBeNull();
+    expect(getRefreshToken()).toBeNull();
   });
 });

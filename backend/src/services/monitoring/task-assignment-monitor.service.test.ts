@@ -162,6 +162,14 @@ describe('TaskAssignmentMonitorService', () => {
   });
 
   describe('monitoring process', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     /**
      * Test file existence polling
      */
@@ -200,8 +208,8 @@ describe('TaskAssignmentMonitorService', () => {
       const result = await service.startMonitoring(shortTimeoutConfig);
       expect(result.success).toBe(true);
 
-      // Wait for timeout to occur
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Advance fake timers past the 1-second timeout + poll interval
+      await jest.advanceTimersByTimeAsync(2000);
 
       // Should have logged timeout
       expect(mockComponentLogger.warn).toHaveBeenCalledWith(
@@ -346,6 +354,14 @@ describe('TaskAssignmentMonitorService', () => {
   });
 
   describe('error handling', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     /**
      * Test handling of tmux service errors
      */
@@ -375,8 +391,8 @@ describe('TaskAssignmentMonitorService', () => {
       const result = await service.startMonitoring(config);
       expect(result.success).toBe(true);
 
-      // Wait for poll to run and encounter the error
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Advance fake timers past the first poll interval to trigger the error
+      await jest.advanceTimersByTimeAsync(2500);
 
       expect(mockComponentLogger.error).toHaveBeenCalledWith(
         'Error during polling',

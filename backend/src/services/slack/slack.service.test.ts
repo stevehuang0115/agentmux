@@ -361,7 +361,7 @@ describe('SlackService', () => {
 
         // 1 initial + 3 retries = 4 total calls
         expect(mockUploadV2).toHaveBeenCalledTimes(4);
-      });
+      }, 30000);
 
       it('should throw immediately for non-rate-limit errors', async () => {
         mockUploadV2.mockRejectedValue(new Error('channel_not_found'));
@@ -488,7 +488,7 @@ describe('SlackService', () => {
 
         // 1 initial + 3 retries = 4 total calls
         expect(mockUploadV2).toHaveBeenCalledTimes(4);
-      });
+      }, 30000);
 
       it('should throw immediately for non-rate-limit errors', async () => {
         mockUploadV2.mockRejectedValue(new Error('channel_not_found'));

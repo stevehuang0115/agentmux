@@ -65,20 +65,38 @@ require_param() {
 }
 
 # -----------------------------------------------------------------------------
-# auto_remember agentId content [category] [scope]
+# auto_remember agentId content [category] [scope] [projectPath]
 #
 # Fire-and-forget persistence of a learning to project memory.
-# Non-blocking, non-fatal — errors are silently suppressed.
+# Non-blocking, non-fatal — errors are logged but do not block execution.
+#
+# Valid categories:
+#   agent scope: fact, pattern, preference
+#   project scope: pattern, decision, gotcha, relationship, user_preference
 # -----------------------------------------------------------------------------
 auto_remember() {
   local agent_id="$1" content="$2"
-  local category="${3:-task-completion}" scope="${4:-project}"
+  local category="${3:-pattern}" scope="${4:-project}"
+  local project_path="${5:-}"
   local body
-  body=$(jq -n \
-    --arg agentId "$agent_id" \
-    --arg content "$content" \
-    --arg category "$category" \
-    --arg scope "$scope" \
-    '{agentId: $agentId, content: $content, category: $category, scope: $scope}')
-  api_call POST "/memory/remember" "$body" 2>/dev/null || true
+  if [ -n "$project_path" ]; then
+    body=$(jq -n \
+      --arg agentId "$agent_id" \
+      --arg content "$content" \
+      --arg category "$category" \
+      --arg scope "$scope" \
+      --arg projectPath "$project_path" \
+      '{agentId: $agentId, content: $content, category: $category, scope: $scope, projectPath: $projectPath}')
+  else
+    body=$(jq -n \
+      --arg agentId "$agent_id" \
+      --arg content "$content" \
+      --arg category "$category" \
+      --arg scope "$scope" \
+      '{agentId: $agentId, content: $content, category: $category, scope: $scope}')
+  fi
+  local result
+  if ! result=$(api_call POST "/memory/remember" "$body" 2>&1); then
+    echo "[auto_remember] Warning: failed to persist knowledge (non-fatal): $result" >&2
+  fi
 }
