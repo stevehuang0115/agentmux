@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { CREWLY_CONSTANTS, MESSAGE_SOURCES } from '../../constants.js';
+import { LoggerService } from '../../services/core/logger.service.js';
 import { MessengerRegistryService } from '../../services/messaging/messenger-registry.service.js';
 import { SlackMessengerAdapter } from '../../services/messaging/adapters/slack-messenger.adapter.js';
 import { TelegramMessengerAdapter } from '../../services/messaging/adapters/telegram-messenger.adapter.js';
@@ -101,8 +102,8 @@ function createGoogleChatIncomingCallback(
       try {
         await adapter.sendMessage(msg.channelId, response, { threadId: msg.threadId });
       } catch (err) {
-        // Log reply failure - the error is not propagated since there's no caller to propagate to
-        console.error(`[GoogleChat] Failed to send reply to ${msg.channelId}: ${formatError(err)}`);
+        const logger = LoggerService.getInstance().createComponentLogger('GoogleChatReply');
+        logger.error('Failed to send reply', { channelId: msg.channelId, error: formatError(err) });
       }
     });
   };

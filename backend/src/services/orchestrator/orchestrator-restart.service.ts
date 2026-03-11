@@ -17,6 +17,7 @@ import {
 	type RuntimeType,
 } from '../../constants.js';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
+import { formatError } from '../../utils/format-error.js';
 import { StorageService } from '../core/storage.service.js';
 import { MemoryService } from '../memory/memory.service.js';
 import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
@@ -213,7 +214,7 @@ export class OrchestratorRestartService {
 					}
 				} catch (error) {
 					this.logger.warn('Failed to get projects for Gemini CLI allowlist (continuing without)', {
-						error: error instanceof Error ? error.message : String(error),
+						error: formatError(error),
 					});
 				}
 			}
@@ -285,7 +286,7 @@ export class OrchestratorRestartService {
 			return true;
 		} catch (error) {
 			this.logger.error('Orchestrator restart failed', {
-				error: error instanceof Error ? error.message : String(error),
+				error: formatError(error),
 				stack: error instanceof Error ? error.stack : undefined,
 			});
 			return false;
@@ -307,7 +308,7 @@ export class OrchestratorRestartService {
 			}
 		} catch (error) {
 			this.logger.warn('Failed to resolve orchestrator runtime type from storage, using default', {
-				error: error instanceof Error ? error.message : String(error),
+				error: formatError(error),
 			});
 		}
 

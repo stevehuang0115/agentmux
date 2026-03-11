@@ -12,6 +12,7 @@
 import { EventEmitter } from 'events';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { EVENT_BUS_CONSTANTS } from '../../constants.js';
+import { formatError } from '../../utils/format-error.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from '../slack/slack-thread-store.service.js';
 import type {
@@ -377,7 +378,7 @@ export class EventBusService extends EventEmitter {
       this.logger.info('Critical event delivered immediately', { subscriberSession });
     } catch (error) {
       this.logger.error('Failed to deliver critical event notification', {
-        error: error instanceof Error ? error.message : String(error),
+        error: formatError(error),
         subscriberSession,
       });
     }
@@ -426,7 +427,7 @@ export class EventBusService extends EventEmitter {
         });
       } catch (error) {
         this.logger.error('Failed to enqueue batched event notifications', {
-          error: error instanceof Error ? error.message : String(error),
+          error: formatError(error),
           messageCount: messages.length,
           subscriberSession,
         });
