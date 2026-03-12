@@ -6,4 +6,3 @@
 
 export { createCloudRouter } from './cloud.routes.js';
 export { createRelayRouter } from './relay.routes.js';
-export { createAuthRouter } from './auth/auth.routes.js';

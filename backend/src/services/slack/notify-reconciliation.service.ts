@@ -126,6 +126,21 @@ export class NotifyReconciliationService {
 			this.logger.info('Running NOTIFY reconciliation', { pendingCount: stats.total });
 
 			for (const msg of pendingMessages) {
+				const deliveryStatus = msg.metadata?.slackDeliveryStatus as string | undefined;
+
+				// Skip messages already handled by the reply-slack skill or
+				// that no longer have 'pending' status. The NOTIFY handler no
+				// longer sets 'pending' — Slack delivery is exclusively
+				// skill-handled. Only explicitly 'pending' messages (from
+				// legacy code paths or manual metadata) should be retried.
+				if (deliveryStatus !== 'pending') {
+					this.logger.debug('Skipping non-pending message in reconciliation', {
+						messageId: msg.id,
+						deliveryStatus,
+					});
+					continue;
+				}
+
 				const attempts = (msg.metadata?.slackDeliveryAttempts as number) || 0;
 
 				// Max attempts exceeded — mark as failed

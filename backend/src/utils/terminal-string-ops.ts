@@ -122,7 +122,6 @@ export function stripAnsiCodes(content: string): string {
 				if (hasQuestion) i++;
 
 				// Collect parameter + intermediate bytes
-				let paramStart = i;
 				while (i < len) {
 					const c = content.charCodeAt(i);
 					if (c >= 0x30 && c <= 0x3F) { i++; continue; } // parameter bytes (digits, ;, <=>?)
@@ -747,7 +746,7 @@ export function extractChatResponseBlocks(buf: string): ChatResponseBlock[] {
 // ─── Conversation ID extraction ───────────────────────────────────────────────
 
 /**
- * Extract conversation ID from a [CHAT:convId] marker in text.
+ * Extract conversation ID from a [CHAT:convId] or [GCHAT:convId] marker in text.
  *
  * Replaces CHAT_ROUTING_CONSTANTS.CONVERSATION_ID_PATTERN regex.
  *
@@ -755,28 +754,31 @@ export function extractChatResponseBlocks(buf: string): ChatResponseBlock[] {
  * @returns The conversation ID or null if not found
  */
 export function extractConversationId(text: string): string | null {
-	const marker = '[CHAT:';
-	const idx = text.indexOf(marker);
-	if (idx === -1) return null;
+	// Try [GCHAT:...] first (more specific), then [CHAT:...]
+	for (const marker of ['[GCHAT:', '[CHAT:']) {
+		const idx = text.indexOf(marker);
+		if (idx === -1) continue;
 
-	const start = idx + marker.length;
-	const end = text.indexOf(']', start);
-	if (end === -1) return null;
+		const start = idx + marker.length;
+		const end = text.indexOf(']', start);
+		if (end === -1) continue;
 
-	const id = text.slice(start, end);
-	return id.length > 0 ? id : null;
+		const id = text.slice(start, end);
+		if (id.length > 0) return id;
+	}
+	return null;
 }
 
 /**
- * Extract and remove the [CHAT:convId] prefix from a message.
+ * Extract and remove the [CHAT:convId] or [GCHAT:convId] prefix from a message.
  *
  * Replaces the CHAT prefix regex.
  *
- * @param message - Message that may start with [CHAT:...]
+ * @param message - Message that may start with [CHAT:...] or [GCHAT:...]
  * @returns Object with the prefix length (0 if no prefix) and the content after prefix
  */
 export function extractChatPrefix(message: string): { prefixLength: number; content: string } {
-	if (!message.startsWith('[CHAT:')) {
+	if (!message.startsWith('[CHAT:') && !message.startsWith('[GCHAT:')) {
 		return { prefixLength: 0, content: message };
 	}
 

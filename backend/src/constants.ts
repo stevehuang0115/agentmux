@@ -140,6 +140,8 @@ export const TERMINAL_GATEWAY_CONSTANTS = {
 export const CHAT_ROUTING_CONSTANTS = {
 	/** Message format prefix for chat routing */
 	MESSAGE_PREFIX: 'CHAT',
+	/** Message format prefix for Google Chat routing (distinguishes from Slack) */
+	GOOGLE_CHAT_PREFIX: 'GCHAT',
 } as const;
 
 /**
@@ -357,6 +359,17 @@ export const SLACK_THREAD_CONSTANTS = {
 	FILE_EXTENSION: '.md',
 	/** Maximum age for thread files before cleanup (30 days) */
 	MAX_THREAD_AGE_MS: 30 * 24 * 60 * 60 * 1000,
+} as const;
+
+/**
+ * Constants for Google Chat thread file storage.
+ * Used by GoogleChatThreadStoreService to persist thread conversations.
+ */
+export const GCHAT_THREAD_CONSTANTS = {
+	/** Directory name under crewly home for thread files */
+	STORAGE_DIR: 'gchat-threads',
+	/** File extension for thread conversation files */
+	FILE_EXTENSION: '.md',
 } as const;
 
 /**
@@ -852,6 +865,8 @@ export const GOOGLE_CHAT_PUBSUB_CONSTANTS = {
 	FETCH_TIMEOUT_MS: 15_000,
 	/** Max consecutive pull failures before pausing */
 	MAX_CONSECUTIVE_FAILURES: 5,
+	/** Maximum message length for the Google Chat API (characters) */
+	MAX_MESSAGE_LENGTH: 4096,
 } as const;
 
 // Re-export marketplace constants from shared config
@@ -1027,6 +1042,7 @@ export const AUTH_CONSTANTS = {
 	PLANS: {
 		FREE: 'free',
 		PRO: 'pro',
+		ENTERPRISE: 'enterprise',
 	},
 	/** Storage paths relative to ~/.crewly/ */
 	STORAGE: {
@@ -1048,6 +1064,36 @@ export const AUTH_CONSTANTS = {
 
 /** User plan type */
 export type UserPlan = (typeof AUTH_CONSTANTS.PLANS)[keyof typeof AUTH_CONSTANTS.PLANS];
+
+/** Admin portal constants */
+export const ADMIN_CONSTANTS = {
+	/** Default admin credentials (overridable via env) */
+	CREDENTIALS: {
+		get EMAIL(): string {
+			return process.env['CREWLY_ADMIN_EMAIL'] || 'admin@crewly.dev';
+		},
+		get PASSWORD(): string {
+			return process.env['CREWLY_ADMIN_PASSWORD'] || 'crewly-admin-2026';
+		},
+	},
+	/** Admin JWT configuration */
+	JWT: {
+		/** Admin token expiry in seconds (8 hours) */
+		EXPIRY_S: 28_800,
+		/** Admin role claim */
+		ROLE: 'admin',
+	},
+} as const;
+
+/** Device heartbeat constants for dual-machine connectivity */
+export const DEVICE_CONSTANTS = {
+	/** Time-to-live for device heartbeat (ms) */
+	HEARTBEAT_TTL_MS: 60_000,
+	/** Storage directory for device state (relative to ~/.crewly/) */
+	DEVICES_DIR: 'cloud/devices',
+	/** Maximum teams per heartbeat payload */
+	MAX_TEAMS_PER_HEARTBEAT: 50,
+} as const;
 
 /**
  * Constants for Supabase-backed Cloud Auth.

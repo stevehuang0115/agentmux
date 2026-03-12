@@ -65,6 +65,25 @@ JSON confirmation with the Slack message timestamp (text) or file ID (image) on 
 
 > **Heads up:** After a successful API call the script automatically emits a `[NOTIFY]` block so the backend logs the reply and unblocks any pending Slack messages. If you pass `--conversation`, that ID is embedded in the header. Otherwise TerminalGateway will associate the notify block with the active conversation.
 
+## Special Characters
+
+If your message contains special characters like parentheses `()`, single quotes `'`, backslashes `\`, or dollar signs `$`, use `--text-file` or stdin to avoid bash escaping issues:
+
+```bash
+# Write message to a temp file first
+bash config/skills/orchestrator/reply-slack/execute.sh \
+  --channel C0123 \
+  --thread 1707430000.001234 \
+  --text-file /tmp/reply.txt
+```
+
+```bash
+# Or pipe via stdin
+echo "message with special chars (like these)" | bash config/skills/orchestrator/reply-slack/execute.sh \
+  --channel C0123 \
+  --thread 1707430000.001234
+```
+
 ## Safety Behavior
 
 By default, this skill **requires** `threadTs` and will fail fast if it is missing.  

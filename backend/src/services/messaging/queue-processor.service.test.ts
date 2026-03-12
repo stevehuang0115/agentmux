@@ -52,6 +52,7 @@ jest.mock('../../constants.js', () => ({
   ORCHESTRATOR_SESSION_NAME: 'crewly-orc',
   CHAT_ROUTING_CONSTANTS: {
     MESSAGE_PREFIX: 'CHAT',
+    GOOGLE_CHAT_PREFIX: 'GCHAT',
   },
   EVENT_DELIVERY_CONSTANTS: {
     AGENT_READY_TIMEOUT: 5000,
@@ -79,6 +80,7 @@ jest.mock('../../constants.js', () => ({
     SLACK: 'slack',
     WHATSAPP: 'whatsapp',
     WEB_CHAT: 'web_chat',
+    GOOGLE_CHAT: 'google_chat',
     SYSTEM_EVENT: 'system_event',
   },
 }));
@@ -1182,6 +1184,179 @@ describe('QueueProcessorService', () => {
         2000,
         'claude-code'
       );
+    });
+
+    it('should use USER_MESSAGE_TIMEOUT for google_chat source', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello from Google Chat',
+        conversationId: 'conv-gchat',
+        source: 'google_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.waitForAgentReady).toHaveBeenCalledWith(
+        'crewly-orc',
+        2000,
+        'claude-code'
+      );
+    });
+
+    it('should force-deliver google_chat messages when agent is not ready', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(false);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+      const requeueSpy = jest.spyOn(queueService, 'requeue');
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Urgent Google Chat message',
+        conversationId: 'conv-gchat',
+        source: 'google_chat',
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // google_chat messages should force-deliver even when agent is not ready
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-orc',
+        '[GCHAT:conv-gchat] Urgent Google Chat message',
+        'claude-code'
+      );
+      expect(requeueSpy).not.toHaveBeenCalled();
+    });
+
+    it('should include thread ID in GCHAT prefix when sourceMetadata has threadId', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello from Chat',
+        conversationId: 'conv-gchat-hint',
+        source: 'google_chat',
+        sourceMetadata: {
+          channelId: 'spaces/AAAA123',
+          threadId: 'spaces/AAAA123/threads/BBB456',
+          userId: 'users/111',
+        },
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+        'crewly-orc',
+        '[GCHAT:conv-gchat-hint thread=spaces/AAAA123/threads/BBB456] Hello from Chat',
+        'claude-code'
+      );
+    });
+
+    it('should match waitForResponse when NOTIFY conversationId has thread suffix', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({ success: true });
+
+      const googleChatResolve = jest.fn();
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello from Chat',
+        conversationId: 'spaces/jycUeSAAAAE',
+        source: 'google_chat',
+        sourceMetadata: {
+          channelId: 'spaces/jycUeSAAAAE',
+          threadId: 'spaces/jycUeSAAAAE/threads/NqhNzlr_WgY',
+          googleChatResolve,
+        },
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Simulate orchestrator NOTIFY with thread-suffixed conversationId
+      // (matches the bug: NOTIFY includes "spaces/X thread=spaces/X/threads/Y")
+      mockChatService.emit('message', {
+        conversationId: 'spaces/jycUeSAAAAE thread=spaces/jycUeSAAAAE/threads/NqhNzlr_WgY',
+        from: { type: 'orchestrator' },
+        content: 'Reply from orchestrator',
+      });
+
+      await flushPromises();
+      await flushPromises();
+
+      // googleChatResolve should be called with the response (not the timeout message)
+      expect(googleChatResolve).toHaveBeenCalledWith('Reply from orchestrator');
+    });
+
+    it('should NOT requeue or route error for google_chat messages when agent is busy', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: '[AGENT_BUSY] Agent is actively processing',
+      });
+      const routeErrorSpy = jest.spyOn(responseRouter, 'routeError');
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello GCHAT',
+        conversationId: 'conv-gchat-no-requeue',
+        source: 'google_chat',
+        sourceMetadata: { channelId: 'spaces/AAA', userId: 'users/1' },
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Message should NOT be requeued
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+      // Error should NOT be routed to Google Chat (no ugly error message for users)
+      expect(routeErrorSpy).not.toHaveBeenCalled();
+      // Should NOT be requeued — verify no retry
+      jest.advanceTimersByTime(10000);
+      await flushPromises();
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('should requeue google_chat messages on non-AGENT_BUSY delivery failure', async () => {
+      mockAgentRegistrationService.waitForAgentReady.mockResolvedValue(true);
+      mockAgentRegistrationService.sendMessageToAgent.mockResolvedValue({
+        success: false,
+        error: 'Failed to deliver message after multiple attempts',
+      });
+      const routeErrorSpy = jest.spyOn(responseRouter, 'routeError');
+      const requeueSpy = jest.spyOn(queueService, 'requeue');
+
+      processor.start();
+
+      queueService.enqueue({
+        content: 'Hello from GCHAT',
+        conversationId: 'conv-gchat-retry',
+        source: 'google_chat',
+        sourceMetadata: { channelId: 'spaces/BBB', userId: 'users/2' },
+      });
+
+      jest.advanceTimersByTime(0);
+      await flushPromises();
+      await flushPromises();
+
+      // Should requeue instead of routing error
+      expect(requeueSpy).toHaveBeenCalled();
+      expect(routeErrorSpy).not.toHaveBeenCalled();
     });
 
     it('should force-deliver system events when agent not ready', async () => {

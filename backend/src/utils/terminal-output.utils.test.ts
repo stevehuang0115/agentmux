@@ -7,7 +7,7 @@
  * @module terminal-output-utils.test
  */
 
-import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from './terminal-output.utils.js';
+import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator, cleanGoogleChatResponse } from './terminal-output.utils.js';
 
 describe('stripAnsiCodes', () => {
 	describe('color codes', () => {
@@ -259,6 +259,113 @@ describe('ResponseDeduplicator', () => {
 			defaultDedup.isDuplicate(`hash-${i}`);
 		}
 		expect(defaultDedup.size).toBe(20);
+	});
+});
+
+describe('cleanGoogleChatResponse', () => {
+	it('should strip ANSI escape codes', () => {
+		const result = cleanGoogleChatResponse('\x1b[1m\x1b[32mHello\x1b[0m world');
+		expect(result).toBe('Hello world');
+	});
+
+	it('should strip spinner characters', () => {
+		const result = cleanGoogleChatResponse('⠸ Processing... ⠼⠴');
+		expect(result).toBe('Processing...');
+	});
+
+	it('should strip progress bar characters', () => {
+		const result = cleanGoogleChatResponse('Loading ▀▀▀▄▄▄ done');
+		expect(result).toBe('Loading  done');
+	});
+
+	it('should strip TUI status lines', () => {
+		const input = 'Configure terminal keybindings (press ? for help)\nActual content\n⏺ Working...';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).toBe('Actual content');
+	});
+
+	it('should pass through pre-extracted content unchanged (NOTIFY extraction removed)', () => {
+		// cleanGoogleChatResponse no longer extracts NOTIFY blocks —
+		// that's handled upstream by parseNotifyContent in the terminal gateway.
+		// It should just clean TUI artifacts from already-extracted body content.
+		const input = 'Hello from the orchestrator.\nHere is your status update.';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).toBe('Hello from the orchestrator.\nHere is your status update.');
+	});
+
+	it('should collapse excessive blank lines', () => {
+		const result = cleanGoogleChatResponse('line1\n\n\n\n\nline2');
+		expect(result).toBe('line1\n\nline2');
+	});
+
+	it('should return empty string for spinner-only content', () => {
+		const result = cleanGoogleChatResponse('⠸⠼⠴⠦');
+		expect(result).toBe('');
+	});
+
+	it('should handle clean text unchanged', () => {
+		const result = cleanGoogleChatResponse('Hello, this is a normal response.');
+		expect(result).toBe('Hello, this is a normal response.');
+	});
+
+	it('should strip Gemini CLI TUI status lines', () => {
+		const input = 'Hello world\nUse ripgrep for faster file c...\nType your message or @path/to/file\nGoodbye';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).toBe('Hello world\nGoodbye');
+	});
+
+	it('should strip inline Gemini CLI TUI artifacts', () => {
+		const input = 'Status Update(esc to cancel,Press Ctrl+O to show more lines 11s) of the last response';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('esc to cancel');
+		expect(result).not.toContain('Press Ctrl+O');
+		expect(result).toContain('Status Update');
+	});
+
+	it('should strip timer countdowns from Gemini CLI', () => {
+		const input = 'Hello 12s) world';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('12s)');
+		expect(result).toContain('Hello');
+		expect(result).toContain('world');
+	});
+
+	it('should strip Gemini CLI prompt bullets', () => {
+		const input = 'Good response\n• Type your message or @path/to/file\nMore content';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('Type your message');
+		expect(result).toContain('Good response');
+		expect(result).toContain('More content');
+	});
+
+	it('should strip Ctrl keybinding hints', () => {
+		const input = 'Press Ctrl+Y to accept or Ctrl+N to decline';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('Ctrl+Y');
+		expect(result).not.toContain('Ctrl+N');
+	});
+
+	it('should strip Gemini sandbox status line fragments', () => {
+		const input = 'Response text\nno sandbox gemini-2.5-pro-preview\nMore content';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('sandbox gemini');
+		expect(result).toContain('Response text');
+		expect(result).toContain('More content');
+	});
+
+	it('should strip F12 error indicator fragments', () => {
+		const input = 'Hello world 3 error (F12 for details) end';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('F12 for deta');
+		expect(result).toContain('Hello world');
+	});
+
+	it('should handle combined TUI artifacts in one string', () => {
+		const input = 'Good output Ctrl+O sandbox gemini-2.5-pro more text';
+		const result = cleanGoogleChatResponse(input);
+		expect(result).not.toContain('Ctrl+O');
+		expect(result).not.toContain('sandbox gemini');
+		expect(result).toContain('Good output');
 	});
 });
 

@@ -605,6 +605,64 @@ describe('SettingsService', () => {
       expect(hasFile).toBe(true);
     });
   });
+
+  describe('getApiKey', () => {
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    it('should return undefined when no key is configured', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      const key = await service.getApiKey('anthropic');
+      expect(key).toBeUndefined();
+    });
+
+    it('should return env var as fallback', async () => {
+      process.env.ANTHROPIC_API_KEY = 'env-key';
+      const key = await service.getApiKey('anthropic');
+      expect(key).toBe('env-key');
+    });
+
+    it('should return global key from settings', async () => {
+      await service.updateSettings({
+        apiKeys: { global: { anthropic: 'settings-key' } },
+      });
+      const key = await service.getApiKey('anthropic');
+      expect(key).toBe('settings-key');
+    });
+
+    it('should return runtime override when context specifies runtime', async () => {
+      await service.updateSettings({
+        apiKeys: {
+          global: { gemini: 'global-key' },
+          runtimeOverrides: {
+            'gemini-cli': {
+              gemini: { key: 'runtime-key', source: 'custom' },
+            },
+          },
+        },
+      });
+      const key = await service.getApiKey('gemini', { runtime: 'gemini-cli' });
+      expect(key).toBe('runtime-key');
+    });
+
+    it('should fall back to global when runtime override source is global', async () => {
+      await service.updateSettings({
+        apiKeys: {
+          global: { gemini: 'global-key' },
+          runtimeOverrides: {
+            'gemini-cli': {
+              gemini: { key: '', source: 'global' },
+            },
+          },
+        },
+      });
+      const key = await service.getApiKey('gemini', { runtime: 'gemini-cli' });
+      expect(key).toBe('global-key');
+    });
+  });
 });
 
 describe('Error Classes', () => {

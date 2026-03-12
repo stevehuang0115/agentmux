@@ -402,10 +402,23 @@ export class RuntimeExitMonitorService {
 			// Mark as detected to prevent double-processing
 			monitored.exitDetected = true;
 
+			// Identify which exit pattern triggered detection for diagnostics
+			let matchedPatternSource: string | undefined;
+			try {
+				const runtimeService = RuntimeServiceFactory.create(monitored.runtimeType, null, process.cwd());
+				const patterns = runtimeService.getExitPatterns();
+				const matched = patterns.find((p) => p.test(monitored.buffer));
+				matchedPatternSource = matched?.source;
+			} catch {
+				// Non-critical — pattern name is best-effort diagnostics
+			}
+
 			this.logger.info('Runtime exit detected and confirmed', {
 				sessionName,
 				runtimeType: monitored.runtimeType,
 				role: monitored.role,
+				matchedPattern: matchedPatternSource,
+				bufferTail: monitored.buffer.slice(-500),
 			});
 
 			// Fire the exit-detected callback (used to cancel pending registrations)

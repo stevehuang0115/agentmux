@@ -7,13 +7,15 @@ import { MemberAvatar } from '@/components/common/MemberAvatar';
 interface TeamsGridCardProps {
   team: Team;
   projectName?: string;
+  /** Number of sub-teams for parent/organization teams */
+  subTeamCount?: number;
   onClick?: () => void;
   onViewTeam?: (teamId: string) => void;
   onEditTeam?: (teamId: string) => void;
   onDeleteTeam?: (teamId: string) => void;
 }
 
-export const TeamsGridCard: React.FC<TeamsGridCardProps> = ({ team, projectName, onClick, onViewTeam, onEditTeam, onDeleteTeam }) => {
+export const TeamsGridCard: React.FC<TeamsGridCardProps> = ({ team, projectName, subTeamCount, onClick, onViewTeam, onEditTeam, onDeleteTeam }) => {
   const members = team.members || [];
   const avatars = members.slice(0, 3);
   const extra = Math.max(members.length - 3, 0);
@@ -37,6 +39,13 @@ export const TeamsGridCard: React.FC<TeamsGridCardProps> = ({ team, projectName,
         <div className="flex items-center gap-2 text-text-secondary-dark text-sm mb-4">
           <FolderOpen className="w-4 h-4" />
           <span>Project {projectName}</span>
+        </div>
+      )}
+
+      {subTeamCount !== undefined && subTeamCount > 0 && (
+        <div className="flex items-center gap-2 text-text-secondary-dark text-sm mb-4">
+          <Users className="w-4 h-4" />
+          <span>{subTeamCount} sub-team{subTeamCount !== 1 ? 's' : ''} &middot; {members.length} member{members.length !== 1 ? 's' : ''}</span>
         </div>
       )}
 

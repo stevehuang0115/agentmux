@@ -151,7 +151,7 @@ export interface ChatSender {
 /**
  * Valid Slack delivery statuses for NOTIFY reconciliation
  */
-export const SLACK_DELIVERY_STATUSES = ['pending', 'delivered', 'failed'] as const;
+export const SLACK_DELIVERY_STATUSES = ['pending', 'delivered', 'delivered_by_skill', 'failed'] as const;
 
 /**
  * Slack delivery status type

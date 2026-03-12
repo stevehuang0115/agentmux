@@ -75,6 +75,58 @@ export interface SkillsSettings {
   skillExecutionTimeoutMs: number;
 }
 
+// ============================================================================
+// API Key Management Types
+// ============================================================================
+
+/**
+ * Supported AI provider names for API key management
+ */
+export type ApiKeyProvider = 'gemini' | 'anthropic' | 'openai';
+
+/**
+ * Array of all valid API key providers
+ */
+export const API_KEY_PROVIDERS: readonly ApiKeyProvider[] = ['gemini', 'anthropic', 'openai'] as const;
+
+/**
+ * Configuration for an API key override at runtime or skill level
+ */
+export interface ApiKeyConfig {
+  /** The actual API key value (masked when returned from API) */
+  key: string;
+  /** Whether this uses the global key or a custom override */
+  source: 'global' | 'custom';
+}
+
+/**
+ * API Keys settings with global keys and per-level overrides
+ */
+export interface ApiKeysSettings {
+  /** Global API keys available system-wide */
+  global: {
+    gemini?: string;
+    anthropic?: string;
+    openai?: string;
+  };
+  /** Per-runtime API key overrides */
+  runtimeOverrides?: {
+    [runtimeType: string]: {
+      gemini?: ApiKeyConfig;
+      anthropic?: ApiKeyConfig;
+      openai?: ApiKeyConfig;
+    };
+  };
+  /** Per-skill API key overrides */
+  skillOverrides?: {
+    [skillName: string]: {
+      gemini?: ApiKeyConfig;
+      anthropic?: ApiKeyConfig;
+      openai?: ApiKeyConfig;
+    };
+  };
+}
+
 /**
  * Complete settings object
  */
@@ -82,6 +134,7 @@ export interface CrewlySettings {
   general: GeneralSettings;
   chat: ChatSettings;
   skills: SkillsSettings;
+  apiKeys?: ApiKeysSettings;
 }
 
 /**
@@ -91,6 +144,7 @@ export interface UpdateSettingsInput {
   general?: Partial<GeneralSettings>;
   chat?: Partial<ChatSettings>;
   skills?: Partial<SkillsSettings>;
+  apiKeys?: Partial<ApiKeysSettings>;
 }
 
 /**

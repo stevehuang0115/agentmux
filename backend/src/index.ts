@@ -55,9 +55,11 @@ import { MemoryService } from './services/memory/memory.service.js';
 import { getImprovementStartupService } from './services/orchestrator/improvement-startup.service.js';
 import { initializeSlackIfConfigured, shutdownSlack } from './services/slack/index.js';
 import { initializeWhatsAppIfConfigured, shutdownWhatsApp } from './services/whatsapp/index.js';
+import { initializeGoogleChatIfConfigured } from './services/messaging/google-chat-initializer.js';
 import { MessageQueueService, QueueProcessorService, ResponseRouterService } from './services/messaging/index.js';
 import { EventBusService } from './services/event-bus/index.js';
 import { SlackThreadStoreService, setSlackThreadStore, getSlackThreadStore } from './services/slack/slack-thread-store.service.js';
+import { GoogleChatThreadStoreService, setGchatThreadStore } from './services/messaging/gchat-thread-store.service.js';
 import { SlackImageService, setSlackImageService } from './services/slack/slack-image.service.js';
 import { NotifyReconciliationService } from './services/slack/notify-reconciliation.service.js';
 import { setEventBusService as setEventBusControllerService } from './controllers/event-bus/event-bus.controller.js';
@@ -290,6 +292,10 @@ export class CrewlyServer {
 		const slackThreadStore = new SlackThreadStoreService(this.config.crewlyHome);
 		setSlackThreadStore(slackThreadStore);
 		this.eventBusService.setSlackThreadStore(slackThreadStore);
+
+		// Initialize Google Chat thread store for persistent thread conversations
+		const gchatThreadStore = new GoogleChatThreadStoreService(this.config.crewlyHome);
+		setGchatThreadStore(gchatThreadStore);
 
 		// Initialize Slack image service for downloading images from Slack messages
 		const slackImageService = new SlackImageService(this.config.crewlyHome);
@@ -746,6 +752,9 @@ export class CrewlyServer {
 			// Initialize WhatsApp if configured
 			await this.initializeWhatsAppIfConfigured();
 
+			// Initialize Google Chat if saved credentials exist
+			await this.initializeGoogleChatIfConfigured();
+
 			// Start NOTIFY reconciliation service (retries failed Slack deliveries)
 			this.notifyReconciliationService = new NotifyReconciliationService();
 			this.notifyReconciliationService.start();
@@ -869,6 +878,32 @@ export class CrewlyServer {
 				error: error instanceof Error ? error.message : String(error),
 			});
 			// Don't fail startup if WhatsApp fails
+		}
+	}
+
+	/**
+	 * Initialize Google Chat adapter from saved credentials if available.
+	 * Restarts the Pub/Sub pull loop automatically on backend restart.
+	 */
+	private async initializeGoogleChatIfConfigured(): Promise<void> {
+		try {
+			this.logger.info('Checking Google Chat saved credentials...');
+			const result = await initializeGoogleChatIfConfigured({
+				messageQueueService: this.messageQueueService,
+			});
+
+			if (result.success) {
+				this.logger.info('Google Chat auto-reconnect successful');
+			} else if (result.attempted) {
+				this.logger.warn('Google Chat auto-reconnect failed', { error: result.error });
+			} else {
+				this.logger.info('Google Chat not configured, skipping initialization');
+			}
+		} catch (error) {
+			this.logger.error('Error initializing Google Chat integration', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			// Don't fail startup if Google Chat fails
 		}
 	}
 

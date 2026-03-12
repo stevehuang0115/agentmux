@@ -50,14 +50,23 @@ export class TerminalGateway {
 	/** Current active chat conversation ID for orchestrator responses */
 	private activeConversationId: string | null = null;
 
-	/** Buffer to accumulate orchestrator output for [NOTIFY] / legacy marker detection */
-	private orchestratorOutputBuffer: string = '';
+	/** Per-session buffers for [NOTIFY] / legacy marker detection */
+	private sessionOutputBuffers: Map<string, string> = new Map();
 
 	/** Maximum buffer size to prevent memory issues (100KB) */
 	private readonly MAX_BUFFER_SIZE = TERMINAL_GATEWAY_CONSTANTS.MAX_BUFFER_SIZE;
 
 	/** Deduplicator for recently sent chat responses */
 	private responseDeduplicator = new ResponseDeduplicator();
+
+	/**
+	 * Google Chat thread tracking for auto-routing follow-up NOTIFY messages.
+	 * Key: space name (e.g. "spaces/jycUeSAAAAE"), value: thread name.
+	 * Populated when the queue processor delivers a GCHAT message (via the
+	 * google-chat-initializer sourceMetadata). Read by the NOTIFY handler
+	 * to send follow-up messages to the correct thread.
+	 */
+	private gchatThreadMap = new Map<string, string>();
 
 	/**
 	 * Create a new TerminalGateway.
@@ -69,6 +78,30 @@ export class TerminalGateway {
 		this.logger = LoggerService.getInstance().createComponentLogger('TerminalGateway');
 
 		this.setupEventHandlers();
+	}
+
+	/**
+	 * Get the output buffer for a specific session.
+	 *
+	 * @param sessionName - The session name
+	 * @returns The current buffer content
+	 */
+	private getSessionBuffer(sessionName: string): string {
+		return this.sessionOutputBuffers.get(sessionName) || '';
+	}
+
+	/**
+	 * Set the output buffer for a specific session.
+	 *
+	 * @param sessionName - The session name
+	 * @param value - The new buffer content
+	 */
+	private setSessionBuffer(sessionName: string, value: string): void {
+		if (value.length === 0) {
+			this.sessionOutputBuffers.delete(sessionName);
+		} else {
+			this.sessionOutputBuffers.set(sessionName, value);
+		}
 	}
 
 	/**
@@ -219,7 +252,12 @@ export class TerminalGateway {
 
 		// Subscribe to exit events
 		const unsubscribeExit = session.onExit((exitCode: number) => {
-			this.logger.info('Session exited', { sessionName, exitCode });
+			const lastOutput = backend.captureOutput(sessionName, 50);
+			this.logger.info('Session exited', {
+				sessionName,
+				exitCode,
+				lastOutput: lastOutput?.slice(-500),
+			});
 			this.broadcastSessionStatus(sessionName, 'terminated');
 			this.cleanupSessionSubscription(sessionName);
 		});
@@ -278,7 +316,7 @@ export class TerminalGateway {
 		}
 
 		// Clear the output buffer and response hash cache for fresh monitoring
-		this.orchestratorOutputBuffer = '';
+		this.setSessionBuffer(sessionName, '');
 		this.responseDeduplicator.clear();
 
 		// Mark session as persistent so it won't be stopped when clients disconnect
@@ -479,10 +517,13 @@ export class TerminalGateway {
 
 		this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
 
-		// Process orchestrator output for chat responses
-		if (sessionName === ORCHESTRATOR_SESSION_NAME) {
-			this.processOrchestratorOutputForChat(sessionName, output.content);
-		}
+		// Process terminal output for [NOTIFY] markers and chat responses.
+		// Previously gated to ORCHESTRATOR_SESSION_NAME only, which meant
+		// Gemini CLI orchestrators with different session names were silently
+		// ignored. Now processes all sessions — NOTIFY markers are explicit
+		// skill output and the false positive filter (⏺ tool indicator)
+		// already handles Claude Code tool output display.
+		this.processOrchestratorOutputForChat(sessionName, output.content);
 	}
 
 	/**
@@ -513,12 +554,14 @@ export class TerminalGateway {
 			this.activeConversationId = extractedConvId;
 		}
 
-		// Always buffer content — notifications don't require a conversation ID
-		this.orchestratorOutputBuffer += cleanContent;
+		// Always buffer content per session — notifications don't require a conversation ID
+		const currentBuffer = this.getSessionBuffer(sessionName) + cleanContent;
 
 		// Prevent buffer from growing too large
-		if (this.orchestratorOutputBuffer.length > this.MAX_BUFFER_SIZE) {
-			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(-this.MAX_BUFFER_SIZE / 2);
+		if (currentBuffer.length > this.MAX_BUFFER_SIZE) {
+			this.setSessionBuffer(sessionName, currentBuffer.slice(-this.MAX_BUFFER_SIZE / 2));
+		} else {
+			this.setSessionBuffer(sessionName, currentBuffer);
 		}
 
 		// Process unified [NOTIFY] markers first (preferred format)
@@ -528,9 +571,9 @@ export class TerminalGateway {
 		this.processLegacyChatResponse(sessionName);
 
 		// Process legacy [SLACK_NOTIFY] markers for backward compatibility
-		this.processLegacySlackNotifications();
+		this.processLegacySlackNotifications(sessionName);
 
-		this.trimBufferIfNoOpenMarkers();
+		this.trimBufferIfNoOpenMarkers(sessionName);
 	}
 
 	/**
@@ -602,12 +645,13 @@ export class TerminalGateway {
 	 * @param sessionName - The orchestrator session name
 	 */
 	private processNotifyMarkers(sessionName: string): void {
-		if (!this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
+		const buffer = this.getSessionBuffer(sessionName);
+		if (!buffer.includes(NOTIFY_CONSTANTS.OPEN_TAG)) {
 			return;
 		}
 
 		const blocks = extractMarkerBlocks(
-			this.orchestratorOutputBuffer,
+			buffer,
 			NOTIFY_CONSTANTS.OPEN_TAG,
 			NOTIFY_CONSTANTS.CLOSE_TAG
 		);
@@ -621,7 +665,7 @@ export class TerminalGateway {
 			// the previous match end and this match start for state transitions:
 			// - ⏺ with no following ❯ → entering/still in tool output
 			// - ❯ after ⏺ → tool output ended, back to direct AI output
-			const gapText = this.orchestratorOutputBuffer.slice(lastMatchEnd, block.startIndex);
+			const gapText = buffer.slice(lastMatchEnd, block.startIndex);
 			if (gapText.includes('⏺')) {
 				inToolOutput = true;
 			}
@@ -662,7 +706,7 @@ export class TerminalGateway {
 
 		// Remove processed NOTIFY blocks from buffer
 		if (lastMatchEnd > 0) {
-			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+			this.setSessionBuffer(sessionName, buffer.slice(lastMatchEnd));
 		}
 	}
 
@@ -689,19 +733,27 @@ export class TerminalGateway {
 		const conversationId = payload.conversationId
 			|| (canFallbackToActiveConversation ? this.activeConversationId : null);
 
-		// Build metadata dict with NOTIFY fields for the chat message
+		// Build metadata dict with NOTIFY fields for the chat message.
+		// NOTE: Do NOT set slackDeliveryStatus here. Slack delivery is handled
+		// exclusively by the reply-slack skill. Setting 'pending' here caused
+		// the NotifyReconciliationService to trigger redundant retry storms
+		// for messages that were already delivered by the skill (#retry-storm fix).
 		const metadata: Record<string, unknown> = {};
 		if (payload.channelId) {
 			metadata.slackChannelId = payload.channelId;
-			metadata.slackDeliveryStatus = 'pending';
-			metadata.slackDeliveryAttempts = 0;
 			if (payload.threadTs) metadata.slackThreadTs = payload.threadTs;
 		}
 		if (payload.type) metadata.notifyType = payload.type;
 		if (payload.title) metadata.notifyTitle = payload.title;
 		if (payload.urgency) metadata.notifyUrgency = payload.urgency;
 
-		// Route to chat UI
+		// Route to chat service — this emits the ChatMessage event that
+		// QueueProcessor.waitForResponse() listens for to resolve responses.
+		// Google Chat replies ultimately go through the googleChatResolve callback
+		// (queue processor → response router), but the ChatMessage emission is
+		// still needed for waitForResponse to detect the response.
+		// The responseDeduplicator prevents duplicate messages from PTY re-renders.
+		const isGoogleChatConversation = conversationId?.startsWith('spaces/') ?? false;
 		let chatMessage: import('../types/chat.types.js').ChatMessage | null = null;
 		if (conversationId) {
 			const responseHash = generateResponseHash(conversationId, payload.message);
@@ -709,6 +761,7 @@ export class TerminalGateway {
 				this.logger.info('Routing NOTIFY to chat', {
 					conversationId,
 					contentLength: payload.message.length,
+					isGoogleChat: isGoogleChatConversation,
 				});
 
 				const chatGateway = getChatGateway();
@@ -761,22 +814,41 @@ export class TerminalGateway {
 				});
 			}
 		}
+
+		// Google Chat: no auto-routing here. Initial replies go through the
+		// googleChatResolve callback (queue processor → waitForResponse path).
+		// Follow-up messages are sent by the agent via the reply-gchat skill.
+		// This avoids TUI redraw duplicates and NOTIFY parsing issues.
+	}
+
+	/**
+	 * Register a Google Chat thread mapping so follow-up NOTIFY messages
+	 * for the given space are routed to the correct thread.
+	 *
+	 * Called by the google-chat-initializer when a new GCHAT message is enqueued.
+	 *
+	 * @param space - Google Chat space name (e.g. "spaces/jycUeSAAAAE")
+	 * @param threadName - Thread name for replies (e.g. "spaces/jycUeSAAAAE/threads/BBB")
+	 */
+	registerGchatThread(space: string, threadName: string): void {
+		this.gchatThreadMap.set(space, threadName);
 	}
 
 	/**
 	 * Trim the orchestrator output buffer if there are no pending open markers.
 	 * Prevents unbounded growth when output doesn't contain any markers.
 	 */
-	private trimBufferIfNoOpenMarkers(): void {
+	private trimBufferIfNoOpenMarkers(sessionName: string): void {
+		const buffer = this.getSessionBuffer(sessionName);
 		const hasPendingMarker =
-			this.orchestratorOutputBuffer.includes(NOTIFY_CONSTANTS.OPEN_TAG) ||
-			this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE') ||
-			this.orchestratorOutputBuffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG);
+			buffer.includes(NOTIFY_CONSTANTS.OPEN_TAG) ||
+			buffer.includes('[CHAT_RESPONSE') ||
+			buffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG);
 		if (!hasPendingMarker) {
 			// Keep a small trailing buffer in case the tag is split across chunks
-			const lastNewline = this.orchestratorOutputBuffer.lastIndexOf('\n');
+			const lastNewline = buffer.lastIndexOf('\n');
 			if (lastNewline > TERMINAL_GATEWAY_CONSTANTS.BUFFER_TRIM_THRESHOLD) {
-				this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastNewline);
+				this.setSessionBuffer(sessionName, buffer.slice(lastNewline));
 			}
 		}
 	}
@@ -792,7 +864,8 @@ export class TerminalGateway {
 			return;
 		}
 
-		if (!this.orchestratorOutputBuffer.includes('[CHAT_RESPONSE')) {
+		const buffer = this.getSessionBuffer(sessionName);
+		if (!buffer.includes('[CHAT_RESPONSE')) {
 			return;
 		}
 
@@ -803,7 +876,7 @@ export class TerminalGateway {
 			return;
 		}
 
-		const blocks = extractChatResponseBlocks(this.orchestratorOutputBuffer);
+		const blocks = extractChatResponseBlocks(buffer);
 		let lastMatchEnd = 0;
 
 		for (const block of blocks) {
@@ -844,23 +917,26 @@ export class TerminalGateway {
 		}
 
 		if (lastMatchEnd > 0) {
-			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+			this.setSessionBuffer(sessionName, buffer.slice(lastMatchEnd));
 		}
 	}
 
 	/**
 	 * Process legacy [SLACK_NOTIFY]...[/SLACK_NOTIFY] markers from the buffer.
 	 * @deprecated Use [NOTIFY] markers instead. Kept for backward compatibility.
+	 *
+	 * @param sessionName - The session name
 	 */
-	private processLegacySlackNotifications(): void {
-		if (!this.orchestratorOutputBuffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG)) {
+	private processLegacySlackNotifications(sessionName: string): void {
+		const buffer = this.getSessionBuffer(sessionName);
+		if (!buffer.includes(SLACK_NOTIFY_CONSTANTS.OPEN_TAG)) {
 			return;
 		}
 
 		this.logger.debug('Processing legacy [SLACK_NOTIFY] markers (deprecated — use [NOTIFY])');
 
 		const blocks = extractMarkerBlocks(
-			this.orchestratorOutputBuffer,
+			buffer,
 			SLACK_NOTIFY_CONSTANTS.OPEN_TAG,
 			SLACK_NOTIFY_CONSTANTS.CLOSE_TAG
 		);
@@ -897,16 +973,16 @@ export class TerminalGateway {
 		}
 
 		if (lastMatchEnd > 0) {
-			this.orchestratorOutputBuffer = this.orchestratorOutputBuffer.slice(lastMatchEnd);
+			this.setSessionBuffer(sessionName, buffer.slice(lastMatchEnd));
 		}
 	}
 
 	/**
-	 * Clear the orchestrator output buffer.
+	 * Clear output buffers for all sessions.
 	 * Called when conversation changes or on cleanup.
 	 */
 	clearOrchestratorBuffer(): void {
-		this.orchestratorOutputBuffer = '';
+		this.sessionOutputBuffers.clear();
 		this.responseDeduplicator.clear();
 	}
 

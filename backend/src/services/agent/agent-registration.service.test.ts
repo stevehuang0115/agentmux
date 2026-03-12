@@ -43,6 +43,7 @@ jest.mock('../settings/settings.service.js', () => ({
 		getSettings: jest.fn().mockResolvedValue({
 			general: { autoResumeOnRestart: true },
 		}),
+		getApiKey: jest.fn().mockResolvedValue(undefined),
 	}),
 }));
 
@@ -723,6 +724,7 @@ describe('AgentRegistrationService', () => {
 			// isClaudeAtPrompt returns false (❯ Hello world ≠ idle prompt),
 			// but the message-text-stuck check catches it — "Hello world"
 			// found at bottom of terminal → Enter was dropped, not success.
+			// The extended confirmation loop (30s/attempt) also detects the stuck text.
 			let capturePaneCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				capturePaneCount++;
@@ -730,20 +732,20 @@ describe('AgentRegistrationService', () => {
 				if (capturePaneCount === 1) return '❯ \n';
 				// Call 2 (beforeOutput): clean prompt (baseline)
 				if (capturePaneCount === 2) return '❯ \n';
-				// All subsequent calls (progressive checks): pasted text at prompt.
-				// No processing indicators, isClaudeAtPrompt returns false, but
-				// message text "Hello world" found at bottom → stuck, not success.
+				// All subsequent calls (progressive checks + confirmation loop):
+				// pasted text at prompt. No processing indicators, isClaudeAtPrompt
+				// returns false, message text "Hello world" found at bottom → stuck.
 				return '❯ Hello world\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello world');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			// Should FAIL — message stuck at prompt, not processing
 			expect(result.success).toBe(false);
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
-		});
+		}, 120000);
 
 		it('should fall through to direct delivery when agent is not at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
@@ -1281,6 +1283,7 @@ describe('AgentRegistrationService', () => {
 			const { getSettingsService } = require('../settings/settings.service.js');
 			getSettingsService.mockReturnValueOnce({
 				getSettings: jest.fn().mockRejectedValue(new Error('Settings unavailable')),
+				getApiKey: jest.fn().mockResolvedValue(undefined),
 			});
 
 			(sessionModule.getSessionStatePersistence as jest.Mock).mockReturnValue({
@@ -1419,41 +1422,43 @@ describe('AgentRegistrationService', () => {
 		it('should detect stuck message and return false on timeout', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 capturePane calls.
-			// All return prompt → stuck after 3 intervals exhausted on every attempt.
+			// Each attempt: 1 pre-send + 1 beforeOutput + 3 progressive intervals +
+			// extended confirmation loop (30s). All return prompt → stuck after
+			// confirmation loop exhausted on every attempt.
 			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
 			const resultPromise = service.sendMessageToAgent(
 				'test-session',
 				'[CHAT:abc] Hello orchestrator'
 			);
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
-		});
+		}, 120000);
 
 		it('should succeed when Enter accepted after retry', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Each attempt: 1 pre-send + 1 beforeOutput + 3 intervals = 5 calls.
-			// Attempt 1: calls 1-5 → all prompt → stuck, cleanup
-			// Attempt 2: calls 6 (pre-send) + 7 (beforeOutput) → prompt,
-			//   call 8 (1st interval) → processing indicator → success
+			// Attempt 1: progressive checks + confirmation loop all return prompt → stuck.
+			// Attempt 2 or confirmation loop: processing indicator appears → success.
+			// Call count is higher now due to the extended confirmation loop.
 			let capturePaneCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				capturePaneCount++;
-				if (capturePaneCount <= 7) return '❯ \n';
+				// First ~20 calls: prompt (covers progressive + some confirmation loop)
+				if (capturePaneCount <= 20) return '❯ \n';
+				// After enough attempts, processing indicator appears
 				return '⏺ Processing...\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
-		});
+		}, 60000);
 
 		it('should accept when prompt gone on first progressive check (no false negative)', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
@@ -1478,36 +1483,37 @@ describe('AgentRegistrationService', () => {
 		it('should clear leftover input on retry when at prompt', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Each attempt: 1 pre-send + 1 beforeOutput + 1 dedup guard + 3 intervals = 6 calls.
-			// Attempt 1: calls 1-6 → all prompt → stuck, cleanup + clearCurrentCommandLine
-			// Attempt 2: calls 7-9 → prompt (pre-send + beforeOutput + dedup guard),
-			//   call 10 → processing → success
+			// Each attempt: 1 pre-send + 1 beforeOutput + 1 dedup guard + 3 progressive intervals
+			// + extended confirmation loop calls. Prompt calls lead to stuck detection.
+			// Eventually a processing indicator appears → success on retry.
 			let capturePaneCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				capturePaneCount++;
-				if (capturePaneCount <= 9) return '❯ \n';
+				// First ~30 calls: all prompt (covers attempt 1 progressive + confirmation loop)
+				if (capturePaneCount <= 30) return '❯ \n';
+				// Subsequent calls: processing indicator → success on retry
 				return '⏺ Processing...\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello stuck message');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			// clearCurrentCommandLine should have been called during retry after stuck detection
 			expect(mockSessionHelper.clearCurrentCommandLine).toHaveBeenCalled();
 			// Second attempt succeeds
 			expect(result.success).toBe(true);
-		});
+		}, 120000);
 
 		it('should run retry cleanup on every failed attempt, not just first', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 
-			// Claude Code: 3 capturePane calls per attempt (pre-send, post-send, re-check)
-			// All attempts always show prompt → stuck on every attempt
+			// All capturePane calls return prompt → stuck on every attempt.
+			// With extended confirmation loop (30s/attempt), needs more fake time.
 			mockSessionHelper.capturePane.mockReturnValue('❯ \n');
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			expect(result.success).toBe(false);
@@ -1515,7 +1521,7 @@ describe('AgentRegistrationService', () => {
 			// With 3 attempts all stuck, expect at least 2 cleanup calls
 			// (first attempt skips Ctrl+C but cleanup still runs after stuck detection)
 			expect(mockSessionHelper.clearCurrentCommandLine.mock.calls.length).toBeGreaterThanOrEqual(2);
-		});
+		}, 120000);
 	});
 
 	describe('resolveRuntimeFlags (private method)', () => {
@@ -1930,55 +1936,45 @@ describe('AgentRegistrationService', () => {
 			let callCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				callCount++;
-				// Call 1 (prompt check attempt 1): at prompt
-				if (callCount === 1) return '❯ \n';
-				// Call 2 (beforeOutput capture attempt 1): at prompt
-				if (callCount === 2) return '❯ \n';
-				// Call 3 (1st verification interval): still at prompt (false negative)
-				if (callCount === 3) return '❯ \n';
-				// Call 4 (2nd verification interval): still at prompt
-				if (callCount === 4) return '❯ \n';
-				// Call 5 (3rd verification interval): still at prompt → attempt 1 fails
-				if (callCount === 5) return '❯ \n';
-				// Call 6 (prompt check attempt 2): not at prompt — but we continue
-				// since isClaudeAtPrompt fails, it hits the dedup guard
-				if (callCount === 6) return '⏺ Processing your request...\n';
-				// Call 7 (dedup guard on retry attempt 2): spinner detected → skip re-write
+				// Calls 1-2: at prompt (pre-send + beforeOutput)
+				if (callCount <= 2) return '❯ \n';
+				// Calls 3-5: still at prompt (progressive verification intervals)
+				if (callCount <= 5) return '❯ \n';
+				// Calls 6+: processing indicator (confirmation loop or retry dedup guard)
+				// The confirmation loop will see spinner and set claudeDelivered = true
 				return '⏺ Processing your request...\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			// sendMessage should only be called ONCE (attempt 1), not twice
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(1);
-		});
+		}, 60000);
 
 		it('should skip re-write on retry when agent is not at prompt and message not stuck', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
 			let callCount = 0;
 			mockSessionHelper.capturePane.mockImplementation(() => {
 				callCount++;
-				// Call 1 (prompt check attempt 1): at prompt
-				if (callCount === 1) return '❯ \n';
-				// Call 2 (beforeOutput capture attempt 1): at prompt
-				if (callCount === 2) return '❯ \n';
-				// Calls 3-5 (verification intervals): still at prompt → attempt 1 fails
+				// Calls 1-2: at prompt (pre-send + beforeOutput)
+				if (callCount <= 2) return '❯ \n';
+				// Calls 3-5: still at prompt (progressive verification intervals)
 				if (callCount <= 5) return '❯ \n';
-				// Calls 6+ (dedup guard on retry): agent is processing (no prompt, no stuck text, no spinner)
+				// Calls 6+: agent processing (confirmation loop detects no prompt + no stuck text)
 				return 'Reading file src/index.ts\nAnalyzing code...\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			const result = await resultPromise;
 
 			expect(result.success).toBe(true);
 			// sendMessage should only be called ONCE (attempt 1), not twice
 			expect(mockSessionHelper.sendMessage).toHaveBeenCalledTimes(1);
-		});
+		}, 60000);
 
 		it('should allow re-write when message text is stuck at prompt on retry', async () => {
 			mockSessionHelper.sessionExists.mockReturnValue(true);
@@ -1989,19 +1985,17 @@ describe('AgentRegistrationService', () => {
 				if (callCount === 1) return '❯ \n';
 				// Call 2 (beforeOutput capture attempt 1): at prompt
 				if (callCount === 2) return '❯ \n';
-				// Calls 3-5 (verification intervals): message text stuck at prompt
-				if (callCount <= 5) return '❯ Hello\n';
-				// Call 6+ (dedup guard): message stuck at bottom → allow retry
+				// Calls 3+ (progressive + confirmation loop): message text stuck at prompt
 				return '❯ Hello\n';
 			});
 
 			const resultPromise = service.sendMessageToAgent('test-session', 'Hello');
-			await jest.advanceTimersByTimeAsync(60000);
+			await jest.advanceTimersByTimeAsync(300000);
 			await resultPromise;
 
 			// sendMessage should be called more than once since dedup guard allows re-write
 			expect(mockSessionHelper.sendMessage.mock.calls.length).toBeGreaterThanOrEqual(1);
-		});
+		}, 120000);
 	});
 
 	describe('escapeGeminiShellMode (private method)', () => {
@@ -2191,8 +2185,9 @@ describe('AgentRegistrationService', () => {
 			const snippet = 'This scheduled check-in message is stuck';
 			tracker.set('test-session', [{
 				snippet,
-				sentAt: Date.now() - 20000, // 20s ago (> 15s threshold)
+				sentAt: Date.now() - 20000, // 20s ago (> 10s threshold)
 				recovered: false,
+				recoveryAttempts: 0,
 			}]);
 
 			// Terminal shows the message at the bottom (stuck)
@@ -2209,9 +2204,10 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('test-session');
 			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(2);
 
-			// Entry should be marked as recovered
+			// Entry should have incremented recoveryAttempts (not yet at max)
 			const entries = tracker.get('test-session');
-			expect(entries[0].recovered).toBe(true);
+			expect(entries[0].recoveryAttempts).toBe(1);
+			expect(entries[0].recovered).toBe(false);
 		});
 
 		it('should detect stuck message when terminal has multi-line pasted text with empty lines', async () => {
@@ -2225,6 +2221,7 @@ describe('AgentRegistrationService', () => {
 				snippet,
 				sentAt: Date.now() - 20000,
 				recovered: false,
+				recoveryAttempts: 0,
 			}]);
 
 			// Terminal shows multi-line pasted text with empty lines between sections
@@ -2244,16 +2241,19 @@ describe('AgentRegistrationService', () => {
 			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('test-session');
 			expect(mockSessionHelper.sendEnter).toHaveBeenCalledTimes(2);
 
+			// Entry should have incremented recoveryAttempts (not yet at max)
 			const entries = tracker.get('test-session');
-			expect(entries[0].recovered).toBe(true);
+			expect(entries[0].recoveryAttempts).toBe(1);
+			expect(entries[0].recovered).toBe(false);
 		});
 
-		it('should NOT act on messages younger than 15 seconds', async () => {
+		it('should NOT act on messages younger than 10 seconds', async () => {
 			const tracker = (service as any).sentMessageTracker;
 			tracker.set('test-session', [{
 				snippet: 'This message was just sent recently',
-				sentAt: Date.now() - 5000, // 5s ago (< 15s threshold)
+				sentAt: Date.now() - 5000, // 5s ago (< 10s threshold)
 				recovered: false,
+				recoveryAttempts: 0,
 			}]);
 
 			mockSessionHelper.capturePane.mockReturnValue(
@@ -2272,6 +2272,7 @@ describe('AgentRegistrationService', () => {
 				snippet: 'Previously recovered stuck message text',
 				sentAt: Date.now() - 30000,
 				recovered: true, // Already recovered
+				recoveryAttempts: 5,
 			}]);
 
 			mockSessionHelper.capturePane.mockReturnValue(
@@ -2290,6 +2291,7 @@ describe('AgentRegistrationService', () => {
 				snippet: 'This message was successfully delivered',
 				sentAt: Date.now() - 20000,
 				recovered: false,
+				recoveryAttempts: 0,
 			}]);
 
 			// Terminal shows different content (message was accepted and processed)
@@ -2309,6 +2311,7 @@ describe('AgentRegistrationService', () => {
 				snippet: 'Message to dead session for testing',
 				sentAt: Date.now() - 20000,
 				recovered: false,
+				recoveryAttempts: 0,
 			}]);
 
 			mockSessionHelper.sessionExists.mockImplementation((name: string) => name !== 'dead-session');
@@ -2316,6 +2319,112 @@ describe('AgentRegistrationService', () => {
 			await (service as any).scanForStuckMessages();
 
 			expect(tracker.has('dead-session')).toBe(false);
+		});
+
+		it('should skip Gemini CLI sessions in tracked-message scanning', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			const tuiRegistry = (service as any).tuiSessionRegistry;
+
+			// Register session as Gemini CLI
+			tuiRegistry.set('gemini-session', RUNTIME_TYPES.GEMINI_CLI);
+			tracker.set('gemini-session', [{
+				snippet: 'This message should NOT trigger recovery',
+				sentAt: Date.now() - 20000, // 20s ago
+				recovered: false,
+				recoveryAttempts: 0,
+			}]);
+
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some output\n' +
+				'This message should NOT trigger recovery\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			// Should NOT have pressed Enter for Gemini CLI
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendKey).not.toHaveBeenCalled();
+
+			// Entry should remain un-recovered
+			const entries = tracker.get('gemini-session');
+			expect(entries[0].recovered).toBe(false);
+		});
+
+		it('should skip Gemini CLI sessions in TUI prompt-line scanning', async () => {
+			const tuiRegistry = (service as any).tuiSessionRegistry;
+
+			// Register session as Gemini CLI
+			tuiRegistry.set('gemini-tui', RUNTIME_TYPES.GEMINI_CLI);
+
+			// Terminal shows text at a TUI prompt — would normally trigger recovery
+			mockSessionHelper.capturePane.mockReturnValue(
+				'│  > This is stuck text at the prompt that is long enough │\n'
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			// Should NOT have pressed Tab+Enter for Gemini CLI
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+			expect(mockSessionHelper.sendKey).not.toHaveBeenCalled();
+		});
+
+		it('should still scan non-Gemini sessions when Gemini sessions are present', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			const tuiRegistry = (service as any).tuiSessionRegistry;
+
+			// One Gemini, one Claude Code
+			tuiRegistry.set('gemini-session', RUNTIME_TYPES.GEMINI_CLI);
+			tuiRegistry.set('claude-session', RUNTIME_TYPES.CLAUDE_CODE);
+
+			tracker.set('claude-session', [{
+				snippet: 'This Claude message IS stuck and should recover',
+				sentAt: Date.now() - 20000,
+				recovered: false,
+				recoveryAttempts: 0,
+			}]);
+			tracker.set('gemini-session', [{
+				snippet: 'This Gemini message should be skipped',
+				sentAt: Date.now() - 20000,
+				recovered: false,
+				recoveryAttempts: 0,
+			}]);
+
+			mockSessionHelper.capturePane.mockImplementation((name: string) => {
+				if (name === 'claude-session') {
+					return 'Output\nThis Claude message IS stuck and should recover\n';
+				}
+				return 'Output\nThis Gemini message should be skipped\n';
+			});
+
+			await (service as any).scanForStuckMessages();
+
+			// Should have recovered claude-session only
+			expect(mockSessionHelper.sendEnter).toHaveBeenCalledWith('claude-session');
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalledWith('gemini-session');
+		});
+
+		it('should mark entry as recovered after MAX_RECOVERY_ATTEMPTS exhausted', async () => {
+			const tracker = (service as any).sentMessageTracker;
+			const snippet = 'Permanently stuck message text here';
+			tracker.set('test-session', [{
+				snippet,
+				sentAt: Date.now() - 20000,
+				recovered: false,
+				recoveryAttempts: 5, // Already at max (5) — next scan marks recovered
+			}]);
+
+			mockSessionHelper.capturePane.mockReturnValue(
+				'Some output\n' +
+				`❯ ${snippet}\n`
+			);
+
+			await (service as any).scanForStuckMessages();
+
+			// Should NOT have pressed Enter — max attempts reached, just marks recovered
+			expect(mockSessionHelper.sendEnter).not.toHaveBeenCalled();
+
+			const entries = tracker.get('test-session');
+			expect(entries[0].recovered).toBe(true);
 		});
 	});
 

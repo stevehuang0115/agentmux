@@ -680,6 +680,18 @@ describe('extractConversationId', () => {
 	it('should find first occurrence', () => {
 		expect(extractConversationId('prefix [CHAT:first] then [CHAT:second]')).toBe('first');
 	});
+
+	it('should extract conversation ID from [GCHAT:] marker', () => {
+		expect(extractConversationId('[GCHAT:spaces/jycUeSAAAAE] Hello')).toBe('spaces/jycUeSAAAAE');
+	});
+
+	it('should prefer [GCHAT:] over [CHAT:] when GCHAT appears first', () => {
+		expect(extractConversationId('[GCHAT:spaces/abc] then [CHAT:conv-123]')).toBe('spaces/abc');
+	});
+
+	it('should return null for empty GCHAT ID', () => {
+		expect(extractConversationId('[GCHAT:]')).toBeNull();
+	});
 });
 
 // ─── extractChatPrefix ────────────────────────────────────────────────────────
@@ -712,5 +724,23 @@ describe('extractChatPrefix', () => {
 		const result = extractChatPrefix('[CHAT:abc no bracket');
 		expect(result.prefixLength).toBe(0);
 		expect(result.content).toBe('[CHAT:abc no bracket');
+	});
+
+	it('should extract GCHAT prefix and content', () => {
+		const result = extractChatPrefix('[GCHAT:spaces/jycUeSAAAAE] Who are you');
+		expect(result.prefixLength).toBe(27);
+		expect(result.content).toBe('Who are you');
+	});
+
+	it('should handle GCHAT prefix without content', () => {
+		const result = extractChatPrefix('[GCHAT:spaces/abc]');
+		expect(result.prefixLength).toBe(18);
+		expect(result.content).toBe('');
+	});
+
+	it('should handle unclosed GCHAT bracket', () => {
+		const result = extractChatPrefix('[GCHAT:spaces/abc no bracket');
+		expect(result.prefixLength).toBe(0);
+		expect(result.content).toBe('[GCHAT:spaces/abc no bracket');
 	});
 });

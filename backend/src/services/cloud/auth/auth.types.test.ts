@@ -27,8 +27,11 @@ describe('isValidPlan', () => {
     expect(isValidPlan('pro')).toBe(true);
   });
 
+  it('should return true for "enterprise"', () => {
+    expect(isValidPlan('enterprise')).toBe(true);
+  });
+
   it('should return false for invalid strings', () => {
-    expect(isValidPlan('enterprise')).toBe(false);
     expect(isValidPlan('premium')).toBe(false);
     expect(isValidPlan('')).toBe(false);
   });

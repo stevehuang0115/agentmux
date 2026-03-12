@@ -2352,6 +2352,54 @@ describe('Teams Handlers', () => {
       );
     });
 
+    it('should pass runtimeType from member to createAgentSession', async () => {
+      // Override the mock team to use a non-default runtimeType
+      const mockTeamWithCrewlyAgent: Team = {
+        id: 'team-1',
+        name: 'Test Team',
+        description: 'Test Description',
+        members: [{
+          id: 'member-1',
+          name: 'Test Member',
+          sessionName: '',
+          role: 'tpm',
+          systemPrompt: 'Test prompt',
+          agentStatus: 'inactive',
+          workingStatus: 'idle',
+          runtimeType: 'crewly-agent',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }],
+        projectIds: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+
+      mockStorageService.getTeams.mockResolvedValue([mockTeamWithCrewlyAgent]);
+
+      const mockCreateResult = {
+        success: true,
+        sessionName: 'test-session',
+        message: 'Session created successfully'
+      };
+
+      mockApiContext.agentRegistrationService = {
+        createAgentSession: jest.fn<any>().mockResolvedValue(mockCreateResult)
+      } as any;
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimeType: 'crewly-agent',
+        })
+      );
+    });
+
     it('should retry on failure and succeed on second attempt', async () => {
       const mockFailResult = {
         success: false,
@@ -2537,6 +2585,249 @@ describe('Teams Handlers', () => {
         expect.objectContaining({
           success: true,
           message: expect.stringContaining('already active'),
+        })
+      );
+    });
+  });
+
+  describe('startTeamMember with orchestrator virtual team', () => {
+    it('should start Assistant (crewly-agent runtime) via agentRegistrationService', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'a1b2c3d4-5678-9abc-def0-assistant001' };
+      mockRequest.body = {};
+
+      (mockApiContext.agentRegistrationService as any).createAgentSession = jest.fn<any>().mockResolvedValue({
+        success: true,
+        sessionName: 'crewly-team-assistant-a1b2c3d4',
+      });
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionName: 'crewly-team-assistant-a1b2c3d4',
+          role: 'orchestrator',
+          memberId: 'a1b2c3d4-5678-9abc-def0-assistant001',
+          teamId: 'orchestrator',
+          runtimeType: 'crewly-agent',
+        })
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: expect.stringContaining('Assistant started successfully'),
+        })
+      );
+    });
+
+    it('should start Auditor (claude-code runtime) via agentRegistrationService', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'e5f6a7b8-9012-3cde-f456-auditor00001' };
+      mockRequest.body = {};
+
+      (mockApiContext.agentRegistrationService as any).createAgentSession = jest.fn<any>().mockResolvedValue({
+        success: true,
+        sessionName: 'crewly-auditor',
+      });
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionName: 'crewly-auditor',
+          role: 'auditor',
+          memberId: 'e5f6a7b8-9012-3cde-f456-auditor00001',
+          teamId: 'orchestrator',
+          runtimeType: 'claude-code',
+        })
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: expect.stringContaining('Auditor started successfully'),
+        })
+      );
+    });
+
+    it('should reject starting the main orchestrator member', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'orchestrator-member' };
+      mockRequest.body = {};
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('system level'),
+        })
+      );
+    });
+
+    it('should return 404 for unknown orchestrator member', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'nonexistent' };
+      mockRequest.body = {};
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(404);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Orchestrator team member not found',
+        })
+      );
+    });
+
+    it('should return 500 when session creation fails', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'e5f6a7b8-9012-3cde-f456-auditor00001' };
+      mockRequest.body = {};
+
+      (mockApiContext.agentRegistrationService as any).createAgentSession = jest.fn<any>().mockResolvedValue({
+        success: false,
+        error: 'Runtime binary not found',
+      });
+
+      await teamsHandlers.startTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(500);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Runtime binary not found',
+        })
+      );
+    });
+  });
+
+  describe('stopTeamMember with orchestrator virtual team', () => {
+    it('should stop Auditor via terminateAgentSession', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'e5f6a7b8-9012-3cde-f456-auditor00001' };
+
+      (mockApiContext.agentRegistrationService as any).terminateAgentSession = jest.fn<any>().mockResolvedValue({
+        success: true,
+      });
+
+      await teamsHandlers.stopTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect((mockApiContext.agentRegistrationService as any).terminateAgentSession).toHaveBeenCalledWith(
+        'crewly-auditor',
+        'auditor'
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: expect.stringContaining('Auditor stopped successfully'),
+        })
+      );
+    });
+
+    it('should stop Assistant via terminateAgentSession', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'a1b2c3d4-5678-9abc-def0-assistant001' };
+
+      (mockApiContext.agentRegistrationService as any).terminateAgentSession = jest.fn<any>().mockResolvedValue({
+        success: true,
+      });
+
+      await teamsHandlers.stopTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect((mockApiContext.agentRegistrationService as any).terminateAgentSession).toHaveBeenCalledWith(
+        'crewly-team-assistant-a1b2c3d4',
+        'orchestrator'
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: expect.stringContaining('Assistant stopped successfully'),
+        })
+      );
+    });
+
+    it('should reject stopping the main orchestrator member', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'orchestrator-member' };
+
+      await teamsHandlers.stopTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: expect.stringContaining('system level'),
+        })
+      );
+    });
+
+    it('should return 404 for unknown orchestrator member', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'nonexistent' };
+
+      await teamsHandlers.stopTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(404);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Orchestrator team member not found',
+        })
+      );
+    });
+
+    it('should return 500 when session termination fails', async () => {
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'e5f6a7b8-9012-3cde-f456-auditor00001' };
+
+      (mockApiContext.agentRegistrationService as any).terminateAgentSession = jest.fn<any>().mockResolvedValue({
+        success: false,
+        error: 'Session not found',
+      });
+
+      await teamsHandlers.stopTeamMember.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(500);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Session not found',
         })
       );
     });

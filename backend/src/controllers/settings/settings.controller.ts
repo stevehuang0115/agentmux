@@ -11,14 +11,23 @@ import {
   getSettingsService,
   SettingsValidationError,
 } from '../../services/settings/settings.service.js';
-import { UpdateSettingsInput, CrewlySettings } from '../../types/settings.types.js';
+import {
+  UpdateSettingsInput,
+  CrewlySettings,
+  maskApiKeysSettings,
+  isValidApiKeyProvider,
+  ApiKeyProvider,
+} from '../../types/settings.types.js';
 
 const router = Router();
+
+/** Timeout in milliseconds for API key validation requests */
+const API_KEY_TEST_TIMEOUT_MS = 10_000;
 
 /**
  * Valid section names for reset endpoints
  */
-const VALID_SECTIONS: (keyof CrewlySettings)[] = ['general', 'chat', 'skills'];
+const VALID_SECTIONS: (keyof CrewlySettings)[] = ['general', 'chat', 'skills', 'apiKeys'];
 
 /**
  * GET /api/settings
@@ -29,9 +38,15 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const settingsService = getSettingsService();
     const settings = await settingsService.getSettings();
 
+    // Mask API keys before returning to prevent leaking secrets
+    const safeSettings = { ...settings };
+    if (safeSettings.apiKeys) {
+      safeSettings.apiKeys = maskApiKeysSettings(safeSettings.apiKeys);
+    }
+
     res.json({
       success: true,
-      data: settings,
+      data: safeSettings,
     });
   } catch (error) {
     next(error);
@@ -157,7 +172,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
   try {
     const importedSettings = req.body;
 
-    if (!importedSettings || typeof importedSettings !== 'object') {
+    if (!importedSettings || typeof importedSettings !== 'object' || Array.isArray(importedSettings)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid settings format',
@@ -194,5 +209,99 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
     next(error);
   }
 });
+
+/**
+ * POST /api/settings/test-api-key
+ * Test if an API key is valid by making a minimal API call
+ */
+router.post('/test-api-key', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { provider, key } = req.body as { provider?: string; key?: string };
+
+    if (!provider || !isValidApiKeyProvider(provider)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid provider. Must be one of: gemini, anthropic, openai`,
+      });
+    }
+
+    if (!key || typeof key !== 'string' || key.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'API key is required',
+      });
+    }
+
+    const result = await testApiKey(provider as ApiKeyProvider, key.trim());
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Test an API key by making a minimal request to the provider
+ *
+ * @param provider - The API key provider
+ * @param key - The API key to test
+ * @returns Test result with valid flag and optional error
+ */
+async function testApiKey(
+  provider: ApiKeyProvider,
+  key: string
+): Promise<{ valid: boolean; error?: string }> {
+  try {
+    switch (provider) {
+      case 'gemini': {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+          { method: 'GET', signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS) }
+        );
+        if (response.ok) return { valid: true };
+        const body = await response.json().catch(() => ({}));
+        return { valid: false, error: (body as Record<string, unknown>)?.error?.toString() || `HTTP ${response.status}` };
+      }
+      case 'anthropic': {
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+          signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS),
+        });
+        // 200 or 429 (rate limited) both mean the key is valid
+        if (response.ok || response.status === 429) return { valid: true };
+        if (response.status === 401) return { valid: false, error: 'Invalid API key' };
+        return { valid: false, error: `HTTP ${response.status}` };
+      }
+      case 'openai': {
+        const response = await fetch('https://api.openai.com/v1/models', {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${key}` },
+          signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS),
+        });
+        if (response.ok) return { valid: true };
+        if (response.status === 401) return { valid: false, error: 'Invalid API key' };
+        return { valid: false, error: `HTTP ${response.status}` };
+      }
+      default:
+        return { valid: false, error: `Unknown provider: ${provider}` };
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return { valid: false, error: message };
+  }
+}
 
 export default router;
