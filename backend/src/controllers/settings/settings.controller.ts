@@ -21,6 +21,9 @@ import {
 
 const router = Router();
 
+/** Timeout in milliseconds for API key validation requests */
+const API_KEY_TEST_TIMEOUT_MS = 10_000;
+
 /**
  * Valid section names for reset endpoints
  */
@@ -256,7 +259,7 @@ async function testApiKey(
       case 'gemini': {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
-          { method: 'GET', signal: AbortSignal.timeout(10000) }
+          { method: 'GET', signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS) }
         );
         if (response.ok) return { valid: true };
         const body = await response.json().catch(() => ({}));
@@ -275,7 +278,7 @@ async function testApiKey(
             max_tokens: 1,
             messages: [{ role: 'user', content: 'hi' }],
           }),
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS),
         });
         // 200 or 429 (rate limited) both mean the key is valid
         if (response.ok || response.status === 429) return { valid: true };
@@ -286,7 +289,7 @@ async function testApiKey(
         const response = await fetch('https://api.openai.com/v1/models', {
           method: 'GET',
           headers: { 'Authorization': `Bearer ${key}` },
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(API_KEY_TEST_TIMEOUT_MS),
         });
         if (response.ok) return { valid: true };
         if (response.status === 401) return { valid: false, error: 'Invalid API key' };

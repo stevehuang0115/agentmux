@@ -2,18 +2,17 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import { CREWLY_CONSTANTS, MESSAGE_SOURCES } from '../../constants.js';
+import { CREWLY_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import { MessengerRegistryService } from '../../services/messaging/messenger-registry.service.js';
 import { SlackMessengerAdapter } from '../../services/messaging/adapters/slack-messenger.adapter.js';
 import { TelegramMessengerAdapter } from '../../services/messaging/adapters/telegram-messenger.adapter.js';
 import { DiscordMessengerAdapter } from '../../services/messaging/adapters/discord-messenger.adapter.js';
 import { GoogleChatMessengerAdapter } from '../../services/messaging/adapters/google-chat-messenger.adapter.js';
-import { formatError } from '../../utils/format-error.js';
-import { cleanGoogleChatResponse } from '../../utils/terminal-output.utils.js';
+import { createIncomingCallback } from '../../services/messaging/google-chat-initializer.js';
 import { getChatService } from '../../services/chat/chat.service.js';
 import type { MessageQueueService } from '../../services/messaging/message-queue.service.js';
-import type { MessengerPlatform, IncomingMessage } from '../../services/messaging/messenger-adapter.interface.js';
+import type { MessengerPlatform } from '../../services/messaging/messenger-adapter.interface.js';
 
 /** Known messenger platforms for input validation. */
 const VALID_PLATFORMS: ReadonlySet<string> = new Set<MessengerPlatform>(['slack', 'telegram', 'discord', 'google-chat']);
@@ -63,58 +62,6 @@ function registerDefaultAdapters(registry: MessengerRegistryService): void {
 }
 
 /**
- * Create an incoming message callback for Google Chat Pub/Sub mode.
- *
- * When a message arrives from the Pub/Sub subscription, this callback enqueues
- * it into the MessageQueueService with source 'google_chat'. The queue processor
- * will deliver it to the orchestrator, and the response router will resolve
- * the reply back to Google Chat via the adapter.
- *
- * Thread tracking: the threadId from the incoming message is stored in
- * sourceMetadata so the response can be posted back to the same Chat thread.
- *
- * @param queueService - The message queue service to enqueue into
- * @param adapter - The Google Chat adapter for sending replies
- * @returns Callback function for incoming messages
- */
-function createGoogleChatIncomingCallback(
-  queueService: MessageQueueService,
-  adapter: GoogleChatMessengerAdapter,
-): (msg: IncomingMessage) => void {
-  return (msg: IncomingMessage) => {
-    // Create a resolve callback that sends the reply back to the Chat thread
-    const replyPromise = new Promise<string>((resolve) => {
-      const sourceMetadata: Record<string, unknown> = {
-        channelId: msg.channelId,
-        userId: msg.userId,
-        threadId: msg.threadId,
-        googleChatResolve: resolve,
-      };
-
-      queueService.enqueue({
-        content: msg.text,
-        conversationId: msg.conversationId,
-        source: MESSAGE_SOURCES.GOOGLE_CHAT,
-        sourceMetadata,
-      });
-    });
-
-    // When the orchestrator responds, clean TUI artifacts and send to Chat thread
-    replyPromise.then(async (response: string) => {
-      try {
-        const cleaned = cleanGoogleChatResponse(response);
-        if (cleaned) {
-          await adapter.sendMessage(msg.channelId, cleaned, { threadId: msg.threadId });
-        }
-      } catch (err) {
-        const replyLogger = LoggerService.getInstance().createComponentLogger('GoogleChatReply');
-        replyLogger.error('Failed to send reply', { channelId: msg.channelId, error: formatError(err) });
-      }
-    });
-  };
-}
-
-/**
  * Create the messenger API router.
  *
  * Registers default adapters and exposes status, connect, disconnect,
@@ -150,7 +97,7 @@ export function createMessengerRouter(): Router {
       if (platform === 'google-chat' && config.subscriptionName && config.projectId) {
         if (messageQueueService) {
           const gchatAdapter = adapter as GoogleChatMessengerAdapter;
-          config.onIncomingMessage = createGoogleChatIncomingCallback(messageQueueService, gchatAdapter);
+          config.onIncomingMessage = createIncomingCallback(messageQueueService, gchatAdapter);
         } else {
           const routeLogger = LoggerService.getInstance().createComponentLogger('MessengerRoutes');
           routeLogger.error('Google Chat Pub/Sub connect blocked: messageQueueService is not initialized — incoming messages would be silently dropped.', {

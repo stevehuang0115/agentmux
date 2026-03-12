@@ -39,6 +39,10 @@ jest.mock('../../services/messaging/adapters/google-chat-messenger.adapter.js', 
   GoogleChatMessengerAdapter: jest.fn(),
 }));
 
+jest.mock('../../services/messaging/google-chat-initializer.js', () => ({
+  createIncomingCallback: jest.fn(() => jest.fn()),
+}));
+
 const mockAddDirectMessage = jest.fn().mockResolvedValue({} as never);
 jest.mock('../../services/chat/chat.service.js', () => ({
   getChatService: jest.fn(() => ({

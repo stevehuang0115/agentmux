@@ -43,6 +43,9 @@ const PROVIDER_ENV_HINTS: Record<ApiKeyProvider, string> = {
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 type TestStatus = Record<string, 'idle' | 'testing' | 'valid' | 'invalid'>;
 
+/** Delay in ms before resetting save status back to idle. */
+const SAVE_STATUS_RESET_DELAY_MS = 2_000;
+
 /**
  * API Keys settings tab for managing provider API keys
  *
@@ -122,7 +125,7 @@ export const ApiKeysTab: React.FC = () => {
       await updateSettings({ apiKeys: localApiKeys });
       setSaveStatus('saved');
       setHasChanges(false);
-      setTimeout(() => setSaveStatus('idle'), 2000);
+      setTimeout(() => setSaveStatus('idle'), SAVE_STATUS_RESET_DELAY_MS);
     } catch (err) {
       setSaveStatus('error');
       setSaveError(err instanceof Error ? err.message : 'Failed to save');

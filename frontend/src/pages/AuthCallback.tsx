@@ -10,9 +10,7 @@
 
 import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-
-/** localStorage key for cloud access token. */
-const CLOUD_TOKEN_KEY = 'crewly_cloud_token';
+import { CLOUD_TOKEN_KEY } from '../constants/cloud.constants';
 
 /**
  * AuthCallback component that processes the OAuth redirect.

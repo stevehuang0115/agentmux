@@ -10,6 +10,7 @@ import { HierarchyDashboard } from '../components/Hierarchy';
 import { useAlert, useConfirm } from '../components/UI/Dialog';
 import { webSocketService } from '../services/websocket.service';
 import { apiService } from '../services/api.service';
+import { assignDefaultAvatars } from '../utils/team.utils';
 
 export const TeamDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -130,21 +131,9 @@ export const TeamDetail: React.FC = () => {
         const result = await response.json();
         if (result.success && result.data) {
           // Migrate team members to include default avatars if missing
-          const avatarChoices = [
-            'https://picsum.photos/seed/1/64',
-            'https://picsum.photos/seed/2/64',
-            'https://picsum.photos/seed/3/64',
-            'https://picsum.photos/seed/4/64',
-            'https://picsum.photos/seed/5/64',
-            'https://picsum.photos/seed/6/64',
-          ];
-
           const migratedTeam = {
             ...result.data,
-            members: result.data.members.map((member: any, index: number) => ({
-              ...member,
-              avatar: member.avatar || avatarChoices[index % avatarChoices.length]
-            }))
+            members: assignDefaultAvatars(result.data.members),
           };
 
           setTeam(migratedTeam);

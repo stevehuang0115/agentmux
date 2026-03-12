@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { CLOUD_API_BASE } from '../constants/cloud.constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -48,9 +49,6 @@ export interface UseDeviceHeartbeatResult {
 
 /** Heartbeat interval in milliseconds. */
 const HEARTBEAT_INTERVAL_MS = 30_000;
-
-/** Cloud API base URL for device endpoints. */
-const CLOUD_API_BASE = 'https://api.crewlyai.com/api';
 
 // ---------------------------------------------------------------------------
 // Hook

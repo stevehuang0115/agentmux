@@ -16,6 +16,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { GCHAT_THREAD_CONSTANTS } from '../../constants.js';
+import { formatMessageTimestamp } from '../../utils/format-date.js';
 
 /**
  * Sanitize a Google Chat resource name into a filesystem-safe directory/file name.
@@ -122,7 +123,7 @@ export class GoogleChatThreadStoreService {
     message: string
   ): Promise<void> {
     const filePath = await this.ensureThreadFile(space, thread, userName);
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const timestamp = formatMessageTimestamp();
     const entry = `\n**${userName}** (${timestamp}):\n${message}\n`;
     await fs.appendFile(filePath, entry, 'utf-8');
   }
@@ -148,7 +149,7 @@ export class GoogleChatThreadStoreService {
       return;
     }
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const timestamp = formatMessageTimestamp();
     const entry = `\n**Crewly** (${timestamp}):\n${message}\n`;
     await fs.appendFile(filePath, entry, 'utf-8');
   }

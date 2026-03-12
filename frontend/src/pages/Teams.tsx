@@ -13,6 +13,7 @@ import { webSocketService } from '../services/websocket.service';
 import { useDeviceHeartbeat } from '../hooks/useDeviceHeartbeat';
 import { useCloudConnection } from '../hooks/useCloudConnection';
 import { useAuth } from '../contexts/AuthContext';
+import { assignDefaultAvatars } from '../utils/team.utils';
 
 export const Teams: React.FC = () => {
   const navigate = useNavigate();
@@ -119,28 +120,15 @@ export const Teams: React.FC = () => {
       // Use cached apiService.getTeams() to reduce redundant API calls
       const teamsData = await apiService.getTeams();
 
-      // Avatar choices for migration
-      const avatarChoices = [
-        'https://picsum.photos/seed/1/64',
-        'https://picsum.photos/seed/2/64',
-        'https://picsum.photos/seed/3/64',
-        'https://picsum.photos/seed/4/64',
-        'https://picsum.photos/seed/5/64',
-        'https://picsum.photos/seed/6/64',
-      ];
-
       // Migrate teams without avatars for backward compatibility
       const migratedTeams = teamsData.map(team => ({
         ...team,
-        members: team.members.map((member: any, index: number) => ({
-          ...member,
-          avatar: member.avatar || avatarChoices[index % avatarChoices.length]
-        }))
+        members: assignDefaultAvatars(team.members),
       }));
 
       setTeams(migratedTeams);
     } catch (error) {
-      console.error('Error fetching teams:', error);
+      logSilentError(error, { context: 'fetchTeams' });
       setTeams([]); // Set empty array on error
     } finally {
       setLoading(false);
@@ -155,7 +143,7 @@ export const Teams: React.FC = () => {
         team.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (team.description && team.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (team.projectIds?.length > 0 && team.projectIds.some(pid => pid.toLowerCase().includes(searchQuery.toLowerCase()))) ||
-        team.members.some(member => 
+        team.members.some(member =>
           member.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           member.role.toLowerCase().includes(searchQuery.toLowerCase())
         )
@@ -202,7 +190,7 @@ export const Teams: React.FC = () => {
         showError('Error creating team: ' + (errorResult.error || 'Unknown error'));
       }
     } catch (error) {
-      console.error('Error creating team:', error);
+      logSilentError(error, { context: 'handleCreateTeam' });
       showError('Error creating team: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };

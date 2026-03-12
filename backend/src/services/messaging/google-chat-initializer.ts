@@ -77,15 +77,17 @@ async function loadSavedCredentials(): Promise<Record<string, unknown> | null> {
 /**
  * Create the incoming message callback for Google Chat Pub/Sub mode.
  *
- * Replicates the same callback from `messenger.routes.ts` so that
- * auto-reconnected Pub/Sub subscriptions can route messages to the
- * orchestrator via the message queue.
+ * This is the single shared callback used by both `messenger.routes.ts`
+ * (manual connect) and the auto-reconnect flow in this module. It enqueues
+ * incoming Pub/Sub messages into the MessageQueueService, registers thread
+ * mappings in the terminal gateway, and stores conversation history in
+ * the thread store.
  *
  * @param queueService - The message queue service to enqueue into
  * @param adapter - The Google Chat adapter for sending replies
  * @returns Callback function for incoming messages
  */
-function createIncomingCallback(
+export function createIncomingCallback(
   queueService: MessageQueueService,
   adapter: GoogleChatMessengerAdapter,
 ): (msg: IncomingMessage) => void {

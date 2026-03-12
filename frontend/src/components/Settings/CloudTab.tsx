@@ -10,16 +10,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Cloud, LogOut, RefreshCw, Check, ExternalLink, Zap } from 'lucide-react';
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** Cloud API base URL. */
-const CLOUD_API_BASE = 'https://api.crewlyai.com/api';
-
-/** localStorage key for cloud access token. */
-const CLOUD_TOKEN_KEY = 'crewly_cloud_token';
+import { CLOUD_API_BASE, CLOUD_TOKEN_KEY } from '../../constants/cloud.constants';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -93,18 +84,8 @@ export const CloudTab: React.FC = () => {
     }
   }, []);
 
-  /** Check for callback token in URL on mount. */
+  /** Validate token on mount. */
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-    if (token) {
-      localStorage.setItem(CLOUD_TOKEN_KEY, token);
-      // Clean up URL
-      const url = new URL(window.location.href);
-      url.searchParams.delete('token');
-      window.history.replaceState({}, '', url.toString());
-    }
-
     validateToken();
   }, [validateToken]);
 
