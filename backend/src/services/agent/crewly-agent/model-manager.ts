@@ -14,6 +14,8 @@
 
 import type { LanguageModel } from 'ai';
 import { type ModelConfig, type ModelProvider, CREWLY_AGENT_DEFAULTS } from './types.js';
+import { getSettingsService } from '../../settings/settings.service.js';
+import { ApiKeyProvider } from '../../../types/settings.types.js';
 
 /**
  * Factory for creating AI SDK language model instances from configuration.
@@ -34,11 +36,17 @@ export class ModelManager {
   /**
    * Get an AI SDK language model instance for the given configuration.
    *
+   * Resolves API keys from settings (with override chain) and injects them
+   * into the environment before creating the model, so provider SDKs can find them.
+   *
    * @param config - Model configuration specifying provider and model ID
    * @returns AI SDK LanguageModel instance ready for use with generateText
    * @throws Error if the provider is unknown or the SDK is not installed
    */
   async getModel(config: ModelConfig = CREWLY_AGENT_DEFAULTS.DEFAULT_MODEL): Promise<LanguageModel> {
+    // Ensure the provider's API key is in the environment from settings
+    await this.ensureApiKeyInEnv(config.provider);
+
     const providerFn = await this.getProviderFunction(config.provider);
     return providerFn(config.modelId);
   }
@@ -80,16 +88,59 @@ export class ModelManager {
   }
 
   /**
-   * Check which providers have API keys configured in the environment.
+   * Check which providers have API keys configured (settings + env vars).
    *
    * @returns Object indicating which providers are available
    */
-  getAvailableProviders(): Record<ModelProvider, boolean> {
+  async getAvailableProviders(): Promise<Record<ModelProvider, boolean>> {
+    const settingsService = getSettingsService();
+    const context = { runtime: 'crewly-agent' };
+
+    const [geminiKey, anthropicKey, openaiKey] = await Promise.all([
+      settingsService.getApiKey('gemini', context),
+      settingsService.getApiKey('anthropic', context),
+      settingsService.getApiKey('openai', context),
+    ]);
+
     return {
-      anthropic: !!process.env.ANTHROPIC_API_KEY,
-      openai: !!process.env.OPENAI_API_KEY,
-      google: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY || !!process.env.GEMINI_API_KEY,
+      anthropic: !!anthropicKey,
+      openai: !!openaiKey,
+      google: !!geminiKey,
     };
+  }
+
+  /**
+   * Map model provider name to API key provider name
+   */
+  private static providerToApiKeyProvider(provider: ModelProvider): ApiKeyProvider {
+    return provider === 'google' ? 'gemini' : provider;
+  }
+
+  /**
+   * Ensure the API key for a provider is available in process.env
+   * by resolving it from settings if not already present.
+   *
+   * @param provider - The model provider
+   */
+  private async ensureApiKeyInEnv(provider: ModelProvider): Promise<void> {
+    const apiKeyProvider = ModelManager.providerToApiKeyProvider(provider);
+    const settingsService = getSettingsService();
+    const key = await settingsService.getApiKey(apiKeyProvider, { runtime: 'crewly-agent' });
+
+    if (!key) return;
+
+    // Set env vars so the provider SDKs can find them
+    switch (provider) {
+      case 'anthropic':
+        if (!process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = key;
+        break;
+      case 'openai':
+        if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
+        break;
+      case 'google':
+        if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
+        break;
+    }
   }
 
   /**

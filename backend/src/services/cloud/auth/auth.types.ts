@@ -120,7 +120,7 @@ export interface LicenseStatus {
  * @returns true if value is 'free' or 'pro'
  */
 export function isValidPlan(value: unknown): value is UserPlan {
-  return value === 'free' || value === 'pro';
+  return value === 'free' || value === 'pro' || value === 'enterprise';
 }
 
 /**

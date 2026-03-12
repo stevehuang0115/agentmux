@@ -98,6 +98,7 @@ export class AgentRegistrationService {
 		snippet: string;
 		sentAt: number;
 		recovered: boolean;
+		recoveryAttempts: number;
 	}>>();
 
 	// Per-session delivery mutex to serialize message delivery.
@@ -2049,17 +2050,27 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				`http://localhost:${WEB_CONSTANTS.PORTS.BACKEND}`
 			);
 
-			// Pass Gemini API key to gemini-cli agents so they authenticate
-			// with the paid API key instead of the free-tier Google login.
-			if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
-				const geminiApiKey = process.env[ENV_CONSTANTS.GEMINI_API_KEY];
-				if (geminiApiKey) {
-					await sessionHelper.setEnvironmentVariable(
-						sessionName,
-						ENV_CONSTANTS.GEMINI_API_KEY,
-						geminiApiKey
-					);
-				}
+			// Inject API keys from settings (with override chain) for all runtimes
+			const settingsService = getSettingsService();
+			const runtimeContext = { runtime: runtimeType };
+
+			// Gemini key — needed by gemini-cli and crewly-agent
+			const geminiKey = await settingsService.getApiKey('gemini', runtimeContext);
+			if (geminiKey) {
+				await sessionHelper.setEnvironmentVariable(sessionName, 'GOOGLE_GENERATIVE_AI_API_KEY', geminiKey);
+				await sessionHelper.setEnvironmentVariable(sessionName, ENV_CONSTANTS.GEMINI_API_KEY, geminiKey);
+			}
+
+			// Anthropic key — needed by claude-code and crewly-agent
+			const anthropicKey = await settingsService.getApiKey('anthropic', runtimeContext);
+			if (anthropicKey) {
+				await sessionHelper.setEnvironmentVariable(sessionName, 'ANTHROPIC_API_KEY', anthropicKey);
+			}
+
+			// OpenAI key — needed by codex-cli and crewly-agent
+			const openaiKey = await settingsService.getApiKey('openai', runtimeContext);
+			if (openaiKey) {
+				await sessionHelper.setEnvironmentVariable(sessionName, 'OPENAI_API_KEY', openaiKey);
 			}
 
 			this.logger.info('Agent session created and environment variables set, initializing with registration', {
@@ -2339,8 +2350,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				};
 			}
 
-			// Use robust message delivery with proper waiting mechanism
-			const delivered = await this.sendMessageWithRetry(sessionName, message, 3, runtimeType);
+			// Use robust message delivery with proper waiting mechanism.
+			// Gemini CLI: use 2 attempts — one retry is needed for TUI focus
+			// issues (Tab+Enter recovery). Previously set to 1 which caused
+			// Google Chat messages to fail permanently on first TUI hiccup.
+			const maxDeliveryAttempts = runtimeType === RUNTIME_TYPES.GEMINI_CLI ? 2 : 3;
+			const delivered = await this.sendMessageWithRetry(sessionName, message, maxDeliveryAttempts, runtimeType);
 
 			if (!delivered) {
 				// Check if the agent is actively processing (busy) — the queue
@@ -2430,8 +2445,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			return false;
 		}
 
+		const waitStartMs = Date.now();
+
 		return new Promise<boolean>((resolve) => {
 			let resolved = false;
+			let pollCount = 0;
 			const pollInterval = EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL;
 
 			const cleanup = () => {
@@ -2453,9 +2471,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// Poll capturePane periodically as a fallback
 			const pollId = setInterval(() => {
 				if (resolved) return;
+				pollCount++;
 				const output = sessionHelper.capturePane(sessionName);
 				if (this.isClaudeAtPrompt(output, runtimeType)) {
-					this.logger.debug('Agent at prompt (detected via polling)', { sessionName });
+					const elapsedMs = Date.now() - waitStartMs;
+					this.logger.info('Agent ready after polling', { sessionName, pollCount, elapsedMs });
 					cleanup();
 					resolve(true);
 				}
@@ -2465,9 +2485,11 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			// that the fast poll misses (e.g. when prompt is beyond the default 200 lines)
 			const deepScanId = setInterval(() => {
 				if (resolved) return;
+				pollCount++;
 				const output = sessionHelper.capturePane(sessionName, EVENT_DELIVERY_CONSTANTS.DEEP_SCAN_LINES);
 				if (this.isClaudeAtPrompt(output, runtimeType)) {
-					this.logger.debug('Agent at prompt (detected via deep scan)', { sessionName });
+					const elapsedMs = Date.now() - waitStartMs;
+					this.logger.info('Agent ready after polling', { sessionName, pollCount, elapsedMs });
 					cleanup();
 					resolve(true);
 				}
@@ -3001,103 +3023,177 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						claudeDelivered = true;
 						break;
 					}
+
+					// --- Extended confirmation loop ---
+					// If progressive verification didn't confirm delivery, run an
+					// extended check loop (every 3s, up to 30s total). Each iteration
+					// captures the pane, checks for spinner/working indicators, and
+					// presses Tab+Enter if message text is still stuck at the bottom.
+					if (!claudeDelivered) {
+						const CONFIRM_INTERVAL_MS = 3000;
+						const CONFIRM_MAX_MS = 30000;
+						const confirmStart = Date.now();
+						let confirmAttempt = 0;
+
+						// Normalize snippet once for reuse
+						const confirmSnippet = (message.length > 20
+							? message.substring(0, 80)
+							: message).replace(/\s+/g, ' ').trim();
+
+						while (Date.now() - confirmStart < CONFIRM_MAX_MS) {
+							await delay(CONFIRM_INTERVAL_MS);
+							confirmAttempt++;
+
+							const loopOutput = sessionHelper.capturePane(sessionName);
+
+							// Spinner or working indicator → delivered
+							if (containsSpinnerOrWorkingIndicator(loopOutput)) {
+								this.logger.info('Confirmation loop: processing detected', {
+									sessionName, attempt, confirmAttempt,
+								});
+								claudeDelivered = true;
+								break;
+							}
+
+							// Not at prompt and text not stuck → delivered
+							const loopBottom = loopOutput.split('\n').slice(-10).join(' ').replace(/\s+/g, ' ');
+							if (!this.isClaudeAtPrompt(loopOutput, runtimeType) && !loopBottom.includes(confirmSnippet)) {
+								this.logger.info('Confirmation loop: prompt gone, text cleared', {
+									sessionName, attempt, confirmAttempt,
+								});
+								claudeDelivered = true;
+								break;
+							}
+
+							// Text still stuck → Tab+Enter recovery
+							if (loopBottom.includes(confirmSnippet)) {
+								this.logger.warn('Confirmation loop: text still stuck, pressing Tab+Enter', {
+									sessionName, attempt, confirmAttempt,
+								});
+								await sessionHelper.sendKey(sessionName, 'Tab');
+								await delay(200);
+								await sessionHelper.sendEnter(sessionName);
+								await delay(500);
+								await sessionHelper.sendEnter(sessionName); // backup
+							}
+						}
+
+						if (!claudeDelivered) {
+							this.logger.error('Confirmation loop exhausted — delivery unconfirmed', {
+								sessionName, attempt, confirmAttempts: confirmAttempt,
+							});
+						}
+					}
+
 					if (claudeDelivered) {
 						return true;
 					}
 				} else {
-					// --- Phase 1: Direct stuck-at-prompt detection ---
-					// Check if our message text is literally sitting on the `> ` prompt
-					// line. This is the definitive signal that Enter was not pressed or
-					// was silently consumed by the TUI. Unlike output-change detection,
-					// this has no false positives from TUI redraws or historical text.
-					const stuckAtPrompt = this.isTextStuckAtTuiPrompt(sessionName, message);
-					if (stuckAtPrompt) {
-						// Attempt immediate recovery: press Enter to submit the text
-						const recovered = await this.recoverStuckTuiMessage(sessionName, message);
-						if (recovered) {
-							this.logger.info('Message recovered via Enter re-press', {
+					// --- Gemini CLI: lightweight verification ---
+					// Gemini CLI's PTY write is reliable. The aggressive verification
+					// (stuck detection + Tab+Enter recovery + output-change diff) causes
+					// false "stuck" judgments that trigger visible retry error spam even
+					// when the message was successfully delivered (#retry-storm fix).
+					//
+					// Strategy: only check for the definitive stuck signal (message text
+					// literally sitting on the `> ` prompt line). If not stuck, trust the
+					// write. Skip the output-change heuristics that cause false negatives.
+					const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
+
+					if (isGemini) {
+						// Single stuck-at-prompt check — the only reliable failure signal
+						const stuckAtPrompt = this.isTextStuckAtTuiPrompt(sessionName, message);
+						if (stuckAtPrompt) {
+							const recovered = await this.recoverStuckTuiMessage(sessionName, message);
+							if (recovered) {
+								this.logger.info('Gemini CLI: message recovered via Enter re-press', {
+									sessionName,
+									attempt,
+								});
+								return true;
+							}
+							this.logger.warn('Gemini CLI: message still stuck after Enter recovery', {
+								sessionName,
+								attempt,
+							});
+							// Fall through to retry cleanup below
+						} else {
+							// Not stuck at prompt — PTY write succeeded, trust delivery.
+							// The old code did output-change detection here, but TUI redraws
+							// and minimal length diffs caused false "not delivered" verdicts.
+							this.logger.debug('Gemini CLI: message not stuck at prompt — delivery trusted', {
 								sessionName,
 								attempt,
 							});
 							return true;
 						}
-						// Still stuck after recovery — fall through to retry with cleanup
-						this.logger.warn('Message still stuck after Enter recovery, will retry', {
-							sessionName,
-							attempt,
-						});
-						// Skip the output-change check — we know it's stuck
 					} else {
-						// --- Phase 2: Output-change detection ---
-						// Text is NOT on the prompt line. Either it was delivered (Enter
-						// worked) or it was never written (TUI was defocused and the Ink
-						// framework consumed the text silently). Compare output snapshots.
-						const afterOutput = sessionHelper.capturePane(sessionName, 20);
-						const lengthDiff = afterOutput.length - beforeLength;
-						const contentChanged = beforeOutput !== afterOutput;
+						// --- Non-Gemini TUI runtimes: full verification ---
+						// Phase 1: Direct stuck-at-prompt detection
+						const stuckAtPrompt = this.isTextStuckAtTuiPrompt(sessionName, message);
+						if (stuckAtPrompt) {
+							const recovered = await this.recoverStuckTuiMessage(sessionName, message);
+							if (recovered) {
+								this.logger.info('Message recovered via Enter re-press', {
+									sessionName,
+									attempt,
+								});
+								return true;
+							}
+							this.logger.warn('Message still stuck after Enter recovery, will retry', {
+								sessionName,
+								attempt,
+							});
+						} else {
+							// Phase 2: Output-change detection
+							const afterOutput = sessionHelper.capturePane(sessionName, 20);
+							const lengthDiff = afterOutput.length - beforeLength;
+							const contentChanged = beforeOutput !== afterOutput;
 
-						// CRITICAL: Only check for processing indicators in NEW content
-						// (the diff between before and after). Checking the full afterOutput
-						// causes false positives because words like "generating", "searching"
-						// commonly appear in the agent's previous response text visible in
-						// the 20-line capture.
-						let newContent = '';
-						if (contentChanged && afterOutput.length > beforeOutput.length) {
-							newContent = afterOutput.slice(beforeLength);
-						} else if (contentChanged) {
-							const beforeLines = new Set(beforeOutput.split('\n'));
-							newContent = afterOutput
-								.split('\n')
-								.filter((line) => !beforeLines.has(line))
-								.join('\n');
-						}
+							let newContent = '';
+							if (contentChanged && afterOutput.length > beforeOutput.length) {
+								newContent = afterOutput.slice(beforeLength);
+							} else if (contentChanged) {
+								const beforeLines = new Set(beforeOutput.split('\n'));
+								newContent = afterOutput
+									.split('\n')
+									.filter((line) => !beforeLines.has(line))
+									.join('\n');
+							}
 
-						const hasProcessingIndicators = containsProcessingIndicator(
-							newContent || afterOutput.slice(-500)
-						);
-						const hasGeminiIndicators = newContent.length > 0
-							&& containsGeminiProcessingKeywords(newContent);
+							const hasProcessingIndicators = containsProcessingIndicator(
+								newContent || afterOutput.slice(-500)
+							);
 
-						const significantLengthChange = Math.abs(lengthDiff) > 10;
-						// For Gemini CLI, contentChanged alone is sufficient evidence of
-						// delivery. The TUI redraws minimally (lengthDiff can be as low as
-						// 1-2 chars) when processing starts, so requiring significantLengthChange
-						// causes false "stuck" detection. False "stuck" + Ctrl+C kills the CLI.
-						const isGemini = runtimeType === RUNTIME_TYPES.GEMINI_CLI;
-						const delivered = (lengthDiff > 20)
-							|| (contentChanged && significantLengthChange)
-							|| (contentChanged && isGemini)
-							|| hasProcessingIndicators
-							|| hasGeminiIndicators;
+							const significantLengthChange = Math.abs(lengthDiff) > 10;
+							const delivered = (lengthDiff > 20)
+								|| (contentChanged && significantLengthChange)
+								|| hasProcessingIndicators;
 
-						if (delivered) {
-							// Log at warn level when verification passed on weak signals
-							// (output length change only, no explicit processing indicators)
-							// so future false positives are traceable in logs.
-							const hasStrongSignal = hasProcessingIndicators || hasGeminiIndicators;
-							const logLevel = hasStrongSignal ? 'debug' : 'warn';
-							this.logger[logLevel](`Message delivery verified (${hasStrongSignal ? 'strong' : 'weak'} signal)`, {
+							if (delivered) {
+								const hasStrongSignal = hasProcessingIndicators;
+								const logLevel = hasStrongSignal ? 'debug' : 'warn';
+								this.logger[logLevel](`Message delivery verified (${hasStrongSignal ? 'strong' : 'weak'} signal)`, {
+									sessionName,
+									attempt,
+									lengthDiff,
+									contentChanged,
+									hasProcessingIndicators,
+									newContentLength: newContent.length,
+									signal: hasStrongSignal ? 'processing-indicators' : 'output-length-change-only',
+								});
+								return true;
+							}
+
+							this.logger.warn('TUI output did not change after send — message may not have been accepted', {
 								sessionName,
 								attempt,
 								lengthDiff,
 								contentChanged,
 								hasProcessingIndicators,
-								hasGeminiIndicators,
 								newContentLength: newContent.length,
-								signal: hasStrongSignal ? 'processing-indicators' : 'output-length-change-only',
 							});
-							return true;
 						}
-
-						this.logger.warn('TUI output did not change after send — message may not have been accepted', {
-							sessionName,
-							attempt,
-							lengthDiff,
-							contentChanged,
-							hasProcessingIndicators,
-							hasGeminiIndicators,
-							newContentLength: newContent.length,
-						});
 					}
 				}
 
@@ -3264,7 +3360,12 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				const promptContent = matchTuiPromptLine(line);
 				if (promptContent !== null) {
 					const trimmedContent = stripTuiLineBorders(promptContent).trim();
-					// Check if the prompt line content contains our message text
+					// Check if the prompt line content contains our message text.
+					// Only check the BOTTOMMOST prompt line — historical echoes of
+					// submitted messages also appear as `> text` further up in the
+					// TUI conversation history. Without this break, those echoes
+					// cause false "stuck" detections even after the message was
+					// successfully delivered.
 					if (trimmedContent.length > 5 && trimmedContent.includes(searchToken)) {
 						this.logger.warn('Text stuck at TUI prompt — Enter was not pressed', {
 							sessionName,
@@ -3273,6 +3374,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						});
 						return true;
 					}
+					break; // Only check the first (bottommost) prompt line
 				}
 			}
 
@@ -3394,9 +3496,15 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		// --- Part 1: Existing TUI prompt-line scanning (unchanged) ---
-		for (const [sessionName] of this.tuiSessionRegistry) {
+		// --- Part 1: Existing TUI prompt-line scanning ---
+		for (const [sessionName, runtimeType] of this.tuiSessionRegistry) {
 			try {
+				// Skip Gemini CLI sessions — their TUI prompt behaves differently
+				// and false-positive stuck detection causes Tab+Enter spam.
+				if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+					continue;
+				}
+
 				// Skip sessions that no longer exist
 				if (!sessionHelper.sessionExists(sessionName)) {
 					this.tuiSessionRegistry.delete(sessionName);
@@ -3416,7 +3524,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						// Only act on substantial text (> 10 chars) to avoid false positives
 						// from TUI rendering artifacts or short status text
 						if (trimmedContent.length > 10) {
-							// Skip known Gemini CLI idle placeholder text that sits at
+							// Skip known idle placeholder text that sits at
 							// the `> ` prompt when no user input is present. These are
 							// NOT stuck messages — they are TUI decoration.
 							const lowerContent = trimmedContent.toLowerCase();
@@ -3451,13 +3559,21 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 			}
 		}
 
-		// --- Part 2: Tracked-message scanning (all runtimes) ---
+		// --- Part 2: Tracked-message scanning (non-Gemini runtimes) ---
 		const now = Date.now();
-		const MIN_AGE_MS = 15000; // Only check messages older than 15s
+		const MIN_AGE_MS = 10000; // Check messages older than 10s
+		const MAX_RECOVERY_ATTEMPTS = 5; // Give up after 5 Tab+Enter attempts
 
 		for (const [sessionName, entries] of this.sentMessageTracker) {
 			if (!sessionHelper.sessionExists(sessionName)) {
 				this.sentMessageTracker.delete(sessionName);
+				continue;
+			}
+
+			// Skip Gemini CLI sessions — Tab+Enter recovery causes more harm
+			// than good because the Gemini TUI handles input differently.
+			const trackedRuntime = this.tuiSessionRegistry.get(sessionName);
+			if (trackedRuntime === RUNTIME_TYPES.GEMINI_CLI) {
 				continue;
 			}
 
@@ -3469,12 +3585,25 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				for (const entry of entries) {
 					if (entry.recovered) continue;
 					if (now - entry.sentAt < MIN_AGE_MS) continue;
+					if (entry.recoveryAttempts >= MAX_RECOVERY_ATTEMPTS) {
+						// Exhausted recovery attempts — mark as recovered to stop retrying
+						entry.recovered = true;
+						this.logger.error('Background scan: max recovery attempts exhausted', {
+							sessionName,
+							snippet: entry.snippet.slice(0, 50),
+							attempts: entry.recoveryAttempts,
+						});
+						continue;
+					}
 
 					if (bottomText.includes(entry.snippet)) {
+						entry.recoveryAttempts++;
 						this.logger.warn('Background scan: tracked message stuck, pressing Tab+Enter', {
 							sessionName,
 							snippet: entry.snippet.slice(0, 50),
 							ageMs: now - entry.sentAt,
+							attempt: entry.recoveryAttempts,
+							maxAttempts: MAX_RECOVERY_ATTEMPTS,
 						});
 
 						// Tab restores Ink TUI focus before Enter
@@ -3483,7 +3612,6 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						await sessionHelper.sendEnter(sessionName);
 						await delay(500);
 						await sessionHelper.sendEnter(sessionName); // backup
-						entry.recovered = true;
 						break; // One recovery per session per scan cycle
 					}
 				}
@@ -3535,7 +3663,7 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 		if (snippet.length < 10) return; // Too short to reliably match
 
 		const entries = this.sentMessageTracker.get(sessionName) || [];
-		entries.push({ snippet, sentAt: Date.now(), recovered: false });
+		entries.push({ snippet, sentAt: Date.now(), recovered: false, recoveryAttempts: 0 });
 
 		// Keep only last 5 minutes of entries
 		const cutoff = Date.now() - 5 * 60 * 1000;

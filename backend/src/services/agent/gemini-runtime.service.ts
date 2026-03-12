@@ -6,6 +6,7 @@ import { SessionCommandHelper } from '../session/index.js';
 import { CREWLY_CONSTANTS, RUNTIME_TYPES, GEMINI_FAILURE_PATTERNS, type RuntimeType } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
 import { addGeminiTrustedFolders } from '../../utils/gemini-trusted-folders.js';
+import { getSettingsService } from '../settings/settings.service.js';
 
 /**
  * Gemini CLI specific runtime service implementation.
@@ -324,9 +325,12 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 	 * @param projectPath - Project directory where `.env` will be created/updated
 	 */
 	private async ensureGeminiEnvFile(projectPath: string): Promise<void> {
-		const apiKey = process.env.GEMINI_API_KEY;
+		// Resolve API key through settings override chain → process.env fallback
+		const settingsService = getSettingsService();
+		const apiKey = await settingsService.getApiKey('gemini', { runtime: RUNTIME_TYPES.GEMINI_CLI });
+
 		if (!apiKey) {
-			this.logger.debug('GEMINI_API_KEY not found in process environment, skipping .env setup');
+			this.logger.debug('Gemini API key not found in settings or process environment, skipping .env setup');
 			return;
 		}
 
@@ -334,7 +338,6 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 		const envLine = `GEMINI_API_KEY="${apiKey}"`;
 
 		try {
-			// Check if .env already contains the key
 			let existingContent: string | null = null;
 			try {
 				existingContent = await fsPromises.readFile(envPath, 'utf8');
@@ -343,18 +346,29 @@ export class GeminiRuntimeService extends RuntimeAgentService {
 			}
 
 			if (existingContent !== null) {
-				if (existingContent.includes('GEMINI_API_KEY=')) {
-					this.logger.debug('GEMINI_API_KEY already present in .env', { projectPath });
+				// Check if key already matches
+				const existingMatch = existingContent.match(/GEMINI_API_KEY="?([^"\n]*)"?/);
+				if (existingMatch && existingMatch[1] === apiKey) {
+					this.logger.debug('GEMINI_API_KEY already up-to-date in .env', { projectPath });
 					return;
 				}
-				// Append to existing .env
-				const separator = existingContent.endsWith('\n') ? '' : '\n';
-				await fsPromises.appendFile(envPath, `${separator}${envLine}\n`);
+
+				if (existingContent.includes('GEMINI_API_KEY=')) {
+					// Update existing key to match settings value
+					const updated = existingContent.replace(/GEMINI_API_KEY="?[^"\n]*"?/, envLine);
+					await fsPromises.writeFile(envPath, updated);
+					this.logger.info('Updated GEMINI_API_KEY in .env from settings', { projectPath });
+				} else {
+					// Append to existing .env
+					const separator = existingContent.endsWith('\n') ? '' : '\n';
+					await fsPromises.appendFile(envPath, `${separator}${envLine}\n`);
+					this.logger.info('Added GEMINI_API_KEY to .env from settings', { projectPath });
+				}
 			} else {
 				// Create new .env
 				await fsPromises.writeFile(envPath, `${envLine}\n`);
+				this.logger.info('Created .env with GEMINI_API_KEY from settings', { projectPath });
 			}
-			this.logger.info('Added GEMINI_API_KEY to .env', { projectPath });
 		} catch (error) {
 			this.logger.warn('Failed to write GEMINI_API_KEY to .env (non-fatal)', {
 				projectPath,

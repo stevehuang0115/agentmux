@@ -6,7 +6,7 @@ import { writeFile, readFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, AGENT_IDENTITY_CONSTANTS, PTY_CONSTANTS, ACTIVITY_MONITOR_CONSTANTS, type WorkingStatus } from '../../constants.js';
+import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, AGENT_IDENTITY_CONSTANTS, PTY_CONSTANTS, ACTIVITY_MONITOR_CONSTANTS, RUNTIME_TYPES, type WorkingStatus } from '../../constants.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import type { EventBusService } from '../event-bus/event-bus.service.js';
@@ -445,7 +445,19 @@ export class ActivityMonitorService {
               // Get terminal output and check for activity
               const currentOutput = await this.getTerminalOutput(member.sessionName);
               const previousOutput = this.lastTerminalOutputs.get(member.sessionName) || '';
-              const outputChanged = currentOutput !== previousOutput && currentOutput.trim() !== '';
+              let outputChanged = currentOutput !== previousOutput && currentOutput.trim() !== '';
+
+              // Gemini CLI TUI re-renders in place, so bottom-N line comparison
+              // often shows no change even while the agent is actively working.
+              // Fall back to raw PTY activity timestamp as an additional signal.
+              if (!outputChanged && member.runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+                const tracker = PtyActivityTrackerService.getInstance();
+                const idleMs = tracker.getIdleTimeMs(member.sessionName);
+                if (idleMs > 0 && idleMs < ACTIVITY_MONITOR_CONSTANTS.POLLING_INTERVAL_MS) {
+                  outputChanged = true;
+                }
+              }
+
               const newWorkingStatus: WorkingStatus = outputChanged ? 'in_progress' : 'idle';
 
               // Update working status if changed

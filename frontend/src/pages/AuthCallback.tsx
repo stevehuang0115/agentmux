@@ -1,0 +1,61 @@
+/**
+ * Auth Callback Page
+ *
+ * Handles the OAuth callback from CrewlyAI Cloud.
+ * Receives the token from the URL query parameter, stores it
+ * in localStorage, and redirects to the Settings Cloud tab.
+ *
+ * @module pages/AuthCallback
+ */
+
+import { useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+
+/** localStorage key for cloud access token. */
+const CLOUD_TOKEN_KEY = 'crewly_cloud_token';
+
+/**
+ * AuthCallback component that processes the OAuth redirect.
+ *
+ * @returns Loading indicator while processing
+ */
+export const AuthCallback: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const token = searchParams.get('token');
+    const error = searchParams.get('error');
+
+    if (token) {
+      localStorage.setItem(CLOUD_TOKEN_KEY, token);
+
+      // Also notify the backend
+      fetch('/api/cloud/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      }).catch(() => {
+        // Best-effort
+      });
+    }
+
+    // Redirect to settings with cloud tab active
+    if (error) {
+      navigate('/settings?tab=cloud&error=' + encodeURIComponent(error), { replace: true });
+    } else {
+      navigate('/settings?tab=cloud', { replace: true });
+    }
+  }, [searchParams, navigate]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background-dark">
+      <div className="text-center">
+        <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin mx-auto" />
+        <p className="text-sm text-text-secondary-dark mt-4">Completing sign-in...</p>
+      </div>
+    </div>
+  );
+};
+
+export default AuthCallback;

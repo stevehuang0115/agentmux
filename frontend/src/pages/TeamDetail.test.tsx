@@ -6,12 +6,13 @@ import { TeamDetail } from './TeamDetail';
 
 // Mock the useNavigate and useParams hooks
 const mockNavigate = vi.fn();
+let mockTeamId = 'team-1';
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual('react-router-dom');
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useParams: () => ({ id: 'team-1' })
+    useParams: () => ({ id: mockTeamId })
   };
 });
 
@@ -23,19 +24,90 @@ vi.mock('../contexts/TerminalContext', () => ({
   })
 }));
 
-// Mock child components
-vi.mock('../components/TeamMemberCard', () => ({
-  TeamMemberCard: ({ member, onUpdate, onDelete, onStart, onStop }: any) => (
-    <div data-testid={`member-card-${member.id}`} className="member-card">
-      <h4>{member.name}</h4>
-      <p>{member.role}</p>
-      <p>Status: {member.sessionName ? 'active' : 'inactive'}</p>
-      <button onClick={() => onUpdate(member.id, { name: 'Updated Name' })}>Update</button>
-      <button onClick={() => onDelete(member.id)}>Delete</button>
-      <button onClick={() => onStart(member.id)}>Start</button>
-      <button onClick={() => onStop(member.id)}>Stop</button>
-    </div>
-  )
+// Mock the websocket service
+vi.mock('../services/websocket.service', () => ({
+  webSocketService: {
+    on: vi.fn(),
+    off: vi.fn(),
+  }
+}));
+
+// Mock useAlert and useConfirm hooks
+const mockShowSuccess = vi.fn();
+const mockShowError = vi.fn();
+const mockShowWarning = vi.fn();
+const mockShowConfirm = vi.fn();
+vi.mock('../components/UI/Dialog', () => ({
+  useAlert: () => ({
+    showSuccess: mockShowSuccess,
+    showError: mockShowError,
+    showWarning: mockShowWarning,
+    AlertComponent: () => null,
+  }),
+  useConfirm: () => ({
+    showConfirm: mockShowConfirm,
+    ConfirmComponent: () => null,
+  }),
+}));
+
+// Mock TeamHeader to render testable controls
+vi.mock('../components/TeamDetail', () => ({
+  TeamHeader: ({ team, teamStatus, onStartTeam, onStopTeam, onViewTerminal, onDeleteTeam, onEditTeam, isStoppingTeam, isStartingTeam }: any) => {
+    const isOrchestratorTeam = team?.id === 'orchestrator' || team?.name === 'Orchestrator Team';
+    return (
+      <div data-testid="team-header">
+        <h1 className="page-title">{team.name}</h1>
+        <span data-testid="team-status">{teamStatus === 'active' ? 'ACTIVE' : 'IDLE'}</span>
+        {teamStatus === 'idle' && !isStartingTeam ? (
+          <button onClick={onStartTeam}>
+            {isOrchestratorTeam ? 'Start Orchestrator' : 'Start Team'}
+          </button>
+        ) : isStartingTeam ? (
+          <button disabled>Starting...</button>
+        ) : (
+          <button onClick={onStopTeam}>
+            {isStoppingTeam ? 'Stopping...' : isOrchestratorTeam ? 'Stop Orchestrator' : 'Stop Team'}
+          </button>
+        )}
+        {isOrchestratorTeam && teamStatus === 'active' && (
+          <button onClick={onViewTerminal}>View Terminal</button>
+        )}
+        {!isOrchestratorTeam && (
+          <>
+            <button onClick={onEditTeam}>Edit Team</button>
+            <button onClick={onDeleteTeam}>Delete Team</button>
+          </>
+        )}
+      </div>
+    );
+  },
+  TeamOverview: ({ team, teamId, projectName, onUpdateMember, onDeleteMember, onStartMember, onStopMember, onViewTerminal, onViewAgent }: any) => {
+    const members = team?.members || [];
+    const activeCount = members.filter((m: any) => m.agentStatus === 'active' || m.sessionName).length;
+    return (
+      <div data-testid="team-overview">
+        <span>{activeCount} / {members.length}</span>
+        {projectName && <span>{projectName}</span>}
+        {members.map((member: any) => (
+          <div key={member.id} data-testid={`member-card-${member.id}`}>
+            <span>{member.name}</span>
+            <span>{member.role}</span>
+            <button onClick={() => onUpdateMember(member.id, { name: 'Updated Name' })}>Update</button>
+            <button onClick={() => onDeleteMember(member.id)}>Delete</button>
+            <button onClick={() => onStartMember(member.id)}>Start</button>
+            <button onClick={() => onStopMember(member.id)}>Stop</button>
+          </div>
+        ))}
+        {members.length === 0 && <p>No team members yet. Add members to get started.</p>}
+      </div>
+    );
+  },
+  AgentDetailModal: () => null,
+}));
+
+// Mock HierarchyDashboard
+vi.mock('../components/Hierarchy', () => ({
+  HierarchyDashboard: () => <div data-testid="hierarchy-dashboard" />,
 }));
 
 vi.mock('../components/StartTeamModal', () => ({
@@ -43,12 +115,23 @@ vi.mock('../components/StartTeamModal', () => ({
     isOpen ? (
       <div data-testid="start-team-modal">
         <h2>Start Team: {team?.name}</h2>
-        <button 
+        <button
           onClick={() => onStartTeam('project-1', true)}
           disabled={loading}
         >
-          {loading ? 'Starting...' : 'Start Team'}
+          {loading ? 'Starting...' : 'Confirm Start'}
         </button>
+        <button onClick={onClose}>Close</button>
+      </div>
+    ) : null
+  )
+}));
+
+vi.mock('../components/Modals/TeamModal', () => ({
+  TeamModal: ({ isOpen, onClose, onSubmit, team }: any) => (
+    isOpen ? (
+      <div data-testid="edit-team-modal">
+        <h2>Edit Team: {team?.name}</h2>
         <button onClick={onClose}>Close</button>
       </div>
     ) : null
@@ -61,20 +144,18 @@ vi.mock('../utils/api', () => ({
   })
 }));
 
+// Mock apiService for sub-teams fetching
+vi.mock('../services/api.service', () => ({
+  apiService: {
+    getTeams: vi.fn(),
+  },
+}));
+
+import { apiService } from '../services/api.service';
+const mockApiGetTeams = apiService.getTeams as ReturnType<typeof vi.fn>;
+
 // Mock fetch globally
 global.fetch = vi.fn();
-
-// Mock window.confirm
-Object.defineProperty(window, 'confirm', {
-  value: vi.fn(() => true),
-  writable: true
-});
-
-// Mock window.alert
-Object.defineProperty(window, 'alert', {
-  value: vi.fn(),
-  writable: true
-});
 
 // Test data
 const mockTeam = {
@@ -131,18 +212,8 @@ const mockProjects = [
   }
 ];
 
-// Mock react-router-dom at module level
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom');
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-    useParams: () => ({ id: 'team-1' })
-  };
-});
-
-const TestWrapper: React.FC<{ children: React.ReactNode; teamId?: string }> = ({ 
-  children, 
+const TestWrapper: React.FC<{ children: React.ReactNode; teamId?: string }> = ({
+  children,
   teamId = 'team-1'
 }) => {
   return (
@@ -155,7 +226,11 @@ const TestWrapper: React.FC<{ children: React.ReactNode; teamId?: string }> = ({
 describe('TeamDetail Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    
+    mockTeamId = 'team-1';
+
+    // Default: apiService.getTeams returns empty (no sub-teams)
+    mockApiGetTeams.mockResolvedValue([]);
+
     // Setup default fetch mocks
     (global.fetch as any).mockImplementation((url: string) => {
       if (url.includes('/api/teams/team-1')) {
@@ -164,15 +239,6 @@ describe('TeamDetail Page', () => {
           json: () => Promise.resolve({
             success: true,
             data: mockTeam
-          })
-        });
-      }
-      if (url.includes('/api/teams/team-1/terminals')) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            success: true,
-            data: []
           })
         });
       }
@@ -209,7 +275,7 @@ describe('TeamDetail Page', () => {
     it('should render loading state initially', () => {
       // Make fetch hang to test loading state
       (global.fetch as any).mockImplementation(() => new Promise(() => {}));
-      
+
       render(
         <TestWrapper>
           <TeamDetail />
@@ -254,11 +320,13 @@ describe('TeamDetail Page', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Development Team')).toBeInTheDocument();
+        // Team name appears in breadcrumb and TeamHeader mock
+        expect(screen.getAllByText('Development Team').length).toBeGreaterThanOrEqual(1);
       });
 
-      expect(screen.getByText('Frontend development team')).toBeInTheDocument();
-      expect(screen.getByText('ACTIVE')).toBeInTheDocument();
+      // Team header renders status from mock; TeamOverview renders active count
+      expect(screen.getByTestId('team-header')).toBeInTheDocument();
+      expect(screen.getByTestId('team-overview')).toBeInTheDocument();
       expect(screen.getByText('1 / 2')).toBeInTheDocument(); // Active members
       expect(screen.getByText('Test Project')).toBeInTheDocument();
     });
@@ -434,7 +502,7 @@ describe('TeamDetail Page', () => {
   });
 
   describe('Member Management', () => {
-    it('should show Add Member button for regular teams', async () => {
+    it('should render member cards for team members', async () => {
       render(
         <TestWrapper>
           <TeamDetail />
@@ -442,119 +510,10 @@ describe('TeamDetail Page', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Add Member')).toBeInTheDocument();
-      });
-    });
-
-    it('should hide Add Member button for orchestrator team', async () => {
-      (global.fetch as any).mockImplementation((url: string) => {
-        if (url.includes('/api/teams/orchestrator')) {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({
-              success: true,
-              data: mockOrchestratorTeam
-            })
-          });
-        }
-        return Promise.resolve({ ok: false });
+        expect(screen.getByTestId('member-card-member-1')).toBeInTheDocument();
       });
 
-      // Mock useParams for orchestrator team
-      vi.doMock('react-router-dom', async () => {
-        const actual = await vi.importActual('react-router-dom');
-        return {
-          ...actual,
-          useNavigate: () => mockNavigate,
-          useParams: () => ({ id: 'orchestrator' })
-        };
-      });
-
-      render(
-        <TestWrapper teamId="orchestrator">
-          <TeamDetail />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Orchestrator Team')).toBeInTheDocument();
-      });
-
-      expect(screen.queryByText('Add Member')).not.toBeInTheDocument();
-    });
-
-    it('should show add member form when Add Member is clicked', async () => {
-      render(
-        <TestWrapper>
-          <TeamDetail />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Add Member')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Add Member'));
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Member name')).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('Role (e.g., Developer, PM, QA)')).toBeInTheDocument();
-        expect(screen.getByText('Add')).toBeInTheDocument();
-        expect(screen.getByText('Cancel')).toBeInTheDocument();
-      });
-    });
-
-    it('should handle add member form submission', async () => {
-      (global.fetch as any).mockImplementation((url: string, options?: any) => {
-        if (url.includes('/api/teams/team-1/members') && options?.method === 'POST') {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ success: true })
-          });
-        }
-        if (url.includes('/api/teams/team-1')) {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({
-              success: true,
-              data: mockTeam
-            })
-          });
-        }
-        return Promise.resolve({ ok: false });
-      });
-
-      render(
-        <TestWrapper>
-          <TeamDetail />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Add Member')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Add Member'));
-
-      await waitFor(() => {
-        const nameInput = screen.getByPlaceholderText('Member name');
-        const roleInput = screen.getByPlaceholderText('Role (e.g., Developer, PM, QA)');
-        
-        fireEvent.change(nameInput, { target: { value: 'New Member' } });
-        fireEvent.change(roleInput, { target: { value: 'Developer' } });
-      });
-
-      fireEvent.click(screen.getByText('Add'));
-
-      await waitFor(() => {
-        expect(global.fetch).toHaveBeenCalledWith('/api/teams/team-1/members', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ name: 'New Member', role: 'Developer' })
-        });
-      });
+      expect(screen.getByTestId('member-card-member-2')).toBeInTheDocument();
     });
 
     it('should handle member actions', async () => {
@@ -570,13 +529,13 @@ describe('TeamDetail Page', () => {
 
       // Test member update
       fireEvent.click(screen.getAllByText('Update')[0]);
-      
+
       // Test member start
       fireEvent.click(screen.getAllByText('Start')[0]);
-      
+
       // Test member stop
       fireEvent.click(screen.getAllByText('Stop')[0]);
-      
+
       // Test member delete
       fireEvent.click(screen.getAllByText('Delete')[0]);
     });
@@ -584,6 +543,8 @@ describe('TeamDetail Page', () => {
 
   describe('Orchestrator Team Special Handling', () => {
     beforeEach(() => {
+      mockTeamId = 'orchestrator';
+
       (global.fetch as any).mockImplementation((url: string) => {
         if (url.includes('/api/teams/orchestrator')) {
           return Promise.resolve({
@@ -627,7 +588,7 @@ describe('TeamDetail Page', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText('Orchestrator Team')).toBeInTheDocument();
+        expect(screen.getAllByText('Orchestrator Team').length).toBeGreaterThanOrEqual(1);
       });
 
       expect(screen.queryByText('Delete Team')).not.toBeInTheDocument();
@@ -651,7 +612,7 @@ describe('TeamDetail Page', () => {
   });
 
   describe('Team Deletion', () => {
-    it('should handle delete team confirmation', async () => {
+    it('should handle delete team button click', async () => {
       (global.fetch as any).mockImplementation((url: string, options?: any) => {
         if (url.includes('/api/teams/team-1/stop') && options?.method === 'POST') {
           return Promise.resolve({ ok: true });
@@ -683,13 +644,40 @@ describe('TeamDetail Page', () => {
 
       fireEvent.click(screen.getByText('Delete Team'));
 
+      // The component now uses useConfirm instead of window.confirm
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/teams');
+        expect(mockShowConfirm).toHaveBeenCalled();
       });
+
+      // Verify the confirm callback was passed correctly
+      const confirmCall = mockShowConfirm.mock.calls[0];
+      expect(confirmCall[0]).toContain('Are you sure you want to delete team');
     });
 
     it('should prevent deletion of orchestrator team', async () => {
-      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+      mockTeamId = 'orchestrator';
+
+      (global.fetch as any).mockImplementation((url: string) => {
+        if (url.includes('/api/teams/orchestrator')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              success: true,
+              data: mockOrchestratorTeam
+            })
+          });
+        }
+        if (url.includes('/api/terminal/sessions')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              success: true,
+              data: [{ sessionName: 'crewly-orc' }]
+            })
+          });
+        }
+        return Promise.resolve({ ok: false });
+      });
 
       render(
         <TestWrapper teamId="orchestrator">
@@ -697,17 +685,12 @@ describe('TeamDetail Page', () => {
         </TestWrapper>
       );
 
-      // Since orchestrator team doesn't show delete button, we need to test the handler directly
-      // This would be called if somehow the delete was triggered
-      // But in normal UI flow, the button is hidden
       await waitFor(() => {
-        expect(screen.getByText('Orchestrator Team')).toBeInTheDocument();
+        expect(screen.getAllByText('Orchestrator Team').length).toBeGreaterThanOrEqual(1);
       });
 
-      // Verify delete button is not shown
+      // Verify delete button is not shown for orchestrator team
       expect(screen.queryByText('Delete Team')).not.toBeInTheDocument();
-
-      alertSpy.mockRestore();
     });
   });
 
@@ -735,8 +718,6 @@ describe('TeamDetail Page', () => {
         return Promise.resolve({ ok: false });
       });
 
-      const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
       render(
         <TestWrapper>
           <TeamDetail />
@@ -747,13 +728,15 @@ describe('TeamDetail Page', () => {
         expect(screen.getByText('Start Team')).toBeInTheDocument();
       });
 
+      // Click Start Team to open the modal
       fireEvent.click(screen.getByText('Start Team'));
 
       await waitFor(() => {
         expect(screen.getByTestId('start-team-modal')).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getByText('Start Team'));
+      // Click the confirm button inside the modal (renamed to "Confirm Start" to avoid ambiguity)
+      fireEvent.click(screen.getByText('Confirm Start'));
 
       await waitFor(() => {
         expect(global.fetch).toHaveBeenCalledWith('/api/teams/team-1/start', {
@@ -765,10 +748,111 @@ describe('TeamDetail Page', () => {
             projectId: 'project-1',
           })
         });
-        expect(alertSpy).toHaveBeenCalledWith('Team started successfully');
+      });
+    });
+  });
+
+  describe('Sub-Teams Section', () => {
+    it('should display sub-teams when parent team has children', async () => {
+      const childTeams = [
+        {
+          id: 'child-1',
+          name: 'Core Team',
+          description: 'Core development',
+          projectIds: [],
+          parentTeamId: 'team-1',
+          members: [
+            { id: 'c1', name: 'Alice', role: 'developer', agentStatus: 'active' },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+        {
+          id: 'child-2',
+          name: 'Marketing Team',
+          description: 'Marketing',
+          projectIds: [],
+          parentTeamId: 'team-1',
+          members: [
+            { id: 'c2', name: 'Bob', role: 'marketer', agentStatus: 'inactive' },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+        {
+          id: 'other-team',
+          name: 'Other Team',
+          description: 'Unrelated',
+          projectIds: [],
+          parentTeamId: 'team-999',
+          members: [],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+      ];
+
+      mockApiGetTeams.mockResolvedValue(childTeams);
+
+      render(
+        <TestWrapper>
+          <TeamDetail />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('Sub-Teams (2)')).toBeInTheDocument();
       });
 
-      alertSpy.mockRestore();
+      expect(screen.getByTestId('sub-team-child-1')).toBeInTheDocument();
+      expect(screen.getByTestId('sub-team-child-2')).toBeInTheDocument();
+      expect(screen.getByText('Core Team')).toBeInTheDocument();
+      expect(screen.getByText('Marketing Team')).toBeInTheDocument();
+      // Should not show unrelated team
+      expect(screen.queryByTestId('sub-team-other-team')).not.toBeInTheDocument();
+    });
+
+    it('should not show sub-teams section when no children exist', async () => {
+
+      render(
+        <TestWrapper>
+          <TeamDetail />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getAllByText('Development Team').length).toBeGreaterThan(0);
+      });
+
+      expect(screen.queryByText(/Sub-Teams/)).not.toBeInTheDocument();
+    });
+
+    it('should navigate to sub-team on click', async () => {
+      mockApiGetTeams.mockResolvedValue([
+        {
+          id: 'child-1',
+          name: 'Core Team',
+          description: 'Core development',
+          projectIds: [],
+          parentTeamId: 'team-1',
+          members: [{ id: 'c1', name: 'Alice', role: 'developer', agentStatus: 'active' }],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+      ]);
+
+      render(
+        <TestWrapper>
+          <TeamDetail />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('sub-team-child-1')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('sub-team-child-1'));
+
+      expect(mockNavigate).toHaveBeenCalledWith('/teams/child-1');
     });
   });
 
@@ -810,10 +894,11 @@ describe('TeamDetail Page', () => {
       );
 
       await waitFor(() => {
-        const heading = screen.getByText('Development Team');
-        expect(heading).toBeInTheDocument();
-        expect(heading.tagName).toBe('H1');
-        expect(heading).toHaveClass('page-title');
+        const headings = screen.getAllByText('Development Team');
+        // Find the h1 element among the matches
+        const h1 = headings.find(el => el.tagName === 'H1');
+        expect(h1).toBeDefined();
+        expect(h1).toHaveClass('page-title');
       });
     });
 

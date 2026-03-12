@@ -150,13 +150,14 @@ describe('Chat Constants', () => {
     it('should contain all expected Slack delivery statuses', () => {
       expect(SLACK_DELIVERY_STATUSES).toContain('pending');
       expect(SLACK_DELIVERY_STATUSES).toContain('delivered');
+      expect(SLACK_DELIVERY_STATUSES).toContain('delivered_by_skill');
       expect(SLACK_DELIVERY_STATUSES).toContain('failed');
-      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(4);
     });
 
     it('should be a readonly tuple at compile time', () => {
       expect(Array.isArray(SLACK_DELIVERY_STATUSES)).toBe(true);
-      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(4);
     });
 
     it('should derive SlackDeliveryStatus type from the constant', () => {
@@ -958,10 +959,12 @@ describe('Type Definitions', () => {
   it('should compile ChatMessageMetadata with all SlackDeliveryStatus values', () => {
     const pending: ChatMessageMetadata = { slackDeliveryStatus: 'pending' };
     const delivered: ChatMessageMetadata = { slackDeliveryStatus: 'delivered' };
+    const deliveredBySkill: ChatMessageMetadata = { slackDeliveryStatus: 'delivered_by_skill' };
     const failed: ChatMessageMetadata = { slackDeliveryStatus: 'failed' };
 
     expect(pending.slackDeliveryStatus).toBe('pending');
     expect(delivered.slackDeliveryStatus).toBe('delivered');
+    expect(deliveredBySkill.slackDeliveryStatus).toBe('delivered_by_skill');
     expect(failed.slackDeliveryStatus).toBe('failed');
   });
 

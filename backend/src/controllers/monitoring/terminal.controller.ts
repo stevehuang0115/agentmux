@@ -789,12 +789,19 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 				await new Promise(resolve => setTimeout(resolve, 500));
 				session.write('\r'); // backup Enter
 			} else {
-				session.write(message + '\r');
+				// Claude Code also benefits from two-step write: bundling message+\r
+				// in a single write can be swallowed by bracketed paste mode.
+				session.write(message);
+				const ccEnterDelay = Math.min(1000 + Math.ceil(message.length / 10), 5000);
+				await new Promise(resolve => setTimeout(resolve, ccEnterDelay));
+				session.write('\r');
+				await new Promise(resolve => setTimeout(resolve, 300));
+				session.write('\r'); // backup Enter
 			}
 			logger.info('Message force-delivered via direct PTY write', {
 				sessionName,
 				messageLength: message.length,
-				twoStepWrite: !!isTuiRuntime,
+				twoStepWrite: true,
 			});
 			res.json({
 				success: true,

@@ -234,8 +234,10 @@ export class OrchestratorHeartbeatMonitorService {
 		if (this.sessionBackend.isChildProcessAlive) {
 			const isAlive = this.sessionBackend.isChildProcessAlive(ORCHESTRATOR_SESSION_NAME);
 			if (!isAlive) {
+				const lastOutput = this.sessionBackend.captureOutput(ORCHESTRATOR_SESSION_NAME, 50);
 				this.logger.warn('Orchestrator child process is dead, triggering immediate restart', {
 					sessionName: ORCHESTRATOR_SESSION_NAME,
+					lastOutput: lastOutput?.slice(-500),
 				});
 				this.heartbeatRequestSentAt = null;
 				await this.triggerAutoRestart();

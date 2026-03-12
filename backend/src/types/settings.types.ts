@@ -102,6 +102,83 @@ export interface SkillsSettings {
   skillExecutionTimeoutMs: number;
 }
 
+// ============================================================================
+// API Key Management Types
+// ============================================================================
+
+/**
+ * Supported AI provider names for API key management
+ */
+export type ApiKeyProvider = 'gemini' | 'anthropic' | 'openai';
+
+/**
+ * Array of all valid API key providers
+ */
+export const API_KEY_PROVIDERS: readonly ApiKeyProvider[] = ['gemini', 'anthropic', 'openai'] as const;
+
+/**
+ * Environment variable names for each provider's API key
+ */
+export const API_KEY_ENV_VARS: Record<ApiKeyProvider, string[]> = {
+  gemini: ['GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY'],
+  anthropic: ['ANTHROPIC_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+} as const;
+
+/**
+ * Configuration for an API key override at runtime or skill level
+ */
+export interface ApiKeyConfig {
+  /** The actual API key value (encrypted at rest) */
+  key: string;
+
+  /** Whether this uses the global key or a custom override */
+  source: 'global' | 'custom';
+}
+
+/**
+ * API Keys settings with global keys and per-level overrides
+ *
+ * Override resolution order: skill → runtime → global → env var fallback
+ */
+export interface ApiKeysSettings {
+  /** Global API keys available system-wide */
+  global: {
+    gemini?: string;
+    anthropic?: string;
+    openai?: string;
+  };
+
+  /** Per-runtime API key overrides (e.g. "gemini-cli", "crewly-agent") */
+  runtimeOverrides?: {
+    [runtimeType: string]: {
+      gemini?: ApiKeyConfig;
+      anthropic?: ApiKeyConfig;
+      openai?: ApiKeyConfig;
+    };
+  };
+
+  /** Per-skill API key overrides (e.g. "nano-banana-image") */
+  skillOverrides?: {
+    [skillName: string]: {
+      gemini?: ApiKeyConfig;
+      anthropic?: ApiKeyConfig;
+      openai?: ApiKeyConfig;
+    };
+  };
+}
+
+/**
+ * Context for resolving an API key through the override chain
+ */
+export interface ApiKeyResolutionContext {
+  /** Runtime type requesting the key (e.g. "gemini-cli", "crewly-agent") */
+  runtime?: string;
+
+  /** Skill name requesting the key (e.g. "nano-banana-image") */
+  skill?: string;
+}
+
 /**
  * Complete Crewly settings
  */
@@ -114,6 +191,9 @@ export interface CrewlySettings {
 
   /** Skills system settings */
   skills: SkillsSettings;
+
+  /** API key management settings */
+  apiKeys?: ApiKeysSettings;
 }
 
 /**
@@ -128,6 +208,9 @@ export interface UpdateSettingsInput {
 
   /** Partial skills settings */
   skills?: Partial<SkillsSettings>;
+
+  /** Partial API keys settings */
+  apiKeys?: Partial<ApiKeysSettings>;
 }
 
 /**
@@ -224,6 +307,11 @@ export function getDefaultSettings(): CrewlySettings {
       },
       enableScriptExecution: true,
       skillExecutionTimeoutMs: 60000,
+    },
+    apiKeys: {
+      global: {},
+      runtimeOverrides: {},
+      skillOverrides: {},
     },
   };
 }
@@ -333,10 +421,20 @@ export function mergeSettings(
   existing: CrewlySettings,
   updates: UpdateSettingsInput
 ): CrewlySettings {
+  const existingApiKeys = existing.apiKeys ?? { global: {} };
+  const updatedApiKeys = updates.apiKeys;
+
   return {
     general: { ...existing.general, ...updates.general },
     chat: { ...existing.chat, ...updates.chat },
     skills: { ...existing.skills, ...updates.skills },
+    apiKeys: updatedApiKeys
+      ? {
+          global: { ...existingApiKeys.global, ...updatedApiKeys.global },
+          runtimeOverrides: { ...existingApiKeys.runtimeOverrides, ...updatedApiKeys.runtimeOverrides },
+          skillOverrides: { ...existingApiKeys.skillOverrides, ...updatedApiKeys.skillOverrides },
+        }
+      : existingApiKeys,
   };
 }
 
@@ -356,7 +454,128 @@ export function hasSettingsUpdates(settings: UpdateSettingsInput): boolean {
   if (settings.skills && Object.keys(settings.skills).length > 0) {
     return true;
   }
+  if (settings.apiKeys && Object.keys(settings.apiKeys).length > 0) {
+    return true;
+  }
   return false;
+}
+
+/**
+ * Check if a string is a valid API key provider
+ *
+ * @param value - The string to check
+ * @returns True if the value is a valid API key provider
+ */
+export function isValidApiKeyProvider(value: string): value is ApiKeyProvider {
+  return API_KEY_PROVIDERS.includes(value as ApiKeyProvider);
+}
+
+/**
+ * Mask an API key for safe display, showing only the last 4 characters
+ *
+ * @param key - The API key to mask
+ * @returns Masked key string (e.g. "••••••••abcd")
+ */
+export function maskApiKey(key: string): string {
+  if (!key || key.length <= 4) {
+    return '••••';
+  }
+  return '••••••••' + key.slice(-4);
+}
+
+/**
+ * Resolve an API key through the override chain: skill → runtime → global → env var
+ *
+ * @param provider - The API key provider
+ * @param apiKeysSettings - The API keys settings
+ * @param context - Resolution context with optional runtime and skill
+ * @returns The resolved API key or undefined if not found
+ */
+export function resolveApiKey(
+  provider: ApiKeyProvider,
+  apiKeysSettings: ApiKeysSettings | undefined,
+  context?: ApiKeyResolutionContext
+): string | undefined {
+  // 1. Check skill-level override
+  if (context?.skill && apiKeysSettings?.skillOverrides?.[context.skill]) {
+    const override = apiKeysSettings.skillOverrides[context.skill][provider];
+    if (override && override.source === 'custom' && override.key) {
+      return override.key;
+    }
+  }
+
+  // 2. Check runtime-level override
+  if (context?.runtime && apiKeysSettings?.runtimeOverrides?.[context.runtime]) {
+    const override = apiKeysSettings.runtimeOverrides[context.runtime][provider];
+    if (override && override.source === 'custom' && override.key) {
+      return override.key;
+    }
+  }
+
+  // 3. Check global setting
+  if (apiKeysSettings?.global?.[provider]) {
+    return apiKeysSettings.global[provider];
+  }
+
+  // 4. Fall back to environment variable
+  const envVarNames = API_KEY_ENV_VARS[provider];
+  for (const envVar of envVarNames) {
+    const value = process.env[envVar];
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Create a masked copy of API keys settings for safe API responses
+ *
+ * @param apiKeys - The API keys settings to mask
+ * @returns Masked copy safe for API responses
+ */
+export function maskApiKeysSettings(apiKeys: ApiKeysSettings): ApiKeysSettings {
+  const masked: ApiKeysSettings = { global: {}, runtimeOverrides: {}, skillOverrides: {} };
+
+  // Mask global keys
+  for (const provider of API_KEY_PROVIDERS) {
+    if (apiKeys.global[provider]) {
+      masked.global[provider] = maskApiKey(apiKeys.global[provider]!);
+    }
+  }
+
+  // Mask runtime overrides
+  if (apiKeys.runtimeOverrides) {
+    for (const [runtime, overrides] of Object.entries(apiKeys.runtimeOverrides)) {
+      masked.runtimeOverrides![runtime] = {};
+      for (const provider of API_KEY_PROVIDERS) {
+        if (overrides[provider]) {
+          masked.runtimeOverrides![runtime][provider] = {
+            ...overrides[provider]!,
+            key: overrides[provider]!.key ? maskApiKey(overrides[provider]!.key) : '',
+          };
+        }
+      }
+    }
+  }
+
+  // Mask skill overrides
+  if (apiKeys.skillOverrides) {
+    for (const [skill, overrides] of Object.entries(apiKeys.skillOverrides)) {
+      masked.skillOverrides![skill] = {};
+      for (const provider of API_KEY_PROVIDERS) {
+        if (overrides[provider]) {
+          masked.skillOverrides![skill][provider] = {
+            ...overrides[provider]!,
+            key: overrides[provider]!.key ? maskApiKey(overrides[provider]!.key) : '',
+          };
+        }
+      }
+    }
+  }
+
+  return masked;
 }
 
 /**

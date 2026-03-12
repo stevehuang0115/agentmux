@@ -435,6 +435,33 @@ describe('TerminalGateway', () => {
 				'active-conv'
 			);
 		});
+
+		it('should isolate output buffers per session', () => {
+			// Set up two sessions with separate onData callbacks
+			const sessionCallbacks: Record<string, ((data: string) => void)[]> = {
+				'session-a': [],
+				'session-b': [],
+			};
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				return jest.fn();
+			});
+
+			// Access private method directly
+			const processChat = (gateway as any).processOrchestratorOutputForChat.bind(gateway);
+
+			// Buffer partial NOTIFY in session-a
+			processChat('session-a', '[NOTIFY]');
+
+			// Buffer unrelated content in session-b
+			processChat('session-b', 'just some log output');
+
+			// Session-a's buffer should have the NOTIFY tag, session-b should not
+			const bufferA = (gateway as any).getSessionBuffer('session-a');
+			const bufferB = (gateway as any).getSessionBuffer('session-b');
+
+			expect(bufferA).toContain('[NOTIFY]');
+			expect(bufferB).not.toContain('[NOTIFY]');
+		});
 	});
 
 	describe('proactive Slack notifications', () => {
@@ -685,8 +712,6 @@ describe('TerminalGateway', () => {
 				'conv-abc',
 				expect.objectContaining({
 					slackChannelId: 'C0123',
-					slackDeliveryStatus: 'pending',
-					slackDeliveryAttempts: 0,
 					slackThreadTs: '170743.001',
 					notifyType: 'task_completed',
 					notifyUrgency: 'normal',
@@ -696,6 +721,12 @@ describe('TerminalGateway', () => {
 			// Slack delivery is now handled by the reply-slack skill
 			expect(mockBridgeSendNotification).not.toHaveBeenCalled();
 			expect(mockBridgeMarkDeliveredBySkill).toHaveBeenCalledWith('C0123', '170743.001');
+
+			// Verify: NOTIFY no longer sets slackDeliveryStatus:'pending' on metadata.
+			// Slack delivery is exclusively handled by the reply-slack skill (#retry-storm fix).
+			const metadataArg = mockChatGateway.processNotifyMessage.mock.calls[0][3] as Record<string, unknown>;
+			expect(metadataArg.slackDeliveryStatus).toBeUndefined();
+			expect(metadataArg.slackDeliveryAttempts).toBeUndefined();
 		});
 
 		it('should NOT route to Slack when type is present but channelId is missing', async () => {
@@ -755,7 +786,6 @@ describe('TerminalGateway', () => {
 				expect.objectContaining({
 					slackChannelId: 'D0AC7NF5N7L',
 					slackThreadTs: '1772987441.763389',
-					slackDeliveryStatus: 'pending',
 				})
 			);
 		});
@@ -827,8 +857,6 @@ describe('TerminalGateway', () => {
 				'conv-abc',
 				expect.objectContaining({
 					slackChannelId: 'C123',
-					slackDeliveryStatus: 'pending',
-					slackDeliveryAttempts: 0,
 					notifyType: 'task_completed',
 				})
 			);
@@ -899,8 +927,6 @@ describe('TerminalGateway', () => {
 				'conv-1',
 				expect.objectContaining({
 					slackChannelId: 'C456',
-					slackDeliveryStatus: 'pending',
-					slackDeliveryAttempts: 0,
 					slackThreadTs: '12345.001',
 					notifyType: 'project_update',
 					notifyTitle: 'Update',

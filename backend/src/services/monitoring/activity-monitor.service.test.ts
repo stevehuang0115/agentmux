@@ -7,8 +7,9 @@ import { readFile, writeFile, rename, unlink } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
-import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, PTY_CONSTANTS } from '../../constants.js';
+import { CREWLY_CONSTANTS, CONTINUATION_CONSTANTS, PTY_CONSTANTS, ACTIVITY_MONITOR_CONSTANTS } from '../../constants.js';
 import { stripAnsiCodes } from '../../utils/terminal-output.utils.js';
+import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 
 // Mock dependencies
 jest.mock('node-pty', () => ({ spawn: jest.fn() }));
@@ -25,6 +26,14 @@ jest.mock('../orchestrator/orchestrator-restart.service.js', () => ({
 }));
 jest.mock('../../utils/terminal-output.utils.js', () => ({
   stripAnsiCodes: jest.fn((s: string) => s),
+}));
+jest.mock('../agent/pty-activity-tracker.service.js', () => ({
+  PtyActivityTrackerService: {
+    getInstance: jest.fn().mockReturnValue({
+      getIdleTimeMs: jest.fn().mockReturnValue(0),
+      recordActivity: jest.fn(),
+    }),
+  },
 }));
 jest.mock('fs/promises');
 jest.mock('fs');
@@ -446,6 +455,81 @@ describe('ActivityMonitorService', () => {
       expect(writeFile).toHaveBeenCalled();
       const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
       expect(savedData.teamMembers['test-session-1'].workingStatus).toBe('idle');
+    });
+
+    it('should detect Gemini CLI activity via PTY tracker when terminal output unchanged', async () => {
+      // Set up a Gemini CLI team member
+      const geminiTeam = {
+        id: 'test-team',
+        name: 'Test Team',
+        projectIds: [],
+        createdAt: '2023-01-01T00:00:00.000Z',
+        updatedAt: '2023-01-01T00:00:00.000Z',
+        members: [{
+          id: 'gemini-member',
+          name: 'Gemini Agent',
+          role: 'developer' as const,
+          runtimeType: 'gemini-cli' as const,
+          systemPrompt: 'Test',
+          agentStatus: 'active' as const,
+          workingStatus: 'idle' as const,
+          sessionName: 'gemini-session',
+          createdAt: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
+        }]
+      };
+      mockStorageService.getTeams.mockResolvedValue([geminiTeam]);
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true);  // gemini session
+      mockSessionBackend.captureOutput.mockReturnValue('same TUI output');
+      (service as any).lastTerminalOutputs.set('gemini-session', 'same TUI output');
+
+      // PTY activity within polling interval → should detect as active
+      const mockTracker = PtyActivityTrackerService.getInstance();
+      (mockTracker.getIdleTimeMs as jest.Mock).mockReturnValue(5000); // 5s < 30s polling
+
+      await (service as any).performActivityCheck();
+
+      expect(writeFile).toHaveBeenCalled();
+      const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
+      expect(savedData.teamMembers['gemini-session'].workingStatus).toBe('in_progress');
+    });
+
+    it('should NOT detect Gemini CLI activity when PTY idle exceeds polling interval', async () => {
+      const geminiTeam = {
+        id: 'test-team',
+        name: 'Test Team',
+        projectIds: [],
+        createdAt: '2023-01-01T00:00:00.000Z',
+        updatedAt: '2023-01-01T00:00:00.000Z',
+        members: [{
+          id: 'gemini-member',
+          name: 'Gemini Agent',
+          role: 'developer' as const,
+          runtimeType: 'gemini-cli' as const,
+          systemPrompt: 'Test',
+          agentStatus: 'active' as const,
+          workingStatus: 'idle' as const,
+          sessionName: 'gemini-session',
+          createdAt: '2023-01-01T00:00:00.000Z',
+          updatedAt: '2023-01-01T00:00:00.000Z'
+        }]
+      };
+      mockStorageService.getTeams.mockResolvedValue([geminiTeam]);
+      mockSessionBackend.sessionExists.mockReturnValueOnce(false); // orchestrator
+      mockSessionBackend.sessionExists.mockReturnValueOnce(true);  // gemini session
+      mockSessionBackend.captureOutput.mockReturnValue('same TUI output');
+      (service as any).lastTerminalOutputs.set('gemini-session', 'same TUI output');
+
+      // PTY idle exceeds polling interval → should remain idle
+      const mockTracker = PtyActivityTrackerService.getInstance();
+      (mockTracker.getIdleTimeMs as jest.Mock).mockReturnValue(60000); // 60s > 30s polling
+
+      await (service as any).performActivityCheck();
+
+      expect(writeFile).toHaveBeenCalled();
+      const savedData = JSON.parse((writeFile as jest.Mock).mock.calls[0][1]);
+      expect(savedData.teamMembers['gemini-session'].workingStatus).toBe('idle');
     });
 
     it('should check all members with sessions regardless of status', async () => {

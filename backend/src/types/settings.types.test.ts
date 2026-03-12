@@ -21,6 +21,15 @@ import {
   mergeSettings,
   hasSettingsUpdates,
   getAIRuntimeDisplayName,
+  ApiKeyProvider,
+  API_KEY_PROVIDERS,
+  API_KEY_ENV_VARS,
+  ApiKeysSettings,
+  ApiKeyConfig,
+  isValidApiKeyProvider,
+  maskApiKey,
+  resolveApiKey,
+  maskApiKeysSettings,
 } from './settings.types.js';
 
 describe('Settings Types', () => {
@@ -554,6 +563,261 @@ describe('Settings Types', () => {
     it('should handle unknown runtime gracefully', () => {
       const name = getAIRuntimeDisplayName('unknown' as AIRuntime);
       expect(name).toBe('unknown');
+    });
+  });
+
+  describe('hasSettingsUpdates - apiKeys', () => {
+    it('should return true for apiKeys updates', () => {
+      const input: UpdateSettingsInput = {
+        apiKeys: { global: { gemini: 'test-key' } },
+      };
+      expect(hasSettingsUpdates(input)).toBe(true);
+    });
+  });
+});
+
+describe('API Key Management Types', () => {
+  describe('API_KEY_PROVIDERS', () => {
+    it('should contain all valid providers', () => {
+      expect(API_KEY_PROVIDERS).toContain('gemini');
+      expect(API_KEY_PROVIDERS).toContain('anthropic');
+      expect(API_KEY_PROVIDERS).toContain('openai');
+      expect(API_KEY_PROVIDERS).toHaveLength(3);
+    });
+  });
+
+  describe('API_KEY_ENV_VARS', () => {
+    it('should map providers to environment variable names', () => {
+      expect(API_KEY_ENV_VARS.gemini).toContain('GOOGLE_GENERATIVE_AI_API_KEY');
+      expect(API_KEY_ENV_VARS.gemini).toContain('GEMINI_API_KEY');
+      expect(API_KEY_ENV_VARS.anthropic).toContain('ANTHROPIC_API_KEY');
+      expect(API_KEY_ENV_VARS.openai).toContain('OPENAI_API_KEY');
+    });
+  });
+
+  describe('isValidApiKeyProvider', () => {
+    it('should return true for valid providers', () => {
+      expect(isValidApiKeyProvider('gemini')).toBe(true);
+      expect(isValidApiKeyProvider('anthropic')).toBe(true);
+      expect(isValidApiKeyProvider('openai')).toBe(true);
+    });
+
+    it('should return false for invalid providers', () => {
+      expect(isValidApiKeyProvider('invalid')).toBe(false);
+      expect(isValidApiKeyProvider('')).toBe(false);
+      expect(isValidApiKeyProvider('google')).toBe(false);
+    });
+  });
+
+  describe('maskApiKey', () => {
+    it('should mask keys showing only last 4 chars', () => {
+      expect(maskApiKey('sk-1234567890abcdef')).toBe('••••••••cdef');
+    });
+
+    it('should handle short keys', () => {
+      expect(maskApiKey('abc')).toBe('••••');
+      expect(maskApiKey('')).toBe('••••');
+    });
+
+    it('should handle exactly 4-char keys', () => {
+      expect(maskApiKey('abcd')).toBe('••••');
+    });
+
+    it('should handle 5-char keys', () => {
+      expect(maskApiKey('abcde')).toBe('••••••••bcde');
+    });
+  });
+
+  describe('resolveApiKey', () => {
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    it('should return undefined when no key is configured anywhere', () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      const result = resolveApiKey('anthropic', undefined);
+      expect(result).toBeUndefined();
+    });
+
+    it('should fall back to env var when no settings configured', () => {
+      process.env.ANTHROPIC_API_KEY = 'env-key';
+      const result = resolveApiKey('anthropic', undefined);
+      expect(result).toBe('env-key');
+    });
+
+    it('should use global key over env var', () => {
+      process.env.ANTHROPIC_API_KEY = 'env-key';
+      const apiKeys: ApiKeysSettings = {
+        global: { anthropic: 'global-key' },
+      };
+      const result = resolveApiKey('anthropic', apiKeys);
+      expect(result).toBe('global-key');
+    });
+
+    it('should use runtime override over global key', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: { anthropic: 'global-key' },
+        runtimeOverrides: {
+          'claude-code': {
+            anthropic: { key: 'runtime-key', source: 'custom' },
+          },
+        },
+      };
+      const result = resolveApiKey('anthropic', apiKeys, { runtime: 'claude-code' });
+      expect(result).toBe('runtime-key');
+    });
+
+    it('should fall back to global when runtime override uses global source', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: { anthropic: 'global-key' },
+        runtimeOverrides: {
+          'claude-code': {
+            anthropic: { key: '', source: 'global' },
+          },
+        },
+      };
+      const result = resolveApiKey('anthropic', apiKeys, { runtime: 'claude-code' });
+      expect(result).toBe('global-key');
+    });
+
+    it('should use skill override over runtime override', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: { gemini: 'global-key' },
+        runtimeOverrides: {
+          'gemini-cli': {
+            gemini: { key: 'runtime-key', source: 'custom' },
+          },
+        },
+        skillOverrides: {
+          'nano-banana': {
+            gemini: { key: 'skill-key', source: 'custom' },
+          },
+        },
+      };
+      const result = resolveApiKey('gemini', apiKeys, {
+        runtime: 'gemini-cli',
+        skill: 'nano-banana',
+      });
+      expect(result).toBe('skill-key');
+    });
+
+    it('should check multiple env var names for gemini', () => {
+      delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+      process.env.GEMINI_API_KEY = 'gemini-env-key';
+      const result = resolveApiKey('gemini', { global: {} });
+      expect(result).toBe('gemini-env-key');
+    });
+
+    it('should prefer GOOGLE_GENERATIVE_AI_API_KEY over GEMINI_API_KEY', () => {
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'google-key';
+      process.env.GEMINI_API_KEY = 'gemini-key';
+      const result = resolveApiKey('gemini', { global: {} });
+      expect(result).toBe('google-key');
+    });
+  });
+
+  describe('maskApiKeysSettings', () => {
+    it('should mask all global keys', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: {
+          gemini: 'sk-gemini-1234567890',
+          anthropic: 'sk-ant-1234567890',
+        },
+      };
+      const masked = maskApiKeysSettings(apiKeys);
+      expect(masked.global.gemini).toBe('••••••••7890');
+      expect(masked.global.anthropic).toBe('••••••••7890');
+      expect(masked.global.openai).toBeUndefined();
+    });
+
+    it('should mask runtime override keys', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: {},
+        runtimeOverrides: {
+          'claude-code': {
+            anthropic: { key: 'sk-ant-secret-key-12', source: 'custom' },
+          },
+        },
+      };
+      const masked = maskApiKeysSettings(apiKeys);
+      expect(masked.runtimeOverrides!['claude-code'].anthropic!.key).toBe('••••••••y-12');
+      expect(masked.runtimeOverrides!['claude-code'].anthropic!.source).toBe('custom');
+    });
+
+    it('should mask skill override keys', () => {
+      const apiKeys: ApiKeysSettings = {
+        global: {},
+        skillOverrides: {
+          'nano-banana': {
+            openai: { key: 'sk-openai-key-abcd', source: 'custom' },
+          },
+        },
+      };
+      const masked = maskApiKeysSettings(apiKeys);
+      expect(masked.skillOverrides!['nano-banana'].openai!.key).toBe('••••••••abcd');
+    });
+
+    it('should handle empty settings', () => {
+      const apiKeys: ApiKeysSettings = { global: {} };
+      const masked = maskApiKeysSettings(apiKeys);
+      expect(masked.global).toEqual({});
+    });
+  });
+
+  describe('getDefaultSettings - apiKeys', () => {
+    it('should include apiKeys defaults', () => {
+      const defaults = getDefaultSettings();
+      expect(defaults.apiKeys).toBeDefined();
+      expect(defaults.apiKeys!.global).toEqual({});
+      expect(defaults.apiKeys!.runtimeOverrides).toEqual({});
+      expect(defaults.apiKeys!.skillOverrides).toEqual({});
+    });
+  });
+
+  describe('mergeSettings - apiKeys', () => {
+    it('should merge apiKeys global updates', () => {
+      const existing = getDefaultSettings();
+      const updates: UpdateSettingsInput = {
+        apiKeys: { global: { gemini: 'new-key' } },
+      };
+      const merged = mergeSettings(existing, updates);
+      expect(merged.apiKeys!.global.gemini).toBe('new-key');
+    });
+
+    it('should preserve existing apiKeys when not updated', () => {
+      const existing = getDefaultSettings();
+      existing.apiKeys = {
+        global: { gemini: 'existing-key' },
+        runtimeOverrides: {},
+        skillOverrides: {},
+      };
+      const merged = mergeSettings(existing, { general: { verboseLogging: true } });
+      expect(merged.apiKeys!.global.gemini).toBe('existing-key');
+    });
+
+    it('should merge runtime overrides', () => {
+      const existing = getDefaultSettings();
+      existing.apiKeys = {
+        global: { gemini: 'global-key' },
+        runtimeOverrides: {
+          'claude-code': { anthropic: { key: 'cc-key', source: 'custom' } },
+        },
+        skillOverrides: {},
+      };
+      const updates: UpdateSettingsInput = {
+        apiKeys: {
+          runtimeOverrides: {
+            'gemini-cli': { gemini: { key: 'gc-key', source: 'custom' } },
+          },
+        },
+      };
+      const merged = mergeSettings(existing, updates);
+      // New override should be present
+      expect(merged.apiKeys!.runtimeOverrides!['gemini-cli']).toBeDefined();
+      // Note: shallow merge means existing claude-code override is replaced
+      // This is consistent with other settings sections
     });
   });
 });

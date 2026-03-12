@@ -17,6 +17,9 @@ import {
   validateSettings,
   mergeSettings,
   AIRuntime,
+  ApiKeyProvider,
+  ApiKeyResolutionContext,
+  resolveApiKey,
 } from '../../types/settings.types.js';
 import { atomicWriteJson, safeReadJson } from '../../utils/file-io.utils.js';
 
@@ -228,6 +231,18 @@ export class SettingsService {
     await this.saveSettings(merged);
     this.settingsCache = merged;
     return merged;
+  }
+
+  /**
+   * Resolve an API key through the override chain: skill → runtime → global → env var
+   *
+   * @param provider - The API key provider (gemini, anthropic, openai)
+   * @param context - Optional context with runtime and/or skill for override resolution
+   * @returns The resolved API key or undefined if not configured anywhere
+   */
+  async getApiKey(provider: ApiKeyProvider, context?: ApiKeyResolutionContext): Promise<string | undefined> {
+    const settings = await this.getSettings();
+    return resolveApiKey(provider, settings.apiKeys, context);
   }
 
   /**

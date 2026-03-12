@@ -44,6 +44,31 @@ vi.mock('@/utils/error-handling', () => ({
   logSilentError: vi.fn(),
 }));
 
+// Mock useAuth context
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({
+    getAccessToken: () => null,
+  }),
+}));
+
+// Mock useCloudConnection hook
+vi.mock('../hooks/useCloudConnection', () => ({
+  useCloudConnection: () => ({
+    isConnected: false,
+    tier: null,
+  }),
+}));
+
+// Mock useDeviceHeartbeat hook
+vi.mock('../hooks/useDeviceHeartbeat', () => ({
+  useDeviceHeartbeat: () => ({
+    devices: [],
+    isLoading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+}));
+
 // Mock child components
 vi.mock('@/components/Teams/TeamsGridCard', () => ({
   __esModule: true,
@@ -395,7 +420,7 @@ describe('Teams Page', () => {
     });
   });
 
-  describe('Organization Grouping (parentTeamId)', () => {
+  describe('Flat Team Layout (parentTeamId)', () => {
     const orgTeams = [
       {
         id: 'org-crewly',
@@ -443,7 +468,7 @@ describe('Teams Page', () => {
       },
     ];
 
-    it('should display organization group header for parent teams', async () => {
+    it('should display all teams as flat grid cards', async () => {
       mockGetTeams.mockResolvedValue(orgTeams);
 
       render(
@@ -453,50 +478,15 @@ describe('Teams Page', () => {
       );
 
       await waitFor(() => {
-        // Parent org should appear as a group header
-        expect(screen.getByText('Crewly Team')).toBeInTheDocument();
+        // All teams should appear as regular grid cards
+        expect(screen.getByTestId('grid-card-org-crewly')).toBeInTheDocument();
+        expect(screen.getByTestId('grid-card-child-core')).toBeInTheDocument();
+        expect(screen.getByTestId('grid-card-child-marketing')).toBeInTheDocument();
+        expect(screen.getByTestId('grid-card-standalone-steamfun')).toBeInTheDocument();
       });
-
-      // Child teams should be visible
-      expect(screen.getByText('Crewly Core')).toBeInTheDocument();
-      expect(screen.getByText('Crewly Marketing')).toBeInTheDocument();
     });
 
-    it('should show child team count in organization header', async () => {
-      mockGetTeams.mockResolvedValue(orgTeams);
-
-      render(
-        <TestWrapper>
-          <Teams />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('Crewly Team')).toBeInTheDocument();
-      });
-
-      // Should show "2 teams" count
-      expect(screen.getByText(/2 teams/)).toBeInTheDocument();
-    });
-
-    it('should show standalone teams separately', async () => {
-      mockGetTeams.mockResolvedValue(orgTeams);
-
-      render(
-        <TestWrapper>
-          <Teams />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('SteamFun')).toBeInTheDocument();
-      });
-
-      // "Independent Teams" label should appear when there are both orgs and standalone teams
-      expect(screen.getByText('Independent Teams')).toBeInTheDocument();
-    });
-
-    it('should show active count badge on organization with active children', async () => {
+    it('should not show organization group headers or Independent Teams label', async () => {
       mockGetTeams.mockResolvedValue(orgTeams);
 
       render(
@@ -509,25 +499,124 @@ describe('Teams Page', () => {
         expect(screen.getByText('Crewly Team')).toBeInTheDocument();
       });
 
-      // Crewly Core has an active member, so org header should show "1 active"
-      expect(screen.getByText('1 active')).toBeInTheDocument();
-    });
-
-    it('should not show Independent Teams label when no organizations exist', async () => {
-      const standaloneOnly = [orgTeams[3]]; // Just SteamFun
-      mockGetTeams.mockResolvedValue(standaloneOnly);
-
-      render(
-        <TestWrapper>
-          <Teams />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByText('SteamFun')).toBeInTheDocument();
-      });
-
+      // No org grouping headers or separators
       expect(screen.queryByText('Independent Teams')).not.toBeInTheDocument();
+    });
+
+    it('should render parent teams with their members as regular cards', async () => {
+      const orgTeamsWithParentMembers = [
+        {
+          id: 'org-crewly',
+          name: 'Crewly Team',
+          description: 'Top-level organization',
+          projectIds: [],
+          members: [
+            { id: 'coord-1', name: 'Coordinator', role: 'coordinator', agentStatus: 'active' as const },
+            { id: 'assist-1', name: 'Assistant', role: 'assistant', agentStatus: 'inactive' as const },
+            { id: 'audit-1', name: 'Auditor', role: 'auditor', agentStatus: 'inactive' as const },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+        {
+          id: 'child-core',
+          name: 'Crewly Core',
+          description: 'Core development',
+          projectIds: [],
+          parentTeamId: 'org-crewly',
+          members: [
+            { id: 'm1', name: 'Sam', role: 'developer', agentStatus: 'active' as const },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+      ];
+
+      mockGetTeams.mockResolvedValue(orgTeamsWithParentMembers);
+
+      render(
+        <TestWrapper>
+          <Teams />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        // Parent team rendered as a regular grid card
+        expect(screen.getByTestId('grid-card-org-crewly')).toBeInTheDocument();
+        // Child team also rendered as a regular grid card
+        expect(screen.getByTestId('grid-card-child-core')).toBeInTheDocument();
+      });
+
+      // Parent team members visible in the card
+      expect(screen.getByText('Coordinator - coordinator')).toBeInTheDocument();
+      expect(screen.getByText('Assistant - assistant')).toBeInTheDocument();
+      expect(screen.getByText('Auditor - auditor')).toBeInTheDocument();
+    });
+
+    it('should render parent team even when it has no members', async () => {
+      mockGetTeams.mockResolvedValue(orgTeams);
+
+      render(
+        <TestWrapper>
+          <Teams />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        // Parent team with no members should still appear as a card
+        expect(screen.getByTestId('grid-card-org-crewly')).toBeInTheDocument();
+        expect(screen.getByTestId('grid-card-child-core')).toBeInTheDocument();
+        expect(screen.getByTestId('grid-card-child-marketing')).toBeInTheDocument();
+      });
+    });
+
+    it('should render all teams in list view', async () => {
+      const orgTeamsWithParentMembers = [
+        {
+          id: 'org-crewly',
+          name: 'Crewly Team',
+          description: 'Top-level organization',
+          projectIds: [],
+          members: [
+            { id: 'coord-1', name: 'Coordinator', role: 'coordinator', agentStatus: 'active' as const },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+        {
+          id: 'child-core',
+          name: 'Crewly Core',
+          description: 'Core development',
+          projectIds: [],
+          parentTeamId: 'org-crewly',
+          members: [
+            { id: 'm1', name: 'Sam', role: 'developer', agentStatus: 'active' as const },
+          ],
+          createdAt: '2024-01-01',
+          updatedAt: '2024-01-02',
+        },
+      ];
+
+      mockGetTeams.mockResolvedValue(orgTeamsWithParentMembers);
+
+      render(
+        <TestWrapper>
+          <Teams />
+        </TestWrapper>
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('grid-card-org-crewly')).toBeInTheDocument();
+      });
+
+      // Switch to list view
+      const listViewButton = screen.getByTitle('List view');
+      fireEvent.click(listViewButton);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('list-item-org-crewly')).toBeInTheDocument();
+        expect(screen.getByTestId('list-item-child-core')).toBeInTheDocument();
+      });
     });
   });
 });

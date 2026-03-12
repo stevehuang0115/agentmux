@@ -119,6 +119,24 @@ class SettingsService {
    * @returns Promise resolving to imported settings
    * @throws Error if validation fails or request fails
    */
+  /**
+   * Test if an API key is valid
+   *
+   * @param provider - API provider (gemini, anthropic, openai)
+   * @param key - API key to test
+   * @returns Promise resolving to test result
+   */
+  async testApiKey(provider: string, key: string): Promise<{ valid: boolean; error?: string }> {
+    const response = await axios.post<ApiResponse<{ valid: boolean; error?: string }>>(
+      `${SETTINGS_API_BASE}/test-api-key`,
+      { provider, key }
+    );
+    if (!response.data.success || !response.data.data) {
+      throw new Error(response.data.error || 'Failed to test API key');
+    }
+    return response.data.data;
+  }
+
   async importSettings(settings: CrewlySettings): Promise<CrewlySettings> {
     const response = await axios.post<ApiResponse<CrewlySettings>>(
       `${SETTINGS_API_BASE}/import`,

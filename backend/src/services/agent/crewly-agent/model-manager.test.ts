@@ -14,6 +14,26 @@ jest.unstable_mockModule('@ai-sdk/google', () => ({
   google: jest.fn((modelId: string) => ({ provider: 'google', modelId })),
 }));
 
+// Mock settings service — getApiKey resolves through env vars only (no settings file)
+jest.mock('../../settings/settings.service.js', () => {
+  const envMap: Record<string, string[]> = {
+    gemini: ['GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY'],
+    anthropic: ['ANTHROPIC_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+  };
+  return {
+    getSettingsService: () => ({
+      getSettings: jest.fn<any>().mockResolvedValue({ apiKeys: { global: {} } }),
+      getApiKey: jest.fn<any>().mockImplementation(async (provider: string) => {
+        for (const envVar of envMap[provider] ?? []) {
+          if (process.env[envVar]) return process.env[envVar];
+        }
+        return undefined;
+      }),
+    }),
+  };
+});
+
 describe('ModelManager', () => {
   let manager: ModelManager;
   const originalEnv = { ...process.env };
@@ -68,29 +88,29 @@ describe('ModelManager', () => {
   });
 
   describe('getAvailableProviders', () => {
-    it('should report providers based on environment variables', () => {
+    it('should report providers based on environment variables', async () => {
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.OPENAI_API_KEY;
       delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       delete process.env.GEMINI_API_KEY;
 
-      const available = manager.getAvailableProviders();
+      const available = await manager.getAvailableProviders();
 
       expect(available.anthropic).toBe(false);
       expect(available.openai).toBe(false);
       expect(available.google).toBe(false);
     });
 
-    it('should detect Anthropic API key', () => {
+    it('should detect Anthropic API key', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
-      const available = manager.getAvailableProviders();
+      const available = await manager.getAvailableProviders();
       expect(available.anthropic).toBe(true);
     });
 
-    it('should detect Google via GEMINI_API_KEY fallback', () => {
+    it('should detect Google via GEMINI_API_KEY fallback', async () => {
       delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
       process.env.GEMINI_API_KEY = 'test-key';
-      const available = manager.getAvailableProviders();
+      const available = await manager.getAvailableProviders();
       expect(available.google).toBe(true);
     });
   });

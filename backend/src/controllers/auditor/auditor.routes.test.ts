@@ -48,7 +48,7 @@ describe('Auditor Routes', () => {
       .find((layer: any) => layer.route.path === '/trigger');
 
     expect(triggerRoute).toBeDefined();
-    const methods = Object.keys(triggerRoute!.route.methods);
+    const methods = Object.keys((triggerRoute as any).route.methods);
     expect(methods).toEqual(['post']);
   });
 
@@ -60,7 +60,7 @@ describe('Auditor Routes', () => {
       .find((layer: any) => layer.route.path === '/status');
 
     expect(statusRoute).toBeDefined();
-    const methods = Object.keys(statusRoute!.route.methods);
+    const methods = Object.keys((statusRoute as any).route.methods);
     expect(methods).toEqual(['get']);
   });
 

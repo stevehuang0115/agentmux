@@ -12,6 +12,7 @@ import { Settings } from './pages/Settings';
 import { Chat } from './pages/Chat';
 import Marketplace from './pages/Marketplace';
 import { Knowledge } from './pages/Knowledge';
+import { AuthCallback } from './pages/AuthCallback';
 import { TerminalProvider } from './contexts/TerminalContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 import { ChatProvider } from './contexts/ChatContext';
@@ -24,7 +25,10 @@ function App() {
       <SidebarProvider>
         <Router>
           <Routes>
-            {/* Admin / Internal UI */}
+            {/* OAuth callback (standalone, no AppLayout) */}
+            <Route path="/auth/callback" element={<AuthCallback />} />
+
+            {/* Main App */}
             <Route path="/" element={<AppLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="projects" element={<Projects />} />

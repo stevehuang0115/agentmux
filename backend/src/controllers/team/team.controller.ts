@@ -21,8 +21,9 @@ import {
   ORCHESTRATOR_SESSION_NAME,
   ORCHESTRATOR_ROLE,
   RUNTIME_TYPES,
-  NON_RECOVERABLE_ERROR_PATTERNS
+  NON_RECOVERABLE_ERROR_PATTERNS,
 } from '../../constants.js';
+import type { RuntimeType } from '../../constants.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
 import { updateAgentHeartbeat } from '../../services/agent/agent-heartbeat.service.js';
 import { getSessionBackendSync, getSessionStatePersistence } from '../../services/session/index.js';
@@ -162,6 +163,30 @@ function buildOrchestratorTeam(
         runtimeType: (orchestratorStatus?.runtimeType || 'claude-code') as TeamMember['runtimeType'],
         createdAt: orchestratorStatus?.createdAt || now,
         updatedAt: orchestratorStatus?.updatedAt || now
+      },
+      {
+        id: 'a1b2c3d4-5678-9abc-def0-assistant001',
+        name: 'Assistant',
+        sessionName: 'crewly-team-assistant-a1b2c3d4',
+        role: 'orchestrator',
+        systemPrompt: 'Shadow orchestrator running in-process via Crewly Agent runtime (AI SDK)',
+        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'],
+        workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE as TeamMember['workingStatus'],
+        runtimeType: 'crewly-agent' as TeamMember['runtimeType'],
+        createdAt: '2026-03-11T02:00:00.000Z',
+        updatedAt: now
+      },
+      {
+        id: 'e5f6a7b8-9012-3cde-f456-auditor00001',
+        name: 'Auditor',
+        sessionName: 'crewly-auditor',
+        role: 'auditor',
+        systemPrompt: 'Autonomous quality observer — monitors all agents, detects problems, writes audit reports',
+        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'],
+        workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE as TeamMember['workingStatus'],
+        runtimeType: 'claude-code' as TeamMember['runtimeType'],
+        createdAt: '2026-03-11T02:10:00.000Z',
+        updatedAt: now
       }
     ],
     projectIds: [],
@@ -356,6 +381,7 @@ async function _startTeamMemberCore(
         projectPath: projectPath,
         memberId: currentMember.id,
         teamId: team.id,
+        runtimeType: (currentMember.runtimeType as RuntimeType) || undefined,
       });
 
       if (createResult.success) {
@@ -1210,9 +1236,153 @@ export async function deleteTeamMember(this: ApiContext, req: Request, res: Resp
   }
 }
 
+/**
+ * Start a virtual orchestrator team member (Assistant or Auditor).
+ * These members are not persisted in teams.json — their team is built dynamically
+ * by buildOrchestratorTeam(). The main orchestrator member is managed via /orchestrator/setup.
+ *
+ * @param context - API context with services
+ * @param memberId - The member ID from the virtual orchestrator team
+ * @param res - Express response object
+ */
+async function _startOrchestratorMember(
+  context: ApiContext,
+  memberId: string,
+  res: Response
+): Promise<void> {
+  const orchestratorTeam = buildOrchestratorTeam(
+    CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+    null
+  );
+  const member = orchestratorTeam.members.find(m => m.id === memberId);
+
+  if (!member) {
+    res.status(404).json({ success: false, error: 'Orchestrator team member not found' } as ApiResponse);
+    return;
+  }
+
+  // Main orchestrator member is managed at system level
+  if (memberId === 'orchestrator-member') {
+    res.status(400).json({
+      success: false,
+      error: 'Orchestrator is managed at system level. Use /api/orchestrator/setup endpoint instead.'
+    } as ApiResponse);
+    return;
+  }
+
+  // Use project root (cwd) as the project path for orchestrator virtual members
+  const projectPath = process.cwd();
+
+  // Create the agent session via agentRegistrationService (handles both crewly-agent and claude-code runtimes)
+  try {
+    const createResult = await context.agentRegistrationService.createAgentSession({
+      sessionName: member.sessionName,
+      role: member.role,
+      projectPath,
+      memberId: member.id,
+      teamId: 'orchestrator',
+      runtimeType: (member.runtimeType as RuntimeType) || undefined,
+    });
+
+    if (createResult.success) {
+      res.json({
+        success: true,
+        data: {
+          memberId: member.id,
+          sessionName: createResult.sessionName || member.sessionName,
+          status: CREWLY_CONSTANTS.AGENT_STATUSES.STARTING
+        },
+        message: `Orchestrator member ${member.name} started successfully`
+      } as ApiResponse);
+    } else {
+      res.status(500).json({
+        success: false,
+        error: createResult.error || `Failed to start orchestrator member ${member.name}`
+      } as ApiResponse);
+    }
+  } catch (error) {
+    logger.error('Error starting orchestrator member', { memberId, error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to start orchestrator member'
+    } as ApiResponse);
+  }
+}
+
+/**
+ * Stop a virtual orchestrator team member (Assistant or Auditor).
+ * These members are not persisted in teams.json — uses agentRegistrationService
+ * to terminate the session without storage updates.
+ *
+ * @param context - API context with services
+ * @param memberId - The member ID from the virtual orchestrator team
+ * @param res - Express response object
+ */
+async function _stopOrchestratorMember(
+  context: ApiContext,
+  memberId: string,
+  res: Response
+): Promise<void> {
+  const orchestratorTeam = buildOrchestratorTeam(
+    CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
+    null
+  );
+  const member = orchestratorTeam.members.find(m => m.id === memberId);
+
+  if (!member) {
+    res.status(404).json({ success: false, error: 'Orchestrator team member not found' } as ApiResponse);
+    return;
+  }
+
+  // Main orchestrator member is managed at system level
+  if (memberId === 'orchestrator-member') {
+    res.status(400).json({
+      success: false,
+      error: 'Orchestrator is managed at system level. Use /api/orchestrator/setup endpoint instead.'
+    } as ApiResponse);
+    return;
+  }
+
+  try {
+    const stopResult = await context.agentRegistrationService.terminateAgentSession(
+      member.sessionName,
+      member.role
+    );
+
+    if (stopResult.success) {
+      res.json({
+        success: true,
+        data: {
+          memberId: member.id,
+          status: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE
+        },
+        message: `Orchestrator member ${member.name} stopped successfully`
+      } as ApiResponse);
+    } else {
+      res.status(500).json({
+        success: false,
+        error: stopResult.error || `Failed to stop orchestrator member ${member.name}`
+      } as ApiResponse);
+    }
+  } catch (error) {
+    logger.error('Error stopping orchestrator member', { memberId, error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to stop orchestrator member'
+    } as ApiResponse);
+  }
+}
+
 export async function startTeamMember(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { teamId, memberId } = req.params;
+
+    // Handle virtual orchestrator team members (not stored in teams.json)
+    if (teamId === 'orchestrator') {
+      await _startOrchestratorMember(this, memberId, res);
+      return;
+    }
+
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) {
@@ -1318,6 +1488,13 @@ export async function startTeamMember(this: ApiContext, req: Request, res: Respo
 export async function stopTeamMember(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
     const { teamId, memberId } = req.params;
+
+    // Handle virtual orchestrator team members (not stored in teams.json)
+    if (teamId === 'orchestrator') {
+      await _stopOrchestratorMember(this, memberId, res);
+      return;
+    }
+
     const teams = await this.storageService.getTeams();
     const team = teams.find(t => t.id === teamId);
     if (!team) {
@@ -1488,7 +1665,7 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
     // Flush any queued messages for this sub-agent (fire-and-forget after response)
     const subAgentQueue = SubAgentMessageQueue.getInstance();
     if (subAgentQueue.hasPending(sessionName)) {
-      const runtimeType = (freshTeam?.members.find(m => m.id === targetMemberId)?.runtimeType || RUNTIME_TYPES.CLAUDE_CODE) as import('../../constants.js').RuntimeType;
+      const runtimeType = (freshTeam?.members.find(m => m.id === targetMemberId)?.runtimeType || RUNTIME_TYPES.CLAUDE_CODE) as RuntimeType;
       const queuedMessages = subAgentQueue.dequeueAll(sessionName);
       logger.info('Flushing queued messages', { count: queuedMessages.length, sessionName });
 
