@@ -172,7 +172,7 @@ router.post('/import', async (req: Request, res: Response, next: NextFunction) =
   try {
     const importedSettings = req.body;
 
-    if (!importedSettings || typeof importedSettings !== 'object') {
+    if (!importedSettings || typeof importedSettings !== 'object' || Array.isArray(importedSettings)) {
       return res.status(400).json({
         success: false,
         error: 'Invalid settings format',

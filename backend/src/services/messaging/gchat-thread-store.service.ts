@@ -26,7 +26,7 @@ import { formatMessageTimestamp } from '../../utils/format-date.js';
  * @returns Filesystem-safe string
  */
 function sanitizeName(name: string): string {
-  return name.replace(/\//g, '_');
+  return name.replace(/\//g, '_').replace(/\.\./g, '_');
 }
 
 /**

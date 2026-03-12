@@ -122,7 +122,6 @@ export function stripAnsiCodes(content: string): string {
 				if (hasQuestion) i++;
 
 				// Collect parameter + intermediate bytes
-				let paramStart = i;
 				while (i < len) {
 					const c = content.charCodeAt(i);
 					if (c >= 0x30 && c <= 0x3F) { i++; continue; } // parameter bytes (digits, ;, <=>?)

@@ -46,6 +46,11 @@ describe('GoogleChatThreadStoreService', () => {
       const path2 = store.getThreadFilePath('spaces/BBB', 'spaces/BBB/threads/222');
       expect(path1).not.toBe(path2);
     });
+
+    it('should sanitize path traversal sequences', () => {
+      const result = store.getThreadFilePath('spaces/../etc', 'spaces/../etc/threads/passwd');
+      expect(result).not.toContain('..');
+    });
   });
 
   describe('ensureThreadFile', () => {

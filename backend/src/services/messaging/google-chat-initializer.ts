@@ -21,6 +21,7 @@ import { getGchatThreadStore } from './gchat-thread-store.service.js';
 import { LoggerService } from '../core/logger.service.js';
 import { formatError } from '../../utils/format-error.js';
 import { cleanGoogleChatResponse } from '../../utils/terminal-output.utils.js';
+import { getTerminalGateway } from '../../websocket/terminal.gateway.js';
 import type { MessageQueueService } from './message-queue.service.js';
 import type { IncomingMessage } from './messenger-adapter.interface.js';
 
@@ -95,12 +96,12 @@ export function createIncomingCallback(
     // Register the thread mapping in the terminal gateway so follow-up
     // NOTIFY messages for this space auto-route to the correct thread.
     if (msg.channelId && msg.threadId) {
-      import('../../websocket/terminal.gateway.js').then(({ getTerminalGateway }) => {
+      try {
         const tg = getTerminalGateway();
         if (tg) {
-          tg.registerGchatThread(msg.channelId, msg.threadId!);
+          tg.registerGchatThread(msg.channelId, msg.threadId);
         }
-      }).catch(() => { /* non-critical */ });
+      } catch { /* non-critical */ }
     }
 
     logger.info('Enqueuing Google Chat message', {
@@ -152,8 +153,7 @@ export function createIncomingCallback(
           }
         }
       } catch (err) {
-        const replyLogger = LoggerService.getInstance().createComponentLogger('GoogleChatReply');
-        replyLogger.error('Failed to send reply', { channelId: msg.channelId, error: formatError(err) });
+        logger.error('Failed to send reply', { channelId: msg.channelId, error: formatError(err) });
       }
     });
   };

@@ -18,7 +18,6 @@ import { assignDefaultAvatars } from '../utils/team.utils';
 export const Teams: React.FC = () => {
   const navigate = useNavigate();
   const [teams, setTeams] = useState<Team[]>([]);
-  const [filteredTeams, setFilteredTeams] = useState<Team[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -48,6 +47,39 @@ export const Teams: React.FC = () => {
     heartbeatTeams,
     typeof window !== 'undefined' ? (window.location.hostname || 'My Device') : 'My Device',
   );
+
+  const filteredTeams = useMemo(() => {
+    let filtered = teams;
+
+    if (searchQuery) {
+      filtered = filtered.filter(team =>
+        team.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (team.description && team.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (team.projectIds?.length > 0 && team.projectIds.some(pid => pid.toLowerCase().includes(searchQuery.toLowerCase()))) ||
+        team.members.some(member =>
+          member.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          member.role.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+      );
+    }
+
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(team => {
+        if (statusFilter === 'active') {
+          return team.members.some(member => member.agentStatus === 'active');
+        } else if (statusFilter === 'inactive') {
+          return team.members.every(member => member.agentStatus === 'inactive');
+        }
+        return true;
+      });
+    }
+
+    if (projectFilter !== 'all') {
+      filtered = filtered.filter(team => team.projectIds?.includes(projectFilter));
+    }
+
+    return filtered;
+  }, [teams, searchQuery, statusFilter, projectFilter]);
 
   /**
    * Compute sub-team counts for parent teams.
@@ -111,10 +143,6 @@ export const Teams: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    filterTeams();
-  }, [teams, searchQuery, statusFilter, projectFilter]);
-
   const fetchTeams = async () => {
     try {
       // Use cached apiService.getTeams() to reduce redundant API calls
@@ -133,39 +161,6 @@ export const Teams: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const filterTeams = () => {
-    let filtered = teams;
-
-    if (searchQuery) {
-      filtered = filtered.filter(team =>
-        team.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (team.description && team.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (team.projectIds?.length > 0 && team.projectIds.some(pid => pid.toLowerCase().includes(searchQuery.toLowerCase()))) ||
-        team.members.some(member =>
-          member.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          member.role.toLowerCase().includes(searchQuery.toLowerCase())
-        )
-      );
-    }
-
-    if (statusFilter !== 'all') {
-      filtered = filtered.filter(team => {
-        if (statusFilter === 'active') {
-          return team.members.some(member => member.agentStatus === 'active');
-        } else if (statusFilter === 'inactive') {
-          return team.members.every(member => member.agentStatus === 'inactive');
-        }
-        return true;
-      });
-    }
-
-    if (projectFilter !== 'all') {
-      filtered = filtered.filter(team => team.projectIds?.includes(projectFilter));
-    }
-
-    setFilteredTeams(filtered);
   };
 
   const handleCreateTeam = async (teamData: any) => {

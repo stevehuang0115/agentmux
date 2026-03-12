@@ -8,7 +8,7 @@
  * @module pages/AuthCallback
  */
 
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CLOUD_TOKEN_KEY } from '../constants/cloud.constants';
 
