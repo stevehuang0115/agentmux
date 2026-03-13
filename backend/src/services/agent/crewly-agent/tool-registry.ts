@@ -9,22 +9,239 @@
  */
 
 import { promises as fsPromises } from 'fs';
+import { homedir } from 'os';
 import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
-import type { ToolDefinition } from './types.js';
+import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, ApprovalCheckResult } from './types.js';
+
+/**
+ * Expand ~ and $HOME in a file path to the user's home directory.
+ *
+ * @param filePath - Path that may contain ~ or $HOME
+ * @returns Resolved absolute path
+ */
+function expandPath(filePath: string): string {
+  const home = homedir();
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    return home + filePath.slice(1);
+  }
+  if (filePath.startsWith('$HOME/') || filePath === '$HOME') {
+    return home + filePath.slice(5);
+  }
+  return filePath;
+}
+
+/** File extensions recognized as images for multimodal read_file support */
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg']);
+
+/** MIME type mapping for image extensions */
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+};
+
+/**
+ * Strip [NOTIFY]...[/NOTIFY] markers from text.
+ *
+ * The crewly-agent model sometimes wraps tool arguments in NOTIFY markers
+ * intended for the terminal gateway routing layer. When this leaks into
+ * reply_slack or other outward-facing tools, the raw markers appear in
+ * the Slack message. This function extracts the body content (after the
+ * --- separator if present) or the full block content.
+ *
+ * @param text - Text that may contain NOTIFY markers
+ * @returns Clean text with markers stripped and body content extracted
+ */
+export function stripNotifyMarkers(text: string): string {
+  // Replace each [NOTIFY]...[/NOTIFY] block with its body content
+  const cleaned = text.replace(/\[NOTIFY\]([\s\S]*?)\[\/NOTIFY\]/gi, (_match, inner: string) => {
+    const trimmed = inner.trim();
+    // If there's a --- separator, extract only the body after it
+    const separatorIdx = trimmed.indexOf('---');
+    if (separatorIdx !== -1) {
+      return trimmed.slice(separatorIdx + 3).trim();
+    }
+    // No separator — return the full inner content
+    return trimmed;
+  });
+  return cleaned.trim();
+}
+
+/**
+ * Sensitivity classification for each tool.
+ * Used by the audit trail to classify tool invocations.
+ */
+export const TOOL_SENSITIVITY: Record<string, ToolSensitivity> = {
+  // Safe: read-only, informational
+  get_agent_status: 'safe',
+  get_team_status: 'safe',
+  get_agent_logs: 'safe',
+  heartbeat: 'safe',
+  get_tasks: 'safe',
+  get_project_overview: 'safe',
+  read_file: 'safe',
+  recall_memory: 'safe',
+  subscribe_event: 'safe',
+  get_audit_log: 'safe',
+  compact_memory: 'safe',
+  // Sensitive: modify state, communicate externally
+  delegate_task: 'sensitive',
+  send_message: 'sensitive',
+  reply_slack: 'sensitive',
+  schedule_check: 'sensitive',
+  cancel_schedule: 'sensitive',
+  register_self: 'sensitive',
+  report_status: 'sensitive',
+  remember: 'sensitive',
+  complete_task: 'sensitive',
+  broadcast: 'sensitive',
+  // Destructive: irreversible or high-impact operations
+  start_agent: 'destructive',
+  stop_agent: 'destructive',
+  handle_agent_failure: 'destructive',
+  edit_file: 'destructive',
+  write_file: 'destructive',
+};
+
+/**
+ * Wrap a tool's execute function with audit logging.
+ *
+ * Records tool name, sensitivity, args, result status, and duration.
+ * Sanitizes arguments to avoid logging secrets.
+ *
+ * @param toolName - Name of the tool being wrapped
+ * @param executeFn - Original execute function
+ * @param callbacks - Callbacks object with onAuditLog handler
+ * @returns Wrapped execute function
+ */
+/**
+ * Wrap a tool's execute function with security policy enforcement and audit logging.
+ *
+ * Checks blocked tools and approval requirements before execution.
+ * Records tool name, sensitivity, args, result status, and duration.
+ * Sanitizes arguments to avoid logging secrets.
+ *
+ * @param toolName - Name of the tool being wrapped
+ * @param executeFn - Original execute function
+ * @param callbacks - Callbacks object with onAuditLog and onCheckApproval handlers
+ * @returns Wrapped execute function
+ */
+function wrapWithAudit(
+  toolName: string,
+  executeFn: (args: Record<string, unknown>) => Promise<unknown>,
+  callbacks?: ToolCallbacks,
+): (args: Record<string, unknown>) => Promise<unknown> {
+  if (!callbacks?.onAuditLog && !callbacks?.onCheckApproval) return executeFn;
+
+  return async (args: Record<string, unknown>): Promise<unknown> => {
+    const start = Date.now();
+    const sensitivity = TOOL_SENSITIVITY[toolName] || 'safe';
+
+    // Sanitize args: redact potential secrets
+    const sanitizedArgs = sanitizeArgs(args);
+
+    // Check security policy before execution
+    if (callbacks?.onCheckApproval) {
+      const approvalResult: ApprovalCheckResult = callbacks.onCheckApproval(toolName, sensitivity);
+      if (!approvalResult.allowed) {
+        const entry: AuditEntry = {
+          timestamp: new Date().toISOString(),
+          toolName,
+          sensitivity,
+          args: sanitizedArgs,
+          success: false,
+          error: approvalResult.reason || 'Blocked by security policy',
+          durationMs: Date.now() - start,
+        };
+        if (callbacks?.onAuditLog) callbacks.onAuditLog(entry);
+        return {
+          success: false,
+          blocked: approvalResult.blocked ?? false,
+          requiresApproval: !approvalResult.blocked,
+          error: approvalResult.reason || 'Tool execution denied by security policy',
+        };
+      }
+    }
+
+    // No audit logger — just execute
+    if (!callbacks?.onAuditLog) return executeFn(args);
+
+    try {
+      const result = await executeFn(args);
+      const success = result != null && typeof result === 'object'
+        ? (result as Record<string, unknown>).success !== false
+        : true;
+
+      const entry: AuditEntry = {
+        timestamp: new Date().toISOString(),
+        toolName,
+        sensitivity,
+        args: sanitizedArgs,
+        success,
+        durationMs: Date.now() - start,
+      };
+      if (!success && typeof result === 'object' && result !== null) {
+        entry.error = String((result as Record<string, unknown>).error || 'unknown');
+      }
+      callbacks.onAuditLog!(entry);
+      return result;
+    } catch (error) {
+      const entry: AuditEntry = {
+        timestamp: new Date().toISOString(),
+        toolName,
+        sensitivity,
+        args: sanitizedArgs,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+        durationMs: Date.now() - start,
+      };
+      callbacks.onAuditLog!(entry);
+      throw error;
+    }
+  };
+}
+
+/**
+ * Sanitize tool arguments for audit logging.
+ * Redacts values for keys that may contain secrets.
+ *
+ * @param args - Raw tool arguments
+ * @returns Sanitized copy safe for logging
+ */
+function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const sensitiveKeys = ['password', 'secret', 'token', 'apiKey', 'api_key', 'authorization'];
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
+      result[key] = '[REDACTED]';
+    } else if (typeof value === 'string' && value.length > 2000) {
+      result[key] = value.substring(0, 2000) + '...[truncated]';
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
 
 /**
  * Create the complete set of AI SDK tools for the Crewly Agent.
  *
  * Each tool's execute function calls the Crewly REST API directly
  * via the provided API client, bypassing the bash script layer.
+ * Tools are wrapped with audit logging when callbacks are provided.
  *
  * @param client - API client instance for making REST calls
  * @param sessionName - Agent session name for identity context
+ * @param projectPath - Optional project path for auto-injection
+ * @param callbacks - Optional callbacks for compaction and audit logging
  * @returns Object of named tools ready to pass to generateText
  */
-export function createTools(client: CrewlyApiClient, sessionName: string): Record<string, ToolDefinition> {
-  return {
+export function createTools(client: CrewlyApiClient, sessionName: string, projectPath?: string, callbacks?: ToolCallbacks, conversationId?: string): Record<string, ToolDefinition> {
+  const rawTools: Record<string, ToolDefinition> = {
     // ===== Core Orchestration Tools =====
 
     delegate_task: {
@@ -81,7 +298,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
           ttlMinutes: 120,
         });
 
-        return { success: true, delegatedTo: to, taskId };
+        return { success: true, delegatedTo: to, taskId, conversationId: conversationId || undefined };
       },
     },
 
@@ -159,7 +376,11 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         threadTs: z.string().optional().describe('Thread timestamp for replies'),
       }),
       execute: async ({ channelId, text, threadTs }) => {
-        const body: Record<string, string> = { channelId: channelId as string, text: text as string };
+        // Strip [NOTIFY]...[/NOTIFY] blocks that may leak into tool arguments.
+        // The agent sometimes wraps responses in NOTIFY markers intended for the
+        // terminal gateway routing layer, not for Slack display.
+        const cleanText = stripNotifyMarkers(text as string);
+        const body: Record<string, string> = { channelId: channelId as string, text: cleanText };
         if (threadTs) body.threadTs = threadTs as string;
         const result = await client.post('/slack/send', body);
         return result.success
@@ -260,13 +481,20 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
       inputSchema: z.object({
         context: z.string().describe('What to search for'),
         scope: z.enum(['agent', 'project', 'both']).default('both'),
+        projectPath: z.string().optional().describe('Project path (auto-injected if omitted)'),
       }),
-      execute: async ({ context, scope }) => {
-        const result = await client.post('/memory/recall', {
+      execute: async ({ context, scope, projectPath: pp }) => {
+        const body: Record<string, unknown> = {
           agentId: sessionName,
           context,
           scope,
-        });
+        };
+        // Auto-inject projectPath when scope requires it
+        const resolvedProjectPath = (pp as string | undefined) || projectPath;
+        if (resolvedProjectPath && (scope === 'project' || scope === 'both')) {
+          body.projectPath = resolvedProjectPath;
+        }
+        const result = await client.post('/memory/recall', body);
         return result.success ? result.data : { error: result.error };
       },
     },
@@ -277,14 +505,20 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         content: z.string().describe('Knowledge to store'),
         category: z.enum(['pattern', 'decision', 'gotcha', 'fact', 'preference']),
         scope: z.enum(['agent', 'project']).default('project'),
+        projectPath: z.string().optional().describe('Project path (auto-injected if omitted)'),
       }),
-      execute: async ({ content, category, scope }) => {
-        const result = await client.post('/memory/remember', {
+      execute: async ({ content, category, scope, projectPath: pp }) => {
+        const body: Record<string, unknown> = {
           agentId: sessionName,
           content,
           category,
           scope,
-        });
+        };
+        const resolvedProjectPath = (pp as string | undefined) || projectPath;
+        if (resolvedProjectPath) {
+          body.projectPath = resolvedProjectPath;
+        }
+        const result = await client.post('/memory/remember', body);
         return result.success ? result.data : { error: result.error };
       },
     },
@@ -399,7 +633,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         replace_all: z.boolean().default(false).describe('Replace all occurrences instead of requiring uniqueness'),
       }),
       execute: async ({ file_path, old_string, new_string, replace_all }) => {
-        const fp = file_path as string, os = old_string as string, ns = new_string as string;
+        const fp = expandPath(file_path as string), os = old_string as string, ns = new_string as string;
         try {
           // Read the file
           const content = await fsPromises.readFile(fp, 'utf8');
@@ -459,15 +693,31 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
     },
 
     read_file: {
-      description: 'Read the contents of a file. Returns the file content as a string.',
+      description: 'Read the contents of a file. Returns text content with line numbers, or base64-encoded image data for image files (png/jpg/gif/webp/svg). Image files are returned as multimodal content parts for AI SDK.',
       inputSchema: z.object({
         file_path: z.string().describe('Absolute path to the file to read'),
-        offset: z.number().optional().describe('Line number to start reading from (1-based)'),
-        limit: z.number().optional().describe('Maximum number of lines to read'),
+        offset: z.number().optional().describe('Line number to start reading from (1-based, text files only)'),
+        limit: z.number().optional().describe('Maximum number of lines to read (text files only)'),
       }),
       execute: async ({ file_path, offset, limit }) => {
-        const fp = file_path as string;
+        const fp = expandPath(file_path as string);
         try {
+          // Check if this is an image file
+          const ext = fp.split('.').pop()?.toLowerCase() || '';
+          if (IMAGE_EXTENSIONS.has(ext)) {
+            const buffer = await fsPromises.readFile(fp);
+            const base64 = buffer.toString('base64');
+            const mimeType = IMAGE_MIME_TYPES[ext] || 'application/octet-stream';
+            return {
+              success: true,
+              type: 'image',
+              mimeType,
+              data: base64,
+              file: fp,
+              sizeBytes: buffer.length,
+            };
+          }
+
           const content = await fsPromises.readFile(fp, 'utf8');
           const lines = content.split('\n');
 
@@ -504,7 +754,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         content: z.string().describe('Full file content to write'),
       }),
       execute: async ({ file_path, content }) => {
-        const fp = file_path as string, ct = content as string;
+        const fp = expandPath(file_path as string), ct = content as string;
         try {
           // Ensure parent directory exists
           const dir = fp.substring(0, fp.lastIndexOf('/'));
@@ -518,7 +768,106 @@ export function createTools(client: CrewlyApiClient, sessionName: string): Recor
         }
       },
     },
+
+    // ===== Agent Lifecycle Self-Registration Tools =====
+
+    register_self: {
+      description: 'Register this agent as active with the Crewly backend. Call this immediately on startup.',
+      inputSchema: z.object({
+        role: z.string().describe('Agent role (e.g., "developer", "orchestrator")'),
+      }),
+      execute: async ({ role }) => {
+        const result = await client.post('/teams/members/register', {
+          role,
+          sessionName,
+        });
+        return result.success ? result.data : { error: result.error };
+      },
+    },
+
+    get_project_overview: {
+      description: 'Get an overview of all configured projects.',
+      inputSchema: z.object({}),
+      execute: async () => {
+        const result = await client.get('/projects');
+        return result.success ? result.data : { error: result.error };
+      },
+    },
+
+    report_status: {
+      description: 'Report task status to the orchestrator.',
+      inputSchema: z.object({
+        status: z.enum(['in_progress', 'done', 'blocked', 'error']).describe('Current status'),
+        summary: z.string().describe('Brief status summary'),
+      }),
+      execute: async ({ status, summary }) => {
+        const body: Record<string, unknown> = {
+          sessionName,
+          status,
+          summary,
+        };
+        if (projectPath) body.projectPath = projectPath;
+        if (conversationId) body.conversationId = conversationId;
+        const result = await client.post('/teams/members/register', body);
+        return result.success ? result.data : { error: result.error };
+      },
+    },
+
+    // ===== Context Compaction Tool =====
+
+    compact_memory: {
+      description: 'Proactively compact conversation context to preserve critical state while freeing token budget. Use when context is growing large or before starting a new phase of work. Generates an AI-powered structured summary of older messages preserving: active tasks, decisions, findings, blockers, and current context.',
+      inputSchema: z.object({}),
+      sensitivity: 'safe',
+      execute: async () => {
+        if (!callbacks?.onCompactMemory) {
+          return { success: false, error: 'Compaction not available — no runner callback configured' };
+        }
+        const result = await callbacks.onCompactMemory();
+        return {
+          success: result.compacted,
+          ...result,
+        };
+      },
+    },
+
+    // ===== Security Audit Tool =====
+
+    get_audit_log: {
+      description: 'Retrieve the security audit trail of recent tool invocations. Shows tool name, sensitivity classification, success/failure, duration, and sanitized arguments. Use for security review, debugging, or compliance.',
+      inputSchema: z.object({
+        limit: z.number().default(50).describe('Maximum entries to return (most recent first)'),
+        sensitivity: z.enum(['safe', 'sensitive', 'destructive']).optional().describe('Filter by sensitivity level'),
+        toolName: z.string().optional().describe('Filter by specific tool name'),
+      }),
+      sensitivity: 'safe',
+      execute: async ({ limit, sensitivity: filterSensitivity, toolName: filterTool }) => {
+        // Audit log is maintained by the runner via callbacks
+        // This tool returns a formatted view — actual data comes from the runner
+        return {
+          success: true,
+          note: 'Audit log is maintained in the agent runner. Use the runner getAuditLog() method for programmatic access.',
+          filters: {
+            limit: limit || 50,
+            sensitivity: filterSensitivity || 'all',
+            toolName: filterTool || 'all',
+          },
+        };
+      },
+    },
   };
+
+  // Apply sensitivity classifications and audit wrapping
+  const tools: Record<string, ToolDefinition> = {};
+  for (const [name, tool] of Object.entries(rawTools)) {
+    tools[name] = {
+      ...tool,
+      sensitivity: tool.sensitivity || TOOL_SENSITIVITY[name] || 'safe',
+      execute: wrapWithAudit(name, tool.execute, callbacks),
+    };
+  }
+
+  return tools;
 }
 
 /**
@@ -558,5 +907,7 @@ export function getToolNames(): string[] {
     'start_agent', 'stop_agent', 'subscribe_event', 'recall_memory',
     'remember', 'heartbeat', 'get_tasks', 'complete_task', 'broadcast',
     'handle_agent_failure', 'edit_file', 'read_file', 'write_file',
+    'register_self', 'get_project_overview', 'report_status',
+    'compact_memory', 'get_audit_log',
   ];
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
-import { createTools, getToolNames } from './tool-registry.js';
+import { createTools, getToolNames, TOOL_SENSITIVITY, stripNotifyMarkers } from './tool-registry.js';
 import { CrewlyApiClient } from './api-client.js';
+import type { AuditEntry, ToolCallbacks, CompactionResult } from './types.js';
 
 describe('Tool Registry', () => {
   let mockClient: jest.Mocked<CrewlyApiClient>;
@@ -12,13 +13,13 @@ describe('Tool Registry', () => {
       post: jest.fn<any>(),
       delete: jest.fn<any>(),
     } as any;
-    tools = createTools(mockClient, 'crewly-orc');
+    tools = createTools(mockClient, 'crewly-orc', '/test/project');
   });
 
   describe('getToolNames', () => {
-    it('should return all 21 tool names', () => {
+    it('should return all 26 tool names', () => {
       const names = getToolNames();
-      expect(names).toHaveLength(21);
+      expect(names).toHaveLength(26);
       expect(names).toContain('delegate_task');
       expect(names).toContain('send_message');
       expect(names).toContain('get_agent_status');
@@ -40,13 +41,18 @@ describe('Tool Registry', () => {
       expect(names).toContain('edit_file');
       expect(names).toContain('read_file');
       expect(names).toContain('write_file');
+      expect(names).toContain('register_self');
+      expect(names).toContain('get_project_overview');
+      expect(names).toContain('report_status');
+      expect(names).toContain('compact_memory');
+      expect(names).toContain('get_audit_log');
     });
   });
 
   describe('createTools', () => {
-    it('should create all 21 tools with descriptions and parameters', () => {
+    it('should create all 26 tools with descriptions and parameters', () => {
       const toolNames = Object.keys(tools);
-      expect(toolNames).toHaveLength(21);
+      expect(toolNames).toHaveLength(26);
       for (const name of toolNames) {
         const t = tools[name] as any;
         expect(t).toBeDefined();
@@ -226,6 +232,67 @@ describe('Tool Registry', () => {
         text: 'Hello',
       });
     });
+
+    it('should strip [NOTIFY] markers from text before sending (Bug 6)', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+
+      await (tools.reply_slack as any).execute({
+        channelId: 'C123',
+        text: '[NOTIFY]\nconversationId: conv-123\n---\n## Task Done\nAll tasks completed.\n[/NOTIFY]',
+        threadTs: '123.456',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
+        channelId: 'C123',
+        text: '## Task Done\nAll tasks completed.',
+        threadTs: '123.456',
+      });
+    });
+
+    it('should handle text with no NOTIFY markers unchanged', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+
+      await (tools.reply_slack as any).execute({
+        channelId: 'C123',
+        text: 'Plain message without markers',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
+        channelId: 'C123',
+        text: 'Plain message without markers',
+      });
+    });
+  });
+
+  describe('stripNotifyMarkers', () => {
+    it('should extract body after --- separator', () => {
+      const input = '[NOTIFY]\nconversationId: conv-123\ntype: task_completed\n---\n## Done\nTask finished.\n[/NOTIFY]';
+      expect(stripNotifyMarkers(input)).toBe('## Done\nTask finished.');
+    });
+
+    it('should return inner content when no --- separator', () => {
+      const input = '[NOTIFY]\nHello world\n[/NOTIFY]';
+      expect(stripNotifyMarkers(input)).toBe('Hello world');
+    });
+
+    it('should handle text mixed with NOTIFY blocks', () => {
+      const input = 'Before [NOTIFY]\n---\nExtracted\n[/NOTIFY] After';
+      expect(stripNotifyMarkers(input)).toBe('Before Extracted After');
+    });
+
+    it('should handle multiple NOTIFY blocks', () => {
+      const input = '[NOTIFY]\n---\nFirst\n[/NOTIFY] and [NOTIFY]\n---\nSecond\n[/NOTIFY]';
+      expect(stripNotifyMarkers(input)).toBe('First and Second');
+    });
+
+    it('should return text unchanged when no markers present', () => {
+      expect(stripNotifyMarkers('No markers here')).toBe('No markers here');
+    });
+
+    it('should be case-insensitive', () => {
+      const input = '[notify]\n---\nContent\n[/notify]';
+      expect(stripNotifyMarkers(input)).toBe('Content');
+    });
   });
 
   describe('schedule_check', () => {
@@ -350,7 +417,7 @@ describe('Tool Registry', () => {
   });
 
   describe('recall_memory', () => {
-    it('should call memory recall API', async () => {
+    it('should call memory recall API with auto-injected projectPath', async () => {
       mockClient.post.mockResolvedValue({ success: true, data: { memories: [] }, status: 200 });
 
       const result = await (tools.recall_memory as any).execute({
@@ -363,12 +430,56 @@ describe('Tool Registry', () => {
         agentId: 'crewly-orc',
         context: 'deployment process',
         scope: 'project',
+        projectPath: '/test/project',
       });
+    });
+
+    it('should auto-inject projectPath for scope=both', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { memories: [] }, status: 200 });
+
+      await (tools.recall_memory as any).execute({
+        context: 'OKR goals',
+        scope: 'both',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/memory/recall', expect.objectContaining({
+        projectPath: '/test/project',
+        scope: 'both',
+      }));
+    });
+
+    it('should not inject projectPath for scope=agent', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { memories: [] }, status: 200 });
+
+      await (tools.recall_memory as any).execute({
+        context: 'my preferences',
+        scope: 'agent',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/memory/recall', {
+        agentId: 'crewly-orc',
+        context: 'my preferences',
+        scope: 'agent',
+      });
+    });
+
+    it('should prefer explicit projectPath over auto-injected', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+
+      await (tools.recall_memory as any).execute({
+        context: 'test',
+        scope: 'project',
+        projectPath: '/explicit/path',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/memory/recall', expect.objectContaining({
+        projectPath: '/explicit/path',
+      }));
     });
   });
 
   describe('remember', () => {
-    it('should store knowledge via API', async () => {
+    it('should store knowledge via API with auto-injected projectPath', async () => {
       mockClient.post.mockResolvedValue({ success: true, data: { id: 'mem-1' }, status: 201 });
 
       const result = await (tools.remember as any).execute({
@@ -378,6 +489,9 @@ describe('Tool Registry', () => {
       });
 
       expect(result.id).toBe('mem-1');
+      expect(mockClient.post).toHaveBeenCalledWith('/memory/remember', expect.objectContaining({
+        projectPath: '/test/project',
+      }));
     });
   });
 
@@ -575,6 +689,84 @@ describe('Tool Registry', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('not found');
     });
+
+    it('should return base64 image data for PNG files', async () => {
+      const fakeImageBuffer = Buffer.from('fake-png-data');
+      mockReadFile.mockResolvedValue(fakeImageBuffer as any);
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/test/screenshot.png',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('image');
+      expect(result.mimeType).toBe('image/png');
+      expect(result.data).toBe(fakeImageBuffer.toString('base64'));
+      expect(result.sizeBytes).toBe(fakeImageBuffer.length);
+      expect(result.file).toBe('/test/screenshot.png');
+    });
+
+    it('should return base64 image data for JPEG files', async () => {
+      const fakeImageBuffer = Buffer.from('fake-jpg-data');
+      mockReadFile.mockResolvedValue(fakeImageBuffer as any);
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/test/photo.jpg',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('image');
+      expect(result.mimeType).toBe('image/jpeg');
+    });
+
+    it('should return base64 image data for WebP files', async () => {
+      const fakeImageBuffer = Buffer.from('fake-webp-data');
+      mockReadFile.mockResolvedValue(fakeImageBuffer as any);
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/test/image.webp',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('image');
+      expect(result.mimeType).toBe('image/webp');
+    });
+
+    it('should return base64 image data for SVG files', async () => {
+      const fakeSvgBuffer = Buffer.from('<svg></svg>');
+      mockReadFile.mockResolvedValue(fakeSvgBuffer as any);
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/test/icon.svg',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBe('image');
+      expect(result.mimeType).toBe('image/svg+xml');
+    });
+
+    it('should read text files normally even with image-like names', async () => {
+      mockReadFile.mockResolvedValue('text content' as any);
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/test/data.json',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.type).toBeUndefined();
+      expect(result.content).toContain('text content');
+    });
+
+    it('should handle image file not found', async () => {
+      mockReadFile.mockRejectedValue(new Error('ENOENT'));
+
+      const result = await (tools.read_file as any).execute({
+        file_path: '/nonexistent/image.png',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not found');
+    });
   });
 
   describe('write_file', () => {
@@ -616,6 +808,513 @@ describe('Tool Registry', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('EACCES');
+    });
+  });
+
+  // ===== Bug 1: Tilde path expansion tests =====
+
+  describe('read_file tilde expansion', () => {
+    let mockReadFile: jest.SpiedFunction<typeof import('fs').promises.readFile>;
+
+    beforeEach(async () => {
+      const fs = await import('fs');
+      mockReadFile = jest.spyOn(fs.promises, 'readFile') as any;
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should expand ~ to home directory', async () => {
+      mockReadFile.mockResolvedValue('file content' as any);
+
+      await (tools.read_file as any).execute({
+        file_path: '~/.crewly/skills/SKILLS_CATALOG.md',
+      });
+
+      const calledPath = mockReadFile.mock.calls[0][0] as string;
+      expect(calledPath).not.toContain('~');
+      expect(calledPath).toMatch(/^\//); // absolute path
+      expect(calledPath).toContain('.crewly/skills/SKILLS_CATALOG.md');
+    });
+
+    it('should expand $HOME to home directory', async () => {
+      mockReadFile.mockResolvedValue('file content' as any);
+
+      await (tools.read_file as any).execute({
+        file_path: '$HOME/.config/test.json',
+      });
+
+      const calledPath = mockReadFile.mock.calls[0][0] as string;
+      expect(calledPath).not.toContain('$HOME');
+      expect(calledPath).toMatch(/^\//);
+      expect(calledPath).toContain('.config/test.json');
+    });
+
+    it('should not modify absolute paths', async () => {
+      mockReadFile.mockResolvedValue('file content' as any);
+
+      await (tools.read_file as any).execute({
+        file_path: '/usr/local/test.txt',
+      });
+
+      expect(mockReadFile).toHaveBeenCalledWith('/usr/local/test.txt', 'utf8');
+    });
+  });
+
+  describe('edit_file tilde expansion', () => {
+    let mockReadFile: jest.SpiedFunction<typeof import('fs').promises.readFile>;
+    let mockWriteFile: jest.SpiedFunction<typeof import('fs').promises.writeFile>;
+
+    beforeEach(async () => {
+      const fs = await import('fs');
+      mockReadFile = jest.spyOn(fs.promises, 'readFile') as any;
+      mockWriteFile = jest.spyOn(fs.promises, 'writeFile') as any;
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('should expand ~ in edit_file path', async () => {
+      mockReadFile.mockResolvedValue('old content' as any);
+      mockWriteFile.mockResolvedValue(undefined as any);
+
+      await (tools.edit_file as any).execute({
+        file_path: '~/test.ts',
+        old_string: 'old content',
+        new_string: 'new content',
+        replace_all: false,
+      });
+
+      const readPath = mockReadFile.mock.calls[0][0] as string;
+      expect(readPath).not.toContain('~');
+      expect(readPath).toMatch(/^\//);
+    });
+  });
+
+  // ===== Bug 3: New tool tests =====
+
+  describe('register_self', () => {
+    it('should register agent with the backend', async () => {
+      mockClient.post.mockResolvedValue({
+        success: true,
+        data: { sessionName: 'crewly-orc', status: 'active' },
+        status: 200,
+      });
+
+      const result = await (tools.register_self as any).execute({
+        role: 'developer',
+      });
+
+      expect(result.sessionName).toBe('crewly-orc');
+      expect(result.status).toBe('active');
+      expect(mockClient.post).toHaveBeenCalledWith('/teams/members/register', {
+        role: 'developer',
+        sessionName: 'crewly-orc',
+      });
+    });
+
+    it('should return error on failure', async () => {
+      mockClient.post.mockResolvedValue({
+        success: false,
+        error: 'Agent not found',
+        status: 404,
+      });
+
+      const result = await (tools.register_self as any).execute({
+        role: 'developer',
+      });
+
+      expect(result.error).toBe('Agent not found');
+    });
+  });
+
+  describe('get_project_overview', () => {
+    it('should return all projects', async () => {
+      const projects = [{ name: 'crewly', path: '/path' }];
+      mockClient.get.mockResolvedValue({ success: true, data: projects, status: 200 });
+
+      const result = await (tools.get_project_overview as any).execute({});
+
+      expect(result).toEqual(projects);
+      expect(mockClient.get).toHaveBeenCalledWith('/projects');
+    });
+
+    it('should return error on failure', async () => {
+      mockClient.get.mockResolvedValue({ success: false, error: 'Server error', status: 500 });
+
+      const result = await (tools.get_project_overview as any).execute({});
+
+      expect(result.error).toBe('Server error');
+    });
+  });
+
+  describe('report_status', () => {
+    it('should report status with auto-injected projectPath', async () => {
+      mockClient.post.mockResolvedValue({
+        success: true,
+        data: { acknowledged: true },
+        status: 200,
+      });
+
+      const result = await (tools.report_status as any).execute({
+        status: 'done',
+        summary: 'Task completed',
+      });
+
+      expect(result.acknowledged).toBe(true);
+      expect(mockClient.post).toHaveBeenCalledWith('/teams/members/register', expect.objectContaining({
+        sessionName: 'crewly-orc',
+        status: 'done',
+        summary: 'Task completed',
+        projectPath: '/test/project',
+      }));
+    });
+  });
+
+  // ===== F13: Autonomous Context Compaction =====
+
+  describe('compact_memory', () => {
+    it('should call onCompactMemory callback when available', async () => {
+      const mockCompact = jest.fn<() => Promise<CompactionResult>>().mockResolvedValue({
+        compacted: true,
+        messagesBefore: 50,
+        messagesAfter: 11,
+      });
+      const callbacks: ToolCallbacks = { onCompactMemory: mockCompact };
+      const toolsWithCallbacks = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithCallbacks.compact_memory as any).execute({});
+
+      expect(result.success).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(result.messagesBefore).toBe(50);
+      expect(result.messagesAfter).toBe(11);
+      expect(mockCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return error when no callback configured', async () => {
+      const result = await (tools.compact_memory as any).execute({});
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not available');
+    });
+
+    it('should pass through skipped compaction result', async () => {
+      const mockCompact = jest.fn<() => Promise<CompactionResult>>().mockResolvedValue({
+        compacted: false,
+        messagesBefore: 5,
+        messagesAfter: 5,
+        reason: 'Too few messages to compact',
+      });
+      const callbacks: ToolCallbacks = { onCompactMemory: mockCompact };
+      const toolsWithCallbacks = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithCallbacks.compact_memory as any).execute({});
+
+      expect(result.success).toBe(false);
+      expect(result.reason).toContain('Too few');
+    });
+  });
+
+  // ===== F27: Security Audit Trail & Hardening =====
+
+  describe('get_audit_log', () => {
+    it('should return formatted audit log query', async () => {
+      const result = await (tools.get_audit_log as any).execute({
+        limit: 20,
+        sensitivity: 'destructive',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.filters.limit).toBe(20);
+      expect(result.filters.sensitivity).toBe('destructive');
+    });
+
+    it('should use defaults when no filters provided', async () => {
+      const result = await (tools.get_audit_log as any).execute({});
+
+      expect(result.success).toBe(true);
+      expect(result.filters.limit).toBe(50);
+      expect(result.filters.sensitivity).toBe('all');
+      expect(result.filters.toolName).toBe('all');
+    });
+  });
+
+  describe('TOOL_SENSITIVITY', () => {
+    it('should classify read-only tools as safe', () => {
+      expect(TOOL_SENSITIVITY.get_agent_status).toBe('safe');
+      expect(TOOL_SENSITIVITY.get_team_status).toBe('safe');
+      expect(TOOL_SENSITIVITY.get_agent_logs).toBe('safe');
+      expect(TOOL_SENSITIVITY.heartbeat).toBe('safe');
+      expect(TOOL_SENSITIVITY.get_tasks).toBe('safe');
+      expect(TOOL_SENSITIVITY.read_file).toBe('safe');
+      expect(TOOL_SENSITIVITY.recall_memory).toBe('safe');
+      expect(TOOL_SENSITIVITY.get_project_overview).toBe('safe');
+    });
+
+    it('should classify communication tools as sensitive', () => {
+      expect(TOOL_SENSITIVITY.delegate_task).toBe('sensitive');
+      expect(TOOL_SENSITIVITY.send_message).toBe('sensitive');
+      expect(TOOL_SENSITIVITY.reply_slack).toBe('sensitive');
+      expect(TOOL_SENSITIVITY.broadcast).toBe('sensitive');
+      expect(TOOL_SENSITIVITY.report_status).toBe('sensitive');
+      expect(TOOL_SENSITIVITY.remember).toBe('sensitive');
+    });
+
+    it('should classify high-impact tools as destructive', () => {
+      expect(TOOL_SENSITIVITY.start_agent).toBe('destructive');
+      expect(TOOL_SENSITIVITY.stop_agent).toBe('destructive');
+      expect(TOOL_SENSITIVITY.handle_agent_failure).toBe('destructive');
+      expect(TOOL_SENSITIVITY.edit_file).toBe('destructive');
+      expect(TOOL_SENSITIVITY.write_file).toBe('destructive');
+    });
+
+    it('should have classifications for all tool names', () => {
+      const allToolNames = getToolNames();
+      for (const name of allToolNames) {
+        expect(TOOL_SENSITIVITY[name]).toBeDefined();
+      }
+    });
+  });
+
+  describe('audit wrapping', () => {
+    it('should call onAuditLog for each tool invocation', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.get.mockResolvedValue({ success: true, data: [], status: 200 });
+      await (toolsWithAudit.get_team_status as any).execute({});
+
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0].toolName).toBe('get_team_status');
+      expect(auditEntries[0].sensitivity).toBe('safe');
+      expect(auditEntries[0].success).toBe(true);
+      expect(auditEntries[0].durationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('should record failure in audit log', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.post.mockResolvedValue({ success: false, error: 'Not found', status: 404 });
+      await (toolsWithAudit.send_message as any).execute({
+        sessionName: 'agent-sam',
+        message: 'Hello',
+        force: false,
+      });
+
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0].toolName).toBe('send_message');
+      expect(auditEntries[0].success).toBe(false);
+      expect(auditEntries[0].error).toContain('Not found');
+    });
+
+    it('should record audit on tool exception', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.get.mockRejectedValue(new Error('Network failure'));
+
+      await expect(
+        (toolsWithAudit.get_team_status as any).execute({}),
+      ).rejects.toThrow('Network failure');
+
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0].success).toBe(false);
+      expect(auditEntries[0].error).toBe('Network failure');
+    });
+
+    it('should redact sensitive fields in audit args', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      // Use send_message which has simple fields; inject args that include a sensitive-named key
+      // The audit wrapper sanitizes the raw args object before logging
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+      await (toolsWithAudit.send_message as any).execute({
+        sessionName: 'agent-sam',
+        message: 'Hello',
+        force: false,
+        authorization_token: 'bearer-secret-123',
+      });
+
+      expect(auditEntries).toHaveLength(1);
+      // authorization_token contains 'token' which is a sensitive key
+      expect(auditEntries[0].args.authorization_token).toBe('[REDACTED]');
+      expect(auditEntries[0].args.message).toBe('Hello');
+    });
+
+    it('should truncate long argument values', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+      await (toolsWithAudit.remember as any).execute({
+        content: 'x'.repeat(1000),
+        category: 'pattern',
+        scope: 'project',
+      });
+
+      expect(auditEntries).toHaveLength(1);
+      const contentArg = auditEntries[0].args.content as string;
+      // sanitizeArgs truncates at 2000 chars, so 1000-char input should NOT be truncated
+      expect(contentArg).toBe('x'.repeat(1000));
+    });
+
+    it('should truncate argument values exceeding 2000 chars', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+      await (toolsWithAudit.remember as any).execute({
+        content: 'x'.repeat(3000),
+        category: 'pattern',
+        scope: 'project',
+      });
+
+      expect(auditEntries).toHaveLength(1);
+      const contentArg = auditEntries[0].args.content as string;
+      expect(contentArg.length).toBeLessThan(2100);
+      expect(contentArg).toContain('[truncated]');
+    });
+
+    it('should assign sensitivity to all created tools', () => {
+      for (const [name, tool] of Object.entries(tools)) {
+        expect((tool as any).sensitivity).toBeDefined();
+        expect(['safe', 'sensitive', 'destructive']).toContain((tool as any).sensitivity);
+      }
+    });
+  });
+
+  // ===== F27: Approval Mode & Blocked Tools Enforcement =====
+
+  describe('approval mode enforcement', () => {
+    it('should block tool when onCheckApproval returns not allowed (blocked)', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+        onCheckApproval: (toolName) => {
+          if (toolName === 'stop_agent') {
+            return { allowed: false, blocked: true, reason: "Tool 'stop_agent' is blocked by security policy" };
+          }
+          return { allowed: true };
+        },
+      };
+      const toolsWithApproval = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithApproval.stop_agent as any).execute({
+        teamId: 'team-1',
+        memberId: 'member-1',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.blocked).toBe(true);
+      expect(result.error).toContain('blocked');
+      // Should NOT have called the API
+      expect(mockClient.post).not.toHaveBeenCalled();
+      // Should still log the blocked attempt
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0].success).toBe(false);
+      expect(auditEntries[0].error).toContain('blocked');
+    });
+
+    it('should block tool when sensitivity requires approval', async () => {
+      const auditEntries: AuditEntry[] = [];
+      const callbacks: ToolCallbacks = {
+        onAuditLog: (entry) => auditEntries.push(entry),
+        onCheckApproval: (_toolName, sensitivity) => {
+          if (sensitivity === 'destructive') {
+            return { allowed: false, blocked: false, reason: 'Destructive tools require approval' };
+          }
+          return { allowed: true };
+        },
+      };
+      const toolsWithApproval = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithApproval.edit_file as any).execute({
+        file_path: '/test/file.ts',
+        old_string: 'foo',
+        new_string: 'bar',
+        replace_all: false,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.requiresApproval).toBe(true);
+      expect(result.blocked).toBe(false);
+      expect(result.error).toContain('approval');
+    });
+
+    it('should allow safe tools when only destructive requires approval', async () => {
+      const callbacks: ToolCallbacks = {
+        onCheckApproval: (_toolName, sensitivity) => {
+          if (sensitivity === 'destructive') {
+            return { allowed: false, blocked: false, reason: 'Requires approval' };
+          }
+          return { allowed: true };
+        },
+      };
+      const toolsWithApproval = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.get.mockResolvedValue({ success: true, data: [], status: 200 });
+      const result = await (toolsWithApproval.get_team_status as any).execute({});
+
+      expect(result).toEqual([]);
+      expect(mockClient.get).toHaveBeenCalled();
+    });
+
+    it('should work without onCheckApproval callback (no enforcement)', async () => {
+      const callbacks: ToolCallbacks = {
+        onAuditLog: () => {},
+      };
+      const toolsNoApproval = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      mockClient.post.mockResolvedValue({ success: true, data: { stopped: true }, status: 200 });
+      const result = await (toolsNoApproval.stop_agent as any).execute({
+        teamId: 'team-1',
+        memberId: 'member-1',
+      });
+
+      expect(result.stopped).toBe(true);
+    });
+
+    it('should enforce approval without audit logger', async () => {
+      const callbacks: ToolCallbacks = {
+        onCheckApproval: (toolName) => {
+          if (toolName === 'write_file') {
+            return { allowed: false, blocked: true, reason: 'Blocked' };
+          }
+          return { allowed: true };
+        },
+      };
+      const toolsApprovalOnly = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsApprovalOnly.write_file as any).execute({
+        file_path: '/test/file.ts',
+        content: 'hello',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.blocked).toBe(true);
     });
   });
 });

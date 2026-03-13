@@ -129,16 +129,17 @@ export class ModelManager {
 
     if (!key) return;
 
-    // Set env vars so the provider SDKs can find them
+    // Set env vars so the provider SDKs can find them.
+    // Always override — settings keys take priority over stale env vars.
     switch (provider) {
       case 'anthropic':
-        if (!process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = key;
+        process.env.ANTHROPIC_API_KEY = key;
         break;
       case 'openai':
-        if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = key;
+        process.env.OPENAI_API_KEY = key;
         break;
       case 'google':
-        if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
+        process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
         break;
     }
   }

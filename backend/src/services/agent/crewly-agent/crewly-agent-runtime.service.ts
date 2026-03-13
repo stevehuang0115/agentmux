@@ -129,6 +129,7 @@ export class CrewlyAgentRuntimeService extends RuntimeAgentService {
       systemPrompt: config?.systemPrompt || systemPrompt,
       maxHistoryMessages: config?.maxHistoryMessages || CREWLY_AGENT_DEFAULTS.MAX_HISTORY_MESSAGES,
       compactionThreshold: config?.compactionThreshold || CREWLY_AGENT_DEFAULTS.COMPACTION_THRESHOLD,
+      projectPath: config?.projectPath,
     };
 
     this.agentRunner = new AgentRunnerService(fullConfig);
@@ -162,16 +163,31 @@ export class CrewlyAgentRuntimeService extends RuntimeAgentService {
     }
 
     const session = this.currentSessionName!;
-    this.logBuffer.append(session, 'info', `← Message received (${message.length} chars)`);
+
+    // Extract conversationId from [CHAT:xxx] or [GCHAT:xxx ...] prefix if present
+    let conversationId: string | undefined;
+    let cleanMessage = message;
+    const chatPrefixMatch = message.match(/^\[(?:G?CHAT):([^\]\s]+)[^\]]*\]\s*/);
+    if (chatPrefixMatch) {
+      conversationId = chatPrefixMatch[1];
+      cleanMessage = message.slice(chatPrefixMatch[0].length);
+      this.logger.debug('Extracted conversationId from message prefix', {
+        sessionName: session,
+        conversationId,
+      });
+    }
+
+    this.logBuffer.append(session, 'info', `← Message received (${cleanMessage.length} chars${conversationId ? `, conv:${conversationId}` : ''})`);
 
     this.logger.debug('Handling message', {
       sessionName: session,
-      messageLength: message.length,
+      messageLength: cleanMessage.length,
       historyLength: this.agentRunner.getHistoryLength(),
+      conversationId,
     });
 
     try {
-      const result = await this.agentRunner.run(message);
+      const result = await this.agentRunner.run(cleanMessage, conversationId);
 
       // Log tool calls to buffer for frontend visibility
       for (const tc of result.toolCalls) {

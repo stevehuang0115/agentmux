@@ -108,4 +108,63 @@ describe('InProcessLogBuffer', () => {
       expect(buffer.getSessionNames()).toEqual([]);
     });
   });
+
+  describe('EventEmitter data events', () => {
+    it('should emit data event on append', (done) => {
+      buffer.on('data', (sessionName: string, formattedLine: string) => {
+        expect(sessionName).toBe('test-session');
+        expect(formattedLine).toContain('hello world');
+        expect(formattedLine).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\] hello world/);
+        done();
+      });
+      buffer.append('test-session', 'info', 'hello world');
+    });
+
+    it('should emit data event with level prefix for errors', (done) => {
+      buffer.on('data', (sessionName: string, formattedLine: string) => {
+        expect(sessionName).toBe('test-session');
+        expect(formattedLine).toContain('ERROR: something broke');
+        done();
+      });
+      buffer.append('test-session', 'error', 'something broke');
+    });
+
+    it('should emit data events for each append', () => {
+      const events: string[] = [];
+      buffer.on('data', (_session: string, line: string) => {
+        events.push(line);
+      });
+
+      buffer.append('s1', 'info', 'first');
+      buffer.append('s2', 'warn', 'second');
+
+      expect(events.length).toBe(2);
+      expect(events[0]).toContain('first');
+      expect(events[1]).toContain('WARN: second');
+    });
+
+    it('should include session name in data event', () => {
+      const sessions: string[] = [];
+      buffer.on('data', (session: string) => {
+        sessions.push(session);
+      });
+
+      buffer.append('agent-a', 'info', 'msg1');
+      buffer.append('agent-b', 'info', 'msg2');
+
+      expect(sessions).toEqual(['agent-a', 'agent-b']);
+    });
+
+    it('should clean up listeners on reset', () => {
+      const handler = jest.fn();
+      buffer.on('data', handler);
+
+      InProcessLogBuffer.resetInstance();
+      const newBuffer = InProcessLogBuffer.getInstance();
+      newBuffer.append('test', 'info', 'after reset');
+
+      // Old handler should NOT be called since instance was reset
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
 });

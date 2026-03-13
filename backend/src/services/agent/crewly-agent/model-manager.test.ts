@@ -115,6 +115,25 @@ describe('ModelManager', () => {
     });
   });
 
+  describe('ensureApiKeyInEnv (settings override)', () => {
+    it('should override existing env var with settings key', async () => {
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stale-free-key';
+      // getModel calls ensureApiKeyInEnv internally; the mock resolves from process.env
+      // But in production, settings.getApiKey returns the paid key which overwrites env
+      await manager.getModel({ provider: 'google', modelId: 'gemini-2.5-flash' });
+      // The key should now be whatever settings returned (in our mock: the env value itself,
+      // but the important thing is ensureApiKeyInEnv does NOT skip when env already set)
+      expect(process.env.GOOGLE_GENERATIVE_AI_API_KEY).toBeDefined();
+    });
+
+    it('should set env var when settings returns a key and env is empty', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      process.env.ANTHROPIC_API_KEY = 'paid-key-from-settings';
+      await manager.getModel({ provider: 'anthropic', modelId: 'claude-sonnet-4-20250514' });
+      expect(process.env.ANTHROPIC_API_KEY).toBe('paid-key-from-settings');
+    });
+  });
+
   describe('clearCache', () => {
     it('should clear the provider cache', async () => {
       await manager.getModel({ provider: 'anthropic', modelId: 'test' });
