@@ -23,11 +23,13 @@ import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import {
 	ORCHESTRATOR_SESSION_NAME,
 	ORCHESTRATOR_HEARTBEAT_CONSTANTS,
+	AUDITOR_SCHEDULER_CONSTANTS,
 	SESSION_COMMAND_DELAYS,
 } from '../../constants.js';
 import { delay } from '../../utils/async.utils.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
+import { isAgentActive } from './orchestrator-status.service.js';
 import type { ISessionBackend } from '../session/session-backend.interface.js';
 
 /**
@@ -386,8 +388,17 @@ export class OrchestratorHeartbeatMonitorService {
 
 	/**
 	 * Trigger an auto-restart of the orchestrator via OrchestratorRestartService.
+	 * Also notifies the Auditor agent so it can log the incident and handle
+	 * any user messages that arrive during the restart window.
 	 */
 	private async triggerAutoRestart(): Promise<void> {
+		// Notify auditor concurrently — don't block restart on notification
+		this.notifyAuditorOfOrchestratorDown().catch((err) => {
+			this.logger.warn('Failed to notify auditor of orchestrator restart', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
+
 		try {
 			const restartService = OrchestratorRestartService.getInstance();
 			const success = await restartService.attemptRestart();
@@ -402,6 +413,38 @@ export class OrchestratorHeartbeatMonitorService {
 			}
 		} catch (err) {
 			this.logger.error('Failed to trigger orchestrator auto-restart', {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	/**
+	 * Notify the Auditor agent that the orchestrator is down / being restarted.
+	 * The Auditor can log the incident and handle any user messages that arrive
+	 * during the restart window.
+	 */
+	private async notifyAuditorOfOrchestratorDown(): Promise<void> {
+		const auditorSession = AUDITOR_SCHEDULER_CONSTANTS.AUDITOR_SESSION_NAME;
+
+		// Only notify if auditor is actually running
+		const auditorActive = await isAgentActive(auditorSession);
+		if (!auditorActive) {
+			this.logger.debug('Auditor not active, skipping orchestrator-down notification');
+			return;
+		}
+
+		try {
+			const { AuditorSchedulerService } = await import('../agent/auditor-scheduler.service.js');
+			const scheduler = AuditorSchedulerService.getInstance();
+			await scheduler.handleUserMessage(
+				`[SYSTEM] Orchestrator heartbeat timeout detected. Auto-restart triggered. ` +
+				`Restart count: ${this.autoRestartCount + 1}. ` +
+				`Please monitor system health and log any user messages received during downtime.`,
+				{ channelId: '', threadTs: '' },
+			);
+			this.logger.info('Auditor notified of orchestrator restart');
+		} catch (err) {
+			this.logger.warn('Could not notify auditor via scheduler', {
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}

@@ -1050,40 +1050,117 @@ describe('SlackOrchestratorBridge', () => {
   });
 
   describe('auditor fallback routing', () => {
-    it('should check auditor status when orchestrator is offline', async () => {
+    let mockQueueService: any;
+
+    function makeChatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+      return {
+        id: 'msg-1',
+        conversationId: 'conv-fallback',
+        from: { type: 'user', name: 'User' },
+        content: 'Hello',
+        contentType: 'text',
+        timestamp: new Date().toISOString(),
+        ...overrides,
+      } as ChatMessage;
+    }
+
+    beforeEach(() => {
+      mockQueueService = {
+        enqueue: jest.fn().mockReturnValue({ id: 'q-fallback' }),
+      };
+      const chatService = getChatService();
+      jest.spyOn(chatService, 'sendMessage').mockResolvedValue({
+        message: makeChatMessage(),
+        conversation: { id: 'conv-fallback', title: 'test', messages: [], createdAt: '', updatedAt: '' } as any,
+      });
+    });
+
+    it('should route to auditor via queue when orchestrator is offline and auditor is active', async () => {
       (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
-      (isAgentActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(true);
 
       const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService);
       await bridge.initialize();
 
-      // isAgentActive should be available for the fallback check
-      expect(isAgentActive).toBeDefined();
-    });
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-fallback',
+        channelId: 'C123',
+        userId: 'U123',
+        threadTs: '1234567890.123',
+      });
+
+      const handledPromise = new Promise<any>((resolve) => {
+        bridge.on('message_handled', resolve);
+      });
+
+      slackService.emit('message', {
+        text: 'hello from user',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '1234567890.123',
+      });
+
+      const event = await handledPromise;
+
+      // Should enqueue with targetSession pointing to auditor
+      expect(mockQueueService.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetSession: 'crewly-auditor',
+          source: 'slack',
+        })
+      );
+      // Enqueued content should include FALLBACK marker and SLACK_CONTEXT
+      const enqueuedContent = mockQueueService.enqueue.mock.calls[0][0].content;
+      expect(enqueuedContent).toContain('[FALLBACK]');
+      expect(enqueuedContent).toContain('[SLACK_CONTEXT:');
+      expect(enqueuedContent).toContain('C123');
+
+      // Response should acknowledge the fallback
+      expect(event.response).toContain('forwarded to the Auditor');
+    }, 15000);
 
     it('should return offline message when both orchestrator and auditor are inactive', async () => {
       (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
       (isAgentActive as jest.Mock).mockResolvedValue(false);
-      (getOrchestratorOfflineMessage as jest.Mock).mockReturnValue('Orchestrator is offline');
+      (getOrchestratorOfflineMessage as jest.Mock).mockReturnValue('Orchestrator is offline. Please start it from the dashboard.');
 
       const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService);
       await bridge.initialize();
 
-      const offlineMsg = getOrchestratorOfflineMessage(true);
-      expect(offlineMsg).toContain('offline');
-    });
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-fb',
+        channelId: 'C123',
+        userId: 'U123',
+      });
 
-    it('should route to auditor when orchestrator is offline and auditor is active', async () => {
-      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
-      (isAgentActive as jest.Mock).mockResolvedValue(true);
+      const handledPromise = new Promise<any>((resolve) => {
+        bridge.on('message_handled', resolve);
+      });
 
-      // isAgentActive should report auditor as available for fallback
-      const auditorActive = await isAgentActive('crewly-auditor');
-      expect(auditorActive).toBe(true);
-    });
+      slackService.emit('message', {
+        text: 'hello',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '999.999',
+      });
+
+      const event = await handledPromise;
+
+      // Should NOT route to auditor queue
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+      // Response is the offline message
+      expect(event.response).toContain('offline');
+    }, 15000);
 
     it('should include FALLBACK marker in auditor-routed messages', () => {
-      // Verify the fallback message format includes the marker
       const message = 'Hello from user';
       const fallbackMessage = `[FALLBACK] Orchestrator is offline. User message:\n${message}`;
       expect(fallbackMessage).toContain('[FALLBACK]');
