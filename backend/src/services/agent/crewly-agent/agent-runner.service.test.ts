@@ -246,7 +246,7 @@ describe('AgentRunnerService', () => {
       await expect(runner.run('Fail')).rejects.toThrow('API error');
     });
 
-    it('should reset conversationId between messages (Bug 2)', async () => {
+    it('should preserve lastKnownConversationId as fallback for messages without explicit conversationId', async () => {
       // Track which conversationId is passed to generateText via tools argument
       const capturedConvIds: (string | undefined)[] = [];
       mockGenerateText
@@ -273,13 +273,68 @@ describe('AgentRunnerService', () => {
 
       // First message with conversationId
       await runner.run('With conv', 'conv-123');
-      // Second message without conversationId
+      // Second message without conversationId (e.g., scheduled check)
       await runner.run('No conv');
 
       // First call should have conversationId = 'conv-123'
       expect(capturedConvIds[0]).toBe('conv-123');
-      // Second call should NOT inherit the previous conversationId
-      expect(capturedConvIds[1]).toBeUndefined();
+      // Second call should inherit the last known conversationId as fallback
+      expect(capturedConvIds[1]).toBe('conv-123');
+    });
+
+    it('should update lastKnownConversationId when a new explicit conversationId arrives', async () => {
+      const capturedConvIds: (string | undefined)[] = [];
+      mockGenerateText
+        .mockImplementation(async (opts: Record<string, unknown>) => {
+          const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+          if (tools?.report_status) {
+            mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+            await tools.report_status.execute({ status: 'in_progress', summary: 'test' });
+            const postCall = mockApiClient.post.mock.calls[mockApiClient.post.mock.calls.length - 1];
+            const body = postCall[1] as Record<string, unknown>;
+            capturedConvIds.push(body.conversationId as string | undefined);
+          }
+          return {
+            text: 'Response',
+            steps: [{ toolCalls: [], toolResults: [] }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+            finishReason: 'stop',
+          };
+        });
+
+      await runner.run('First', 'conv-A');
+      await runner.run('Second', 'conv-B');
+      await runner.run('Third (no conv)');
+
+      expect(capturedConvIds[0]).toBe('conv-A');
+      expect(capturedConvIds[1]).toBe('conv-B');
+      // Third should use conv-B (last known)
+      expect(capturedConvIds[2]).toBe('conv-B');
+    });
+
+    it('should have no conversationId when no message ever provided one', async () => {
+      const capturedConvIds: (string | undefined)[] = [];
+      mockGenerateText
+        .mockImplementation(async (opts: Record<string, unknown>) => {
+          const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+          if (tools?.report_status) {
+            mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+            await tools.report_status.execute({ status: 'in_progress', summary: 'test' });
+            const postCall = mockApiClient.post.mock.calls[mockApiClient.post.mock.calls.length - 1];
+            const body = postCall[1] as Record<string, unknown>;
+            capturedConvIds.push(body.conversationId as string | undefined);
+          }
+          return {
+            text: 'Response',
+            steps: [{ toolCalls: [], toolResults: [] }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+            finishReason: 'stop',
+          };
+        });
+
+      await runner.run('No conv ever');
+
+      expect(capturedConvIds[0]).toBeUndefined();
     });
   });
 
@@ -706,6 +761,150 @@ describe('AgentRunnerService', () => {
     it('should return true after initialize', async () => {
       await runner.initialize();
       expect(runner.isInitialized()).toBe(true);
+    });
+  });
+
+  describe('long message handling (Bug 1)', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should process messages longer than 500 chars without dropping', async () => {
+      const longMessage = 'A'.repeat(2000);
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Processed long message',
+        steps: [],
+        usage: { inputTokens: 500, outputTokens: 50 },
+        finishReason: 'stop',
+      });
+
+      const result = await runner.run(longMessage);
+
+      expect(result.text).toBe('Processed long message');
+      // Verify the full message was passed to generateText
+      const callArgs = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
+      const messages = callArgs.messages as Array<{ role: string; content: string }>;
+      // After run(), assistant response is pushed to the same array reference,
+      // so the user message is second-to-last
+      const userMsg = messages.find(m => m.role === 'user' && m.content.length === 2000);
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe(longMessage);
+      expect(userMsg!.content.length).toBe(2000);
+    });
+
+    it('should process messages over 5000 chars without truncation', async () => {
+      const veryLongMessage = 'Task: '.repeat(1000);
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Done',
+        steps: [],
+        usage: { inputTokens: 1000, outputTokens: 20 },
+        finishReason: 'stop',
+      });
+
+      const result = await runner.run(veryLongMessage);
+      expect(result.text).toBe('Done');
+
+      const callArgs = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
+      const messages = callArgs.messages as Array<{ role: string; content: string }>;
+      // Find the user message (assistant response is also in array due to shared reference)
+      const userMsg = messages.find(m => m.role === 'user' && m.content === veryLongMessage);
+      expect(userMsg).toBeDefined();
+    });
+
+    it('should not strand messages in the queue (race condition guard)', async () => {
+      // Simulate the scenario where a message arrives right as processQueue exits
+      const messages: string[] = [];
+      mockGenerateText.mockImplementation(async () => {
+        return {
+          text: 'Response',
+          steps: [],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      // Send multiple messages concurrently
+      const results = await Promise.all([
+        runner.run('Message 1'),
+        runner.run('Message 2'),
+        runner.run('Message 3'),
+      ]);
+
+      expect(results).toHaveLength(3);
+      expect(results[0].text).toBe('Response');
+      expect(results[1].text).toBe('Response');
+      expect(results[2].text).toBe('Response');
+      expect(mockGenerateText).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('Slack context (Bug 5)', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should store Slack context from metadata', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Response',
+        steps: [{ toolCalls: [], toolResults: [] }],
+        usage: { inputTokens: 10, outputTokens: 5 },
+        finishReason: 'stop',
+      });
+
+      await runner.run('Hello', 'conv-123', { channelId: 'D0AC7NF5N7L', threadTs: '123.456' });
+
+      const slackCtx = runner.getSlackContext();
+      expect(slackCtx).toBeDefined();
+      expect(slackCtx!.channelId).toBe('D0AC7NF5N7L');
+      expect(slackCtx!.threadTs).toBe('123.456');
+    });
+
+    it('should pass Slack context to tools via createTools', async () => {
+      // Verify the reply_slack tool gets the Slack context
+      let replySlackResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+        replySlackResult = await tools.reply_slack.execute({
+          text: 'Hello from agent',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Reply to Slack', 'conv-1', { channelId: 'C123', threadTs: '456.789' });
+
+      // The reply_slack should have auto-filled channelId from context
+      expect(mockApiClient.post).toHaveBeenCalledWith('/slack/send', expect.objectContaining({
+        channelId: 'C123',
+        threadTs: '456.789',
+      }));
+    });
+
+    it('should return error when no channelId available', async () => {
+      let replySlackResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        replySlackResult = await tools.reply_slack.execute({
+          text: 'No channel',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Reply without context');
+
+      expect(replySlackResult).toBeDefined();
+      expect((replySlackResult as Record<string, unknown>).success).toBe(false);
+      expect((replySlackResult as Record<string, unknown>).error).toContain('No channelId');
     });
   });
 });

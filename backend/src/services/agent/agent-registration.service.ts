@@ -2471,8 +2471,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 				const chatPrefixMatch = message.match(/^\[CHAT:([^\]]+)\]\s*/);
 				const incomingConversationId = chatPrefixMatch?.[1];
 
+				// Extract Slack context from [SLACK:channelId:threadTs] marker if present (Bug 5).
+				// This allows crewly-agent to auto-fill reply_slack with the correct thread.
+				let slackMetadata: Record<string, string> | undefined;
+				const slackPrefixMatch = message.match(/\[SLACK:([^:\]]+)(?::([^\]]+))?\]/);
+				if (slackPrefixMatch) {
+					slackMetadata = { channelId: slackPrefixMatch[1] };
+					if (slackPrefixMatch[2]) slackMetadata.threadTs = slackPrefixMatch[2];
+				}
+
 				// Process message asynchronously — don't block the caller
-				crewlyRuntime.handleMessage(message)
+				crewlyRuntime.handleMessage(message, slackMetadata)
 					.then((result) => {
 						this.logger.info('Crewly Agent finished processing message', {
 							sessionName, messageLength: message.length,
@@ -2490,6 +2499,8 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 						const errMsg = agentError instanceof Error ? agentError.message : String(agentError);
 						this.logger.error('Crewly Agent message handling failed', {
 							sessionName, error: errMsg,
+							messageLength: message.length,
+							messagePreview: message.substring(0, 200),
 						});
 					});
 

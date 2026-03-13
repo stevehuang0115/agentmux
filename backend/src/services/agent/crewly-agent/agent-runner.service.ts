@@ -55,11 +55,15 @@ export class AgentRunnerService {
   private model: LanguageModel | null = null;
   private state: ConversationState;
   private processing = false;
-  private messageQueue: Array<{ message: string; conversationId?: string; resolve: (result: AgentRunResult) => void; reject: (error: Error) => void }> = [];
+  private messageQueue: Array<{ message: string; conversationId?: string; metadata?: Record<string, string>; resolve: (result: AgentRunResult) => void; reject: (error: Error) => void }> = [];
   private auditLog: AuditEntry[] = [];
   private securityPolicy: SecurityPolicy;
   /** Current conversationId extracted from [CHAT:xxx] prefix */
   private currentConversationId?: string;
+  /** Last known conversationId — used as fallback when a message has no explicit conversationId */
+  private lastKnownConversationId?: string;
+  /** Current Slack context (channelId + threadTs) for routing NOTIFY responses */
+  private currentSlackContext?: { channelId: string; threadTs?: string };
   /** @internal Override for testing — replaces the AI SDK generateText call */
   _generateTextFn: GenerateTextFn | null = null;
 
@@ -110,9 +114,9 @@ export class AgentRunnerService {
    * @param message - User/system message to process
    * @returns Result of the agent run including text, tool calls, and usage
    */
-  async run(message: string, conversationId?: string): Promise<AgentRunResult> {
+  async run(message: string, conversationId?: string, metadata?: Record<string, string>): Promise<AgentRunResult> {
     return new Promise<AgentRunResult>((resolve, reject) => {
-      this.messageQueue.push({ message, conversationId, resolve, reject });
+      this.messageQueue.push({ message, conversationId, metadata, resolve, reject });
       if (!this.processing) {
         this.processQueue();
       }
@@ -126,6 +130,16 @@ export class AgentRunnerService {
    */
   getState(): ConversationState {
     return { ...this.state };
+  }
+
+  /**
+   * Get the current Slack context (channelId + threadTs).
+   * Used by the runtime service to inject Slack awareness into the agent.
+   *
+   * @returns Current Slack context or undefined
+   */
+  getSlackContext(): { channelId: string; threadTs?: string } | undefined {
+    return this.currentSlackContext;
   }
 
   /**
@@ -155,9 +169,25 @@ export class AgentRunnerService {
       const item = this.messageQueue.shift()!;
       try {
         // Update current conversationId for tool context.
-        // Always update (including to undefined) so stale conversationId from
-        // a previous message doesn't leak into tools for the current message.
-        this.currentConversationId = item.conversationId;
+        // If the incoming message has an explicit conversationId, use it and
+        // remember it for future messages. If not, fall back to the last known
+        // conversationId so tools (especially [NOTIFY] output) can still route
+        // responses correctly for system messages like scheduled checks.
+        if (item.conversationId) {
+          this.currentConversationId = item.conversationId;
+          this.lastKnownConversationId = item.conversationId;
+        } else {
+          this.currentConversationId = this.lastKnownConversationId;
+        }
+        // Update Slack context from message metadata (Bug 5 fix).
+        // When a message arrives via Slack, metadata contains channelId + threadTs
+        // so the agent's tools (reply_slack) know where to reply.
+        if (item.metadata?.channelId) {
+          this.currentSlackContext = {
+            channelId: item.metadata.channelId,
+            threadTs: item.metadata.threadTs,
+          };
+        }
         const result = await this.executeRun(item.message);
         item.resolve(result);
       } catch (error) {
@@ -165,6 +195,13 @@ export class AgentRunnerService {
       }
     }
     this.processing = false;
+
+    // Re-check: a message may have been pushed between the while-loop exit
+    // condition check and this.processing = false. Without this guard, the
+    // queued message would be stranded — nobody restarts processQueue.
+    if (this.messageQueue.length > 0) {
+      this.processQueue();
+    }
   }
 
   /**
@@ -194,7 +231,7 @@ export class AgentRunnerService {
       onCheckApproval: (toolName: string, sensitivity: ToolSensitivity) => this.checkApproval(toolName, sensitivity),
       onGetAuditLog: (filters: AuditLogFilters) => this.getFilteredAuditLog(filters),
     };
-    const tools = createTools(this.apiClient, this.config.sessionName, this.config.projectPath, callbacks, this.currentConversationId);
+    const tools = createTools(this.apiClient, this.config.sessionName, this.config.projectPath, callbacks, this.currentConversationId, this.currentSlackContext);
 
     // Execute generateText with agentic loop
     const generateFn = this._generateTextFn || (generateText as Function);
