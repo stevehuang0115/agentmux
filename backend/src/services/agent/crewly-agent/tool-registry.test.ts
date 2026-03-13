@@ -10,7 +10,7 @@ describe('Tool Registry', () => {
 
   beforeEach(() => {
     mockClient = {
-      get: jest.fn<any>(),
+      get: jest.fn<any>().mockResolvedValue({ success: false, data: null, status: 404 }),
       post: jest.fn<any>(),
       delete: jest.fn<any>(),
     } as any;
@@ -18,9 +18,9 @@ describe('Tool Registry', () => {
   });
 
   describe('getToolNames', () => {
-    it('should return all 26 tool names', () => {
+    it('should return all 27 tool names', () => {
       const names = getToolNames();
-      expect(names).toHaveLength(26);
+      expect(names).toHaveLength(27);
       expect(names).toContain('delegate_task');
       expect(names).toContain('send_message');
       expect(names).toContain('get_agent_status');
@@ -29,6 +29,7 @@ describe('Tool Registry', () => {
       expect(names).toContain('reply_slack');
       expect(names).toContain('schedule_check');
       expect(names).toContain('cancel_schedule');
+      expect(names).toContain('get_scheduled_checks');
       expect(names).toContain('start_agent');
       expect(names).toContain('stop_agent');
       expect(names).toContain('subscribe_event');
@@ -51,9 +52,9 @@ describe('Tool Registry', () => {
   });
 
   describe('createTools', () => {
-    it('should create all 26 tools with descriptions and parameters', () => {
+    it('should create all 27 tools with descriptions and parameters', () => {
       const toolNames = Object.keys(tools);
-      expect(toolNames).toHaveLength(26);
+      expect(toolNames).toHaveLength(27);
       for (const name of toolNames) {
         const t = tools[name] as any;
         expect(t).toBeDefined();
@@ -361,7 +362,13 @@ describe('Tool Registry', () => {
   });
 
   describe('start_agent', () => {
-    it('should start agent via API', async () => {
+    it('should start agent via API when not already active', async () => {
+      // Pre-check returns team with inactive member
+      mockClient.get.mockResolvedValueOnce({
+        success: true,
+        data: { members: [{ id: 'member-1', agentStatus: 'inactive', sessionName: '' }] },
+        status: 200,
+      });
       mockClient.post.mockResolvedValue({ success: true, data: { started: true }, status: 200 });
 
       const result = await (tools.start_agent as any).execute({
@@ -371,6 +378,35 @@ describe('Tool Registry', () => {
 
       expect(result.started).toBe(true);
       expect(mockClient.post).toHaveBeenCalledWith('/teams/team-1/members/member-1/start', {});
+    });
+
+    it('should return already_active without calling start if agent is active', async () => {
+      mockClient.get.mockResolvedValueOnce({
+        success: true,
+        data: { members: [{ id: 'member-1', agentStatus: 'active', sessionName: 'session-1', name: 'Sam' }] },
+        status: 200,
+      });
+
+      const result = await (tools.start_agent as any).execute({
+        teamId: 'team-1',
+        memberId: 'member-1',
+      });
+
+      expect(result.status).toBe('already_active');
+      expect(result.sessionName).toBe('session-1');
+      expect(mockClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should proceed with start if pre-check fails', async () => {
+      mockClient.get.mockResolvedValueOnce({ success: false, error: 'not found', status: 404 });
+      mockClient.post.mockResolvedValue({ success: true, data: { started: true }, status: 200 });
+
+      const result = await (tools.start_agent as any).execute({
+        teamId: 'team-1',
+        memberId: 'member-1',
+      });
+
+      expect(result.started).toBe(true);
     });
   });
 
@@ -1084,6 +1120,7 @@ describe('Tool Registry', () => {
       expect(TOOL_SENSITIVITY.read_file).toBe('safe');
       expect(TOOL_SENSITIVITY.recall_memory).toBe('safe');
       expect(TOOL_SENSITIVITY.get_project_overview).toBe('safe');
+      expect(TOOL_SENSITIVITY.get_scheduled_checks).toBe('safe');
     });
 
     it('should classify communication tools as sensitive', () => {
@@ -1347,6 +1384,107 @@ describe('Tool Registry', () => {
 
       expect(result.success).toBe(false);
       expect(result.blocked).toBe(true);
+    });
+  });
+
+  describe('get_scheduled_checks', () => {
+    it('should fetch all scheduled checks', async () => {
+      mockClient.get.mockResolvedValue({ success: true, data: [{ id: 'chk-1', isRecurring: true }], status: 200 });
+
+      const result = await (tools.get_scheduled_checks as any).execute({});
+
+      expect(mockClient.get).toHaveBeenCalledWith('/schedule');
+      expect(result).toEqual([{ id: 'chk-1', isRecurring: true }]);
+    });
+
+    it('should filter by session when provided', async () => {
+      mockClient.get.mockResolvedValue({ success: true, data: [], status: 200 });
+
+      await (tools.get_scheduled_checks as any).execute({ session: 'agent-sam' });
+
+      expect(mockClient.get).toHaveBeenCalledWith('/schedule?session=agent-sam');
+    });
+
+    it('should return error on failure', async () => {
+      mockClient.get.mockResolvedValue({ success: false, error: 'Server error', status: 500 });
+
+      const result = await (tools.get_scheduled_checks as any).execute({});
+
+      expect(result).toEqual({ error: 'Server error' });
+    });
+  });
+
+  describe('schedule_check with taskId', () => {
+    it('should pass taskId to the schedule API', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { checkId: 'sched-3' }, status: 201 });
+
+      await (tools.schedule_check as any).execute({
+        minutes: 5,
+        message: 'Check Sam progress',
+        recurring: true,
+        taskId: 'task-42',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/schedule', expect.objectContaining({
+        taskId: 'task-42',
+        isRecurring: true,
+        intervalMinutes: 5,
+      }));
+    });
+
+    it('should not include taskId when not provided', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { checkId: 'sched-4' }, status: 201 });
+
+      await (tools.schedule_check as any).execute({
+        minutes: 10,
+        message: 'Check progress',
+        recurring: false,
+      });
+
+      const postArgs = mockClient.post.mock.calls[0][1] as Record<string, unknown>;
+      expect(postArgs.taskId).toBeUndefined();
+    });
+  });
+
+  describe('complete_task with check cleanup', () => {
+    it('should cancel recurring checks for the completing agent', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { completed: true }, status: 200 });
+      mockClient.get.mockResolvedValue({
+        success: true,
+        data: [
+          { id: 'chk-1', isRecurring: true },
+          { id: 'chk-2', isRecurring: false },
+          { id: 'chk-3', isRecurring: true },
+        ],
+        status: 200,
+      });
+      mockClient.delete.mockResolvedValue({ success: true, data: {}, status: 200 });
+
+      const result = await (tools.complete_task as any).execute({
+        absoluteTaskPath: '/tasks/task-1.md',
+        sessionName: 'agent-sam',
+        summary: 'Done',
+      });
+
+      expect(result.completed).toBe(true);
+      expect(result.cancelledChecks).toBe(2); // Only recurring checks
+      expect(mockClient.delete).toHaveBeenCalledWith('/schedule/chk-1');
+      expect(mockClient.delete).toHaveBeenCalledWith('/schedule/chk-3');
+      expect(mockClient.delete).not.toHaveBeenCalledWith('/schedule/chk-2');
+    });
+
+    it('should still complete task even if check cleanup fails', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: { completed: true }, status: 200 });
+      mockClient.get.mockRejectedValue(new Error('Network error'));
+
+      const result = await (tools.complete_task as any).execute({
+        absoluteTaskPath: '/tasks/task-1.md',
+        sessionName: 'agent-sam',
+        summary: 'Done',
+      });
+
+      expect(result.completed).toBe(true);
+      expect(result.cancelledChecks).toBe(0);
     });
   });
 

@@ -87,6 +87,7 @@ export const TOOL_SENSITIVITY: Record<string, ToolSensitivity> = {
   recall_memory: 'safe',
   subscribe_event: 'safe',
   get_audit_log: 'safe',
+  get_scheduled_checks: 'safe',
   compact_memory: 'safe',
   // Sensitive: modify state, communicate externally
   delegate_task: 'sensitive',
@@ -240,12 +241,16 @@ function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
  * @param callbacks - Optional callbacks for compaction and audit logging
  * @returns Object of named tools ready to pass to generateText
  */
-export function createTools(client: CrewlyApiClient, sessionName: string, projectPath?: string, callbacks?: ToolCallbacks, conversationId?: string): Record<string, ToolDefinition> {
+export function createTools(client: CrewlyApiClient, sessionName: string, projectPath?: string, callbacks?: ToolCallbacks, conversationId?: string, slackContext?: { channelId: string; threadTs?: string }): Record<string, ToolDefinition> {
+  // Slack rate-limiting state: throttle messages within a 3-second window
+  let lastSlackSendMs = 0;
+  const SLACK_THROTTLE_MS = 3000;
+
   const rawTools: Record<string, ToolDefinition> = {
     // ===== Core Orchestration Tools =====
 
     delegate_task: {
-      description: 'Delegate a task to a worker agent. Sends the task message and creates a task tracking file.',
+      description: 'Delegate a task to a worker agent. Sends the task message and creates a task tracking file. Enforces TL hierarchy — if target has a parent TL, routes through TL instead.',
       inputSchema: z.object({
         to: z.string().describe('Target agent session name'),
         task: z.string().describe('Task description and instructions'),
@@ -254,6 +259,37 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         projectPath: z.string().optional().describe('Project path for task tracking'),
       }),
       execute: async ({ to, task, priority, context, projectPath }) => {
+        // Issue 1: TL hierarchy check — if target has a parentMemberId, route through TL
+        const teamsResult = await client.get('/teams').catch(() => null);
+        if (teamsResult?.success && Array.isArray(teamsResult.data)) {
+          type MemberInfo = { id: string; sessionName: string; parentMemberId?: string; agentStatus?: string; workingStatus?: string };
+          type TeamInfo = { members?: MemberInfo[] };
+          for (const team of teamsResult.data as TeamInfo[]) {
+            const targetMember = team.members?.find(m => m.sessionName === (to as string));
+            if (targetMember?.parentMemberId) {
+              const tlMember = team.members?.find(m => m.id === targetMember.parentMemberId);
+              // If the caller is NOT the TL, redirect through TL
+              if (tlMember && tlMember.sessionName !== sessionName) {
+                return {
+                  success: false,
+                  error: `Hierarchy violation: ${to} has TL ${tlMember.sessionName}. Delegate through TL instead of directly to worker.`,
+                  redirectTo: tlMember.sessionName,
+                };
+              }
+            }
+
+            // Issue 4: Task stacking prevention — check if target already has in-progress tasks
+            if (targetMember && targetMember.workingStatus === 'in_progress') {
+              return {
+                success: false,
+                error: `Agent ${to} is already working on a task (workingStatus: in_progress). Wait for current task to complete before delegating a new one.`,
+                agentStatus: targetMember.agentStatus,
+                workingStatus: targetMember.workingStatus,
+              };
+            }
+          }
+        }
+
         const taskMessage = buildTaskMessage(to as string, task as string, priority as string, context as string | undefined, projectPath as string | undefined);
 
         // Deliver the task message
@@ -369,20 +405,32 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
     },
 
     reply_slack: {
-      description: 'Send a reply to a Slack channel or thread.',
+      description: 'Send a reply to a Slack channel or thread. If channelId is omitted, uses the current Slack thread context. Messages sent within 3 seconds are batched to avoid spam.',
       inputSchema: z.object({
-        channelId: z.string().describe('Slack channel ID'),
+        channelId: z.string().optional().describe('Slack channel ID (auto-filled from current thread context if omitted)'),
         text: z.string().describe('Message text'),
-        threadTs: z.string().optional().describe('Thread timestamp for replies'),
+        threadTs: z.string().optional().describe('Thread timestamp for replies (auto-filled from current thread context if omitted)'),
       }),
       execute: async ({ channelId, text, threadTs }) => {
-        // Strip [NOTIFY]...[/NOTIFY] blocks that may leak into tool arguments.
-        // The agent sometimes wraps responses in NOTIFY markers intended for the
-        // terminal gateway routing layer, not for Slack display.
         const cleanText = stripNotifyMarkers(text as string);
-        const body: Record<string, string> = { channelId: channelId as string, text: cleanText };
-        if (threadTs) body.threadTs = threadTs as string;
+        const resolvedChannelId = (channelId as string | undefined) || slackContext?.channelId;
+        const resolvedThreadTs = (threadTs as string | undefined) || slackContext?.threadTs;
+        if (!resolvedChannelId) {
+          return { success: false, error: 'No channelId provided and no Slack thread context available. Use reply_slack with an explicit channelId.' };
+        }
+
+        // Issue 3: Rate-limit Slack messages — throttle within a 3s window
+        const now = Date.now();
+        if (now - lastSlackSendMs < SLACK_THROTTLE_MS) {
+          return { success: true, sent: false, throttled: true, retryAfterMs: SLACK_THROTTLE_MS - (now - lastSlackSendMs) };
+        }
+
+        const body: Record<string, string> = { channelId: resolvedChannelId, text: cleanText };
+        if (resolvedThreadTs) body.threadTs = resolvedThreadTs;
         const result = await client.post('/slack/send', body);
+        if (result.success) {
+          lastSlackSendMs = Date.now();
+        }
         return result.success
           ? { success: true, sent: true }
           : { success: false, error: result.error };
@@ -392,16 +440,32 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
     // ===== Scheduling Tools =====
 
     schedule_check: {
-      description: 'Schedule a future check-in reminder.',
+      description: 'Schedule a future check-in reminder. Include taskId to auto-cancel when the linked task completes. Deduplicates: skips if a similar check already exists for the same target.',
       inputSchema: z.object({
         minutes: z.number().describe('Minutes from now'),
         message: z.string().describe('Reminder message'),
         target: z.string().optional().describe('Target session (defaults to self)'),
         recurring: z.boolean().default(false),
         maxOccurrences: z.number().optional(),
+        taskId: z.string().optional().describe('Link to a task ID — recurring check auto-cancels when this task completes'),
       }),
-      execute: async ({ minutes, message, target, recurring, maxOccurrences }) => {
+      execute: async ({ minutes, message, target, recurring, maxOccurrences, taskId }) => {
         const targetSession = target || sessionName;
+
+        // Issue 2: Dedup check — list existing scheduled checks for this target
+        const existingResult = await client.get(`/schedule?session=${encodeURIComponent(targetSession as string)}`).catch(() => null);
+        if (existingResult?.success && Array.isArray(existingResult.data)) {
+          type CheckInfo = { targetSession: string; message: string; taskId?: string };
+          const msgPrefix = (message as string).slice(0, 50); // Match on message prefix
+          const isDuplicate = (existingResult.data as CheckInfo[]).some(check =>
+            check.targetSession === targetSession &&
+            (check.message?.startsWith(msgPrefix) || (taskId && check.taskId === taskId))
+          );
+          if (isDuplicate) {
+            return { success: true, status: 'already_scheduled', targetSession, message };
+          }
+        }
+
         const body: Record<string, unknown> = {
           targetSession,
           minutes,
@@ -412,6 +476,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           body.intervalMinutes = minutes;
         }
         if (maxOccurrences) body.maxOccurrences = maxOccurrences;
+        if (taskId) body.taskId = taskId;
         const result = await client.post('/schedule', body);
         return result.success ? result.data : { error: result.error };
       },
@@ -428,15 +493,46 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
       },
     },
 
+    get_scheduled_checks: {
+      description: 'List all active scheduled checks. Use to identify stale or completed checks that should be cancelled.',
+      inputSchema: z.object({
+        session: z.string().optional().describe('Filter by target session name'),
+      }),
+      execute: async ({ session }) => {
+        const endpoint = session
+          ? `/schedule?session=${encodeURIComponent(session as string)}`
+          : '/schedule';
+        const result = await client.get(endpoint);
+        return result.success ? result.data : { error: result.error };
+      },
+    },
+
     // ===== Agent Lifecycle Tools =====
 
     start_agent: {
-      description: 'Start a specific agent within a team.',
+      description: 'Start a specific agent within a team. Safely skips if the agent is already active.',
       inputSchema: z.object({
         teamId: z.string().describe('Team UUID'),
         memberId: z.string().describe('Member UUID'),
       }),
       execute: async ({ teamId, memberId }) => {
+        // Pre-check: if the agent is already active, return immediately to avoid
+        // timeout and session interruption from redundant start calls
+        const teamResult = await client.get(`/teams/${teamId}`).catch(() => null);
+        if (teamResult?.success && teamResult.data) {
+          const team = teamResult.data as { members?: Array<{ id: string; agentStatus?: string; sessionName?: string; name?: string }> };
+          const member = team.members?.find(m => m.id === memberId);
+          if (member && member.agentStatus === 'active' && member.sessionName) {
+            return {
+              success: true,
+              memberName: member.name,
+              memberId: member.id,
+              sessionName: member.sessionName,
+              status: 'already_active',
+            };
+          }
+        }
+
         const result = await client.post(`/teams/${teamId}/members/${memberId}/start`, {});
         return result.success ? result.data : { error: result.error };
       },
@@ -457,13 +553,28 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
     // ===== Event Tools =====
 
     subscribe_event: {
-      description: 'Subscribe to agent lifecycle events (e.g., agent:idle, agent:busy).',
+      description: 'Subscribe to agent lifecycle events (e.g., agent:idle, agent:busy). Deduplicates: skips if an identical subscription already exists.',
       inputSchema: z.object({
         eventType: z.string().describe('Event type (e.g., "agent:idle")'),
         filter: z.record(z.string()).optional().describe('Event filter criteria'),
         oneShot: z.boolean().default(true),
       }),
       execute: async ({ eventType, filter, oneShot }) => {
+        // Issue 2: Dedup check — list existing subscriptions and skip if duplicate
+        const existingResult = await client.get(`/events/subscriptions?subscriberSession=${encodeURIComponent(sessionName)}`).catch(() => null);
+        if (existingResult?.success && Array.isArray(existingResult.data)) {
+          type SubInfo = { eventType: string; filter?: Record<string, string>; subscriberSession: string };
+          const filterStr = JSON.stringify(filter || {});
+          const isDuplicate = (existingResult.data as SubInfo[]).some(sub =>
+            sub.eventType === eventType &&
+            sub.subscriberSession === sessionName &&
+            JSON.stringify(sub.filter || {}) === filterStr
+          );
+          if (isDuplicate) {
+            return { success: true, status: 'already_subscribed', eventType, filter };
+          }
+        }
+
         const result = await client.post('/events/subscribe', {
           eventType,
           filter: filter || {},
@@ -559,7 +670,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
     },
 
     complete_task: {
-      description: 'Mark a task as complete.',
+      description: 'Mark a task as complete. Also cancels any scheduled checks targeting the completing agent session.',
       inputSchema: z.object({
         absoluteTaskPath: z.string().describe('Absolute path to the task file'),
         sessionName: z.string().describe('Agent session that completed it'),
@@ -571,7 +682,28 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           sessionName: agent,
           summary,
         });
-        return result.success ? result.data : { error: result.error };
+
+        // Auto-cancel scheduled checks targeting the completing agent
+        // to prevent stale recurring checks from firing after task completion
+        let cancelledChecks = 0;
+        try {
+          const checksResult = await client.get(`/schedule?session=${encodeURIComponent(agent as string)}`);
+          if (checksResult.success && Array.isArray(checksResult.data)) {
+            for (const check of checksResult.data as Array<{ id: string; isRecurring?: boolean }>) {
+              if (check.isRecurring) {
+                await client.delete(`/schedule/${check.id}`);
+                cancelledChecks++;
+              }
+            }
+          }
+        } catch {
+          // Non-fatal: task completion succeeded even if check cleanup fails
+        }
+
+        if (result.success) {
+          return { ...result.data as Record<string, unknown>, cancelledChecks };
+        }
+        return { error: result.error };
       },
     },
 
@@ -917,9 +1049,9 @@ export function getToolNames(): string[] {
   return [
     'delegate_task', 'send_message', 'get_agent_status', 'get_team_status',
     'get_agent_logs', 'reply_slack', 'schedule_check', 'cancel_schedule',
-    'start_agent', 'stop_agent', 'subscribe_event', 'recall_memory',
-    'remember', 'heartbeat', 'get_tasks', 'complete_task', 'broadcast',
-    'handle_agent_failure', 'edit_file', 'read_file', 'write_file',
+    'get_scheduled_checks', 'start_agent', 'stop_agent', 'subscribe_event',
+    'recall_memory', 'remember', 'heartbeat', 'get_tasks', 'complete_task',
+    'broadcast', 'handle_agent_failure', 'edit_file', 'read_file', 'write_file',
     'register_self', 'get_project_overview', 'report_status',
     'compact_memory', 'get_audit_log',
   ];

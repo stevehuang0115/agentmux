@@ -88,7 +88,7 @@ describe('AuditorSchedulerService', () => {
 
     it('should bind EventBus listener on start', () => {
       scheduler.start();
-      expect(mockEventBus.on).toHaveBeenCalledWith('event_delivered', expect.any(Function));
+      expect(mockEventBus.on).toHaveBeenCalledWith('event_published', expect.any(Function));
       expect(scheduler.getStatus().eventListenerBound).toBe(true);
     });
 
@@ -259,7 +259,7 @@ describe('AuditorSchedulerService', () => {
       scheduler.start();
 
       const listenerCall = mockEventBus.on.mock.calls.find(
-        (c: any[]) => c[0] === 'event_delivered',
+        (c: any[]) => c[0] === 'event_published',
       );
       expect(listenerCall).toBeDefined();
       const listener = listenerCall![1] as (payload: { eventType: string }) => void;
@@ -277,7 +277,7 @@ describe('AuditorSchedulerService', () => {
       scheduler.start();
 
       const listenerCall = mockEventBus.on.mock.calls.find(
-        (c: any[]) => c[0] === 'event_delivered',
+        (c: any[]) => c[0] === 'event_published',
       );
       const listener = listenerCall![1] as (payload: { eventType: string }) => void;
 
@@ -298,7 +298,7 @@ describe('AuditorSchedulerService', () => {
       scheduler.start();
 
       const listenerCall = mockEventBus.on.mock.calls.find(
-        (c: any[]) => c[0] === 'event_delivered',
+        (c: any[]) => c[0] === 'event_published',
       );
       const listener = listenerCall![1] as (payload: { eventType: string }) => void;
 
