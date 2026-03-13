@@ -12,6 +12,7 @@ import { getWhatsAppService, WhatsAppService } from './whatsapp.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
 import {
   isOrchestratorActive,
+  isAgentActive,
   getOrchestratorOfflineMessage,
 } from '../orchestrator/index.js';
 import type {
@@ -19,7 +20,7 @@ import type {
   WhatsAppConversationContext,
 } from '../../types/whatsapp.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, WHATSAPP_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, WHATSAPP_CONSTANTS, AUDITOR_SCHEDULER_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -173,6 +174,13 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
     try {
       const isActive = await isOrchestratorActive();
       if (!isActive) {
+        // Fallback: route to Auditor agent if it's active
+        const auditorSession = AUDITOR_SCHEDULER_CONSTANTS.AUDITOR_SESSION_NAME;
+        const auditorActive = await isAgentActive(auditorSession);
+        if (auditorActive) {
+          this.logger.info('Orchestrator offline — routing message to Auditor agent');
+          return this.sendToAuditorFallback(message, context);
+        }
         this.logger.info('Orchestrator is not active, returning offline message');
         return getOrchestratorOfflineMessage(true);
       }
@@ -228,6 +236,60 @@ export class WhatsAppOrchestratorBridge extends EventEmitter {
       });
       throw error;
     }
+  }
+
+  /**
+   * Route a message to the Auditor agent as a fallback when the orchestrator is offline.
+   *
+   * Enqueues the message targeting the Auditor's session so the queue processor
+   * delivers it to the Auditor PTY. Includes source context for the Auditor.
+   *
+   * @param message - Original user message
+   * @param context - WhatsApp conversation context
+   * @returns Acknowledgement message to the user
+   */
+  private async sendToAuditorFallback(
+    message: string,
+    context?: WhatsAppConversationContext,
+  ): Promise<string> {
+    const auditorSession = AUDITOR_SCHEDULER_CONSTANTS.AUDITOR_SESSION_NAME;
+    const enrichedMessage = `[FALLBACK] Orchestrator is offline. WhatsApp message from ${context?.contactName || 'unknown'}:\n${message}`;
+
+    const mqService = this.messageQueueService;
+    if (mqService) {
+      try {
+        const result = await this.chatService.sendMessage({
+          content: enrichedMessage,
+          conversationId: context?.conversationId,
+          metadata: {
+            source: 'whatsapp',
+            chatId: context?.chatId,
+            contactName: context?.contactName,
+          },
+        });
+
+        mqService.enqueue({
+          content: enrichedMessage,
+          conversationId: result.conversation.id,
+          source: 'whatsapp',
+          targetSession: auditorSession,
+          sourceMetadata: {
+            whatsappResolve: undefined,
+            chatId: context?.chatId,
+            contactName: context?.contactName,
+          },
+        });
+
+        this.logger.info('Message routed to Auditor agent via queue', { auditorSession });
+        return 'The orchestrator is currently offline. Your message has been forwarded to the Auditor agent.';
+      } catch (err) {
+        this.logger.error('Failed to route message to Auditor via queue', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return getOrchestratorOfflineMessage(true);
   }
 
   /**

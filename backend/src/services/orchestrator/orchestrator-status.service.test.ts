@@ -83,6 +83,7 @@ jest.mock('../../../../config/index.js', () => ({
 // Import after mocks are defined
 import {
   isOrchestratorActive,
+  isAgentActive,
   getOrchestratorStatus,
   getOrchestratorOfflineMessage,
 } from './orchestrator-status.service.js';
@@ -398,6 +399,39 @@ describe('OrchestratorStatusService', () => {
       expect(result.isActive).toBe(true);
       expect(result.agentStatus).toBe('active');
       expect(result.message).toContain('status recovered');
+    });
+  });
+
+  describe('isAgentActive', () => {
+    it('should return true when session exists and child process is alive', async () => {
+      mockSessionState.exists = true;
+      mockSessionState.childProcessAlive = true;
+
+      const result = await isAgentActive('crewly-auditor');
+      expect(result).toBe(true);
+    });
+
+    it('should return false when session does not exist', async () => {
+      mockSessionState.exists = false;
+      mockSessionState.childProcessAlive = false;
+
+      const result = await isAgentActive('crewly-auditor');
+      expect(result).toBe(false);
+    });
+
+    it('should return false when session exists but child process is not alive', async () => {
+      mockSessionState.exists = true;
+      mockSessionState.childProcessAlive = false;
+
+      const result = await isAgentActive('crewly-auditor');
+      expect(result).toBe(false);
+    });
+
+    it('should return false when session backend is unavailable', async () => {
+      mockSessionState.backendAvailable = false;
+
+      const result = await isAgentActive('crewly-auditor');
+      expect(result).toBe(false);
     });
   });
 

@@ -18,6 +18,7 @@ import { getSlackService, SlackService } from './slack.service.js';
 import { getChatService, ChatService } from '../chat/chat.service.js';
 import {
   isOrchestratorActive,
+  isAgentActive,
   getOrchestratorOfflineMessage,
 } from '../orchestrator/index.js';
 import {
@@ -34,7 +35,7 @@ import { getSlackImageService } from './slack-image.service.js';
 import { parseNotifyContent, type NotifyPayload } from '../../types/chat.types.js';
 import type { MessageQueueService } from '../messaging/message-queue.service.js';
 import type { SlackThreadStoreService } from './slack-thread-store.service.js';
-import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_FILE_DOWNLOAD_CONSTANTS, SLACK_BRIDGE_CONSTANTS } from '../../constants.js';
+import { ORCHESTRATOR_SESSION_NAME, MESSAGE_QUEUE_CONSTANTS, SLACK_IMAGE_CONSTANTS, SLACK_FILE_DOWNLOAD_CONSTANTS, SLACK_BRIDGE_CONSTANTS, AUDITOR_SCHEDULER_CONSTANTS } from '../../constants.js';
 import { LoggerService } from '../core/logger.service.js';
 
 /**
@@ -236,8 +237,8 @@ export class SlackOrchestratorBridge extends EventEmitter {
       // Override message text with enriched version for downstream processing
       message.text = enrichedText;
 
-      // Auditor prefix routing — intercept "auditor ..." messages
-      const auditorMatch = enrichedText.match(/^\/?auditor\s+(.*)/is);
+      // Auditor prefix routing — intercept "auditor ...", "/auditor ...", or "@auditor ..." messages
+      const auditorMatch = enrichedText.match(/^[/@]?auditor[\s:]+(.+)/is);
       if (auditorMatch) {
         const auditorMessage = auditorMatch[1].trim();
         try {
@@ -458,6 +459,13 @@ Just type naturally to chat with the orchestrator!`;
       // Check if orchestrator is active before attempting to send
       const isActive = await isOrchestratorActive();
       if (!isActive) {
+        // Fallback: route to Auditor agent if it's active
+        const auditorSession = AUDITOR_SCHEDULER_CONSTANTS.AUDITOR_SESSION_NAME;
+        const auditorActive = await isAgentActive(auditorSession);
+        if (auditorActive) {
+          this.logger.info('Orchestrator offline — routing message to Auditor agent');
+          return this.sendToAuditorFallback(message, context);
+        }
         this.logger.info('Orchestrator is not active, returning offline message');
         return getOrchestratorOfflineMessage(true);
       }
@@ -530,6 +538,82 @@ Just type naturally to chat with the orchestrator!`;
       this.logger.error('Error sending to orchestrator', { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+  }
+
+  /**
+   * Route a message to the Auditor agent as a fallback when the orchestrator is offline.
+   *
+   * Enqueues the message targeting the Auditor's session so the queue processor
+   * delivers it to the Auditor PTY instead of the orchestrator. Includes Slack
+   * context (channel, thread) so the Auditor can respond.
+   *
+   * @param message - Original user message
+   * @param context - Slack conversation context
+   * @returns Acknowledgement message to the user
+   */
+  private async sendToAuditorFallback(
+    message: string,
+    context?: SlackConversationContext,
+  ): Promise<string> {
+    const auditorSession = AUDITOR_SCHEDULER_CONSTANTS.AUDITOR_SESSION_NAME;
+
+    // Build a context-enriched message so the Auditor knows the source
+    const slackPrefix = context
+      ? `[SLACK_CONTEXT:channelId=${context.channelId},threadTs=${context.threadTs || ''}]`
+      : '';
+    const enrichedMessage = `${slackPrefix} [FALLBACK] Orchestrator is offline. User message:\n${message}`;
+
+    // Try to enqueue via the message queue (same path as orchestrator delivery)
+    if (this.messageQueueService) {
+      try {
+        // Store in chat history
+        const result = await this.chatService.sendMessage({
+          content: enrichedMessage,
+          conversationId: context?.conversationId,
+          metadata: {
+            source: 'slack',
+            userId: context?.userId,
+            channelId: context?.channelId,
+          },
+        });
+
+        this.messageQueueService.enqueue({
+          content: enrichedMessage,
+          conversationId: result.conversation.id,
+          source: 'slack',
+          targetSession: auditorSession,
+          sourceMetadata: {
+            slackResolve: undefined,
+            userId: context?.userId,
+            channelId: context?.channelId,
+          },
+        });
+
+        this.logger.info('Message routed to Auditor agent via queue', { auditorSession });
+        return 'The orchestrator is currently offline. Your message has been forwarded to the Auditor agent.';
+      } catch (err) {
+        this.logger.error('Failed to route message to Auditor via queue', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Last resort: direct delivery via AuditorSchedulerService
+    try {
+      const { AuditorSchedulerService } = await import('../agent/auditor-scheduler.service.js');
+      const scheduler = AuditorSchedulerService.getInstance();
+      await scheduler.handleUserMessage(
+        `[FALLBACK] Orchestrator is offline. User message: ${message}`,
+        { channelId: context?.channelId || '', threadTs: context?.threadTs || '' },
+      );
+      return 'The orchestrator is currently offline. Your message has been forwarded to the Auditor agent.';
+    } catch (err) {
+      this.logger.error('Failed to route message to Auditor via scheduler', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    return getOrchestratorOfflineMessage(true);
   }
 
   /**

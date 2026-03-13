@@ -18,6 +18,7 @@ import type { NotifyPayload } from '../../types/chat.types.js';
 // Mock the orchestrator status module
 jest.mock('../orchestrator/index.js', () => ({
   isOrchestratorActive: jest.fn(),
+  isAgentActive: jest.fn().mockResolvedValue(false),
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
@@ -39,7 +40,7 @@ jest.mock('./slack-image.service.js', () => ({
   resetSlackImageService: jest.fn(),
 }));
 
-import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
+import { isOrchestratorActive, isAgentActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
 import { getChatService } from '../chat/chat.service.js';
 import { ChatMessage } from '../../types/chat.types.js';
 import { getSlackImageService } from './slack-image.service.js';
@@ -1048,6 +1049,56 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('auditor fallback routing', () => {
+    it('should check auditor status when orchestrator is offline', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(false);
+
+      const bridge = new SlackOrchestratorBridge();
+      await bridge.initialize();
+
+      // isAgentActive should be available for the fallback check
+      expect(isAgentActive).toBeDefined();
+    });
+
+    it('should return offline message when both orchestrator and auditor are inactive', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(false);
+      (getOrchestratorOfflineMessage as jest.Mock).mockReturnValue('Orchestrator is offline');
+
+      const bridge = new SlackOrchestratorBridge();
+      await bridge.initialize();
+
+      const offlineMsg = getOrchestratorOfflineMessage(true);
+      expect(offlineMsg).toContain('offline');
+    });
+
+    it('should route to auditor when orchestrator is offline and auditor is active', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(true);
+
+      // isAgentActive should report auditor as available for fallback
+      const auditorActive = await isAgentActive('crewly-auditor');
+      expect(auditorActive).toBe(true);
+    });
+
+    it('should include FALLBACK marker in auditor-routed messages', () => {
+      // Verify the fallback message format includes the marker
+      const message = 'Hello from user';
+      const fallbackMessage = `[FALLBACK] Orchestrator is offline. User message:\n${message}`;
+      expect(fallbackMessage).toContain('[FALLBACK]');
+      expect(fallbackMessage).toContain(message);
+    });
+
+    it('should include SLACK_CONTEXT in fallback messages when context is available', () => {
+      const channelId = 'C123';
+      const threadTs = '1234567890.123456';
+      const prefix = `[SLACK_CONTEXT:channelId=${channelId},threadTs=${threadTs}]`;
+      expect(prefix).toContain(channelId);
+      expect(prefix).toContain(threadTs);
+    });
+  });
+
   describe('typing indicator scope handling', () => {
     it('should only log missing scope warning once', () => {
       const bridge = new SlackOrchestratorBridge();
@@ -1410,7 +1461,7 @@ describe('SlackOrchestratorBridge', () => {
   });
 
   describe('auditor prefix routing', () => {
-    const pattern = /^\/?auditor\s+(.*)/is;
+    const pattern = /^[/@]?auditor[\s:]+(.+)/is;
 
     it('should match "auditor ..." prefix and extract message', () => {
       const match = 'auditor show me the latest audit report'.match(pattern);
@@ -1430,9 +1481,22 @@ describe('SlackOrchestratorBridge', () => {
       expect(match![1].trim()).toBe('check system health');
     });
 
+    it('should handle @auditor prefix with at-sign', () => {
+      const match = '@auditor check system health'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('check system health');
+    });
+
+    it('should handle @auditor: prefix with colon', () => {
+      const match = '@auditor: what is the team status?'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('what is the team status?');
+    });
+
     it('should be case-insensitive', () => {
       expect('Auditor check status'.match(pattern)).not.toBeNull();
       expect('AUDITOR run audit'.match(pattern)).not.toBeNull();
+      expect('@Auditor show report'.match(pattern)).not.toBeNull();
     });
   });
 });

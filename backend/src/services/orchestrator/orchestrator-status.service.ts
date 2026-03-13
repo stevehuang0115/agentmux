@@ -202,6 +202,29 @@ export async function getOrchestratorStatus(): Promise<OrchestratorStatusResult>
 }
 
 /**
+ * Check if a specific agent is currently active by verifying its PTY session exists
+ * and has a running child process.
+ *
+ * @param sessionName - The agent's session name to check
+ * @returns Promise resolving to true if the agent's session is alive
+ */
+export async function isAgentActive(sessionName: string): Promise<boolean> {
+  try {
+    const sessionBackend = getSessionBackendSync();
+    if (!sessionBackend) {
+      return false;
+    }
+    if (!sessionBackend.sessionExists(sessionName)) {
+      return false;
+    }
+    // Session exists — check if child process (the AI runtime) is alive
+    return !!sessionBackend.isChildProcessAlive?.(sessionName);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Get a user-friendly message for when the orchestrator is offline.
  * Useful for Slack and Chat responses.
  *
