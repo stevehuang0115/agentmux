@@ -248,6 +248,14 @@ export class CrewlyServer {
 		// Set terminal gateway singleton for chat integration
 		setTerminalGateway(this.terminalGateway);
 
+		// Pre-load Gemini CLI session names so NOTIFY processing is skipped
+		// for existing sessions before registerGeminiCliSession fires.
+		this.terminalGateway.loadGeminiCliSessions().catch((error) => {
+			this.logger.warn('Failed to pre-load Gemini CLI sessions', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+
 		// Initialize ChatGateway for chat message forwarding
 		// This sets up the event listeners that forward chat messages to WebSocket clients
 		initializeChatGateway(this.io).catch((error) => {
