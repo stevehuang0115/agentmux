@@ -32,7 +32,8 @@ jest.mock('../../constants.js', () => ({
 }));
 
 import { KnowledgeService as DirectKnowledgeService } from './knowledge.service.js';
-import { KnowledgeService as BarrelKnowledgeService } from './index.js';
+import { VectorStoreService as DirectVectorStoreService } from './vector-store.service.js';
+import { KnowledgeService as BarrelKnowledgeService, VectorStoreService as BarrelVectorStoreService } from './index.js';
 
 describe('Knowledge Service Barrel Export', () => {
   it('should export KnowledgeService from the index', () => {
@@ -49,5 +50,13 @@ describe('Knowledge Service Barrel Export', () => {
 
   it('should be a class with resetInstance static method', () => {
     expect(typeof BarrelKnowledgeService.resetInstance).toBe('function');
+  });
+
+  it('should export VectorStoreService from the index', () => {
+    expect(BarrelVectorStoreService).toBeDefined();
+  });
+
+  it('should export the same VectorStoreService class as the direct import', () => {
+    expect(BarrelVectorStoreService).toBe(DirectVectorStoreService);
   });
 });

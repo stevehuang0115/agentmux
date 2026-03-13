@@ -514,6 +514,42 @@ describe('Settings Types', () => {
       expect(merged).not.toBe(existing);
       expect(merged.general).not.toBe(existing.general);
     });
+
+    it('should backfill missing runtimeCommands from defaults', () => {
+      // Simulate old settings file missing crewly-agent
+      const existing = getDefaultSettings();
+      const oldRuntimeCommands = {
+        'claude-code': 'claude --dangerously-skip-permissions',
+        'gemini-cli': 'gemini --yolo',
+        'codex-cli': 'codex -a never -s danger-full-access',
+      } as any;
+      existing.general.runtimeCommands = oldRuntimeCommands;
+
+      const merged = mergeSettings(existing, {});
+
+      // crewly-agent should be backfilled from defaults
+      expect(merged.general.runtimeCommands['crewly-agent']).toBe('crewly-agent-in-process');
+      // Existing entries should be preserved
+      expect(merged.general.runtimeCommands['claude-code']).toBe('claude --dangerously-skip-permissions');
+    });
+
+    it('should allow updates to override runtimeCommands', () => {
+      const existing = getDefaultSettings();
+
+      const merged = mergeSettings(existing, {
+        general: {
+          runtimeCommands: {
+            'claude-code': 'custom-claude',
+            'gemini-cli': 'custom-gemini',
+            'codex-cli': 'custom-codex',
+            'crewly-agent': 'custom-agent',
+          },
+        },
+      });
+
+      expect(merged.general.runtimeCommands['claude-code']).toBe('custom-claude');
+      expect(merged.general.runtimeCommands['crewly-agent']).toBe('custom-agent');
+    });
   });
 
   describe('hasSettingsUpdates', () => {
