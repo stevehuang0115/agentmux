@@ -534,6 +534,106 @@ describe('TerminalPanel', () => {
     });
   });
 
+  describe('In-Process Session Support', () => {
+    it('shows Read Only badge for in-process sessions', async () => {
+      // Mock the selected session as an in-process session
+      mockUseTerminal.mockReturnValue({
+        isTerminalOpen: true,
+        selectedSession: 'crewly-assistant',
+        openTerminal: vi.fn(),
+        closeTerminal: vi.fn(),
+        setSelectedSession: mockSetSelectedSession,
+        openTerminalWithSession: vi.fn(),
+      });
+
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['crewly-orc', 'crewly-assistant'],
+            inProcessSessions: ['crewly-assistant']
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Read Only')).toBeInTheDocument();
+      });
+    });
+
+    it('shows (Log) suffix in session dropdown for in-process sessions', async () => {
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['crewly-orc', 'crewly-assistant'],
+            inProcessSessions: ['crewly-assistant']
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        const select = screen.getByRole('combobox');
+        const options = select.querySelectorAll('option');
+        const assistantOption = Array.from(options).find(o => o.textContent?.includes('assistant'));
+        expect(assistantOption?.textContent).toContain('(Log)');
+      });
+    });
+
+    it('does not show Read Only badge for PTY sessions', async () => {
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['crewly-orc', 'crewly-dev'],
+            inProcessSessions: []
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText('Read Only')).not.toBeInTheDocument();
+      });
+    });
+
+    it('handles missing inProcessSessions field gracefully', async () => {
+      // Old backend without inProcessSessions field
+      (global.fetch as any).mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
+          success: true,
+          data: {
+            sessions: ['crewly-orc']
+          }
+        })
+      });
+
+      await act(async () => {
+        render(<TerminalPanel isOpen={true} onClose={mockOnClose} />);
+      });
+
+      // Should not crash, no Read Only badge
+      await waitFor(() => {
+        expect(screen.queryByText('Read Only')).not.toBeInTheDocument();
+      });
+    });
+  });
+
   describe('Close Functionality', () => {
     it('calls onClose when close button is clicked', async () => {
       await act(async () => {
