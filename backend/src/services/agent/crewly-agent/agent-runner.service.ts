@@ -23,7 +23,9 @@ import {
   type ToolCallbacks,
   type ApprovalCheckResult,
   type ToolSensitivity,
+  type AuditLogFilters,
   CREWLY_AGENT_DEFAULTS,
+  WRITE_TOOLS,
 } from './types.js';
 
 /**
@@ -188,8 +190,9 @@ export class AgentRunnerService {
     // Build tools with callbacks for compaction, audit, and security enforcement
     const callbacks: ToolCallbacks = {
       onCompactMemory: () => this.requestCompaction(),
-      onAuditLog: (entry: AuditEntry) => this.recordAudit(entry),
+      onAuditLog: (entry: AuditEntry) => this.recordAudit({ ...entry, sessionName: this.config.sessionName }),
       onCheckApproval: (toolName: string, sensitivity: ToolSensitivity) => this.checkApproval(toolName, sensitivity),
+      onGetAuditLog: (filters: AuditLogFilters) => this.getFilteredAuditLog(filters),
     };
     const tools = createTools(this.apiClient, this.config.sessionName, this.config.projectPath, callbacks, this.currentConversationId);
 
@@ -326,6 +329,15 @@ export class AgentRunnerService {
    * @returns ApprovalCheckResult indicating if execution is allowed
    */
   private checkApproval(toolName: string, sensitivity: ToolSensitivity): ApprovalCheckResult {
+    // Check read-only mode — block all write/modify tools
+    if (this.securityPolicy.readOnlyMode && WRITE_TOOLS.includes(toolName)) {
+      return {
+        allowed: false,
+        blocked: true,
+        reason: `Tool '${toolName}' is blocked — read-only audit mode is active`,
+      };
+    }
+
     // Check blocked tools
     if (this.securityPolicy.blockedTools.includes(toolName)) {
       return {
@@ -345,6 +357,25 @@ export class AgentRunnerService {
     }
 
     return { allowed: true };
+  }
+
+  /**
+   * Get filtered audit log entries.
+   *
+   * @param filters - Query filters for limit, sensitivity, and toolName
+   * @returns Filtered audit entries (most recent first)
+   */
+  private getFilteredAuditLog(filters: AuditLogFilters): AuditEntry[] {
+    let entries = [...this.auditLog].reverse();
+
+    if (filters.sensitivity) {
+      entries = entries.filter(e => e.sensitivity === filters.sensitivity);
+    }
+    if (filters.toolName) {
+      entries = entries.filter(e => e.toolName === filters.toolName);
+    }
+
+    return entries.slice(0, filters.limit);
   }
 
   /**

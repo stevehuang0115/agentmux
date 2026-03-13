@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { AgentRunnerService } from './agent-runner.service.js';
 import { ModelManager } from './model-manager.js';
 import { CrewlyApiClient } from './api-client.js';
-import type { CrewlyAgentConfig, SecurityPolicy } from './types.js';
+import type { CrewlyAgentConfig, SecurityPolicy, AuditEntry } from './types.js';
 
 describe('AgentRunnerService', () => {
   let runner: AgentRunnerService;
@@ -512,6 +512,174 @@ describe('AgentRunnerService', () => {
       expect(policy.requireApproval).toEqual(['destructive', 'sensitive']);
       expect(policy.blockedTools).toEqual(['handle_agent_failure']);
       expect(policy.auditEnabled).toBe(true); // unchanged
+    });
+  });
+
+  describe('read-only audit mode', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should default readOnlyMode to false', () => {
+      const policy = runner.getSecurityPolicy();
+      expect(policy.readOnlyMode).toBe(false);
+    });
+
+    it('should enable read-only mode via updateSecurityPolicy', () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+      const policy = runner.getSecurityPolicy();
+      expect(policy.readOnlyMode).toBe(true);
+    });
+
+    it('should block write tools when readOnlyMode is active', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      // Run a message that triggers a write tool — we check via tool execution
+      // The tool should be blocked by checkApproval before reaching the API
+      let toolResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        // Try to call write_file — should be blocked
+        toolResult = await tools.write_file.execute({
+          file_path: '/test/file.ts',
+          content: 'blocked content',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Try to write');
+
+      expect(toolResult).toBeDefined();
+      expect((toolResult as Record<string, unknown>).success).toBe(false);
+      expect((toolResult as Record<string, unknown>).blocked).toBe(true);
+      expect((toolResult as Record<string, unknown>).error).toContain('read-only');
+      // Should NOT have called the API
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should allow safe/read-only tools when readOnlyMode is active', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      let toolResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [{ name: 'team-a' }], status: 200 } as any);
+        toolResult = await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Check teams');
+
+      // Safe tool should work
+      expect(mockApiClient.get).toHaveBeenCalled();
+      expect(toolResult).toEqual([{ name: 'team-a' }]);
+    });
+
+    it('should log blocked write attempts in audit trail during readOnlyMode', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        await tools.edit_file.execute({
+          file_path: '/test/file.ts',
+          old_string: 'foo',
+          new_string: 'bar',
+          replace_all: false,
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Try to edit');
+
+      const auditLog = runner.getAuditLog();
+      expect(auditLog.length).toBeGreaterThanOrEqual(1);
+      const editEntry = auditLog.find(e => e.toolName === 'edit_file');
+      expect(editEntry).toBeDefined();
+      expect(editEntry!.success).toBe(false);
+      expect(editEntry!.error).toContain('read-only');
+    });
+  });
+
+  describe('audit trail with sessionName', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should include sessionName in audit entries', async () => {
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [], status: 200 } as any);
+        await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Check status');
+
+      const auditLog = runner.getAuditLog();
+      expect(auditLog.length).toBeGreaterThanOrEqual(1);
+      expect(auditLog[0].sessionName).toBe('test-session');
+    });
+  });
+
+  describe('getFilteredAuditLog via get_audit_log tool', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should return actual audit entries via get_audit_log tool', async () => {
+      // First generate some audit data
+      mockGenerateText.mockImplementationOnce(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [], status: 200 } as any);
+        await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+      await runner.run('Generate audit data');
+
+      // Now query the audit log through the tool
+      let auditResult: Record<string, unknown> | undefined;
+      mockGenerateText.mockImplementationOnce(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        auditResult = await tools.get_audit_log.execute({ limit: 10 }) as Record<string, unknown>;
+        return {
+          text: 'Audit retrieved',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+      await runner.run('Get audit log');
+
+      expect(auditResult).toBeDefined();
+      expect(auditResult!.success).toBe(true);
+      expect(auditResult!.totalEntries).toBeGreaterThanOrEqual(1);
+      const entries = auditResult!.entries as AuditEntry[];
+      expect(entries[0].toolName).toBe('get_team_status');
     });
   });
 

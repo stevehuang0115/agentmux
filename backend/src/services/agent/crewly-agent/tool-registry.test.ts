@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { createTools, getToolNames, TOOL_SENSITIVITY, stripNotifyMarkers } from './tool-registry.js';
 import { CrewlyApiClient } from './api-client.js';
-import type { AuditEntry, ToolCallbacks, CompactionResult } from './types.js';
+import type { AuditEntry, ToolCallbacks, CompactionResult, AuditLogFilters } from './types.js';
+import { WRITE_TOOLS } from './types.js';
 
 describe('Tool Registry', () => {
   let mockClient: jest.Mocked<CrewlyApiClient>;
@@ -1021,19 +1022,50 @@ describe('Tool Registry', () => {
   // ===== F27: Security Audit Trail & Hardening =====
 
   describe('get_audit_log', () => {
-    it('should return formatted audit log query', async () => {
+    it('should return error when no callback configured', async () => {
       const result = await (tools.get_audit_log as any).execute({
         limit: 20,
         sensitivity: 'destructive',
       });
 
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not available');
+    });
+
+    it('should return actual audit entries via onGetAuditLog callback', async () => {
+      const mockEntries: AuditEntry[] = [
+        { timestamp: '2026-01-01T00:00:00Z', toolName: 'edit_file', sensitivity: 'destructive', args: {}, success: true, durationMs: 10 },
+        { timestamp: '2026-01-01T00:01:00Z', toolName: 'get_team_status', sensitivity: 'safe', args: {}, success: true, durationMs: 5 },
+      ];
+      const callbacks: ToolCallbacks = {
+        onGetAuditLog: (filters: AuditLogFilters) => {
+          let entries = [...mockEntries];
+          if (filters.sensitivity) entries = entries.filter(e => e.sensitivity === filters.sensitivity);
+          if (filters.toolName) entries = entries.filter(e => e.toolName === filters.toolName);
+          return entries.slice(0, filters.limit);
+        },
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithAudit.get_audit_log as any).execute({
+        limit: 20,
+        sensitivity: 'destructive',
+      });
+
       expect(result.success).toBe(true);
+      expect(result.totalEntries).toBe(1);
+      expect(result.entries[0].toolName).toBe('edit_file');
       expect(result.filters.limit).toBe(20);
       expect(result.filters.sensitivity).toBe('destructive');
     });
 
     it('should use defaults when no filters provided', async () => {
-      const result = await (tools.get_audit_log as any).execute({});
+      const callbacks: ToolCallbacks = {
+        onGetAuditLog: () => [],
+      };
+      const toolsWithAudit = createTools(mockClient, 'crewly-orc', '/test/project', callbacks);
+
+      const result = await (toolsWithAudit.get_audit_log as any).execute({});
 
       expect(result.success).toBe(true);
       expect(result.filters.limit).toBe(50);
@@ -1315,6 +1347,36 @@ describe('Tool Registry', () => {
 
       expect(result.success).toBe(false);
       expect(result.blocked).toBe(true);
+    });
+  });
+
+  describe('WRITE_TOOLS', () => {
+    it('should include all destructive and sensitive tools that modify state', () => {
+      expect(WRITE_TOOLS).toContain('edit_file');
+      expect(WRITE_TOOLS).toContain('write_file');
+      expect(WRITE_TOOLS).toContain('start_agent');
+      expect(WRITE_TOOLS).toContain('stop_agent');
+      expect(WRITE_TOOLS).toContain('delegate_task');
+      expect(WRITE_TOOLS).toContain('send_message');
+      expect(WRITE_TOOLS).toContain('reply_slack');
+      expect(WRITE_TOOLS).toContain('broadcast');
+    });
+
+    it('should not include read-only tools', () => {
+      expect(WRITE_TOOLS).not.toContain('get_agent_status');
+      expect(WRITE_TOOLS).not.toContain('get_team_status');
+      expect(WRITE_TOOLS).not.toContain('read_file');
+      expect(WRITE_TOOLS).not.toContain('recall_memory');
+      expect(WRITE_TOOLS).not.toContain('heartbeat');
+      expect(WRITE_TOOLS).not.toContain('get_audit_log');
+      expect(WRITE_TOOLS).not.toContain('compact_memory');
+    });
+
+    it('should only contain valid tool names from the registry', () => {
+      const validNames = getToolNames();
+      for (const writeTool of WRITE_TOOLS) {
+        expect(validNames).toContain(writeTool);
+      }
     });
   });
 });

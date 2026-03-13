@@ -12,7 +12,7 @@ import { promises as fsPromises } from 'fs';
 import { homedir } from 'os';
 import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
-import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, ApprovalCheckResult } from './types.js';
+import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, ApprovalCheckResult, AuditLogFilters } from './types.js';
 
 /**
  * Expand ~ and $HOME in a file path to the user's home directory.
@@ -842,16 +842,29 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
       }),
       sensitivity: 'safe',
       execute: async ({ limit, sensitivity: filterSensitivity, toolName: filterTool }) => {
-        // Audit log is maintained by the runner via callbacks
-        // This tool returns a formatted view — actual data comes from the runner
+        if (!callbacks?.onGetAuditLog) {
+          return {
+            success: false,
+            error: 'Audit log not available — no runner callback configured',
+          };
+        }
+
+        const filters: AuditLogFilters = {
+          limit: (limit as number) || 50,
+          sensitivity: filterSensitivity as ToolSensitivity | undefined,
+          toolName: filterTool as string | undefined,
+        };
+        const entries = callbacks.onGetAuditLog(filters);
+
         return {
           success: true,
-          note: 'Audit log is maintained in the agent runner. Use the runner getAuditLog() method for programmatic access.',
+          totalEntries: entries.length,
           filters: {
-            limit: limit || 50,
-            sensitivity: filterSensitivity || 'all',
-            toolName: filterTool || 'all',
+            limit: filters.limit,
+            sensitivity: filters.sensitivity || 'all',
+            toolName: filters.toolName || 'all',
           },
+          entries,
         };
       },
     },

@@ -149,6 +149,8 @@ export interface ToolDefinition {
 export interface AuditEntry {
   /** ISO timestamp of the tool invocation */
   timestamp: string;
+  /** Agent session name that invoked the tool */
+  sessionName?: string;
   /** Name of the tool that was called */
   toolName: string;
   /** Sensitivity classification of the tool */
@@ -176,7 +178,35 @@ export interface SecurityPolicy {
   blockedTools: string[];
   /** Maximum audit log entries to retain in memory */
   maxAuditEntries: number;
+  /**
+   * Read-only audit mode. When enabled, all tools classified as
+   * 'sensitive' or 'destructive' are blocked — only 'safe' (read-only)
+   * tools can execute. Tool invocations are still logged to the audit trail.
+   */
+  readOnlyMode: boolean;
 }
+
+/**
+ * Tools that perform write/modify operations.
+ * Used by readOnlyMode to determine which tools to block.
+ */
+export const WRITE_TOOLS: readonly string[] = [
+  'edit_file',
+  'write_file',
+  'start_agent',
+  'stop_agent',
+  'handle_agent_failure',
+  'delegate_task',
+  'send_message',
+  'reply_slack',
+  'broadcast',
+  'schedule_check',
+  'cancel_schedule',
+  'register_self',
+  'report_status',
+  'remember',
+  'complete_task',
+] as const;
 
 /**
  * Result of an autonomous context compaction operation.
@@ -217,6 +247,20 @@ export interface ToolCallbacks {
   onAuditLog?: (entry: AuditEntry) => void;
   /** Check if a tool is allowed to execute given current security policy */
   onCheckApproval?: (toolName: string, sensitivity: ToolSensitivity) => ApprovalCheckResult;
+  /** Retrieve audit log entries with optional filters */
+  onGetAuditLog?: (filters: AuditLogFilters) => AuditEntry[];
+}
+
+/**
+ * Filters for querying the audit log.
+ */
+export interface AuditLogFilters {
+  /** Maximum entries to return (most recent first) */
+  limit: number;
+  /** Filter by sensitivity level */
+  sensitivity?: ToolSensitivity;
+  /** Filter by specific tool name */
+  toolName?: string;
 }
 
 /**
@@ -246,6 +290,7 @@ export const CREWLY_AGENT_DEFAULTS = {
     requireApproval: [] as ToolSensitivity[],
     blockedTools: [] as string[],
     maxAuditEntries: 500,
+    readOnlyMode: false,
   } satisfies SecurityPolicy,
 } as const;
 
