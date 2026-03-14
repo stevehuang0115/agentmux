@@ -16,7 +16,7 @@
 
 import { createInterface, type Interface as ReadlineInterface } from 'readline';
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, copyFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
@@ -29,6 +29,7 @@ import {
 import {
   listTemplates,
   getTemplate,
+  getTemplatesDir,
   type TeamTemplate,
 } from '../utils/templates.js';
 
@@ -456,37 +457,88 @@ export function createTeamFromTemplate(template: TeamTemplate, provider: Provide
  * - .crewly/tasks/
  * - .crewly/teams/
  *
- * If the directory already exists, reports it and moves on.
+ * If a template is provided, copies goals.md and team.json from the
+ * template directory into .crewly/ (only if they exist in the template
+ * and don't already exist in the target).
+ *
+ * If the directory already exists, reports it and moves on but still
+ * copies any missing template files.
  *
  * @param projectDir - The project root directory (defaults to process.cwd())
+ * @param template - Optional template to copy project files from
  * @returns True if the directory was created or already existed
  */
-export function scaffoldCrewlyDirectory(projectDir: string = process.cwd()): boolean {
+export function scaffoldCrewlyDirectory(projectDir: string = process.cwd(), template?: TeamTemplate | null): boolean {
   const crewlyDir = join(projectDir, '.crewly');
+  let alreadyExisted = false;
 
   if (existsSync(crewlyDir)) {
     console.log(chalk.green('  ✓ .crewly/ directory already exists'));
-    return true;
+    alreadyExisted = true;
   }
 
   try {
-    const subdirs = ['docs', 'memory', 'tasks', 'teams'];
-    for (const subdir of subdirs) {
-      mkdirSync(join(crewlyDir, subdir), { recursive: true });
+    if (!alreadyExisted) {
+      const subdirs = ['docs', 'memory', 'tasks', 'teams'];
+      for (const subdir of subdirs) {
+        mkdirSync(join(crewlyDir, subdir), { recursive: true });
+      }
+
+      // Write minimal config.env
+      writeFileSync(
+        join(crewlyDir, 'config.env'),
+        '# Crewly configuration\n# Add API keys and settings here\n',
+      );
+
+      console.log(chalk.green('  ✓ .crewly/ directory created'));
     }
 
-    // Write minimal config.env
-    writeFileSync(
-      join(crewlyDir, 'config.env'),
-      '# Crewly configuration\n# Add API keys and settings here\n',
-    );
+    // Copy template project files (goals.md, team.json) if available
+    if (template) {
+      copyTemplateProjectFiles(crewlyDir, template);
+    }
 
-    console.log(chalk.green('  ✓ .crewly/ directory created'));
     return true;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.log(chalk.red(`  ✗ Failed to create .crewly/ directory: ${msg}`));
     return false;
+  }
+}
+
+/**
+ * Copies project-level files (goals.md, team.json) from a template
+ * directory into the .crewly/ scaffold directory.
+ *
+ * Only copies files that exist in the template and don't already
+ * exist in the target directory (avoids overwriting user edits).
+ *
+ * @param crewlyDir - The .crewly/ directory to copy files into
+ * @param template - The template whose directory to copy from
+ */
+export function copyTemplateProjectFiles(crewlyDir: string, template: TeamTemplate): void {
+  const templatesDir = getTemplatesDir();
+  const templateDir = join(templatesDir, template.id);
+
+  if (!existsSync(templateDir)) {
+    return;
+  }
+
+  const filesToCopy = ['goals.md', 'team.json'];
+  let copiedCount = 0;
+
+  for (const fileName of filesToCopy) {
+    const src = join(templateDir, fileName);
+    const dest = join(crewlyDir, fileName);
+
+    if (existsSync(src) && !existsSync(dest)) {
+      copyFileSync(src, dest);
+      copiedCount++;
+    }
+  }
+
+  if (copiedCount > 0) {
+    console.log(chalk.green(`  ✓ Copied ${copiedCount} template file(s) to .crewly/`));
   }
 }
 
@@ -591,8 +643,8 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
       console.log(chalk.gray('  No templates available.\n'));
     }
 
-    // Scaffold .crewly/ directory
-    scaffoldCrewlyDirectory();
+    // Scaffold .crewly/ directory (with template project files)
+    scaffoldCrewlyDirectory(process.cwd(), selectedTemplate);
 
     // Step 5: Summary
     printSummary(selectedTemplate);
@@ -630,8 +682,8 @@ export async function onboardCommand(options: OnboardOptions = {}): Promise<void
       }
     }
 
-    // Scaffold .crewly/ directory
-    scaffoldCrewlyDirectory();
+    // Scaffold .crewly/ directory (with template project files)
+    scaffoldCrewlyDirectory(process.cwd(), selectedTemplate);
 
     // Step 5: Summary
     printSummary(selectedTemplate);

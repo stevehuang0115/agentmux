@@ -915,6 +915,15 @@ export const GOOGLE_OAUTH_CONSTANTS = {
 		'https://www.googleapis.com/auth/gmail.readonly',
 		'https://www.googleapis.com/auth/gmail.send',
 	],
+	/** Google Workspace scopes for agent-driven operations (Phase 1). */
+	WORKSPACE_SCOPES: [
+		'https://www.googleapis.com/auth/gmail.readonly',
+		'https://www.googleapis.com/auth/gmail.send',
+		'https://www.googleapis.com/auth/gmail.compose',
+		'https://www.googleapis.com/auth/drive.file',
+		'https://www.googleapis.com/auth/calendar.events',
+		'https://www.googleapis.com/auth/documents',
+	],
 } as const;
 
 /**
