@@ -276,6 +276,8 @@ export interface AuditLogFilters {
 export const CREWLY_AGENT_DEFAULTS = {
   /** Default max reasoning steps per generateText call */
   MAX_STEPS: 30,
+  /** Maximum tool calls allowed per single response to prevent polling dead-loops */
+  MAX_TOOL_CALLS_PER_RESPONSE: 15,
   /** Default API base URL */
   API_BASE_URL: 'http://localhost:8787',
   /** Default max history messages before compaction */

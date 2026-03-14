@@ -325,14 +325,21 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           }
         }
 
-        // Subscribe to idle event for monitoring
-        await client.post('/events/subscribe', {
-          eventType: 'agent:idle',
-          filter: { sessionName: to },
-          subscriberSession: sessionName,
-          oneShot: true,
-          ttlMinutes: 120,
-        });
+        // Subscribe to idle event for monitoring (with dedup check)
+        const existingSubs = await client.get(`/events/subscriptions?subscriberSession=${encodeURIComponent(sessionName)}`).catch(() => null);
+        const alreadySubscribed = existingSubs?.success && Array.isArray(existingSubs.data) &&
+          (existingSubs.data as Array<{ eventType: string; filter?: Record<string, string> }>).some(
+            sub => sub.eventType === 'agent:idle' && sub.filter?.sessionName === (to as string),
+          );
+        if (!alreadySubscribed) {
+          await client.post('/events/subscribe', {
+            eventType: 'agent:idle',
+            filter: { sessionName: to },
+            subscriberSession: sessionName,
+            oneShot: true,
+            ttlMinutes: 120,
+          });
+        }
 
         return { success: true, delegatedTo: to, taskId, conversationId: conversationId || undefined };
       },

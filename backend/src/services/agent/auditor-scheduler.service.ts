@@ -264,6 +264,12 @@ export class AuditorSchedulerService {
       // Stay idle — do NOT shutdown on error (always-active mode)
       this.status = 'idle';
 
+      // Re-initialize runtime if it crashed so next trigger can succeed
+      if (this.auditorRuntime && !this.auditorRuntime.isReady()) {
+        this.logger.info('Auditor runtime not ready after error, re-initializing');
+        void this.initializeAuditorRuntime();
+      }
+
       return { triggered: false, reason: `Audit error: ${errMsg}`, source, timestamp };
     } finally {
       if (this.auditTimeoutTimer) {

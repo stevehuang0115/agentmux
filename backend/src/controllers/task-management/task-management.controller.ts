@@ -1772,3 +1772,62 @@ export async function completeTasksBySession(this: ApiController, req: Request, 
 		res.status(500).json({ success: false, error: 'Failed to complete tasks by session' });
 	}
 }
+
+/**
+ * GET /task-management/tasks
+ *
+ * List task files for a project, optionally filtered by status.
+ * Returns task filenames and paths grouped by milestone.
+ *
+ * @param req - Request with query: { projectPath, status? }
+ * @param res - Response with { success, tasks }
+ */
+export async function listTasks(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const projectPath = req.query.projectPath as string;
+		const statusFilter = req.query.status as string | undefined;
+
+		if (!projectPath) {
+			res.status(400).json({ success: false, error: 'projectPath query parameter is required' });
+			return;
+		}
+
+		const tasksBasePath = join(projectPath, '.crewly', 'tasks');
+		if (!existsSync(tasksBasePath)) {
+			res.json({ success: true, tasks: [] });
+			return;
+		}
+
+		const tasks: Array<{ name: string; path: string; milestone: string; status: string }> = [];
+		const milestones = await readdir(tasksBasePath);
+
+		for (const milestone of milestones) {
+			const milestonePath = join(tasksBasePath, milestone);
+			const milestoneStat = await stat(milestonePath).catch(() => null);
+			if (!milestoneStat?.isDirectory()) continue;
+
+			const statusDirs = statusFilter ? [statusFilter] : ['open', 'in_progress', 'blocked', 'done'];
+			for (const status of statusDirs) {
+				const statusPath = join(milestonePath, status);
+				if (!existsSync(statusPath)) continue;
+
+				const files = await readdir(statusPath);
+				for (const file of files) {
+					if (file.endsWith('.md')) {
+						tasks.push({
+							name: file.replace('.md', ''),
+							path: join(statusPath, file),
+							milestone,
+							status,
+						});
+					}
+				}
+			}
+		}
+
+		res.json({ success: true, tasks });
+	} catch (error) {
+		logger.error('Error listing tasks', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to list tasks' });
+	}
+}
