@@ -12,6 +12,9 @@ import { generateText, stepCountIs, type ModelMessage, type LanguageModel } from
 import { ModelManager } from './model-manager.js';
 import { CrewlyApiClient } from './api-client.js';
 import { createTools } from './tool-registry.js';
+import { McpClientService } from '../../mcp-client.js';
+import { connectAndLoadMcpTools } from './mcp-tool-bridge.js';
+import type { ToolDefinition } from './types.js';
 import {
   type CrewlyAgentConfig,
   type ConversationState,
@@ -64,6 +67,10 @@ export class AgentRunnerService {
   private lastKnownConversationId?: string;
   /** Current Slack context (channelId + threadTs) for routing NOTIFY responses */
   private currentSlackContext?: { channelId: string; threadTs?: string };
+  /** MCP client for external tool integration */
+  private mcpClient: McpClientService | null = null;
+  /** Cached MCP tool definitions loaded during initialization */
+  private mcpToolDefs: Record<string, ToolDefinition> = {};
   /** @internal Override for testing — replaces the AI SDK generateText call */
   _generateTextFn: GenerateTextFn | null = null;
 
@@ -103,6 +110,24 @@ export class AgentRunnerService {
    */
   async initialize(): Promise<void> {
     this.model = await this.modelManager.getModel(this.config.model);
+
+    // Connect to configured MCP servers and load their tools
+    if (this.config.mcpServers && Object.keys(this.config.mcpServers).length > 0) {
+      this.mcpClient = new McpClientService();
+      const { tools, errors } = await connectAndLoadMcpTools(
+        this.mcpClient,
+        this.config.mcpServers,
+        this.config.mcpSensitivityOverrides,
+      );
+      this.mcpToolDefs = tools;
+
+      if (errors.size > 0) {
+        for (const [name, error] of errors.entries()) {
+          // Log but don't fail — partial MCP availability is acceptable
+          console.warn(`MCP server "${name}" failed to connect: ${error.message}`);
+        }
+      }
+    }
   }
 
   /**
@@ -130,6 +155,38 @@ export class AgentRunnerService {
    */
   getState(): ConversationState {
     return { ...this.state };
+  }
+
+  /**
+   * Shut down the agent runner, disconnecting MCP servers.
+   *
+   * Should be called when the agent session ends to clean up
+   * child processes spawned by MCP server connections.
+   */
+  async shutdown(): Promise<void> {
+    if (this.mcpClient) {
+      await this.mcpClient.disconnectAll();
+      this.mcpClient = null;
+      this.mcpToolDefs = {};
+    }
+  }
+
+  /**
+   * Get the names of connected MCP servers.
+   *
+   * @returns Array of server names, or empty if no MCP client is configured
+   */
+  getMcpServerNames(): string[] {
+    return this.mcpClient?.getConnectedServers() ?? [];
+  }
+
+  /**
+   * Get the number of MCP tools currently loaded.
+   *
+   * @returns Number of MCP tool definitions
+   */
+  getMcpToolCount(): number {
+    return Object.keys(this.mcpToolDefs).length;
   }
 
   /**
@@ -231,7 +288,8 @@ export class AgentRunnerService {
       onCheckApproval: (toolName: string, sensitivity: ToolSensitivity) => this.checkApproval(toolName, sensitivity),
       onGetAuditLog: (filters: AuditLogFilters) => this.getFilteredAuditLog(filters),
     };
-    const tools = createTools(this.apiClient, this.config.sessionName, this.config.projectPath, callbacks, this.currentConversationId, this.currentSlackContext);
+    const mcpTools = Object.keys(this.mcpToolDefs).length > 0 ? this.mcpToolDefs : undefined;
+    const tools = createTools(this.apiClient, this.config.sessionName, this.config.projectPath, callbacks, this.currentConversationId, this.currentSlackContext, mcpTools);
 
     // Execute generateText with agentic loop
     const generateFn = this._generateTextFn || (generateText as Function);

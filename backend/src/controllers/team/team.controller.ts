@@ -600,38 +600,7 @@ async function _stopTeamMemberCore(
   }
 }
 
-/**
- * Creates (or refreshes) orchestrator subscriptions to critical agent events.
- *
- * Clears any existing subscriptions for the orchestrator session first to avoid
- * duplicates on re-registration, then subscribes to only CRITICAL event types
- * (task completions, failures, agent crashes, escalations) with the maximum
- * TTL (24 hours). Info events (idle/busy toggles, minor status changes) are
- * intentionally excluded to prevent flooding the orchestrator terminal.
- *
- * Critical events are also delivered immediately (no debounce delay) by the
- * EventBusService, ensuring the orchestrator learns about task completions
- * within seconds.
- */
-function ensureOrchestratorSubscriptions(): void {
-  if (!eventBusService) return;
-
-  // Clear any existing orchestrator subscriptions to avoid duplicates on re-registration
-  const existing = eventBusService.listSubscriptions(ORCHESTRATOR_SESSION_NAME);
-  for (const sub of existing) {
-    eventBusService.unsubscribe(sub.id);
-  }
-
-  // Subscribe to CRITICAL events only — task completions, failures, agent crashes, escalations.
-  // Info events (idle/busy, status_changed) are excluded to prevent terminal flooding.
-  eventBusService.subscribe({
-    eventType: getCriticalEventTypes(),
-    filter: {},
-    subscriberSession: ORCHESTRATOR_SESSION_NAME,
-    oneShot: false,
-    ttlMinutes: 1440,
-  });
-}
+// Orchestrator reads agent status on-demand; no push subscriptions.
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
@@ -1643,8 +1612,9 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
           });
         }
 
-        // Auto-subscribe orchestrator to agent lifecycle events for real-time notifications
-        ensureOrchestratorSubscriptions();
+        // NOTE: Orchestrator no longer auto-subscribes to agent lifecycle events.
+        // The orchestrator can read team status on-demand via get-agent-status skill
+        // instead of receiving push notifications, which become spam with many agents.
 
         res.json({ success: true, message: `Orchestrator ${sessionName} registered as active`, sessionName } as ApiResponse);
         return;

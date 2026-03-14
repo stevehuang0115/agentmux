@@ -241,7 +241,7 @@ function sanitizeArgs(args: Record<string, unknown>): Record<string, unknown> {
  * @param callbacks - Optional callbacks for compaction and audit logging
  * @returns Object of named tools ready to pass to generateText
  */
-export function createTools(client: CrewlyApiClient, sessionName: string, projectPath?: string, callbacks?: ToolCallbacks, conversationId?: string, slackContext?: { channelId: string; threadTs?: string }): Record<string, ToolDefinition> {
+export function createTools(client: CrewlyApiClient, sessionName: string, projectPath?: string, callbacks?: ToolCallbacks, conversationId?: string, slackContext?: { channelId: string; threadTs?: string }, mcpTools?: Record<string, ToolDefinition>): Record<string, ToolDefinition> {
   // Slack rate-limiting state: throttle messages within a 3-second window
   let lastSlackSendMs = 0;
   const SLACK_THROTTLE_MS = 3000;
@@ -1022,6 +1022,16 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
       sensitivity: tool.sensitivity || TOOL_SENSITIVITY[name] || 'safe',
       execute: wrapWithAudit(name, tool.execute, callbacks),
     };
+  }
+
+  // Merge MCP-sourced tools with audit wrapping
+  if (mcpTools) {
+    for (const [name, tool] of Object.entries(mcpTools)) {
+      tools[name] = {
+        ...tool,
+        execute: wrapWithAudit(name, tool.execute, callbacks),
+      };
+    }
   }
 
   return tools;
