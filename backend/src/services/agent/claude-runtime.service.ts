@@ -53,6 +53,98 @@ export class ClaudeRuntimeService extends RuntimeAgentService {
 	}
 
 	/**
+	 * Detect the Claude Code workspace trust prompt in terminal output.
+	 *
+	 * Claude Code shows "Is this a project you trust?" on first launch
+	 * for untrusted workspaces. This blocks agent initialization.
+	 *
+	 * @param output - Terminal output text
+	 * @returns True if trust prompt is detected
+	 * @see https://github.com/stevehuang0115/crewly/issues/144
+	 */
+	private isClaudeTrustPrompt(output: string): boolean {
+		const trustPatterns = [
+			'Do you trust the files',
+			'Is this a project you trust',
+			'Yes, proceed',
+			'Trust this folder',
+			'trust this project',
+		];
+		return trustPatterns.some(p => output.includes(p));
+	}
+
+	/**
+	 * Override waitForRuntimeReady to auto-accept workspace trust prompt (#144).
+	 *
+	 * Claude Code shows an interactive trust gate on first launch for
+	 * untrusted workspaces. Without auto-acceptance, the agent hangs
+	 * and enters a crash-restart loop.
+	 */
+	async waitForRuntimeReady(
+		sessionName: string,
+		timeout: number,
+		checkInterval: number = 2000
+	): Promise<boolean> {
+		const startTime = Date.now();
+		let trustPromptAttempts = 0;
+
+		this.logger.info('Waiting for Claude Code to be ready (with trust prompt detection)', {
+			sessionName,
+			timeout,
+			checkInterval,
+		});
+
+		while (Date.now() - startTime < timeout) {
+			try {
+				const output = this.sessionHelper.capturePane(sessionName);
+
+				// #144: Auto-accept workspace trust prompt
+				if (this.isClaudeTrustPrompt(output)) {
+					trustPromptAttempts++;
+					this.logger.info('Claude Code trust prompt detected, auto-accepting', {
+						sessionName,
+						attempt: trustPromptAttempts,
+					});
+					await this.sessionHelper.sendEnter(sessionName);
+					await delay(1000);
+					continue;
+				}
+
+				const readyPatterns = this.getRuntimeReadyPatterns();
+				const hasReadySignal = readyPatterns.some(p => output.includes(p));
+				if (hasReadySignal) {
+					this.logger.info('Claude Code ready', {
+						sessionName,
+						totalElapsed: Date.now() - startTime,
+						trustPromptAttempts,
+					});
+					return true;
+				}
+
+				const errorPatterns = this.getRuntimeErrorPatterns();
+				const hasError = errorPatterns.some(p => output.includes(p));
+				if (hasError) {
+					this.logger.error('Claude Code error during startup', {
+						sessionName,
+						totalElapsed: Date.now() - startTime,
+					});
+					return false;
+				}
+			} catch (error) {
+				this.logger.warn('Error checking Claude Code ready state', {
+					sessionName,
+					error: String(error),
+				});
+			}
+
+			await delay(checkInterval);
+		}
+
+		this.logger.warn('Timeout waiting for Claude Code', { sessionName, timeout });
+		return false;
+	}
+
+	/**
 	 * Claude Code specific ready patterns
 	 */
 	protected getRuntimeReadyPatterns(): string[] {

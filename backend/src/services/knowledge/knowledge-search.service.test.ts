@@ -11,6 +11,7 @@ import {
   KeywordSearchStrategy,
   GeminiEmbeddingStrategy,
   KnowledgeSearchService,
+  applyTemporalDecay,
 } from './knowledge-search.service.js';
 import type { KnowledgeDocumentSummary } from '../../types/knowledge.types.js';
 
@@ -288,5 +289,64 @@ describe('KnowledgeSearchService', () => {
 
     await service.search('deploy', 'project', '/path/to/project');
     expect(mockListDocuments).toHaveBeenCalledWith('project', '/path/to/project', { category: undefined });
+  });
+});
+
+describe('#154: applyTemporalDecay', () => {
+  it('should decay score based on age', () => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const decayed = applyTemporalDecay(10, thirtyDaysAgo, []);
+    // After exactly 1 half-life (30 days), score should be ~5
+    expect(decayed).toBeCloseTo(5, 0);
+  });
+
+  it('should return full score for recent documents', () => {
+    const now = new Date().toISOString();
+    const decayed = applyTemporalDecay(10, now, []);
+    expect(decayed).toBeCloseTo(10, 1);
+  });
+
+  it('should bypass decay for evergreen tags', () => {
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    expect(applyTemporalDecay(10, sixtyDaysAgo, ['evergreen'])).toBe(10);
+    expect(applyTemporalDecay(10, sixtyDaysAgo, ['Decision'])).toBe(10);
+    expect(applyTemporalDecay(10, sixtyDaysAgo, ['architecture'])).toBe(10);
+    expect(applyTemporalDecay(10, sixtyDaysAgo, ['SOP'])).toBe(10);
+    expect(applyTemporalDecay(10, sixtyDaysAgo, ['runbook'])).toBe(10);
+  });
+
+  it('should not bypass decay for non-evergreen tags', () => {
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const decayed = applyTemporalDecay(10, sixtyDaysAgo, ['general', 'learning']);
+    // After 60 days (2 half-lives), score should be ~2.5
+    expect(decayed).toBeCloseTo(2.5, 0);
+  });
+
+  it('should handle future dates gracefully', () => {
+    const future = new Date(Date.now() + 10000).toISOString();
+    expect(applyTemporalDecay(10, future, [])).toBe(10);
+  });
+
+  it('should re-rank results by temporal decay in KnowledgeSearchService', async () => {
+    KnowledgeSearchService.resetInstance();
+    delete process.env.GEMINI_API_KEY;
+    const service = KnowledgeSearchService.getInstance();
+
+    const recentDoc = makeDoc({
+      id: 'recent',
+      title: 'deploy instructions new',
+      createdAt: new Date().toISOString(),
+    });
+    const oldDoc = makeDoc({
+      id: 'old',
+      title: 'deploy instructions old',
+      createdAt: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    // Both docs match "deploy" equally, but recent doc should rank higher
+    mockListDocuments.mockResolvedValue([oldDoc, recentDoc]);
+
+    const results = await service.search('deploy instructions', 'global');
+    expect(results[0].id).toBe('recent');
   });
 });

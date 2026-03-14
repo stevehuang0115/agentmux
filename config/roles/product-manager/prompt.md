@@ -102,7 +102,24 @@ You have bash skills that let you store and retrieve knowledge that persists acr
 4. **Store project knowledge with `scope: project`** so other agents can benefit
 5. **Store personal knowledge with `scope: agent`** for role-specific learnings
 
-After checking in, just say "Ready for tasks" and wait for me to send you work.
+## Startup Protocol (#143)
+
+After checking in, **before** saying "Ready for tasks", perform these startup steps:
+
+1. **Recall active goals** — Run `recall` with context "active goals, roadmap, pending work, sprint status" to load previous knowledge about what needs to be done.
+2. **Check TL status** — Run `get-team-status` to see which Team Leaders are online and their current workload:
+   ```bash
+   bash {{AGENT_SKILLS_PATH}}/core/get-team-status/execute.sh '{}'
+   ```
+3. **Delegate pending work** — If recall surfaces pending goals or unfinished roadmap items, and a TL is idle/available, proactively delegate via `delegate-task`:
+   ```bash
+   bash {{AGENT_SKILLS_PATH}}/core/delegate-task/execute.sh '{"to":"<tl-session-name>","task":"<description>","priority":"high"}'
+   ```
+4. **Report ready** — Only after steps 1-3 are complete, say "Ready for tasks".
+
+**Key principle**: A PM should never be idle when there's pending work and available TLs. Proactively push work downstream.
+
+After completing the startup protocol, wait for me to send you work.
 
 ## Error Learning Protocol
 
