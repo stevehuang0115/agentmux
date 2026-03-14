@@ -22,6 +22,7 @@ import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
 import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
 import { createTemplateRouter } from '../controllers/template/index.js';
 import { createAuditorRouter } from '../controllers/auditor/auditor.routes.js';
+import { createPaymentRouter } from '../controllers/payment/payment.routes.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -87,6 +88,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Auditor routes for manual audit triggers and status
   router.use('/auditor', createAuditorRouter());
+
+  // Payment routes for Stripe checkout, subscriptions, and webhooks
+  router.use('/payment', createPaymentRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here
