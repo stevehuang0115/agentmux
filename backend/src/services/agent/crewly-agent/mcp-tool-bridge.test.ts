@@ -235,12 +235,14 @@ describe('MCP Tool Bridge', () => {
       expect(result.error).toBe('MCP tool returned an error');
     });
 
-    it('should propagate callTool exceptions', async () => {
+    it('should return error result when callTool throws', async () => {
       const mcpClient = createMockMcpClient();
       (mcpClient.callTool as jest.Mock).mockRejectedValue(new Error('Connection lost'));
       const tool = convertMcpTool(mcpClient, SAMPLE_TOOL);
 
-      await expect(tool.execute({ path: '/tmp' })).rejects.toThrow('Connection lost');
+      const result = await tool.execute({ path: '/tmp' }) as { success: boolean; error: string };
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Connection lost');
     });
   });
 

@@ -147,22 +147,30 @@ export function convertMcpTool(
     inputSchema: jsonSchemaToZodPassthrough(toolInfo.inputSchema),
     sensitivity,
     execute: async (args: Record<string, unknown>): Promise<unknown> => {
-      const result = await mcpClient.callTool(
-        toolInfo.serverName,
-        toolInfo.name,
-        args,
-      );
+      try {
+        const result = await mcpClient.callTool(
+          toolInfo.serverName,
+          toolInfo.name,
+          args,
+        );
 
-      // Flatten text content for simpler tool results
-      if (!result.isError && result.content.length === 1 && result.content[0].type === 'text') {
-        return { success: true, text: result.content[0].text };
+        // Flatten text content for simpler tool results
+        if (!result.isError && result.content.length === 1
+          && result.content[0].type === 'text' && 'text' in result.content[0]) {
+          return { success: true, text: result.content[0].text };
+        }
+
+        return {
+          success: !result.isError,
+          content: result.content,
+          ...(result.isError && { error: 'MCP tool returned an error' }),
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `MCP tool call failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
       }
-
-      return {
-        success: !result.isError,
-        content: result.content,
-        ...(result.isError && { error: 'MCP tool returned an error' }),
-      };
     },
   };
 }

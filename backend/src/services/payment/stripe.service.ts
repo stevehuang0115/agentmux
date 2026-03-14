@@ -33,6 +33,14 @@ export interface SubscriptionInfo {
   cancelAtPeriodEnd: boolean;
 }
 
+/** Maps plan+interval keys to environment variable names for Stripe Price IDs */
+const PRICE_ENV_VAR_MAP: Readonly<Record<string, string>> = {
+  'pro_month': 'STRIPE_PRICE_PRO_MONTHLY',
+  'pro_year': 'STRIPE_PRICE_PRO_YEARLY',
+  'enterprise_month': 'STRIPE_PRICE_ENTERPRISE_MONTHLY',
+  'enterprise_year': 'STRIPE_PRICE_ENTERPRISE_YEARLY',
+};
+
 /**
  * Resolve a Stripe Price ID for a plan + interval combination.
  * Reads env vars at call time to support late-loaded configuration.
@@ -42,13 +50,7 @@ export interface SubscriptionInfo {
  * @returns Stripe Price ID or undefined
  */
 function resolvePriceId(planId: string, interval: string): string | undefined {
-  const envVarMap: Record<string, string> = {
-    'pro_month': 'STRIPE_PRICE_PRO_MONTHLY',
-    'pro_year': 'STRIPE_PRICE_PRO_YEARLY',
-    'enterprise_month': 'STRIPE_PRICE_ENTERPRISE_MONTHLY',
-    'enterprise_year': 'STRIPE_PRICE_ENTERPRISE_YEARLY',
-  };
-  const envVar = envVarMap[`${planId}_${interval}`];
+  const envVar = PRICE_ENV_VAR_MAP[`${planId}_${interval}`];
   return envVar ? process.env[envVar] : undefined;
 }
 
@@ -94,23 +96,24 @@ export class StripeService {
   }
 
   /**
-   * Return the Stripe client or a "not configured" result.
-   * Centralizes the guard check used by all public methods.
+   * Return the Stripe client, or null if not configured.
+   * Callers use the return value directly, allowing TS to narrow the type.
    *
    * @returns Stripe instance or null
    */
-  private requireStripe(): Stripe | null {
+  private getStripeClient(): Stripe | null {
     return this.stripe;
   }
 
   /**
    * Find a Stripe customer by userId stored in metadata.
    *
+   * @param client - Stripe client (must be non-null)
    * @param userId - Internal user ID
    * @returns The first matching customer or null
    */
-  private async findCustomerByUserId(userId: string): Promise<Stripe.Customer | null> {
-    const customers = await this.stripe!.customers.search({
+  private async findCustomerByUserId(client: Stripe, userId: string): Promise<Stripe.Customer | null> {
+    const customers = await client.customers.search({
       query: `metadata['userId']:'${userId}'`,
       limit: 1,
     });
@@ -134,7 +137,8 @@ export class StripeService {
     successUrl: string,
     cancelUrl: string,
   ): Promise<StripeResult<{ checkoutUrl: string; sessionId: string }>> {
-    if (!this.requireStripe()) {
+    const client = this.getStripeClient();
+    if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
@@ -144,7 +148,7 @@ export class StripeService {
     }
 
     try {
-      const session = await this.stripe!.checkout.sessions.create({
+      const session = await client.checkout.sessions.create({
         mode: 'subscription',
         payment_method_types: ['card'],
         line_items: [{ price: priceId, quantity: 1 }],
@@ -185,13 +189,14 @@ export class StripeService {
     rawBody: Buffer,
     signature: string,
   ): Promise<StripeResult<{ eventType: string }>> {
-    if (!this.requireStripe() || !this.webhookSecret) {
+    const client = this.getStripeClient();
+    if (!client || !this.webhookSecret) {
       return { success: false, message: 'Stripe webhook is not configured' };
     }
 
     let event: Stripe.Event;
     try {
-      event = this.stripe!.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
+      event = client.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
     } catch (error) {
       const msg = formatError(error);
       logger.warn('Webhook signature verification failed', { error: msg });
@@ -203,7 +208,7 @@ export class StripeService {
     try {
       switch (event.type) {
         case 'checkout.session.completed':
-          await this.handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+          await this.handleCheckoutCompleted(client, event.data.object as Stripe.Checkout.Session);
           break;
         case 'customer.subscription.updated':
           await this.handleSubscriptionUpdated(event.data.object as Stripe.Subscription);
@@ -232,17 +237,18 @@ export class StripeService {
    * @returns Result with subscription data or null if no active subscription
    */
   async getSubscription(userId: string): Promise<StripeResult<SubscriptionInfo | null>> {
-    if (!this.requireStripe()) {
+    const client = this.getStripeClient();
+    if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
     try {
-      const customer = await this.findCustomerByUserId(userId);
+      const customer = await this.findCustomerByUserId(client, userId);
       if (!customer) {
         return { success: true, data: null };
       }
 
-      const subscriptions = await this.stripe!.subscriptions.list({
+      const subscriptions = await client.subscriptions.list({
         customer: customer.id,
         status: 'active',
         limit: 1,
@@ -258,7 +264,7 @@ export class StripeService {
         data: {
           subscriptionId: sub.id,
           status: sub.status,
-          planId: sub.metadata?.planId || 'pro',
+          planId: sub.metadata?.planId ?? 'pro',
           cancelAt: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
           cancelAtPeriodEnd: sub.cancel_at_period_end,
         },
@@ -280,17 +286,18 @@ export class StripeService {
     userId: string,
     returnUrl: string,
   ): Promise<StripeResult<{ portalUrl: string }>> {
-    if (!this.requireStripe()) {
+    const client = this.getStripeClient();
+    if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
     try {
-      const customer = await this.findCustomerByUserId(userId);
+      const customer = await this.findCustomerByUserId(client, userId);
       if (!customer) {
         return { success: false, message: 'No Stripe customer found for this user' };
       }
 
-      const session = await this.stripe!.billingPortal.sessions.create({
+      const session = await client.billingPortal.sessions.create({
         customer: customer.id,
         return_url: returnUrl,
       });
@@ -310,11 +317,12 @@ export class StripeService {
    * Handle checkout.session.completed — new subscription created.
    * Links the Stripe customer to the internal userId via metadata.
    *
+   * @param client - Stripe client instance
    * @param session - The completed checkout session
    */
-  private async handleCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
-    const userId = session.metadata?.userId || session.client_reference_id;
-    const planId = session.metadata?.planId || 'pro';
+  private async handleCheckoutCompleted(client: Stripe, session: Stripe.Checkout.Session): Promise<void> {
+    const userId = session.metadata?.userId ?? session.client_reference_id;
+    const planId = session.metadata?.planId ?? 'pro';
 
     if (!userId) {
       logger.warn('Checkout completed without userId', { sessionId: session.id });
@@ -322,7 +330,7 @@ export class StripeService {
     }
 
     if (session.customer && typeof session.customer === 'string') {
-      await this.stripe!.customers.update(session.customer, {
+      await client.customers.update(session.customer, {
         metadata: { userId, planId },
       });
     }
