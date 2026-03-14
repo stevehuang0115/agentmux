@@ -84,7 +84,7 @@ export class ModelManager {
       }
       case 'ollama': {
         const { createOllama } = await import('ollama-ai-provider');
-        const baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/api';
+        const baseURL = process.env.OLLAMA_BASE_URL || CREWLY_AGENT_DEFAULTS.OLLAMA_BASE_URL;
         const ollamaProvider = createOllama({ baseURL });
         providerFn = (modelId: string) => ollamaProvider(modelId) as unknown as LanguageModel;
         break;

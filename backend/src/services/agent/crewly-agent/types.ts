@@ -291,6 +291,8 @@ export const CREWLY_AGENT_DEFAULTS = {
   } satisfies ModelConfig,
   /** HTTP request timeout in milliseconds */
   API_TIMEOUT_MS: 30_000,
+  /** Default Ollama API base URL for local LLM provider */
+  OLLAMA_BASE_URL: 'http://localhost:11434/api',
   /** Default security policy */
   SECURITY_POLICY: {
     auditEnabled: true,

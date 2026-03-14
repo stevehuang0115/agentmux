@@ -13,6 +13,7 @@
 
 import Stripe from 'stripe';
 import { LoggerService } from '../core/logger.service.js';
+import { formatError } from '../../utils/format-error.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('StripeService');
 
@@ -32,13 +33,24 @@ export interface SubscriptionInfo {
   cancelAtPeriodEnd: boolean;
 }
 
-/** Map of planId + interval to Stripe Price IDs */
-const PRICE_ID_MAP: Record<string, string | undefined> = {
-  'pro_month': process.env.STRIPE_PRICE_PRO_MONTHLY,
-  'pro_year': process.env.STRIPE_PRICE_PRO_YEARLY,
-  'enterprise_month': process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY,
-  'enterprise_year': process.env.STRIPE_PRICE_ENTERPRISE_YEARLY,
-};
+/**
+ * Resolve a Stripe Price ID for a plan + interval combination.
+ * Reads env vars at call time to support late-loaded configuration.
+ *
+ * @param planId - Plan identifier (pro, enterprise)
+ * @param interval - Billing interval (month, year)
+ * @returns Stripe Price ID or undefined
+ */
+function resolvePriceId(planId: string, interval: string): string | undefined {
+  const envVarMap: Record<string, string> = {
+    'pro_month': 'STRIPE_PRICE_PRO_MONTHLY',
+    'pro_year': 'STRIPE_PRICE_PRO_YEARLY',
+    'enterprise_month': 'STRIPE_PRICE_ENTERPRISE_MONTHLY',
+    'enterprise_year': 'STRIPE_PRICE_ENTERPRISE_YEARLY',
+  };
+  const envVar = envVarMap[`${planId}_${interval}`];
+  return envVar ? process.env[envVar] : undefined;
+}
 
 /**
  * Stripe payment service singleton.
@@ -82,6 +94,30 @@ export class StripeService {
   }
 
   /**
+   * Return the Stripe client or a "not configured" result.
+   * Centralizes the guard check used by all public methods.
+   *
+   * @returns Stripe instance or null
+   */
+  private requireStripe(): Stripe | null {
+    return this.stripe;
+  }
+
+  /**
+   * Find a Stripe customer by userId stored in metadata.
+   *
+   * @param userId - Internal user ID
+   * @returns The first matching customer or null
+   */
+  private async findCustomerByUserId(userId: string): Promise<Stripe.Customer | null> {
+    const customers = await this.stripe!.customers.search({
+      query: `metadata['userId']:'${userId}'`,
+      limit: 1,
+    });
+    return customers.data.length > 0 ? customers.data[0] : null;
+  }
+
+  /**
    * Create a Stripe Checkout Session for a subscription plan.
    *
    * @param userId - User ID attached as metadata for post-checkout correlation
@@ -98,19 +134,17 @@ export class StripeService {
     successUrl: string,
     cancelUrl: string,
   ): Promise<StripeResult<{ checkoutUrl: string; sessionId: string }>> {
-    if (!this.stripe) {
+    if (!this.requireStripe()) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
-    const priceKey = `${planId}_${interval}`;
-    const priceId = PRICE_ID_MAP[priceKey];
-
+    const priceId = resolvePriceId(planId, interval);
     if (!priceId) {
       return { success: false, message: `No Stripe price configured for ${planId}/${interval}` };
     }
 
     try {
-      const session = await this.stripe.checkout.sessions.create({
+      const session = await this.stripe!.checkout.sessions.create({
         mode: 'subscription',
         payment_method_types: ['card'],
         line_items: [{ price: priceId, quantity: 1 }],
@@ -120,19 +154,19 @@ export class StripeService {
         client_reference_id: userId,
       });
 
+      if (!session.url) {
+        return { success: false, message: 'Checkout session created without redirect URL' };
+      }
+
       logger.info('Checkout session created', { sessionId: session.id, userId, planId });
 
       return {
         success: true,
-        data: {
-          checkoutUrl: session.url!,
-          sessionId: session.id,
-        },
+        data: { checkoutUrl: session.url, sessionId: session.id },
       };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown Stripe error';
-      logger.error('Failed to create checkout session', { error: msg, userId, planId });
-      return { success: false, message: msg };
+      logger.error('Failed to create checkout session', { error: formatError(error), userId, planId });
+      return { success: false, message: formatError(error) };
     }
   }
 
@@ -151,19 +185,15 @@ export class StripeService {
     rawBody: Buffer,
     signature: string,
   ): Promise<StripeResult<{ eventType: string }>> {
-    if (!this.stripe || !this.webhookSecret) {
+    if (!this.requireStripe() || !this.webhookSecret) {
       return { success: false, message: 'Stripe webhook is not configured' };
     }
 
     let event: Stripe.Event;
     try {
-      event = this.stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        this.webhookSecret,
-      );
+      event = this.stripe!.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Signature verification failed';
+      const msg = formatError(error);
       logger.warn('Webhook signature verification failed', { error: msg });
       return { success: false, message: `Webhook signature verification failed: ${msg}` };
     }
@@ -190,9 +220,8 @@ export class StripeService {
 
       return { success: true, data: { eventType: event.type } };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Webhook handler error';
-      logger.error('Webhook handler failed', { type: event.type, error: msg });
-      return { success: false, message: msg };
+      logger.error('Webhook handler failed', { type: event.type, error: formatError(error) });
+      return { success: false, message: formatError(error) };
     }
   }
 
@@ -200,26 +229,20 @@ export class StripeService {
    * Get the current subscription for a user by their Stripe customer ID.
    *
    * @param userId - The user to look up (used as client_reference_id or metadata)
-   * @returns Result with subscription data
+   * @returns Result with subscription data or null if no active subscription
    */
   async getSubscription(userId: string): Promise<StripeResult<SubscriptionInfo | null>> {
-    if (!this.stripe) {
+    if (!this.requireStripe()) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
     try {
-      // Search for customer by metadata userId
-      const customers = await this.stripe.customers.search({
-        query: `metadata['userId']:'${userId}'`,
-        limit: 1,
-      });
-
-      if (customers.data.length === 0) {
+      const customer = await this.findCustomerByUserId(userId);
+      if (!customer) {
         return { success: true, data: null };
       }
 
-      const customer = customers.data[0];
-      const subscriptions = await this.stripe.subscriptions.list({
+      const subscriptions = await this.stripe!.subscriptions.list({
         customer: customer.id,
         status: 'active',
         limit: 1,
@@ -230,22 +253,19 @@ export class StripeService {
       }
 
       const sub = subscriptions.data[0];
-      const planId = (sub.metadata?.planId) || 'pro';
-
       return {
         success: true,
         data: {
           subscriptionId: sub.id,
           status: sub.status,
-          planId,
+          planId: sub.metadata?.planId || 'pro',
           cancelAt: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
           cancelAtPeriodEnd: sub.cancel_at_period_end,
         },
       };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown Stripe error';
-      logger.error('Failed to get subscription', { error: msg, userId });
-      return { success: false, message: msg };
+      logger.error('Failed to get subscription', { error: formatError(error), userId });
+      return { success: false, message: formatError(error) };
     }
   }
 
@@ -260,30 +280,25 @@ export class StripeService {
     userId: string,
     returnUrl: string,
   ): Promise<StripeResult<{ portalUrl: string }>> {
-    if (!this.stripe) {
+    if (!this.requireStripe()) {
       return { success: false, message: 'Stripe is not configured' };
     }
 
     try {
-      const customers = await this.stripe.customers.search({
-        query: `metadata['userId']:'${userId}'`,
-        limit: 1,
-      });
-
-      if (customers.data.length === 0) {
+      const customer = await this.findCustomerByUserId(userId);
+      if (!customer) {
         return { success: false, message: 'No Stripe customer found for this user' };
       }
 
-      const session = await this.stripe.billingPortal.sessions.create({
-        customer: customers.data[0].id,
+      const session = await this.stripe!.billingPortal.sessions.create({
+        customer: customer.id,
         return_url: returnUrl,
       });
 
       return { success: true, data: { portalUrl: session.url } };
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Unknown Stripe error';
-      logger.error('Failed to create portal session', { error: msg, userId });
-      return { success: false, message: msg };
+      logger.error('Failed to create portal session', { error: formatError(error), userId });
+      return { success: false, message: formatError(error) };
     }
   }
 
@@ -306,7 +321,6 @@ export class StripeService {
       return;
     }
 
-    // Tag the customer with userId for future lookups
     if (session.customer && typeof session.customer === 'string') {
       await this.stripe!.customers.update(session.customer, {
         metadata: { userId, planId },
@@ -314,7 +328,6 @@ export class StripeService {
     }
 
     logger.info('Checkout completed', { userId, planId, customerId: session.customer });
-    // TODO: Update internal licenses table when database layer is ready
   }
 
   /**
@@ -328,7 +341,6 @@ export class StripeService {
       status: subscription.status,
       customerId: subscription.customer,
     });
-    // TODO: Sync subscription status to internal licenses table
   }
 
   /**
@@ -341,7 +353,6 @@ export class StripeService {
       subscriptionId: subscription.id,
       customerId: subscription.customer,
     });
-    // TODO: Mark license as expired in internal licenses table
   }
 
   /**
@@ -355,7 +366,6 @@ export class StripeService {
       customerId: invoice.customer,
       attemptCount: invoice.attempt_count,
     });
-    // TODO: Notify user about failed payment via messaging service
   }
 
   /**

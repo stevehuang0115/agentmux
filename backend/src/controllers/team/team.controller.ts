@@ -600,10 +600,7 @@ async function _stopTeamMemberCore(
   }
 }
 
-// NOTE: ensureOrchestratorSubscriptions() was removed.
-// The orchestrator no longer auto-subscribes to agent lifecycle events (agent:status_changed,
-// agent:idle, agent:busy, etc.) because with many agents these push notifications become spam.
-// Instead, the orchestrator reads team/agent status on-demand via get-agent-status skill.
+// Orchestrator reads agent status on-demand; no push subscriptions.
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
