@@ -216,7 +216,7 @@ describe('Tool Registry', () => {
       expect(result.success).toBe(true);
       expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
         channelId: 'C123',
-        text: 'Hello team',
+        text: '[Orc] Hello team',
         threadTs: '123.456',
       });
     });
@@ -231,7 +231,7 @@ describe('Tool Registry', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
         channelId: 'C123',
-        text: 'Hello',
+        text: '[Orc] Hello',
       });
     });
 
@@ -244,9 +244,10 @@ describe('Tool Registry', () => {
         threadTs: '123.456',
       });
 
+      // After stripping NOTIFY markers, text starts with "##" not "[", so prefix is added
       expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
         channelId: 'C123',
-        text: '## Task Done\nAll tasks completed.',
+        text: '[Orc] ## Task Done\nAll tasks completed.',
         threadTs: '123.456',
       });
     });
@@ -261,7 +262,21 @@ describe('Tool Registry', () => {
 
       expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
         channelId: 'C123',
-        text: 'Plain message without markers',
+        text: '[Orc] Plain message without markers',
+      });
+    });
+
+    it('should not double-prefix text already starting with [', async () => {
+      mockClient.post.mockResolvedValue({ success: true, data: {}, status: 200 });
+
+      await (tools.reply_slack as any).execute({
+        channelId: 'C123',
+        text: '[Sam] Already prefixed message',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith('/slack/send', {
+        channelId: 'C123',
+        text: '[Sam] Already prefixed message',
       });
     });
   });

@@ -22,16 +22,8 @@ vi.mock('../components/Settings/SkillsTab', () => ({
   SkillsTab: () => <div data-testid="skills-tab">Skills Tab Content</div>,
 }));
 
-vi.mock('../components/Settings/ApiKeysTab', () => ({
-  ApiKeysTab: () => <div data-testid="apikeys-tab">API Keys Tab Content</div>,
-}));
-
 vi.mock('../components/Settings/IntegrationsTab', () => ({
   IntegrationsTab: () => <div data-testid="integrations-tab">Integrations Tab Content</div>,
-}));
-
-vi.mock('../components/Settings/CloudTab', () => ({
-  CloudTab: () => <div data-testid="cloud-tab">Cloud Tab Content</div>,
 }));
 
 describe('Settings Page', () => {
@@ -47,11 +39,9 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       expect(screen.getByText('General')).toBeInTheDocument();
-      expect(screen.getByText('API Keys')).toBeInTheDocument();
       expect(screen.getByText('Roles')).toBeInTheDocument();
       expect(screen.getByText('Skills')).toBeInTheDocument();
       expect(screen.getByText('Integrations')).toBeInTheDocument();
-      expect(screen.getByText('Cloud')).toBeInTheDocument();
     });
   });
 
@@ -60,19 +50,9 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       expect(screen.getByTestId('general-tab')).toBeInTheDocument();
-      expect(screen.queryByTestId('apikeys-tab')).not.toBeInTheDocument();
       expect(screen.queryByTestId('roles-tab')).not.toBeInTheDocument();
       expect(screen.queryByTestId('skills-tab')).not.toBeInTheDocument();
       expect(screen.queryByTestId('integrations-tab')).not.toBeInTheDocument();
-    });
-
-    it('should switch to API Keys tab when clicked', () => {
-      render(<Settings />);
-
-      fireEvent.click(screen.getByText('API Keys'));
-
-      expect(screen.getByTestId('apikeys-tab')).toBeInTheDocument();
-      expect(screen.queryByTestId('general-tab')).not.toBeInTheDocument();
     });
 
     it('should switch to Integrations tab when clicked', () => {
@@ -118,7 +98,7 @@ describe('Settings Page', () => {
       render(<Settings />);
 
       const tabs = screen.getAllByRole('tab');
-      expect(tabs).toHaveLength(6);
+      expect(tabs).toHaveLength(4);
     });
 
     it('should set aria-selected on active tab', () => {

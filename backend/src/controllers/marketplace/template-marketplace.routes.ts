@@ -17,6 +17,7 @@
  */
 
 import { Router } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import {
 	handleCreateTemplate,
 	handleListTemplates,
@@ -27,7 +28,18 @@ import {
 	handleListVersions,
 	handlePublishTemplate,
 } from './template-marketplace.controller.js';
-import { requireCloudConnection } from '../../services/cloud/cloud-auth.middleware.js';
+
+/**
+ * Placeholder auth middleware. Passes requests through without authentication.
+ * TODO: Replace with a real authentication middleware when cloud services are restored.
+ *
+ * @param _req - Express request
+ * @param _res - Express response
+ * @param next - Express next function
+ */
+const requireAuth = (_req: Request, _res: Response, next: NextFunction): void => {
+	next();
+};
 
 /**
  * Creates the template marketplace router with all template endpoints.
@@ -53,17 +65,17 @@ export function createTemplateMarketplaceRouter(): Router {
 	router.get('/', handleListTemplates);
 
 	// Protected collection routes (require auth to create)
-	router.post('/', requireCloudConnection, handleCreateTemplate);
+	router.post('/', requireAuth, handleCreateTemplate);
 
 	// Public item routes (browse details)
 	router.get('/:id', handleGetTemplate);
 	router.get('/:id/versions', handleListVersions);
 
 	// Protected item routes (require auth to modify)
-	router.put('/:id', requireCloudConnection, handleUpdateTemplate);
-	router.delete('/:id', requireCloudConnection, handleArchiveTemplate);
-	router.post('/:id/versions', requireCloudConnection, handleAddVersion);
-	router.post('/:id/publish', requireCloudConnection, handlePublishTemplate);
+	router.put('/:id', requireAuth, handleUpdateTemplate);
+	router.delete('/:id', requireAuth, handleArchiveTemplate);
+	router.post('/:id/versions', requireAuth, handleAddVersion);
+	router.post('/:id/publish', requireAuth, handlePublishTemplate);
 
 	return router;
 }

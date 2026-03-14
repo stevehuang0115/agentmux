@@ -69,7 +69,6 @@ import { SkillCatalogService } from './services/skill/skill-catalog.service.js';
 import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.js';
 import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
-import { setMessengerRouterQueueService } from './controllers/messaging/messenger.routes.js';
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 import { agentHeartbeatMiddleware } from './middleware/agent-heartbeat.middleware.js';
@@ -282,7 +281,6 @@ export class CrewlyServer {
 		// Wire queue service into controllers
 		setChatMessageQueueService(this.messageQueueService);
 		setMessagingControllerQueueService(this.messageQueueService);
-		setMessengerRouterQueueService(this.messageQueueService);
 
 		// Initialize system resource alert service for proactive monitoring
 		this.systemResourceAlertService = new SystemResourceAlertService();

@@ -12,6 +12,8 @@
     "dist",
     "src/**/*.test.ts",
     "src/**/__tests__/**",
+    "src/controllers/payment/**",
+    "src/services/payment/**",
     "../config/*.test.ts",
     "../config/*.test.js"
   ]

@@ -38,7 +38,6 @@ interface FilterChip {
 const FILTER_CHIPS: FilterChip[] = [
   { key: null, label: 'All' },
   { key: 'slack', label: 'Slack', icon: '\uD83D\uDD37' },
-  { key: 'google_chat', label: 'Google Chat', icon: '\uD83D\uDFE2' },
   { key: 'crewly_chat', label: 'Crewly', icon: '\uD83D\uDCAC' },
   { key: 'telegram', label: 'Telegram', icon: '\u2709\uFE0F' },
   { key: 'api', label: 'API', icon: '\uD83D\uDD0C' },

@@ -150,14 +150,13 @@ describe('Chat Constants', () => {
     it('should contain all expected Slack delivery statuses', () => {
       expect(SLACK_DELIVERY_STATUSES).toContain('pending');
       expect(SLACK_DELIVERY_STATUSES).toContain('delivered');
-      expect(SLACK_DELIVERY_STATUSES).toContain('delivered_by_skill');
       expect(SLACK_DELIVERY_STATUSES).toContain('failed');
-      expect(SLACK_DELIVERY_STATUSES).toHaveLength(4);
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
     });
 
     it('should be a readonly tuple at compile time', () => {
       expect(Array.isArray(SLACK_DELIVERY_STATUSES)).toBe(true);
-      expect(SLACK_DELIVERY_STATUSES).toHaveLength(4);
+      expect(SLACK_DELIVERY_STATUSES).toHaveLength(3);
     });
 
     it('should derive SlackDeliveryStatus type from the constant', () => {
@@ -959,12 +958,10 @@ describe('Type Definitions', () => {
   it('should compile ChatMessageMetadata with all SlackDeliveryStatus values', () => {
     const pending: ChatMessageMetadata = { slackDeliveryStatus: 'pending' };
     const delivered: ChatMessageMetadata = { slackDeliveryStatus: 'delivered' };
-    const deliveredBySkill: ChatMessageMetadata = { slackDeliveryStatus: 'delivered_by_skill' };
     const failed: ChatMessageMetadata = { slackDeliveryStatus: 'failed' };
 
     expect(pending.slackDeliveryStatus).toBe('pending');
     expect(delivered.slackDeliveryStatus).toBe('delivered');
-    expect(deliveredBySkill.slackDeliveryStatus).toBe('delivered_by_skill');
     expect(failed.slackDeliveryStatus).toBe('failed');
   });
 
@@ -1594,27 +1591,24 @@ describe('ChatChannelType', () => {
     it('should contain all expected channel types', () => {
       expect(CHAT_CHANNEL_TYPES).toContain('crewly_chat');
       expect(CHAT_CHANNEL_TYPES).toContain('slack');
-      expect(CHAT_CHANNEL_TYPES).toContain('google_chat');
       expect(CHAT_CHANNEL_TYPES).toContain('telegram');
       expect(CHAT_CHANNEL_TYPES).toContain('api');
-      expect(CHAT_CHANNEL_TYPES).toHaveLength(5);
+      expect(CHAT_CHANNEL_TYPES).toHaveLength(4);
     });
 
     it('should be a readonly tuple at compile time', () => {
       expect(Array.isArray(CHAT_CHANNEL_TYPES)).toBe(true);
-      expect(CHAT_CHANNEL_TYPES).toHaveLength(5);
+      expect(CHAT_CHANNEL_TYPES).toHaveLength(4);
     });
 
     it('should derive ChatChannelType type from the constant', () => {
       const crewlyChat: ChatChannelType = 'crewly_chat';
       const slack: ChatChannelType = 'slack';
-      const googleChat: ChatChannelType = 'google_chat';
       const telegram: ChatChannelType = 'telegram';
       const api: ChatChannelType = 'api';
 
       expect(crewlyChat).toBe('crewly_chat');
       expect(slack).toBe('slack');
-      expect(googleChat).toBe('google_chat');
       expect(telegram).toBe('telegram');
       expect(api).toBe('api');
     });

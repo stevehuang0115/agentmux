@@ -107,11 +107,6 @@ export const ThreadDetailPanel: React.FC<ThreadDetailPanelProps> = ({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const lastMessageRef = useRef<HTMLDivElement>(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
-  /** Whether the user is near the bottom of the scroll container (within threshold) */
-  const isNearBottomRef = useRef(true);
-
-  /** Scroll-near-bottom threshold in pixels */
-  const SCROLL_THRESHOLD = 50;
 
   /**
    * Scroll to the bottom of the messages container.
@@ -121,30 +116,20 @@ export const ThreadDetailPanel: React.FC<ThreadDetailPanelProps> = ({
     requestAnimationFrame(() => {
       lastMessageRef.current?.scrollIntoView({ behavior: 'auto' });
     });
-    isNearBottomRef.current = true;
   }, []);
 
-  /**
-   * Smart auto-scroll: only scroll to bottom when user hasn't manually
-   * scrolled up. When the user scrolls up to read history, auto-scroll
-   * is paused. It re-enables when the user scrolls back near the bottom.
-   */
+  /** Auto-scroll when new messages arrive */
   useEffect(() => {
-    if (isNearBottomRef.current) {
-      scrollToBottom();
-    }
+    scrollToBottom();
   }, [messages, isTyping, scrollToBottom]);
 
-  /** Track scroll position: update near-bottom state, show/hide button, trigger load-more */
+  /** Track scroll position: show/hide scroll-to-bottom + trigger load-more at top */
   const handleScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
 
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
-
-    // Track whether user is near bottom to control auto-scroll
-    isNearBottomRef.current = distanceFromBottom <= SCROLL_THRESHOLD;
     setShowScrollButton(distanceFromBottom > 100);
 
     // Load older messages when scrolled near the top

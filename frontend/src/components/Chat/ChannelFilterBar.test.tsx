@@ -78,31 +78,12 @@ describe('ChannelFilterBar', () => {
         />
       );
 
-      // Should show All, Slack, Crewly, API (not Telegram or Google Chat since no conversations)
+      // Should show All, Slack, Crewly, API (not Telegram since no telegram conversations)
       expect(screen.getByTestId('filter-chip-all')).toBeInTheDocument();
       expect(screen.getByTestId('filter-chip-slack')).toBeInTheDocument();
       expect(screen.getByTestId('filter-chip-crewly_chat')).toBeInTheDocument();
       expect(screen.getByTestId('filter-chip-api')).toBeInTheDocument();
       expect(screen.queryByTestId('filter-chip-telegram')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('filter-chip-google_chat')).not.toBeInTheDocument();
-    });
-
-    it('renders Google Chat chip when google_chat conversations exist', () => {
-      const withGchat = [
-        ...mixedConversations,
-        createMockConversation('conv-gchat', 'google_chat'),
-      ];
-
-      render(
-        <ChannelFilterBar
-          activeFilter={null}
-          onFilterChange={mockOnFilterChange}
-          conversations={withGchat}
-        />
-      );
-
-      expect(screen.getByTestId('filter-chip-google_chat')).toBeInTheDocument();
-      expect(screen.getByText('Google Chat')).toBeInTheDocument();
     });
 
     it('does not render channel chips when there are no conversations', () => {

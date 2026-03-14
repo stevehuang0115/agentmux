@@ -27,7 +27,6 @@ import {
 } from '../../constants.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
 import { StorageService } from '../core/storage.service.js';
-import { getGchatThreadStore } from './gchat-thread-store.service.js';
 import type { ChatMessage } from '../../types/chat.types.js';
 
 /**
@@ -219,7 +218,7 @@ export class QueueProcessorService extends EventEmitter {
       // User messages and system events get shorter timeouts and force-delivery
       // to reduce delay. System events are fire-and-forget so force-delivery is
       // lower risk — prevents the 5×120s=10min retry loop that blocks notifications.
-      const isUserMessage = message.source === MESSAGE_SOURCES.SLACK || message.source === MESSAGE_SOURCES.WEB_CHAT || message.source === MESSAGE_SOURCES.WHATSAPP || message.source === MESSAGE_SOURCES.GOOGLE_CHAT;
+      const isUserMessage = message.source === MESSAGE_SOURCES.SLACK || message.source === MESSAGE_SOURCES.WEB_CHAT || message.source === MESSAGE_SOURCES.WHATSAPP;
       const readyTimeout = isUserMessage
         ? EVENT_DELIVERY_CONSTANTS.USER_MESSAGE_TIMEOUT
         : isSystemEvent
@@ -338,26 +337,11 @@ export class QueueProcessorService extends EventEmitter {
         }
       }
 
-      // Format message: system events use raw content, chat uses [CHAT:id] or [GCHAT:id] prefix
+      // Format message: system events use raw content, chat uses [CHAT:id] prefix
       let deliveryContent: string;
       if (isSystemEvent) {
         const allContents = [message.content, ...batchedMessages.map(m => m.content)];
         deliveryContent = allContents.join('\n');
-      } else if (message.source === MESSAGE_SOURCES.GOOGLE_CHAT) {
-        // Include thread ID so the agent can use reply-gchat with correct threading
-        const threadId = (message.sourceMetadata as Record<string, unknown>)?.threadId as string | undefined;
-        const threadSuffix = threadId ? ` thread=${threadId}` : '';
-        deliveryContent = `[GCHAT:${message.conversationId}${threadSuffix}] ${message.content}`;
-
-        // Append thread context file hint if thread store is available
-        const space = (message.sourceMetadata as Record<string, unknown>)?.channelId as string | undefined;
-        if (space && threadId) {
-          const gchatStore = getGchatThreadStore();
-          if (gchatStore) {
-            const threadFilePath = gchatStore.getThreadFilePath(space, threadId);
-            deliveryContent += `\n\n[Thread context file: ${threadFilePath}]`;
-          }
-        }
       } else {
         deliveryContent = `[${CHAT_ROUTING_CONSTANTS.MESSAGE_PREFIX}:${message.conversationId}] ${message.content}`;
       }
@@ -380,7 +364,7 @@ export class QueueProcessorService extends EventEmitter {
       }
 
       const deliveryResult = await this.agentRegistrationService.sendMessageToAgent(
-        deliveryTarget,
+        targetSession,
         deliveryContent,
         deliveryRuntimeType
       );
@@ -393,14 +377,10 @@ export class QueueProcessorService extends EventEmitter {
 
         // If agent is busy (actively processing), re-queue instead of permanently failing.
         // This allows the message to be retried once the agent returns to prompt.
-        // Exception: Google Chat messages are NOT requeued because they have an auto-route
-        // path (googleChatResolve) that handles responses. Requeuing GCHAT messages causes
-        // duplicate deliveries where each delivery triggers a separate response.
         const isAgentBusy = errorMsg.includes('[AGENT_BUSY]');
         const currentRetries = message.retryCount || 0;
-        const isGoogleChat = message.source === MESSAGE_SOURCES.GOOGLE_CHAT;
 
-        if (isAgentBusy && !isGoogleChat && currentRetries < MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES) {
+        if (isAgentBusy && currentRetries < MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES) {
           this.logger.info('Agent busy, re-queuing message for later delivery', {
             messageId: message.id,
             retryCount: currentRetries + 1,
@@ -419,68 +399,35 @@ export class QueueProcessorService extends EventEmitter {
           return;
         }
 
-        // Google Chat delivery failure (non-AGENT_BUSY): requeue for retry instead
-        // of routing error to the user. Gemini CLI TUI focus issues are transient —
-        // a retry after a short delay usually succeeds.
-        if (isGoogleChat && !isAgentBusy && currentRetries < MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES) {
-          this.logger.info('Google Chat message delivery failed, re-queuing for retry', {
-            messageId: message.id,
-            retryCount: currentRetries + 1,
-            maxRetries: MESSAGE_QUEUE_CONSTANTS.MAX_REQUEUE_RETRIES,
-            error: errorMsg,
-          });
+        this.logger.warn('Message delivery failed', {
+          messageId: message.id,
+          error: errorMsg,
+        });
 
-          this.queueService.requeue(message);
-          for (const batchedMsg of batchedMessages) {
-            this.queueService.requeue(batchedMsg);
+        this.queueService.markFailed(message.id, errorMsg);
+        // Also fail any batched system event messages
+        if (batchedMessages.length > 0) {
+          this.queueService.markBatchFailed(batchedMessages, errorMsg);
+        }
+        this.responseRouter.routeError(message, errorMsg);
+
+        // Post a system message to the conversation so the user sees the error
+        // (skip for system events — no user conversation to notify)
+        if (!isSystemEvent) {
+          try {
+            const chatService = getChatService();
+            await chatService.addSystemMessage(
+              message.conversationId,
+              `Failed to deliver message to orchestrator: ${errorMsg}. Please try again.`
+            );
+          } catch (sysErr) {
+            this.logger.warn('Failed to send delivery-failure system message', {
+              error: sysErr instanceof Error ? sysErr.message : String(sysErr),
+            });
           }
-
-          this.scheduleProcessNext(EVENT_DELIVERY_CONSTANTS.AGENT_READY_POLL_INTERVAL);
-          this.nextAlreadyScheduled = true;
-          clearInterval(keepaliveInterval);
-          return;
         }
 
-        // Google Chat + AGENT_BUSY: the message was already force-delivered to the PTY
-        // (shouldForceDeliver=true for user messages). The agent will process it when
-        // it finishes current work. Proceed to waitForResponse instead of routing an
-        // error — sending "[AGENT_BUSY]" to Google Chat is a terrible user experience.
-        if (isGoogleChat && isAgentBusy) {
-          this.logger.info('Google Chat message force-delivered while agent busy, waiting for response', {
-            messageId: message.id,
-          });
-          // Fall through to the waitForResponse path below
-        } else {
-          this.logger.warn('Message delivery failed', {
-            messageId: message.id,
-            error: errorMsg,
-          });
-
-          this.queueService.markFailed(message.id, errorMsg);
-          // Also fail any batched system event messages
-          if (batchedMessages.length > 0) {
-            this.queueService.markBatchFailed(batchedMessages, errorMsg);
-          }
-          this.responseRouter.routeError(message, errorMsg);
-
-          // Post a system message to the conversation so the user sees the error
-          // (skip for system events — no user conversation to notify)
-          if (!isSystemEvent) {
-            try {
-              const chatService = getChatService();
-              await chatService.addSystemMessage(
-                message.conversationId,
-                `Failed to deliver message to orchestrator: ${errorMsg}. Please try again.`
-              );
-            } catch (sysErr) {
-              this.logger.warn('Failed to send delivery-failure system message', {
-                error: sysErr instanceof Error ? sysErr.message : String(sysErr),
-              });
-            }
-          }
-
-          return;
-        }
+        return;
       }
 
       if (isSystemEvent) {
@@ -564,22 +511,14 @@ export class QueueProcessorService extends EventEmitter {
    * @returns Response content
    */
   private waitForResponse(conversationId: string, timeoutMs: number): Promise<string> {
-    const waitStartMs = Date.now();
-    this.logger.info('Waiting for orchestrator response', { conversationId, timeoutMs });
-
     return new Promise((resolve) => {
       const chatService = getChatService();
 
       const onMessage = (chatMessage: ChatMessage): void => {
-        // Use startsWith for matching: Google Chat NOTIFY blocks may include
-        // a thread suffix (e.g. "spaces/X thread=spaces/X/threads/Y") while
-        // the queue's conversationId is just the space name ("spaces/X").
         if (
-          chatMessage.conversationId.startsWith(conversationId) &&
+          chatMessage.conversationId === conversationId &&
           chatMessage.from.type === 'orchestrator'
         ) {
-          const elapsedMs = Date.now() - waitStartMs;
-          this.logger.info('Orchestrator response received', { conversationId, elapsedMs });
           cleanup();
           resolve(chatMessage.content);
         }

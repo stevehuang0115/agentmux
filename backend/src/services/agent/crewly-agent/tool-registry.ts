@@ -412,7 +412,19 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         threadTs: z.string().optional().describe('Thread timestamp for replies (auto-filled from current thread context if omitted)'),
       }),
       execute: async ({ channelId, text, threadTs }) => {
-        const cleanText = stripNotifyMarkers(text as string);
+        let cleanText = stripNotifyMarkers(text as string);
+
+        // Auto-prefix with agent display name so Slack messages are attributable
+        // Session format: "crewly-{team}-{name}-{uuid}" → extract {name}
+        // Fallback: "crewly-orc" → "orc"
+        if (sessionName && !cleanText.startsWith('[')) {
+          const parts = sessionName.split('-');
+          // For "crewly-product-sam-217bfbbf": parts[2] = "sam"
+          // For "crewly-orc": parts[1] = "orc"
+          const namePart = parts.length >= 3 ? parts[2] : parts[parts.length - 1];
+          const capitalized = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+          cleanText = `[${capitalized}] ${cleanText}`;
+        }
         const resolvedChannelId = (channelId as string | undefined) || slackContext?.channelId;
         const resolvedThreadTs = (threadTs as string | undefined) || slackContext?.threadTs;
         if (!resolvedChannelId) {

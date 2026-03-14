@@ -21,7 +21,6 @@ import { createQualityGateRouter } from './modules/quality-gate.routes.js';
 import { createMarketplaceRouter } from '../controllers/marketplace/index.js';
 import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
 import { createTemplateRouter } from '../controllers/template/index.js';
-import { createCloudRouter, createRelayRouter } from '../controllers/cloud/index.js';
 import { createAuditorRouter } from '../controllers/auditor/auditor.routes.js';
 
 /**
@@ -85,12 +84,6 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Template routes for team template management and team creation
   router.use('/templates', createTemplateRouter());
-
-  // Cloud routes for CrewlyAI Cloud integration (connect, status, premium templates)
-  router.use('/cloud', createCloudRouter());
-
-  // Relay routes for WebSocket relay registration and status (双机互联)
-  router.use('/relay', createRelayRouter());
 
   // Auditor routes for manual audit triggers and status
   router.use('/auditor', createAuditorRouter());

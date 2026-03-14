@@ -29,7 +29,6 @@ export const Chat: React.FC = () => {
     conversations,
     currentConversation,
     selectConversation,
-    createConversation,
     channelFilter,
     setChannelFilter,
   } = useChat();
@@ -45,12 +44,6 @@ export const Chat: React.FC = () => {
     },
     [selectConversation]
   );
-
-  /** Handle creating a new thread */
-  const handleCreateThread = useCallback(async () => {
-    await createConversation();
-    setMobileView('detail');
-  }, [createConversation]);
 
   /** Handle back button on mobile */
   const handleBack = useCallback(() => {
@@ -74,7 +67,6 @@ export const Chat: React.FC = () => {
             onSelectThread={handleSelectThread}
             channelFilter={channelFilter}
             onChannelFilterChange={setChannelFilter}
-            onCreateThread={handleCreateThread}
           />
         </aside>
 
