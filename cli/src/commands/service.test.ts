@@ -543,6 +543,13 @@ describe('generateCommandFile', () => {
 		expect(content).toContain('while true');
 		expect(content).toContain('restarting in 5s');
 	});
+
+	it('includes native module arch check', () => {
+		const content = generateCommandFile('/any/path');
+		expect(content).toContain('pty.node');
+		expect(content).toContain('npm rebuild node-pty');
+		expect(content).toContain('Architecture mismatch');
+	});
 });
 
 describe('generateSystemdUnit', () => {
@@ -596,6 +603,12 @@ describe('generateLinuxWrapper', () => {
 	it('uses exec to replace shell with node', () => {
 		const content = generateLinuxWrapper('/any/path');
 		expect(content).toContain('exec node');
+	});
+
+	it('includes native module arch check', () => {
+		const content = generateLinuxWrapper('/any/path');
+		expect(content).toContain('pty.node');
+		expect(content).toContain('npm rebuild node-pty');
 	});
 });
 

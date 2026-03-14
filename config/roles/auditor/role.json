@@ -1,0 +1,13 @@
+{
+  "id": "auditor",
+  "name": "auditor",
+  "displayName": "Auditor",
+  "description": "Quality observer that monitors agents, detects problems, and produces structured audit reports",
+  "category": "operations",
+  "systemPromptFile": "prompt.md",
+  "assignedSkills": ["reply-slack"],
+  "isDefault": false,
+  "isHidden": false,
+  "createdAt": "2024-01-01T00:00:00.000Z",
+  "updatedAt": "2024-01-01T00:00:00.000Z"
+}

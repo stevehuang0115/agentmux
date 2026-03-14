@@ -262,26 +262,37 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         projectPath: z.string().optional().describe('Project path for task tracking'),
       }),
       execute: async ({ to, task, priority, context, projectPath }) => {
-        // Issue 1: TL hierarchy check — if target has a parentMemberId, route through TL
+        // #164: TL hierarchy validation — enforce that the caller has delegation authority
         const teamsResult = await client.get('/teams').catch(() => null);
         if (teamsResult?.success && Array.isArray(teamsResult.data)) {
-          type MemberInfo = { id: string; sessionName: string; parentMemberId?: string; agentStatus?: string; workingStatus?: string };
+          type MemberInfo = { id: string; sessionName: string; parentMemberId?: string; canDelegate?: boolean; subordinateIds?: string[]; agentStatus?: string; workingStatus?: string };
           type TeamInfo = { members?: MemberInfo[] };
           for (const team of teamsResult.data as TeamInfo[]) {
             const targetMember = team.members?.find(m => m.sessionName === (to as string));
+            const callerMember = team.members?.find(m => m.sessionName === sessionName);
+
             if (targetMember?.parentMemberId) {
               const tlMember = team.members?.find(m => m.id === targetMember.parentMemberId);
               // If the caller is NOT the TL, redirect through TL
               if (tlMember && tlMember.sessionName !== sessionName) {
                 return {
                   success: false,
-                  error: `Hierarchy violation: ${to} has TL ${tlMember.sessionName}. Delegate through TL instead of directly to worker.`,
+                  error: `Hierarchy violation: ${to} reports to TL ${tlMember.sessionName} (${tlMember.id}). You must delegate through the TL, not directly. Use send_message to ask ${tlMember.sessionName} to delegate this task to ${to}.`,
                   redirectTo: tlMember.sessionName,
+                  hint: 'Use send_message to the TL with the task details, and ask them to delegate to the worker.',
                 };
               }
             }
 
-            // Issue 4: Task stacking prevention — check if target already has in-progress tasks
+            // Verify caller has canDelegate permission when delegating to a subordinate
+            if (callerMember && targetMember && callerMember.canDelegate === false) {
+              return {
+                success: false,
+                error: `You (${sessionName}) do not have delegation permission (canDelegate: false). Ask your TL to delegate this task.`,
+              };
+            }
+
+            // Task stacking prevention — check if target already has in-progress tasks
             if (targetMember && targetMember.workingStatus === 'in_progress') {
               return {
                 success: false,
@@ -965,6 +976,9 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           senderName: sessionName,
           senderType: 'agent',
         };
+        if (conversationId) {
+          chatBody.conversationId = conversationId;
+        }
         const result = await client.post('/chat/agent-response', chatBody);
 
         // Auto-complete tracked tasks when status is done

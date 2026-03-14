@@ -1663,4 +1663,176 @@ describe('SchedulerService', () => {
       expect(deliveredMessage).not.toContain('OUTDATED');
     });
   });
+
+  describe('#165: recurring check uniqueness per target', () => {
+    it('should cancel existing recurring checks for the same target when scheduling a new one', () => {
+      const id1 = service.scheduleRecurringCheck('agent-A', 10, 'Check 1');
+      const id2 = service.scheduleRecurringCheck('agent-B', 10, 'Check B');
+      const id3 = service.scheduleRecurringCheck('agent-A', 15, 'Check 2');
+
+      const stats = service.getStats();
+      // agent-A should have only 1 recurring check (id3), agent-B should keep id2
+      expect(stats.recurringChecks).toBe(2);
+
+      // id1 should have been cancelled
+      const checksForA = service.getChecksForSession('agent-A');
+      expect(checksForA.length).toBe(1);
+      expect(checksForA[0].id).toBe(id3);
+
+      // id2 should still exist
+      const checksForB = service.getChecksForSession('agent-B');
+      expect(checksForB.length).toBe(1);
+      expect(checksForB[0].id).toBe(id2);
+    });
+
+    it('should log when cancelling existing recurring checks', () => {
+      service.scheduleRecurringCheck('agent-A', 10, 'Old check');
+      service.scheduleRecurringCheck('agent-A', 15, 'New check');
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Cancelling existing recurring checks for target before scheduling new one',
+        expect.objectContaining({
+          targetSession: 'agent-A',
+          cancelledCount: 1,
+        })
+      );
+    });
+  });
+
+  describe('#167: dead-letter queue', () => {
+    it('should queue messages when delivery fails', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValueOnce(
+        new Error('Agent offline')
+      );
+
+      service.scheduleCheck('offline-agent', 1, 'Test DLQ message');
+      await jest.advanceTimersByTimeAsync(1 * 60 * 1000 + 1);
+
+      const dlqStats = service.getDeadLetterQueueStats();
+      expect(dlqStats['offline-agent']).toBe(1);
+    });
+
+    it('should drain dead-letter queue when agent comes online', async () => {
+      mockAgentRegistrationService.sendMessageToAgent
+        .mockRejectedValueOnce(new Error('Agent offline'))
+        .mockResolvedValue({ success: true });
+
+      service.scheduleCheck('offline-agent', 1, 'DLQ message');
+      await jest.advanceTimersByTimeAsync(1 * 60 * 1000 + 1);
+
+      // Verify message is queued
+      expect(service.getDeadLetterQueueStats()['offline-agent']).toBe(1);
+
+      // Drain DLQ
+      const delivered = await service.drainDeadLetterQueue('offline-agent');
+      expect(delivered).toBe(1);
+      expect(service.getDeadLetterQueueStats()['offline-agent']).toBeUndefined();
+    });
+
+    it('should limit DLQ to 10 messages per session', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValue(
+        new Error('Agent offline')
+      );
+
+      // Schedule 12 checks
+      for (let i = 0; i < 12; i++) {
+        service.scheduleCheck('offline-agent', 1, `Message ${i}`);
+      }
+      await jest.advanceTimersByTimeAsync(1 * 60 * 1000 + 1);
+
+      const dlqStats = service.getDeadLetterQueueStats();
+      expect(dlqStats['offline-agent']).toBe(10);
+    });
+
+    it('should include deadLetterMessages in stats', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValueOnce(
+        new Error('Agent offline')
+      );
+
+      service.scheduleCheck('offline-agent', 1, 'Test');
+      await jest.advanceTimersByTimeAsync(1 * 60 * 1000 + 1);
+
+      const stats = service.getStats();
+      expect(stats.deadLetterMessages).toBe(1);
+    });
+
+    it('should clear DLQ during cleanup', async () => {
+      mockAgentRegistrationService.sendMessageToAgent.mockRejectedValueOnce(
+        new Error('Agent offline')
+      );
+
+      service.scheduleCheck('offline-agent', 1, 'Test');
+      await jest.advanceTimersByTimeAsync(1 * 60 * 1000 + 1);
+
+      service.cleanup();
+      expect(service.getDeadLetterQueueStats()).toEqual({});
+    });
+  });
+
+  describe('#167: cron expression support', () => {
+    it('should validate cron expressions', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+      const checkId = service.scheduleCronCheck(
+        'test-session',
+        '0 9 * * *',
+        'Daily 9am check'
+      );
+
+      expect(checkId).toBeTruthy();
+      expect(emitSpy).toHaveBeenCalledWith(
+        'recurring_check_scheduled',
+        expect.objectContaining({
+          targetSession: 'test-session',
+          cronExpression: '0 9 * * *',
+        })
+      );
+    });
+
+    it('should fall back to interval scheduling for invalid cron expressions', () => {
+      const checkId = service.scheduleCronCheck(
+        'test-session',
+        'invalid-cron',
+        'Fallback check'
+      );
+
+      expect(checkId).toBeTruthy();
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Invalid cron expression, falling back to 30-min interval',
+        expect.objectContaining({
+          cronExpression: 'invalid-cron',
+        })
+      );
+    });
+
+    it('should cancel existing recurring checks for the same target when using cron', () => {
+      const id1 = service.scheduleRecurringCheck('agent-A', 10, 'Old check');
+      const id2 = service.scheduleCronCheck('agent-A', '*/5 * * * *', 'New cron check');
+
+      const checks = service.getChecksForSession('agent-A');
+      expect(checks.length).toBe(1);
+      expect(checks[0].id).toBe(id2);
+    });
+
+    it('should stop cron task when cancelling', () => {
+      const checkId = service.scheduleCronCheck(
+        'test-session',
+        '0 9 * * *',
+        'Daily check'
+      );
+
+      service.cancelCheck(checkId);
+
+      const stats = service.getStats();
+      expect(stats.recurringChecks).toBe(0);
+    });
+
+    it('should clean up cron tasks during cleanup', () => {
+      service.scheduleCronCheck('test-session', '0 9 * * *', 'Daily check');
+
+      service.cleanup();
+
+      const stats = service.getStats();
+      expect(stats.recurringChecks).toBe(0);
+    });
+  });
 });

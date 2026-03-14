@@ -10,6 +10,7 @@
 import { EventEmitter } from 'events';
 import { ScheduledCheck } from '../../types/index.js';
 import { v4 as uuidv4 } from 'uuid';
+import * as cron from 'node-cron';
 import {
   ISessionBackend,
   getSessionBackendSync,
@@ -153,6 +154,10 @@ export class SchedulerService extends EventEmitter {
   // 25+ concurrent Ctrl+C presses crash the runtime. This guard ensures only
   // one check delivers per session at a time; concurrent checks are dropped.
   private deliveryInProgress = new Set<string>();
+  /** #167: Dead-letter queue — messages for offline agents, delivered when they come online. */
+  private deadLetterQueue = new Map<string, Array<{ message: string; queuedAt: string }>>();
+  /** #167: Active cron tasks keyed by check ID. */
+  private cronTasks = new Map<string, cron.ScheduledTask>();
   /** Consecutive idle hits per recurring check ID for auto-cancel policy. */
   private recurringIdleStreak = new Map<string, number>();
   /** Auto-cancel recurring checks after this many consecutive idle observations. */
@@ -465,6 +470,25 @@ export class SchedulerService extends EventEmitter {
       taskId?: string;
     }
   ): string {
+    // #165: Enforce uniqueness — cancel existing recurring checks for the same target
+    // to prevent duplicate/overlapping checks from accumulating.
+    const existingCheckIds: string[] = [];
+    for (const [existingId, existingCheck] of this.recurringChecks.entries()) {
+      if (existingCheck.targetSession === targetSession) {
+        existingCheckIds.push(existingId);
+      }
+    }
+    if (existingCheckIds.length > 0) {
+      this.logger.info('Cancelling existing recurring checks for target before scheduling new one', {
+        targetSession,
+        cancelledCount: existingCheckIds.length,
+        cancelledIds: existingCheckIds,
+      });
+      for (const existingId of existingCheckIds) {
+        this.cancelCheck(existingId);
+      }
+    }
+
     const checkId = uuidv4();
     const firstExecution = new Date(Date.now() + intervalMinutes * 60 * 1000);
 
@@ -521,6 +545,136 @@ export class SchedulerService extends EventEmitter {
       checkId,
       targetSession,
       intervalMinutes,
+      type,
+    });
+
+    return checkId;
+  }
+
+  /**
+   * #167: Schedule a recurring check using a cron expression.
+   * Supports standard 5-field cron syntax (minute hour day-of-month month day-of-week).
+   * Falls back to intervalMinutes-based scheduling if cron expression is invalid.
+   *
+   * @param targetSession - Target session name
+   * @param cronExpression - Cron expression (e.g., '0 9 * * *' for daily at 9am)
+   * @param message - Message to send
+   * @param type - Type of scheduled message
+   * @param maxOccurrences - Maximum number of times the check fires
+   * @param options - Additional scheduling options
+   * @returns Check ID
+   */
+  scheduleCronCheck(
+    targetSession: string,
+    cronExpression: string,
+    message: string,
+    type: ScheduledMessageType = 'progress-check',
+    maxOccurrences?: number,
+    options?: {
+      label?: string;
+      taskId?: string;
+    }
+  ): string {
+    // Validate cron expression
+    if (!cron.validate(cronExpression)) {
+      this.logger.error('Invalid cron expression, falling back to 30-min interval', {
+        cronExpression,
+        targetSession,
+      });
+      return this.scheduleRecurringCheck(targetSession, 30, message, type, maxOccurrences, options);
+    }
+
+    // Cancel existing recurring/cron checks for the same target (uniqueness constraint)
+    const existingCheckIds: string[] = [];
+    for (const [existingId, existingCheck] of this.recurringChecks.entries()) {
+      if (existingCheck.targetSession === targetSession) {
+        existingCheckIds.push(existingId);
+      }
+    }
+    for (const existingId of existingCheckIds) {
+      this.cancelCheck(existingId);
+    }
+
+    const checkId = uuidv4();
+
+    const scheduledCheck: ScheduledCheck = {
+      id: checkId,
+      targetSession,
+      message,
+      scheduledFor: new Date().toISOString(),
+      isRecurring: true,
+      cronExpression,
+      maxOccurrences,
+      currentOccurrence: 0,
+      createdAt: new Date().toISOString(),
+      label: options?.label,
+      taskId: options?.taskId,
+    };
+
+    this.recurringChecks.set(checkId, scheduledCheck);
+
+    // Persist to disk
+    this.storageService.saveRecurringCheck(scheduledCheck).catch(err => {
+      this.logger.error('Failed to persist cron check', {
+        checkId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    // Store enhanced message info
+    const enhancedMessage: EnhancedScheduledMessage = {
+      id: checkId,
+      sessionName: targetSession,
+      message,
+      scheduledFor: new Date(),
+      type,
+      recurring: {
+        interval: 0,
+        currentOccurrence: 0,
+        maxOccurrences,
+        cronExpression,
+      },
+      createdAt: new Date().toISOString(),
+    };
+    this.enhancedMessages.set(checkId, enhancedMessage);
+
+    // Create the cron task
+    const task = cron.schedule(cronExpression, async () => {
+      if (!this.recurringChecks.has(checkId)) {
+        task.stop();
+        this.cronTasks.delete(checkId);
+        return;
+      }
+
+      const enhanced = this.enhancedMessages.get(checkId);
+      const occurrence = (enhanced?.recurring?.currentOccurrence ?? 0) + 1;
+
+      // Check max occurrences
+      if (maxOccurrences && occurrence > maxOccurrences) {
+        this.cancelCheck(checkId);
+        return;
+      }
+
+      await this.executeCheck(targetSession, this.addFreshnessInstructions(message));
+
+      // Update occurrence count
+      if (enhanced?.recurring) {
+        enhanced.recurring.currentOccurrence = occurrence;
+        const rc = this.recurringChecks.get(checkId);
+        if (rc) {
+          rc.currentOccurrence = occurrence;
+          this.storageService.saveRecurringCheck(rc).catch(() => {});
+        }
+      }
+    });
+
+    this.cronTasks.set(checkId, task);
+
+    this.emit('recurring_check_scheduled', scheduledCheck);
+    this.logger.info('Scheduled cron check', {
+      checkId,
+      targetSession,
+      cronExpression,
       type,
     });
 
@@ -747,6 +901,12 @@ export class SchedulerService extends EventEmitter {
       if (recurringTimeout) {
         clearTimeout(recurringTimeout);
         this.recurringTimeouts.delete(checkId);
+      }
+      // #167: Stop cron task if this was a cron-based check
+      const cronTask = this.cronTasks.get(checkId);
+      if (cronTask) {
+        cronTask.stop();
+        this.cronTasks.delete(checkId);
       }
       this.recurringChecks.delete(checkId);
       this.enhancedMessages.delete(checkId);
@@ -1081,6 +1241,20 @@ export class SchedulerService extends EventEmitter {
       error = sendError instanceof Error ? sendError.message : 'Unknown error';
       this.logger.error('Error executing check-in', { targetSession, error });
 
+      // #167: Dead-letter queue — queue the message for delivery when agent comes online
+      if (!this.deadLetterQueue.has(targetSession)) {
+        this.deadLetterQueue.set(targetSession, []);
+      }
+      const dlq = this.deadLetterQueue.get(targetSession)!;
+      // Limit DLQ per session to 10 messages to prevent unbounded growth
+      if (dlq.length < 10) {
+        dlq.push({ message, queuedAt: new Date().toISOString() });
+        this.logger.info('Message queued in dead-letter queue for offline agent', {
+          targetSession,
+          queueSize: dlq.length,
+        });
+      }
+
       this.emit('check_execution_failed', {
         targetSession,
         message,
@@ -1323,6 +1497,63 @@ export class SchedulerService extends EventEmitter {
   }
 
   /**
+   * #167: Drain the dead-letter queue for a session that has come online.
+   * Delivers all queued messages and clears the queue for that session.
+   *
+   * @param sessionName - The session that came online
+   * @returns Number of messages delivered
+   */
+  async drainDeadLetterQueue(sessionName: string): Promise<number> {
+    const queued = this.deadLetterQueue.get(sessionName);
+    if (!queued || queued.length === 0) {
+      return 0;
+    }
+
+    this.logger.info('Draining dead-letter queue for session', {
+      sessionName,
+      messageCount: queued.length,
+    });
+
+    // Take all messages and clear the queue immediately to prevent double delivery
+    const messages = [...queued];
+    this.deadLetterQueue.delete(sessionName);
+
+    let delivered = 0;
+    for (const entry of messages) {
+      try {
+        await this.executeCheck(sessionName, entry.message);
+        delivered++;
+      } catch (err) {
+        this.logger.warn('Failed to deliver dead-letter message', {
+          sessionName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    this.logger.info('Dead-letter queue drained', {
+      sessionName,
+      delivered,
+      total: messages.length,
+    });
+
+    return delivered;
+  }
+
+  /**
+   * Get dead-letter queue stats.
+   *
+   * @returns Map of session name to queued message count
+   */
+  getDeadLetterQueueStats(): Record<string, number> {
+    const stats: Record<string, number> = {};
+    for (const [session, messages] of this.deadLetterQueue) {
+      stats[session] = messages.length;
+    }
+    return stats;
+  }
+
+  /**
    * Clean up all scheduled checks
    */
   cleanup(): void {
@@ -1340,6 +1571,12 @@ export class SchedulerService extends EventEmitter {
     this.recurringTimeouts.clear();
     this.recurringChecks.clear();
     this.recurringIdleStreak.clear();
+
+    // #167: Stop and clear all cron tasks
+    for (const task of this.cronTasks.values()) {
+      task.stop();
+    }
+    this.cronTasks.clear();
 
     // Clear persisted recurring checks
     this.storageService.clearRecurringChecks().catch(err => {
@@ -1367,6 +1604,9 @@ export class SchedulerService extends EventEmitter {
     // Clear enhanced messages
     this.enhancedMessages.clear();
 
+    // Clear dead-letter queue
+    this.deadLetterQueue.clear();
+
     this.logger.info('Scheduler service cleaned up');
   }
 
@@ -1389,7 +1629,7 @@ export class SchedulerService extends EventEmitter {
       let restored = 0;
       let purged = 0;
       for (const check of persisted) {
-        if (!check.isRecurring || !check.intervalMinutes) {
+        if (!check.isRecurring || (!check.intervalMinutes && !check.cronExpression)) {
           continue;
         }
 
@@ -1419,23 +1659,49 @@ export class SchedulerService extends EventEmitter {
           id: check.id,
           sessionName: check.targetSession,
           message: check.message,
-          scheduledFor: new Date(Date.now() + check.intervalMinutes * 60 * 1000),
+          scheduledFor: new Date(Date.now() + (check.intervalMinutes || 30) * 60 * 1000),
           type: 'progress-check',
           recurring: {
-            interval: check.intervalMinutes,
+            interval: check.intervalMinutes || 0,
             currentOccurrence: check.currentOccurrence || 0,
             maxOccurrences: check.maxOccurrences,
+            cronExpression: check.cronExpression,
           },
           createdAt: check.createdAt,
         };
         this.enhancedMessages.set(check.id, enhancedMessage);
 
-        this.scheduleRecurringExecution(
-          check.id,
-          check.intervalMinutes,
-          check.targetSession,
-          check.message
-        );
+        // #167: Restore cron-based checks using cron scheduler, interval-based using setTimeout
+        if (check.cronExpression && cron.validate(check.cronExpression)) {
+          const task = cron.schedule(check.cronExpression, async () => {
+            if (!this.recurringChecks.has(check.id)) {
+              task.stop();
+              this.cronTasks.delete(check.id);
+              return;
+            }
+            await this.executeCheck(check.targetSession, this.addFreshnessInstructions(check.message));
+            const enh = this.enhancedMessages.get(check.id);
+            if (enh?.recurring) {
+              enh.recurring.currentOccurrence = (enh.recurring.currentOccurrence || 0) + 1;
+              const rc = this.recurringChecks.get(check.id);
+              if (rc) {
+                rc.currentOccurrence = enh.recurring.currentOccurrence;
+                this.storageService.saveRecurringCheck(rc).catch(() => {});
+              }
+              if (enh.recurring.maxOccurrences && enh.recurring.currentOccurrence >= enh.recurring.maxOccurrences) {
+                this.cancelCheck(check.id);
+              }
+            }
+          });
+          this.cronTasks.set(check.id, task);
+        } else if (check.intervalMinutes) {
+          this.scheduleRecurringExecution(
+            check.id,
+            check.intervalMinutes,
+            check.targetSession,
+            check.message
+          );
+        }
         restored++;
       }
 
@@ -1555,12 +1821,18 @@ export class SchedulerService extends EventEmitter {
       activeSessions.add(msg.sessionName);
     }
 
+    let deadLetterMessages = 0;
+    for (const messages of this.deadLetterQueue.values()) {
+      deadLetterMessages += messages.length;
+    }
+
     return {
       oneTimeChecks: this.scheduledChecks.size,
       recurringChecks: this.recurringChecks.size,
       totalActiveSessions: activeSessions.size,
       continuationChecks: this.continuationChecks.size,
       adaptiveChecks: this.adaptiveChecks.size,
+      deadLetterMessages,
     };
   }
 }

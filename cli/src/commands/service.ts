@@ -78,6 +78,34 @@ const SYSTEMD_UNIT_PATH = path.join(SYSTEMD_USER_DIR, SYSTEMD_UNIT_NAME);
 const SYSTEMD_WRAPPER_PATH = path.join(SERVICE_DIR, 'crewly-start.sh');
 
 // ---------------------------------------------------------------------------
+// Shared shell snippet: native module arch check
+// ---------------------------------------------------------------------------
+
+/**
+ * Shell snippet embedded in wrapper scripts that detects architecture
+ * mismatches between the running node binary and native modules (e.g.
+ * node-pty). If a mismatch is found, runs `npm rebuild` automatically
+ * before starting the backend — preventing the ERR_DLOPEN_FAILED crash
+ * that occurs when node-pty was compiled for x86_64 but node is arm64
+ * (or vice versa).
+ */
+const NATIVE_MODULE_CHECK = `# Auto-rebuild native modules if node arch doesn't match compiled binaries
+PTY_NODE="node_modules/node-pty/build/Release/pty.node"
+if [ -f "$PTY_NODE" ]; then
+  NODE_ARCH=$(node -p "process.arch")
+  PTY_ARCH=$(file "$PTY_NODE" | grep -o 'arm64\\|x86_64' | head -1)
+  # Normalize: node uses "x64", file uses "x86_64"
+  if [ "$NODE_ARCH" = "x64" ]; then NODE_ARCH="x86_64"; fi
+  if [ "$NODE_ARCH" = "arm64" ] && [ "$PTY_ARCH" = "x86_64" ]; then
+    echo "$(date): Architecture mismatch (node=arm64, pty.node=x86_64). Rebuilding..." | tee -a "$LOG_DIR/service.log" 2>/dev/null
+    npm rebuild node-pty 2>&1 | tee -a "$LOG_DIR/service.log" 2>/dev/null
+  elif [ "$NODE_ARCH" = "x86_64" ] && [ "$PTY_ARCH" = "arm64" ]; then
+    echo "$(date): Architecture mismatch (node=x86_64, pty.node=arm64). Rebuilding..." | tee -a "$LOG_DIR/service.log" 2>/dev/null
+    npm rebuild node-pty 2>&1 | tee -a "$LOG_DIR/service.log" 2>/dev/null
+  fi
+fi`;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -523,6 +551,8 @@ PIDFILE="$HOME/${CREWLY_CONSTANTS.PATHS.CREWLY_HOME}/crewly.pid"
 
 cd "$CREWLY_DIR" || { echo "Cannot cd to $CREWLY_DIR"; exit 1; }
 
+${NATIVE_MODULE_CHECK}
+
 echo "$(date): Starting Crewly backend (node $(node --version))..."
 
 # Write PID file for status checks
@@ -609,6 +639,8 @@ if [ -f "$PIDFILE" ]; then
 fi
 
 cd "$CREWLY_DIR" || { echo "Cannot cd to $CREWLY_DIR"; exit 1; }
+
+${NATIVE_MODULE_CHECK}
 
 echo "$(date): Starting Crewly backend (node $(node --version))..." | tee -a "$LOG_DIR/service.log"
 

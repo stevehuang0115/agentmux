@@ -1968,4 +1968,79 @@ describe('ContextWindowMonitorService', () => {
 			expect(service.getContextState('test-agent')).toBeUndefined();
 		});
 	});
+
+	describe('#166: pre-compaction memory flush', () => {
+		function createMockAgentRegWithSendMessage() {
+			return {
+				createAgentSession: jest.fn().mockResolvedValue({
+					success: true,
+					sessionName: 'test-session',
+				}),
+				sendMessageToAgent: jest.fn().mockResolvedValue({ success: true }),
+			};
+		}
+
+		it('should send memory flush message before first compact at red level', () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegWithSendMessage();
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// Transition to red
+			service.updateContextUsage('test-agent', 85);
+
+			// Should have sent pre-compaction flush message via agentRegistrationService
+			expect(mockAgentReg.sendMessageToAgent).toHaveBeenCalledWith(
+				'test-agent',
+				expect.stringContaining('PRE-COMPACTION MEMORY FLUSH'),
+				expect.anything()
+			);
+		});
+
+		it('should only send flush on first compact attempt', () => {
+			const service = ContextWindowMonitorService.getInstance();
+			const mockSession = createMockSession();
+			const sessions = new Map([['test-agent', mockSession.session]]);
+			const backend = createMockSessionBackend(sessions as any);
+			const mockAgentReg = createMockAgentRegWithSendMessage();
+			const eventBus = createMockEventBus();
+
+			service.setDependencies(
+				backend as any,
+				mockAgentReg as any,
+				{} as any,
+				createMockTaskTrackingService() as any,
+				eventBus as any
+			);
+
+			service.startSessionMonitoring('test-agent', 'member-1', 'team-1', 'developer');
+
+			// First red transition - should flush
+			service.updateContextUsage('test-agent', 85);
+			const flushCallCount = mockAgentReg.sendMessageToAgent.mock.calls.filter(
+				(call: unknown[]) => typeof call[1] === 'string' && (call[1] as string).includes('PRE-COMPACTION')
+			).length;
+			expect(flushCallCount).toBe(1);
+
+			// Second red evaluation should NOT flush again (compactAttempts > 0)
+			mockAgentReg.sendMessageToAgent.mockClear();
+			service.updateContextUsage('test-agent', 87);
+			const secondFlushCount = mockAgentReg.sendMessageToAgent.mock.calls.filter(
+				(call: unknown[]) => typeof call[1] === 'string' && (call[1] as string).includes('PRE-COMPACTION')
+			).length;
+			expect(secondFlushCount).toBe(0);
+		});
+	});
 });
