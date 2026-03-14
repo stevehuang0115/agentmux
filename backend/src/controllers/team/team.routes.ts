@@ -21,7 +21,8 @@ import {
   injectContextIntoSession,
   refreshMemberContext,
   getTeamActivityStatus,
-  updateTeamMemberRuntime
+  updateTeamMemberRuntime,
+  archiveTeam
 } from './team.controller.js';
 
 /**
@@ -43,6 +44,7 @@ export function createTeamRouter(context: ApiContext): Router {
   // Team lifecycle management
   router.post('/:id/start', startTeam.bind(context));
   router.post('/:id/stop', stopTeam.bind(context));
+  router.post('/:id/archive', archiveTeam.bind(context));
   router.get('/:id/workload', getTeamWorkload.bind(context));
 
   // Team member management

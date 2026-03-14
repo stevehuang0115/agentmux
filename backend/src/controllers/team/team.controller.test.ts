@@ -2879,4 +2879,145 @@ describe('Teams Handlers', () => {
       );
     });
   });
+
+  describe('#171: archiveTeam', () => {
+    const sampleTeam: Team = {
+      id: 'team-1',
+      name: 'Test Team',
+      members: [],
+      projectIds: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    it('should archive a team', async () => {
+      mockStorageService.getTeams.mockResolvedValue([{ ...sampleTeam }]);
+      mockRequest = { params: { id: 'team-1' }, body: {} };
+
+      await teamsHandlers.archiveTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: 'Team archived successfully',
+        })
+      );
+      const savedTeam = mockStorageService.saveTeam.mock.calls[0][0];
+      expect(savedTeam.archived).toBe(true);
+      expect(savedTeam.archivedAt).toBeTruthy();
+    });
+
+    it('should unarchive a team when archived=false', async () => {
+      mockStorageService.getTeams.mockResolvedValue([{ ...sampleTeam, archived: true, archivedAt: '2026-01-01T00:00:00.000Z' }]);
+      mockRequest = { params: { id: 'team-1' }, body: { archived: false } };
+
+      await teamsHandlers.archiveTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          message: 'Team unarchived successfully',
+        })
+      );
+      const savedTeam = mockStorageService.saveTeam.mock.calls[0][0];
+      expect(savedTeam.archived).toBe(false);
+      expect(savedTeam.archivedAt).toBeUndefined();
+    });
+
+    it('should reject archiving the orchestrator team', async () => {
+      mockRequest = { params: { id: 'orchestrator' }, body: {} };
+
+      await teamsHandlers.archiveTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(400);
+      expect(responseMock.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: 'Cannot archive the Orchestrator team',
+        })
+      );
+    });
+
+    it('should return 404 for non-existent team', async () => {
+      mockStorageService.getTeams.mockResolvedValue([]);
+      mockRequest = { params: { id: 'non-existent' }, body: {} };
+
+      await teamsHandlers.archiveTeam.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      expect(responseMock.status).toHaveBeenCalledWith(404);
+    });
+  });
+
+  describe('#171: getTeams archived filter', () => {
+    const activeTeam: Team = {
+      id: 'active-1',
+      name: 'Active Team',
+      members: [],
+      projectIds: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const archivedTeam: Team = {
+      id: 'archived-1',
+      name: 'Archived Team',
+      members: [],
+      projectIds: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      archived: true,
+      archivedAt: '2026-03-01T00:00:00.000Z',
+    };
+
+    it('should exclude archived teams by default', async () => {
+      mockStorageService.getTeams.mockResolvedValue([activeTeam, archivedTeam]);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue({ agentStatus: 'active' });
+      mockRequest = { query: {} };
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as { data: Team[] };
+      // Should include orchestrator + active team, but NOT archived team
+      const teamNames = responseData.data.map((t: Team) => t.name);
+      expect(teamNames).toContain('Active Team');
+      expect(teamNames).not.toContain('Archived Team');
+    });
+
+    it('should include archived teams when includeArchived=true', async () => {
+      mockStorageService.getTeams.mockResolvedValue([activeTeam, archivedTeam]);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue({ agentStatus: 'active' });
+      mockRequest = { query: { includeArchived: 'true' } };
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as { data: Team[] };
+      const teamNames = responseData.data.map((t: Team) => t.name);
+      expect(teamNames).toContain('Active Team');
+      expect(teamNames).toContain('Archived Team');
+    });
+  });
 });

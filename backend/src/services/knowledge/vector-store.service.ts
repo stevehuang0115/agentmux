@@ -14,9 +14,41 @@
 
 import * as path from 'path';
 import { existsSync, mkdirSync } from 'fs';
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { CREWLY_CONSTANTS } from '../../constants.js';
+
+/**
+ * Lazy-loaded better-sqlite3 module reference.
+ *
+ * Uses dynamic require so that a native-module load failure does NOT
+ * cascade to every test file that transitively imports this service.
+ * The module is loaded on first actual database access, not at import time.
+ *
+ * @see https://github.com/stevehuang0115/crewly/issues/170
+ */
+let _BetterSqlite3: typeof import('better-sqlite3') | null = null;
+
+/**
+ * Load better-sqlite3 on demand. Throws a clear error if the native module
+ * is not available (e.g. needs `npm rebuild better-sqlite3`).
+ */
+function getBetterSqlite3(): typeof import('better-sqlite3') {
+  if (!_BetterSqlite3) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      _BetterSqlite3 = require('better-sqlite3');
+    } catch (err) {
+      throw new Error(
+        'better-sqlite3 native module failed to load. Run `npm rebuild better-sqlite3` to fix. ' +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  return _BetterSqlite3!;
+}
+
+/** Type alias for a better-sqlite3 Database instance */
+type DatabaseType = import('better-sqlite3').Database;
 
 /** Constants for the vector store */
 export const VECTOR_STORE_CONSTANTS = {
@@ -190,6 +222,7 @@ export class VectorStoreService {
       mkdirSync(dir, { recursive: true });
     }
 
+    const Database = getBetterSqlite3();
     const db = new Database(dbFile);
 
     // Enable WAL mode for better concurrent read performance

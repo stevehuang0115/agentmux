@@ -36,6 +36,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Session-based task completion (for report-status auto-completion)
   router.post('/task-management/complete-by-session', (req, res) => taskMgmtHandlers.completeTasksBySession.call(apiController, req, res));
 
+  // Orphan task detection and cleanup (#168)
+  router.post('/task-management/cleanup', (req, res) => taskMgmtHandlers.cleanupOrphanTasks.call(apiController, req, res));
+
   // List tasks for a project (used by get_tasks tool)
   router.get('/task-management/tasks', (req, res) => taskMgmtHandlers.listTasks.call(apiController, req, res));
 

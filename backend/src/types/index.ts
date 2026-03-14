@@ -89,6 +89,12 @@ export interface Team {
 
   /** Parent team ID for team organization/grouping. null/undefined = top-level team. */
   parentTeamId?: string;
+
+  /** Whether this team is archived. Archived teams are hidden from default listings. (#171) */
+  archived?: boolean;
+
+  /** ISO timestamp when the team was archived. (#171) */
+  archivedAt?: string;
 }
 
 export interface Project {
@@ -146,6 +152,8 @@ export interface ScheduledCheck {
   taskId?: string;
   /** Cron expression for cron-based scheduling (e.g., '0 9 * * *'). Overrides intervalMinutes when set. (#167) */
   cronExpression?: string;
+  /** Session ID that created this check — used to auto-cancel stale checks from previous sessions on restart (#169) */
+  sessionId?: string;
 }
 
 export interface ScheduledMessage {

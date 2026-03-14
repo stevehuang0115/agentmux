@@ -168,6 +168,8 @@ export class SchedulerService extends EventEmitter {
    * whose message mentions a recently-checked session are suppressed.
    */
   private lastManualCheck = new Map<string, number>();
+  /** Unique session ID generated on construction — tags all new checks so stale checks from previous sessions can be purged on restart (#169). */
+  private readonly sessionId: string;
 
   /**
    * Creates a new SchedulerService
@@ -177,7 +179,17 @@ export class SchedulerService extends EventEmitter {
   constructor(storageService: StorageService) {
     super();
     this.storageService = storageService;
+    this.sessionId = uuidv4();
     this.logger = LoggerService.getInstance().createComponentLogger('SchedulerService');
+  }
+
+  /**
+   * Get the current session ID for this SchedulerService instance.
+   *
+   * @returns The unique session ID
+   */
+  getSessionId(): string {
+    return this.sessionId;
   }
 
   /**
@@ -394,6 +406,7 @@ export class SchedulerService extends EventEmitter {
       timeOfDay: options?.timeOfDay,
       dayOfWeek: options?.dayOfWeek,
       createdAt: new Date().toISOString(),
+      sessionId: this.sessionId,
     };
 
     // Store enhanced message info
@@ -509,6 +522,7 @@ export class SchedulerService extends EventEmitter {
       currentOccurrence: 0,
       createdAt: new Date().toISOString(),
       taskId: options?.taskId,
+      sessionId: this.sessionId,
     };
 
     this.recurringChecks.set(checkId, scheduledCheck);
@@ -609,6 +623,7 @@ export class SchedulerService extends EventEmitter {
       createdAt: new Date().toISOString(),
       label: options?.label,
       taskId: options?.taskId,
+      sessionId: this.sessionId,
     };
 
     this.recurringChecks.set(checkId, scheduledCheck);
@@ -1628,8 +1643,26 @@ export class SchedulerService extends EventEmitter {
 
       let restored = 0;
       let purged = 0;
+      let staleSessionPurged = 0;
       for (const check of persisted) {
         if (!check.isRecurring || (!check.intervalMinutes && !check.cronExpression)) {
+          continue;
+        }
+
+        // #169: Skip and purge checks from previous sessions
+        if (check.sessionId && check.sessionId !== this.sessionId) {
+          this.logger.info('Purging stale recurring check from previous session', {
+            checkId: check.id,
+            staleSessionId: check.sessionId,
+            currentSessionId: this.sessionId,
+          });
+          this.storageService.deleteRecurringCheck(check.id).catch(err => {
+            this.logger.error('Failed to delete stale session recurring check', {
+              checkId: check.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          staleSessionPurged++;
           continue;
         }
 
@@ -1709,6 +1742,7 @@ export class SchedulerService extends EventEmitter {
         total: persisted.length,
         restored,
         purgedCompletedTasks: purged,
+        purgedStaleSessions: staleSessionPurged,
       });
 
       return restored;
@@ -1737,11 +1771,29 @@ export class SchedulerService extends EventEmitter {
       }
 
       let restored = 0;
+      let staleSessionPurged = 0;
       const now = Date.now();
 
       for (const check of persisted) {
         // Skip recurring checks that ended up here by mistake
         if (check.isRecurring) {
+          continue;
+        }
+
+        // #169: Skip and purge checks from previous sessions
+        if (check.sessionId && check.sessionId !== this.sessionId) {
+          this.logger.info('Purging stale one-time check from previous session', {
+            checkId: check.id,
+            staleSessionId: check.sessionId,
+            currentSessionId: this.sessionId,
+          });
+          this.storageService.deleteOneTimeCheck(check.id).catch(err => {
+            this.logger.error('Failed to delete stale session one-time check', {
+              checkId: check.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+          staleSessionPurged++;
           continue;
         }
 
@@ -1792,6 +1844,7 @@ export class SchedulerService extends EventEmitter {
       this.logger.info('Restored one-time checks from disk', {
         total: persisted.length,
         restored,
+        purgedStaleSessions: staleSessionPurged,
       });
 
       return restored;
