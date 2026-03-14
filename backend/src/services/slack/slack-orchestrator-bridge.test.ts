@@ -1465,9 +1465,18 @@ describe('SlackOrchestratorBridge', () => {
       sanitize = (sanitizeBridge as any).sanitizeForSlack.bind(sanitizeBridge);
     });
 
-    it('should strip NOTIFY tags and metadata headers', () => {
+    it('should strip entire NOTIFY blocks including body', () => {
       const input = '[NOTIFY]\nconversationId: slack-C123\ntype: update\ntitle: Test\n---\nActual message\n[/NOTIFY]';
-      expect(sanitize(input)).toBe('Actual message');
+      expect(sanitize(input)).toBe('');
+    });
+
+    it('should preserve text outside NOTIFY blocks', () => {
+      const input = 'Before text [NOTIFY]\ntype: update\n---\nbody\n[/NOTIFY] After text';
+      const result = sanitize(input);
+      expect(result).toContain('Before text');
+      expect(result).toContain('After text');
+      expect(result).not.toContain('type: update');
+      expect(result).not.toContain('body');
     });
 
     it('should strip Claude Code satisfaction survey', () => {

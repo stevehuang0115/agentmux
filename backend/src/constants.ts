@@ -1132,8 +1132,8 @@ export const CLOUD_AUTH_CONSTANTS = {
  * remains alive between audits, and only shuts down when the service stops.
  */
 export const AUDITOR_SCHEDULER_CONSTANTS = {
-	/** Periodic full-sweep audit interval (30 minutes) */
-	AUDIT_INTERVAL_MS: 30 * 60 * 1000,
+	/** Periodic full-sweep audit interval (15 minutes) */
+	AUDIT_INTERVAL_MS: 15 * 60 * 1000,
 	/** Debounce window for event-driven triggers (30 seconds) */
 	EVENT_DEBOUNCE_MS: 30_000,
 	/** Maximum time a single audit run can take before timeout (10 minutes).

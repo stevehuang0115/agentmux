@@ -319,6 +319,16 @@ export class AgentRunnerService {
       }
     }
 
+    // Warn if tool call count is excessive (polling dead-loop protection)
+    const maxToolCalls = CREWLY_AGENT_DEFAULTS.MAX_TOOL_CALLS_PER_RESPONSE;
+    if (toolCalls.length > maxToolCalls) {
+      console.warn('[AgentRunner] Excessive tool calls in single response:', {
+        count: toolCalls.length,
+        limit: maxToolCalls,
+        topTools: toolCalls.slice(0, 5).map(tc => tc.toolName),
+      });
+    }
+
     // Add assistant response to history
     if (result.text) {
       this.state.messages.push({ role: 'assistant', content: result.text });

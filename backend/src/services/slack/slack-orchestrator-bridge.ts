@@ -1112,16 +1112,8 @@ Just type naturally to chat with the orchestrator!`;
    */
   private sanitizeForSlack(raw: string): string {
     return raw
-      // Strip [NOTIFY] / [/NOTIFY] tags
-      .replace(/\[\/?NOTIFY\]/g, '')
-      // Strip NOTIFY metadata headers
-      .replace(/^conversationId:.*$/gm, '')
-      .replace(/^channelId:.*$/gm, '')
-      .replace(/^threadTs:.*$/gm, '')
-      .replace(/^type:.*$/gm, '')
-      .replace(/^title:.*$/gm, '')
-      .replace(/^urgency:.*$/gm, '')
-      .replace(/^---$/gm, '')
+      // Strip entire [NOTIFY]...[/NOTIFY] blocks (headers + body)
+      .replace(/\[NOTIFY\][\s\S]*?\[\/NOTIFY\]/g, '')
       // Strip Claude Code UI elements
       .replace(/^.*How is Claude doing this session\?.*$/gm, '')
       .replace(/^.*\d:\s*Bad\s+\d:\s*Fine\s+\d:\s*Good\s+\d:\s*Dismiss.*$/gm, '')
@@ -1169,14 +1161,8 @@ Just type naturally to chat with the orchestrator!`;
     }
 
     const cleaned = raw
-      .replace(/\[\/?NOTIFY\]/g, '')
-      .replace(/^conversationId:.*$/gm, '')
-      .replace(/^channelId:.*$/gm, '')
-      .replace(/^threadTs:.*$/gm, '')
-      .replace(/^type:.*$/gm, '')
-      .replace(/^title:.*$/gm, '')
-      .replace(/^urgency:.*$/gm, '')
-      .replace(/^---$/gm, '')
+      // Strip entire [NOTIFY]...[/NOTIFY] blocks
+      .replace(/\[NOTIFY\][\s\S]*?\[\/NOTIFY\]/g, '')
       // Strip TUI box-drawing border characters from Gemini CLI output
       .replace(/^[\s│┃║|]+|[\s│┃║|]+$/gm, '')
       // Remove pure decoration lines (corners, horizontal rules)

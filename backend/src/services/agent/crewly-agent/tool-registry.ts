@@ -14,6 +14,9 @@ import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
 import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, ApprovalCheckResult, AuditLogFilters } from './types.js';
 
+/** TTL for delegation idle event subscriptions (minutes) */
+const DELEGATION_SUBSCRIPTION_TTL_MINUTES = 120;
+
 /**
  * Expand ~ and $HOME in a file path to the user's home directory.
  *
@@ -325,14 +328,21 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           }
         }
 
-        // Subscribe to idle event for monitoring
-        await client.post('/events/subscribe', {
-          eventType: 'agent:idle',
-          filter: { sessionName: to },
-          subscriberSession: sessionName,
-          oneShot: true,
-          ttlMinutes: 120,
-        });
+        // Subscribe to idle event for monitoring (with dedup check)
+        const existingSubs = await client.get(`/events/subscriptions?subscriberSession=${encodeURIComponent(sessionName)}`).catch(() => null);
+        const alreadySubscribed = existingSubs?.success && Array.isArray(existingSubs.data) &&
+          (existingSubs.data as Array<{ eventType: string; filter?: Record<string, string> }>).some(
+            sub => sub.eventType === 'agent:idle' && sub.filter?.sessionName === (to as string),
+          );
+        if (!alreadySubscribed) {
+          await client.post('/events/subscribe', {
+            eventType: 'agent:idle',
+            filter: { sessionName: to },
+            subscriberSession: sessionName,
+            oneShot: true,
+            ttlMinutes: DELEGATION_SUBSCRIPTION_TTL_MINUTES,
+          });
+        }
 
         return { success: true, delegatedTo: to, taskId, conversationId: conversationId || undefined };
       },
