@@ -2188,7 +2188,7 @@ describe('Teams Handlers', () => {
       setTeamControllerEventBusService(null as any);
     });
 
-    it('should auto-subscribe orchestrator to agent events on registration', async () => {
+    it('should NOT auto-subscribe orchestrator to agent events on registration (removed to avoid spam)', async () => {
       mockRequest.body = {
         sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
         role: 'orchestrator',
@@ -2204,79 +2204,7 @@ describe('Teams Handlers', () => {
         mockResponse as Response
       );
 
-      expect(mockEventBusService.listSubscriptions).toHaveBeenCalledWith(
-        CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME
-      );
-      // Should subscribe to CRITICAL events only (not noisy idle/busy toggles)
-      expect(mockEventBusService.subscribe).toHaveBeenCalledWith(
-        expect.objectContaining({
-          filter: {},
-          subscriberSession: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-          oneShot: false,
-          ttlMinutes: 1440,
-        })
-      );
-      // Verify critical event types are included
-      const subscribedTypes = (mockEventBusService.subscribe.mock.calls[0][0] as any).eventType;
-      expect(subscribedTypes).toContain('task:completed');
-      expect(subscribedTypes).toContain('task:failed');
-      expect(subscribedTypes).toContain('agent:inactive');
-      expect(subscribedTypes).toContain('agent:context_critical');
-      expect(subscribedTypes).toContain('hierarchy:escalation');
-      // Verify noisy info events are NOT included
-      expect(subscribedTypes).not.toContain('agent:idle');
-      expect(subscribedTypes).not.toContain('agent:busy');
-      expect(subscribedTypes).not.toContain('agent:status_changed');
-    });
-
-    it('should clear existing subscriptions before re-subscribing', async () => {
-      mockEventBusService.listSubscriptions.mockReturnValue([
-        { id: 'old-sub-1' },
-        { id: 'old-sub-2' },
-      ]);
-
-      mockRequest.body = {
-        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-        role: 'orchestrator',
-        status: 'active',
-      };
-
-      mockStorageService.updateOrchestratorStatus = jest.fn<any>().mockResolvedValue(undefined);
-
-      await teamsHandlers.registerMemberStatus.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(mockEventBusService.unsubscribe).toHaveBeenCalledWith('old-sub-1');
-      expect(mockEventBusService.unsubscribe).toHaveBeenCalledWith('old-sub-2');
-      expect(mockEventBusService.subscribe).toHaveBeenCalledTimes(1);
-    });
-
-    it('should gracefully handle missing eventBusService', async () => {
-      // Reset to null
-      setTeamControllerEventBusService(null as any);
-
-      mockRequest.body = {
-        sessionName: CREWLY_CONSTANTS.SESSIONS.ORCHESTRATOR_NAME,
-        role: 'orchestrator',
-        status: 'active',
-      };
-
-      mockStorageService.updateOrchestratorStatus = jest.fn<any>().mockResolvedValue(undefined);
-
-      // Should not throw
-      await teamsHandlers.registerMemberStatus.call(
-        mockApiContext,
-        mockRequest as Request,
-        mockResponse as Response
-      );
-
-      expect(responseMock.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true })
-      );
-      // subscribe should not be called since eventBusService is null
+      // Orchestrator should NOT subscribe to agent events — it reads status on-demand
       expect(mockEventBusService.subscribe).not.toHaveBeenCalled();
     });
 
