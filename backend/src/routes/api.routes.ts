@@ -23,6 +23,7 @@ import { createKnowledgeRouter } from '../controllers/knowledge/index.js';
 import { createTemplateRouter } from '../controllers/template/index.js';
 import { createAuditorRouter } from '../controllers/auditor/auditor.routes.js';
 import { createPaymentRouter } from '../controllers/payment/payment.routes.js';
+import { createRelayRouter } from '../controllers/cloud/index.js';
 
 /**
  * Creates API routes using the new organized controller structure
@@ -91,6 +92,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Payment routes for Stripe checkout, subscriptions, and webhooks
   router.use('/payment', createPaymentRouter());
+
+  // Relay routes for cloud relay client endpoints (connect, disconnect, devices, send)
+  router.use('/relay', createRelayRouter());
 
   // Keep legacy modular routes for handlers not yet migrated (for backward compatibility)
   // Note: Project routes consolidated into new architecture - no longer needed here
