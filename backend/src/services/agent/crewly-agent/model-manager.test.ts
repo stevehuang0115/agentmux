@@ -61,9 +61,9 @@ describe('ModelManager', () => {
     });
 
     it('should create a Google model', async () => {
-      const model = await manager.getModel({ provider: 'google', modelId: 'gemini-2.5-flash' });
+      const model = await manager.getModel({ provider: 'google', modelId: 'gemini-3.1-flash' });
       expect(model).toBeDefined();
-      expect((model as any).modelId).toBe('gemini-2.5-flash');
+      expect((model as any).modelId).toBe('gemini-3.1-flash');
     });
 
     it('should use default config when none provided', async () => {
@@ -120,7 +120,7 @@ describe('ModelManager', () => {
       process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stale-free-key';
       // getModel calls ensureApiKeyInEnv internally; the mock resolves from process.env
       // But in production, settings.getApiKey returns the paid key which overwrites env
-      await manager.getModel({ provider: 'google', modelId: 'gemini-2.5-flash' });
+      await manager.getModel({ provider: 'google', modelId: 'gemini-3.1-flash' });
       // The key should now be whatever settings returned (in our mock: the env value itself,
       // but the important thing is ensureApiKeyInEnv does NOT skip when env already set)
       expect(process.env.GOOGLE_GENERATIVE_AI_API_KEY).toBeDefined();
