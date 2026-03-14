@@ -85,6 +85,8 @@ import { VersionCheckService } from './services/system/version-check.service.js'
 import { LogRotationService } from './services/session/log-rotation.service.js';
 import { AuditorSchedulerService } from './services/agent/auditor-scheduler.service.js';
 import { setAuditorSchedulerService } from './controllers/auditor/auditor.controller.js';
+import { RuntimeServiceFactory } from './services/agent/runtime-service.factory.js';
+import { CrewlyAgentRuntimeService } from './services/agent/crewly-agent/crewly-agent-runtime.service.js';
 
 // ESM __dirname equivalent using import.meta.url
 const __filename = fileURLToPath(import.meta.url);
@@ -808,6 +810,12 @@ export class CrewlyServer {
 			// Start AuditorSchedulerService (non-critical — audit scheduling)
 			try {
 				const auditorScheduler = AuditorSchedulerService.getInstance();
+				const auditorRuntime = RuntimeServiceFactory.createFresh(
+					RUNTIME_TYPES.CREWLY_AGENT as RuntimeType,
+					null,
+					findPackageRoot(__dirname)
+				) as CrewlyAgentRuntimeService;
+				auditorScheduler.setAuditorRuntime(auditorRuntime);
 				auditorScheduler.setEventBusService(this.eventBusService);
 				setAuditorSchedulerService(auditorScheduler);
 				auditorScheduler.start();
