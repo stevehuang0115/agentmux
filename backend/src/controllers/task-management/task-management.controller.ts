@@ -1792,7 +1792,16 @@ export async function listTasks(this: ApiController, req: Request, res: Response
 			return;
 		}
 
-		const tasksBasePath = join(projectPath, '.crewly', 'tasks');
+		// Validate status filter against known values to prevent path traversal
+		const VALID_STATUSES = ['open', 'in_progress', 'blocked', 'done'] as const;
+		if (statusFilter && !VALID_STATUSES.includes(statusFilter as typeof VALID_STATUSES[number])) {
+			res.status(400).json({ success: false, error: `status must be one of: ${VALID_STATUSES.join(', ')}` });
+			return;
+		}
+
+		// Resolve and validate project path to prevent directory traversal
+		const resolvedPath = resolve(projectPath);
+		const tasksBasePath = join(resolvedPath, '.crewly', 'tasks');
 		if (!existsSync(tasksBasePath)) {
 			res.json({ success: true, tasks: [] });
 			return;
@@ -1806,7 +1815,7 @@ export async function listTasks(this: ApiController, req: Request, res: Response
 			const milestoneStat = await stat(milestonePath).catch(() => null);
 			if (!milestoneStat?.isDirectory()) continue;
 
-			const statusDirs = statusFilter ? [statusFilter] : ['open', 'in_progress', 'blocked', 'done'];
+			const statusDirs = statusFilter ? [statusFilter] : [...VALID_STATUSES];
 			for (const status of statusDirs) {
 				const statusPath = join(milestonePath, status);
 				if (!existsSync(statusPath)) continue;

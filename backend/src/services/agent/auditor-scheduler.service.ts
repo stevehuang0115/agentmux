@@ -267,7 +267,9 @@ export class AuditorSchedulerService {
       // Re-initialize runtime if it crashed so next trigger can succeed
       if (this.auditorRuntime && !this.auditorRuntime.isReady()) {
         this.logger.info('Auditor runtime not ready after error, re-initializing');
-        void this.initializeAuditorRuntime();
+        void this.initializeAuditorRuntime().catch((err) => {
+          this.logger.error('Failed to re-initialize auditor runtime', { error: formatError(err) });
+        });
       }
 
       return { triggered: false, reason: `Audit error: ${errMsg}`, source, timestamp };
