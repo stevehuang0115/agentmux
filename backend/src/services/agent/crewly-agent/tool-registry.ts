@@ -119,6 +119,8 @@ export const TOOL_SENSITIVITY: Record<string, ToolSensitivity> = {
   git_commit: 'sensitive',
   // Shell execution (#176)
   bash_exec: 'destructive',
+  // Task handoff (F12)
+  handoff_task: 'sensitive',
 };
 
 /**
@@ -1216,6 +1218,70 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         } catch (error) {
           return { success: false, error: error instanceof Error ? error.message : String(error) };
         }
+      },
+    },
+
+    // ===================================================================
+    // Task Handoff (F12)
+    // ===================================================================
+
+    handoff_task: {
+      description: 'Hand off an in-progress task to another agent with full context (progress, findings, blockers). Unlike delegate_task which assigns NEW work, handoff transfers ONGOING work so the receiving agent can continue where you left off.',
+      inputSchema: z.object({
+        to: z.string().describe('Target agent session name to hand off to'),
+        reason: z.string().describe('Why you are handing off (blocked, expertise needed, etc.)'),
+        progress: z.string().optional().describe('Current progress summary (what is done so far)'),
+        findings: z.string().optional().describe('Key findings and decisions made'),
+        blockers: z.string().optional().describe('Current blockers or notes for the receiving agent'),
+        taskPath: z.string().optional().describe('Path to the task markdown file'),
+      }),
+      sensitivity: 'sensitive' as ToolSensitivity,
+      execute: async ({ to, reason, progress, findings, blockers, taskPath }) => {
+        const target = to as string;
+        const handoffReason = reason as string;
+
+        // Build handoff context message
+        let message = `[TASK HANDOFF] from ${sessionName}\n\n## Reason\n${handoffReason}\n`;
+        if (progress) message += `\n## Progress\n${progress}\n`;
+        if (findings) message += `\n## Key Findings\n${findings}\n`;
+        if (blockers) message += `\n## Blockers / Notes\n${blockers}\n`;
+        if (taskPath) message += `\n## Task File\n${taskPath}\n`;
+
+        if (projectPath) {
+          message += `\n---\nWhen done, report back using: bash config/skills/agent/core/report-status/execute.sh '{"sessionName":"${target}","status":"done","summary":"<brief summary>","projectPath":"${projectPath}"}'`;
+        }
+
+        // Deliver to target agent
+        const deliverResult = await client.post(`/terminal/${target}/deliver`, {
+          message,
+          waitForReady: true,
+          waitTimeout: 15000,
+        }).catch(async () => {
+          // Retry with force
+          return client.post(`/terminal/${target}/deliver`, { message, force: true });
+        });
+
+        // Record handoff via task management
+        const handoffRecord = await client.post('/task-management/handoff', {
+          from: sessionName,
+          to: target,
+          taskPath: taskPath || '',
+          reason: handoffReason,
+          progress: progress || '',
+          projectPath: projectPath || '',
+        }).catch(() => ({ success: false, error: 'handoff tracking not available' }));
+
+        return {
+          success: deliverResult?.success ?? false,
+          handoff: {
+            from: sessionName,
+            to: target,
+            reason: handoffReason,
+            timestamp: new Date().toISOString(),
+          },
+          delivery: deliverResult?.success ? 'delivered' : (deliverResult?.error || 'failed'),
+          tracking: handoffRecord?.success ? 'tracked' : 'not tracked',
+        };
       },
     },
   };

@@ -45,6 +45,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // Task quality scoring (#174 — auditor score-task skill)
   router.post('/tasks/score', (req, res) => taskMgmtHandlers.scoreTask.call(apiController, req, res));
 
+  // Task handoff (F12 — multi-agent A→B handoff)
+  router.post('/task-management/handoff', (req, res) => taskMgmtHandlers.recordHandoff.call(apiController, req, res));
+
   // In-Progress Tasks Routes
   router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }
