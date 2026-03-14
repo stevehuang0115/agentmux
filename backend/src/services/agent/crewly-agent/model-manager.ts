@@ -86,6 +86,8 @@ export class ModelManager {
         const { createOllama } = await import('ollama-ai-provider');
         const baseURL = process.env.OLLAMA_BASE_URL || CREWLY_AGENT_DEFAULTS.OLLAMA_BASE_URL;
         const ollamaProvider = createOllama({ baseURL });
+        // ollama-ai-provider exports LanguageModelV1 which is compatible but
+        // doesn't extend the newer LanguageModel union — safe to cast.
         providerFn = (modelId: string) => ollamaProvider(modelId) as unknown as LanguageModel;
         break;
       }

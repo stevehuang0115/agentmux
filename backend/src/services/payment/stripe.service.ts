@@ -33,6 +33,9 @@ export interface SubscriptionInfo {
   cancelAtPeriodEnd: boolean;
 }
 
+/** Default plan ID when metadata is missing */
+const DEFAULT_PLAN_ID = 'pro' as const;
+
 /** Maps plan+interval keys to environment variable names for Stripe Price IDs */
 const PRICE_ENV_VAR_MAP: Readonly<Record<string, string>> = {
   'pro_month': 'STRIPE_PRICE_PRO_MONTHLY',
@@ -96,16 +99,6 @@ export class StripeService {
   }
 
   /**
-   * Return the Stripe client, or null if not configured.
-   * Callers use the return value directly, allowing TS to narrow the type.
-   *
-   * @returns Stripe instance or null
-   */
-  private getStripeClient(): Stripe | null {
-    return this.stripe;
-  }
-
-  /**
    * Find a Stripe customer by userId stored in metadata.
    *
    * @param client - Stripe client (must be non-null)
@@ -137,7 +130,7 @@ export class StripeService {
     successUrl: string,
     cancelUrl: string,
   ): Promise<StripeResult<{ checkoutUrl: string; sessionId: string }>> {
-    const client = this.getStripeClient();
+    const client = this.stripe;
     if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
@@ -189,7 +182,7 @@ export class StripeService {
     rawBody: Buffer,
     signature: string,
   ): Promise<StripeResult<{ eventType: string }>> {
-    const client = this.getStripeClient();
+    const client = this.stripe;
     if (!client || !this.webhookSecret) {
       return { success: false, message: 'Stripe webhook is not configured' };
     }
@@ -237,7 +230,7 @@ export class StripeService {
    * @returns Result with subscription data or null if no active subscription
    */
   async getSubscription(userId: string): Promise<StripeResult<SubscriptionInfo | null>> {
-    const client = this.getStripeClient();
+    const client = this.stripe;
     if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
@@ -248,6 +241,8 @@ export class StripeService {
         return { success: true, data: null };
       }
 
+      // Only returns 'active' subscriptions — past_due and trialing
+      // are handled separately by webhook events.
       const subscriptions = await client.subscriptions.list({
         customer: customer.id,
         status: 'active',
@@ -264,7 +259,7 @@ export class StripeService {
         data: {
           subscriptionId: sub.id,
           status: sub.status,
-          planId: sub.metadata?.planId ?? 'pro',
+          planId: sub.metadata?.planId ?? DEFAULT_PLAN_ID,
           cancelAt: sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : null,
           cancelAtPeriodEnd: sub.cancel_at_period_end,
         },
@@ -286,7 +281,7 @@ export class StripeService {
     userId: string,
     returnUrl: string,
   ): Promise<StripeResult<{ portalUrl: string }>> {
-    const client = this.getStripeClient();
+    const client = this.stripe;
     if (!client) {
       return { success: false, message: 'Stripe is not configured' };
     }
@@ -322,7 +317,7 @@ export class StripeService {
    */
   private async handleCheckoutCompleted(client: Stripe, session: Stripe.Checkout.Session): Promise<void> {
     const userId = session.metadata?.userId ?? session.client_reference_id;
-    const planId = session.metadata?.planId ?? 'pro';
+    const planId = session.metadata?.planId ?? DEFAULT_PLAN_ID;
 
     if (!userId) {
       logger.warn('Checkout completed without userId', { sessionId: session.id });
