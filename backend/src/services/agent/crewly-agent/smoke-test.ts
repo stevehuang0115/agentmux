@@ -27,7 +27,7 @@ if (!API_KEY) {
 async function main(): Promise<void> {
   console.log('=== Crewly Agent Runtime Smoke Test ===\n');
   console.log('Provider: google');
-  console.log('Model: gemini-3.1-flash');
+  console.log('Model: gemini-2.0-flash');
   console.log('API Key: ...%s', API_KEY!.slice(-6));
   console.log();
 
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
     // Step 1: Initialize with Gemini
     console.log('[1/4] Initializing runtime...');
     await runtime.initializeInProcess('smoke-test-session', {
-      model: { provider: 'google', modelId: 'gemini-3.1-flash' },
+      model: { provider: 'google', modelId: 'gemini-2.0-flash' },
       maxSteps: 5,
       systemPrompt: `You are a test agent. When asked to check team status, you MUST call the get_team_status tool. After getting the result, summarize it briefly. Always use tools when available.`,
     });
