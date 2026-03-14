@@ -9,9 +9,9 @@
  * Write endpoints (create, update, archive, add version, publish)
  * require authentication.
  *
- * Note: Supabase auth middleware was removed when cloud services were
- * deleted. Write endpoints currently use a pass-through placeholder
- * that must be replaced with a real auth middleware before production.
+ * Note: Write endpoints use a shared pass-through placeholder middleware
+ * (require-auth.middleware.ts) that must be replaced with a real auth
+ * implementation before production.
  *
  * @module controllers/marketplace/template-marketplace.routes
  */

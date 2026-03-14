@@ -7,9 +7,9 @@
  * The webhook endpoint uses raw body parsing for Stripe signature
  * verification (configured at the Express app level).
  *
- * Note: Supabase auth middleware was removed when cloud services were
- * deleted. Authenticated endpoints currently use a pass-through placeholder
- * that must be replaced with a real auth middleware before production.
+ * Note: Authenticated endpoints use a shared pass-through placeholder
+ * middleware (require-auth.middleware.ts) that must be replaced with
+ * a real auth implementation before production.
  *
  * @module controllers/payment/payment.routes
  */
