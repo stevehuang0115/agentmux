@@ -9,11 +9,13 @@
 
 import type { ModelMessage } from 'ai';
 import type { z } from 'zod';
+import type { McpServerConfig } from '../../mcp-client.js';
+import type { McpSensitivityOverrides } from './mcp-tool-bridge.js';
 
 /**
  * Supported model providers for Crewly Agent
  */
-export type ModelProvider = 'anthropic' | 'openai' | 'google';
+export type ModelProvider = 'anthropic' | 'openai' | 'google' | 'ollama';
 
 /**
  * All valid model providers
@@ -22,13 +24,14 @@ export const MODEL_PROVIDERS: readonly ModelProvider[] = [
   'anthropic',
   'openai',
   'google',
+  'ollama',
 ] as const;
 
 /**
  * Configuration for a specific model instance
  */
 export interface ModelConfig {
-  /** Model provider (e.g., 'anthropic', 'openai', 'google') */
+  /** Model provider (e.g., 'anthropic', 'openai', 'google', 'ollama') */
   provider: ModelProvider;
   /** Model identifier (e.g., 'claude-sonnet-4-20250514', 'gpt-4o', 'gemini-3.1-flash') */
   modelId: string;
@@ -74,6 +77,10 @@ export interface CrewlyAgentConfig {
   compactionThreshold: number;
   /** Project path for memory and task tools (auto-injected) */
   projectPath?: string;
+  /** MCP server configurations for external tool integration */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** Sensitivity overrides for MCP tools (key: 'serverName:toolName' or 'toolName') */
+  mcpSensitivityOverrides?: McpSensitivityOverrides;
 }
 
 /**

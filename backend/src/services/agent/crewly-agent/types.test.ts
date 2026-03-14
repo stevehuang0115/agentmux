@@ -23,7 +23,8 @@ describe('Crewly Agent Types', () => {
       expect(MODEL_PROVIDERS).toContain('anthropic');
       expect(MODEL_PROVIDERS).toContain('openai');
       expect(MODEL_PROVIDERS).toContain('google');
-      expect(MODEL_PROVIDERS).toHaveLength(3);
+      expect(MODEL_PROVIDERS).toContain('ollama');
+      expect(MODEL_PROVIDERS).toHaveLength(4);
     });
   });
 
@@ -58,6 +59,7 @@ describe('Crewly Agent Types', () => {
       expect(isModelProvider('anthropic')).toBe(true);
       expect(isModelProvider('openai')).toBe(true);
       expect(isModelProvider('google')).toBe(true);
+      expect(isModelProvider('ollama')).toBe(true);
     });
 
     it('should return false for invalid providers', () => {
@@ -72,6 +74,7 @@ describe('Crewly Agent Types', () => {
       expect(isModelConfig({ provider: 'anthropic', modelId: 'claude-sonnet-4-20250514' })).toBe(true);
       expect(isModelConfig({ provider: 'openai', modelId: 'gpt-4o', temperature: 0.5 })).toBe(true);
       expect(isModelConfig({ provider: 'google', modelId: 'gemini-3.1-flash', maxTokens: 4096 })).toBe(true);
+      expect(isModelConfig({ provider: 'ollama', modelId: 'llama3.3:70b' })).toBe(true);
     });
 
     it('should return false for invalid configs', () => {

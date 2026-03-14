@@ -148,7 +148,7 @@ describe('CrewlyAgentRuntimeService', () => {
       const result = await service.handleMessage('Delegate task to Sam');
 
       expect(result).toEqual(mockResult);
-      expect(mockRun).toHaveBeenCalledWith('Delegate task to Sam', undefined);
+      expect(mockRun).toHaveBeenCalledWith('Delegate task to Sam', undefined, undefined);
     });
 
     it('should extract conversationId from [CHAT:xxx] prefix', async () => {
@@ -164,7 +164,7 @@ describe('CrewlyAgentRuntimeService', () => {
       await service.initializeInProcess('crewly-orc');
       await service.handleMessage('[CHAT:conv-123] Do the thing');
 
-      expect(mockRun).toHaveBeenCalledWith('Do the thing', 'conv-123');
+      expect(mockRun).toHaveBeenCalledWith('Do the thing', 'conv-123', undefined);
     });
 
     it('should pass undefined conversationId when no [CHAT:] prefix', async () => {
@@ -180,7 +180,7 @@ describe('CrewlyAgentRuntimeService', () => {
       await service.initializeInProcess('crewly-orc');
       await service.handleMessage('No prefix message');
 
-      expect(mockRun).toHaveBeenCalledWith('No prefix message', undefined);
+      expect(mockRun).toHaveBeenCalledWith('No prefix message', undefined, undefined);
     });
 
     it('should extract conversationId from [GCHAT:xxx ...] prefix', async () => {
@@ -196,7 +196,7 @@ describe('CrewlyAgentRuntimeService', () => {
       await service.initializeInProcess('crewly-orc');
       await service.handleMessage('[GCHAT:spaces/123/threads/abc thread=xyz] Hello from GChat');
 
-      expect(mockRun).toHaveBeenCalledWith('Hello from GChat', 'spaces/123/threads/abc');
+      expect(mockRun).toHaveBeenCalledWith('Hello from GChat', 'spaces/123/threads/abc', undefined);
     });
 
     it('should throw if not initialized', async () => {

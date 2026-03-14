@@ -2,12 +2,15 @@
  * Crewly Agent Model Manager
  *
  * Multi-provider model factory that creates AI SDK model instances
- * from configuration. Supports Anthropic, OpenAI, and Google providers.
+ * from configuration. Supports Anthropic, OpenAI, Google, and Ollama providers.
  *
  * API keys are read from environment variables by the provider SDKs:
  * - ANTHROPIC_API_KEY
  * - OPENAI_API_KEY
  * - GOOGLE_GENERATIVE_AI_API_KEY
+ *
+ * Ollama runs locally and does not require an API key.
+ * Configure the Ollama base URL via OLLAMA_BASE_URL (default: http://localhost:11434).
  *
  * @module services/agent/crewly-agent/model-manager
  */
@@ -79,6 +82,13 @@ export class ModelManager {
         providerFn = (modelId: string) => google(modelId);
         break;
       }
+      case 'ollama': {
+        const { createOllama } = await import('ollama-ai-provider');
+        const baseURL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/api';
+        const ollamaProvider = createOllama({ baseURL });
+        providerFn = (modelId: string) => ollamaProvider(modelId) as unknown as LanguageModel;
+        break;
+      }
       default:
         throw new Error(`Unknown model provider: ${provider}`);
     }
@@ -106,23 +116,30 @@ export class ModelManager {
       anthropic: !!anthropicKey,
       openai: !!openaiKey,
       google: !!geminiKey,
+      ollama: true, // Ollama runs locally, always "available" if installed
     };
   }
 
   /**
-   * Map model provider name to API key provider name
+   * Map model provider name to API key provider name.
+   * Only applicable for cloud providers (not ollama).
+   *
+   * @param provider - Cloud model provider (anthropic, openai, or google)
+   * @returns Corresponding ApiKeyProvider name
    */
-  private static providerToApiKeyProvider(provider: ModelProvider): ApiKeyProvider {
+  private static providerToApiKeyProvider(provider: Exclude<ModelProvider, 'ollama'>): ApiKeyProvider {
     return provider === 'google' ? 'gemini' : provider;
   }
 
   /**
    * Ensure the API key for a provider is available in process.env
    * by resolving it from settings if not already present.
+   * Ollama runs locally and does not require an API key — this is a no-op for 'ollama'.
    *
    * @param provider - The model provider
    */
   private async ensureApiKeyInEnv(provider: ModelProvider): Promise<void> {
+    if (provider === 'ollama') return; // Ollama is local, no API key needed
     const apiKeyProvider = ModelManager.providerToApiKeyProvider(provider);
     const settingsService = getSettingsService();
     const key = await settingsService.getApiKey(apiKeyProvider, { runtime: 'crewly-agent' });

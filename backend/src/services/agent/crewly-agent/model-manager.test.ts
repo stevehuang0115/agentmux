@@ -14,6 +14,13 @@ jest.unstable_mockModule('@ai-sdk/google', () => ({
   google: jest.fn((modelId: string) => ({ provider: 'google', modelId })),
 }));
 
+jest.unstable_mockModule('ollama-ai-provider', () => ({
+  createOllama: jest.fn(() => {
+    const provider = jest.fn((modelId: string) => ({ provider: 'ollama', modelId }));
+    return provider;
+  }),
+}));
+
 // Mock settings service — getApiKey resolves through env vars only (no settings file)
 jest.mock('../../settings/settings.service.js', () => {
   const envMap: Record<string, string[]> = {
@@ -66,6 +73,12 @@ describe('ModelManager', () => {
       expect((model as any).modelId).toBe('gemini-3.1-flash');
     });
 
+    it('should create an Ollama model', async () => {
+      const model = await manager.getModel({ provider: 'ollama', modelId: 'llama3.3:70b' });
+      expect(model).toBeDefined();
+      expect((model as any).modelId).toBe('llama3.3:70b');
+    });
+
     it('should use default config when none provided', async () => {
       const model = await manager.getModel();
       expect(model).toBeDefined();
@@ -99,6 +112,7 @@ describe('ModelManager', () => {
       expect(available.anthropic).toBe(false);
       expect(available.openai).toBe(false);
       expect(available.google).toBe(false);
+      expect(available.ollama).toBe(true); // Ollama is always available (local)
     });
 
     it('should detect Anthropic API key', async () => {
