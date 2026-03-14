@@ -95,6 +95,41 @@ export interface Team {
 
   /** ISO timestamp when the team was archived. (#171) */
   archivedAt?: string;
+
+  // === Org Chart fields (#173) ===
+
+  /** Team mission statement — displayed in get-team-status and org chart. */
+  mission?: string;
+
+  /** Token/cost budget configuration for the team. */
+  budget?: TeamBudget;
+
+  /** Quality gate configuration for task review. */
+  qualityGate?: TeamQualityGate;
+}
+
+/**
+ * Token and cost budget for a team (#173).
+ */
+export interface TeamBudget {
+  /** Maximum tokens per day across all team members. */
+  maxTokensPerDay?: number;
+  /** Maximum USD spend per month. */
+  maxUsdPerMonth?: number;
+  /** Percentage (0-100) at which to alert (e.g., 80 = alert at 80% usage). */
+  alertThreshold?: number;
+}
+
+/**
+ * Quality gate configuration for task review (#173).
+ */
+export interface TeamQualityGate {
+  /** Member ID of the designated reviewer. */
+  reviewerId?: string;
+  /** Whether tasks below minQualityScore are auto-approved. */
+  autoApprove?: boolean;
+  /** Minimum quality score (0-100) required for auto-approval. */
+  minQualityScore?: number;
 }
 
 export interface Project {

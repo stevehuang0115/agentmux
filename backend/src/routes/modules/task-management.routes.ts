@@ -42,6 +42,9 @@ export function registerTaskManagementRoutes(router: Router, apiController: ApiC
   // List tasks for a project (used by get_tasks tool)
   router.get('/task-management/tasks', (req, res) => taskMgmtHandlers.listTasks.call(apiController, req, res));
 
+  // Task quality scoring (#174 — auditor score-task skill)
+  router.post('/tasks/score', (req, res) => taskMgmtHandlers.scoreTask.call(apiController, req, res));
+
   // In-Progress Tasks Routes
   router.get('/in-progress-tasks', (req, res) => inProgressHandlers.getInProgressTasks.call(apiController, req, res));
 }

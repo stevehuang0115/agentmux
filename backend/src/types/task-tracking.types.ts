@@ -120,6 +120,17 @@ export interface InProgressTask {
     channelId: string;
     threadTs: string;
   };
+
+  // === Quality Scoring (#174) ===
+
+  /** Quality score (0-100) assigned by the auditor after task completion. */
+  qualityScore?: number;
+
+  /** ISO timestamp when qualityScore was assigned. */
+  scoredAt?: string;
+
+  /** Member/session that scored this task. */
+  scoredBy?: string;
 }
 
 export interface TaskTrackingData {
