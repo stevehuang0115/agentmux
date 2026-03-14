@@ -696,6 +696,122 @@ describe('TaskTrackingService', () => {
     });
   });
 
+  describe('detectOrphanTasks (#168)', () => {
+    const mockTeams = [
+      {
+        members: [
+          { id: 'member-789', sessionName: 'session-abc' },
+          { id: 'member-active', sessionName: 'session-active' },
+        ],
+      },
+    ];
+    const getTeamStatus = async () => mockTeams;
+
+    it('should detect tasks assigned to non-existent agents', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'orphan-1', assignedSessionName: 'ghost-agent', assignedTeamMemberId: 'ghost-member', status: 'assigned' as const },
+          { ...mockTask, id: 'valid-1', assignedSessionName: 'session-abc', status: 'assigned' as const, assignedAt: new Date().toISOString() },
+        ],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const orphans = await service.detectOrphanTasks(getTeamStatus, 999999999999);
+
+      expect(orphans).toHaveLength(1);
+      expect(orphans[0].id).toBe('orphan-1');
+      expect(orphans[0].staleSinceMs).toBeGreaterThan(0);
+    });
+
+    it('should detect stale tasks even if agent exists', async () => {
+      const oldDate = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(); // 48h ago
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'stale-1', assignedSessionName: 'session-abc', assignedAt: oldDate, status: 'assigned' as const },
+        ],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const orphans = await service.detectOrphanTasks(getTeamStatus, 24 * 60 * 60 * 1000);
+
+      expect(orphans).toHaveLength(1);
+      expect(orphans[0].id).toBe('stale-1');
+    });
+
+    it('should return empty when no orphans exist', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'ok-1', assignedSessionName: 'session-abc', assignedAt: new Date().toISOString(), status: 'assigned' as const },
+        ],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const orphans = await service.detectOrphanTasks(getTeamStatus, 999999999999);
+      expect(orphans).toHaveLength(0);
+    });
+
+    it('should skip tasks with non-active statuses', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [
+          { ...mockTask, id: 'completed-1', assignedSessionName: 'ghost-agent', status: 'completed' as const },
+          { ...mockTask, id: 'cancelled-1', assignedSessionName: 'ghost-agent', status: 'cancelled' as const },
+        ],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+
+      const orphans = await service.detectOrphanTasks(getTeamStatus);
+      expect(orphans).toHaveLength(0);
+    });
+  });
+
+  describe('cleanupOrphanTasks (#168)', () => {
+    it('should cancel orphan tasks', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [{ ...mockTask, id: 'orphan-1' }],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      jest.spyOn(service, 'removeTask').mockResolvedValue();
+
+      const report = await service.cleanupOrphanTasks(['orphan-1'], 'cancel');
+
+      expect(report.cleaned).toBe(1);
+      expect(report.errors).toHaveLength(0);
+    });
+
+    it('should reopen orphan tasks', async () => {
+      const taskData = {
+        ...mockTaskData,
+        tasks: [{ ...mockTask, id: 'orphan-1', taskFilePath: '/project/.crewly/tasks/m1/in_progress/task.md' }],
+      };
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(taskData);
+      jest.spyOn(service, 'saveTaskData').mockResolvedValue();
+      jest.spyOn(service, 'removeTask').mockResolvedValue();
+      // moveTaskBackToOpen is private — stub via existsSync/readFile/writeFile
+      (fsSync.existsSync as jest.Mock).mockReturnValue(false);
+
+      const report = await service.cleanupOrphanTasks(['orphan-1'], 'reopen');
+
+      // moveTaskBackToOpen returns false (file not found), but cleanup still removes from tracking
+      expect(report.cleaned).toBe(1);
+    });
+
+    it('should report error for non-existent task IDs', async () => {
+      jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);
+
+      const report = await service.cleanupOrphanTasks(['nonexistent'], 'cancel');
+
+      expect(report.cleaned).toBe(0);
+      expect(report.errors).toHaveLength(1);
+      expect(report.errors[0]).toContain('nonexistent');
+    });
+  });
+
   describe('Team integration tests', () => {
     it('should handle tasks with team assignments', async () => {
       jest.spyOn(service, 'loadTaskData').mockResolvedValue(mockTaskData);

@@ -1782,6 +1782,93 @@ export async function completeTasksBySession(this: ApiController, req: Request, 
  * @param req - Request with query: { projectPath, status? }
  * @param res - Response with { success, tasks }
  */
+/**
+ * Detect and optionally clean up orphan tasks — tasks stuck in progress
+ * assigned to agents that no longer exist or have been inactive too long.
+ *
+ * POST /api/task-management/cleanup
+ * Body:
+ *   - action: 'detect' (default, dry run) | 'cancel' | 'reopen'
+ *   - staleThresholdHours: number (default 24)
+ *   - taskIds: string[] (optional, specific tasks to clean; if omitted, cleans all detected orphans)
+ *
+ * @param req - Request with cleanup parameters
+ * @param res - Response with orphan detection/cleanup report
+ * @see https://github.com/stevehuang0115/crewly/issues/168
+ */
+export async function cleanupOrphanTasks(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const {
+			action = 'detect',
+			staleThresholdHours = 24,
+			taskIds,
+		} = req.body;
+
+		const staleThresholdMs = staleThresholdHours * 60 * 60 * 1000;
+
+		const getTeamStatus = async () => {
+			return await this.storageService.getTeams();
+		};
+
+		// Step 1: Detect orphan tasks
+		const orphans = await this.taskTrackingService.detectOrphanTasks(getTeamStatus, staleThresholdMs);
+
+		if (action === 'detect') {
+			res.json({
+				success: true,
+				message: `Found ${orphans.length} orphan task(s)`,
+				data: {
+					orphanCount: orphans.length,
+					orphans: orphans.map(t => ({
+						id: t.id,
+						taskName: t.taskName,
+						assignedSessionName: t.assignedSessionName,
+						assignedTeamMemberId: t.assignedTeamMemberId,
+						status: t.status,
+						assignedAt: t.assignedAt,
+						staleSinceHours: Math.round(t.staleSinceMs / (60 * 60 * 1000) * 10) / 10,
+						taskFilePath: t.taskFilePath,
+					})),
+				},
+			});
+			return;
+		}
+
+		// Step 2: Clean up
+		const idsToClean = taskIds || orphans.map(t => t.id);
+		if (idsToClean.length === 0) {
+			res.json({ success: true, message: 'No orphan tasks to clean up', data: { cleaned: 0 } });
+			return;
+		}
+
+		const cleanupAction = action === 'reopen' ? 'reopen' : 'cancel';
+		const report = await this.taskTrackingService.cleanupOrphanTasks(idsToClean, cleanupAction);
+
+		logger.info('Orphan task cleanup completed', {
+			action: cleanupAction,
+			cleaned: report.cleaned,
+			errors: report.errors.length,
+		});
+
+		res.json({
+			success: true,
+			message: `Cleaned ${report.cleaned} orphan task(s) (action: ${cleanupAction})`,
+			data: {
+				cleaned: report.cleaned,
+				errors: report.errors,
+				totalOrphansDetected: orphans.length,
+			},
+		});
+	} catch (error) {
+		logger.error('Orphan task cleanup failed', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({
+			success: false,
+			error: 'Failed to clean up orphan tasks',
+			details: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
 export async function listTasks(this: ApiController, req: Request, res: Response): Promise<void> {
 	try {
 		const projectPath = req.query.projectPath as string;

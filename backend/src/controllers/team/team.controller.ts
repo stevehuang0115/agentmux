@@ -762,8 +762,14 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
 
 export async function getTeams(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const teams = await this.storageService.getTeams();
+    let teams = await this.storageService.getTeams();
     const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+
+    // #171: Filter out archived teams unless ?includeArchived=true
+    const includeArchived = req.query?.includeArchived === 'true';
+    if (!includeArchived) {
+      teams = teams.filter(t => !t.archived);
+    }
 
     // Check actual PTY session existence for accurate status
     const backend = getSessionBackendSync();
@@ -2281,6 +2287,12 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
       }));
     }
 
+    // #171: Handle archive toggle
+    if (updates.archived !== undefined) {
+      team.archived = updates.archived;
+      (team as MutableTeam).archivedAt = updates.archived ? new Date().toISOString() : undefined;
+    }
+
     // Handle parentTeamId updates
     if (updates.parentTeamId !== undefined) {
       if (updates.parentTeamId === null) {
@@ -2344,5 +2356,58 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
       success: false,
       error: 'Failed to update team'
     } as ApiResponse);
+  }
+}
+
+/**
+ * Archive or unarchive a team (#171).
+ * POST /:id/archive — sets archived=true.
+ * Body: { archived?: boolean } — defaults to true. Pass false to unarchive.
+ *
+ * Archived teams are excluded from the default GET /teams listing
+ * (pass ?includeArchived=true to include them).
+ *
+ * @param req - Express request with team ID in params
+ * @param res - Express response
+ */
+export async function archiveTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { archived = true } = req.body as { archived?: boolean };
+
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Team ID is required' } as ApiResponse);
+      return;
+    }
+
+    if (id === CREWLY_CONSTANTS.AGENT_IDS.ORCHESTRATOR_ID || id === 'orchestrator') {
+      res.status(400).json({ success: false, error: 'Cannot archive the Orchestrator team' } as ApiResponse);
+      return;
+    }
+
+    const teams = await this.storageService.getTeams();
+    const team = teams.find(t => t.id === id) as MutableTeam | undefined;
+
+    if (!team) {
+      res.status(404).json({ success: false, error: 'Team not found' } as ApiResponse);
+      return;
+    }
+
+    team.archived = archived;
+    (team as MutableTeam).archivedAt = archived ? new Date().toISOString() : undefined;
+    team.updatedAt = new Date().toISOString();
+
+    await this.storageService.saveTeam(team);
+
+    logger.info(`Team ${archived ? 'archived' : 'unarchived'}`, { teamId: id, teamName: team.name });
+
+    res.json({
+      success: true,
+      data: team,
+      message: `Team ${archived ? 'archived' : 'unarchived'} successfully`
+    } as ApiResponse<Team>);
+  } catch (error) {
+    logger.error('Error archiving team', { error: error instanceof Error ? error.message : String(error) });
+    res.status(500).json({ success: false, error: 'Failed to archive team' } as ApiResponse);
   }
 }

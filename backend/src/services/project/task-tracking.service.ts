@@ -375,6 +375,112 @@ export class TaskTrackingService extends EventEmitter {
     return { scheduleIds, subscriptionIds };
   }
 
+  /**
+   * Detect orphan tasks: tasks stuck in in_progress/assigned/active with no
+   * corresponding active agent. Returns the list without modifying state.
+   *
+   * @param getTeamStatus - Function returning current team configurations
+   * @param staleThresholdMs - Age threshold in ms to consider a task stale (default: 24 hours)
+   * @returns Array of orphan tasks with staleness info
+   */
+  async detectOrphanTasks(
+    getTeamStatus: () => Promise<any[]>,
+    staleThresholdMs: number = 24 * 60 * 60 * 1000
+  ): Promise<Array<InProgressTask & { staleSinceMs: number }>> {
+    const data = await this.loadTaskData();
+    const activeTasks = data.tasks.filter(
+      t => t.status === 'assigned' || t.status === 'active' || t.status === 'working'
+    );
+
+    if (activeTasks.length === 0) return [];
+
+    // Build set of all known agent session names + member IDs
+    const teams = await getTeamStatus();
+    const knownAgents = new Set<string>();
+    for (const team of teams) {
+      for (const member of (team.members || [])) {
+        if (member.sessionName) knownAgents.add(member.sessionName);
+        if (member.id) knownAgents.add(member.id);
+      }
+    }
+
+    const now = Date.now();
+    const orphans: Array<InProgressTask & { staleSinceMs: number }> = [];
+
+    for (const task of activeTasks) {
+      const agentKnown =
+        knownAgents.has(task.assignedSessionName) ||
+        knownAgents.has(task.assignedTeamMemberId);
+
+      const assignedTime = new Date(task.assignedAt).getTime();
+      const staleSinceMs = now - assignedTime;
+
+      // Orphan if agent doesn't exist in any team OR task is stale
+      if (!agentKnown || staleSinceMs > staleThresholdMs) {
+        orphans.push({ ...task, staleSinceMs });
+      }
+    }
+
+    return orphans;
+  }
+
+  /**
+   * Bulk cleanup orphan tasks by marking them as cancelled and optionally
+   * moving their files back to the open folder.
+   *
+   * @param taskIds - Array of task IDs to clean up
+   * @param action - 'cancel' marks tasks as cancelled, 'reopen' moves them back to open
+   * @returns Cleanup report with counts
+   */
+  async cleanupOrphanTasks(
+    taskIds: string[],
+    action: 'cancel' | 'reopen' = 'cancel'
+  ): Promise<{ cleaned: number; errors: string[] }> {
+    const report = { cleaned: 0, errors: [] as string[] };
+    const data = await this.loadTaskData();
+
+    for (const taskId of taskIds) {
+      const task = data.tasks.find(t => t.id === taskId);
+      if (!task) {
+        report.errors.push(`Task ${taskId} not found`);
+        continue;
+      }
+
+      try {
+        if (action === 'reopen') {
+          const moved = await this.moveTaskBackToOpen(task);
+          if (moved) {
+            await this.removeTask(taskId);
+            report.cleaned++;
+          } else {
+            // File may already be gone — just remove from tracking
+            await this.removeTask(taskId);
+            report.cleaned++;
+          }
+        } else {
+          // Cancel: update status and remove from active tracking
+          task.status = 'cancelled';
+          task.completedAt = new Date().toISOString();
+          await this.saveTaskData(data);
+          await this.removeTask(taskId);
+          report.cleaned++;
+        }
+      } catch (err) {
+        report.errors.push(
+          `Failed to clean task ${taskId}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    this.logger.info('Orphan task cleanup complete', {
+      action,
+      cleaned: report.cleaned,
+      errors: report.errors.length,
+    });
+
+    return report;
+  }
+
   private extractTaskNameFromFile(filename: string): string {
     // Remove extension and number prefix
     return filename

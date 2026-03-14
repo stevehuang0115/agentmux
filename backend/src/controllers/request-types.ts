@@ -246,6 +246,8 @@ export interface UpdateTeamRequestBody {
   leaderIds?: string[];
   /** Parent team ID for organization grouping. */
   parentTeamId?: string | null;
+  /** Whether this team is archived (#171). */
+  archived?: boolean;
 }
 
 // =============================================================================
@@ -280,6 +282,8 @@ export interface MutableTeam {
   leaderIds?: string[];
   templateId?: string;
   parentTeamId?: string;
+  archived?: boolean;
+  archivedAt?: string;
 }
 
 /**

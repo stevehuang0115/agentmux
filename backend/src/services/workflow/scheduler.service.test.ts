@@ -693,16 +693,18 @@ describe('SchedulerService', () => {
 
   describe('getChecksForSession', () => {
     it('should return checks for specific session', () => {
+      // #165: uniqueness constraint cancels previous recurring checks for the same target,
+      // so only the last recurring check for session-1 survives.
       service.scheduleRecurringCheck('session-1', 10, 'Message 1');
       service.scheduleRecurringCheck('session-2', 10, 'Message 2');
       service.scheduleRecurringCheck('session-1', 15, 'Message 3');
 
       const checks = service.getChecksForSession('session-1');
 
-      expect(checks).toHaveLength(2);
-      checks.forEach((check) => {
-        expect(check.targetSession).toBe('session-1');
-      });
+      // Only 1 recurring check for session-1 (the latest), due to #165 uniqueness
+      expect(checks).toHaveLength(1);
+      expect(checks[0].message).toBe('Message 3');
+      expect(checks[0].targetSession).toBe('session-1');
     });
   });
 
@@ -890,8 +892,10 @@ describe('SchedulerService', () => {
     });
 
     it('should clear recurring timeouts during cleanup', () => {
-      service.scheduleRecurringCheck('test-session', 10, 'Test message');
-      service.scheduleRecurringCheck('test-session', 20, 'Another message');
+      // #165: uniqueness constraint means scheduling a second recurring check for the
+      // same target cancels the first. Use different targets to test cleanup of multiple.
+      service.scheduleRecurringCheck('test-session-a', 10, 'Test message');
+      service.scheduleRecurringCheck('test-session-b', 20, 'Another message');
 
       const recurringTimeouts = (service as any).recurringTimeouts as Map<string, NodeJS.Timeout>;
       expect(recurringTimeouts.size).toBe(2);
@@ -1833,6 +1837,172 @@ describe('SchedulerService', () => {
 
       const stats = service.getStats();
       expect(stats.recurringChecks).toBe(0);
+    });
+  });
+
+  describe('session-scoped checks (#169)', () => {
+    it('should generate a unique sessionId on construction', () => {
+      const sessionId = service.getSessionId();
+      expect(sessionId).toBeTruthy();
+      expect(typeof sessionId).toBe('string');
+
+      // A second instance should have a different sessionId
+      const service2 = new SchedulerService(mockStorageService);
+      expect(service2.getSessionId()).not.toBe(sessionId);
+      service2.cleanup();
+    });
+
+    it('should tag one-time checks with the current sessionId', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+
+      service.scheduleCheck('test-session', 5, 'Test message');
+
+      expect(emitSpy).toHaveBeenCalledWith(
+        'check_scheduled',
+        expect.objectContaining({
+          sessionId: service.getSessionId(),
+        })
+      );
+    });
+
+    it('should tag recurring checks with the current sessionId', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+
+      service.scheduleRecurringCheck('test-session', 10, 'Recurring msg');
+
+      expect(emitSpy).toHaveBeenCalledWith(
+        'recurring_check_scheduled',
+        expect.objectContaining({
+          sessionId: service.getSessionId(),
+        })
+      );
+    });
+
+    it('should tag cron checks with the current sessionId', () => {
+      const emitSpy = jest.spyOn(service, 'emit');
+
+      service.scheduleCronCheck('test-session', '0 9 * * *', 'Cron msg');
+
+      expect(emitSpy).toHaveBeenCalledWith(
+        'recurring_check_scheduled',
+        expect.objectContaining({
+          sessionId: service.getSessionId(),
+        })
+      );
+    });
+
+    it('should purge stale recurring checks from previous sessions on restore', async () => {
+      const staleCheck = {
+        id: 'stale-1',
+        targetSession: 'old-agent',
+        message: 'Stale check',
+        scheduledFor: new Date().toISOString(),
+        intervalMinutes: 10,
+        isRecurring: true,
+        createdAt: new Date().toISOString(),
+        sessionId: 'previous-session-id',
+      };
+
+      mockStorageService.getRecurringChecks.mockResolvedValue([staleCheck]);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(0);
+      expect(mockStorageService.deleteRecurringCheck).toHaveBeenCalledWith('stale-1');
+    });
+
+    it('should restore recurring checks without sessionId (legacy) for backward compatibility', async () => {
+      const legacyCheck = {
+        id: 'legacy-1',
+        targetSession: 'agent-session',
+        message: 'Legacy check',
+        scheduledFor: new Date().toISOString(),
+        intervalMinutes: 15,
+        isRecurring: true,
+        createdAt: new Date().toISOString(),
+        // No sessionId — legacy check
+      };
+
+      mockStorageService.getRecurringChecks.mockResolvedValue([legacyCheck]);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(1);
+      expect(mockStorageService.deleteRecurringCheck).not.toHaveBeenCalled();
+    });
+
+    it('should purge stale one-time checks from previous sessions on restore', async () => {
+      const futureTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const staleCheck = {
+        id: 'stale-ot-1',
+        targetSession: 'old-agent',
+        message: 'Stale one-time',
+        scheduledFor: futureTime,
+        isRecurring: false,
+        createdAt: new Date().toISOString(),
+        sessionId: 'old-session-id',
+      };
+
+      mockStorageService.getOneTimeChecks.mockResolvedValue([staleCheck]);
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(0);
+      expect(mockStorageService.deleteOneTimeCheck).toHaveBeenCalledWith('stale-ot-1');
+    });
+
+    it('should restore one-time checks without sessionId (legacy) for backward compatibility', async () => {
+      const futureTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const legacyCheck = {
+        id: 'legacy-ot-1',
+        targetSession: 'agent-session',
+        message: 'Legacy one-time',
+        scheduledFor: futureTime,
+        isRecurring: false,
+        createdAt: new Date().toISOString(),
+        // No sessionId — legacy check
+      };
+
+      mockStorageService.getOneTimeChecks.mockResolvedValue([legacyCheck]);
+
+      const restored = await service.restoreOneTimeChecks();
+
+      expect(restored).toBe(1);
+      expect(mockStorageService.deleteOneTimeCheck).not.toHaveBeenCalled();
+    });
+
+    it('should keep current-session checks and purge stale ones during restore', async () => {
+      const currentSessionId = service.getSessionId();
+      const checks = [
+        {
+          id: 'current-1',
+          targetSession: 'agent-a',
+          message: 'Current session check',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 10,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+          sessionId: currentSessionId,
+        },
+        {
+          id: 'stale-2',
+          targetSession: 'agent-b',
+          message: 'Stale session check',
+          scheduledFor: new Date().toISOString(),
+          intervalMinutes: 10,
+          isRecurring: true,
+          createdAt: new Date().toISOString(),
+          sessionId: 'old-session',
+        },
+      ];
+
+      mockStorageService.getRecurringChecks.mockResolvedValue(checks);
+
+      const restored = await service.restoreRecurringChecks();
+
+      expect(restored).toBe(1);
+      expect(mockStorageService.deleteRecurringCheck).toHaveBeenCalledWith('stale-2');
+      expect(mockStorageService.deleteRecurringCheck).toHaveBeenCalledTimes(1);
     });
   });
 });
