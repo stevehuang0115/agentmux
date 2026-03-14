@@ -14,6 +14,9 @@ import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
 import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, ApprovalCheckResult, AuditLogFilters } from './types.js';
 
+/** TTL for delegation idle event subscriptions (minutes) */
+const DELEGATION_SUBSCRIPTION_TTL_MINUTES = 120;
+
 /**
  * Expand ~ and $HOME in a file path to the user's home directory.
  *
@@ -337,7 +340,7 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
             filter: { sessionName: to },
             subscriberSession: sessionName,
             oneShot: true,
-            ttlMinutes: 120,
+            ttlMinutes: DELEGATION_SUBSCRIPTION_TTL_MINUTES,
           });
         }
 
