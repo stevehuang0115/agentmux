@@ -25,6 +25,8 @@ import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { PtySessionBackend } from '../../services/session/pty/pty-session-backend.js';
 import { InProcessLogBuffer } from '../../services/agent/crewly-agent/in-process-log-buffer.js';
+import type { PendingWorkSummary, HeartbeatState } from '../../services/agent/adaptive-heartbeat.service.js';
+import { ADAPTIVE_HEARTBEAT_DEFAULTS } from '../../services/agent/adaptive-heartbeat.service.js';
 
 /** Logger instance for terminal controller */
 const logger: ComponentLogger = LoggerService.getInstance().createComponentLogger('TerminalController');
@@ -957,5 +959,101 @@ export async function getSessionLogs(req: Request, res: Response): Promise<void>
 			success: false,
 			error: 'Failed to read session logs',
 		} as ApiResponse);
+	}
+}
+
+/**
+ * Get pending work for an agent session (#172 Adaptive Heartbeat).
+ *
+ * Returns pending tasks, undelivered messages, and a recommended
+ * heartbeat state so agents can self-schedule their next check-in.
+ *
+ * @param req - Express request with sessionName param
+ * @param res - Express response with PendingWorkSummary
+ *
+ * @example
+ * GET /api/agents/crewly-product-sam/pending-work
+ * Response: { success: true, data: { hasPendingWork: true, pendingTasks: [...], ... } }
+ */
+export async function getPendingWork(this: ApiContext, req: Request, res: Response): Promise<void> {
+	try {
+		const { sessionName } = req.params;
+
+		if (!sessionName) {
+			res.status(400).json({ success: false, error: 'sessionName is required' } as ApiResponse);
+			return;
+		}
+
+		const sessionValidation = validateSessionName(sessionName);
+		if (!sessionValidation.isValid) {
+			res.status(400).json({ success: false, error: sessionValidation.error } as ApiResponse);
+			return;
+		}
+
+		// 1. Get pending tasks from TaskTrackingService
+		const tasks = await this.taskTrackingService.getTasksBySessionName(sessionName);
+		const pendingTasks = tasks
+			.filter(t => t.status === 'assigned' || t.status === 'pending_assignment' || t.status === 'submitted')
+			.map(t => ({
+				id: t.id,
+				taskName: t.taskName,
+				priority: t.priority,
+				assignedAt: t.assignedAt,
+			}));
+
+		// 2. Get pending message count from SubAgentMessageQueue
+		const messageQueue = SubAgentMessageQueue.getInstance();
+		const pendingMessageCount = messageQueue.getQueueSize(sessionName);
+		const pendingMessages: Array<{ id: string; from: string; preview: string; queuedAt: string }> = [];
+		// Note: SubAgentMessageQueue doesn't expose individual messages for privacy.
+		// We report the count; agents can fetch actual messages via the deliver endpoint.
+
+		// 3. Check if the agent's team is active
+		const teams = await this.storageService.getTeams();
+		let teamActive = false;
+		for (const team of teams) {
+			const member = team.members?.find((m: any) => m.sessionName === sessionName);
+			if (member) {
+				// Team is active if any member besides this one is active
+				teamActive = team.members.some((m: any) =>
+					m.sessionName !== sessionName && m.agentStatus === 'active'
+				);
+				break;
+			}
+		}
+
+		// 4. Determine recommended state
+		const hasPendingWork = pendingTasks.length > 0 || pendingMessageCount > 0;
+		let recommendedState: HeartbeatState;
+		if (hasPendingWork) {
+			recommendedState = 'busy';
+		} else if (teamActive) {
+			recommendedState = 'idle';
+		} else {
+			recommendedState = 'dormant';
+		}
+
+		const recommendedIntervalMs = recommendedState === 'busy'
+			? ADAPTIVE_HEARTBEAT_DEFAULTS.busyIntervalMs
+			: recommendedState === 'idle'
+				? ADAPTIVE_HEARTBEAT_DEFAULTS.idleIntervalMs
+				: ADAPTIVE_HEARTBEAT_DEFAULTS.dormantIntervalMs;
+
+		const summary: PendingWorkSummary = {
+			hasPendingWork,
+			pendingTasks,
+			pendingMessages,
+			teamActive,
+			recommendedState,
+			recommendedIntervalMs,
+		};
+
+		res.json({ success: true, data: summary } as ApiResponse<PendingWorkSummary>);
+
+	} catch (error) {
+		logger.error('Error getting pending work', {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		res.status(500).json({ success: false, error: 'Failed to get pending work' } as ApiResponse);
 	}
 }

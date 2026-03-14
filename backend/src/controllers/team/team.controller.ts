@@ -604,7 +604,7 @@ async function _stopTeamMemberCore(
 
 export async function createTeam(this: ApiContext, req: Request, res: Response): Promise<void> {
   try {
-    const { name, description, members, projectPath, currentProject, projectIds, hierarchical, templateId, parentTeamId } = req.body as CreateTeamRequestBody;
+    const { name, description, members, projectPath, currentProject, projectIds, hierarchical, templateId, parentTeamId, mission, budget, qualityGate } = req.body as CreateTeamRequestBody;
 
     if (!name || !members || !Array.isArray(members) || members.length === 0) {
       res.status(400).json({
@@ -733,6 +733,9 @@ export async function createTeam(this: ApiContext, req: Request, res: Response):
       ...(hierarchical ? { hierarchical: true, leaderId, leaderIds } : {}),
       ...(templateId ? { templateId } : {}),
       ...(parentTeamId ? { parentTeamId } : {}),
+      ...(mission ? { mission } : {}),
+      ...(budget ? { budget } : {}),
+      ...(qualityGate ? { qualityGate } : {}),
     };
 
     await this.storageService.saveTeam(team);
@@ -2291,6 +2294,17 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
     if (updates.archived !== undefined) {
       team.archived = updates.archived;
       (team as MutableTeam).archivedAt = updates.archived ? new Date().toISOString() : undefined;
+    }
+
+    // #173: Handle org chart fields
+    if (updates.mission !== undefined) {
+      (team as MutableTeam).mission = updates.mission;
+    }
+    if (updates.budget !== undefined) {
+      (team as MutableTeam).budget = updates.budget;
+    }
+    if (updates.qualityGate !== undefined) {
+      (team as MutableTeam).qualityGate = updates.qualityGate;
     }
 
     // Handle parentTeamId updates

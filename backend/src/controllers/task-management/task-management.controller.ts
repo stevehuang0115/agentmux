@@ -325,7 +325,7 @@ export async function completeTask(
 	res: Response
 ): Promise<void> {
 	try {
-		const { taskPath, sessionName, output } = req.body;
+		const { taskPath, sessionName, output, qualityScore } = req.body;
 
 		// Update agent heartbeat (proof of life)
 		try {
@@ -491,6 +491,12 @@ export async function completeTask(
 			const taskToRemoveWithSchema = allTasksWithSchema.find(t => t.taskFilePath === taskPath);
 			let cleanupResultSchema = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 			if (taskToRemoveWithSchema) {
+				// #174: Store quality score on task before completing
+				if (typeof qualityScore === 'number' && qualityScore >= 0 && qualityScore <= 100) {
+					taskToRemoveWithSchema.qualityScore = qualityScore;
+					taskToRemoveWithSchema.scoredAt = new Date().toISOString();
+					taskToRemoveWithSchema.scoredBy = sessionName;
+				}
 				publishTaskCompletedEvent(taskToRemoveWithSchema, sessionName);
 				cleanupResultSchema = await cleanupTaskMonitoring(this, taskToRemoveWithSchema);
 				await this.taskTrackingService.removeTask(taskToRemoveWithSchema.id);
@@ -528,6 +534,12 @@ export async function completeTask(
 		const taskToRemove = allTasks.find(t => t.taskFilePath === taskPath);
 		let cleanupResult = { cancelledSchedules: 0, unsubscribedEvents: 0 };
 		if (taskToRemove) {
+			// #174: Store quality score on task before completing
+			if (typeof qualityScore === 'number' && qualityScore >= 0 && qualityScore <= 100) {
+				taskToRemove.qualityScore = qualityScore;
+				taskToRemove.scoredAt = new Date().toISOString();
+				taskToRemove.scoredBy = sessionName;
+			}
 			publishTaskCompletedEvent(taskToRemove, sessionName);
 			cleanupResult = await cleanupTaskMonitoring(this, taskToRemove);
 			await this.taskTrackingService.removeTask(taskToRemove.id);
@@ -1925,5 +1937,51 @@ export async function listTasks(this: ApiController, req: Request, res: Response
 	} catch (error) {
 		logger.error('Error listing tasks', { error: error instanceof Error ? error.message : String(error) });
 		res.status(500).json({ success: false, error: 'Failed to list tasks' });
+	}
+}
+
+/**
+ * Score a completed task's quality (#174).
+ * Called by the auditor's score-task skill after task:completed events.
+ * Updates the task's qualityScore in the tracking data.
+ *
+ * @param req - Request containing taskId, qualityScore, and optional scoredBy
+ * @param res - Response with success status
+ */
+export async function scoreTask(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { taskId, qualityScore, scoredBy } = req.body;
+
+		if (!taskId) {
+			res.status(400).json({ success: false, error: 'taskId is required' });
+			return;
+		}
+
+		if (typeof qualityScore !== 'number' || qualityScore < 0 || qualityScore > 100) {
+			res.status(400).json({ success: false, error: 'qualityScore must be a number between 0 and 100' });
+			return;
+		}
+
+		// Load task data directly for in-place update
+		const taskData = await this.taskTrackingService.loadTaskData();
+		const task = taskData.tasks.find(t => t.id === taskId);
+
+		if (task) {
+			// Task still in tracking — update in place and persist
+			task.qualityScore = qualityScore;
+			task.scoredAt = new Date().toISOString();
+			task.scoredBy = scoredBy || 'auditor';
+			await this.taskTrackingService.saveTaskData(taskData);
+
+			logger.info('Task scored', { taskId, qualityScore, scoredBy: scoredBy || 'auditor' });
+			res.json({ success: true, message: 'Task scored successfully', taskId, qualityScore });
+		} else {
+			// Task already removed from tracking — score acknowledged
+			logger.warn('Task not found in tracking (may already be completed)', { taskId });
+			res.json({ success: true, message: 'Score acknowledged but task already completed', taskId, qualityScore });
+		}
+	} catch (error) {
+		logger.error('Error scoring task', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to score task' });
 	}
 }

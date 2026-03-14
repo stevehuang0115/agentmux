@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { readFile, writeFile, mkdir, readdir, stat } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import * as taskManagementHandlers from './task-management.controller.js';
-import { assignTask, completeTask, completeTasksBySession, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput, addMonitoring, setEventBusServiceForTaskCleanup } from './task-management.controller.js';
+import { assignTask, completeTask, completeTasksBySession, blockTask, takeNextTask, syncTaskStatus, getTeamProgress, createTask, getTaskOutput, addMonitoring, setEventBusServiceForTaskCleanup, scoreTask } from './task-management.controller.js';
 import type { ApiController } from '../api.controller.js';
 import { TASK_OUTPUT_CONSTANTS } from '../../types/task-output.types.js';
 
@@ -57,6 +57,8 @@ describe('Task Management Handlers', () => {
     recoverAbandonedTasks: jest.fn<any>(),
     addMonitoringIds: jest.fn<any>(),
     getTasksBySessionName: jest.fn<any>(),
+    loadTaskData: jest.fn<any>(),
+    saveTaskData: jest.fn<any>(),
   };
 
   const mockSchedulerService = {

@@ -62,4 +62,11 @@ export function registerTerminalRoutes(router: Router, apiController?: ApiContro
 
 	// Get persistent session log file (ANSI-stripped, includes pre-restart output)
 	router.get('/sessions/:sessionName/logs', terminalHandlers.getSessionLogs);
+
+	// Adaptive heartbeat: pending work check (#172)
+	if (apiController) {
+		router.get('/agents/:sessionName/pending-work', (req, res) =>
+			terminalHandlers.getPendingWork.call(apiController, req, res)
+		);
+	}
 }

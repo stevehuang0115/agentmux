@@ -5,7 +5,7 @@
  * providing compile-time type safety for incoming HTTP requests.
  */
 
-import type { TeamMember, TeamMemberRole, Project } from '../types/index.js';
+import type { TeamMember, TeamMemberRole, Project, TeamBudget, TeamQualityGate } from '../types/index.js';
 
 // =============================================================================
 // Project Controller Request Types
@@ -135,6 +135,12 @@ export interface CreateTeamRequestBody {
   templateId?: string;
   /** Parent team ID for organization grouping. */
   parentTeamId?: string;
+  /** Team mission statement (#173). */
+  mission?: string;
+  /** Token/cost budget configuration (#173). */
+  budget?: TeamBudget;
+  /** Quality gate configuration for task review (#173). */
+  qualityGate?: TeamQualityGate;
 }
 
 /**
@@ -248,6 +254,12 @@ export interface UpdateTeamRequestBody {
   parentTeamId?: string | null;
   /** Whether this team is archived (#171). */
   archived?: boolean;
+  /** Team mission statement (#173). */
+  mission?: string;
+  /** Token/cost budget configuration (#173). */
+  budget?: TeamBudget;
+  /** Quality gate configuration for task review (#173). */
+  qualityGate?: TeamQualityGate;
 }
 
 // =============================================================================
@@ -284,6 +296,9 @@ export interface MutableTeam {
   parentTeamId?: string;
   archived?: boolean;
   archivedAt?: string;
+  mission?: string;
+  budget?: TeamBudget;
+  qualityGate?: TeamQualityGate;
 }
 
 /**
