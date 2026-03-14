@@ -285,7 +285,7 @@ export const CREWLY_AGENT_DEFAULTS = {
   /** Default model configuration */
   DEFAULT_MODEL: {
     provider: 'google' as ModelProvider,
-    modelId: 'gemini-2.0-flash',
+    modelId: 'gemini-3-flash-preview',
     temperature: 0.3,
     maxTokens: 8192,
   } satisfies ModelConfig,
