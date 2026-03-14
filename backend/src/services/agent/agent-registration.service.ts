@@ -114,6 +114,9 @@ export class AgentRegistrationService {
 	// Used for crewly-agent runtimeType agents that run without PTY sessions.
 	private inProcessRuntimes = new Map<string, CrewlyAgentRuntimeService>();
 
+	/** #167: Optional scheduler service for DLQ drain on agent activation. */
+	private schedulerService: { drainDeadLetterQueue(sessionName: string): Promise<number> } | null = null;
+
 
 	// Terminal patterns are now centralized in TERMINAL_PATTERNS constant
 	// Keeping prompt chars as static getter for backwards compatibility within the class
@@ -141,6 +144,15 @@ export class AgentRegistrationService {
 				}
 			}
 		);
+	}
+
+	/**
+	 * #167: Inject scheduler service for dead-letter queue drain on agent activation.
+	 *
+	 * @param scheduler - Scheduler service with drainDeadLetterQueue method
+	 */
+	setSchedulerService(scheduler: { drainDeadLetterQueue(sessionName: string): Promise<number> }): void {
+		this.schedulerService = scheduler;
 	}
 
 	/**
@@ -1164,6 +1176,17 @@ export class AgentRegistrationService {
 					}
 					await this.storageService.saveTeam(team);
 					this.logger.info('Member registered as active', { sessionName, teamId: team.id });
+
+					// #167: Drain dead-letter queue for newly active agent
+					if (this.schedulerService) {
+						this.schedulerService.drainDeadLetterQueue(sessionName).catch((err: Error) => {
+							this.logger.warn('Failed to drain DLQ on activation (non-critical)', {
+								sessionName,
+								error: err.message,
+							});
+						});
+					}
+
 					return true;
 				}
 			}

@@ -71,6 +71,8 @@ export interface RecurringConfig {
   maxOccurrences?: number;
   /** Current occurrence count */
   currentOccurrence?: number;
+  /** Optional cron expression (e.g., '0 9 * * *' for daily at 9am). Overrides interval when set. (#167) */
+  cronExpression?: string;
 }
 
 /**
@@ -310,4 +312,6 @@ export interface SchedulerStats {
   continuationChecks?: number;
   /** Number of adaptive checks */
   adaptiveChecks?: number;
+  /** Number of messages in the dead-letter queue (#167) */
+  deadLetterMessages?: number;
 }

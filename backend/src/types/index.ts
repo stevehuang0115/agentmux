@@ -144,6 +144,8 @@ export interface ScheduledCheck {
   watchedSession?: string;
   /** Task ID that this schedule monitors — auto-cancels when task completes */
   taskId?: string;
+  /** Cron expression for cron-based scheduling (e.g., '0 9 * * *'). Overrides intervalMinutes when set. (#167) */
+  cronExpression?: string;
 }
 
 export interface ScheduledMessage {

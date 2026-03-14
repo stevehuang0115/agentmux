@@ -244,6 +244,9 @@ export class CrewlyServer {
 		this.schedulerService.setMessageQueueService(this.messageQueueService);
 		this.schedulerService.setActivityMonitor(this.activityMonitorService);
 
+		// #167: Wire scheduler into agent registration for DLQ drain on activation
+		this.apiController.agentRegistrationService.setSchedulerService(this.schedulerService);
+
 		this.terminalGateway = new TerminalGateway(this.io);
 
 		// Set terminal gateway singleton for chat integration
@@ -793,6 +796,45 @@ export class CrewlyServer {
 
 			// Auto-restore agent sessions that were running before the last shutdown
 			await this.autoRestoreAgentSessionsIfEnabled();
+
+			// #166: Auto-recover in-progress tasks after restart
+			try {
+				const inProgressTasks = await this.taskTrackingService.getAllInProgressTasks();
+				const activeTasks = inProgressTasks.filter(
+					t => t.status === 'assigned' || t.status === 'active' || t.status === 'working'
+				);
+				if (activeTasks.length > 0) {
+					this.logger.info('Found in-progress tasks to recover after restart', {
+						count: activeTasks.length,
+					});
+					for (const task of activeTasks) {
+						try {
+							const recoveryMessage = `[SYSTEM — TASK RECOVERY] You were working on this task before the server restarted. Please continue:\n\nTask: ${task.taskName}\nPriority: ${task.priority || 'normal'}\nFile: ${task.taskFilePath}\n\nPlease check the current state and continue working.`;
+							await this.apiController.agentRegistrationService.sendMessageToAgent(
+								task.assignedSessionName,
+								recoveryMessage,
+								undefined as unknown as RuntimeType
+							);
+							this.logger.info('Task recovery message sent', {
+								taskId: task.id,
+								sessionName: task.assignedSessionName,
+								taskName: task.taskName,
+							});
+						} catch (err) {
+							// Agent might not be online yet — DLQ in scheduler will handle it
+							this.logger.warn('Task recovery delivery deferred (agent may not be online yet)', {
+								taskId: task.id,
+								sessionName: task.assignedSessionName,
+								error: err instanceof Error ? err.message : String(err),
+							});
+						}
+					}
+				}
+			} catch (err) {
+				this.logger.warn('Task auto-recovery failed (non-critical)', {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
 
 			// Start log rotation service (non-critical — logs cleanup)
 			try {

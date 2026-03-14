@@ -534,9 +534,20 @@ export class ContextWindowMonitorService {
 			this.publishContextEvent(state, 'agent:context_warning');
 		}
 
-		// At red level: try compact before things get critical
+		// At red level: flush memory before compacting (#166)
 		if (state.level === 'red' && !state.compactInProgress) {
 			if (state.compactAttempts < CONTEXT_WINDOW_MONITOR_CONSTANTS.MAX_COMPACT_ATTEMPTS) {
+				// #166: Pre-compaction memory flush — send a silent message asking the agent
+				// to save critical context before compaction clears conversation history.
+				// Only on the first compact attempt to avoid spam.
+				if (state.compactAttempts === 0) {
+					this.triggerPreCompactionFlush(state).catch((err) => {
+						this.logger.warn('Pre-compaction memory flush failed (non-blocking)', {
+							sessionName: state.sessionName,
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				}
 				this.triggerCompact(state).catch((err) => {
 					this.logger.error('Compact failed', {
 						sessionName: state.sessionName,
@@ -642,6 +653,49 @@ export class ContextWindowMonitorService {
 			level: state.level,
 			timestamp: new Date().toISOString(),
 		});
+	}
+
+	/**
+	 * #166: Pre-compaction memory flush — send a message to the agent asking it to
+	 * save critical context (current task, progress, findings) before compaction
+	 * clears conversation history. The agent responds with record-learning or
+	 * remember calls, then replies NO_REPLY to avoid generating visible output.
+	 *
+	 * This is fire-and-forget: if delivery fails, compaction still proceeds.
+	 *
+	 * @param state - Context window state for the session
+	 */
+	private async triggerPreCompactionFlush(state: ContextWindowState): Promise<void> {
+		if (!this.agentRegistrationService) {
+			return;
+		}
+
+		const flushMessage = `[SYSTEM — PRE-COMPACTION MEMORY FLUSH]
+Your context window is at ${state.contextPercent}% and will be compacted shortly. Before compaction, save your critical working state NOW:
+
+1. Call record-learning with: current task progress, key findings, any blockers, and what remains to be done
+2. If you have important patterns or decisions discovered, call remember with scope: project
+
+After saving, respond with exactly: NO_REPLY
+
+This is automated — do not ask questions, just save and respond NO_REPLY.`;
+
+		try {
+			await this.agentRegistrationService.sendMessageToAgent(
+				state.sessionName,
+				flushMessage,
+				state.runtimeType
+			);
+			this.logger.info('Pre-compaction memory flush sent', {
+				sessionName: state.sessionName,
+				contextPercent: state.contextPercent,
+			});
+		} catch (err) {
+			this.logger.warn('Pre-compaction memory flush delivery failed', {
+				sessionName: state.sessionName,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
 	}
 
 	/**
