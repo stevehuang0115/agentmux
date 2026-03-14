@@ -9,6 +9,7 @@
  */
 
 import { promises as fsPromises } from 'fs';
+import { execSync } from 'child_process';
 import { homedir } from 'os';
 import { z } from 'zod';
 import type { CrewlyApiClient } from './api-client.js';
@@ -16,6 +17,9 @@ import type { ToolDefinition, ToolCallbacks, ToolSensitivity, AuditEntry, Approv
 
 /** TTL for delegation idle event subscriptions (minutes) */
 const DELEGATION_SUBSCRIPTION_TTL_MINUTES = 120;
+
+/** Maximum characters for git diff output */
+const GIT_DIFF_MAX_CHARS = 5000;
 
 /**
  * Expand ~ and $HOME in a file path to the user's home directory.
@@ -109,6 +113,12 @@ export const TOOL_SENSITIVITY: Record<string, ToolSensitivity> = {
   handle_agent_failure: 'destructive',
   edit_file: 'destructive',
   write_file: 'destructive',
+  // Git tools (#176)
+  git_status: 'safe',
+  git_diff: 'safe',
+  git_commit: 'sensitive',
+  // Shell execution (#176)
+  bash_exec: 'destructive',
 };
 
 /**
@@ -248,6 +258,10 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
   // Slack rate-limiting state: throttle messages within a 3-second window
   let lastSlackSendMs = 0;
   const SLACK_THROTTLE_MS = 3000;
+
+  // Slack dedup: ring buffer of recent messages to prevent duplicate sends
+  const recentSlackMessages: string[] = [];
+  const SLACK_DEDUP_WINDOW = 10;
 
   const rawTools: Record<string, ToolDefinition> = {
     // ===== Core Orchestration Tools =====
@@ -452,6 +466,11 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
           return { success: false, error: 'No channelId provided and no Slack thread context available. Use reply_slack with an explicit channelId.' };
         }
 
+        // Dedup: skip if this exact message was recently sent
+        if (recentSlackMessages.includes(cleanText)) {
+          return { success: true, sent: false, deduplicated: true, reason: 'Message already sent recently' };
+        }
+
         // Issue 3: Rate-limit Slack messages — throttle within a 3s window
         const now = Date.now();
         if (now - lastSlackSendMs < SLACK_THROTTLE_MS) {
@@ -463,6 +482,11 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         const result = await client.post('/slack/send', body);
         if (result.success) {
           lastSlackSendMs = Date.now();
+          // Track for dedup
+          recentSlackMessages.push(cleanText);
+          if (recentSlackMessages.length > SLACK_DEDUP_WINDOW) {
+            recentSlackMessages.shift();
+          }
         }
         return result.success
           ? { success: true, sent: true }
@@ -1056,6 +1080,144 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
         };
       },
     },
+
+    // ===================================================================
+    // Shell Execution (#176)
+    // ===================================================================
+
+    bash_exec: {
+      description: 'Execute a shell command and return stdout/stderr. Commands run with a timeout (default 30s, max 120s). Use for build, test, lint, and system operations.',
+      inputSchema: z.object({
+        command: z.string().describe('Shell command to execute'),
+        cwd: z.string().optional().describe('Working directory (defaults to project path)'),
+        timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000, max: 120000)'),
+      }),
+      sensitivity: 'destructive' as ToolSensitivity,
+      execute: async ({ command, cwd, timeout }) => {
+        const cmd = command as string;
+        const workDir = expandPath((cwd as string | undefined) || projectPath || process.cwd());
+        const timeoutMs = Math.min((timeout as number | undefined) || 30000, 120000);
+
+        try {
+          const output = execSync(cmd, {
+            cwd: workDir,
+            encoding: 'utf-8',
+            timeout: timeoutMs,
+            maxBuffer: 1024 * 1024,
+            env: { ...process.env, FORCE_COLOR: '0' },
+          });
+          const truncated = output.length > 10000;
+          return {
+            success: true,
+            exitCode: 0,
+            stdout: truncated ? output.slice(-10000) + '\n...(truncated)' : output,
+            truncated,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            exitCode: error.status ?? 1,
+            stdout: (error.stdout as string || '').slice(-5000),
+            stderr: (error.stderr as string || '').slice(-5000),
+            error: error.message?.slice(0, 500),
+          };
+        }
+      },
+    },
+
+    // ===================================================================
+    // Git Tools (#176)
+    // ===================================================================
+
+    git_status: {
+      description: 'Get the git status of a project directory. Returns current branch, staged files, unstaged changes, and untracked files.',
+      inputSchema: z.object({
+        projectPath: z.string().describe('Absolute path to the git repository'),
+      }),
+      execute: async ({ projectPath }) => {
+        const cwd = expandPath(projectPath as string);
+        try {
+          const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf8' }).trim();
+          const statusOutput = execSync('git status --porcelain', { cwd, encoding: 'utf8' });
+
+          const staged: string[] = [];
+          const unstaged: string[] = [];
+          const untracked: string[] = [];
+
+          for (const line of statusOutput.split('\n')) {
+            if (!line.trim()) continue;
+            const x = line[0]; // index status
+            const y = line[1]; // working tree status
+            const file = line.slice(3);
+            if (x === '?' && y === '?') {
+              untracked.push(file);
+            } else {
+              if (x !== ' ' && x !== '?') staged.push(file);
+              if (y !== ' ' && y !== '?') unstaged.push(file);
+            }
+          }
+
+          return { success: true, branch, staged, unstaged, untracked };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    },
+
+    git_diff: {
+      description: 'Get the git diff output for a project directory. Shows unstaged changes by default, or staged changes when staged=true. Output truncated to 5000 characters.',
+      inputSchema: z.object({
+        projectPath: z.string().describe('Absolute path to the git repository'),
+        staged: z.boolean().default(false).describe('Show staged (cached) changes instead of unstaged'),
+      }),
+      execute: async ({ projectPath, staged }) => {
+        const cwd = expandPath(projectPath as string);
+        try {
+          const cmd = staged ? 'git diff --cached' : 'git diff';
+          const diff = execSync(cmd, { cwd, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 });
+
+          const truncated = diff.length > GIT_DIFF_MAX_CHARS;
+          const output = truncated ? diff.slice(0, GIT_DIFF_MAX_CHARS) + '\n... (truncated)' : diff;
+
+          return { success: true, diff: output, truncated, totalLength: diff.length };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    },
+
+    git_commit: {
+      description: 'Stage files and create a git commit. If files are provided, stages only those files. Otherwise stages all changes (git add -A). Returns the new commit hash.',
+      inputSchema: z.object({
+        projectPath: z.string().describe('Absolute path to the git repository'),
+        message: z.string().describe('Commit message'),
+        files: z.array(z.string()).optional().describe('Specific files to stage (omit for git add -A)'),
+      }),
+      sensitivity: 'sensitive' as ToolSensitivity,
+      execute: async ({ projectPath, message, files }) => {
+        const cwd = expandPath(projectPath as string);
+        try {
+          // Stage files
+          if (files && (files as string[]).length > 0) {
+            for (const file of files as string[]) {
+              execSync(`git add -- ${JSON.stringify(file)}`, { cwd, encoding: 'utf8' });
+            }
+          } else {
+            execSync('git add -A', { cwd, encoding: 'utf8' });
+          }
+
+          // Commit
+          execSync(`git commit -m ${JSON.stringify(message as string)}`, { cwd, encoding: 'utf8' });
+
+          // Get the commit hash
+          const hash = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8' }).trim();
+
+          return { success: true, commitHash: hash, message: message as string };
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    },
   };
 
   // Apply sensitivity classifications and audit wrapping
@@ -1120,5 +1282,6 @@ export function getToolNames(): string[] {
     'broadcast', 'handle_agent_failure', 'edit_file', 'read_file', 'write_file',
     'register_self', 'get_project_overview', 'report_status',
     'compact_memory', 'get_audit_log',
+    'git_status', 'git_diff', 'git_commit',
   ];
 }

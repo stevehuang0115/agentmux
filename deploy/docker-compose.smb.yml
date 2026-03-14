@@ -1,0 +1,103 @@
+# =============================================================================
+# Crewly SMB (Self-Hosted) — Docker Compose
+#
+# Complete self-hosted Crewly deployment for small/medium businesses.
+# Includes:
+# - crewly-api: Backend API + frontend + crewly-agent runtime
+# - crewly-auth: OAuth + device management + relay (optional)
+#
+# The crewly-agent runtime runs in-process (no PTY/tmux required for agents
+# using the Crewly Agent runtime type). Agents using Claude Code or Gemini
+# CLI still require tmux in the container.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.smb.yml up -d
+#   docker compose -f deploy/docker-compose.smb.yml logs -f crewly-api
+#
+# Environment: copy deploy/.env.smb.example to deploy/.env.smb
+#
+# @see https://github.com/stevehuang0115/crewly/issues/176
+# =============================================================================
+
+services:
+  crewly-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - NODE_ENV=production
+    image: crewly-smb:${CREWLY_VERSION:-latest}
+    container_name: crewly-smb
+    restart: unless-stopped
+    ports:
+      - "${CREWLY_PORT:-8787}:8787"
+    volumes:
+      # Persist Crewly state (teams, memory, queue, projects)
+      - crewly_data:/home/node/.crewly
+      # Project workspaces (agents read/write code here)
+      - crewly_projects:/home/node/projects
+      # Optional: mount host SSH keys for git operations
+      - ${SSH_KEY_DIR:-/dev/null}:/home/node/.ssh:ro
+    env_file:
+      - .env.smb
+    environment:
+      - NODE_ENV=production
+      - WEB_PORT=8787
+      - CREWLY_HEADLESS=true
+      # Agent runtime: use crewly-agent (in-process, no PTY required)
+      - DEFAULT_RUNTIME=crewly-agent
+      # Model configuration (set in .env.smb)
+      # - GEMINI_API_KEY
+      # - OPENAI_API_KEY
+      # - ANTHROPIC_API_KEY
+      # - OLLAMA_HOST
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # Optional: Cloud auth service for multi-device relay
+  crewly-auth:
+    image: dr.careerengine.dev/crewly-auth:${AUTH_VERSION:-latest}
+    container_name: crewly-auth
+    restart: unless-stopped
+    ports:
+      - "${AUTH_PORT:-10021}:10021"
+    env_file:
+      - .env.smb
+    environment:
+      - NODE_ENV=production
+      - AUTH_PORT=10021
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:10021/api/cloud/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - cloud  # Only start with: docker compose --profile cloud up
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  crewly_data:
+    driver: local
+  crewly_projects:
+    driver: local

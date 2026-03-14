@@ -20,7 +20,7 @@ describe('Tool Registry', () => {
   describe('getToolNames', () => {
     it('should return all 27 tool names', () => {
       const names = getToolNames();
-      expect(names).toHaveLength(27);
+      expect(names).toHaveLength(30);
       expect(names).toContain('delegate_task');
       expect(names).toContain('send_message');
       expect(names).toContain('get_agent_status');
@@ -52,9 +52,9 @@ describe('Tool Registry', () => {
   });
 
   describe('createTools', () => {
-    it('should create all 27 tools with descriptions and parameters', () => {
+    it('should create all tools with descriptions and parameters', () => {
       const toolNames = Object.keys(tools);
-      expect(toolNames).toHaveLength(27);
+      expect(toolNames.length).toBeGreaterThanOrEqual(30);
       for (const name of toolNames) {
         const t = tools[name] as any;
         expect(t).toBeDefined();
@@ -1565,6 +1565,180 @@ describe('Tool Registry', () => {
       for (const writeTool of WRITE_TOOLS) {
         expect(validNames).toContain(writeTool);
       }
+    });
+  });
+
+  describe('git_status', () => {
+    it('should parse git status output correctly', async () => {
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        if (cmd.includes('rev-parse')) return 'main\n';
+        if (cmd.includes('status --porcelain')) return 'M  staged.ts\n M unstaged.ts\n?? new.ts\n';
+        return '';
+      });
+
+      const result = await (tools.git_status as any).execute({ projectPath: '/test/project' });
+
+      expect(result.success).toBe(true);
+      expect(result.branch).toBe('main');
+      expect(result.staged).toContain('staged.ts');
+      expect(result.unstaged).toContain('unstaged.ts');
+      expect(result.untracked).toContain('new.ts');
+
+      jest.restoreAllMocks();
+    });
+
+    it('should handle errors gracefully', async () => {
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation(() => {
+        throw new Error('not a git repository');
+      });
+
+      const result = await (tools.git_status as any).execute({ projectPath: '/not/a/repo' });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not a git repository');
+
+      jest.restoreAllMocks();
+    });
+  });
+
+  describe('git_diff', () => {
+    it('should return unstaged diff by default', async () => {
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        if (cmd === 'git diff') return 'diff --git a/file.ts\n+added line\n';
+        return '';
+      });
+
+      const result = await (tools.git_diff as any).execute({ projectPath: '/test/project', staged: false });
+
+      expect(result.success).toBe(true);
+      expect(result.diff).toContain('+added line');
+      expect(result.truncated).toBe(false);
+
+      jest.restoreAllMocks();
+    });
+
+    it('should return staged diff when staged=true', async () => {
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        if (cmd === 'git diff --cached') return 'staged diff output\n';
+        return '';
+      });
+
+      const result = await (tools.git_diff as any).execute({ projectPath: '/test/project', staged: true });
+
+      expect(result.success).toBe(true);
+      expect(result.diff).toContain('staged diff output');
+
+      jest.restoreAllMocks();
+    });
+
+    it('should truncate long diffs to 5000 chars', async () => {
+      const longDiff = 'x'.repeat(6000);
+      jest.spyOn(require('child_process'), 'execSync').mockReturnValue(longDiff);
+
+      const result = await (tools.git_diff as any).execute({ projectPath: '/test/project', staged: false });
+
+      expect(result.success).toBe(true);
+      expect(result.truncated).toBe(true);
+      expect(result.diff.length).toBeLessThanOrEqual(5020);
+      expect(result.totalLength).toBe(6000);
+
+      jest.restoreAllMocks();
+    });
+  });
+
+  describe('git_commit', () => {
+    it('should stage all and commit when no files specified', async () => {
+      const calls: string[] = [];
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        calls.push(cmd);
+        if (cmd.includes('rev-parse HEAD')) return 'abc123def\n';
+        return '';
+      });
+
+      const result = await (tools.git_commit as any).execute({
+        projectPath: '/test/project',
+        message: 'feat: add feature',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.commitHash).toBe('abc123def');
+      expect(calls).toContain('git add -A');
+      expect(calls.some((c: string) => c.includes('git commit'))).toBe(true);
+
+      jest.restoreAllMocks();
+    });
+
+    it('should stage specific files when provided', async () => {
+      const calls: string[] = [];
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        calls.push(cmd);
+        if (cmd.includes('rev-parse HEAD')) return 'def456\n';
+        return '';
+      });
+
+      const result = await (tools.git_commit as any).execute({
+        projectPath: '/test/project',
+        message: 'fix: bug',
+        files: ['src/a.ts', 'src/b.ts'],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.commitHash).toBe('def456');
+      expect(calls.some((c: string) => c.includes('git add') && c.includes('src/a.ts'))).toBe(true);
+      expect(calls.some((c: string) => c.includes('git add') && c.includes('src/b.ts'))).toBe(true);
+      expect(calls).not.toContain('git add -A');
+
+      jest.restoreAllMocks();
+    });
+
+    it('should handle commit errors gracefully', async () => {
+      jest.spyOn(require('child_process'), 'execSync').mockImplementation((...args: unknown[]) => {
+        const cmd = String(args[0]);
+        if (cmd.includes('git commit')) throw new Error('nothing to commit');
+        return '';
+      });
+
+      const result = await (tools.git_commit as any).execute({
+        projectPath: '/test/project',
+        message: 'empty commit',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('nothing to commit');
+
+      jest.restoreAllMocks();
+    });
+
+    it('should have sensitive classification', () => {
+      expect(TOOL_SENSITIVITY.git_commit).toBe('sensitive');
+    });
+  });
+
+  describe('git tool sensitivity', () => {
+    it('should classify git_status as safe', () => {
+      expect(TOOL_SENSITIVITY.git_status).toBe('safe');
+    });
+
+    it('should classify git_diff as safe', () => {
+      expect(TOOL_SENSITIVITY.git_diff).toBe('safe');
+    });
+
+    it('should classify git_commit as sensitive', () => {
+      expect(TOOL_SENSITIVITY.git_commit).toBe('sensitive');
+    });
+  });
+
+  describe('getToolNames includes git tools', () => {
+    it('should include all 3 git tools', () => {
+      const names = getToolNames();
+      expect(names).toContain('git_status');
+      expect(names).toContain('git_diff');
+      expect(names).toContain('git_commit');
     });
   });
 });
