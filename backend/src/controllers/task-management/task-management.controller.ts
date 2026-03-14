@@ -1985,3 +1985,68 @@ export async function scoreTask(this: ApiController, req: Request, res: Response
 		res.status(500).json({ success: false, error: 'Failed to score task' });
 	}
 }
+
+/**
+ * Record a task handoff from one agent to another (F12).
+ *
+ * POST /api/task-management/handoff
+ * Body: { from, to, taskPath?, reason, progress?, projectPath? }
+ *
+ * Updates the task tracking data to reflect the handoff and logs the event.
+ *
+ * @param req - Request with handoff parameters
+ * @param res - Response with handoff record
+ */
+export async function recordHandoff(this: ApiController, req: Request, res: Response): Promise<void> {
+	try {
+		const { from, to, taskPath, reason, progress, projectPath } = req.body;
+
+		if (!from || !to || !reason) {
+			res.status(400).json({ success: false, error: 'from, to, and reason are required' });
+			return;
+		}
+
+		// Find the task being handed off (by assignedSessionName)
+		const tasks = await this.taskTrackingService.getTasksBySessionName(from);
+		const activeTask = tasks.find(t =>
+			t.status === 'assigned' || t.status === 'active' || t.status === 'working'
+		);
+
+		if (activeTask) {
+			// Update task assignment to new agent
+			const data = await this.taskTrackingService.loadTaskData();
+			const task = data.tasks.find(t => t.id === activeTask.id);
+			if (task) {
+				task.assignedSessionName = to;
+				task.status = 'assigned';
+				task.statusHistory = task.statusHistory || [];
+				task.statusHistory.push({
+					timestamp: new Date().toISOString(),
+					fromStatus: activeTask.status,
+					toStatus: 'assigned',
+					message: `Handed off from ${from} to ${to}: ${reason}`,
+					reportedBy: from,
+				});
+				await this.taskTrackingService.saveTaskData(data);
+			}
+		}
+
+		logger.info('Task handoff recorded', { from, to, reason, taskId: activeTask?.id });
+
+		res.json({
+			success: true,
+			handoff: {
+				from,
+				to,
+				reason,
+				taskId: activeTask?.id || null,
+				taskPath: taskPath || null,
+				progress: progress || null,
+				timestamp: new Date().toISOString(),
+			},
+		});
+	} catch (error) {
+		logger.error('Error recording handoff', { error: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({ success: false, error: 'Failed to record handoff' });
+	}
+}
