@@ -83,7 +83,7 @@ export const handleCreateCheckout = asyncHandler(async (req: Request, res: Respo
 	const result = await stripe.createCheckoutSession(userId, planId, interval, successUrl, cancelUrl);
 
 	if (!result.success) {
-		res.status(result.message.includes('not configured') ? 503 : 400).json(result);
+		res.status(result.message?.includes('not configured') ? 503 : 400).json(result);
 		return;
 	}
 
@@ -167,7 +167,7 @@ export const handleCreatePortal = asyncHandler(async (req: Request, res: Respons
 	const result = await stripe.createPortalSession(userId, returnUrl);
 
 	if (!result.success) {
-		res.status(result.message.includes('not configured') ? 503 : 400).json(result);
+		res.status(result.message?.includes('not configured') ? 503 : 400).json(result);
 		return;
 	}
 
