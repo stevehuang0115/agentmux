@@ -30,7 +30,7 @@ export const MODEL_PROVIDERS: readonly ModelProvider[] = [
 export interface ModelConfig {
   /** Model provider (e.g., 'anthropic', 'openai', 'google') */
   provider: ModelProvider;
-  /** Model identifier (e.g., 'claude-sonnet-4-20250514', 'gpt-4o', 'gemini-2.5-flash') */
+  /** Model identifier (e.g., 'claude-sonnet-4-20250514', 'gpt-4o', 'gemini-3.1-flash') */
   modelId: string;
   /** Optional temperature override (0-1) */
   temperature?: number;
@@ -278,7 +278,7 @@ export const CREWLY_AGENT_DEFAULTS = {
   /** Default model configuration */
   DEFAULT_MODEL: {
     provider: 'google' as ModelProvider,
-    modelId: 'gemini-2.5-flash',
+    modelId: 'gemini-3.1-flash',
     temperature: 0.3,
     maxTokens: 8192,
   } satisfies ModelConfig,

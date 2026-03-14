@@ -71,7 +71,7 @@ describe('Crewly Agent Types', () => {
     it('should return true for valid configs', () => {
       expect(isModelConfig({ provider: 'anthropic', modelId: 'claude-sonnet-4-20250514' })).toBe(true);
       expect(isModelConfig({ provider: 'openai', modelId: 'gpt-4o', temperature: 0.5 })).toBe(true);
-      expect(isModelConfig({ provider: 'google', modelId: 'gemini-2.5-flash', maxTokens: 4096 })).toBe(true);
+      expect(isModelConfig({ provider: 'google', modelId: 'gemini-3.1-flash', maxTokens: 4096 })).toBe(true);
     });
 
     it('should return false for invalid configs', () => {
