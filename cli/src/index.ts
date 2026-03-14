@@ -13,6 +13,7 @@ import { onboardCommand } from './commands/onboard.js';
 import { mcpServerCommand } from './commands/mcp-server.js';
 import { publishCommand } from './commands/publish.js';
 import { seedMarketplaceCommand } from './commands/seed-marketplace.js';
+import { serviceCommand } from './commands/service.js';
 import { DEFAULT_WEB_PORT } from './constants.js';
 import { getLocalVersion } from './utils/version-check.js';
 
@@ -104,6 +105,12 @@ program
   .option('--dry-run', 'Validate only, do not publish')
   .option('--skills-dir <dir>', 'Skills directory to package from')
   .action(seedMarketplaceCommand);
+
+program
+  .command('service <action>')
+  .description('Manage Crewly as a macOS background service (install|uninstall|status)')
+  .option('--force', 'Overwrite existing installation')
+  .action(serviceCommand);
 
 // Error handling
 program.exitOverride();
