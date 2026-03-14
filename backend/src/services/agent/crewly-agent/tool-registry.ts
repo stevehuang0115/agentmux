@@ -949,20 +949,40 @@ export function createTools(client: CrewlyApiClient, sessionName: string, projec
     },
 
     report_status: {
-      description: 'Report task status to the orchestrator.',
+      description: 'Report task status to the orchestrator. sessionName and role are auto-injected from the current session context.',
       inputSchema: z.object({
         status: z.enum(['in_progress', 'done', 'blocked', 'error']).describe('Current status'),
         summary: z.string().describe('Brief status summary'),
       }),
       execute: async ({ status, summary }) => {
-        const body: Record<string, unknown> = {
-          sessionName,
-          status,
-          summary,
+        // Build status message matching the bash report-status format
+        const statusUpper = (status as string).toUpperCase();
+        const message = `[${statusUpper}] Agent ${sessionName}: ${summary}`;
+
+        // Send to orchestrator via chat API (matches bash skill behavior)
+        const chatBody: Record<string, string> = {
+          content: message,
+          senderName: sessionName,
+          senderType: 'agent',
         };
-        if (projectPath) body.projectPath = projectPath;
-        if (conversationId) body.conversationId = conversationId;
-        const result = await client.post('/teams/members/register', body);
+        const result = await client.post('/chat/agent-response', chatBody);
+
+        // Auto-complete tracked tasks when status is done
+        if (status === 'done') {
+          await client.post('/task-management/complete-by-session', { sessionName }).catch(() => {});
+        }
+
+        // Auto-persist key findings as project knowledge when done (#127)
+        if (status === 'done' && summary && projectPath) {
+          await client.post('/memory/remember', {
+            agentId: sessionName,
+            content: `Task completed by ${sessionName}: ${summary}`,
+            category: 'pattern',
+            scope: 'project',
+            projectPath,
+          }).catch(() => {});
+        }
+
         return result.success ? result.data : { error: result.error };
       },
     },
