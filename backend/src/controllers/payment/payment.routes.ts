@@ -15,25 +15,13 @@
  */
 
 import { Router } from 'express';
-import type { Request, Response, NextFunction } from 'express';
 import {
 	handleCreateCheckout,
 	handleWebhook,
 	handleGetSubscription,
 	handleCreatePortal,
 } from './payment.controller.js';
-
-/**
- * Placeholder auth middleware. Passes requests through without authentication.
- * TODO: Replace with a real authentication middleware when cloud services are restored.
- *
- * @param _req - Express request
- * @param _res - Express response
- * @param next - Express next function
- */
-const requireAuth = (_req: Request, _res: Response, next: NextFunction): void => {
-	next();
-};
+import { requireAuth } from '../../middleware/require-auth.middleware.js';
 
 /**
  * Creates the payment router with all Stripe payment endpoints.
