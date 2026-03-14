@@ -20,6 +20,37 @@ import { EMBEDDING_CONSTANTS, ENV_CONSTANTS } from '../../constants.js';
 /** Default number of results returned by search */
 const DEFAULT_SEARCH_LIMIT = 5;
 
+/** Half-life in days for temporal decay — score halves every 30 days (#154) */
+const TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
+
+/** Tags that bypass temporal decay (always full relevance) (#154) */
+const EVERGREEN_TAGS = new Set(['evergreen', 'decision', 'architecture', 'sop', 'runbook']);
+
+/**
+ * Apply temporal decay to a search score (#154).
+ * Score decays by half every TEMPORAL_DECAY_HALF_LIFE_DAYS days.
+ * Documents tagged with evergreen/decision tags bypass decay entirely.
+ *
+ * @param score - Raw relevance score
+ * @param createdAt - ISO timestamp of document creation
+ * @param tags - Document tags
+ * @returns Decayed score
+ */
+export function applyTemporalDecay(score: number, createdAt: string, tags: string[]): number {
+  // Bypass decay for evergreen documents
+  const lowerTags = tags.map(t => t.toLowerCase());
+  if (lowerTags.some(tag => EVERGREEN_TAGS.has(tag))) {
+    return score;
+  }
+
+  const daysSinceCreation = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+  if (daysSinceCreation <= 0) {
+    return score;
+  }
+
+  return score * Math.pow(0.5, daysSinceCreation / TEMPORAL_DECAY_HALF_LIFE_DAYS);
+}
+
 /**
  * A document scored by a search strategy.
  */
@@ -397,23 +428,101 @@ export class LocalVectorSearchStrategy implements KnowledgeSearchStrategy {
 }
 
 /**
+ * BM25-inspired keyword scoring for hybrid search (#152).
+ *
+ * Computes a simplified BM25-like score for a document against a query.
+ * Uses term frequency with diminishing returns (k1 saturation).
+ *
+ * @param query - Search query text
+ * @param docText - Document text to score
+ * @returns BM25-inspired score (higher is better)
+ */
+export function bm25Score(query: string, docText: string): number {
+  const k1 = 1.2;
+  const b = 0.75;
+  const avgDocLen = 200;
+
+  const queryTerms = query.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+  const docLower = docText.toLowerCase();
+  const docWords = docLower.split(/\s+/);
+  const docLen = docWords.length;
+
+  let score = 0;
+  for (const term of queryTerms) {
+    const tf = docWords.filter(w => w.includes(term)).length;
+    if (tf === 0) continue;
+    const idf = Math.log(1 + 1 / (tf + 0.5));
+    const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (docLen / avgDocLen)));
+    score += idf * tfNorm;
+  }
+  return score;
+}
+
+/**
+ * Hybrid search strategy: vector similarity (70%) + BM25 keywords (30%) (#152).
+ *
+ * Combines semantic vector search with BM25 keyword matching for more
+ * accurate retrieval. Proper nouns, technical terms, and IDs are caught
+ * by BM25 while conceptual matches come from vector similarity.
+ */
+export class HybridSearchStrategy implements KnowledgeSearchStrategy {
+  private readonly vectorStrategy: LocalVectorSearchStrategy;
+  private readonly keywordStrategy: KeywordSearchStrategy;
+  private readonly logger: ComponentLogger;
+  private readonly vectorWeight: number;
+  private readonly keywordWeight: number;
+
+  constructor(apiKey?: string, vectorWeight = 0.7, keywordWeight = 0.3) {
+    this.vectorStrategy = new LocalVectorSearchStrategy(apiKey);
+    this.keywordStrategy = new KeywordSearchStrategy();
+    this.vectorWeight = vectorWeight;
+    this.keywordWeight = keywordWeight;
+    this.logger = LoggerService.getInstance().createComponentLogger('HybridSearchStrategy');
+  }
+
+  async search(query: string, documents: KnowledgeDocumentSummary[]): Promise<ScoredDocument[]> {
+    const vectorResults = await this.vectorStrategy.search(query, documents);
+    const vectorMap = new Map(vectorResults.map(r => [r.document.id, r.score]));
+
+    const keywordResults = await this.keywordStrategy.search(query, documents);
+    const keywordMap = new Map(keywordResults.map(r => [r.document.id, r.score]));
+
+    const maxVector = vectorResults.length > 0 ? Math.max(...vectorResults.map(r => r.score)) : 1;
+    const maxKeyword = keywordResults.length > 0 ? Math.max(...keywordResults.map(r => r.score)) : 1;
+
+    const allDocIds = new Set([...vectorMap.keys(), ...keywordMap.keys()]);
+    const docById = new Map(documents.map(d => [d.id, d]));
+
+    const combined: ScoredDocument[] = [];
+    for (const docId of allDocIds) {
+      const doc = docById.get(docId);
+      if (!doc) continue;
+
+      const vScore = (vectorMap.get(docId) || 0) / (maxVector || 1);
+      const kScore = (keywordMap.get(docId) || 0) / (maxKeyword || 1);
+      const docText = `${doc.title} ${doc.tags.join(' ')} ${doc.preview}`;
+      const bm25 = bm25Score(query, docText);
+      const normalizedBm25 = Math.min(bm25 / 5, 1);
+
+      const combinedScore =
+        this.vectorWeight * vScore +
+        this.keywordWeight * Math.max(kScore, normalizedBm25);
+
+      if (combinedScore > 0) {
+        combined.push({ document: doc, score: combinedScore });
+      }
+    }
+
+    return combined.sort((a, b) => b.score - a.score);
+  }
+}
+
+/**
  * Knowledge Search Service singleton.
  *
- * Factory that selects the appropriate search strategy based on
- * environment configuration. Provides a high-level search interface
- * over the KnowledgeService document store.
- *
  * Strategy selection priority:
- * 1. LocalVectorSearchStrategy (when GEMINI_API_KEY is set — uses local SQLite + API for embedding)
+ * 1. HybridSearchStrategy (when embedding API key is set — vector 70% + BM25 30%) (#152)
  * 2. KeywordSearchStrategy (default, zero dependencies)
- *
- * @example
- * ```typescript
- * const results = await KnowledgeSearchService.getInstance().search(
- *   'deployment runbook',
- *   'global',
- * );
- * ```
  */
 export class KnowledgeSearchService {
   private static instance: KnowledgeSearchService | null = null;
@@ -425,10 +534,10 @@ export class KnowledgeSearchService {
 
     const geminiKey = process.env[ENV_CONSTANTS.GEMINI_API_KEY];
     if (geminiKey) {
-      this.logger.info('Using local vector search strategy (SQLite + Gemini embeddings)');
-      this.strategy = new LocalVectorSearchStrategy(geminiKey);
+      this.logger.info('Using hybrid search strategy (vector 70% + BM25 30%)');
+      this.strategy = new HybridSearchStrategy(geminiKey);
     } else {
-      this.logger.info('Using keyword search strategy (no GEMINI_API_KEY set)');
+      this.logger.info('Using keyword search strategy (no embedding API key set)');
       this.strategy = new KeywordSearchStrategy();
     }
   }
@@ -479,6 +588,14 @@ export class KnowledgeSearchService {
     }
 
     const scored = await this.strategy.search(query, candidates);
-    return scored.slice(0, limit).map((s) => s.document);
+
+    // #154: Apply temporal decay to re-rank results
+    const decayed = scored.map((s) => ({
+      ...s,
+      score: applyTemporalDecay(s.score, s.document.createdAt, s.document.tags),
+    }));
+    decayed.sort((a, b) => b.score - a.score);
+
+    return decayed.slice(0, limit).map((s) => s.document);
   }
 }

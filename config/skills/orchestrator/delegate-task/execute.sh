@@ -14,6 +14,8 @@ TASK=$(echo "$INPUT" | jq -r '.task // empty')
 PRIORITY=$(echo "$INPUT" | jq -r '.priority // "normal"')
 CONTEXT=$(echo "$INPUT" | jq -r '.context // empty')
 PROJECT_PATH=$(echo "$INPUT" | jq -r '.projectPath // empty')
+# #150: Task type classification — 'technical' tasks can bypass PM routing
+TASK_TYPE=$(echo "$INPUT" | jq -r '.taskType // "general"')
 require_param "to" "$TO"
 require_param "task" "$TASK"
 

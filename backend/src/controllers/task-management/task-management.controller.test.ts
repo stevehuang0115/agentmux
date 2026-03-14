@@ -1174,4 +1174,71 @@ describe('Task Management Handlers', () => {
       );
     });
   });
+
+  describe('#174: scoreTask', () => {
+    it('should score a task successfully', async () => {
+      const taskData = {
+        tasks: [{ id: 'task-1', status: 'completed', taskName: 'Test' }],
+        lastUpdated: '2026-01-01',
+        version: '1.0.0',
+      };
+      mockTaskTrackingService.loadTaskData.mockResolvedValue(taskData);
+      mockTaskTrackingService.saveTaskData.mockResolvedValue(undefined);
+
+      const mockReq = { body: { taskId: 'task-1', qualityScore: 85, scoredBy: 'auditor-session' } } as Partial<Request>;
+      const jsonSpy = jest.fn<any>();
+      const mockRes = { status: jest.fn<any>().mockReturnThis(), json: jsonSpy } as Partial<Response>;
+
+      await scoreTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, qualityScore: 85 })
+      );
+      expect(mockTaskTrackingService.saveTaskData).toHaveBeenCalled();
+      expect(taskData.tasks[0]).toHaveProperty('qualityScore', 85);
+    });
+
+    it('should reject invalid qualityScore', async () => {
+      const mockReq = { body: { taskId: 'task-1', qualityScore: 150 } } as Partial<Request>;
+      const statusSpy = jest.fn<any>().mockReturnThis();
+      const jsonSpy = jest.fn<any>();
+      const mockRes = { status: statusSpy, json: jsonSpy } as Partial<Response>;
+
+      await scoreTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(400);
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: expect.stringContaining('qualityScore') })
+      );
+    });
+
+    it('should reject missing taskId', async () => {
+      const mockReq = { body: { qualityScore: 80 } } as Partial<Request>;
+      const statusSpy = jest.fn<any>().mockReturnThis();
+      const jsonSpy = jest.fn<any>();
+      const mockRes = { status: statusSpy, json: jsonSpy } as Partial<Response>;
+
+      await scoreTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(statusSpy).toHaveBeenCalledWith(400);
+    });
+
+    it('should handle task not found gracefully', async () => {
+      mockTaskTrackingService.loadTaskData.mockResolvedValue({
+        tasks: [],
+        lastUpdated: '2026-01-01',
+        version: '1.0.0',
+      });
+
+      const mockReq = { body: { taskId: 'nonexistent', qualityScore: 70 } } as Partial<Request>;
+      const jsonSpy = jest.fn<any>();
+      const mockRes = { status: jest.fn<any>().mockReturnThis(), json: jsonSpy } as Partial<Response>;
+
+      await scoreTask.call(fullMockApiController, mockReq as Request, mockRes as Response);
+
+      expect(jsonSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, message: expect.stringContaining('already completed') })
+      );
+    });
+  });
 });
