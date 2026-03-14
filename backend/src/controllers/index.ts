@@ -18,6 +18,7 @@ import { createOAuthRouter } from './oauth/oauth.routes.js';
 import { createMessengerRouter } from './messaging/messenger.routes.js';
 import { selfImprovementRouter } from './self-improvement/index.js';
 import { createMemoryRouter } from './memory/index.js';
+import { createWorkspaceRouter } from './workspace/workspace.routes.js';
 
 /**
  * Creates the main API router that aggregates all feature routers
@@ -44,6 +45,7 @@ export function createApiRouter(context: ApiContext): Router {
   router.use('/messengers', createMessengerRouter());
   router.use('/self-improvement', selfImprovementRouter);
   router.use('/memory', createMemoryRouter());
+  router.use('/workspace', createWorkspaceRouter());
 
   return router;
 }

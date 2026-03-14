@@ -36,18 +36,23 @@ jest.mock('../utils/marketplace.js', () => ({
 
 const mockListTemplates = jest.fn();
 const mockGetTemplate = jest.fn();
+const mockGetTemplatesDir = jest.fn().mockReturnValue('/mock/templates');
 jest.mock('../utils/templates.js', () => ({
   listTemplates: (...args: unknown[]) => mockListTemplates(...args),
   getTemplate: (...args: unknown[]) => mockGetTemplate(...args),
+  getTemplatesDir: (...args: unknown[]) => mockGetTemplatesDir(...args),
 }));
 
 const mockMkdirSync = jest.fn();
 const mockWriteFileSync = jest.fn();
 const mockExistsSync = jest.fn();
+const mockCopyFileSync = jest.fn();
 jest.mock('fs', () => ({
   mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
   writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
   existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  readFileSync: (...args: unknown[]) => '',
+  copyFileSync: (...args: unknown[]) => mockCopyFileSync(...args),
 }));
 
 /** Shared mock readline answers — set per-test */
@@ -80,6 +85,7 @@ import {
   selectTemplate,
   createTeamFromTemplate,
   scaffoldCrewlyDirectory,
+  copyTemplateProjectFiles,
   printSummary,
   onboardCommand,
   type ProviderChoice,
@@ -147,6 +153,8 @@ describe('onboard command', () => {
     mockWriteFileSync.mockReset();
     mockExistsSync.mockReset();
     mockExistsSync.mockReturnValue(false);
+    mockCopyFileSync.mockReset();
+    mockGetTemplatesDir.mockReturnValue('/mock/templates');
   });
 
   afterEach(() => {
@@ -584,6 +592,67 @@ describe('onboard command', () => {
         expect.stringContaining('config.env'),
         expect.stringContaining('Crewly configuration'),
       );
+    });
+
+    it('copies template project files when template is provided', () => {
+      // .crewly/ doesn't exist, template dir exists, goals.md exists, team.json exists
+      mockExistsSync.mockImplementation((p: string) => {
+        if (typeof p === 'string' && p.includes('/mock/templates/web-dev-team')) return true;
+        if (typeof p === 'string' && p.endsWith('goals.md') && p.includes('/mock/templates')) return true;
+        if (typeof p === 'string' && p.endsWith('team.json') && p.includes('/mock/templates')) return true;
+        return false;
+      });
+
+      scaffoldCrewlyDirectory('/test/project', sampleTemplate);
+
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+      const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+      expect(output).toContain('Copied 2 template file(s)');
+    });
+
+    it('does not overwrite existing project files', () => {
+      // .crewly/ exists, template dir exists, goals.md exists in both src and dest
+      mockExistsSync.mockReturnValue(true);
+
+      scaffoldCrewlyDirectory('/test/project', sampleTemplate);
+
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // copyTemplateProjectFiles
+  // -----------------------------------------------------------------------
+
+  describe('copyTemplateProjectFiles', () => {
+    it('copies goals.md and team.json from template directory', () => {
+      // Template dir exists, both files exist in template, neither in target
+      mockExistsSync.mockImplementation((p: string) => {
+        if (typeof p === 'string' && p.includes('/mock/templates/web-dev-team')) return true;
+        if (typeof p === 'string' && p.includes('/mock/templates') && (p.endsWith('goals.md') || p.endsWith('team.json'))) return true;
+        return false;
+      });
+
+      copyTemplateProjectFiles('/test/.crewly', sampleTemplate);
+
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips when template directory does not exist', () => {
+      mockExistsSync.mockReturnValue(false);
+
+      copyTemplateProjectFiles('/test/.crewly', sampleTemplate);
+
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+
+    it('does not copy files that already exist in target', () => {
+      // Template dir exists, source files exist, dest files also exist
+      mockExistsSync.mockReturnValue(true);
+
+      copyTemplateProjectFiles('/test/.crewly', sampleTemplate);
+
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
     });
   });
 
