@@ -100,7 +100,10 @@ COLLECTED_SCHEDULE_IDS="[]"
 COLLECTED_SUBSCRIPTION_IDS="[]"
 
 if [ "$MONITOR_IDLE" = "true" ]; then
-  SUBSCRIBER_SESSION="${CREWLY_SESSION_NAME:-crewly-orc}"
+  if [ -z "${CREWLY_SESSION_NAME:-}" ]; then
+    echo '{"warning":"CREWLY_SESSION_NAME not set, idle event subscription may route to wrong agent"}' >&2
+  fi
+  SUBSCRIBER_SESSION="${CREWLY_SESSION_NAME:?CREWLY_SESSION_NAME must be set for correct event routing}"
   SUB_BODY=$(jq -n \
     --arg eventType "agent:idle" \
     --arg sessionName "$TO" \
@@ -114,7 +117,7 @@ if [ "$MONITOR_IDLE" = "true" ]; then
 fi
 
 if [ "$MONITOR_FALLBACK_MINUTES" != "0" ] && [ -n "$MONITOR_FALLBACK_MINUTES" ]; then
-  SCHEDULE_TARGET="${CREWLY_SESSION_NAME:-crewly-orc}"
+  SCHEDULE_TARGET="${CREWLY_SESSION_NAME:?CREWLY_SESSION_NAME must be set for correct schedule routing}"
   SCHED_BODY=$(jq -n \
     --arg target "$SCHEDULE_TARGET" \
     --arg minutes "$MONITOR_FALLBACK_MINUTES" \

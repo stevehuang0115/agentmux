@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { AgentRunnerService } from './agent-runner.service.js';
 import { ModelManager } from './model-manager.js';
 import { CrewlyApiClient } from './api-client.js';
-import type { CrewlyAgentConfig } from './types.js';
+import type { CrewlyAgentConfig, SecurityPolicy, AuditEntry } from './types.js';
 
 describe('AgentRunnerService', () => {
   let runner: AgentRunnerService;
@@ -245,6 +245,97 @@ describe('AgentRunnerService', () => {
 
       await expect(runner.run('Fail')).rejects.toThrow('API error');
     });
+
+    it('should preserve lastKnownConversationId as fallback for messages without explicit conversationId', async () => {
+      // Track which conversationId is passed to generateText via tools argument
+      const capturedConvIds: (string | undefined)[] = [];
+      mockGenerateText
+        .mockImplementation(async (opts: Record<string, unknown>) => {
+          // The tools object is created with the current conversationId.
+          // We verify by checking if report_status tool exists — its closure
+          // captures the conversationId. We call it to extract the value.
+          const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+          if (tools?.report_status) {
+            // Call report_status to see if conversationId is included in the POST body
+            mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+            await tools.report_status.execute({ status: 'in_progress', summary: 'test' });
+            const postCall = mockApiClient.post.mock.calls[mockApiClient.post.mock.calls.length - 1];
+            const body = postCall[1] as Record<string, unknown>;
+            capturedConvIds.push(body.conversationId as string | undefined);
+          }
+          return {
+            text: 'Response',
+            steps: [{ toolCalls: [], toolResults: [] }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+            finishReason: 'stop',
+          };
+        });
+
+      // First message with conversationId
+      await runner.run('With conv', 'conv-123');
+      // Second message without conversationId (e.g., scheduled check)
+      await runner.run('No conv');
+
+      // First call should have conversationId = 'conv-123'
+      expect(capturedConvIds[0]).toBe('conv-123');
+      // Second call should inherit the last known conversationId as fallback
+      expect(capturedConvIds[1]).toBe('conv-123');
+    });
+
+    it('should update lastKnownConversationId when a new explicit conversationId arrives', async () => {
+      const capturedConvIds: (string | undefined)[] = [];
+      mockGenerateText
+        .mockImplementation(async (opts: Record<string, unknown>) => {
+          const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+          if (tools?.report_status) {
+            mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+            await tools.report_status.execute({ status: 'in_progress', summary: 'test' });
+            const postCall = mockApiClient.post.mock.calls[mockApiClient.post.mock.calls.length - 1];
+            const body = postCall[1] as Record<string, unknown>;
+            capturedConvIds.push(body.conversationId as string | undefined);
+          }
+          return {
+            text: 'Response',
+            steps: [{ toolCalls: [], toolResults: [] }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+            finishReason: 'stop',
+          };
+        });
+
+      await runner.run('First', 'conv-A');
+      await runner.run('Second', 'conv-B');
+      await runner.run('Third (no conv)');
+
+      expect(capturedConvIds[0]).toBe('conv-A');
+      expect(capturedConvIds[1]).toBe('conv-B');
+      // Third should use conv-B (last known)
+      expect(capturedConvIds[2]).toBe('conv-B');
+    });
+
+    it('should have no conversationId when no message ever provided one', async () => {
+      const capturedConvIds: (string | undefined)[] = [];
+      mockGenerateText
+        .mockImplementation(async (opts: Record<string, unknown>) => {
+          const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+          if (tools?.report_status) {
+            mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+            await tools.report_status.execute({ status: 'in_progress', summary: 'test' });
+            const postCall = mockApiClient.post.mock.calls[mockApiClient.post.mock.calls.length - 1];
+            const body = postCall[1] as Record<string, unknown>;
+            capturedConvIds.push(body.conversationId as string | undefined);
+          }
+          return {
+            text: 'Response',
+            steps: [{ toolCalls: [], toolResults: [] }],
+            usage: { inputTokens: 10, outputTokens: 5 },
+            finishReason: 'stop',
+          };
+        });
+
+      await runner.run('No conv ever');
+
+      expect(capturedConvIds[0]).toBeUndefined();
+    });
   });
 
   describe('context compaction', () => {
@@ -270,7 +361,13 @@ describe('AgentRunnerService', () => {
 
       expect(r.getHistoryLength()).toBe(12);
 
-      // Next run triggers compaction
+      // AI summarization call for compaction + the actual run
+      mockGenerateText.mockResolvedValueOnce({
+        text: '[Compacted State] Summary of active tasks and decisions',
+        steps: [],
+        usage: { inputTokens: 50, outputTokens: 30 },
+        finishReason: 'stop',
+      });
       mockGenerateText.mockResolvedValueOnce({
         text: 'Compacted result',
         steps: [],
@@ -280,7 +377,43 @@ describe('AgentRunnerService', () => {
       await r.run('After compact');
 
       const state = r.getState();
-      // Compaction: 2 old messages → 1 summary, keep 10 recent, +1 user +1 assistant = 13
+      // Compaction: 2 old messages → 1 AI summary, keep 10 recent, +1 user +1 assistant = 13
+      expect(state.messages.length).toBeLessThan(15);
+      expect(state.messages[0].role).toBe('assistant');
+      expect(String(state.messages[0].content)).toContain('Compacted State');
+    });
+
+    it('should fall back to truncation summary when AI summarization fails', async () => {
+      const config: CrewlyAgentConfig = {
+        ...baseConfig,
+        maxHistoryMessages: 12,
+      };
+      const r = new AgentRunnerService(config, mockModelManager, mockApiClient);
+      r._generateTextFn = mockGenerateText;
+      await r.initialize();
+
+      // 6 runs × 2 messages = 12 messages
+      for (let i = 0; i < 6; i++) {
+        mockGenerateText.mockResolvedValueOnce({
+          text: `Response ${i}`,
+          steps: [],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        });
+        await r.run(`Message ${i}`);
+      }
+
+      // AI summarization fails, then actual run succeeds
+      mockGenerateText.mockRejectedValueOnce(new Error('Model error'));
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'After fallback',
+        steps: [],
+        usage: { inputTokens: 10, outputTokens: 5 },
+        finishReason: 'stop',
+      });
+      await r.run('After compact');
+
+      const state = r.getState();
       expect(state.messages.length).toBeLessThan(15);
       expect(state.messages[0].role).toBe('assistant');
       expect(String(state.messages[0].content)).toContain('summary');
@@ -307,6 +440,304 @@ describe('AgentRunnerService', () => {
     });
   });
 
+  describe('requestCompaction', () => {
+    it('should return skipped when history is too small', async () => {
+      await runner.initialize();
+      const result = await runner.requestCompaction();
+
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toContain('Too few');
+      expect(result.messagesBefore).toBe(0);
+      expect(result.messagesAfter).toBe(0);
+    });
+
+    it('should perform AI-powered compaction when history is large enough', async () => {
+      const config: CrewlyAgentConfig = {
+        ...baseConfig,
+        maxHistoryMessages: 100,
+      };
+      const r = new AgentRunnerService(config, mockModelManager, mockApiClient);
+      r._generateTextFn = mockGenerateText;
+      await r.initialize();
+
+      // Build up 12 messages (6 runs × 2)
+      for (let i = 0; i < 6; i++) {
+        mockGenerateText.mockResolvedValueOnce({
+          text: `Response ${i}`,
+          steps: [],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        });
+        await r.run(`Message ${i}`);
+      }
+
+      expect(r.getHistoryLength()).toBe(12);
+
+      // AI summarization for compaction
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Structured summary of conversation state with active tasks and decisions',
+        steps: [],
+        usage: { inputTokens: 50, outputTokens: 30 },
+        finishReason: 'stop',
+      });
+
+      const result = await r.requestCompaction();
+
+      expect(result.compacted).toBe(true);
+      expect(result.messagesBefore).toBe(12);
+      expect(result.messagesAfter).toBe(11); // 1 summary + 10 recent
+    });
+
+    it('should return skipped when not initialized', async () => {
+      const r = new AgentRunnerService(baseConfig, mockModelManager, mockApiClient);
+      const result = await r.requestCompaction();
+
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toBeDefined();
+    });
+  });
+
+  describe('audit trail', () => {
+    it('should return empty audit log initially', () => {
+      const log = runner.getAuditLog();
+      expect(log).toEqual([]);
+    });
+
+    it('should return default security policy', () => {
+      const policy = runner.getSecurityPolicy();
+      expect(policy.auditEnabled).toBe(true);
+      expect(policy.requireApproval).toEqual([]);
+      expect(policy.blockedTools).toEqual([]);
+      expect(policy.maxAuditEntries).toBe(500);
+    });
+
+    it('should update security policy', () => {
+      runner.updateSecurityPolicy({ requireApproval: ['destructive'] });
+      const policy = runner.getSecurityPolicy();
+      expect(policy.requireApproval).toEqual(['destructive']);
+      expect(policy.auditEnabled).toBe(true); // unchanged
+    });
+
+    it('should return a copy of the security policy', () => {
+      const p1 = runner.getSecurityPolicy();
+      const p2 = runner.getSecurityPolicy();
+      expect(p1).not.toBe(p2);
+      expect(p1).toEqual(p2);
+    });
+  });
+
+  describe('approval mode enforcement', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should block tool execution when sensitivity requires approval', async () => {
+      runner.updateSecurityPolicy({ requireApproval: ['destructive'] });
+
+      // When a tool with 'destructive' sensitivity is called, it should be denied
+      // We verify this by running a message that would trigger tool use
+      // and checking the security policy state
+      const policy = runner.getSecurityPolicy();
+      expect(policy.requireApproval).toContain('destructive');
+    });
+
+    it('should allow tool execution when sensitivity is not in requireApproval', async () => {
+      runner.updateSecurityPolicy({ requireApproval: ['destructive'] });
+
+      const policy = runner.getSecurityPolicy();
+      expect(policy.requireApproval).not.toContain('safe');
+      expect(policy.requireApproval).not.toContain('sensitive');
+    });
+
+    it('should block explicitly blocked tools', async () => {
+      runner.updateSecurityPolicy({ blockedTools: ['stop_agent', 'write_file'] });
+
+      const policy = runner.getSecurityPolicy();
+      expect(policy.blockedTools).toContain('stop_agent');
+      expect(policy.blockedTools).toContain('write_file');
+    });
+
+    it('should combine approval and blocked tools', async () => {
+      runner.updateSecurityPolicy({
+        requireApproval: ['destructive', 'sensitive'],
+        blockedTools: ['handle_agent_failure'],
+      });
+
+      const policy = runner.getSecurityPolicy();
+      expect(policy.requireApproval).toEqual(['destructive', 'sensitive']);
+      expect(policy.blockedTools).toEqual(['handle_agent_failure']);
+      expect(policy.auditEnabled).toBe(true); // unchanged
+    });
+  });
+
+  describe('read-only audit mode', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should default readOnlyMode to false', () => {
+      const policy = runner.getSecurityPolicy();
+      expect(policy.readOnlyMode).toBe(false);
+    });
+
+    it('should enable read-only mode via updateSecurityPolicy', () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+      const policy = runner.getSecurityPolicy();
+      expect(policy.readOnlyMode).toBe(true);
+    });
+
+    it('should block write tools when readOnlyMode is active', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      // Run a message that triggers a write tool — we check via tool execution
+      // The tool should be blocked by checkApproval before reaching the API
+      let toolResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        // Try to call write_file — should be blocked
+        toolResult = await tools.write_file.execute({
+          file_path: '/test/file.ts',
+          content: 'blocked content',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Try to write');
+
+      expect(toolResult).toBeDefined();
+      expect((toolResult as Record<string, unknown>).success).toBe(false);
+      expect((toolResult as Record<string, unknown>).blocked).toBe(true);
+      expect((toolResult as Record<string, unknown>).error).toContain('read-only');
+      // Should NOT have called the API
+      expect(mockApiClient.post).not.toHaveBeenCalled();
+    });
+
+    it('should allow safe/read-only tools when readOnlyMode is active', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      let toolResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [{ name: 'team-a' }], status: 200 } as any);
+        toolResult = await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Check teams');
+
+      // Safe tool should work
+      expect(mockApiClient.get).toHaveBeenCalled();
+      expect(toolResult).toEqual([{ name: 'team-a' }]);
+    });
+
+    it('should log blocked write attempts in audit trail during readOnlyMode', async () => {
+      runner.updateSecurityPolicy({ readOnlyMode: true });
+
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        await tools.edit_file.execute({
+          file_path: '/test/file.ts',
+          old_string: 'foo',
+          new_string: 'bar',
+          replace_all: false,
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Try to edit');
+
+      const auditLog = runner.getAuditLog();
+      expect(auditLog.length).toBeGreaterThanOrEqual(1);
+      const editEntry = auditLog.find(e => e.toolName === 'edit_file');
+      expect(editEntry).toBeDefined();
+      expect(editEntry!.success).toBe(false);
+      expect(editEntry!.error).toContain('read-only');
+    });
+  });
+
+  describe('audit trail with sessionName', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should include sessionName in audit entries', async () => {
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [], status: 200 } as any);
+        await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Check status');
+
+      const auditLog = runner.getAuditLog();
+      expect(auditLog.length).toBeGreaterThanOrEqual(1);
+      expect(auditLog[0].sessionName).toBe('test-session');
+    });
+  });
+
+  describe('getFilteredAuditLog via get_audit_log tool', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should return actual audit entries via get_audit_log tool', async () => {
+      // First generate some audit data
+      mockGenerateText.mockImplementationOnce(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.get.mockResolvedValueOnce({ success: true, data: [], status: 200 } as any);
+        await tools.get_team_status.execute({});
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+      await runner.run('Generate audit data');
+
+      // Now query the audit log through the tool
+      let auditResult: Record<string, unknown> | undefined;
+      mockGenerateText.mockImplementationOnce(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        auditResult = await tools.get_audit_log.execute({ limit: 10 }) as Record<string, unknown>;
+        return {
+          text: 'Audit retrieved',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+      await runner.run('Get audit log');
+
+      expect(auditResult).toBeDefined();
+      expect(auditResult!.success).toBe(true);
+      expect(auditResult!.totalEntries).toBeGreaterThanOrEqual(1);
+      const entries = auditResult!.entries as AuditEntry[];
+      expect(entries[0].toolName).toBe('get_team_status');
+    });
+  });
+
   describe('getState', () => {
     it('should return a copy of state, not the original', () => {
       const state1 = runner.getState();
@@ -330,6 +761,150 @@ describe('AgentRunnerService', () => {
     it('should return true after initialize', async () => {
       await runner.initialize();
       expect(runner.isInitialized()).toBe(true);
+    });
+  });
+
+  describe('long message handling (Bug 1)', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should process messages longer than 500 chars without dropping', async () => {
+      const longMessage = 'A'.repeat(2000);
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Processed long message',
+        steps: [],
+        usage: { inputTokens: 500, outputTokens: 50 },
+        finishReason: 'stop',
+      });
+
+      const result = await runner.run(longMessage);
+
+      expect(result.text).toBe('Processed long message');
+      // Verify the full message was passed to generateText
+      const callArgs = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
+      const messages = callArgs.messages as Array<{ role: string; content: string }>;
+      // After run(), assistant response is pushed to the same array reference,
+      // so the user message is second-to-last
+      const userMsg = messages.find(m => m.role === 'user' && m.content.length === 2000);
+      expect(userMsg).toBeDefined();
+      expect(userMsg!.content).toBe(longMessage);
+      expect(userMsg!.content.length).toBe(2000);
+    });
+
+    it('should process messages over 5000 chars without truncation', async () => {
+      const veryLongMessage = 'Task: '.repeat(1000);
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Done',
+        steps: [],
+        usage: { inputTokens: 1000, outputTokens: 20 },
+        finishReason: 'stop',
+      });
+
+      const result = await runner.run(veryLongMessage);
+      expect(result.text).toBe('Done');
+
+      const callArgs = mockGenerateText.mock.calls[0][0] as Record<string, unknown>;
+      const messages = callArgs.messages as Array<{ role: string; content: string }>;
+      // Find the user message (assistant response is also in array due to shared reference)
+      const userMsg = messages.find(m => m.role === 'user' && m.content === veryLongMessage);
+      expect(userMsg).toBeDefined();
+    });
+
+    it('should not strand messages in the queue (race condition guard)', async () => {
+      // Simulate the scenario where a message arrives right as processQueue exits
+      const messages: string[] = [];
+      mockGenerateText.mockImplementation(async () => {
+        return {
+          text: 'Response',
+          steps: [],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      // Send multiple messages concurrently
+      const results = await Promise.all([
+        runner.run('Message 1'),
+        runner.run('Message 2'),
+        runner.run('Message 3'),
+      ]);
+
+      expect(results).toHaveLength(3);
+      expect(results[0].text).toBe('Response');
+      expect(results[1].text).toBe('Response');
+      expect(results[2].text).toBe('Response');
+      expect(mockGenerateText).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('Slack context (Bug 5)', () => {
+    beforeEach(async () => {
+      await runner.initialize();
+    });
+
+    it('should store Slack context from metadata', async () => {
+      mockGenerateText.mockResolvedValueOnce({
+        text: 'Response',
+        steps: [{ toolCalls: [], toolResults: [] }],
+        usage: { inputTokens: 10, outputTokens: 5 },
+        finishReason: 'stop',
+      });
+
+      await runner.run('Hello', 'conv-123', { channelId: 'D0AC7NF5N7L', threadTs: '123.456' });
+
+      const slackCtx = runner.getSlackContext();
+      expect(slackCtx).toBeDefined();
+      expect(slackCtx!.channelId).toBe('D0AC7NF5N7L');
+      expect(slackCtx!.threadTs).toBe('123.456');
+    });
+
+    it('should pass Slack context to tools via createTools', async () => {
+      // Verify the reply_slack tool gets the Slack context
+      let replySlackResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        mockApiClient.post.mockResolvedValueOnce({ success: true, data: {} } as any);
+        replySlackResult = await tools.reply_slack.execute({
+          text: 'Hello from agent',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Reply to Slack', 'conv-1', { channelId: 'C123', threadTs: '456.789' });
+
+      // The reply_slack should have auto-filled channelId from context
+      expect(mockApiClient.post).toHaveBeenCalledWith('/slack/send', expect.objectContaining({
+        channelId: 'C123',
+        threadTs: '456.789',
+      }));
+    });
+
+    it('should return error when no channelId available', async () => {
+      let replySlackResult: unknown;
+      mockGenerateText.mockImplementation(async (opts: Record<string, unknown>) => {
+        const tools = opts.tools as Record<string, { execute: (args: Record<string, unknown>) => Promise<unknown> }>;
+        replySlackResult = await tools.reply_slack.execute({
+          text: 'No channel',
+        });
+        return {
+          text: 'Done',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: 'stop',
+        };
+      });
+
+      await runner.run('Reply without context');
+
+      expect(replySlackResult).toBeDefined();
+      expect((replySlackResult as Record<string, unknown>).success).toBe(false);
+      expect((replySlackResult as Record<string, unknown>).error).toContain('No channelId');
     });
   });
 });

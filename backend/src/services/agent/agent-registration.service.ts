@@ -234,7 +234,62 @@ export class AgentRegistrationService {
 			});
 		}
 
+		// Check in-process runtimes before defaulting to CLAUDE_CODE.
+		// crewly-agent runtimes may not have a team config entry yet.
+		if (this.inProcessRuntimes.has(sessionName)) {
+			return RUNTIME_TYPES.CREWLY_AGENT;
+		}
+
 		return RUNTIME_TYPES.CLAUDE_CODE;
+	}
+
+	/**
+	 * Route a crewly-agent in-process response to the originating chat conversation.
+	 *
+	 * PTY-based runtimes emit [NOTIFY] markers that the terminal gateway parses.
+	 * In-process crewly-agents have no terminal output, so this method provides
+	 * the equivalent routing for their text responses.
+	 *
+	 * @param sessionName - Agent session that produced the response
+	 * @param text - Response text from the agent
+	 * @param conversationId - Chat conversation to route the response to
+	 */
+	private routeInProcessResponseToChat(
+		sessionName: string,
+		text: string,
+		conversationId: string,
+	): void {
+		// Lazy import to avoid circular dependencies at module load time
+		import('../../websocket/chat.gateway.js')
+			.then(({ getChatGateway }) => {
+				const chatGateway = getChatGateway();
+				if (!chatGateway) {
+					this.logger.debug('ChatGateway not available, skipping response routing', {
+						sessionName, conversationId,
+					});
+					return;
+				}
+				return chatGateway.processNotifyMessage(
+					sessionName,
+					text,
+					conversationId,
+					{ source: 'crewly-agent' },
+				);
+			})
+			.then((chatMessage) => {
+				if (chatMessage) {
+					this.logger.debug('Routed in-process agent response to chat', {
+						sessionName, conversationId,
+						messageId: typeof chatMessage === 'object' ? (chatMessage as unknown as Record<string, unknown>).id : undefined,
+					});
+				}
+			})
+			.catch((err) => {
+				this.logger.warn('Failed to route in-process agent response to chat', {
+					sessionName, conversationId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
 	}
 
 	/**
@@ -354,6 +409,20 @@ export class AgentRegistrationService {
 	 */
 	getInProcessRuntime(sessionName: string): CrewlyAgentRuntimeService | undefined {
 		return this.inProcessRuntimes.get(sessionName);
+	}
+
+	/**
+	 * Check if an in-process Crewly Agent runtime is active and ready for a given session.
+	 *
+	 * Used by team status resolution to correctly report active status for
+	 * crewly-agent runtimes that have no PTY session.
+	 *
+	 * @param sessionName - The session name to check
+	 * @returns True if an in-process runtime exists and is ready
+	 */
+	isInProcessRuntimeActive(sessionName: string): boolean {
+		const runtime = this.inProcessRuntimes.get(sessionName);
+		return runtime !== undefined && runtime.isReady();
 	}
 
 	/**
@@ -677,6 +746,17 @@ export class AgentRegistrationService {
 			role,
 			runtimeType,
 		});
+
+		// Register Gemini CLI sessions with terminal gateway so NOTIFY
+		// marker processing is skipped (Gemini TUI garbles markers).
+		if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+			import('../../websocket/terminal.gateway.js').then(({ getTerminalGateway }) => {
+				const tg = getTerminalGateway();
+				if (tg) {
+					tg.registerGeminiCliSession(sessionName);
+				}
+			}).catch(() => { /* non-critical */ });
+		}
 
 		// Background: detect and store session ID for resume-on-restart
 		if (runtimeType === RUNTIME_TYPES.CLAUDE_CODE) {
@@ -1049,6 +1129,53 @@ export class AgentRegistrationService {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Register a crewly-agent member as active by updating its team config directly.
+	 * In-process agents cannot run bash scripts, so this performs the registration
+	 * that the register-self skill would normally do for PTY-based runtimes.
+	 *
+	 * @param sessionName - Agent session name
+	 * @param role - Agent role
+	 * @param memberId - Optional member UUID
+	 * @returns True if registration succeeded
+	 */
+	private async registerMemberActive(
+		sessionName: string,
+		role: string,
+		memberId?: string,
+	): Promise<boolean> {
+		try {
+			const teams = await this.storageService.getTeams();
+			for (const team of teams) {
+				const member = team.members.find(
+					(m) =>
+						(m.sessionName === sessionName) ||
+						(memberId !== undefined && m.id === memberId),
+				);
+				if (member) {
+					member.agentStatus = 'active';
+					member.workingStatus = 'idle';
+					member.updatedAt = new Date().toISOString();
+					// Pre-populate sessionName so register_self tool can find this member
+					if (!member.sessionName && sessionName) {
+						member.sessionName = sessionName;
+					}
+					await this.storageService.saveTeam(team);
+					this.logger.info('Member registered as active', { sessionName, teamId: team.id });
+					return true;
+				}
+			}
+			this.logger.warn('Could not find member to register as active', { sessionName, memberId });
+			return false;
+		} catch (error) {
+			this.logger.error('Failed to register member as active', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
 	}
 
 	/**
@@ -1950,24 +2077,39 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 				// Determine role name for system prompt lookup
 				const roleName = role === ORCHESTRATOR_ROLE ? 'orchestrator' : role.toLowerCase().replace(/\s+/g, '-');
-				await crewlyRuntime.initializeInProcess(sessionName, undefined, roleName);
+				await crewlyRuntime.initializeInProcess(sessionName, { projectPath }, roleName);
 
 				// Track the in-process runtime for message routing
 				this.inProcessRuntimes.set(sessionName, crewlyRuntime);
 
-				// Load and deliver registration prompt as the first message
+				// Auto-register agent as active — crewly-agent cannot run bash scripts,
+				// so we register on its behalf instead of relying on the register_self tool.
 				try {
-					const prompt = await this.loadRegistrationPrompt(role, sessionName, memberId);
-					this.logger.info('Delivering registration prompt to Crewly Agent', {
-						sessionName, promptLength: prompt.length,
+					const registerResult = await this.registerMemberActive(sessionName, role, memberId);
+					this.logger.info('Auto-registered crewly-agent as active', {
+						sessionName, role, success: registerResult,
 					});
-					await crewlyRuntime.handleMessage(prompt);
-				} catch (promptError) {
-					this.logger.warn('Registration prompt delivery failed (non-fatal for crewly-agent)', {
+				} catch (registerErr) {
+					this.logger.warn('Auto-registration failed (non-fatal)', {
+						sessionName,
+						error: registerErr instanceof Error ? registerErr.message : String(registerErr),
+					});
+				}
+
+				// For crewly-agent, the system prompt is already loaded during initializeInProcess().
+				// Do NOT deliver the full registration prompt as a message — that would trigger
+				// a redundant generateText call (60K chars → rate limits). Instead, send a
+				// lightweight activation message that tells the agent to start working.
+				crewlyRuntime.handleMessage(
+					`You are now active as "${role}" (session: ${sessionName}). ` +
+					'Your system prompt is already loaded. Begin by calling register_self, ' +
+					'then wait for tasks.'
+				).catch(promptError => {
+					this.logger.warn('Initial activation message failed (non-fatal for crewly-agent)', {
 						sessionName,
 						error: promptError instanceof Error ? promptError.message : String(promptError),
 					});
-				}
+				});
 
 				// Start context window monitoring if applicable
 				if (role !== ORCHESTRATOR_ROLE && config.teamId && config.memberId) {
@@ -2112,6 +2254,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// Start OAuth relogin monitoring for newly created session
 			OAuthReloginMonitorService.getInstance().startMonitoring(sessionName, runtimeType);
+
+			// Register Gemini CLI sessions with terminal gateway so NOTIFY
+			// marker processing is skipped (Gemini TUI garbles markers).
+			if (runtimeType === RUNTIME_TYPES.GEMINI_CLI) {
+				import('../../websocket/terminal.gateway.js').then(({ getTerminalGateway }) => {
+					const tg = getTerminalGateway();
+					if (tg) {
+						tg.registerGeminiCliSession(sessionName);
+					}
+				}).catch(() => { /* non-critical */ });
+			}
 
 			return {
 				success: true,
@@ -2296,8 +2449,17 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 
 			// ===== In-process Crewly Agent delivery =====
 			// Route directly to the in-process runtime, bypassing PTY entirely.
-			if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
-				const crewlyRuntime = this.inProcessRuntimes.get(sessionName);
+			// Fire-and-forget: mirrors PTY runtimes where the write returns immediately.
+			// The LLM processes the message asynchronously in the background.
+			//
+			// IMPORTANT: Always check inProcessRuntimes map first, regardless of
+			// the runtimeType parameter. This makes delivery robust against runtime
+			// type misresolution — e.g., when storage lookup fails and defaults to
+			// claude-code for what is actually a crewly-agent session. Without this
+			// fallback, messages to crewly-agent sessions silently fail when routed
+			// through the PTY path (no PTY session exists).
+			const crewlyRuntime = this.inProcessRuntimes.get(sessionName);
+			if (crewlyRuntime || runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
 				if (!crewlyRuntime || !crewlyRuntime.isReady()) {
 					return {
 						success: false,
@@ -2305,19 +2467,47 @@ After checking in, just say "Ready for tasks" and wait for me to send you work.`
 					};
 				}
 
-				try {
-					await crewlyRuntime.handleMessage(message);
-					this.logger.info('Message delivered to in-process Crewly Agent', {
-						sessionName, messageLength: message.length,
-					});
-					return { success: true, message: 'Message delivered to Crewly Agent' };
-				} catch (agentError) {
-					const errMsg = agentError instanceof Error ? agentError.message : String(agentError);
-					this.logger.error('Crewly Agent message handling failed', {
-						sessionName, error: errMsg,
-					});
-					return { success: false, error: `Crewly Agent error: ${errMsg}` };
+				// Extract conversationId from [CHAT:xxx] prefix for response routing
+				const chatPrefixMatch = message.match(/^\[CHAT:([^\]]+)\]\s*/);
+				const incomingConversationId = chatPrefixMatch?.[1];
+
+				// Extract Slack context from [SLACK:channelId:threadTs] marker if present (Bug 5).
+				// This allows crewly-agent to auto-fill reply_slack with the correct thread.
+				let slackMetadata: Record<string, string> | undefined;
+				const slackPrefixMatch = message.match(/\[SLACK:([^:\]]+)(?::([^\]]+))?\]/);
+				if (slackPrefixMatch) {
+					slackMetadata = { channelId: slackPrefixMatch[1] };
+					if (slackPrefixMatch[2]) slackMetadata.threadTs = slackPrefixMatch[2];
 				}
+
+				// Process message asynchronously — don't block the caller
+				crewlyRuntime.handleMessage(message, slackMetadata)
+					.then((result) => {
+						this.logger.info('Crewly Agent finished processing message', {
+							sessionName, messageLength: message.length,
+							responseLength: result.text?.length ?? 0,
+						});
+
+						// Route response text back to the originating chat conversation.
+						// Without this, crewly-agent responses are discarded — the agent
+						// has no terminal output for the NOTIFY pathway used by PTY runtimes.
+						if (result.text && incomingConversationId) {
+							this.routeInProcessResponseToChat(sessionName, result.text, incomingConversationId);
+						}
+					})
+					.catch(agentError => {
+						const errMsg = agentError instanceof Error ? agentError.message : String(agentError);
+						this.logger.error('Crewly Agent message handling failed', {
+							sessionName, error: errMsg,
+							messageLength: message.length,
+							messagePreview: message.substring(0, 200),
+						});
+					});
+
+				this.logger.info('Message dispatched to in-process Crewly Agent', {
+					sessionName, messageLength: message.length,
+				});
+				return { success: true, message: 'Message delivered to Crewly Agent' };
 			}
 
 			// Get session helper once for this method

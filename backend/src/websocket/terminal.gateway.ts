@@ -1,8 +1,11 @@
 /**
  * Terminal Gateway Module
  *
- * Provides WebSocket-based real-time terminal streaming for PTY sessions.
+ * Provides WebSocket-based real-time terminal streaming for PTY and in-process sessions.
  * Uses event-based streaming instead of polling for better performance.
+ *
+ * In-process sessions (Crewly Agent runtime) are streamed via InProcessLogBuffer
+ * EventEmitter events, while PTY sessions use native onData events.
  *
  * @module terminal-gateway
  */
@@ -23,6 +26,7 @@ import type { SlackNotification } from '../types/slack.types.js';
 import { stripAnsiCodes, generateResponseHash, ResponseDeduplicator } from '../utils/terminal-output.utils.js';
 import { extractConversationId, extractMarkerBlocks, extractChatResponseBlocks } from '../utils/terminal-string-ops.js';
 import { parseNotifyContent, type NotifyPayload } from '../types/chat.types.js';
+import { InProcessLogBuffer } from '../services/agent/crewly-agent/in-process-log-buffer.js';
 
 
 /**
@@ -69,6 +73,32 @@ export class TerminalGateway {
 	private gchatThreadMap = new Map<string, string>();
 
 	/**
+	 * Sessions running Gemini CLI — NOTIFY marker processing is skipped for
+	 * these because Gemini TUI garbles markers. They use reply-gchat/reply-slack
+	 * skills for response delivery instead.
+	 */
+	private geminiCliSessions = new Set<string>();
+
+	/**
+	 * Sessions in read-only mode for security auditing.
+	 * Terminal output is streamed normally, but all input is blocked.
+	 * Used for compliance auditing and observing agent behavior safely.
+	 */
+	private readOnlySessions = new Set<string>();
+
+	/**
+	 * Set of in-process sessions currently being streamed via InProcessLogBuffer.
+	 * These sessions are automatically read-only (no PTY to write to).
+	 */
+	private inProcessStreamingSessions = new Set<string>();
+
+	/**
+	 * Bound handler for InProcessLogBuffer 'data' events.
+	 * Stored so it can be removed on destroy.
+	 */
+	private inProcessDataHandler: ((sessionName: string, formattedLine: string) => void) | null = null;
+
+	/**
 	 * Create a new TerminalGateway.
 	 *
 	 * @param io - Socket.IO server instance
@@ -78,6 +108,7 @@ export class TerminalGateway {
 		this.logger = LoggerService.getInstance().createComponentLogger('TerminalGateway');
 
 		this.setupEventHandlers();
+		this.setupInProcessLogStreaming();
 	}
 
 	/**
@@ -150,6 +181,51 @@ export class TerminalGateway {
 	}
 
 	/**
+	 * Set up real-time log streaming from InProcessLogBuffer.
+	 *
+	 * Listens for 'data' events emitted when InProcessLogBuffer.append() is called,
+	 * and broadcasts the formatted log line to all WebSocket subscribers of that session.
+	 */
+	private setupInProcessLogStreaming(): void {
+		const logBuffer = InProcessLogBuffer.getInstance();
+
+		this.inProcessDataHandler = (sessionName: string, formattedLine: string) => {
+			// Only broadcast if someone is subscribed to this in-process session
+			if (!this.inProcessStreamingSessions.has(sessionName)) {
+				return;
+			}
+
+			const terminalOutput: TerminalOutput = {
+				sessionName,
+				content: formattedLine + '\r\n',
+				timestamp: new Date().toISOString(),
+				type: 'stdout',
+			};
+
+			const message: WebSocketMessage = {
+				type: 'terminal_output',
+				payload: terminalOutput,
+				timestamp: new Date().toISOString(),
+			};
+
+			this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
+		};
+
+		logBuffer.on('data', this.inProcessDataHandler);
+		this.logger.info('In-process log streaming listener registered');
+	}
+
+	/**
+	 * Check if a session is an in-process Crewly Agent session.
+	 *
+	 * @param sessionName - The session to check
+	 * @returns True if the session exists in InProcessLogBuffer
+	 */
+	isInProcessSession(sessionName: string): boolean {
+		return InProcessLogBuffer.getInstance().hasSession(sessionName);
+	}
+
+	/**
 	 * Subscribe a client to a specific terminal session.
 	 *
 	 * @param sessionName - The session to subscribe to
@@ -172,8 +248,13 @@ export class TerminalGateway {
 		// Join socket.io room for this session
 		socket.join(`terminal_${sessionName}`);
 
-		// Start PTY output streaming if not already started
-		const streamingStarted = this.startPtyStreaming(sessionName);
+		// Try PTY streaming first, then fall back to in-process streaming
+		let streamingStarted = this.startPtyStreaming(sessionName);
+
+		if (!streamingStarted) {
+			// Check if this is an in-process Crewly Agent session
+			streamingStarted = this.startInProcessStreaming(sessionName);
+		}
 
 		// Send current terminal state to new subscriber
 		this.sendCurrentTerminalState(sessionName, socket);
@@ -197,6 +278,35 @@ export class TerminalGateway {
 				timestamp: new Date().toISOString(),
 			} as WebSocketMessage);
 		}
+	}
+
+	/**
+	 * Start streaming logs from an in-process Crewly Agent session.
+	 *
+	 * In-process sessions are automatically read-only (no PTY to write to).
+	 * Real-time streaming is handled by the InProcessLogBuffer 'data' event
+	 * listener set up in setupInProcessLogStreaming().
+	 *
+	 * @param sessionName - The session to stream from
+	 * @returns True if the session is an in-process session and streaming started
+	 */
+	private startInProcessStreaming(sessionName: string): boolean {
+		const logBuffer = InProcessLogBuffer.getInstance();
+		if (!logBuffer.hasSession(sessionName)) {
+			return false;
+		}
+
+		// Mark as in-process streaming session (enables data event broadcasting)
+		this.inProcessStreamingSessions.add(sessionName);
+
+		// In-process sessions are always read-only (no PTY to write to)
+		this.readOnlySessions.add(sessionName);
+
+		this.logger.info('Started in-process log streaming for session', {
+			sessionName,
+			isReadOnly: true,
+		});
+		return true;
 	}
 
 	/**
@@ -364,6 +474,8 @@ export class TerminalGateway {
 			// Stop streaming if no more clients watching
 			if (clients.size === 0) {
 				this.stopPtyStreaming(sessionName);
+				// Clean up in-process streaming tracking
+				this.inProcessStreamingSessions.delete(sessionName);
 				this.connectedClients.delete(sessionName);
 			}
 		}
@@ -393,6 +505,17 @@ export class TerminalGateway {
 	 */
 	async sendInput(sessionName: string, input: string, socket: Socket): Promise<void> {
 		try {
+			// Block input for read-only sessions (audit mode)
+			if (this.readOnlySessions.has(sessionName)) {
+				this.logger.warn('Input blocked for read-only session', { sessionName, fromClient: socket.id });
+				socket.emit('error', {
+					type: 'read_only',
+					payload: { sessionName, error: 'Session is in read-only mode (audit mode). Input is blocked.' },
+					timestamp: new Date().toISOString(),
+				} as WebSocketMessage);
+				return;
+			}
+
 			const backend = getSessionBackendSync();
 			if (!backend) {
 				throw new Error('Session backend not initialized');
@@ -495,6 +618,7 @@ export class TerminalGateway {
 				// Stop streaming if no more clients watching
 				if (clients.size === 0) {
 					this.stopPtyStreaming(sessionName);
+					this.inProcessStreamingSessions.delete(sessionName);
 					this.connectedClients.delete(sessionName);
 				}
 			}
@@ -518,12 +642,12 @@ export class TerminalGateway {
 		this.io.to(`terminal_${sessionName}`).emit('terminal_output', message);
 
 		// Process terminal output for [NOTIFY] markers and chat responses.
-		// Previously gated to ORCHESTRATOR_SESSION_NAME only, which meant
-		// Gemini CLI orchestrators with different session names were silently
-		// ignored. Now processes all sessions — NOTIFY markers are explicit
-		// skill output and the false positive filter (⏺ tool indicator)
-		// already handles Claude Code tool output display.
-		this.processOrchestratorOutputForChat(sessionName, output.content);
+		// Skip Gemini CLI sessions — their TUI garbles NOTIFY markers, producing
+		// false matches with raw artifacts. Gemini CLI agents use reply-gchat and
+		// reply-slack skills for response delivery instead of NOTIFY markers.
+		if (!this.geminiCliSessions.has(sessionName)) {
+			this.processOrchestratorOutputForChat(sessionName, output.content);
+		}
 	}
 
 	/**
@@ -835,6 +959,95 @@ export class TerminalGateway {
 	}
 
 	/**
+	 * Pre-load Gemini CLI session names from StorageService.
+	 * Call during startup (after StorageService is initialized) to ensure
+	 * NOTIFY marker processing is skipped for existing Gemini CLI sessions
+	 * that are already streaming before registerGeminiCliSession is called.
+	 */
+	async loadGeminiCliSessions(): Promise<void> {
+		try {
+			const { StorageService } = await import('../services/core/storage.service.js');
+			const storageService = StorageService.getInstance();
+			const teams = await storageService.getTeams();
+			for (const team of teams) {
+				for (const member of team.members) {
+					if (member.runtimeType === 'gemini-cli' && member.sessionName) {
+						this.geminiCliSessions.add(member.sessionName);
+					}
+				}
+			}
+
+			// Check orchestrator runtimeType from storage
+			const orcStatus = await storageService.getOrchestratorStatus();
+			if (orcStatus?.runtimeType === 'gemini-cli') {
+				this.geminiCliSessions.add(ORCHESTRATOR_SESSION_NAME);
+			}
+
+			if (this.geminiCliSessions.size > 0) {
+				this.logger.info('Pre-loaded Gemini CLI sessions for NOTIFY skip', {
+					sessions: [...this.geminiCliSessions],
+				});
+			}
+		} catch (error) {
+			this.logger.warn('Failed to pre-load Gemini CLI sessions (non-fatal)', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
+	 * Register a session as running Gemini CLI.
+	 * NOTIFY marker processing is skipped for these sessions because the
+	 * Gemini TUI garbles marker output. Gemini CLI agents use reply-gchat
+	 * and reply-slack skills for response delivery instead.
+	 *
+	 * @param sessionName - The Gemini CLI session name
+	 */
+	registerGeminiCliSession(sessionName: string): void {
+		this.geminiCliSessions.add(sessionName);
+	}
+
+	/**
+	 * Unregister a Gemini CLI session (e.g. on session destroy).
+	 *
+	 * @param sessionName - The session name to unregister
+	 */
+	unregisterGeminiCliSession(sessionName: string): void {
+		this.geminiCliSessions.delete(sessionName);
+	}
+
+	/**
+	 * Enable read-only mode for a session. Output streaming continues but
+	 * all input is blocked. Used for security auditing and safe observation.
+	 *
+	 * @param sessionName - The session to set as read-only
+	 */
+	setReadOnly(sessionName: string): void {
+		this.readOnlySessions.add(sessionName);
+		this.logger.info('Session set to read-only mode', { sessionName });
+	}
+
+	/**
+	 * Disable read-only mode for a session, restoring normal input capability.
+	 *
+	 * @param sessionName - The session to restore
+	 */
+	clearReadOnly(sessionName: string): void {
+		this.readOnlySessions.delete(sessionName);
+		this.logger.info('Session read-only mode cleared', { sessionName });
+	}
+
+	/**
+	 * Check if a session is in read-only (audit) mode.
+	 *
+	 * @param sessionName - The session to check
+	 * @returns True if the session is read-only
+	 */
+	isReadOnly(sessionName: string): boolean {
+		return this.readOnlySessions.has(sessionName);
+	}
+
+	/**
 	 * Trim the orchestrator output buffer if there are no pending open markers.
 	 * Prevents unbounded growth when output doesn't contain any markers.
 	 */
@@ -1055,6 +1268,31 @@ export class TerminalGateway {
 				socketId: socket.id,
 			});
 
+			// Check in-process sessions first (they don't have a PTY backend)
+			if (this.inProcessStreamingSessions.has(sessionName)) {
+				const logBuffer = InProcessLogBuffer.getInstance();
+				const output = logBuffer.capture(sessionName, 500);
+
+				const terminalState: TerminalOutput = {
+					sessionName,
+					content: output + '\r\n',
+					timestamp: new Date().toISOString(),
+					type: 'stdout',
+				};
+
+				this.logger.debug('Emitting initial in-process terminal state', {
+					sessionName,
+					contentLength: output.length,
+				});
+
+				socket.emit('initial_terminal_state', {
+					type: 'initial_terminal_state',
+					payload: terminalState,
+					timestamp: new Date().toISOString(),
+				} as WebSocketMessage);
+				return;
+			}
+
 			const backend = getSessionBackendSync();
 			if (!backend) {
 				socket.emit('error', {
@@ -1252,6 +1490,13 @@ export class TerminalGateway {
 		this.sessionSubscriptions.clear();
 		this.connectedClients.clear();
 		this.persistentMonitoringSessions.clear();
+
+		// Clean up in-process log streaming
+		if (this.inProcessDataHandler) {
+			InProcessLogBuffer.getInstance().removeListener('data', this.inProcessDataHandler);
+			this.inProcessDataHandler = null;
+		}
+		this.inProcessStreamingSessions.clear();
 
 		this.logger.info('TerminalGateway destroyed');
 	}

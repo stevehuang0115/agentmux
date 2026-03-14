@@ -72,6 +72,8 @@ export interface CrewlyAgentConfig {
   maxHistoryMessages: number;
   /** Token budget threshold (percentage of context window) for compaction */
   compactionThreshold: number;
+  /** Project path for memory and task tools (auto-injected) */
+  projectPath?: string;
 }
 
 /**
@@ -117,6 +119,15 @@ export interface ApiCallResult<T = unknown> {
 }
 
 /**
+ * Sensitivity classification for tool security auditing.
+ *
+ * - 'safe': Read-only or informational tools (no side effects)
+ * - 'sensitive': Tools that modify state or communicate externally
+ * - 'destructive': Tools that can cause irreversible damage
+ */
+export type ToolSensitivity = 'safe' | 'sensitive' | 'destructive';
+
+/**
  * Tool definition shape matching AI SDK Tool interface.
  * Shared by both the main tool registry and the auditor tool registry.
  */
@@ -127,6 +138,129 @@ export interface ToolDefinition {
   inputSchema: z.ZodType;
   /** Execute the tool with the given validated arguments */
   execute: (args: Record<string, unknown>) => Promise<unknown>;
+  /** Security sensitivity classification for audit purposes */
+  sensitivity?: ToolSensitivity;
+}
+
+/**
+ * A single entry in the security audit trail.
+ * Records every tool invocation with timing, classification, and result status.
+ */
+export interface AuditEntry {
+  /** ISO timestamp of the tool invocation */
+  timestamp: string;
+  /** Agent session name that invoked the tool */
+  sessionName?: string;
+  /** Name of the tool that was called */
+  toolName: string;
+  /** Sensitivity classification of the tool */
+  sensitivity: ToolSensitivity;
+  /** Arguments passed to the tool (sanitized — no secrets) */
+  args: Record<string, unknown>;
+  /** Whether the tool call succeeded */
+  success: boolean;
+  /** Error message if the call failed */
+  error?: string;
+  /** Execution duration in milliseconds */
+  durationMs: number;
+}
+
+/**
+ * Security policy configuration for the agent runtime.
+ * Controls which tool sensitivity levels require approval or are blocked.
+ */
+export interface SecurityPolicy {
+  /** Whether audit logging is enabled */
+  auditEnabled: boolean;
+  /** Tool sensitivity levels that require explicit approval */
+  requireApproval: ToolSensitivity[];
+  /** Tool names that are completely blocked */
+  blockedTools: string[];
+  /** Maximum audit log entries to retain in memory */
+  maxAuditEntries: number;
+  /**
+   * Read-only audit mode. When enabled, all tools classified as
+   * 'sensitive' or 'destructive' are blocked — only 'safe' (read-only)
+   * tools can execute. Tool invocations are still logged to the audit trail.
+   */
+  readOnlyMode: boolean;
+}
+
+/**
+ * Tools that perform write/modify operations.
+ * Used by readOnlyMode to determine which tools to block.
+ */
+export const WRITE_TOOLS: readonly string[] = [
+  'edit_file',
+  'write_file',
+  'start_agent',
+  'stop_agent',
+  'handle_agent_failure',
+  'delegate_task',
+  'send_message',
+  'reply_slack',
+  'broadcast',
+  'schedule_check',
+  'cancel_schedule',
+  'register_self',
+  'report_status',
+  'remember',
+  'complete_task',
+] as const;
+
+/**
+ * Result of an autonomous context compaction operation.
+ * Returned by the compact_memory tool and requestCompaction().
+ */
+export interface CompactionResult {
+  /** Whether compaction was performed */
+  compacted: boolean;
+  /** Number of messages before compaction */
+  messagesBefore: number;
+  /** Number of messages after compaction */
+  messagesAfter: number;
+  /** Reason if compaction was skipped */
+  reason?: string;
+}
+
+/**
+ * Result of a tool approval check.
+ * Returned by the onCheckApproval callback to determine if a tool can execute.
+ */
+export interface ApprovalCheckResult {
+  /** Whether the tool is allowed to execute */
+  allowed: boolean;
+  /** Reason if the tool is blocked or requires approval */
+  reason?: string;
+  /** Whether the tool was blocked (vs requiring approval) */
+  blocked?: boolean;
+}
+
+/**
+ * Callbacks from tool registry to the agent runner.
+ * Allows tools to trigger runner-level operations like compaction and security checks.
+ */
+export interface ToolCallbacks {
+  /** Trigger intelligent context compaction */
+  onCompactMemory?: () => Promise<CompactionResult>;
+  /** Record an audit entry for a tool call */
+  onAuditLog?: (entry: AuditEntry) => void;
+  /** Check if a tool is allowed to execute given current security policy */
+  onCheckApproval?: (toolName: string, sensitivity: ToolSensitivity) => ApprovalCheckResult;
+  /** Retrieve audit log entries with optional filters */
+  onGetAuditLog?: (filters: AuditLogFilters) => AuditEntry[];
+}
+
+/**
+ * Filters for querying the audit log.
+ */
+export interface AuditLogFilters {
+  /** Maximum entries to return (most recent first) */
+  limit: number;
+  /** Filter by sensitivity level */
+  sensitivity?: ToolSensitivity;
+  /** Filter by specific tool name */
+  toolName?: string;
 }
 
 /**
@@ -150,6 +284,14 @@ export const CREWLY_AGENT_DEFAULTS = {
   } satisfies ModelConfig,
   /** HTTP request timeout in milliseconds */
   API_TIMEOUT_MS: 30_000,
+  /** Default security policy */
+  SECURITY_POLICY: {
+    auditEnabled: true,
+    requireApproval: [] as ToolSensitivity[],
+    blockedTools: [] as string[],
+    maxAuditEntries: 500,
+    readOnlyMode: false,
+  } satisfies SecurityPolicy,
 } as const;
 
 /**

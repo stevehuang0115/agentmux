@@ -168,7 +168,7 @@ describe('TerminalController', () => {
 
 			expect(mockRes.json).toHaveBeenCalledWith({
 				success: true,
-				data: { sessions: ['session1', 'session2'] },
+				data: { sessions: ['session1', 'session2'], inProcessSessions: [] },
 			});
 		});
 
@@ -180,7 +180,7 @@ describe('TerminalController', () => {
 
 			expect(mockRes.json).toHaveBeenCalledWith({
 				success: true,
-				data: { sessions: [] },
+				data: { sessions: [], inProcessSessions: [] },
 			});
 		});
 
@@ -761,6 +761,7 @@ describe('TerminalController', () => {
 						message: 'Message sent to agent successfully',
 					}),
 					waitForAgentReady: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+					getInProcessRuntime: jest.fn<() => any>().mockReturnValue(undefined),
 				},
 			};
 		});
@@ -900,6 +901,25 @@ describe('TerminalController', () => {
 				'test-session',
 				'Hello',
 				'claude-code'
+			);
+		});
+
+		it('should resolve runtimeType from in-process runtime when storage lookup returns nothing', async () => {
+			mockFindMemberBySessionName.mockResolvedValue(null);
+			mockApiContext.agentRegistrationService.getInProcessRuntime.mockReturnValue({ isReady: () => true });
+
+			mockReq = {
+				params: { sessionName: 'crewly-agent-session' } as any,
+				body: { message: 'Hello crewly agent' },
+			};
+
+			await terminalController.deliverMessage.call(mockApiContext, mockReq as Request, mockRes as Response);
+
+			expect(mockApiContext.agentRegistrationService.getInProcessRuntime).toHaveBeenCalledWith('crewly-agent-session');
+			expect(mockApiContext.agentRegistrationService.sendMessageToAgent).toHaveBeenCalledWith(
+				'crewly-agent-session',
+				'Hello crewly agent',
+				'crewly-agent'
 			);
 		});
 

@@ -5,8 +5,13 @@
  * runtimes. Provides the same interface as PTY terminal capture so the
  * frontend Side Terminal panel can display crewly-agent activity.
  *
+ * Extends EventEmitter to support real-time WebSocket streaming of log entries
+ * to the frontend Side Terminal panel.
+ *
  * @module services/agent/crewly-agent/in-process-log-buffer
  */
+
+import { EventEmitter } from 'events';
 
 /**
  * Single log entry from an in-process agent session.
@@ -30,14 +35,22 @@ const MAX_ENTRIES_PER_SESSION = 500;
  * and errors. The terminal controller reads from this buffer when
  * the requested session is an in-process agent (no PTY).
  *
+ * Emits 'data' events with (sessionName, formattedLine) when new entries
+ * are appended, enabling real-time WebSocket streaming via TerminalGateway.
+ *
  * @example
  * ```typescript
  * const buffer = InProcessLogBuffer.getInstance();
  * buffer.append('crewly-assistant', 'info', 'Calling get_team_status tool...');
  * const output = buffer.capture('crewly-assistant', 50);
+ *
+ * // Real-time streaming
+ * buffer.on('data', (sessionName, formattedLine) => {
+ *   console.log(`[${sessionName}] ${formattedLine}`);
+ * });
  * ```
  */
-export class InProcessLogBuffer {
+export class InProcessLogBuffer extends EventEmitter {
   private static instance: InProcessLogBuffer | null = null;
   private sessions = new Map<string, LogEntry[]>();
 
@@ -57,11 +70,29 @@ export class InProcessLogBuffer {
    * Reset the singleton (for testing).
    */
   static resetInstance(): void {
+    if (InProcessLogBuffer.instance) {
+      InProcessLogBuffer.instance.removeAllListeners();
+    }
     InProcessLogBuffer.instance = null;
   }
 
   /**
+   * Format a log entry into a single display line.
+   *
+   * @param entry - The log entry to format
+   * @returns Formatted string like "[HH:MM:SS.mmm] ERROR: message"
+   */
+  private formatEntry(entry: LogEntry): string {
+    const ts = entry.timestamp.substring(11, 23); // HH:MM:SS.mmm
+    const prefix = entry.level === 'error' ? 'ERROR' : entry.level === 'warn' ? 'WARN' : entry.level === 'debug' ? 'DEBUG' : '';
+    return prefix ? `[${ts}] ${prefix}: ${entry.message}` : `[${ts}] ${entry.message}`;
+  }
+
+  /**
    * Append a log entry for a session.
+   *
+   * Emits a 'data' event with the session name and formatted line for
+   * real-time WebSocket streaming.
    *
    * @param sessionName - In-process agent session name
    * @param level - Log level
@@ -72,15 +103,20 @@ export class InProcessLogBuffer {
       this.sessions.set(sessionName, []);
     }
     const entries = this.sessions.get(sessionName)!;
-    entries.push({
+    const entry: LogEntry = {
       timestamp: new Date().toISOString(),
       level,
       message,
-    });
+    };
+    entries.push(entry);
     // Ring buffer — drop oldest entries
     if (entries.length > MAX_ENTRIES_PER_SESSION) {
       entries.splice(0, entries.length - MAX_ENTRIES_PER_SESSION);
     }
+
+    // Emit for real-time WebSocket streaming
+    const formattedLine = this.formatEntry(entry);
+    this.emit('data', sessionName, formattedLine);
   }
 
   /**
@@ -107,11 +143,7 @@ export class InProcessLogBuffer {
       return '[crewly-agent] No output yet';
     }
     const slice = entries.slice(-lines);
-    return slice.map(e => {
-      const ts = e.timestamp.substring(11, 23); // HH:MM:SS.mmm
-      const prefix = e.level === 'error' ? 'ERROR' : e.level === 'warn' ? 'WARN' : e.level === 'debug' ? 'DEBUG' : '';
-      return prefix ? `[${ts}] ${prefix}: ${e.message}` : `[${ts}] ${e.message}`;
-    }).join('\n');
+    return slice.map(e => this.formatEntry(e)).join('\n');
   }
 
   /**

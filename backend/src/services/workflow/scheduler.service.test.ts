@@ -1629,4 +1629,38 @@ describe('SchedulerService', () => {
       expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
     });
   });
+
+  describe('recurring check freshness instructions', () => {
+    it('should enrich recurring check messages with freshness instructions', async () => {
+      service.scheduleRecurringCheck(
+        'test-session',
+        5,
+        'Check Sam progress on bug fix'
+      );
+
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
+      const deliveredMessage = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0][1] as string;
+      // Original message content should be preserved
+      expect(deliveredMessage).toContain('Check Sam progress on bug fix');
+      // Freshness instructions should be appended
+      expect(deliveredMessage).toContain('This is a recurring scheduled check');
+      expect(deliveredMessage).toContain('OUTDATED');
+      expect(deliveredMessage).toContain('get_tasks');
+      expect(deliveredMessage).toContain('cancel_schedule');
+    });
+
+    it('should not add freshness instructions to one-time checks', async () => {
+      service.scheduleCheck('test-session', 5, 'One-time check');
+
+      await jest.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+
+      expect(mockAgentRegistrationService.sendMessageToAgent).toHaveBeenCalled();
+      const deliveredMessage = mockAgentRegistrationService.sendMessageToAgent.mock.calls[0][1] as string;
+      expect(deliveredMessage).toContain('One-time check');
+      // One-time checks should NOT have freshness instructions
+      expect(deliveredMessage).not.toContain('OUTDATED');
+    });
+  });
 });

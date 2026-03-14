@@ -15,6 +15,7 @@ import { resetChatService, getChatService } from '../chat/chat.service.js';
 // Mock the orchestrator status module
 jest.mock('../orchestrator/index.js', () => ({
   isOrchestratorActive: jest.fn().mockResolvedValue(true),
+  isAgentActive: jest.fn().mockResolvedValue(false),
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
@@ -33,7 +34,7 @@ jest.mock('@whiskeysockets/baileys', () => ({
   DisconnectReason: { loggedOut: 401 },
 }));
 
-import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
+import { isOrchestratorActive, isAgentActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
 
 describe('WhatsAppOrchestratorBridge', () => {
   beforeEach(() => {
@@ -318,6 +319,120 @@ describe('WhatsAppOrchestratorBridge', () => {
 
       expect(sendSpy).toHaveBeenCalledWith(
         expect.objectContaining({ text: expect.stringContaining('Queue full') }),
+      );
+    });
+  });
+
+  describe('auditor fallback routing', () => {
+    it('should return offline message when both orchestrator and auditor are inactive', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(false);
+
+      const bridge = getWhatsAppOrchestratorBridge();
+      const service = getWhatsAppService();
+      bridge.setMessageQueueService({ enqueue: jest.fn() } as any);
+
+      const sendSpy = jest.spyOn(service, 'sendMessage').mockResolvedValue();
+
+      await bridge.initialize();
+
+      const handled = new Promise<void>((resolve) => {
+        bridge.once('message_handled', () => resolve());
+      });
+
+      service.emit('message', {
+        messageId: 'm-aud1', chatId: '555@s.whatsapp.net', from: '555@s.whatsapp.net',
+        text: 'help', isGroup: false, timestamp: Date.now(),
+      });
+
+      await handled;
+
+      // Both offline → should check auditor then return offline message
+      expect(isAgentActive).toHaveBeenCalledWith('crewly-auditor');
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Orchestrator is offline' }),
+      );
+    });
+
+    it('should route to auditor via queue when orchestrator is offline and auditor is active', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(true);
+
+      const bridge = getWhatsAppOrchestratorBridge();
+      const service = getWhatsAppService();
+
+      const chatService = getChatService();
+      jest.spyOn(chatService, 'sendMessage').mockResolvedValue({
+        message: {} as any,
+        conversation: { id: 'conv-aud' } as any,
+      });
+
+      const mockEnqueue = jest.fn();
+      bridge.setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const sendSpy = jest.spyOn(service, 'sendMessage').mockResolvedValue();
+
+      await bridge.initialize();
+
+      const handled = new Promise<void>((resolve) => {
+        bridge.once('message_handled', () => resolve());
+      });
+
+      service.emit('message', {
+        messageId: 'm-aud2', chatId: '555@s.whatsapp.net', from: '555@s.whatsapp.net',
+        text: 'hello', isGroup: false, contactName: 'Alice', timestamp: Date.now(),
+      });
+
+      await handled;
+
+      // Should route to auditor via queue with FALLBACK marker and targetSession
+      expect(mockEnqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetSession: 'crewly-auditor',
+          content: expect.stringContaining('[FALLBACK]'),
+        }),
+      );
+      // Enriched content should include contact name
+      const enqueuedContent = mockEnqueue.mock.calls[0][0].content;
+      expect(enqueuedContent).toContain('Alice');
+
+      // User should get acknowledgement
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('forwarded to the Auditor') }),
+      );
+    });
+
+    it('should fall back to offline message when auditor queue enqueue fails', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(true);
+
+      const bridge = getWhatsAppOrchestratorBridge();
+      const service = getWhatsAppService();
+
+      const chatService = getChatService();
+      jest.spyOn(chatService, 'sendMessage').mockRejectedValue(new Error('chat error'));
+
+      const mockEnqueue = jest.fn();
+      bridge.setMessageQueueService({ enqueue: mockEnqueue } as any);
+
+      const sendSpy = jest.spyOn(service, 'sendMessage').mockResolvedValue();
+
+      await bridge.initialize();
+
+      const handled = new Promise<void>((resolve) => {
+        bridge.once('message_handled', () => resolve());
+      });
+
+      service.emit('message', {
+        messageId: 'm-aud3', chatId: '555@s.whatsapp.net', from: '555@s.whatsapp.net',
+        text: 'hi', isGroup: false, timestamp: Date.now(),
+      });
+
+      await handled;
+
+      // When chat.sendMessage fails, fallback returns offline message
+      expect(sendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('offline') }),
       );
     });
   });

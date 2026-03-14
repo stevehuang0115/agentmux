@@ -199,6 +199,16 @@ export class MessageSchedulerService extends EventEmitter {
         this.logger.warn('AgentRegistrationService not available, using fallback delivery', {
           name: message.name,
         });
+
+        // Check runtime type — in-process runtimes (crewly-agent) cannot be reached via PTY fallback
+        const runtimeType = await this.resolveRuntimeType(sessionName);
+        if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+          throw new Error(
+            `Cannot deliver scheduled message to in-process agent '${sessionName}' without AgentRegistrationService. ` +
+            `Crewly Agent runtime requires AgentRegistrationService for message delivery.`
+          );
+        }
+
         const { getSessionBackendSync } = await import('../session/index.js');
         const { SessionCommandHelper } = await import('../session/session-command-helper.js');
         const backend = getSessionBackendSync();

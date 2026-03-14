@@ -36,6 +36,20 @@ jest.mock('../slack/slack.service.js', () => ({
 	}),
 }));
 
+const mockIsAgentActive = jest.fn().mockResolvedValue(false);
+jest.mock('./orchestrator-status.service.js', () => ({
+	isAgentActive: (...args: unknown[]) => mockIsAgentActive(...(args as [])),
+}));
+
+const mockHandleUserMessage = jest.fn().mockResolvedValue(undefined);
+jest.mock('../agent/auditor-scheduler.service.js', () => ({
+	AuditorSchedulerService: {
+		getInstance: () => ({
+			handleUserMessage: mockHandleUserMessage,
+		}),
+	},
+}));
+
 import { OrchestratorHeartbeatMonitorService } from './orchestrator-heartbeat-monitor.service.js';
 import { OrchestratorRestartService } from './orchestrator-restart.service.js';
 import { PtyActivityTrackerService } from '../agent/pty-activity-tracker.service.js';
@@ -59,6 +73,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 		getSession: jest.Mock;
 		killSession: jest.Mock;
 		isChildProcessAlive: jest.Mock;
+		captureOutput: jest.Mock;
 	};
 	let mockSession: {
 		write: jest.Mock;
@@ -85,6 +100,7 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			getSession: jest.fn().mockReturnValue(mockSession),
 			killSession: jest.fn().mockResolvedValue(undefined),
 			isChildProcessAlive: jest.fn().mockReturnValue(true),
+			captureOutput: jest.fn().mockReturnValue(''),
 		};
 		hasPendingWork = jest.fn().mockReturnValue(true);
 
@@ -471,6 +487,108 @@ describe('OrchestratorHeartbeatMonitorService', () => {
 			service.stop();
 
 			expect(service.getState().inProgressSince).toBeNull();
+		});
+	});
+
+	describe('auditor notification on restart', () => {
+		beforeEach(() => {
+			mockIsAgentActive.mockReset().mockResolvedValue(false);
+			mockHandleUserMessage.mockReset().mockResolvedValue(undefined);
+		});
+
+		it('should notify auditor when auto-restart is triggered and auditor is active', async () => {
+			mockIsAgentActive.mockResolvedValue(true);
+
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			// Make idle and trigger heartbeat request
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS + 1);
+			await performCheckAndFlush(service);
+
+			// Trigger restart
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.RESTART_THRESHOLD_MS + 1);
+			await service.performCheck();
+
+			expect(mockIsAgentActive).toHaveBeenCalledWith('crewly-auditor');
+			expect(mockHandleUserMessage).toHaveBeenCalledWith(
+				expect.stringContaining('[SYSTEM] Orchestrator heartbeat timeout'),
+				expect.objectContaining({ channelId: '', threadTs: '' }),
+			);
+
+			restartSpy.mockRestore();
+		});
+
+		it('should skip auditor notification when auditor is not active', async () => {
+			mockIsAgentActive.mockResolvedValue(false);
+
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS + 1);
+			await performCheckAndFlush(service);
+
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.RESTART_THRESHOLD_MS + 1);
+			await service.performCheck();
+
+			expect(mockIsAgentActive).toHaveBeenCalledWith('crewly-auditor');
+			expect(mockHandleUserMessage).not.toHaveBeenCalled();
+
+			restartSpy.mockRestore();
+		});
+
+		it('should not block restart when auditor notification fails', async () => {
+			mockIsAgentActive.mockResolvedValue(true);
+			mockHandleUserMessage.mockRejectedValue(new Error('notification failed'));
+
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.HEARTBEAT_REQUEST_THRESHOLD_MS + 1);
+			await performCheckAndFlush(service);
+
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.RESTART_THRESHOLD_MS + 1);
+			await service.performCheck();
+
+			// Restart should still happen despite notification failure
+			expect(restartSpy).toHaveBeenCalled();
+			expect(service.getState().autoRestartCount).toBe(1);
+
+			restartSpy.mockRestore();
+		});
+
+		it('should notify auditor on immediate restart when child process is dead', async () => {
+			mockIsAgentActive.mockResolvedValue(true);
+
+			const restartSpy = jest.spyOn(OrchestratorRestartService.getInstance(), 'attemptRestart')
+				.mockResolvedValue(true);
+
+			service.start();
+			service.stop();
+			jest.advanceTimersByTime(ORCHESTRATOR_HEARTBEAT_CONSTANTS.STARTUP_GRACE_PERIOD_MS + 1);
+
+			mockSessionBackend.isChildProcessAlive.mockReturnValue(false);
+			await service.performCheck();
+
+			expect(mockIsAgentActive).toHaveBeenCalledWith('crewly-auditor');
+			expect(mockHandleUserMessage).toHaveBeenCalledWith(
+				expect.stringContaining('[SYSTEM] Orchestrator heartbeat timeout'),
+				expect.any(Object),
+			);
+
+			restartSpy.mockRestore();
 		});
 	});
 });

@@ -18,6 +18,11 @@ jest.mock('./cloud.controller.js', () => ({
   getCloudTemplates: jest.fn((_req, res) => res.status(200).json({ success: true })),
 }));
 
+jest.mock('./cloud-google-auth.controller.js', () => ({
+  cloudGoogleStart: jest.fn((_req, res) => res.redirect('https://accounts.google.com')),
+  cloudGoogleCallback: jest.fn((_req, res) => res.redirect('https://crewlyai.com')),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -75,7 +80,15 @@ describe('Cloud Routes', () => {
     expect(routes).toContainEqual({ method: 'GET', path: '/templates' });
   });
 
-  it('should register exactly 4 routes', () => {
-    expect(routes).toHaveLength(4);
+  it('should register GET /google/start route', () => {
+    expect(routes).toContainEqual({ method: 'GET', path: '/google/start' });
+  });
+
+  it('should register GET /google/callback route', () => {
+    expect(routes).toContainEqual({ method: 'GET', path: '/google/callback' });
+  });
+
+  it('should register exactly 6 routes', () => {
+    expect(routes).toHaveLength(6);
   });
 });

@@ -72,6 +72,9 @@ tmp/
 temp/
 output.log
 
+# Large 3D model files (not needed for production API server)
+frontend/public/models/
+
 # Misc
 *.tgz
 *.tar.gz

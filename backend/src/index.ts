@@ -69,7 +69,6 @@ import { SkillCatalogService } from './services/skill/skill-catalog.service.js';
 import { createEventBusRouter } from './controllers/event-bus/event-bus.routes.js';
 import { setMessageQueueService as setChatMessageQueueService } from './controllers/chat/chat.controller.js';
 import { setMessageQueueService as setMessagingControllerQueueService } from './controllers/messaging/messaging.controller.js';
-import { setMessengerRouterQueueService } from './controllers/messaging/messenger.routes.js';
 import { createMessagingRouter } from './controllers/messaging/messaging.routes.js';
 import { SystemResourceAlertService } from './services/monitoring/system-resource-alert.service.js';
 import { agentHeartbeatMiddleware } from './middleware/agent-heartbeat.middleware.js';
@@ -248,6 +247,14 @@ export class CrewlyServer {
 		// Set terminal gateway singleton for chat integration
 		setTerminalGateway(this.terminalGateway);
 
+		// Pre-load Gemini CLI session names so NOTIFY processing is skipped
+		// for existing sessions before registerGeminiCliSession fires.
+		this.terminalGateway.loadGeminiCliSessions().catch((error) => {
+			this.logger.warn('Failed to pre-load Gemini CLI sessions', {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+
 		// Initialize ChatGateway for chat message forwarding
 		// This sets up the event listeners that forward chat messages to WebSocket clients
 		initializeChatGateway(this.io).catch((error) => {
@@ -274,7 +281,6 @@ export class CrewlyServer {
 		// Wire queue service into controllers
 		setChatMessageQueueService(this.messageQueueService);
 		setMessagingControllerQueueService(this.messageQueueService);
-		setMessengerRouterQueueService(this.messageQueueService);
 
 		// Initialize system resource alert service for proactive monitoring
 		this.systemResourceAlertService = new SystemResourceAlertService();

@@ -86,6 +86,19 @@ describe('CrewlyAgentRuntimeService', () => {
       expect(service.isReady()).toBe(true);
     });
 
+    it('should pass projectPath through to config', async () => {
+      await service.initializeInProcess('crewly-orc', {
+        projectPath: '/my/project',
+      });
+
+      expect(service.isReady()).toBe(true);
+      // AgentRunnerService constructor was called with config containing projectPath
+      const { AgentRunnerService: MockedRunner } = jest.requireMock('./agent-runner.service.js') as any;
+      expect(MockedRunner).toHaveBeenCalledWith(
+        expect.objectContaining({ projectPath: '/my/project' }),
+      );
+    });
+
     it('should load role-specific prompt when roleName provided', async () => {
       const fsMod = jest.requireMock('fs') as any;
       fsMod.promises.readFile.mockResolvedValue('You are the auditor.');
@@ -135,7 +148,55 @@ describe('CrewlyAgentRuntimeService', () => {
       const result = await service.handleMessage('Delegate task to Sam');
 
       expect(result).toEqual(mockResult);
-      expect(mockRun).toHaveBeenCalledWith('Delegate task to Sam');
+      expect(mockRun).toHaveBeenCalledWith('Delegate task to Sam', undefined);
+    });
+
+    it('should extract conversationId from [CHAT:xxx] prefix', async () => {
+      const mockResult = {
+        text: 'Done',
+        steps: 1,
+        usage: { input: 10, output: 5 },
+        toolCalls: [],
+        finishReason: 'stop',
+      };
+      mockRun.mockResolvedValue(mockResult);
+
+      await service.initializeInProcess('crewly-orc');
+      await service.handleMessage('[CHAT:conv-123] Do the thing');
+
+      expect(mockRun).toHaveBeenCalledWith('Do the thing', 'conv-123');
+    });
+
+    it('should pass undefined conversationId when no [CHAT:] prefix', async () => {
+      const mockResult = {
+        text: 'Done',
+        steps: 1,
+        usage: { input: 10, output: 5 },
+        toolCalls: [],
+        finishReason: 'stop',
+      };
+      mockRun.mockResolvedValue(mockResult);
+
+      await service.initializeInProcess('crewly-orc');
+      await service.handleMessage('No prefix message');
+
+      expect(mockRun).toHaveBeenCalledWith('No prefix message', undefined);
+    });
+
+    it('should extract conversationId from [GCHAT:xxx ...] prefix', async () => {
+      const mockResult = {
+        text: 'Done',
+        steps: 1,
+        usage: { input: 10, output: 5 },
+        toolCalls: [],
+        finishReason: 'stop',
+      };
+      mockRun.mockResolvedValue(mockResult);
+
+      await service.initializeInProcess('crewly-orc');
+      await service.handleMessage('[GCHAT:spaces/123/threads/abc thread=xyz] Hello from GChat');
+
+      expect(mockRun).toHaveBeenCalledWith('Hello from GChat', 'spaces/123/threads/abc');
     });
 
     it('should throw if not initialized', async () => {

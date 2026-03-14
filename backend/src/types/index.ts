@@ -246,7 +246,7 @@ export interface WebSocketMessage {
        | 'connection_established' | 'subscription_confirmed' | 'unsubscription_confirmed'
        | 'session_not_found' | 'session_pending' | 'input_error' | 'initial_terminal_state'
        | 'terminal_state_error' | 'system_notification' | 'orchestrator_status_changed'
-       | 'team_member_status_changed' | 'team_activity_updated';
+       | 'team_member_status_changed' | 'team_activity_updated' | 'read_only';
   payload: any;
   timestamp: string;
 }

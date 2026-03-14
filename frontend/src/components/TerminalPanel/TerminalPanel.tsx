@@ -16,6 +16,8 @@ interface TerminalSession {
   type: 'orchestrator' | 'team_member';
   teamId?: string;
   memberId?: string;
+  /** True for in-process Crewly Agent sessions (read-only log viewer) */
+  isInProcess?: boolean;
 }
 
 interface TerminalPanelProps {
@@ -51,6 +53,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   const reconnectAttemptRef = useRef<number>(0);
   const maxReconnectAttempts = 3;
 
+  // Track which sessions are in-process (read-only log viewers)
+  const inProcessSessionsRef = useRef<Set<string>>(new Set());
+
   // Smart scrolling: track if user has scrolled away from bottom
   const isUserScrolledUp = useRef<boolean>(false);
 
@@ -62,6 +67,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
   useEffect(() => {
     selectedSessionRef.current = selectedSession;
   }, [selectedSession]);
+
+  // Derived: is the currently selected session an in-process (read-only) session?
+  const isCurrentSessionReadOnly = inProcessSessionsRef.current.has(selectedSession);
 
   /**
    * Check if the terminal is scrolled to the bottom (or within threshold).
@@ -162,6 +170,10 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     // input lines (e.g. Gemini CLI shows "[?1;2c" in its prompt).
     const TERMINAL_RESPONSE_RE = /\x1b\[\??[\d;]*[cRn]|\x1b\[>[\d;]*c/g;
     term.onData((data) => {
+      // Block input for in-process (read-only) sessions
+      if (inProcessSessionsRef.current.has(selectedSessionRef.current)) {
+        return;
+      }
       if (webSocketService.isConnected() && selectedSessionRef.current) {
         const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
         if (filtered.length > 0) {
@@ -564,10 +576,11 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
     currentSubscription.current = sessionName;
 
     // Sync PTY dimensions with the frontend terminal size.
+    // Skip for in-process sessions (no PTY to resize).
     // The PTY starts at a default 80x24 which is too small for TUI-based runtimes
     // like Gemini CLI that render within the PTY viewport. Without this, Gemini CLI
     // only renders 24 rows of content even though the frontend terminal is larger.
-    if (fitAddonRef.current) {
+    if (fitAddonRef.current && !inProcessSessionsRef.current.has(sessionName)) {
       const dimensions = fitAddonRef.current.proposeDimensions();
       if (dimensions) {
         webSocketService.resizeTerminal(sessionName, dimensions.cols, dimensions.rows);
@@ -596,15 +609,17 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
 
       const result = await sessionsResponse.json();
 
-      // Backend returns { success: true, data: { sessions: string[] } }
+      // Backend returns { success: true, data: { sessions: string[], inProcessSessions?: string[] } }
       const sessionNames = result.success && result.data?.sessions ? result.data.sessions : [];
+      const inProcessNames: string[] = result.data?.inProcessSessions || [];
       if (Array.isArray(sessionNames)) {
         const sessions = sessionNames.map((sessionName: string) => ({
           id: sessionName,
           name: sessionName,
           displayName: sessionName === 'crewly-orc' ? 'Orchestrator' :
                       sessionName.replace('crewly-', ''),
-          type: sessionName === 'crewly-orc' ? 'orchestrator' as const : 'team_member' as const
+          type: sessionName === 'crewly-orc' ? 'orchestrator' as const : 'team_member' as const,
+          isInProcess: inProcessNames.includes(sessionName),
         }));
 
         // Ensure orchestrator is always first
@@ -615,6 +630,9 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
         });
 
         setAvailableSessions(sessions);
+
+        // Update in-process sessions ref for input blocking
+        inProcessSessionsRef.current = new Set(inProcessNames);
 
         // If current selectedSession is not in the available sessions, update to first available
         // This fixes the bug where the default 'crewly-orc' session may not exist
@@ -694,10 +712,15 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({ isOpen, onClose })
           >
             {availableSessions.map((session) => (
               <option key={session.id} value={session.id}>
-                {session.displayName}
+                {session.isInProcess ? `${session.displayName} (Log)` : session.displayName}
               </option>
             ))}
           </select>
+          {isCurrentSessionReadOnly && (
+            <span className="px-2 py-0.5 text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded shrink-0">
+              Read Only
+            </span>
+          )}
         </div>
       </div>
 

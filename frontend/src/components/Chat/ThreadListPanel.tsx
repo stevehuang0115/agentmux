@@ -27,8 +27,6 @@ interface ThreadListPanelProps {
   channelFilter: ChatChannelType | null;
   /** Callback when channel filter changes */
   onChannelFilterChange: (filter: ChatChannelType | null) => void;
-  /** Callback to create a new thread */
-  onCreateThread?: () => void;
 }
 
 // =============================================================================
@@ -49,7 +47,6 @@ export const ThreadListPanel: React.FC<ThreadListPanelProps> = ({
   onSelectThread,
   channelFilter,
   onChannelFilterChange,
-  onCreateThread,
 }) => {
   /** Apply channel filter */
   const filteredConversations = channelFilter
@@ -63,24 +60,11 @@ export const ThreadListPanel: React.FC<ThreadListPanelProps> = ({
 
   return (
     <div className="thread-list-panel" data-testid="thread-list-panel">
-      <div className="thread-list-header">
-        <ChannelFilterBar
-          activeFilter={channelFilter}
-          onFilterChange={onChannelFilterChange}
-          conversations={conversations}
-        />
-        {onCreateThread && (
-          <button
-            className="new-thread-button"
-            onClick={onCreateThread}
-            data-testid="new-thread-button"
-            title="New Thread"
-            aria-label="Create new thread"
-          >
-            + New Thread
-          </button>
-        )}
-      </div>
+      <ChannelFilterBar
+        activeFilter={channelFilter}
+        onFilterChange={onChannelFilterChange}
+        conversations={conversations}
+      />
 
       <div className="thread-list-scroll">
         {sortedConversations.length === 0 ? (

@@ -2471,7 +2471,7 @@ describe('AgentRegistrationService', () => {
 			expect(result.message).toContain('in-process');
 			expect(mockCrewlyRuntime.initializeInProcess).toHaveBeenCalledWith(
 				'crewly-assistant',
-				undefined,
+				expect.objectContaining({ projectPath: expect.any(String) }),
 				'orchestrator'
 			);
 			// Should NOT create a PTY session
@@ -2487,6 +2487,9 @@ describe('AgentRegistrationService', () => {
 				role: 'orchestrator',
 				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
 			});
+
+			// Registration prompt is fire-and-forget — wait for async resolution
+			await new Promise(r => setTimeout(r, 50));
 
 			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalled();
 			const promptArg = mockCrewlyRuntime.handleMessage.mock.calls[0][0];
@@ -2528,7 +2531,7 @@ describe('AgentRegistrationService', () => {
 			expect(result.error).toContain('not initialized');
 		});
 
-		it('should handle in-process runtime errors in sendMessageToAgent', async () => {
+		it('should handle in-process runtime errors gracefully (fire-and-forget)', async () => {
 			mockReadFile.mockResolvedValue('System prompt');
 			mockAccess.mockRejectedValue(new Error('ENOENT'));
 
@@ -2538,17 +2541,20 @@ describe('AgentRegistrationService', () => {
 				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
 			});
 
-			// Make handleMessage throw
+			// Make handleMessage throw — errors are caught in the fire-and-forget handler
 			mockCrewlyRuntime.handleMessage.mockRejectedValueOnce(new Error('Model API rate limited'));
 
+			// sendMessageToAgent returns success immediately (fire-and-forget)
 			const result = await service.sendMessageToAgent(
 				'crewly-err',
 				'test',
 				RUNTIME_TYPES.CREWLY_AGENT as any
 			);
 
-			expect(result.success).toBe(false);
-			expect(result.error).toContain('rate limited');
+			expect(result.success).toBe(true);
+
+			// Wait for async error handling to complete (should not throw)
+			await new Promise(r => setTimeout(r, 50));
 		});
 
 		it('should shutdown in-process runtime on terminateAgentSession', async () => {
@@ -2599,6 +2605,87 @@ describe('AgentRegistrationService', () => {
 
 			const missing = service.getInProcessRuntime('nonexistent');
 			expect(missing).toBeUndefined();
+		});
+
+		it('should report in-process runtime as active via isInProcessRuntimeActive', async () => {
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-active-check',
+				role: 'orchestrator',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			// Mock isReady returning true
+			(mockCrewlyRuntime.isReady as jest.Mock).mockReturnValue(true);
+			expect(service.isInProcessRuntimeActive('crewly-active-check')).toBe(true);
+
+			// Mock isReady returning false
+			(mockCrewlyRuntime.isReady as jest.Mock).mockReturnValue(false);
+			expect(service.isInProcessRuntimeActive('crewly-active-check')).toBe(false);
+
+			// Nonexistent session
+			expect(service.isInProcessRuntimeActive('nonexistent')).toBe(false);
+		});
+
+		it('should route to in-process runtime even when runtimeType is misresolved (Bug 1/3/4)', async () => {
+			// Setup: create the in-process runtime
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-mistype',
+				role: 'developer',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			// Send message with WRONG runtimeType (claude-code instead of crewly-agent)
+			// This simulates what happens when storage lookup fails and defaults
+			const result = await service.sendMessageToAgent(
+				'crewly-mistype',
+				'Check status',
+				RUNTIME_TYPES.CLAUDE_CODE as any
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalledWith('Check status');
+			// Should NOT attempt PTY delivery
+			expect(mockSessionHelper.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('should route response to chat when message has [CHAT:xxx] prefix (Bug 2)', async () => {
+			// Setup: create the in-process runtime
+			mockReadFile.mockResolvedValue('System prompt');
+			mockAccess.mockRejectedValue(new Error('ENOENT'));
+
+			await service.createAgentSession({
+				sessionName: 'crewly-chat',
+				role: 'developer',
+				runtimeType: RUNTIME_TYPES.CREWLY_AGENT as any,
+			});
+
+			mockCrewlyRuntime.handleMessage.mockResolvedValueOnce({
+				text: 'Task completed successfully',
+				steps: 2,
+				usage: { input: 100, output: 50 },
+				toolCalls: [],
+				finishReason: 'stop',
+			});
+
+			const result = await service.sendMessageToAgent(
+				'crewly-chat',
+				'[CHAT:conv-123] Process this task',
+				RUNTIME_TYPES.CREWLY_AGENT as any
+			);
+
+			expect(result.success).toBe(true);
+			expect(mockCrewlyRuntime.handleMessage).toHaveBeenCalledWith('[CHAT:conv-123] Process this task');
+
+			// Wait for fire-and-forget async callback to complete
+			await new Promise(r => setTimeout(r, 50));
+			// Note: routeInProcessResponseToChat uses lazy import — the actual
+			// chat gateway call is tested via integration tests
 		});
 	});
 });

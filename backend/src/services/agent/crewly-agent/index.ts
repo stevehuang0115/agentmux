@@ -11,6 +11,7 @@ export { ModelManager } from './model-manager.js';
 export { InProcessLogBuffer, type LogEntry } from './in-process-log-buffer.js';
 export { createTools, getToolNames } from './tool-registry.js';
 export { createAuditorTools, getAuditorToolNames } from './auditor-tools.js';
+export { AuditTrailService } from './audit-trail.service.js';
 export {
   type ModelProvider,
   type ModelConfig,
@@ -19,8 +20,12 @@ export {
   type AgentRunResult,
   type ToolCallRecord,
   type ApiCallResult,
+  type AuditEntry,
+  type SecurityPolicy,
+  type AuditLogFilters,
   MODEL_PROVIDERS,
   CREWLY_AGENT_DEFAULTS,
+  WRITE_TOOLS,
   isModelProvider,
   isModelConfig,
 } from './types.js';

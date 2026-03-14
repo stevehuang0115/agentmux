@@ -18,7 +18,7 @@ import { stripAnsiCodes } from '../utils/terminal-output.utils.js';
 /**
  * Valid channel types for chat conversations
  */
-export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'google_chat', 'telegram', 'api'] as const;
+export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'telegram', 'api'] as const;
 
 /**
  * Channel type for a chat conversation
@@ -44,9 +44,6 @@ export type ChatChannelType = (typeof CHAT_CHANNEL_TYPES)[number];
 export function inferChannelTypeFromConversationId(conversationId: string): ChatChannelType {
   if (conversationId.startsWith('slack-')) {
     return 'slack';
-  }
-  if (conversationId.startsWith('gchat-') || conversationId.startsWith('google-chat-')) {
-    return 'google_chat';
   }
   if (conversationId.startsWith('telegram-')) {
     return 'telegram';
@@ -151,7 +148,7 @@ export interface ChatSender {
 /**
  * Valid Slack delivery statuses for NOTIFY reconciliation
  */
-export const SLACK_DELIVERY_STATUSES = ['pending', 'delivered', 'delivered_by_skill', 'failed'] as const;
+export const SLACK_DELIVERY_STATUSES = ['pending', 'delivered', 'failed'] as const;
 
 /**
  * Slack delivery status type
@@ -1156,35 +1153,34 @@ export function extractResponseFromOutput(
  * ```
  */
 export function detectContentType(content: string): ChatContentType {
-  // Check for markdown indicators (fenced code blocks and headings are
-  // unambiguous; bold markers require word boundaries to avoid matching
-  // natural language like "**" in isolation)
+  // Check for markdown indicators
   if (
     content.includes('```') ||
-    /^#{1,6}\s/m.test(content) ||
-    /\*\*\w/.test(content) ||
-    /^[-*] /m.test(content) ||
-    /^\d+\. /m.test(content)
+    content.includes('##') ||
+    content.includes('**') ||
+    /^[-*] /.test(content) ||
+    /^\d+\. /.test(content)
   ) {
     return 'markdown';
   }
 
-  // Check for code patterns — require statement-like syntax (keyword at
-  // line start or after punctuation) to avoid matching natural language
-  // like "import the data" or "export controls"
+  // Check for code patterns
   if (
-    /^(function|const|import|export|class|let|var)\s/m.test(content) ||
-    /[{;]\s*$/.test(content.split('\n')[0])
+    content.includes('function ') ||
+    content.includes('const ') ||
+    content.includes('import ') ||
+    content.includes('export ') ||
+    content.includes('class ') ||
+    /^(let|var)\s/.test(content)
   ) {
     return 'code';
   }
 
-  // Check for error patterns — case-sensitive matches for structured
-  // error output; avoid false positives on conversational text
-  const contentLower = content.toLowerCase();
+  // Check for error patterns
   if (
-    contentLower.includes('error:') ||
-    contentLower.includes('exception:') ||
+    content.toLowerCase().includes('error:') ||
+    content.toLowerCase().includes('exception:') ||
+    content.includes('Error:') ||
     content.includes('Failed:')
   ) {
     return 'error';

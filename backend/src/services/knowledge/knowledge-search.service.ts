@@ -10,6 +10,7 @@
 
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { KnowledgeService } from './knowledge.service.js';
+import { VectorStoreService } from './vector-store.service.js';
 import type {
   KnowledgeDocumentSummary,
   KnowledgeScope,
@@ -238,11 +239,173 @@ export class GeminiEmbeddingStrategy implements KnowledgeSearchStrategy {
 }
 
 /**
+ * Local vector search strategy using SQLite-backed VectorStoreService.
+ *
+ * Stores embeddings locally on-device so that recall works offline.
+ * Uses the Gemini API to generate embeddings (when available) and
+ * persists them in the local vector store. Subsequent searches skip
+ * the embedding API for documents that already have stored vectors.
+ * Falls back to keyword search when no API key is configured or
+ * when embedding generation fails.
+ */
+export class LocalVectorSearchStrategy implements KnowledgeSearchStrategy {
+  private readonly vectorStore: VectorStoreService;
+  private readonly apiKey: string | undefined;
+  private readonly fallback: KeywordSearchStrategy;
+  private readonly logger: ComponentLogger;
+
+  /**
+   * Creates a LocalVectorSearchStrategy instance.
+   *
+   * @param apiKey - Optional Gemini API key for generating embeddings
+   */
+  constructor(apiKey?: string) {
+    this.vectorStore = VectorStoreService.getInstance();
+    this.apiKey = apiKey;
+    this.fallback = new KeywordSearchStrategy();
+    this.logger = LoggerService.getInstance().createComponentLogger('LocalVectorSearchStrategy');
+  }
+
+  /**
+   * Embed a single text string via the Gemini API.
+   *
+   * @param text - Text to embed
+   * @returns Embedding vector, or null on failure
+   */
+  private async embed(text: string): Promise<number[] | null> {
+    if (!this.apiKey) {
+      return null;
+    }
+
+    try {
+      const url = `${EMBEDDING_CONSTANTS.GEMINI_ENDPOINT}/${EMBEDDING_CONSTANTS.GEMINI_MODEL}:embedContent?key=${this.apiKey}`;
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), EMBEDDING_CONSTANTS.TIMEOUT_MS);
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: `models/${EMBEDDING_CONSTANTS.GEMINI_MODEL}`,
+            content: { parts: [{ text }] },
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          this.logger.warn('Gemini embedding API returned non-OK status', { status: response.status });
+          return null;
+        }
+
+        const data = (await response.json()) as { embedding?: { values?: number[] } };
+        return data.embedding?.values ?? null;
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (error) {
+      this.logger.warn('Embedding API call failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get or create an embedding for a document, persisting it locally.
+   *
+   * @param docId - Document identifier
+   * @param docText - Text to embed (used only if no stored embedding)
+   * @param scope - Storage scope
+   * @param projectPath - Project path for project scope
+   * @returns The embedding vector, or null if unavailable
+   */
+  private async getOrCreateEmbedding(
+    docId: string,
+    docText: string,
+    scope: 'global' | 'project',
+    projectPath?: string,
+  ): Promise<number[] | null> {
+    // Check local store first
+    const existing = this.vectorStore.get(docId, scope, projectPath);
+    if (existing) {
+      return existing.embedding;
+    }
+
+    // Generate embedding via API
+    const embedding = await this.embed(docText);
+    if (embedding) {
+      this.vectorStore.upsert(docId, embedding, { text: docText.slice(0, 200) }, scope, projectPath);
+    }
+    return embedding;
+  }
+
+  /**
+   * Score documents using local vector search with cosine similarity.
+   * Falls back to keyword search when embeddings are unavailable.
+   *
+   * @param query - Search query text
+   * @param documents - Documents to score
+   * @param scope - Storage scope for vector lookup
+   * @param projectPath - Project path for project scope
+   * @returns Scored documents sorted by relevance
+   */
+  async search(
+    query: string,
+    documents: KnowledgeDocumentSummary[],
+    scope?: 'global' | 'project',
+    projectPath?: string,
+  ): Promise<ScoredDocument[]> {
+    const effectiveScope = scope || 'global';
+
+    // Try to get query embedding
+    const queryEmbedding = await this.embed(query);
+    if (!queryEmbedding) {
+      this.logger.debug('No embedding API available, falling back to keyword search');
+      return this.fallback.search(query, documents);
+    }
+
+    const scored: ScoredDocument[] = [];
+
+    for (const doc of documents) {
+      const docText = `${doc.title} ${doc.tags.join(' ')} ${doc.preview}`;
+      const docEmbedding = await this.getOrCreateEmbedding(
+        doc.id,
+        docText,
+        effectiveScope,
+        projectPath,
+      );
+
+      if (!docEmbedding) {
+        continue;
+      }
+
+      const score = cosineSimilarity(queryEmbedding, docEmbedding);
+      if (score > 0) {
+        scored.push({ document: doc, score });
+      }
+    }
+
+    if (scored.length === 0) {
+      this.logger.debug('No vector results, falling back to keyword search');
+      return this.fallback.search(query, documents);
+    }
+
+    return scored.sort((a, b) => b.score - a.score);
+  }
+}
+
+/**
  * Knowledge Search Service singleton.
  *
  * Factory that selects the appropriate search strategy based on
  * environment configuration. Provides a high-level search interface
  * over the KnowledgeService document store.
+ *
+ * Strategy selection priority:
+ * 1. LocalVectorSearchStrategy (when GEMINI_API_KEY is set — uses local SQLite + API for embedding)
+ * 2. KeywordSearchStrategy (default, zero dependencies)
  *
  * @example
  * ```typescript
@@ -262,8 +425,8 @@ export class KnowledgeSearchService {
 
     const geminiKey = process.env[ENV_CONSTANTS.GEMINI_API_KEY];
     if (geminiKey) {
-      this.logger.info('Using Gemini embedding search strategy');
-      this.strategy = new GeminiEmbeddingStrategy(geminiKey);
+      this.logger.info('Using local vector search strategy (SQLite + Gemini embeddings)');
+      this.strategy = new LocalVectorSearchStrategy(geminiKey);
     } else {
       this.logger.info('Using keyword search strategy (no GEMINI_API_KEY set)');
       this.strategy = new KeywordSearchStrategy();

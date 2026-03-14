@@ -87,9 +87,11 @@ COPY config ./config
 # Package manifest (needed for npm start / version detection)
 COPY package.json ./
 
-# Create .crewly directory for persistence and projects workspace
-RUN mkdir -p /home/node/.crewly /home/node/projects \
-    && chown -R node:node /home/node/.crewly /home/node/projects
+# Create .crewly directories for persistence and projects workspace
+# /app/.crewly is needed for startup briefing generation (writes next to the app)
+# /home/node/.crewly is the main state directory
+RUN mkdir -p /home/node/.crewly /home/node/projects /app/.crewly \
+    && chown -R node:node /home/node/.crewly /home/node/projects /app/.crewly
 
 # Run as non-root user
 USER node

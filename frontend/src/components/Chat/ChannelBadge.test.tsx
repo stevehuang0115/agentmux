@@ -31,14 +31,6 @@ describe('ChannelBadge', () => {
       expect(screen.getByText('Crewly')).toBeInTheDocument();
     });
 
-    it('renders correct icon and label for google_chat channel', () => {
-      render(<ChannelBadge channelType="google_chat" />);
-
-      const badge = screen.getByTestId('channel-badge');
-      expect(badge).toBeInTheDocument();
-      expect(screen.getByText('Google Chat')).toBeInTheDocument();
-    });
-
     it('renders correct icon and label for telegram channel', () => {
       render(<ChannelBadge channelType="telegram" />);
 
@@ -97,12 +89,6 @@ describe('ChannelBadge', () => {
       expect(screen.getByTestId('channel-badge')).toHaveAttribute('title', 'Crewly');
     });
 
-    it('shows correct title for google_chat', () => {
-      render(<ChannelBadge channelType="google_chat" />);
-
-      expect(screen.getByTestId('channel-badge')).toHaveAttribute('title', 'Google Chat');
-    });
-
     it('shows correct title for telegram', () => {
       render(<ChannelBadge channelType="telegram" />);
 
@@ -129,13 +115,6 @@ describe('ChannelBadge', () => {
 
       const badge = screen.getByTestId('channel-badge');
       expect(badge).toHaveClass('channel-badge', 'channel-crewly');
-    });
-
-    it('applies channel-specific CSS class for google_chat', () => {
-      render(<ChannelBadge channelType="google_chat" />);
-
-      const badge = screen.getByTestId('channel-badge');
-      expect(badge).toHaveClass('channel-badge', 'channel-google-chat');
     });
 
     it('applies channel-specific CSS class for telegram', () => {

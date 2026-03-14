@@ -9,9 +9,9 @@
  * Write endpoints (create, update, archive, add version, publish)
  * require authentication.
  *
- * Note: Supabase auth middleware was removed when cloud services were
- * deleted. Write endpoints currently use a pass-through placeholder
- * that must be replaced with a real auth middleware before production.
+ * Note: Write endpoints use a shared pass-through placeholder middleware
+ * (require-auth.middleware.ts) that must be replaced with a real auth
+ * implementation before production.
  *
  * @module controllers/marketplace/template-marketplace.routes
  */
@@ -27,7 +27,7 @@ import {
 	handleListVersions,
 	handlePublishTemplate,
 } from './template-marketplace.controller.js';
-import { requireCloudConnection } from '../../services/cloud/cloud-auth.middleware.js';
+import { requireAuth } from '../../middleware/require-auth.middleware.js';
 
 /**
  * Creates the template marketplace router with all template endpoints.
@@ -53,17 +53,17 @@ export function createTemplateMarketplaceRouter(): Router {
 	router.get('/', handleListTemplates);
 
 	// Protected collection routes (require auth to create)
-	router.post('/', requireCloudConnection, handleCreateTemplate);
+	router.post('/', requireAuth, handleCreateTemplate);
 
 	// Public item routes (browse details)
 	router.get('/:id', handleGetTemplate);
 	router.get('/:id/versions', handleListVersions);
 
 	// Protected item routes (require auth to modify)
-	router.put('/:id', requireCloudConnection, handleUpdateTemplate);
-	router.delete('/:id', requireCloudConnection, handleArchiveTemplate);
-	router.post('/:id/versions', requireCloudConnection, handleAddVersion);
-	router.post('/:id/publish', requireCloudConnection, handlePublishTemplate);
+	router.put('/:id', requireAuth, handleUpdateTemplate);
+	router.delete('/:id', requireAuth, handleArchiveTemplate);
+	router.post('/:id/versions', requireAuth, handleAddVersion);
+	router.post('/:id/publish', requireAuth, handlePublishTemplate);
 
 	return router;
 }

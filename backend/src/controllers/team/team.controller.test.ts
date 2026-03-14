@@ -136,7 +136,7 @@ describe('Teams Handlers', () => {
       messageSchedulerService: mockMessageSchedulerService,
       activeProjectsService: mockActiveProjectsService,
       promptTemplateService: mockPromptTemplateService,
-      agentRegistrationService: { createAgentSession: jest.fn<any>() } as any,
+      agentRegistrationService: { createAgentSession: jest.fn<any>(), isInProcessRuntimeActive: jest.fn<any>().mockReturnValue(false) } as any,
       taskAssignmentMonitor: { monitorTask: jest.fn<any>() } as any,
       taskTrackingService: { getAllInProgressTasks: jest.fn<any>() } as any,
     };
@@ -422,6 +422,84 @@ describe('Teams Handlers', () => {
       );
 
       expect(responseMock.status).toHaveBeenCalledWith(500);
+    });
+
+    it('should show Assistant as active when in-process runtime is active', async () => {
+      mockStorageService.getTeams.mockResolvedValue([]);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue(null);
+      (mockApiContext.agentRegistrationService as any).isInProcessRuntimeActive
+        .mockImplementation((name: string) => name === 'crewly-orc-assistant');
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as any;
+      const orchestratorTeam = responseData.data[0];
+      const assistant = orchestratorTeam.members.find((m: any) => m.sessionName === 'crewly-orc-assistant');
+      expect(assistant.agentStatus).toBe('active');
+    });
+
+    it('should show Assistant as inactive when in-process runtime is not active', async () => {
+      mockStorageService.getTeams.mockResolvedValue([]);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue(null);
+      (mockApiContext.agentRegistrationService as any).isInProcessRuntimeActive.mockReturnValue(false);
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as any;
+      const orchestratorTeam = responseData.data[0];
+      const assistant = orchestratorTeam.members.find((m: any) => m.sessionName === 'crewly-orc-assistant');
+      expect(assistant.agentStatus).toBe('inactive');
+    });
+
+    it('should resolve team member status correctly with in-process runtime', async () => {
+      const mockTeams = [{
+        id: 'team-1',
+        name: 'Test',
+        description: '',
+        members: [{
+          id: 'member-1',
+          name: 'Agent',
+          sessionName: 'crewly-agent-1',
+          role: 'developer',
+          runtimeType: 'crewly-agent',
+          systemPrompt: 'Test',
+          agentStatus: 'active',
+          workingStatus: 'idle',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }];
+
+      mockStorageService.getTeams.mockResolvedValue(mockTeams);
+      mockStorageService.getOrchestratorStatus.mockResolvedValue(null);
+
+      // No PTY session, but in-process runtime is active
+      const { getSessionBackendSync } = require('../../services/session/index.js');
+      (getSessionBackendSync as jest.Mock).mockReturnValue({
+        sessionExists: jest.fn<any>().mockReturnValue(false),
+      });
+      (mockApiContext.agentRegistrationService as any).isInProcessRuntimeActive
+        .mockImplementation((name: string) => name === 'crewly-agent-1');
+
+      await teamsHandlers.getTeams.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      const responseData = responseMock.json.mock.calls[0][0] as any;
+      const regularTeam = responseData.data[1];
+      expect(regularTeam.members[0].agentStatus).toBe('active');
     });
   });
 
@@ -1782,6 +1860,47 @@ describe('Teams Handlers', () => {
         error: 'Failed to register member status'
       });
     });
+
+    it('should register orchestrator team member (e.g. Assistant) that is not in getTeams()', async () => {
+      mockRequest.body = {
+        sessionName: 'crewly-orc-assistant',
+        role: 'orchestrator',
+        status: 'active',
+        registeredAt: new Date().toISOString(),
+        memberId: 'crewly-orc-assistant-member-001'
+      };
+
+      // getTeams returns no matching teams (orchestrator team is excluded)
+      mockStorageService.getTeams.mockResolvedValue([]);
+      // getOrchestratorStatus returns orchestrator info so buildOrchestratorTeam can produce virtual members
+      mockStorageService.getOrchestratorStatus.mockResolvedValue({
+        sessionName: 'crewly-orc',
+        agentStatus: 'active',
+        workingStatus: 'idle',
+        runtimeType: 'claude-code',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+
+      await teamsHandlers.registerMemberStatus.call(
+        mockApiContext,
+        mockRequest as Request,
+        mockResponse as Response
+      );
+
+      // Should succeed — found via orchestrator team virtual members
+      expect(responseMock.json).toHaveBeenCalledWith({
+        success: true,
+        message: 'Agent crewly-orc-assistant registered as active with role orchestrator',
+        data: expect.objectContaining({
+          sessionName: 'crewly-orc-assistant',
+          role: 'orchestrator',
+          status: 'active'
+        })
+      });
+      // Should NOT call saveTeam since orchestrator team is virtual
+      expect(mockStorageService.saveTeam).not.toHaveBeenCalled();
+    });
   });
 
   describe('Status Update Workflow Integration', () => {
@@ -2592,12 +2711,12 @@ describe('Teams Handlers', () => {
 
   describe('startTeamMember with orchestrator virtual team', () => {
     it('should start Assistant (crewly-agent runtime) via agentRegistrationService', async () => {
-      mockRequest.params = { teamId: 'orchestrator', memberId: 'a1b2c3d4-5678-9abc-def0-assistant001' };
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'crewly-orc-assistant-member-001' };
       mockRequest.body = {};
 
       (mockApiContext.agentRegistrationService as any).createAgentSession = jest.fn<any>().mockResolvedValue({
         success: true,
-        sessionName: 'crewly-team-assistant-a1b2c3d4',
+        sessionName: 'crewly-orc-assistant',
       });
 
       await teamsHandlers.startTeamMember.call(
@@ -2608,9 +2727,9 @@ describe('Teams Handlers', () => {
 
       expect((mockApiContext.agentRegistrationService as any).createAgentSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          sessionName: 'crewly-team-assistant-a1b2c3d4',
+          sessionName: 'crewly-orc-assistant',
           role: 'orchestrator',
-          memberId: 'a1b2c3d4-5678-9abc-def0-assistant001',
+          memberId: 'crewly-orc-assistant-member-001',
           teamId: 'orchestrator',
           runtimeType: 'crewly-agent',
         })
@@ -2748,7 +2867,7 @@ describe('Teams Handlers', () => {
     });
 
     it('should stop Assistant via terminateAgentSession', async () => {
-      mockRequest.params = { teamId: 'orchestrator', memberId: 'a1b2c3d4-5678-9abc-def0-assistant001' };
+      mockRequest.params = { teamId: 'orchestrator', memberId: 'crewly-orc-assistant-member-001' };
 
       (mockApiContext.agentRegistrationService as any).terminateAgentSession = jest.fn<any>().mockResolvedValue({
         success: true,
@@ -2761,7 +2880,7 @@ describe('Teams Handlers', () => {
       );
 
       expect((mockApiContext.agentRegistrationService as any).terminateAgentSession).toHaveBeenCalledWith(
-        'crewly-team-assistant-a1b2c3d4',
+        'crewly-orc-assistant',
         'orchestrator'
       );
 

@@ -48,6 +48,7 @@ export {
 
 export {
   isOrchestratorActive,
+  isAgentActive,
   getOrchestratorStatus,
   getOrchestratorOfflineMessage,
   type OrchestratorStatusResult,

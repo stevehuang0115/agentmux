@@ -18,6 +18,7 @@ import type { NotifyPayload } from '../../types/chat.types.js';
 // Mock the orchestrator status module
 jest.mock('../orchestrator/index.js', () => ({
   isOrchestratorActive: jest.fn(),
+  isAgentActive: jest.fn().mockResolvedValue(false),
   getOrchestratorOfflineMessage: jest.fn().mockReturnValue('Orchestrator is offline'),
 }));
 
@@ -39,7 +40,7 @@ jest.mock('./slack-image.service.js', () => ({
   resetSlackImageService: jest.fn(),
 }));
 
-import { isOrchestratorActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
+import { isOrchestratorActive, isAgentActive, getOrchestratorOfflineMessage } from '../orchestrator/index.js';
 import { getChatService } from '../chat/chat.service.js';
 import { ChatMessage } from '../../types/chat.types.js';
 import { getSlackImageService } from './slack-image.service.js';
@@ -1048,6 +1049,133 @@ describe('SlackOrchestratorBridge', () => {
     });
   });
 
+  describe('auditor fallback routing', () => {
+    let mockQueueService: any;
+
+    function makeChatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+      return {
+        id: 'msg-1',
+        conversationId: 'conv-fallback',
+        from: { type: 'user', name: 'User' },
+        content: 'Hello',
+        contentType: 'text',
+        timestamp: new Date().toISOString(),
+        ...overrides,
+      } as ChatMessage;
+    }
+
+    beforeEach(() => {
+      mockQueueService = {
+        enqueue: jest.fn().mockReturnValue({ id: 'q-fallback' }),
+      };
+      const chatService = getChatService();
+      jest.spyOn(chatService, 'sendMessage').mockResolvedValue({
+        message: makeChatMessage(),
+        conversation: { id: 'conv-fallback', title: 'test', messages: [], createdAt: '', updatedAt: '' } as any,
+      });
+    });
+
+    it('should route to auditor via queue when orchestrator is offline and auditor is active', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(true);
+
+      const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService);
+      await bridge.initialize();
+
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-fallback',
+        channelId: 'C123',
+        userId: 'U123',
+        threadTs: '1234567890.123',
+      });
+
+      const handledPromise = new Promise<any>((resolve) => {
+        bridge.on('message_handled', resolve);
+      });
+
+      slackService.emit('message', {
+        text: 'hello from user',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '1234567890.123',
+      });
+
+      const event = await handledPromise;
+
+      // Should enqueue with targetSession pointing to auditor
+      expect(mockQueueService.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetSession: 'crewly-auditor',
+          source: 'slack',
+        })
+      );
+      // Enqueued content should include FALLBACK marker and SLACK_CONTEXT
+      const enqueuedContent = mockQueueService.enqueue.mock.calls[0][0].content;
+      expect(enqueuedContent).toContain('[FALLBACK]');
+      expect(enqueuedContent).toContain('[SLACK_CONTEXT:');
+      expect(enqueuedContent).toContain('C123');
+
+      // Response should acknowledge the fallback
+      expect(event.response).toContain('forwarded to the Auditor');
+    }, 15000);
+
+    it('should return offline message when both orchestrator and auditor are inactive', async () => {
+      (isOrchestratorActive as jest.Mock).mockResolvedValue(false);
+      (isAgentActive as jest.Mock).mockResolvedValue(false);
+      (getOrchestratorOfflineMessage as jest.Mock).mockReturnValue('Orchestrator is offline. Please start it from the dashboard.');
+
+      const bridge = new SlackOrchestratorBridge();
+      bridge.setMessageQueueService(mockQueueService);
+      await bridge.initialize();
+
+      const slackService = (bridge as any).slackService;
+      jest.spyOn(slackService, 'sendMessage').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'addReaction').mockResolvedValue(undefined);
+      jest.spyOn(slackService, 'getConversationContext').mockReturnValue({
+        conversationId: 'conv-fb',
+        channelId: 'C123',
+        userId: 'U123',
+      });
+
+      const handledPromise = new Promise<any>((resolve) => {
+        bridge.on('message_handled', resolve);
+      });
+
+      slackService.emit('message', {
+        text: 'hello',
+        channelId: 'C123',
+        userId: 'U123',
+        ts: '999.999',
+      });
+
+      const event = await handledPromise;
+
+      // Should NOT route to auditor queue
+      expect(mockQueueService.enqueue).not.toHaveBeenCalled();
+      // Response is the offline message
+      expect(event.response).toContain('offline');
+    }, 15000);
+
+    it('should include FALLBACK marker in auditor-routed messages', () => {
+      const message = 'Hello from user';
+      const fallbackMessage = `[FALLBACK] Orchestrator is offline. User message:\n${message}`;
+      expect(fallbackMessage).toContain('[FALLBACK]');
+      expect(fallbackMessage).toContain(message);
+    });
+
+    it('should include SLACK_CONTEXT in fallback messages when context is available', () => {
+      const channelId = 'C123';
+      const threadTs = '1234567890.123456';
+      const prefix = `[SLACK_CONTEXT:channelId=${channelId},threadTs=${threadTs}]`;
+      expect(prefix).toContain(channelId);
+      expect(prefix).toContain(threadTs);
+    });
+  });
+
   describe('typing indicator scope handling', () => {
     it('should only log missing scope warning once', () => {
       const bridge = new SlackOrchestratorBridge();
@@ -1410,7 +1538,7 @@ describe('SlackOrchestratorBridge', () => {
   });
 
   describe('auditor prefix routing', () => {
-    const pattern = /^\/?auditor\s+(.*)/is;
+    const pattern = /^[/@]?auditor[\s:]+(.+)/is;
 
     it('should match "auditor ..." prefix and extract message', () => {
       const match = 'auditor show me the latest audit report'.match(pattern);
@@ -1430,9 +1558,22 @@ describe('SlackOrchestratorBridge', () => {
       expect(match![1].trim()).toBe('check system health');
     });
 
+    it('should handle @auditor prefix with at-sign', () => {
+      const match = '@auditor check system health'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('check system health');
+    });
+
+    it('should handle @auditor: prefix with colon', () => {
+      const match = '@auditor: what is the team status?'.match(pattern);
+      expect(match).not.toBeNull();
+      expect(match![1].trim()).toBe('what is the team status?');
+    });
+
     it('should be case-insensitive', () => {
       expect('Auditor check status'.match(pattern)).not.toBeNull();
       expect('AUDITOR run audit'.match(pattern)).not.toBeNull();
+      expect('@Auditor show report'.match(pattern)).not.toBeNull();
     });
   });
 });

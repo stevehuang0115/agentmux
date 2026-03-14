@@ -46,10 +46,21 @@ export async function listTerminalSessions(req: Request, res: Response): Promise
 		// This prevents race conditions when sessions are queried before orchestrator setup completes
 		const backend = await getSessionBackend();
 
-		const sessions = backend.listSessions();
+		const ptySessions = backend.listSessions();
+
+		// Include in-process Crewly Agent sessions (AI SDK runtime, no PTY)
+		const inProcessBuffer = InProcessLogBuffer.getInstance();
+		const inProcessSessionNames = inProcessBuffer.getSessionNames();
+
+		// Merge and deduplicate (in case a session name appears in both)
+		const allSessions = [...new Set([...ptySessions, ...inProcessSessionNames])];
+
 		res.json({
 			success: true,
-			data: { sessions },
+			data: {
+				sessions: allSessions,
+				inProcessSessions: inProcessSessionNames,
+			},
 		} as ApiResponse);
 	} catch (error) {
 		logger.error('Error listing terminal sessions', {
@@ -728,7 +739,8 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 			return;
 		}
 
-		// Resolve runtime type: prefer request body, fall back to storage lookup
+		// Resolve runtime type: prefer request body, fall back to storage lookup,
+		// then check in-process runtimes (crewly-agent has no PTY session)
 		let resolvedRuntimeType: RuntimeType | undefined = runtimeType as RuntimeType | undefined;
 		if (!resolvedRuntimeType) {
 			try {
@@ -738,6 +750,13 @@ export async function deliverMessage(this: ApiContext, req: Request, res: Respon
 				}
 			} catch {
 				// Non-fatal: sendMessageToAgent will use its default
+			}
+		}
+		// Fallback: if still unresolved, check if an in-process crewly-agent exists for this session
+		if (!resolvedRuntimeType) {
+			const inProcessRuntime = this.agentRegistrationService.getInProcessRuntime(sessionName);
+			if (inProcessRuntime) {
+				resolvedRuntimeType = RUNTIME_TYPES.CREWLY_AGENT;
 			}
 		}
 

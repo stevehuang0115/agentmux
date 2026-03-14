@@ -1039,7 +1039,17 @@ export class SchedulerService extends EventEmitter {
           messageLength: message.length,
         });
       } else {
-        // Fallback: direct PTY write (should not happen in normal operation)
+        // Fallback: direct PTY write (should not happen in normal operation).
+        // Skip crewly-agent sessions — they have no PTY and require
+        // AgentRegistrationService for in-process delivery (Bug 3 fix).
+        const runtimeType = await this.resolveRuntimeType(targetSession);
+        if (runtimeType === RUNTIME_TYPES.CREWLY_AGENT) {
+          this.logger.warn('Cannot deliver scheduled message to crewly-agent without AgentRegistrationService', {
+            targetSession,
+          });
+          return;
+        }
+
         this.logger.warn('AgentRegistrationService not available, using fallback PTY write', {
           targetSession,
         });
@@ -1234,7 +1244,11 @@ export class SchedulerService extends EventEmitter {
         return;
       }
 
-      await this.executeCheck(targetSession, message);
+      // Enrich the recurring check message with freshness instructions so the
+      // agent queries current task status instead of relying on potentially
+      // stale task descriptions baked into the original scheduled message.
+      const enrichedMessage = this.addFreshnessInstructions(message);
+      await this.executeCheck(targetSession, enrichedMessage);
 
       // Log per-execution result
       const enhanced = this.enhancedMessages.get(checkId);
@@ -1292,6 +1306,20 @@ export class SchedulerService extends EventEmitter {
     // Schedule first execution
     const firstTimeout = setTimeout(executeRecurring, intervalMinutes * 60 * 1000);
     this.recurringTimeouts.set(checkId, firstTimeout);
+  }
+
+  /**
+   * Enrich a recurring check message with freshness instructions.
+   * Tells the agent to query current task status rather than relying on
+   * potentially stale task descriptions embedded in the original message.
+   *
+   * @param originalMessage - The original scheduled check message
+   * @returns Enriched message with freshness instructions
+   */
+  private addFreshnessInstructions(originalMessage: string): string {
+    return `${originalMessage}
+
+⚠️ NOTE: This is a recurring scheduled check. The task description above may be OUTDATED. Before responding, use get_tasks or get_agent_status to verify the CURRENT status. If the task is already completed, cancel this recurring check using cancel_schedule and report the task is done.`;
   }
 
   /**

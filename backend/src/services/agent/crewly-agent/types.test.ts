@@ -4,8 +4,18 @@ import {
   isModelConfig,
   MODEL_PROVIDERS,
   CREWLY_AGENT_DEFAULTS,
+  WRITE_TOOLS,
 } from './types.js';
-import type { ToolDefinition } from './types.js';
+import type {
+  ToolDefinition,
+  ToolSensitivity,
+  AuditEntry,
+  SecurityPolicy,
+  CompactionResult,
+  ToolCallbacks,
+  ApprovalCheckResult,
+  AuditLogFilters,
+} from './types.js';
 
 describe('Crewly Agent Types', () => {
   describe('MODEL_PROVIDERS', () => {
@@ -31,6 +41,15 @@ describe('Crewly Agent Types', () => {
       expect(CREWLY_AGENT_DEFAULTS.DEFAULT_MODEL.modelId).toBeTruthy();
       expect(typeof CREWLY_AGENT_DEFAULTS.DEFAULT_MODEL.temperature).toBe('number');
       expect(typeof CREWLY_AGENT_DEFAULTS.DEFAULT_MODEL.maxTokens).toBe('number');
+    });
+
+    it('should have a valid default security policy', () => {
+      const policy = CREWLY_AGENT_DEFAULTS.SECURITY_POLICY;
+      expect(policy.auditEnabled).toBe(true);
+      expect(policy.requireApproval).toEqual([]);
+      expect(policy.blockedTools).toEqual([]);
+      expect(policy.maxAuditEntries).toBe(500);
+      expect(policy.readOnlyMode).toBe(false);
     });
   });
 
@@ -77,6 +96,217 @@ describe('Crewly Agent Types', () => {
       };
       expect(tool.description).toBe('A test tool');
       expect(typeof tool.execute).toBe('function');
+    });
+
+    it('should support optional sensitivity field', () => {
+      const tool: ToolDefinition = {
+        description: 'A sensitive tool',
+        inputSchema: { parse: () => ({}) } as any,
+        execute: async () => ({ result: 'ok' }),
+        sensitivity: 'destructive',
+      };
+      expect(tool.sensitivity).toBe('destructive');
+    });
+  });
+
+  describe('ToolSensitivity', () => {
+    it('should accept valid sensitivity values', () => {
+      const safe: ToolSensitivity = 'safe';
+      const sensitive: ToolSensitivity = 'sensitive';
+      const destructive: ToolSensitivity = 'destructive';
+      expect(safe).toBe('safe');
+      expect(sensitive).toBe('sensitive');
+      expect(destructive).toBe('destructive');
+    });
+  });
+
+  describe('AuditEntry', () => {
+    it('should be constructible with required fields', () => {
+      const entry: AuditEntry = {
+        timestamp: '2026-03-12T00:00:00.000Z',
+        toolName: 'edit_file',
+        sensitivity: 'destructive',
+        args: { file_path: '/test.ts' },
+        success: true,
+        durationMs: 42,
+      };
+      expect(entry.toolName).toBe('edit_file');
+      expect(entry.sensitivity).toBe('destructive');
+      expect(entry.error).toBeUndefined();
+      expect(entry.sessionName).toBeUndefined();
+    });
+
+    it('should support optional error field', () => {
+      const entry: AuditEntry = {
+        timestamp: '2026-03-12T00:00:00.000Z',
+        toolName: 'write_file',
+        sensitivity: 'destructive',
+        args: {},
+        success: false,
+        error: 'EACCES',
+        durationMs: 5,
+      };
+      expect(entry.error).toBe('EACCES');
+    });
+
+    it('should support optional sessionName field', () => {
+      const entry: AuditEntry = {
+        timestamp: '2026-03-12T00:00:00.000Z',
+        sessionName: 'agent-session-abc',
+        toolName: 'delegate_task',
+        sensitivity: 'sensitive',
+        args: {},
+        success: true,
+        durationMs: 100,
+      };
+      expect(entry.sessionName).toBe('agent-session-abc');
+    });
+  });
+
+  describe('SecurityPolicy', () => {
+    it('should be constructible with all fields', () => {
+      const policy: SecurityPolicy = {
+        auditEnabled: true,
+        requireApproval: ['destructive'],
+        blockedTools: ['stop_agent'],
+        maxAuditEntries: 100,
+        readOnlyMode: false,
+      };
+      expect(policy.auditEnabled).toBe(true);
+      expect(policy.requireApproval).toContain('destructive');
+      expect(policy.blockedTools).toContain('stop_agent');
+      expect(policy.readOnlyMode).toBe(false);
+    });
+
+    it('should support readOnlyMode', () => {
+      const policy: SecurityPolicy = {
+        auditEnabled: true,
+        requireApproval: [],
+        blockedTools: [],
+        maxAuditEntries: 500,
+        readOnlyMode: true,
+      };
+      expect(policy.readOnlyMode).toBe(true);
+    });
+  });
+
+  describe('CompactionResult', () => {
+    it('should represent a successful compaction', () => {
+      const result: CompactionResult = {
+        compacted: true,
+        messagesBefore: 50,
+        messagesAfter: 11,
+      };
+      expect(result.compacted).toBe(true);
+      expect(result.reason).toBeUndefined();
+    });
+
+    it('should represent a skipped compaction with reason', () => {
+      const result: CompactionResult = {
+        compacted: false,
+        messagesBefore: 5,
+        messagesAfter: 5,
+        reason: 'Too few messages to compact',
+      };
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toBeTruthy();
+    });
+  });
+
+  describe('ToolCallbacks', () => {
+    it('should be constructible with optional fields', () => {
+      const callbacks: ToolCallbacks = {};
+      expect(callbacks.onCompactMemory).toBeUndefined();
+      expect(callbacks.onAuditLog).toBeUndefined();
+      expect(callbacks.onCheckApproval).toBeUndefined();
+      expect(callbacks.onGetAuditLog).toBeUndefined();
+    });
+
+    it('should accept callback functions', () => {
+      const callbacks: ToolCallbacks = {
+        onCompactMemory: async () => ({ compacted: true, messagesBefore: 50, messagesAfter: 11 }),
+        onAuditLog: () => {},
+        onCheckApproval: () => ({ allowed: true }),
+        onGetAuditLog: () => [],
+      };
+      expect(typeof callbacks.onCompactMemory).toBe('function');
+      expect(typeof callbacks.onAuditLog).toBe('function');
+      expect(typeof callbacks.onCheckApproval).toBe('function');
+      expect(typeof callbacks.onGetAuditLog).toBe('function');
+    });
+  });
+
+  describe('ApprovalCheckResult', () => {
+    it('should represent an allowed result', () => {
+      const result: ApprovalCheckResult = { allowed: true };
+      expect(result.allowed).toBe(true);
+      expect(result.reason).toBeUndefined();
+      expect(result.blocked).toBeUndefined();
+    });
+
+    it('should represent a blocked tool', () => {
+      const result: ApprovalCheckResult = {
+        allowed: false,
+        blocked: true,
+        reason: 'Tool is blocked by security policy',
+      };
+      expect(result.allowed).toBe(false);
+      expect(result.blocked).toBe(true);
+      expect(result.reason).toBeTruthy();
+    });
+
+    it('should represent a tool requiring approval', () => {
+      const result: ApprovalCheckResult = {
+        allowed: false,
+        blocked: false,
+        reason: 'Tool requires approval for destructive operations',
+      };
+      expect(result.allowed).toBe(false);
+      expect(result.blocked).toBe(false);
+      expect(result.reason).toContain('approval');
+    });
+  });
+
+  describe('AuditLogFilters', () => {
+    it('should be constructible with required limit', () => {
+      const filters: AuditLogFilters = { limit: 50 };
+      expect(filters.limit).toBe(50);
+      expect(filters.sensitivity).toBeUndefined();
+      expect(filters.toolName).toBeUndefined();
+    });
+
+    it('should support optional filters', () => {
+      const filters: AuditLogFilters = {
+        limit: 10,
+        sensitivity: 'destructive',
+        toolName: 'edit_file',
+      };
+      expect(filters.sensitivity).toBe('destructive');
+      expect(filters.toolName).toBe('edit_file');
+    });
+  });
+
+  describe('WRITE_TOOLS', () => {
+    it('should be a non-empty readonly array', () => {
+      expect(WRITE_TOOLS.length).toBeGreaterThan(0);
+      expect(Array.isArray(WRITE_TOOLS)).toBe(true);
+    });
+
+    it('should contain all file-modifying tools', () => {
+      expect(WRITE_TOOLS).toContain('edit_file');
+      expect(WRITE_TOOLS).toContain('write_file');
+    });
+
+    it('should contain agent lifecycle tools', () => {
+      expect(WRITE_TOOLS).toContain('start_agent');
+      expect(WRITE_TOOLS).toContain('stop_agent');
+      expect(WRITE_TOOLS).toContain('handle_agent_failure');
+    });
+
+    it('should not contain read-only tools', () => {
+      expect(WRITE_TOOLS).not.toContain('read_file');
+      expect(WRITE_TOOLS).not.toContain('get_team_status');
+      expect(WRITE_TOOLS).not.toContain('recall_memory');
     });
   });
 });

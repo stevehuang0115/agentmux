@@ -15,6 +15,20 @@ jest.mock('../services/session/index.js', () => ({
 	getSessionBackendSync: jest.fn(),
 }));
 
+// Mock InProcessLogBuffer
+const mockLogBuffer = {
+	hasSession: jest.fn(() => false),
+	capture: jest.fn(() => '[crewly-agent] No output yet'),
+	getSessionNames: jest.fn(() => []),
+	on: jest.fn(),
+	removeListener: jest.fn(),
+};
+jest.mock('../services/agent/crewly-agent/in-process-log-buffer.js', () => ({
+	InProcessLogBuffer: {
+		getInstance: jest.fn(() => mockLogBuffer),
+	},
+}));
+
 // Mock the chat gateway
 jest.mock('./chat.gateway.js', () => ({
 	getChatGateway: jest.fn(() => ({
@@ -461,6 +475,37 @@ describe('TerminalGateway', () => {
 
 			expect(bufferA).toContain('[NOTIFY]');
 			expect(bufferB).not.toContain('[NOTIFY]');
+		});
+
+		it('should skip NOTIFY processing for Gemini CLI sessions', () => {
+			const onDataCallbacks: ((data: string) => void)[] = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			// Register session as Gemini CLI
+			gateway.registerGeminiCliSession('gemini-orc');
+
+			mockSessionBackend.listSessions.mockReturnValue(['gemini-orc']);
+			gateway.subscribeToSession('gemini-orc', mockSocket as Socket);
+
+			// Simulate Gemini CLI output with garbled NOTIFY marker
+			const output = '[NOTIFY]\ntype: status\nmessage: Hello\n[/NOTIFY]';
+			if (onDataCallbacks.length > 0) {
+				onDataCallbacks[0](output);
+			}
+
+			// Should NOT process NOTIFY markers for Gemini CLI sessions
+			const { getChatGateway } = require('./chat.gateway.js');
+			const mockChatGw = getChatGateway();
+			if (mockChatGw?.processTerminalOutput) {
+				expect(mockChatGw.processTerminalOutput).not.toHaveBeenCalled();
+			}
+
+			// Buffer should be empty — processOrchestratorOutputForChat was skipped
+			const buffer = (gateway as any).getSessionBuffer('gemini-orc');
+			expect(buffer).toBe('');
 		});
 	});
 
@@ -969,6 +1014,153 @@ describe('TerminalGateway', () => {
 				'conv-real',
 				undefined
 			);
+		});
+	});
+
+	describe('read-only mode', () => {
+		it('should block input for read-only sessions', async () => {
+			gateway.setReadOnly('test-session');
+
+			await gateway.sendInput('test-session', 'hello\r', mockSocket as Socket);
+
+			// Input should NOT be forwarded to PTY
+			expect(mockSession.write).not.toHaveBeenCalled();
+			// Should emit read_only error
+			expect(mockSocket.emit).toHaveBeenCalledWith('error', expect.objectContaining({
+				type: 'read_only',
+				payload: expect.objectContaining({
+					sessionName: 'test-session',
+					error: expect.stringContaining('read-only'),
+				}),
+			}));
+		});
+
+		it('should allow input for non-read-only sessions', async () => {
+			await gateway.sendInput('test-session', 'hello\r', mockSocket as Socket);
+
+			expect(mockSession.write).toHaveBeenCalledWith('hello\r');
+		});
+
+		it('should restore input after clearing read-only mode', async () => {
+			gateway.setReadOnly('test-session');
+			gateway.clearReadOnly('test-session');
+
+			await gateway.sendInput('test-session', 'hello\r', mockSocket as Socket);
+
+			expect(mockSession.write).toHaveBeenCalledWith('hello\r');
+		});
+
+		it('should correctly report read-only status', () => {
+			expect(gateway.isReadOnly('test-session')).toBe(false);
+
+			gateway.setReadOnly('test-session');
+			expect(gateway.isReadOnly('test-session')).toBe(true);
+
+			gateway.clearReadOnly('test-session');
+			expect(gateway.isReadOnly('test-session')).toBe(false);
+		});
+
+		it('should allow output streaming in read-only mode', () => {
+			const onDataCallbacks: ((data: string) => void)[] = [];
+			mockSession.onData.mockImplementation((cb: (data: string) => void) => {
+				onDataCallbacks.push(cb);
+				return jest.fn();
+			});
+
+			// Set read-only BEFORE subscribing
+			gateway.setReadOnly('test-session');
+			gateway.subscribeToSession('test-session', mockSocket as Socket);
+
+			// Output streaming should still work
+			expect(mockSession.onData).toHaveBeenCalled();
+		});
+	});
+
+	describe('in-process session support', () => {
+		beforeEach(() => {
+			// PTY session does NOT exist — only in-process session
+			mockSessionBackend.getSession.mockReturnValue(null);
+			mockSessionBackend.sessionExists.mockReturnValue(false);
+		});
+
+		it('should subscribe to in-process session when PTY is not found', () => {
+			mockLogBuffer.hasSession.mockReturnValue(true);
+			mockLogBuffer.capture.mockReturnValue('[14:23:45.123] Agent initialized');
+
+			gateway.subscribeToSession('agent-assistant', mockSocket as Socket);
+
+			// Should confirm subscription with sessionExists: true
+			expect(mockSocket.emit).toHaveBeenCalledWith('subscription_confirmed', expect.objectContaining({
+				payload: { sessionName: 'agent-assistant', sessionExists: true },
+			}));
+		});
+
+		it('should send initial state from InProcessLogBuffer for in-process sessions', () => {
+			mockLogBuffer.hasSession.mockReturnValue(true);
+			mockLogBuffer.capture.mockReturnValue('[14:23:45.123] Agent initialized\n[14:23:46.000] Ready');
+
+			gateway.subscribeToSession('agent-assistant', mockSocket as Socket);
+
+			// Should emit initial_terminal_state with log buffer content
+			expect(mockSocket.emit).toHaveBeenCalledWith('initial_terminal_state', expect.objectContaining({
+				type: 'initial_terminal_state',
+				payload: expect.objectContaining({
+					sessionName: 'agent-assistant',
+					content: expect.stringContaining('Agent initialized'),
+				}),
+			}));
+		});
+
+		it('should auto-mark in-process sessions as read-only', () => {
+			mockLogBuffer.hasSession.mockReturnValue(true);
+			mockLogBuffer.capture.mockReturnValue('[crewly-agent] No output yet');
+
+			gateway.subscribeToSession('agent-assistant', mockSocket as Socket);
+
+			// In-process sessions should be read-only
+			expect(gateway.isReadOnly('agent-assistant')).toBe(true);
+		});
+
+		it('should block input for in-process sessions', async () => {
+			mockLogBuffer.hasSession.mockReturnValue(true);
+			mockLogBuffer.capture.mockReturnValue('[crewly-agent] No output yet');
+
+			gateway.subscribeToSession('agent-assistant', mockSocket as Socket);
+			await gateway.sendInput('agent-assistant', 'hello\r', mockSocket as Socket);
+
+			// Input should be blocked (read-only)
+			expect(mockSocket.emit).toHaveBeenCalledWith('error', expect.objectContaining({
+				type: 'read_only',
+			}));
+		});
+
+		it('should emit session_pending when neither PTY nor in-process exists', () => {
+			mockLogBuffer.hasSession.mockReturnValue(false);
+
+			gateway.subscribeToSession('nonexistent', mockSocket as Socket);
+
+			expect(mockSocket.emit).toHaveBeenCalledWith('session_pending', expect.objectContaining({
+				type: 'session_pending',
+				payload: expect.objectContaining({ sessionName: 'nonexistent' }),
+			}));
+		});
+
+		it('should detect in-process sessions via isInProcessSession', () => {
+			mockLogBuffer.hasSession.mockReturnValue(true);
+			expect(gateway.isInProcessSession('agent-assistant')).toBe(true);
+
+			mockLogBuffer.hasSession.mockReturnValue(false);
+			expect(gateway.isInProcessSession('pty-session')).toBe(false);
+		});
+
+		it('should register InProcessLogBuffer data event handler on construction', () => {
+			expect(mockLogBuffer.on).toHaveBeenCalledWith('data', expect.any(Function));
+		});
+
+		it('should clean up InProcessLogBuffer listener on destroy', () => {
+			gateway.destroy();
+
+			expect(mockLogBuffer.removeListener).toHaveBeenCalledWith('data', expect.any(Function));
 		});
 	});
 });

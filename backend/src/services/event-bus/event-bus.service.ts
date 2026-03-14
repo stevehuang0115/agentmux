@@ -219,6 +219,14 @@ export class EventBusService extends EventEmitter {
       newValue: event.newValue,
     });
 
+    // Emit event_published for any listener that needs to react to ALL events
+    // regardless of subscriptions (e.g., auditor monitoring agent:inactive)
+    this.emit('event_published', {
+      eventId: event.id,
+      eventType: event.type,
+      sessionName: event.sessionName,
+    });
+
     const toRemove: string[] = [];
 
     const now = new Date();
@@ -334,7 +342,8 @@ export class EventBusService extends EventEmitter {
     // Dedup key: same subscriber + same agent = keep only the latest event.
     // If agent-joe transitions idle→active→idle in 5 seconds, the orchestrator
     // only receives the final "idle" notification, not all three.
-    const dedupKey = `${sub.subscriberSession}:${event.sessionName}`;
+    // Use '||' separator (not ':') to avoid collision with session name chars.
+    const dedupKey = `${sub.subscriberSession}||${event.sessionName}`;
 
     this.pendingNotifications.set(dedupKey, {
       message,
@@ -403,10 +412,10 @@ export class EventBusService extends EventEmitter {
       return;
     }
 
-    // Group messages by subscriber session (extracted from dedup key format: subscriberSession:agentSession)
+    // Group messages by subscriber session (extracted from dedup key format: subscriberSession||agentSession)
     const bySubscriber = new Map<string, string[]>();
     for (const [dedupKey, entry] of this.pendingNotifications) {
-      const subscriberSession = dedupKey.split(':')[0];
+      const subscriberSession = dedupKey.split('||')[0];
       const existing = bySubscriber.get(subscriberSession) ?? [];
       existing.push(entry.message);
       bySubscriber.set(subscriberSession, existing);

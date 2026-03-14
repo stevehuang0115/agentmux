@@ -372,6 +372,8 @@ export class AuditorSchedulerService {
   /**
    * Bind the EventBus listener for L2 event-driven triggers.
    * Listens for agent:inactive and task:failed events with debounce.
+   * Uses event_published (fires on ALL published events) instead of
+   * event_delivered (only fires when a subscription match exists).
    */
   private bindEventBusListener(): void {
     if (!this.eventBusService || this.eventListenerBound) {
@@ -380,7 +382,7 @@ export class AuditorSchedulerService {
 
     const triggerEvents = AUDITOR_SCHEDULER_CONSTANTS.TRIGGER_EVENT_TYPES;
 
-    this.eventBusService.on('event_delivered', (payload: { eventType: string }) => {
+    this.eventBusService.on('event_published', (payload: { eventType: string; sessionName?: string }) => {
       if (!triggerEvents.includes(payload.eventType)) {
         return;
       }

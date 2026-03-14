@@ -144,9 +144,23 @@ interface OrchestratorStatusInfo {
 function buildOrchestratorTeam(
   actualAgentStatus: string,
   orchestratorStatus: OrchestratorStatusInfo | null,
-  overrides?: Partial<Team>
+  overrides?: Partial<Team>,
+  inProcessRuntimeStatus?: Record<string, boolean>
 ): Team {
   const now = new Date().toISOString();
+
+  // Resolve Assistant status: check in-process runtime active state
+  const assistantInProcessActive = inProcessRuntimeStatus?.['crewly-orc-assistant'] ?? false;
+  const assistantStatus = assistantInProcessActive
+    ? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE as TeamMember['agentStatus']
+    : CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
+
+  // Resolve Auditor status: check in-process runtime active state
+  const auditorInProcessActive = inProcessRuntimeStatus?.['crewly-auditor'] ?? false;
+  const auditorStatus = auditorInProcessActive
+    ? CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE as TeamMember['agentStatus']
+    : CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
+
   return {
     id: 'orchestrator',
     name: 'Orchestrator Team',
@@ -165,12 +179,12 @@ function buildOrchestratorTeam(
         updatedAt: orchestratorStatus?.updatedAt || now
       },
       {
-        id: 'a1b2c3d4-5678-9abc-def0-assistant001',
+        id: 'crewly-orc-assistant-member-001',
         name: 'Assistant',
-        sessionName: 'crewly-team-assistant-a1b2c3d4',
+        sessionName: 'crewly-orc-assistant',
         role: 'orchestrator',
         systemPrompt: 'Shadow orchestrator running in-process via Crewly Agent runtime (AI SDK)',
-        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'],
+        agentStatus: assistantStatus,
         workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE as TeamMember['workingStatus'],
         runtimeType: 'crewly-agent' as TeamMember['runtimeType'],
         createdAt: '2026-03-11T02:00:00.000Z',
@@ -182,7 +196,7 @@ function buildOrchestratorTeam(
         sessionName: 'crewly-auditor',
         role: 'auditor',
         systemPrompt: 'Autonomous quality observer — monitors all agents, detects problems, writes audit reports',
-        agentStatus: CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'],
+        agentStatus: auditorStatus,
         workingStatus: CREWLY_CONSTANTS.WORKING_STATUSES.IDLE as TeamMember['workingStatus'],
         runtimeType: 'claude-code' as TeamMember['runtimeType'],
         createdAt: '2026-03-11T02:10:00.000Z',
@@ -204,10 +218,34 @@ function buildOrchestratorTeam(
  * Conversely, if the session has disappeared we immediately report "inactive"
  * regardless of the stored status to avoid stale UI.
  */
+/**
+ * Build a map of in-process runtime active states for orchestrator virtual members.
+ *
+ * @param agentRegistrationService - The agent registration service instance
+ * @returns Record mapping session names to their active state
+ */
+function getInProcessRuntimeStatusMap(agentRegistrationService: { isInProcessRuntimeActive(sessionName: string): boolean }): Record<string, boolean> {
+  const status: Record<string, boolean> = {};
+  for (const sessionName of ['crewly-orc-assistant', 'crewly-auditor']) {
+    status[sessionName] = agentRegistrationService.isInProcessRuntimeActive(sessionName);
+  }
+  return status;
+}
+
 function resolveAgentStatus(
   storedStatus: TeamMember['agentStatus'] | undefined,
-  sessionExists: boolean
+  sessionExists: boolean,
+  isInProcessActive = false
 ): TeamMember['agentStatus'] {
+  // In-process runtimes have no PTY session, so sessionExists will be false.
+  // When the runtime is active, trust the stored status or report as active.
+  if (!sessionExists && isInProcessActive) {
+    if (storedStatus && storedStatus !== CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE) {
+      return storedStatus;
+    }
+    return CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE as TeamMember['agentStatus'];
+  }
+
   if (!sessionExists) {
     return CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE as TeamMember['agentStatus'];
   }
@@ -767,7 +805,10 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       orchestratorSessionExists
     );
 
-    const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
+    // Check in-process runtime status for virtual team members (Assistant, Auditor)
+    const inProcessRuntimeStatus = getInProcessRuntimeStatusMap(this.agentRegistrationService);
+
+    const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus, undefined, inProcessRuntimeStatus);
 
     // Load working status data from ActivityMonitorService
     let workingStatusData;
@@ -784,7 +825,8 @@ export async function getTeams(this: ApiContext, req: Request, res: Response): P
       ...team,
       members: team.members.map(member => {
         const memberSessionExists = backend?.sessionExists(member.sessionName) || false;
-        const resolvedStatus = resolveAgentStatus(member.agentStatus, memberSessionExists);
+        const isInProcessActive = this.agentRegistrationService.isInProcessRuntimeActive(member.sessionName);
+        const resolvedStatus = resolveAgentStatus(member.agentStatus, memberSessionExists, isInProcessActive);
         const resolvedWorkingStatus = workingStatusData?.teamMembers[member.sessionName]?.workingStatus || member.workingStatus || 'idle';
         return {
           ...member,
@@ -827,7 +869,8 @@ export async function getTeam(this: ApiContext, req: Request, res: Response): Pr
         orchestratorSessionExists
       );
 
-      const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus);
+      const inProcessStatus = getInProcessRuntimeStatusMap(this.agentRegistrationService);
+      const orchestratorTeam = buildOrchestratorTeam(actualOrchestratorStatus, orchestratorStatus, undefined, inProcessStatus);
       res.json({ success: true, data: orchestratorTeam } as ApiResponse<Team>);
       return;
     }
@@ -1250,9 +1293,12 @@ async function _startOrchestratorMember(
   memberId: string,
   res: Response
 ): Promise<void> {
+  const inProcessStatus = getInProcessRuntimeStatusMap(context.agentRegistrationService);
   const orchestratorTeam = buildOrchestratorTeam(
     CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
-    null
+    null,
+    undefined,
+    inProcessStatus
   );
   const member = orchestratorTeam.members.find(m => m.id === memberId);
 
@@ -1323,9 +1369,12 @@ async function _stopOrchestratorMember(
   memberId: string,
   res: Response
 ): Promise<void> {
+  const inProcessStatus = getInProcessRuntimeStatusMap(context.agentRegistrationService);
   const orchestratorTeam = buildOrchestratorTeam(
     CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE,
-    null
+    null,
+    undefined,
+    inProcessStatus
   );
   const member = orchestratorTeam.members.find(m => m.id === memberId);
 
@@ -1624,8 +1673,37 @@ export async function registerMemberStatus(this: ApiContext, req: Request, res: 
       if (targetTeamId) break;
     }
 
-    // Load fresh team data and apply registration changes to avoid race conditions
+    // If not found in regular teams, check orchestrator team members (virtual team not in getTeams())
     if (!targetTeamId || !targetMemberId) {
+      const orchestratorStatus = await this.storageService.getOrchestratorStatus();
+      const inProcessStatus = getInProcessRuntimeStatusMap(this.agentRegistrationService);
+      const orchestratorTeam = buildOrchestratorTeam(
+        orchestratorStatus?.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
+        orchestratorStatus,
+        undefined,
+        inProcessStatus
+      );
+      for (const member of orchestratorTeam.members) {
+        const matchesId = memberId && member.id === memberId;
+        const matchesSession = member.sessionName === sessionName;
+        if (matchesId || matchesSession) {
+          // Orchestrator team members are virtual — registration succeeds via heartbeat (already updated above)
+          logger.info('registerMemberStatus: found orchestrator team member', { sessionName, memberId: member.id });
+
+          if (claudeSessionId) {
+            try {
+              const persistence = getSessionStatePersistence();
+              persistence.updateSessionId(sessionName, claudeSessionId);
+            } catch (persistError) {
+              logger.warn('Failed to persist claudeSessionId', { error: persistError instanceof Error ? persistError.message : String(persistError) });
+            }
+          }
+
+          res.json({ success: true, message: `Agent ${sessionName} registered as active with role ${role}`, data: { sessionName, role, status: CREWLY_CONSTANTS.AGENT_STATUSES.ACTIVE, registeredAt: registeredAt || new Date().toISOString() } } as ApiResponse);
+          return;
+        }
+      }
+
       logger.warn('registerMemberStatus: agent not found in any team', { sessionName, role, memberId });
       res.status(404).json({ success: false, error: `Agent with sessionName '${sessionName}' not found in any team` } as ApiResponse);
       return;
@@ -2086,10 +2164,12 @@ export async function updateTeam(this: ApiContext, req: Request, res: Response):
       // but it won't be persisted until we add the proper storage method
 
       // Return the virtual orchestrator team structure
+      const inProcessStatus = getInProcessRuntimeStatusMap(this.agentRegistrationService);
       const orchestratorTeam = buildOrchestratorTeam(
         orchestratorStatus?.agentStatus || CREWLY_CONSTANTS.AGENT_STATUSES.INACTIVE,
         orchestratorStatus,
-        { projectIds: updates.projectIds }
+        { projectIds: updates.projectIds },
+        inProcessStatus
       );
 
       res.json({

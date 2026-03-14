@@ -13,7 +13,7 @@
 /**
  * Valid channel types for chat conversations
  */
-export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'google_chat', 'telegram', 'api'] as const;
+export const CHAT_CHANNEL_TYPES = ['crewly_chat', 'slack', 'telegram', 'api'] as const;
 
 /**
  * Channel type for a chat conversation
@@ -29,9 +29,6 @@ export type ChatChannelType = (typeof CHAT_CHANNEL_TYPES)[number];
 export function inferChannelTypeFromConversationId(conversationId: string): ChatChannelType {
   if (conversationId.startsWith('slack-')) {
     return 'slack';
-  }
-  if (conversationId.startsWith('gchat-') || conversationId.startsWith('google-chat-')) {
-    return 'google_chat';
   }
   if (conversationId.startsWith('telegram-')) {
     return 'telegram';

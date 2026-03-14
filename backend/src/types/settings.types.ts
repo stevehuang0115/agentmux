@@ -424,8 +424,17 @@ export function mergeSettings(
   const existingApiKeys = existing.apiKeys ?? { global: {} };
   const updatedApiKeys = updates.apiKeys;
 
+  // Deep merge runtimeCommands with defaults so new runtimes (e.g. crewly-agent)
+  // always have commands even when loaded from old settings files.
+  const defaultRuntimeCommands = getDefaultSettings().general.runtimeCommands;
+  const mergedRuntimeCommands = {
+    ...defaultRuntimeCommands,
+    ...existing.general.runtimeCommands,
+    ...updates.general?.runtimeCommands,
+  };
+
   return {
-    general: { ...existing.general, ...updates.general },
+    general: { ...existing.general, ...updates.general, runtimeCommands: mergedRuntimeCommands },
     chat: { ...existing.chat, ...updates.chat },
     skills: { ...existing.skills, ...updates.skills },
     apiKeys: updatedApiKeys
