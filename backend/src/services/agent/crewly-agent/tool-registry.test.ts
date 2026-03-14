@@ -1003,7 +1003,7 @@ describe('Tool Registry', () => {
   });
 
   describe('report_status', () => {
-    it('should report status with auto-injected projectPath', async () => {
+    it('should send status via chat API with formatted message', async () => {
       mockClient.post.mockResolvedValue({
         success: true,
         data: { acknowledged: true },
@@ -1016,12 +1016,47 @@ describe('Tool Registry', () => {
       });
 
       expect(result.acknowledged).toBe(true);
-      expect(mockClient.post).toHaveBeenCalledWith('/teams/members/register', expect.objectContaining({
-        sessionName: 'crewly-orc',
+      expect(mockClient.post).toHaveBeenCalledWith('/chat/agent-response', {
+        content: '[DONE] Agent crewly-orc: Task completed',
+        senderName: 'crewly-orc',
+        senderType: 'agent',
+      });
+    });
+
+    it('should auto-complete tasks when status is done', async () => {
+      mockClient.post.mockResolvedValue({
+        success: true,
+        data: { acknowledged: true },
+        status: 200,
+      });
+
+      await (tools.report_status as any).execute({
         status: 'done',
-        summary: 'Task completed',
-        projectPath: '/test/project',
-      }));
+        summary: 'Feature implemented',
+      });
+
+      expect(mockClient.post).toHaveBeenCalledWith(
+        '/task-management/complete-by-session',
+        { sessionName: 'crewly-orc' },
+      );
+    });
+
+    it('should not auto-complete tasks when status is in_progress', async () => {
+      mockClient.post.mockResolvedValue({
+        success: true,
+        data: { acknowledged: true },
+        status: 200,
+      });
+
+      await (tools.report_status as any).execute({
+        status: 'in_progress',
+        summary: 'Working on it',
+      });
+
+      expect(mockClient.post).not.toHaveBeenCalledWith(
+        '/task-management/complete-by-session',
+        expect.anything(),
+      );
     });
   });
 

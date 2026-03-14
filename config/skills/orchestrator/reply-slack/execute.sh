@@ -134,6 +134,24 @@ if [ -n "$TEXT" ]; then
   TEXT="${TEXT//\\n/$_NL}"
 fi
 
+# Auto-prefix with session name so Slack messages are attributable.
+# Uses CREWLY_SESSION_NAME env var (set by the runtime for all agent sessions).
+if [ -n "${CREWLY_SESSION_NAME:-}" ] && [ -n "$TEXT" ]; then
+  # Extract display name from session format: "crewly-{team}-{name}-{uuid}" → {Name}
+  # Fallback: "crewly-orc" → "Orc"
+  IFS='-' read -ra _PARTS <<< "$CREWLY_SESSION_NAME"
+  if [ ${#_PARTS[@]} -ge 3 ]; then
+    _NAME_PART="${_PARTS[2]}"
+  else
+    _NAME_PART="${_PARTS[${#_PARTS[@]}-1]}"
+  fi
+  _CAPITALIZED="$(echo "${_NAME_PART:0:1}" | tr '[:lower:]' '[:upper:]')${_NAME_PART:1}"
+  # Only prefix if not already prefixed (avoid double-prefix on retries)
+  if [[ "$TEXT" != "["* ]]; then
+    TEXT="[${_CAPITALIZED}] ${TEXT}"
+  fi
+fi
+
 # Prevent ambiguous uploads.
 if [ -n "$IMAGE_PATH" ] && [ -n "$FILE_PATH" ]; then
   error_exit "Use either --image or --file, not both."
