@@ -107,7 +107,7 @@ export function Installing({ provider, onComplete }: InstallingProps): React.Rea
           tools.push({ command: 'claude', pkg: '@anthropic-ai/claude-code' });
         }
         if (provider === 'gemini' || provider === 'both') {
-          tools.push({ command: 'gemini', pkg: '@anthropic-ai/gemini-cli' });
+          tools.push({ command: 'gemini', pkg: '@google/gemini-cli' });
         }
 
         for (const tool of tools) {
