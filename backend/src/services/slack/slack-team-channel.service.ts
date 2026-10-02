@@ -87,6 +87,7 @@ import { renderSlackThreadContext } from './slack-thread-context.service.js';
 import type { SlackAgentIdentityService } from './slack-agent-identity.service.js';
 import type { SlackTypingPlaceholderService, TypingKeyParts } from './slack-typing-placeholder.service.js';
 import type { ChannelTokenOps } from './slack-channel-members.js';
+import { trackSlackDelivery, SLACK_DELIVERY_METADATA_KEY, type SlackOutboundDelivery } from './slack-outbound-delivery.js';
 
 // ---------------------------------------------------------------------------
 // Dependency contracts (narrow so tests can pass plain fakes)
@@ -132,7 +133,7 @@ export type TeamChannelIdentityApi = Pick<
   Partial<Pick<SlackAgentIdentityService, 'findByBotUserId'>>;
 
 /** The slice of ChatV2Service this service uses. */
-export type TeamChannelChatApi = Pick<
+export type TeamChannelChatApi = Partial<Pick<ChatV2Service, 'updateMessageMetadata'>> & Pick<
   ChatV2Service,
   | 'createHuddle'
   | 'setHuddleMembers'
@@ -741,7 +742,8 @@ export class SlackTeamChannelService {
 
   private readonly onChatMessage = (dto: ChatMessageDTO): void => {
     if (dto.senderType === 'agent') this.noteAgentActivity(dto.channelId, dto.threadId ?? null, 'here');
-    void this.mirrorOutbound(dto);
+    if (dto.senderType === 'agent') trackSlackDelivery(dto.id, this.mirrorOutboundDetailed(dto).then((r) => r.delivery));
+    else void this.mirrorOutbound(dto);
   };
   private started = false;
   /** Per-team serialisation so two team-saved events cannot create two channels. */
@@ -3743,23 +3745,35 @@ export class SlackTeamChannelService {
    * @returns True when a Slack post was attempted
    */
   async mirrorOutbound(dto: ChatMessageDTO): Promise<boolean> {
+    return (await this.mirrorOutboundDetailed(dto)).attempted;
+  }
+
+  /**
+   * {@link mirrorOutbound} with the outcome: the Slack channel + ts the reply
+   * landed at (also stored on the chat message), or Slack's error.
+   *
+   * @param dto - The chat-v2 message
+   * @returns Whether a post was attempted, and its delivery (null when not meant for Slack)
+   */
+  async mirrorOutboundDetailed(dto: ChatMessageDTO): Promise<{ attempted: boolean; delivery: SlackOutboundDelivery | null }> {
+    const skipped: { attempted: boolean; delivery: SlackOutboundDelivery | null } = { attempted: false, delivery: null };
     try {
       // Every reason a reply does not reach Slack is logged. Until now all
       // four were silent `return false`, so an agent could answer, be told
       // the reply was delivered, and leave the owner staring at an unanswered
       // thread with nothing in the log to explain it (2026-09-19, #think-tank).
-      const skip = (reason: string): false => {
+      const skip = (reason: string): typeof skipped => {
         this.logger.info('Agent reply not mirrored to Slack', {
           reason,
           channelId: dto.channelId,
           sender: dto.senderId,
         });
-        return false;
+        return skipped;
       };
       if (dto.senderType === 'user' && isOwnerTypedInCrewly(dto) && !isDriveModeRow(dto)) {
         await this.load();
         const room = this.findByChatChannelId(dto.channelId);
-        if (room && isAdhocMapping(room)) return await this.mirrorOwnerPost(room, dto);
+        if (room && isAdhocMapping(room)) return { attempted: await this.mirrorOwnerPost(room, dto), delivery: null };
       }
       // A colleague agent on another machine: its post was made in Slack by
       // that machine and reached this one from Slack, stored as a user turn on
@@ -3808,38 +3822,82 @@ export class SlackTeamChannelService {
         // same step as the resolve: as two steps, a final answer landing in
         // between found nothing to replace and the re-opened placeholder then
         // stayed under it (2026-09-28).
-        if (isInterim(dto)) await this.deps.typing.resolve(typingKey, text, typingIdentity, { reopen: 'typing' });
-        else await this.deps.typing.resolve(typingKey, text, typingIdentity);
+        let postedTs = '';
+        const onMessageTs = (ts: string): void => { postedTs = ts; };
+        if (isInterim(dto)) await this.deps.typing.resolve(typingKey, text, typingIdentity, { reopen: 'typing', onMessageTs });
+        else await this.deps.typing.resolve(typingKey, text, typingIdentity, { onMessageTs });
+        const delivery = this.recordDelivery(dto, mapping.slackChannelId, postedTs, threadTs);
         this.logger.info('Agent reply mirrored to Slack', {
           slackChannel: mapping.slackChannelName,
           sender: dto.senderId,
           threaded: Boolean(threadTs),
           via: 'typing-placeholder',
+          ts: postedTs || undefined,
         });
-        return true;
+        return { attempted: true, delivery };
       }
 
-      await this.deps.slack.sendMessage({
+      const sentTs = await this.deps.slack.sendMessage({
         channelId: mapping.slackChannelId,
         text,
         threadTs,
         skipChatV2Mirror: true,
+        senderSession: dto.senderId,
         ...identity,
       });
+      const delivery = this.recordDelivery(dto, mapping.slackChannelId, sentTs, threadTs);
       this.logger.info('Agent reply mirrored to Slack', {
         slackChannel: mapping.slackChannelName,
         sender: dto.senderId,
         threaded: Boolean(threadTs),
+        ts: sentTs || undefined,
       });
-      return true;
+      return { attempted: true, delivery };
     } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
       this.logger.warn('Outbound mirror to Slack failed', {
         channelId: dto.channelId,
         sender: dto.senderId,
+        error,
+      });
+      // The post was attempted for a Slack-mapped room and failed: the
+      // reply call tells the agent instead of reporting success.
+      const mapped = this.findByChatChannelId(dto.channelId);
+      return {
+        attempted: true,
+        delivery: mapped ? { delivered: false, slackChannelId: mapped.slackChannelId, error } : null,
+      };
+    }
+  }
+
+  /**
+   * Store where a mirrored reply landed on its chat message, in the shape
+   * inbound messages use, so the Slack side can be audited from our store.
+   *
+   * @param dto - The mirrored message
+   * @param slackChannelId - Slack channel posted to
+   * @param ts - Slack ts of the message that carries the reply ('' when unknown)
+   * @param threadTs - Thread the reply is in
+   * @returns The delivery
+   */
+  private recordDelivery(dto: ChatMessageDTO, slackChannelId: string, ts: string, threadTs?: string | null): SlackOutboundDelivery {
+    const delivery: SlackOutboundDelivery = {
+      delivered: true,
+      slackChannelId,
+      ...(ts ? { ts } : {}),
+      ...(threadTs ? { threadTs } : {}),
+    };
+    try {
+      this.deps.chat.updateMessageMetadata?.(dto.id, {
+        [SLACK_DELIVERY_METADATA_KEY]: { slackChannelId, ts: ts || null, threadTs: threadTs ?? null },
+      });
+    } catch (err) {
+      this.logger.warn('Could not store the Slack ts on the mirrored message', {
+        messageId: dto.id,
         error: err instanceof Error ? err.message : String(err),
       });
-      return false;
     }
+    return delivery;
   }
 
   /**
@@ -3936,9 +3994,12 @@ export class SlackTeamChannelService {
    *
    * @param mapping - Channel mapping
    * @param dto - The agent message (no thread)
-   * @returns True when the post was attempted
+   * @returns The attempt and its delivery (Slack's ts is stored on the chat row)
    */
-  private async postTopLevel(mapping: SlackTeamChannelMapping, dto: ChatMessageDTO): Promise<boolean> {
+  private async postTopLevel(
+    mapping: SlackTeamChannelMapping,
+    dto: ChatMessageDTO,
+  ): Promise<{ attempted: boolean; delivery: SlackOutboundDelivery | null }> {
     let done: () => void = () => undefined;
     this.rootPosts.set(dto.id, new Promise<void>((resolve) => (done = resolve)));
     try {
@@ -3950,9 +4011,11 @@ export class SlackTeamChannelService {
         channelId: mapping.slackChannelId,
         text,
         skipChatV2Mirror: true,
+        senderSession: dto.senderId,
         ...identity,
       });
       if (ts) this.recordSlackRoot(dto, mapping, ts);
+      const delivery = this.recordDelivery(dto, mapping.slackChannelId, ts);
       this.logger.info('Agent reply mirrored to Slack', {
         slackChannel: mapping.slackChannelName,
         sender: dto.senderId,
@@ -3960,7 +4023,7 @@ export class SlackTeamChannelService {
         via: 'top-level',
         messageId: dto.id,
       });
-      return true;
+      return { attempted: true, delivery };
     } finally {
       done();
       this.rootPosts.delete(dto.id);
