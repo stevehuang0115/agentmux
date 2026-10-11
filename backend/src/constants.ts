@@ -2630,6 +2630,27 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	LOW_DISK_REPORT_ITEMS: 5,
 	/** Timeout of one `du -sk` size probe (ms). */
 	DU_TIMEOUT_MS: 60_000,
+	/** Runaway-file watcher (crewly#1078): how often agent scratch dirs and worktrees are scanned (1 minute). */
+	RUNAWAY_CHECK_INTERVAL_MS: 60 * 1000,
+	/** A file this big in an agent dir is reported to the owner (5 GB); if it is also still growing, its writer is stopped. */
+	RUNAWAY_FILE_BYTES: 5 * 1024 ** 3,
+	/** A file that grew by this much per minute between two scans is a runaway whatever its size (1 GB/min). */
+	RUNAWAY_GROWTH_BYTES_PER_MIN: 1024 ** 3,
+	/** Files smaller than this are never tracked between scans (cheap pre-filter, 256 MB). */
+	RUNAWAY_TRACK_MIN_BYTES: 256 * 1024 ** 2,
+	/** Bytes of a stopped runaway file kept (the head, so the agent can see what it was writing, 1 MB). */
+	RUNAWAY_KEEP_HEAD_BYTES: 1024 ** 2,
+	/** How deep under each watched dir files are looked for. */
+	RUNAWAY_SCAN_DEPTH: 8,
+	/** Cap on directory entries visited per scan. */
+	RUNAWAY_SCAN_MAX_ENTRIES: 200_000,
+	/** Wait after SIGTERM before SIGKILL for the writer (ms). */
+	RUNAWAY_KILL_GRACE_MS: 3000,
+	/** Timeout of the `lsof` that finds a file's writers (ms). */
+	RUNAWAY_LSOF_TIMEOUT_MS: 10_000,
+	/** One line added to every agent's start prompt. */
+	PROMPT_HINT:
+		'Disk hygiene: never let a command or script write an unbounded file. When you redirect or concatenate output (`> file`, `>> file`, `cat a b > all.md`), cap it (`| head -c 50M`, `| head -n 100000`) and never build a file from its own output. A file in your scratch dir or worktree that grows past a few GB is stopped by Crewly and the owner is alerted.',
 	/** State file under CREWLY_HOME remembering when the owner was last told about low disk. */
 	STATE_FILENAME: 'disk-janitor-state.json',
 	/**

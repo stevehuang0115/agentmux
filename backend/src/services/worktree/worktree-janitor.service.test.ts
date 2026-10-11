@@ -627,4 +627,27 @@ describe('WorktreeJanitorService', () => {
 			expect(a).toBe(b);
 		});
 	});
+
+	describe('runaway files (crewly#1078)', () => {
+		it('scans the scratch roots and alerts the owner through the low-disk notifier', async () => {
+			const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'runaway-svc-'));
+			try {
+				const f = path.join(scratch, 'all.md');
+				fs.closeSync(fs.openSync(f, 'w'));
+				fs.truncateSync(f, WORKTREE_JANITOR_CONSTANTS.RUNAWAY_FILE_BYTES + 1);
+				const notifyOwner = jest.fn().mockResolvedValue(true);
+				const j = janitor(fx, { scratchRoots: [scratch], notifyOwner });
+				const out = await j.checkRunawayFiles();
+				expect(out).toHaveLength(1);
+				expect(notifyOwner).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining(f) }));
+			} finally {
+				fs.rmSync(scratch, { recursive: true, force: true });
+			}
+		});
+
+		it('does nothing when the kill switch is on', async () => {
+			const j = janitor(fx, { env: { CREWLY_WORKTREE_JANITOR: '0' } });
+			expect(await j.checkRunawayFiles()).toEqual([]);
+		});
+	});
 });
