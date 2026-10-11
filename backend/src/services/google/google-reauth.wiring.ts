@@ -164,7 +164,7 @@ export function createReauthNotifierDeps(input: ReauthWiringInput): ReauthNotifi
       return false;
     },
     status: () => tokens().status(),
-    clearTokenCache: (account) => tokens().clearCache(account),
+    clearTokenCache: (account) => tokens().clearCacheFor(account),
     tellAgent: input.sendToAgent,
   };
 }

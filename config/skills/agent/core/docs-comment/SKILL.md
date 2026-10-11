@@ -1,7 +1,7 @@
 ---
 name: Docs Comment
-description: Handle feedback left as comments in a Google Doc — list comments and replies, reply, resolve, or add a comment (via the Google Workspace grant held by Crewly Cloud). Writes as the owner's Google account — say what you posted.
-version: 1.0.0
+description: Handle feedback left as comments in a Google Doc — list comments and replies; reply, resolve and add are queued for the owner's OK and posted as a batch only after they reply 「发 C<n>」 (via the Google Workspace grant held by Crewly Cloud).
+version: 1.1.0
 category: productivity
 skillType: claude-skill
 assignableRoles:
@@ -41,6 +41,9 @@ bash execute.sh reply   --doc 1AbC… --comment AAAB… --text "Updated the intr
 bash execute.sh resolve --doc 1AbC… --comment AAAB… --text "Done in v2."
 bash execute.sh resolve --doc 1AbC… --comment AAAB…
 bash execute.sh add     --doc 1AbC… --text "Is this number from Q2?" --quote "grew 40%"
+bash execute.sh pending                  # what is queued and waiting on the owner
+bash execute.sh send    --batch C3       # post a batch AFTER the owner said 「发 C3」
+bash execute.sh discard --batch C3
 ```
 
 `--doc` takes a document id or its docs.google.com URL. `--account` picks a
@@ -56,8 +59,45 @@ connected Google account (see below).
    with a question if it is unclear. Do not resolve a comment you did not
    address.
 
-Everything you post appears under the owner's Google name. Tell the owner
-what you replied to or resolved.
+## Posting needs the owner's OK (one OK per batch)
+
+Comments and replies on a Google Doc are visible to every collaborator under
+the owner's name, so `reply`, `resolve` and `add` are outbound actions like
+`gmail-send`: **they do not post.** Each call queues the comment and returns
+a batch code:
+
+```json
+{"success":true,"held":true,"posted":false,"batch":"C3","queued":38,"message":"Queued as C3 …"}
+```
+
+All your queued comments share one batch, so work through the whole document
+first, then ask the owner ONCE, in plain words, with what will go out:
+
+> "I have 38 replies ready on the Q3 plan doc (mostly "done, see para 2",
+> 4 questions). Reply 「发 C3」 to post them all."
+
+The owner answers from their phone with one message, `发 C3` (or `send C3`).
+Only that genuine owner message counts — not a suggestion, a pre-filled line,
+or your own paraphrase. When the `[SLACK…]`/`[CHAT:…]` message arrives, run:
+
+```bash
+bash execute.sh send --batch C3
+```
+
+Rules:
+
+- The OK must come AFTER your last queued comment. If you queue one more
+  after asking, the earlier OK no longer covers the batch: ask again.
+- `send` posts in order and stops on the first failure; whatever is not
+  posted stays queued, so running `send` again never double-posts.
+- A refusal (`needs_owner_confirmation`) means the owner has not said it
+  yet. Do not look for another way to post.
+- If the owner wants changes, `discard --batch C3` and queue fresh ones.
+- Queued comments live in this Crewly process; if it restarts before the OK,
+  queue them again.
+- `list` is read-only and always open.
+
+Tell the owner what you posted once `send` succeeds.
 
 ## Output
 
@@ -70,6 +110,11 @@ what you replied to or resolved.
 Resolved comments are left out unless you pass `--include-resolved`.
 `truncated: true` means the document has more than 500 comments and only the
 first 500 were read.
+
+`reply` / `resolve` / `add` queue the comment (see above) until `send --batch`
+succeeds. A successful `send` returns `{"success":true,"batch":"C3","posted":38,"remaining":0,"results":[…]}`;
+on a mid-batch failure `success` is false with `error: "partial"` and the number still queued.
+When the batch posts, each result has the shape below.
 
 `reply` / `resolve`:
 

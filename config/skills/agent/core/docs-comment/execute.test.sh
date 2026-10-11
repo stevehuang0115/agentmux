@@ -30,6 +30,14 @@ class H(BaseHTTPRequestHandler):
             return self._send(403, {'success': False, 'error': 'reauth_required',
                                     'message': 'Replying to or adding comments on this document needs Google Drive edit access, which this Google account has not granted yet.',
                                     'hint': 'Ask the owner to reconnect Google Drive: run the google-connect skill with --product drive.'})
+        if '/docs/held/' in self.path:
+            return self._send(202, {'success': True, 'data': {'held': True, 'batch': 'C3', 'queued': 2, 'message': 'Queued as C3'}})
+        if self.path.startswith('/api/google/doc-comment-batches'):
+            if method == 'GET':
+                return self._send(200, {'success': True, 'data': {'batches': [{'code': 'C3', 'agentSession': 'ella', 'items': [{'action': 'reply', 'docId': 'd1', 'commentId': 'c1', 'text': 'Fixed'}]}]}})
+            if '/C9/' in self.path:
+                return self._send(403, {'success': False, 'error': 'needs_owner_confirmation', 'message': 'The owner has not confirmed batch C9'})
+            return self._send(200, {'success': True, 'data': {'batch': 'C3', 'posted': 2, 'remaining': 0}})
         if method == 'GET':
             return self._send(200, {'success': True, 'data': {'docId': 'd1', 'comments': [COMMENT], 'truncated': False}})
         if self.path.endswith('/replies'):
@@ -92,6 +100,26 @@ OUT=$(run reply --doc narrow --comment c1 --text "x"); CODE=$?
 check "reauth: exit code" "$CODE" "1"
 check "reauth: reason" "$(printf '%s' "$OUT" | jq -r '.reason')" "reauth_required"
 check "reauth: hint names the one-tap path" "$(printf '%s' "$OUT" | jq -r '.hint' | grep -c 'google-connect skill with --product drive')" "1"
+
+# a held comment is reported as queued, never as posted
+for ACT in "reply --doc held --comment c1 --text x" "resolve --doc held --comment c1" "add --doc held --text x"; do
+  OUT=$(run $ACT)
+  check "held (${ACT%% *}): output" "$OUT" '{"success":true,"held":true,"posted":false,"batch":"C3","queued":2,"message":"Queued as C3"}'
+done
+
+# pending / send / discard
+OUT=$(run pending)
+check "pending: request" "$(req)" 'GET /api/google/doc-comment-batches null'
+check "pending: output" "$OUT" '{"success":true,"batches":[{"batch":"C3","agent":"ella","queued":1,"items":[{"action":"reply","docId":"d1","commentId":"c1","text":"Fixed","quote":null}]}]}'
+OUT=$(run send --batch C3)
+check "send: request" "$(req)" 'POST /api/google/doc-comment-batches/C3/send {}'
+check "send: output" "$OUT" '{"success":true,"batch":"C3","posted":2,"remaining":0}'
+run discard --batch C3 >/dev/null
+check "discard: request" "$(req)" 'POST /api/google/doc-comment-batches/C3/discard {}'
+OUT=$(run send --batch C9); CODE=$?
+check "send refused: exit code" "$CODE" "1"
+check "send refused: reason" "$(printf '%s' "$OUT" | jq -r '.reason')" "needs_owner_confirmation"
+check "send needs --batch" "$(run_err send | grep -c 'batch')" "1"
 
 # argument validation (no request sent)
 check "no command" "$(run_err --doc d1 | grep -c 'command is required')" "1"

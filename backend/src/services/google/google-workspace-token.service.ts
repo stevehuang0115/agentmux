@@ -304,6 +304,24 @@ export class GoogleWorkspaceTokenService {
   }
 
   /**
+   * Forget the cached tokens of exactly one Google account — the one a failed
+   * call acted as — and leave every other account's untouched.
+   *
+   * Unlike {@link clearCache}, `undefined` does not mean "everything": it
+   * means the default connection (the cache slot an unqualified call uses),
+   * so a 401 or a missing-scope answer on the default account does not make
+   * every other connected account re-fetch its token.
+   *
+   * @param account - The Google account; undefined for the default connection
+   */
+  clearCacheFor(account: string | undefined): void {
+    for (const key of [...this.cached.keys()]) {
+      const slot = key.split('\0')[0];
+      if (slot === (account ?? '')) this.cached.delete(key);
+    }
+  }
+
+  /**
    * Whether Cloud holds a Workspace grant, and for which email.
    * Never throws for the two "not there" cases (no Cloud session / no grant);
    * those come back as `connected: false`.
