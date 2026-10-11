@@ -1266,6 +1266,18 @@ describe('TerminalController', () => {
 			expect(mockSession.write).toHaveBeenCalledWith('\x03');
 		});
 
+		it('should send Ctrl+U key (clears a stuck input box)', async () => {
+			mockReq = {
+				params: { sessionName: 'test-session' } as any,
+				body: { key: 'C-u' },
+			};
+
+			await terminalController.sendTerminalKey(mockReq as Request, mockRes as Response);
+
+			expect(mockSession.write).toHaveBeenCalledWith('\x15');
+			expect(mockRes.status).not.toHaveBeenCalledWith(400);
+		});
+
 		it('should send Escape key', async () => {
 			mockReq = {
 				params: { sessionName: 'test-session' } as any,

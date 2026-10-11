@@ -19,6 +19,8 @@
 # Returns:
 #   On claim: { success: true, claimed: true, workItem: {...}, claim: {...} }
 #   No match: { success: true, claimed: false, available: 0, message: "..." }
+#   Pending:  { success: true, claimed: false, claimPending: true, message: "..." } — the claim timed
+#             out and may still land; do not retry, check get-my-tasks later
 #   Error:    { error: "..." } on stderr, exit 1
 # =============================================================================
 set -euo pipefail
@@ -168,8 +170,18 @@ else
     }')
 fi
 
-CLAIM_RESPONSE=$(api_call POST "/task-pool/claim" "$CLAIM_BODY" 2>&1) || {
+# The claim is a write the server may apply long after this call gives up
+# (a slow pool-file rewrite queues behind other writes, crewly#1108). Bound
+# the wait and report "pending" instead of failing: a failure invites a blind
+# retry, which queues yet another write.
+CLAIM_RESPONSE=$(CREWLY_API_MAX_TIME="${POLL_TASKS_CLAIM_MAX_TIME:-90}" api_call POST "/task-pool/claim" "$CLAIM_BODY" 2>&1) || {
   CLAIM_ERROR="$CLAIM_RESPONSE"
+  # Timed out (curl 28), no HTTP answer (status 0 / 000) or a gateway timeout:
+  # the claim may still land. Do not retry; look at get-my-tasks later.
+  if printf '%s' "$CLAIM_ERROR" | grep -Eq 'exit code 28|"status":(0|000|408|502|503|504)[,}]'; then
+    jq -n '{success: true, claimed: false, claimPending: true, message: "Claim pending: the server has not answered yet and may still apply it. Do NOT retry the claim; check get-my-tasks in a minute to see whether the work item is yours."}'
+    exit 0
+  fi
   # 404 = no available items (race condition — someone else claimed it)
   if printf '%s' "$CLAIM_ERROR" | grep -q '"status":404'; then
     jq -n '{success: true, claimed: false, available: 0, message: "No work items available (claimed by another agent)"}'

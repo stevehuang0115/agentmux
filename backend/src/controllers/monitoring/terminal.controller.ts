@@ -909,7 +909,7 @@ export async function sendTerminalKey(req: Request, res: Response): Promise<void
 		const allowedKeys = [
 			'Enter', 'Return', 'Escape', 'Tab', 'Backspace', 'Delete',
 			'Up', 'Down', 'Right', 'Left', 'Home', 'End', 'PageUp', 'PageDown',
-			'C-c', 'C-d', 'C-z', 'C-l'
+			'C-c', 'C-d', 'C-z', 'C-l', 'C-u'
 		];
 		if (!allowedKeys.includes(key)) {
 			res.status(400).json({
@@ -1057,6 +1057,7 @@ function mapKeyToSequence(key: string): string {
 		'C-d': '\x04', // Ctrl+D
 		'C-z': '\x1a', // Ctrl+Z
 		'C-l': '\x0c', // Ctrl+L (clear)
+		'C-u': '\x15', // Ctrl+U (clear the input line)
 	};
 
 	return keyMap[key] ?? key;

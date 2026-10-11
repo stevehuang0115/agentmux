@@ -5912,6 +5912,19 @@ export const POOL_ARCHIVE_CONSTANTS = {
 } as const;
 
 /**
+ * Ongoing pruning of the task pool (crewly#1108). The pool file is rewritten
+ * whole on every write, and finished items and ended claims were never
+ * removed (13 MB, 5,600 claims): writes queued behind each other. Old
+ * finished items and ended claims move to the dated archive file.
+ */
+export const POOL_PRUNE_CONSTANTS = {
+	/** A finished item (and the ended claims on it) is kept in the live pool this long (ms) */
+	RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
+	/** How often the prune runs after boot (ms) */
+	INTERVAL_MS: 6 * 60 * 60 * 1000,
+} as const;
+
+/**
  * Harness onboarding (specs/onboarding-harness-login.md): detect, install and
  * log in to the agent CLIs ("harnesses") Crewly drives — Claude Code, Codex
  * and Gemini CLI. Shared by the backend REST API and the `crewly` CLI.

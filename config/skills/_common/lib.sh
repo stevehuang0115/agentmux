@@ -222,6 +222,12 @@ api_call() {
   local url="${CREWLY_API_URL}/api${endpoint}"
   _prune_skill_output
   local args=(-s -w '\n%{http_code}' -X "$method")
+  # Optional ceiling on the whole request (seconds). A caller that can tell
+  # "the server is slow" from "it failed" (poll-tasks' claim) sets it; curl
+  # then exits 28 instead of hanging until the skill runner kills the call.
+  if [ -n "${CREWLY_API_MAX_TIME:-}" ]; then
+    args+=(--max-time "$CREWLY_API_MAX_TIME")
+  fi
   # A raw file upload (app-data --upload): CREWLY_API_UPLOAD_FILE is sent as the
   # body, byte for byte, with CREWLY_API_UPLOAD_TYPE as its Content-Type and the
   # URI-encoded CREWLY_API_UPLOAD_NAME as X-File-Name. Everything else is JSON.

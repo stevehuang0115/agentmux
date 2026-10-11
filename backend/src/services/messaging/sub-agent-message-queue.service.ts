@@ -12,6 +12,7 @@
  */
 
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { LoggerService, ComponentLogger } from '../core/logger.service.js';
 import { OWNER_HOOK_MESSAGE_CONSTANTS, SUB_AGENT_QUEUE_CONSTANTS } from '../../constants.js';
 import { mkdirSync, existsSync } from 'fs';
@@ -35,6 +36,13 @@ export type QueueDropReason = 'aged-out' | 'capacity' | 'undeliverable';
 export type QueueDropListener = (sessionName: string, dropped: QueuedAgentMessage[], reason: QueueDropReason) => void;
 
 export interface QueuedAgentMessage {
+	/**
+	 * Stable identity of this queue entry. Flush matches entries by it, never
+	 * by text: two entries can carry identical text (a re-queue by `send`, a
+	 * reminder repeated later) and must stay distinguishable. Entries stored by
+	 * an older version get one when loaded.
+	 */
+	id?: string;
 	/** The raw data string to write to the agent's terminal */
 	data: string;
 	/** Timestamp (ms since epoch) when the message was enqueued */
@@ -168,6 +176,8 @@ export type QueuedMessageRefresher = (data: string, sessionName: string) => Prom
 export class SubAgentMessageQueue {
 	private static instance: SubAgentMessageQueue | null = null;
 	private pendingMessages = new Map<string, QueuedAgentMessage[]>();
+	/** Tail of each agent's flush chain: one flush per agent at a time. */
+	private flushTails = new Map<string, Promise<unknown>>();
 	private logger: ComponentLogger;
 	private readonly storePath: string;
 	/** Set while the store file is bad and could not be copied aside; saves copy it aside first. */
@@ -235,7 +245,9 @@ export class SubAgentMessageQueue {
 		for (const [sessionName, messages] of Object.entries(stored.queues)) {
 			const current = this.pendingMessages.get(sessionName) ?? [];
 			const have = new Set(current.map((m) => `${m.queuedAt}|${m.data}`));
-			const valid = (messages ?? []).filter((m) => m && typeof m.data === 'string' && typeof m.queuedAt === 'number');
+			const valid = (messages ?? [])
+				.filter((m) => m && typeof m.data === 'string' && typeof m.queuedAt === 'number')
+				.map((m) => (typeof m.id === 'string' && m.id ? m : { ...m, id: randomUUID() }));
 			const fresh = valid.filter((m) => Date.now() - m.queuedAt <= SUB_AGENT_QUEUE_CONSTANTS.MAX_AGE_MS);
 			if (fresh.length < valid.length) {
 				this.unreportedDrops.push({ sessionName, dropped: valid.filter((m) => !fresh.includes(m)), reason: 'aged-out' });
@@ -579,6 +591,7 @@ export class SubAgentMessageQueue {
 		}
 
 		const item: QueuedAgentMessage = {
+			id: randomUUID(),
 			data,
 			queuedAt: Date.now(),
 			sessionName,
@@ -630,17 +643,20 @@ export class SubAgentMessageQueue {
 	}
 
 	/**
-	 * Remove the most recently queued copy of a message (the one a `send`
-	 * inside {@link flush} put back at the end).
+	 * Remove the copy a `send` inside {@link flush} put back on the queue.
+	 * Only entries that were not queued before the send (their ids are not in
+	 * `knownIds`) are candidates, so an identical message queued earlier or by
+	 * someone else is never taken by mistake.
 	 *
 	 * @param sessionName - The agent session
-	 * @param data - The message
+	 * @param data - The message text the send re-queued
+	 * @param knownIds - Ids of the entries queued before the send
 	 */
-	private removeLastCopy(sessionName: string, data: string): void {
+	private removeRequeuedCopy(sessionName: string, data: string, knownIds: ReadonlySet<string | undefined>): void {
 		const queue = this.pendingMessages.get(sessionName);
 		if (!queue) return;
 		for (let i = queue.length - 1; i >= 0; i--) {
-			if (queue[i].data === data) {
+			if (queue[i].data === data && !knownIds.has(queue[i].id)) {
 				queue.splice(i, 1);
 				return;
 			}
@@ -670,6 +686,27 @@ export class SubAgentMessageQueue {
 		sessionName: string,
 		send: (data: string) => Promise<{ queued?: boolean; success?: boolean; error?: string }>,
 		gapMs = 0,
+	): Promise<{ delivered: number; deferred: number; failed: number; skippedStale: number }> {
+		// One flush per agent at a time: a second one (idle hook + register +
+		// timer) waits its turn, then sees only what is left. Two overlapping
+		// flushes would both dequeue, deliver out of order and re-queue each
+		// other's messages.
+		const previous = this.flushTails.get(sessionName) ?? Promise.resolve();
+		const run = previous.then(() => this.flushLocked(sessionName, send, gapMs));
+		const tail = run.catch(() => undefined);
+		this.flushTails.set(sessionName, tail);
+		try {
+			return await run;
+		} finally {
+			if (this.flushTails.get(sessionName) === tail) this.flushTails.delete(sessionName);
+		}
+	}
+
+	/** The body of {@link flush}; callers go through the per-agent lock. */
+	private async flushLocked(
+		sessionName: string,
+		send: (data: string) => Promise<{ queued?: boolean; success?: boolean; error?: string }>,
+		gapMs: number,
 	): Promise<{ delivered: number; deferred: number; failed: number; skippedStale: number }> {
 		const out = { delivered: 0, deferred: 0, failed: 0, skippedStale: 0 };
 		const pending = this.pruneNoLongerNeeded(sessionName, this.dequeueAll(sessionName), out);
@@ -738,6 +775,7 @@ export class SubAgentMessageQueue {
 					continue;
 				}
 				const sentText = handOver ? handOver.message : withSurfacedNotice(queued);
+				const knownIds = new Set((this.pendingMessages.get(sessionName) ?? []).map((m) => m.id));
 				const result = await send(sentText);
 				if (handOver) {
 					// Held again or failed: not delivered (the hand-over runs again next time).
@@ -749,7 +787,7 @@ export class SubAgentMessageQueue {
 				} else if (result?.queued) {
 					// `send` re-queued it at the back; take that copy out — it goes
 					// back at its original place, with its original queuedAt.
-					this.removeLastCopy(sessionName, sentText);
+					this.removeRequeuedCopy(sessionName, sentText, knownIds);
 					heldAgain = pending.slice(i);
 					out.deferred += heldAgain.length;
 					this.logger.info('Queued message deferred again — agent still busy; it and the messages after it keep their order', {
@@ -779,7 +817,7 @@ export class SubAgentMessageQueue {
 			// Back at the front, in their original order, ahead of anything
 			// queued meanwhile (failed ones came before the held one).
 			const queue = (this.pendingMessages.get(sessionName) ?? []).filter(
-				(m) => !heldAgain.some((h) => h.data === m.data) && !failedAgain.some((f) => f.data === m.data),
+				(m) => m.id === undefined || (!heldAgain.some((h) => h.id === m.id) && !failedAgain.some((f) => f.id === m.id)),
 			);
 			this.pendingMessages.set(sessionName, ownerFirst([...failedAgain, ...heldAgain, ...queue]));
 			this.save();

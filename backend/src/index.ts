@@ -123,7 +123,7 @@ import { parseSlackThreadKey } from './services/slack/slack-thread-key.js';
 import { LIVENESS_MONITOR_CONSTANTS, INPUT_CIRCUIT_CONSTANTS, INPUT_BLOCKED_RETRY_CONSTANTS } from './constants.js';
 import { InputBlockedRetryService } from './services/messaging/input-blocked-retry.service.js';
 import { driveCapabilities } from './services/drive/drive-agent.service.js';
-import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS } from './constants.js';
+import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
 import { InFlightTurnTracker } from './services/restart/in-flight-turn-tracker.service.js';
@@ -140,6 +140,7 @@ import type { RequestPriority } from './types/v2/request.types.js';
 import { createWorkItem, TERMINAL_WORK_ITEM_STATUSES } from './types/v2/work-item.types.js';
 import type { ChatMessageDTO } from './services/chat-v2/types.js';
 import { runPoolArchiveMigration } from './services/task-pool/pool-archive-migration.js';
+import { runPoolPrune } from './services/task-pool/pool-prune.js';
 import { createPtyTurnProbe } from './services/restart/turn-probe.js';
 import {
 	RestartDrainService,
@@ -270,6 +271,7 @@ import {
 import { createTeamHealthRouter } from './controllers/team-health/team-health.routes.js';
 import { traceHarness, traceTurnActivity } from './services/trace/trace-recorder.js';
 import { inputCircuitStats, setInputCircuitOpenListener } from './services/session/input-circuit-breaker.js';
+import { looksLikeShellPrompt } from './utils/screen-excerpt.js';
 import { harnessPastesSinceOutsideInput, shownMarkers } from './services/session/input-ledger.js';
 
 // ESM __dirname equivalent using import.meta.url
@@ -919,13 +921,26 @@ export class CrewlyServer {
 		// Ticket loop §4: one-time archive of old WorkItems (marker file makes
 		// it run once). Through the pool's own storage cache, so no later
 		// flush can write the archived items back. Never deletes.
+		const poolPruneLogger = LoggerService.getInstance().createComponentLogger('PoolPrune');
+		const pruneOnce = (): Promise<unknown> =>
+			runPoolPrune(TaskPoolService.getInstance().getStorage(), { logger: poolPruneLogger }).catch((pruneErr: unknown) => {
+				this.logger.warn('Task pool prune failed (pool left as is; retried next interval)', {
+					error: pruneErr instanceof Error ? pruneErr.message : String(pruneErr),
+				});
+			});
 		void runPoolArchiveMigration(TaskPoolService.getInstance().getStorage(), {
 			logger: LoggerService.getInstance().createComponentLogger('PoolArchive'),
-		}).catch((archiveErr: unknown) => {
-			this.logger.warn('Task pool one-time archive failed (pool left as is; retried next boot)', {
-				error: archiveErr instanceof Error ? archiveErr.message : String(archiveErr),
-			});
-		});
+		})
+			.catch((archiveErr: unknown) => {
+				this.logger.warn('Task pool one-time archive failed (pool left as is; retried next boot)', {
+					error: archiveErr instanceof Error ? archiveErr.message : String(archiveErr),
+				});
+			})
+			// Then keep it small: finished items and ended claims move to the
+			// archive, once now and every few hours (crewly#1108).
+			.then(pruneOnce);
+		const poolPruneTimer = setInterval(() => void pruneOnce(), POOL_PRUNE_CONSTANTS.INTERVAL_MS);
+		poolPruneTimer.unref?.();
 
 		// Atlas 2026-05-23 fix: wire the agent-liveness gate so claimFromPool /
 		// claimSpecificItem refuse to put a WI into `running` when the requesting
@@ -6900,6 +6915,15 @@ void (async () => {
 			};
 			// Every delivery refused for a while: automatic redelivery is slowed
 			// to a probe now and then, and the owner told once (crewly#1028).
+			// What the unreadable screen shows (redacted rows), so the owner can
+			// tell a dialog from a bare shell without opening the terminal.
+			const screenNote = (sessionName: string, state: string | undefined): string => {
+				if (state !== 'unknown') return '';
+				const excerpt = SessionCommandHelper.unreadableExcerpt(sessionName);
+				if (!excerpt) return '';
+				const hint = looksLikeShellPrompt(excerpt) ? ' It looks like the runtime exited to a shell prompt.' : '';
+				return `${hint}\nScreen (secrets masked):\n${excerpt.split('\n').map((l) => `> ${l}`).join('\n')}`;
+			};
 			setInputCircuitOpenListener((info) => {
 				traceHarness('guard.block', {
 					session: info.sessionName,
@@ -6958,7 +6982,7 @@ void (async () => {
 						const maxMin = Math.round(INPUT_CIRCUIT_CONSTANTS.PROBE_MAX_MS / 60000);
 						tell(
 							notice.sessionName,
-							`Needs you: ${notice.sessionName} has not received any message for ${minutes} min: ${what}, so Crewly refused to type over it (${notice.refusals} attempts). Crewly has stopped retrying every few seconds and now tries again only every few minutes (at most every ${maxMin} min). To fix it, open ${notice.sessionName}'s terminal and clear the input box (Ctrl+U), or press Enter if that text is yours. Delivery resumes on its own after that.`,
+							`Needs you: ${notice.sessionName} has not received any message for ${minutes} min: ${what}, so Crewly refused to type over it (${notice.refusals} attempts). Crewly has stopped retrying every few seconds and now tries again only every few minutes (at most every ${maxMin} min). To fix it, open ${notice.sessionName}'s terminal and clear the input box (Ctrl+U), or press Enter if that text is yours. Delivery resumes on its own after that.${screenNote(notice.sessionName, notice.blockedState)}`,
 							notice.message || undefined,
 						);
 						return;
@@ -6977,7 +7001,7 @@ void (async () => {
 						: `its input box holds ${notice.inputLength} characters of text not written by Crewly`;
 					tell(
 						notice.sessionName,
-						`Needs you: messages to ${notice.sessionName} are waiting because ${what}. Crewly will not type over it. Tried ${notice.refusals} times over ${minutes} min; it keeps retrying. Clear the agent's input (or answer its screen) to let them through.`,
+						`Needs you: messages to ${notice.sessionName} are waiting because ${what}. Crewly will not type over it. Tried ${notice.refusals} times over ${minutes} min; it keeps retrying. Clear the agent's input (or answer its screen) to let them through.${screenNote(notice.sessionName, notice.state)}`,
 						notice.message,
 					);
 				},
