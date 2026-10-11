@@ -60,10 +60,9 @@ On success the skill prints **one JSON line** that always names the `workItemId`
 Resolution order:
 
 1. `workItemId`, if you pass it — always wins.
-2. Otherwise, ONLY when you passed no id at all (no `workItemId`, `taskId` or
-   `absoluteTaskPath`): a lookup of the WorkItem currently `running` against your
+2. Otherwise, ONLY when you named no task (no `workItemId`, no `taskId`): a lookup of the WorkItem currently `running` against your
    `sessionName` (`GET /api/task-pool/items?status=running&target=<session>`).
-3. If you passed `taskId` or `absoluteTaskPath` without `workItemId`, the skill
+3. If you passed `taskId` without `workItemId`, the skill
    refuses (non-zero exit): it never substitutes your running item for an id you named.
 4. If nothing resolves, the skill exits non-zero with an error naming the
    session it searched. It never reports success without completing something.
