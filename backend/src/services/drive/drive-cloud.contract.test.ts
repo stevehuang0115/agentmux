@@ -50,3 +50,9 @@ describe('fetch answers', () => {
     });
   });
 });
+
+describe('op:log', () => {
+  it('a log push needs no id', () => {
+    expect(parseDriveRelayData({ v: 1, kind: 'drive', op: 'log', sessionId: 'drv_abcdefghijkl', instanceId: 'mac' })).toEqual({ v: 1, kind: 'drive', op: 'log', sessionId: 'drv_abcdefghijkl', instanceId: 'mac' });
+  });
+});

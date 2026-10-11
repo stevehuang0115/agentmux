@@ -293,3 +293,18 @@ describe('helpers', () => {
     expect(pickConversation([answered, waiting], SID, 'ella', false)?.conversationId).toBe('c2');
   });
 });
+
+describe('session log copy (op:log)', () => {
+  it('fetches the log with the machine token and stores both renderings; a malformed answer fails the push', async () => {
+    const save = jest.fn(async () => '/home/x/.crewly/drive-logs/2026-10-11-drv_abcdefghijkl.md');
+    const h = harness(
+      { '/machine/log': { id: SID, base: '2026-10-11-drv_abcdefghijkl', markdown: '# log', jsonl: '{}\n' } },
+      { logStore: { save } as unknown as DriveAgentDeps['logStore'] },
+    );
+    expect(await h.service.handle(push({ v: 1, kind: 'drive', op: 'log', sessionId: SID, instanceId: 'mac' }))).toBe('done');
+    expect(h.calls[0]).toMatchObject({ method: 'GET', url: `https://api.crewlyai.com/api/cloud/talk/session/${SID}/machine/log?instanceId=mac`, auth: 'Bearer machine-token' });
+    expect(save).toHaveBeenCalledWith('2026-10-11-drv_abcdefghijkl', '# log', '{}\n');
+    const bad = harness({ '/machine/log': { id: SID } }, { logStore: { save } as unknown as DriveAgentDeps['logStore'] });
+    expect(await bad.service.handle(push({ v: 1, kind: 'drive', op: 'log', sessionId: SID, instanceId: 'mac' }))).toBe('failed');
+  });
+});

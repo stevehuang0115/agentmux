@@ -2889,6 +2889,11 @@ void (async () => {
 								const found = await ProjectTicketService.getInstance().get(ticket.projectPath, ticket.id);
 								return found?.status === 'done' || found?.status === 'cancelled';
 							},
+							// The owner's voice decision goes into the ticket's record at once.
+							noteDecision: async ({ ticket, agentName, summary, answer }) => {
+								const { ProjectTicketService } = await import('./services/project-tickets/project-ticket.service.js');
+								await ProjectTicketService.getInstance().appendLog(ticket.projectPath, ticket.id, 'owner (Drive)', `Owner decided in Drive: "${answer}" (${agentName}: ${summary.slice(0, 160)}). Proceed on this.`);
+							},
 							store: new BriefingStateStore(),
 						}),
 					);
@@ -3176,6 +3181,8 @@ void (async () => {
 											ownerFeed: (sinceMs, limit) => chatService.getOwnerFeed({ sinceMs, limit }),
 											orchestratorRunning: () => getSessionBackendSync()?.sessionExists(ORCHESTRATOR_SESSION_NAME) ?? false,
 											orchestratorName: CLOUD_TALK_CONSTANTS.ORCHESTRATOR_DISPLAY_NAME,
+											// Charters and chore-free work lists for the high-level overview.
+											roster: async () => (await import('./services/team-roster/team-roster.service.js')).TeamRosterService.getInstance().getRoster(),
 										}),
 									),
 								cloud: {

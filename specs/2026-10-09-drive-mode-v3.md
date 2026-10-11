@@ -83,3 +83,69 @@ Owner feedback: items the owner asked for were read out as if the team asked; fi
   3. waits 12 s;
   4. drops the snapshot caches and uploads a fresh snapshot.
   A machine that does not answer in time is reported as `checked.timedOut` and read as "as of N minutes ago".
+
+## 7. Greet first (2026-10-11)
+
+Owner feedback: on start the voice "thought" for up to 25 s (the `fresh=true` check with the teams) before saying anything.
+
+- **The first utterance never waits on a tool call.** The kickoff turn asks for a greeting by name ("Hi Steve, …") and the choice: check in with all the teams, or something specific (the big picture of who is working on what is offered too). The voice instruction says the same (`Opening — greet FIRST`).
+- **The check with the teams runs in the background from the moment the session opens.** Cloud stores it in the session (`freshCheck`: running / done, machines asked, refreshed, timed out), so any auth node can wait on it. It pushes `op:'refresh'` to each live machine as before.
+- **`get_overview` no longer takes `fresh`.** It waits at most 10 s for a check still running, then says so (`checked.pending`: "one team is still reporting back"). A slow machine is `checked.timedOut`, read as "as of N minutes ago". Older clients can still send `fresh=1`: that waits for the whole check.
+- **Opening hold.** Until the owner speaks (or 45 s), Cloud hands no reply to the voice, so a reply never lands on top of the greeting.
+
+## 8. Turn state machine: topics and delivery (crewly-services `drive-flow.ts`)
+
+Cloud decides what the voice says next; the portal asks at each turn boundary (`POST /talk/session/:id/flow {event:'next'}`) and reports how the turn ended (`settle`). Pure functions over the session's `inbox` + `flow`; tested without I/O.
+
+**Topic discipline.** The owner's topic is the team or agent he last talked to (`send_to`, `ask_team`, `get_team`, `get_agent`, `recall`; replying to a delivered answer makes it his topic too). A reply of another topic is held, never injected mid-conversation:
+
+1. Held replies are marked (`heldAt`). At the next boundary the voice wraps up: "Is that all good for CE? Anything else on it?" (`wrap_up`; it does not mention the held reply).
+2. The owner says that is all (the voice calls `topic_done`), or is silent for 40 s, or the topic idles out (90 s): the voice offers: "Marketing also just replied — want to hear it now, or move on?" (`offer`; who, not what).
+3. Yes: `check_replies` hands them over. Not now: `hold_replies` parks them for the next session.
+
+The pending queue is ordered by priority (asks the owner > answer > update), then arrival. Acknowledgements and updates ride along with their conversation's answer and are dropped once it is in. A delivery alone does not make a topic (until the owner reacts, the queue reads on).
+
+**Delivery tracking, per reply:** `queued -> speaking -> heard`. `heard` only when the portal reports the turn was spoken to the end. A cut-off turn (interrupted, socket closed, page hidden, call), or one never settled (75 s), puts the reply back to `queued` with `redelivery`; three tries park it (`deferredAt`). `resume` (after a reconnect) recovers everything in flight and tells the voice where we were.
+
+**Next sessions.** Replies never heard stay in their session (kept 7 days instead of 1) and carry over: a new session copies them into its inbox, held, so they are offered, not read over the greeting. `GET /talk/session/missed` lists them (the portal start screen shows the count).
+
+**Wire:** `POST /:id/flow {event: next|settle|read|topic_done|hold|activity|resume, turnId?, heard?}`; the poll carries `flow: {topic, held, unheard}`.
+
+## 9. High-level overview (`get_org_overview`)
+
+For an owner who keeps the whole organisation in his head. Built with no LLM:
+
+- **Machine** (`drive-org-overview.ts`): per team, from the team roster (#1221: charter, paused, chore-free finished and open work), the snapshot's counts and items, and the waiting items: purpose, members, state (`needs_you` / `blocked` / `active` / `quiet` / `paused`), finished in 24 h (2 titles), in progress (2 titles), blocked, waiting on the owner, last activity; plus agent counts. Part of the snapshot (`org`); trimmed before items when the snapshot is too big.
+- **Cloud** (`drive-org.ts`): merges machines (an older machine's `org` is derived from its teams and items), returns totals, the top 5 active teams with one line each, in progress, blocked, waiting on the owner, the quiet teams ("and 5 more teams were quiet"), and a ready-made `summary` of about 25 seconds.
+- Offered as the first option in the greeting.
+
+## 10. Session log
+
+Every session leaves a record, kept on Cloud for 30 days (`drive_logs`) and copied to the owner's machine for a local Claude Code:
+
+- **Content:** timestamped transcript (owner and assistant turns, as transcribed), tool calls in brief, replies presented (ids) and their outcome (`heard` / `acked` / `decided` / `deferred` / `skipped` / `not_delivered`), decisions, reconnects, errors, and hiccups (`owner_confused`: "what is this about?" within 90 s of a presented reply; `repeated_item`; `cut_off`). Secrets are masked; text is clipped.
+- **Written by:** Cloud for what it runs (start, send/ask, recall, status, flow outcomes, end) and the portal for the rest (transcript, waiting-item tool calls, decisions, reconnects) through `POST /:id/log` in small batches.
+- **On the machine:** `op:'log'` (sent at the end of a session, and at the next start for a session that was never ended) makes each live machine fetch `GET /:id/machine/log` and write `~/.crewly/drive-logs/<YYYY-MM-DD>-<sessionId>.md` and `.jsonl` (kept 30 days, pruned on write; names validated).
+- **Reading:** `GET /api/drive-logs?limit=` and `GET /api/drive-logs/:id?format=md|jsonl` (OSS), the `drive-logs` orchestrator skill, or the files directly.
+
+## 11. The next session knows the last one; decisions are not asked twice
+
+- **Summary at start.** The start returns a compact summary of the previous two sessions (topics, decisions, deferred, not delivered). The kickoff gives it to the voice: do not repeat what was decided or heard; pick up what was deferred or not delivered.
+- **A decision is written where the team looks, at once.** The voice decides a waiting item with `answer_item` (never `send_to`): the decision card is answered, the ticket review accepted or sent back, the owner's words posted to the agent, and now a decision card tied to a project ticket also gets a ticket log line ("Owner decided in Drive: …", `BriefingDeps.noteDecision`).
+- **And suppressed in the briefing before the team acts.** The portal logs a `decision` event with the item's reference (`D-7` / `TKT-5` / `Q-…`). Until a status snapshot no longer holds the item, Cloud leaves it out of every briefing view (`alreadyDecided` lists them, "say only if asked"; `get_item` answers "you decided X on <date>, waiting for the team").
+- **Measured.** The first snapshot of the machine that holds the item (by agent name) which no longer lists it stamps `team_acted` in the log with the delay (`latencyMs`). The log's Decisions section shows "team acted after N s" or "team has not updated it yet".
+
+## 12. Reconnect, outages, and not repeating
+
+Transport: a WebSocket to Gemini Live (not WebRTC; there is no ICE state). Detected losses: socket close; `offline` / `online`; the voice owing an answer and silent for 20 s (watchdog); audio taken by the system (AudioContext `interrupted` / `suspended`, mic track ended or muted: an incoming call, another app); page hidden / `pagehide` (turn cut off at once) and `pageshow` / `visibilitychange` (connection replaced if away for 4 s or more).
+
+- **Shown at once:** "Connection lost — reconnecting…" (with a short lower tone, a higher one when it is back).
+- **Generate nothing while disconnected.** No turn is sent without a ready session; the turn in flight is reported cut off (Cloud queues the reply again); a decision that arrives after the moment passed is given back.
+- **Reconnect** with backoff 1, 2, 4, 8, 15 s, then every 15 s until 5 minutes after the drop; on return to the foreground or `online` it tries at once with a fresh budget.
+- **Audio the browser will not restart** (iOS after a call) shows one big Resume button and says why; the tap restarts audio and reconnects.
+- **Exactly one resume per recovery.** One turn on the live socket: "Sorry, we got cut off. We were on <topic>; I'd just said <short recap> — shall I continue?"; then it continues from the first thing the owner has not acknowledged. The reply that was being spoken is delivered again by Cloud (once, flagged "as I was saying"); a reply is spoken at most once per successful delivery (claimed by turn id on Cloud). Tested: an outage during the summary gives exactly one resume and no repeats.
+
+## 13. Persona, and facts only
+
+- **Persona.** The voice is Crewly, the owner's executive secretary and chief of staff: capable, warm, with personality, natural phrasing and brief acknowledgements, remembers the session, proactive in one short sentence. No invented human name (the product voice card already says "Crewly"). It replies in the language the owner just spoke (Chinese or English).
+- **Facts only; ask the team.** The voice answers only from facts it has (ticket text, agent reports, the status). When the owner wants more detail than those facts give, or asks the same follow-up a second time, it says "I'm not sure — let me ask <who>" and calls `ask_team(target, question)`: the owner's words go verbatim to the owning agent over the Drive channel (with the Drive session id, as any Drive message), the call is logged as `ask_team`, and the answer comes back as a normal queued item framed "<agent> answered your question about "<question>": …", under the topic rules above.

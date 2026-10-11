@@ -106,6 +106,7 @@ interface Harness {
   dir: string;
   ownerTurns: Array<{ channelId: string; root: string; lastAt: number }>;
   closedTickets: Set<string>;
+  noted: Array<{ ticket: { id: string }; agentName: string; answer: string }>;
 }
 
 /** A service over fakes. */
@@ -134,6 +135,7 @@ function harness(init: Partial<Harness['state']> = {}): Harness {
   const dismissOpenItem = jest.fn(async () => undefined);
   const ownerTurns: Harness['ownerTurns'] = [];
   const closedTickets = new Set<string>();
+  const noted: Harness['noted'] = [];
   const deps: BriefingDeps = {
     decisions: () => decisions,
     listRequests: async () => state.requests,
@@ -142,6 +144,9 @@ function harness(init: Partial<Harness['state']> = {}): Harness {
     dismissOpenItem,
     ownerTurns: async () => ownerTurns,
     isCardTicketClosed: async (t) => closedTickets.has(t.id),
+    noteDecision: async (input) => {
+      noted.push(input);
+    },
     roster: async () => [
       { agentSession: 'ella', displayName: 'Ella', teamName: 'Marketing' },
       { agentSession: 'leo', displayName: 'Leo', teamName: 'Content' },
@@ -159,7 +164,7 @@ function harness(init: Partial<Harness['state']> = {}): Harness {
     now: () => clock.now,
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as never,
   };
-  return { service: new BriefingService(deps), decisions, review, posted, replies, state, clock, dismissOpenItem, dir, ownerTurns, closedTickets };
+  return { service: new BriefingService(deps), decisions, review, posted, replies, state, clock, dismissOpenItem, dir, ownerTurns, closedTickets, noted };
 }
 
 afterEach(() => jest.restoreAllMocks());
@@ -285,6 +290,20 @@ describe('statusCheckTargets', () => {
 });
 
 describe('answers', () => {
+  it('a card tied to a ticket: the decision is written into the ticket record at once (not only spoken)', async () => {
+    const ticket = { projectId: 'p1', projectPath: '/p/ce', id: 'CE-12', title: 'Launch thread' };
+    const h = harness({ decisions: [decision({ ticket })] });
+    await h.service.answer('d:D-7', { optionKey: 'a' });
+    expect(h.noted).toMatchObject([{ ticket: { id: 'CE-12', projectPath: '/p/ce' }, agentName: 'Ella', answer: 'Post today' }]);
+  });
+
+  it('a failing note never blocks the answer', async () => {
+    const ticket = { projectId: 'p1', projectPath: '/p/ce', id: 'CE-12', title: 'Launch thread' };
+    const h = harness({ decisions: [decision({ ticket })] });
+    (h.service as unknown as { deps: BriefingDeps }).deps.noteDecision = async () => Promise.reject(new Error('disk full'));
+    expect(await h.service.answer('d:D-7', { text: 'go' })).toMatchObject({ status: 'done' });
+  });
+
   it('a card: an option goes to the decision service as voice', async () => {
     const h = harness({ decisions: [decision()] });
     const out = await h.service.answer('d:D-7', { optionKey: 'Post today' });

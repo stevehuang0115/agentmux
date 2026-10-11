@@ -64,6 +64,7 @@ import { createDesktopRouter } from '../controllers/desktop/desktop.routes.js';
 import { createTalkTranscribeRouter } from '../controllers/talk/talk-transcribe.routes.js';
 import { createTalkLiveTokenRouter } from '../controllers/talk/talk-live-token.controller.js';
 import { createTeamRosterRouter } from '../controllers/team-roster/team-roster.controller.js';
+import { createDriveLogsRouter } from '../controllers/drive-logs/drive-logs.controller.js';
 import { createBriefingRouter } from '../controllers/briefing/briefing.controller.js';
 import { createCanvaRouter } from '../controllers/canva/canva.routes.js';
 import { createAppsRouter } from '../controllers/apps/apps.routes.js';
@@ -242,6 +243,8 @@ export function createApiRoutes(apiController: ApiController): Router {
   router.use('/briefing', createBriefingRouter());
   // Team roster (specs/2026-10-10-team-roster.md): who owns what, ranked owner lookup
   router.use('/team-roster', createTeamRosterRouter());
+  // Drive mode session logs (specs/2026-10-09-drive-mode-v3.md §10): what was said, decided, missed
+  router.use('/drive-logs', createDriveLogsRouter());
 
   // Harness onboarding (specs/onboarding-harness-login.md): detect, install,
   // choose the orc harness and log in — shared engine with the CLI
