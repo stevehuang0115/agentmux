@@ -85,6 +85,33 @@ describe('evaluateDisconnect', () => {
 	});
 });
 
+describe('unreadable sign-in (local cause)', () => {
+	const base = { signedIn: true, monitorStartedAt: T0, thresholdMs: THRESHOLD, health: health({ state: 'stopped', lastContactAt: null, startedAt: null }) };
+
+	it('fires at once as local_config, not unreachable, even before the threshold', () => {
+		expect(evaluateDisconnect({ ...base, now: T0 + MIN, configProblem: 'invalid JSON' })).toEqual({
+			status: 'disconnected',
+			reason: 'local_config',
+			since: T0,
+			detail: 'invalid JSON',
+		});
+	});
+
+	it('stays signed_out when there is no config at all', () => {
+		expect(evaluateDisconnect({ ...base, signedIn: false, now: T0 + MIN, configProblem: 'invalid JSON' }).status).toBe('signed_out');
+	});
+
+	it('says the cause is on this machine and never calls it unreachable', () => {
+		const text = composeDisconnectNotice({ deviceName: 'm', reason: 'local_config', since: T0 });
+		expect(text).toContain('damaged');
+		expect(text).toContain('acting as signed out');
+		expect(text).toContain('not with the network');
+		expect(text).not.toContain('unreachable');
+		const withLink = composeDisconnectNotice({ deviceName: 'm', reason: 'local_config', since: T0, loginUrl: 'https://x/pair?code=AB', userCode: 'AB' });
+		expect(withLink).toContain('https://x/pair?code=AB');
+	});
+});
+
 describe('shouldNotify', () => {
 	const REPEAT = 6 * 60 * MIN;
 	it('allows the first notice of an episode', () => {

@@ -55,6 +55,31 @@ jest.mock('fs', () => ({
   readFileSync: (...args: any[]) => mockReadFileSync(...args),
 }));
 
+// The shared cloud-config module does atomic writes (tmp + fsync + rename) and a repairing read;
+// route it to the fs mocks above so these tests keep asserting what is saved and where.
+jest.mock('../../../backend/src/services/cloud/cloud-config-file.js', () => {
+  const actual = jest.requireActual('../../../backend/src/services/cloud/cloud-config-file.js');
+  const nodePath = jest.requireActual('path');
+  return {
+    ...actual,
+    readCloudConfigFile: () => {
+      if (!mockExistsSync(actual.getCloudConfigPath())) return { status: 'missing' };
+      try {
+        const config = JSON.parse(String(mockReadFileSync(actual.getCloudConfigPath())));
+        const bad = actual.validateCloudConfig(config);
+        return bad ? { status: 'damaged', reason: bad, quarantinedTo: null } : { status: 'ok', config, repaired: false };
+      } catch {
+        return { status: 'damaged', reason: 'invalid JSON', quarantinedTo: null };
+      }
+    },
+    writeCloudConfigFileSync: (config: unknown) => {
+      const file = actual.getCloudConfigPath();
+      mockMkdirSync(nodePath.dirname(file), { recursive: true });
+      mockWriteFileSync(file, JSON.stringify(config, null, 2), 'utf-8');
+    },
+  };
+});
+
 jest.mock('http', async () => {
   const actualHttp = await jest.requireActual('http') as any;
   return {
@@ -146,12 +171,11 @@ describe('saveCloudCredentials', () => {
     expect(written.tier).toBeDefined();
   });
 
-  it('skips mkdir when directory already exists', () => {
+  it('writes credentials when the directory already exists', () => {
     mockExistsSync.mockReturnValue(true);
 
     saveCloudCredentials('tok-abc');
 
-    expect(mockMkdirSync).not.toHaveBeenCalled();
     expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
   });
 });
@@ -164,9 +188,11 @@ describe('loadCloudCredentials', () => {
   it('returns parsed credentials from config file', () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(JSON.stringify({
+      cloudUrl: 'https://api.example.test',
       token: 'saved-tok',
+      tier: 'pro',
       refreshToken: 'saved-ref',
-      savedAt: '2026-01-01T00:00:00.000Z',
+      connectedAt: '2026-01-01T00:00:00.000Z',
     }));
 
     const creds = loadCloudCredentials();

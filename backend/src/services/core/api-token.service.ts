@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { getCrewlyHomePath } from './crewly-home.utils.js';
+import { atomicWriteFileSync } from '../../utils/file-io.utils.js';
 import { API_SECURITY_CONSTANTS } from '../../../../config/constants.js';
 
 /** Lazily-resolved token cache for the process lifetime. */
@@ -84,9 +85,7 @@ function readTokenFile(filePath: string): string | null {
  */
 function writeTokenFile(filePath: string, token: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${token}\n`, { mode: API_SECURITY_CONSTANTS.TOKEN_FILE_MODE });
-  // writeFileSync only applies `mode` on creation; enforce it for pre-existing files too.
-  fs.chmodSync(filePath, API_SECURITY_CONSTANTS.TOKEN_FILE_MODE);
+  atomicWriteFileSync(filePath, `${token}\n`, { mode: API_SECURITY_CONSTANTS.TOKEN_FILE_MODE });
 }
 
 /**

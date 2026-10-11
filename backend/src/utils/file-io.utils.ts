@@ -11,6 +11,7 @@
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
 
 /**
  * Minimal logger interface accepted by safeReadJson / modifyJsonFile.
@@ -162,11 +163,31 @@ export async function withOperationLock<T>(lockKey: string, operation: () => Pro
 //  Atomic write
 // ──────────────────────────────────────────────────────────────────────
 
+/** Options for the atomic writers. */
+export interface AtomicWriteOptions {
+  /** File mode for the new file (e.g. `0o600` for credentials). Default: the process umask. */
+  mode?: number;
+}
+
 /**
- * Write a string to a file atomically (temp file → fsync → rename).
+ * Unique sibling temp path (same directory, so the rename stays on one filesystem).
+ * Includes the pid so two processes never share a temp file.
+ *
+ * @param filePath - Destination file
+ * @returns Temp path
+ */
+function tempPathFor(filePath: string): string {
+  return `${filePath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).substring(2)}`;
+}
+
+/**
+ * Write a string to a file atomically (temp file in the same directory →
+ * fsync → rename).
  *
  * Acquires a per-path file lock so concurrent callers targeting the
- * same path are serialized.
+ * same path are serialized. Readers (and a crash at any point) see either
+ * the old file or the new one, never a mix; a shorter write can never leave
+ * the tail of a longer one behind.
  *
  * **Precondition:** The parent directory must already exist. This function
  * does not create intermediate directories — use {@link ensureDir} first
@@ -174,18 +195,25 @@ export async function withOperationLock<T>(lockKey: string, operation: () => Pro
  *
  * @param filePath - Destination file path
  * @param content - String content to write
+ * @param options - Optional file mode
  */
-export async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+export async function atomicWriteFile(filePath: string, content: string, options: AtomicWriteOptions = {}): Promise<void> {
   await withFileLock(filePath, async () => {
-    const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
+    const tempPath = tempPathFor(filePath);
 
     try {
-      await fs.writeFile(tempPath, content, 'utf8');
+      // 'wx': a fresh file only — never reuse (and never inherit the tail of) an existing one
+      await fs.writeFile(tempPath, content, { encoding: 'utf8', flag: 'wx', mode: options.mode });
 
       // Ensure data hits the disk before the atomic rename
       const handle = await fs.open(tempPath, 'r+');
-      await handle.sync();
-      await handle.close();
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      // `mode` is subject to the umask on create; make it exact.
+      if (options.mode !== undefined) await fs.chmod(tempPath, options.mode);
 
       await fs.rename(tempPath, filePath);
     } catch (error) {
@@ -205,9 +233,10 @@ export async function atomicWriteFile(filePath: string, content: string): Promis
  *
  * @param filePath - Destination file path
  * @param data - Value to serialize (via `JSON.stringify`)
+ * @param options - Optional file mode
  */
-export async function atomicWriteJson<T>(filePath: string, data: T): Promise<void> {
-  await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
+export async function atomicWriteJson<T>(filePath: string, data: T, options: AtomicWriteOptions = {}): Promise<void> {
+  await atomicWriteFile(filePath, JSON.stringify(data, null, 2), options);
 }
 
 /**
@@ -222,16 +251,18 @@ export async function atomicWriteJson<T>(filePath: string, data: T): Promise<voi
  *
  * @param filePath - Destination file path
  * @param content - String content to write
+ * @param options - Optional file mode
  */
-export function atomicWriteFileSync(filePath: string, content: string): void {
-  const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
+export function atomicWriteFileSync(filePath: string, content: string, options: AtomicWriteOptions = {}): void {
+  const tempPath = tempPathFor(filePath);
   let fd: number | null = null;
   try {
-    fd = fsSync.openSync(tempPath, 'w');
+    fd = fsSync.openSync(tempPath, 'wx', options.mode);
     fsSync.writeFileSync(fd, content, 'utf8');
     fsSync.fsyncSync(fd);
     fsSync.closeSync(fd);
     fd = null;
+    if (options.mode !== undefined) fsSync.chmodSync(tempPath, options.mode);
     fsSync.renameSync(tempPath, filePath);
   } catch (error) {
     if (fd !== null) {
@@ -385,6 +416,135 @@ function parseStore(raw: string, validate?: (data: unknown) => string | null): {
   }
   const rejected = validate?.(data) ?? null;
   return rejected ? { ok: false, reason: rejected } : { ok: true, data };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  Lenient read + repair (raw_decode style)
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Decode the first JSON object at the start of `raw` and ignore whatever
+ * follows (Python's `json.JSONDecoder.raw_decode`). Recovers a file that holds
+ * a valid object followed by the tail of an older, longer write.
+ *
+ * @param raw - File text
+ * @returns The first object and the number of trailing non-whitespace bytes, or null when `raw` does not start with a complete JSON object
+ */
+export function decodeFirstJsonObject(raw: string): { value: Record<string, unknown>; trailingChars: number } | null {
+  const start = raw.search(/\S/);
+  if (start < 0 || raw[start] !== '{') return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      try {
+        const value: unknown = JSON.parse(raw.slice(start, i + 1));
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+        return { value: value as Record<string, unknown>, trailingChars: raw.slice(i + 1).trim().length };
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+/** Result of {@link readJsonObjectWithRepairSync}. */
+export type JsonRepairRead<T> =
+  | { status: 'missing' }
+  | { status: 'ok'; data: T; repaired: boolean }
+  | { status: 'damaged'; reason: string; quarantinedTo: string | null };
+
+/**
+ * Read a JSON object file that holds credentials or other state that must not
+ * be silently dropped.
+ *
+ * - missing → `missing`;
+ * - parses and passes `validate` → `ok`;
+ * - does not parse, but starts with a complete object that passes `validate`
+ *   (stale trailing bytes) → the file is rewritten atomically with just that
+ *   object, a WARN is logged, `ok` with `repaired: true`;
+ * - anything else → a copy is kept at `<file>.corrupt-<ts>` and `damaged` is
+ *   returned (the original is left in place; the next atomic write replaces it).
+ *   The copy is made once per distinct damaged file content, not on every read.
+ *
+ * Other read errors (EACCES, EIO…) are rethrown: the file may be fine.
+ *
+ * @param filePath - File to read
+ * @param options.validate - Shape check; return an error text to reject
+ * @param options.logger - Optional logger
+ * @param options.mode - Mode for the repaired file
+ * @returns What was found
+ */
+export function readJsonObjectWithRepairSync<T>(
+  filePath: string,
+  options: { validate: (data: unknown) => string | null; logger?: FileIOLogger; mode?: number },
+): JsonRepairRead<T> {
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(filePath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'missing' };
+    throw err;
+  }
+  let reason: string;
+  try {
+    const data: unknown = JSON.parse(raw);
+    const rejected = options.validate(data);
+    if (!rejected) return { status: 'ok', data: data as T, repaired: false };
+    reason = rejected;
+  } catch (err) {
+    reason = `invalid JSON (${raw.length} bytes): ${errText(err)}`;
+    const first = decodeFirstJsonObject(raw);
+    if (first && !options.validate(first.value)) {
+      try {
+        atomicWriteFileSync(filePath, JSON.stringify(first.value, null, 2), { mode: options.mode });
+        options.logger?.warn('Repaired a JSON file that had stale trailing bytes after a complete object', {
+          filePath, trailingChars: first.trailingChars,
+        });
+      } catch (writeErr) {
+        options.logger?.warn('JSON file had stale trailing bytes; using the first object but could not rewrite the file', {
+          filePath, error: errText(writeErr),
+        });
+      }
+      return { status: 'ok', data: first.value as T, repaired: true };
+    }
+  }
+  return { status: 'damaged', reason, quarantinedTo: quarantineOnce(filePath, raw, reason, options.logger) };
+}
+
+/** Damaged-content signatures already copied aside this process (path → length:hash). */
+const quarantinedContent = new Map<string, string>();
+
+/**
+ * Copy a damaged file aside, at most once per distinct content.
+ *
+ * @param filePath - Damaged file
+ * @param raw - Its content
+ * @param reason - Why it is damaged
+ * @param logger - Optional logger
+ * @returns Backup path, or null when already copied / the copy failed
+ */
+function quarantineOnce(filePath: string, raw: string, reason: string, logger?: FileIOLogger): string | null {
+  const sig = `${raw.length}:${createHash('sha1').update(raw).digest('hex')}`;
+  if (quarantinedContent.get(filePath) === sig) return null;
+  try {
+    const target = quarantineCorruptFileSync(filePath, reason, logger);
+    quarantinedContent.set(filePath, sig);
+    return target;
+  } catch {
+    return null; // already logged by quarantineCorruptFileSync
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────

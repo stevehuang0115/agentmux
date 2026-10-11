@@ -27,11 +27,12 @@ import axios from 'axios';
 import http from 'http';
 import readline from 'readline';
 import { exec } from 'child_process';
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { hostname, platform } from 'os';
 import { DEFAULT_WEB_PORT } from '../constants.js';
 import { CLOUD_DEVICE_PAIRING_CONSTANTS } from '../../../config/constants.js';
+import { readCloudConfigFile, writeCloudConfigFileSync } from '../../../backend/src/services/cloud/cloud-config-file.js';
 import { getCrewlyHomePath } from '../../../backend/src/services/core/crewly-home.utils.js';
 import {
   startCloudDevicePairing,
@@ -162,21 +163,10 @@ interface CloudStatusData {
  * @param refreshToken - Optional refresh token for auto-renewal
  */
 export function saveCloudCredentials(token: string, refreshToken?: string): void {
-  const configDir = getCloudConfigDir();
-  const configFile = getCloudConfigFile();
-  if (!existsSync(configDir)) {
-    mkdirSync(configDir, { recursive: true });
-  }
-
-  // Merge with existing config to preserve fields the backend may have written
-  let existing: Partial<CloudCredentials> = {};
-  try {
-    if (existsSync(configFile)) {
-      existing = JSON.parse(readFileSync(configFile, 'utf-8'));
-    }
-  } catch {
-    // Ignore parse errors — overwrite with new credentials
-  }
+  // Merge with existing config to preserve fields the backend may have written.
+  // A damaged file reads as "nothing to preserve": this login is the repair.
+  const read = readCloudConfigFile();
+  const existing: Partial<CloudCredentials> = read.status === 'ok' ? read.config : {};
 
   const credentials: CloudCredentials = {
     cloudUrl: existing.cloudUrl || CLOUD_API_URL,
@@ -187,7 +177,8 @@ export function saveCloudCredentials(token: string, refreshToken?: string): void
     // Preserve existing refreshToken if new one not provided
     ...(!refreshToken && existing.refreshToken && { refreshToken: existing.refreshToken }),
   };
-  writeFileSync(configFile, JSON.stringify(credentials, null, 2), 'utf-8');
+  // Atomic + owner-only: the backend may be rewriting this file at the same moment.
+  writeCloudConfigFileSync(credentials);
 }
 
 /**
@@ -196,16 +187,8 @@ export function saveCloudCredentials(token: string, refreshToken?: string): void
  * @returns The saved credentials, or null if the file does not exist or is invalid
  */
 export function loadCloudCredentials(): CloudCredentials | null {
-  const configFile = getCloudConfigFile();
-  if (!existsSync(configFile)) {
-    return null;
-  }
-  try {
-    const raw = readFileSync(configFile, 'utf-8');
-    return JSON.parse(raw) as CloudCredentials;
-  } catch {
-    return null;
-  }
+  const read = readCloudConfigFile();
+  return read.status === 'ok' ? read.config : null;
 }
 
 /**
