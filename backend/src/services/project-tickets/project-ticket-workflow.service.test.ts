@@ -348,6 +348,31 @@ describe('ProjectTicketWorkflowService', () => {
       expect(t.log.at(-1)).toContain('cancelled: stale — back to ready');
     });
 
+    it('cancelled with a "verified" note after done work → done, not back to ready (#1125)', async () => {
+      const s = await started();
+      pool.set(s.workItem.id, { status: 'cancelled', cancelReason: 'Verified: PR merged, all checks pass' });
+      expect(await wf.syncTicket(project.path, s.ticket.id)).toBe('done');
+      expect((await wf.get('p1', s.ticket.id)).status).toBe('done');
+    });
+
+    it('cancelled with a verified note on an owner-review ticket → review (#1125)', async () => {
+      const s = await started({ ownerReview: true });
+      pool.set(s.workItem.id, { status: 'cancelled', cancelReason: 'done and verified' });
+      expect(await wf.syncTicket(project.path, s.ticket.id)).toBe('review');
+    });
+
+    it('cancelled after completing with evidence → done (#1125)', async () => {
+      const s = await started();
+      pool.set(s.workItem.id, { status: 'cancelled', completedAt: new Date().toISOString(), result: { summary: 'x', evidence: [{ type: 'artifact', path: 'a' }] } });
+      expect(await wf.syncTicket(project.path, s.ticket.id)).toBe('done');
+    });
+
+    it('a cancel that denies the work was done still returns the ticket (#1125)', async () => {
+      const s = await started();
+      pool.set(s.workItem.id, { status: 'cancelled', cancelReason: 'not done, scope changed' });
+      expect(await wf.syncTicket(project.path, s.ticket.id)).toBe('returned');
+    });
+
     it('rejected with a retry successor → relinked, still in progress; retry verified → done', async () => {
       const s = await started();
       const retryId = `${s.workItem.id}:retry:1`;

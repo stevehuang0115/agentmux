@@ -209,6 +209,25 @@ function isSession(member: TeamMember, session: string): boolean {
   return member.sessionName === session || member.agentId === session;
 }
 
+/** A cancel note that says the work was finished ("verified", "done", "merged", ...). */
+const CANCEL_DONE_NOTE = /\b(verified|accepted|completed?|done|merged|shipped)\b/i;
+/** ...unless it negates that ("not done", "unverified", "never merged"). */
+const CANCEL_NOT_DONE_NOTE = /\b(not|never|n't|isn't|wasn't|un(?:verified|finished)|incomplete|before)\b|\bno\s+(?:work|evidence)/i;
+
+/**
+ * Whether a cancelled WorkItem had in fact finished its work: the cancel note
+ * says verified / done, or the item completed with evidence on record.
+ *
+ * @param wi - Cancelled work item
+ * @returns True when the ticket should move on (done / review), not back to ready
+ */
+export function cancelledAfterDoneWork(wi: WorkItem): boolean {
+  const note = wi.cancelReason ?? '';
+  if (note && CANCEL_DONE_NOTE.test(note) && !CANCEL_NOT_DONE_NOTE.test(note)) return true;
+  const evidence = (wi.result as { evidence?: unknown } | undefined)?.evidence;
+  return !!wi.completedAt && Array.isArray(evidence) && evidence.length > 0;
+}
+
 /**
  * Cut a string to a byte budget (UTF-8), keeping whole characters.
  *
@@ -1280,6 +1299,9 @@ export class ProjectTicketWorkflowService {
         current = successor;
         continue;
       }
+      // A cancel that says the work was verified / done (or whose item carries
+      // done evidence) is a mis-closed success, not a request to redo it (#1125).
+      if (wi.status === 'cancelled' && cancelledAfterDoneWork(wi)) return { kind: 'success', wi };
       if (wi.status === 'cancelled') return { kind: 'returned', id: wi.id, why: `cancelled${wi.cancelReason ? `: ${wi.cancelReason}` : ''}` };
       if (disposition?.kind === 'terminal') return { kind: 'returned', id: wi.id, why: `${wi.status}${wi.error ? `: ${wi.error}` : ''}` };
       // failed / rejected with no decision yet: the harness is still choosing

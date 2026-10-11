@@ -1753,7 +1753,11 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
     } catch {
       place = null;
     }
-    if (!place && (threadId || reference || !channelId)) {
+    // The orchestrator's primary owner DM is neither a team channel nor an
+    // agent DM: post there with the workspace bot (#1142).
+    const { orcOwnerDmTarget } = await import('../../services/slack/orc-owner-dm-target.js');
+    const orcDm = orcOwnerDmTarget(agentSession, { channelId, threadId });
+    if (!place && !orcDm && (threadId || reference || !channelId)) {
       res.status(409).json({
         success: false,
         error: `File NOT sent: ${reference ? 'the reference you named does not resolve to a Slack thread' : `thread ${String(threadId)} is not a thread of a conversation you are in`}. Run attach-file again without --thread (the harness picks the thread), or name the ticket / message from your prompt with --ticket / --to.`,
@@ -1791,6 +1795,29 @@ router.post('/attach', async (req: Request, res: Response, next: NextFunction) =
         ...(resolvedThread ? { threadId: resolvedThread } : {}),
       });
       if (viaDm) result = viaDm;
+    }
+
+    if ((!result || (!result.ok && result.reason === 'not_a_slack_channel')) && (orcDm || (place && agentSession === ORCHESTRATOR_SESSION_NAME && place.slackChannelId.startsWith('D')))) {
+      const target = orcDm ?? { slackChannelId: place!.slackChannelId, ...(place!.threadTs ? { threadTs: place!.threadTs } : {}) };
+      try {
+        const uploaded = await getSlackService().uploadFile({
+          channelId: target.slackChannelId,
+          filePath: String(filePath),
+          ...(filename ? { filename: String(filename) } : {}),
+          ...(title ? { title: String(title) } : {}),
+          ...(comment ? { initialComment: String(comment) } : {}),
+          ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+        });
+        result = {
+          ok: true,
+          slackChannelId: target.slackChannelId,
+          ...(target.threadTs ? { threadTs: target.threadTs } : {}),
+          ...(uploaded.fileId ? { fileId: uploaded.fileId } : {}),
+          asAgentBot: false,
+        };
+      } catch (err) {
+        result = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
     }
 
     if (!result) {
