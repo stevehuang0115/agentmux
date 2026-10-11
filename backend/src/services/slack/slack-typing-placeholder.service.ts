@@ -51,7 +51,7 @@ export interface TypingSlackApi {
 }
 
 /** What the agent is doing while the reply is owed. */
-export type TypingPhase = 'waking' | 'typing';
+export type TypingPhase = 'waking' | 'queued' | 'typing';
 
 /**
  * Why a placeholder came down without its agent posting the answer:
@@ -325,7 +325,8 @@ export class SlackTypingPlaceholderService {
 
   /**
    * Move a pending placeholder to another phase (e.g. the agent finished
-   * waking and now holds the message → "is working on it…"). No-op when nothing
+   * waking and now holds the message → "is working on it…"; its start is
+   * deferred and the message is held on its queue → "will pick this up shortly…"). No-op when nothing
    * is pending or the phase is unchanged.
    *
    * @param key - Agent + conversation (+ thread)
@@ -360,7 +361,13 @@ export class SlackTypingPlaceholderService {
   }
 
   private textFor(phase: TypingPhase, name: string): string {
-    return (phase === 'waking' ? SLACK_TYPING_CONSTANTS.WAKING_TEXT : SLACK_TYPING_CONSTANTS.TYPING_TEXT).replace('{name}', readableAgentName(name));
+    const template =
+      phase === 'waking'
+        ? SLACK_TYPING_CONSTANTS.WAKING_TEXT
+        : phase === 'queued'
+          ? SLACK_TYPING_CONSTANTS.QUEUED_TEXT
+          : SLACK_TYPING_CONSTANTS.TYPING_TEXT;
+    return template.replace('{name}', readableAgentName(name));
   }
 
   private async edit(placeholder: TypingPlaceholder, text: string): Promise<void> {

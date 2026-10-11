@@ -2148,9 +2148,12 @@ export class SlackTeamChannelService {
       // actually holds the message.
       if (this.deps.typing && typingTargets.length > 0) {
         const outcomes = new Map((dispatch?.huddleOutcomes ?? []).map((o) => [o.sessionName, o.dispatched]));
+        const deferred = new Set((dispatch?.huddleOutcomes ?? []).filter((o) => o.deferred).map((o) => o.sessionName));
         for (const { session, key } of typingTargets) {
           const delivered = outcomes.get(session) ?? dispatch?.dispatched ?? false;
-          if (delivered) await this.deps.typing.setPhase(key, 'typing');
+          // Start deferred, message held on the agent's queue: delivered, just later.
+          if (delivered && deferred.has(session)) await this.deps.typing.setPhase(key, 'queued');
+          else if (delivered) await this.deps.typing.setPhase(key, 'typing');
           else await this.deps.typing.fail(key);
         }
       }
@@ -3610,6 +3613,14 @@ export class SlackTeamChannelService {
         await this.load();
         const room = this.findByChatChannelId(dto.channelId);
         if (room && isAdhocMapping(room)) return await this.mirrorOwnerPost(room, dto);
+      }
+      // A colleague agent on another machine: its post was made in Slack by
+      // that machine and reached this one from Slack, stored as a user turn on
+      // purpose (so it dispatches to the local agents it @'d). Mirroring it
+      // would post it twice, so it is skipped — say so instead of the
+      // misleading "senderType=user" (Rex, 2026-10-11).
+      if (dto.senderType === 'user' && typeof dto.metadata?.[OWNER_EVIDENCE_METADATA.REMOTE_AGENT_SESSION] === 'string') {
+        return skip('remote-agent-already-in-slack');
       }
       if (dto.senderType !== 'agent') return skip(`senderType=${dto.senderType}`);
       if (dto.metadata?.source === 'slack') return skip('inbound-from-slack');

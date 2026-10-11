@@ -2745,7 +2745,20 @@ void (async () => {
 							'./controllers/team/team.controller.js'
 						);
 						const res = await activateAgentBySession(this.apiController, agentSession);
-						return res.success;
+						// A start waiting for a running-agent slot is deferred, not failed.
+						return res.success ? true : res.deferred ? 'deferred' : false;
+					},
+					// The message waits on the agent's persisted queue for a deferred start.
+					holdForStart: (agentSession, prompt) => {
+						SubAgentMessageQueue.getInstance().enqueue(agentSession, prompt);
+						// Nothing else starts the agent when a slot frees: retry until it does.
+						void import('./services/messaging/deferred-start-retry.js').then(async ({ scheduleDeferredStartRetry }) => {
+							const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+							await scheduleDeferredStartRetry(agentSession, {
+								activate: (name) => activateAgentBySession(this.apiController, name),
+								hasPending: (name) => SubAgentMessageQueue.getInstance().hasPending(name),
+							});
+						});
 					},
 					// Every owner message that reached an agent is watched until
 					// it is answered (specs/2026-09-30-owner-message-guarantee.md).

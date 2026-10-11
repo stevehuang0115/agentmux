@@ -37,6 +37,9 @@ import { RoomContextBacklog, renderContextOnlyBlock } from './room-context-backl
 import { redactOpenLinkTokens } from '../apps/app-open-link.js';
 import { withQueueMeta, type QueueMessageMeta } from '../messaging/queue-priority.js';
 
+/** Pause before the one retry of a failed activate-on-send (a deferred start is not retried: it is queued) */
+export const ACTIVATE_RETRY_DELAY_MS = 3_000;
+
 // ---------------------------------------------------------------------------
 // Public contract
 // ---------------------------------------------------------------------------
@@ -57,6 +60,11 @@ export interface AgentMessageSink {
 export interface DispatchResult {
   /** True when the runtime accepted the message (or queued it for delivery). */
   dispatched: boolean;
+  /**
+   * The agent could not be started right now (running-agent cap) and the
+   * message waits on its queue for the start. Delivered, not failed.
+   */
+  deferred?: boolean;
   /** Filled when `dispatched === false`. */
   error?: string;
 }
@@ -91,6 +99,12 @@ export interface HuddleDispatchOutcome {
   /** Whether the prompt was successfully queued for the member. */
   dispatched: boolean;
   /**
+   * The member's start is deferred (running-agent cap): the prompt waits on
+   * its persisted queue and is delivered once the agent starts. Delivered,
+   * not failed — {@link dispatched} is true.
+   */
+  deferred?: boolean;
+  /**
    * The agent was busy: the prompt waits on its queue (`[AGENT_BUSY]` hold)
    * and reaches it when it is idle. It holds the message — nobody else should
    * be handed it meanwhile.
@@ -122,6 +136,8 @@ export interface DispatchMessageResult {
   strategy: 'dm' | 'channel-mentions' | 'huddle-broadcast' | 'skip';
   /** True when at least one underlying delivery succeeded. */
   dispatched: boolean;
+  /** DM only: the agent's start is deferred and the message waits on its queue. */
+  deferred?: boolean;
   /** Filled when `strategy === 'skip'`. */
   reason?: string;
   /** Populated for `strategy === 'dm'`. */
@@ -256,7 +272,19 @@ export interface ChatV2DispatcherOptions {
    * active. User-initiated, so it bypasses the orchestrator wake-gate by
    * design. When omitted, inactive sends just queue (legacy behavior).
    */
-  activateAgent?: (agentSession: string) => Promise<boolean>;
+  activateAgent?: (agentSession: string) => Promise<boolean | 'deferred'>;
+  /**
+   * Holds a prompt on the agent's persisted queue. Used when activate-on-send
+   * answers `'deferred'` (the start waits for a running-agent slot): the
+   * message is not lost and not failed, it is delivered when the agent starts.
+   * When omitted a deferred start is a failure, as before.
+   */
+  holdForStart?: (agentSession: string, prompt: string) => void;
+  /**
+   * Pause before the one retry of a failed (not deferred) activation, ms.
+   * Defaults to {@link ACTIVATE_RETRY_DELAY_MS}.
+   */
+  activateRetryDelayMs?: number;
   /**
    * The messages that came before this one, newest last.
    *
@@ -791,7 +819,9 @@ export class ChatV2DispatcherService {
   private readonly threadParticipantsFor?: (channelId: string, threadId: string) => readonly string[];
   private readonly lastThreadSpeakerFor?: (channelId: string, threadId: string) => string | null;
   private readonly huddleLeaderFor?: (channelId: string) => Promise<string | null>;
-  private readonly activateAgent?: (agentSession: string) => Promise<boolean>;
+  private readonly activateAgent?: (agentSession: string) => Promise<boolean | 'deferred'>;
+  private readonly holdForStart?: (agentSession: string, prompt: string) => void;
+  private readonly activateRetryDelayMs: number;
   private readonly recentTurnsFor?: (channelId: string, threadId?: string) => readonly ChatContextTurn[];
   private readonly onDispatched?: ChatV2DispatcherOptions['onDispatched'];
   private readonly refuseDelivery?: ChatV2DispatcherOptions['refuseDelivery'];
@@ -809,6 +839,8 @@ export class ChatV2DispatcherService {
     this.lastThreadSpeakerFor = options.lastThreadSpeakerFor;
     this.huddleLeaderFor = options.huddleLeaderFor;
     this.activateAgent = options.activateAgent;
+    this.holdForStart = options.holdForStart;
+    this.activateRetryDelayMs = options.activateRetryDelayMs ?? ACTIVATE_RETRY_DELAY_MS;
     this.recentTurnsFor = options.recentTurnsFor;
     this.onDispatched = options.onDispatched;
     this.refuseDelivery = options.refuseDelivery;
@@ -838,25 +870,95 @@ export class ChatV2DispatcherService {
     prompt: string,
     chatThreadId: string | undefined,
   ): ReturnType<AgentMessageSink['sendMessageToAgent']> {
+    return this.withDeliveryMeta(channel, message, sessionName, prompt, chatThreadId, () =>
+      this.agentSink.sendMessageToAgent(sessionName, prompt),
+    );
+  }
+
+  /**
+   * Run a delivery (or a queue hold) with the queue metadata this message
+   * deserves: owner priority for the owner's message, staleness for a
+   * colleague's room message in a thread.
+   */
+  private withDeliveryMeta<T>(
+    channel: ChatChannelDTO,
+    message: ChatMessageDTO,
+    sessionName: string,
+    prompt: string,
+    chatThreadId: string | undefined,
+    fn: () => T,
+  ): T {
     let owner = false;
     try {
       owner = this.isOwnerMessage?.(message) === true;
     } catch {
       owner = false;
     }
-    if (owner) {
-      return withQueueMeta(sessionName, prompt, ownerQueueMeta(channel, message, chatThreadId), () =>
-        this.agentSink.sendMessageToAgent(sessionName, prompt),
-      );
-    }
+    if (owner) return withQueueMeta(sessionName, prompt, ownerQueueMeta(channel, message, chatThreadId), fn);
     // A colleague agent's room message in a thread: no priority, but stale
     // once the recipient has answered in that thread.
     if (agentAuthorOf(message) && chatThreadId) {
-      return withQueueMeta(sessionName, prompt, { where: { chatChannelId: channel.id, chatThreadId } }, () =>
-        this.agentSink.sendMessageToAgent(sessionName, prompt),
-      );
+      return withQueueMeta(sessionName, prompt, { where: { chatChannelId: channel.id, chatThreadId } }, fn);
     }
-    return this.agentSink.sendMessageToAgent(sessionName, prompt);
+    return fn();
+  }
+
+  /**
+   * Activate-on-send for an agent whose session is down. A start that is
+   * deferred (running-agent cap) is final for this attempt — the caller holds
+   * the message on the queue. Any other failure is retried once after a short
+   * pause before it counts.
+   *
+   * @param sessionName - Agent to start
+   * @returns `true` started, `'deferred'` waiting for a slot, `false` could not be started
+   */
+  private async activateWithRetry(sessionName: string): Promise<boolean | 'deferred'> {
+    if (!this.activateAgent) return false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const out = await this.activateAgent(sessionName);
+        if (out) return out;
+      } catch (err) {
+        this.logger.warn('chat-v2 activate-on-send failed', {
+          sessionName,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (attempt === 0 && this.activateRetryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.activateRetryDelayMs));
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Put a prompt on the agent's queue for its deferred start.
+   *
+   * @returns True when the prompt is held
+   */
+  private hold(
+    channel: ChatChannelDTO,
+    message: ChatMessageDTO,
+    sessionName: string,
+    prompt: string,
+    chatThreadId: string | undefined,
+  ): boolean {
+    const holder = this.holdForStart;
+    if (!holder) return false;
+    try {
+      this.withDeliveryMeta(channel, message, sessionName, prompt, chatThreadId, () => holder(sessionName, prompt));
+      this.logger.info('chat-v2: agent start deferred — message held on its queue until it starts', {
+        channelId: channel.id,
+        sessionName,
+      });
+      return true;
+    } catch (err) {
+      this.logger.warn('chat-v2: could not hold a message for a deferred start', {
+        sessionName,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   /**
@@ -1047,6 +1149,7 @@ export class ChatV2DispatcherService {
     return {
       strategy: 'dm',
       dispatched: dmResult.dispatched,
+      ...(dmResult.deferred ? { deferred: true } : {}),
       dmResult,
     };
   }
@@ -1454,20 +1557,24 @@ export class ChatV2DispatcherService {
       });
 
     /** One delivery attempt; false when the sink refused (typically: no session). */
-    const attempt = async (sessionName: string, responseMode: 'required' | 'optional'): Promise<{ ok: boolean; error?: string; queued?: boolean }> => {
+    type Attempt = { ok: boolean; error?: string; queued?: boolean; deferred?: boolean; prompt?: string };
+    const attempt = async (sessionName: string, responseMode: 'required' | 'optional'): Promise<Attempt> => {
       // What this agent only listened to in the room since its last prompt here.
       const heard = this.contextBacklog.take(sessionName, channel.id, message.id);
+      const prompt = promptFor(sessionName, responseMode, renderContextOnlyBlock(heard));
       try {
         this.noteActingFor(sessionName, message);
         const result = await this.sendToAgent(
           channel,
           message,
           sessionName,
-          promptFor(sessionName, responseMode, renderContextOnlyBlock(heard)),
+          prompt,
           options.threadId ?? message.threadId ?? message.id,
         );
         if (!result.success) this.contextBacklog.restore(sessionName, channel.id, heard);
-        return result.success ? { ok: true, ...(result.queued ? { queued: true } : {}) } : { ok: false, error: result.error ?? 'unknown sink failure' };
+        return result.success
+          ? { ok: true, ...(result.queued ? { queued: true } : {}) }
+          : { ok: false, error: result.error ?? 'unknown sink failure', prompt };
       } catch (err) {
         this.contextBacklog.restore(sessionName, channel.id, heard);
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1485,20 +1592,23 @@ export class ChatV2DispatcherService {
           sessionName,
           responseMode,
         });
-        let activated = false;
-        try {
-          activated = await this.activateAgent(sessionName);
-        } catch (err) {
-          this.logger.warn('chat-v2 huddle activate-on-send failed', {
-            sessionName,
-            err: err instanceof Error ? err.message : String(err),
-          });
+        const activated = await this.activateWithRetry(sessionName);
+        if (activated === 'deferred' && result.prompt !== undefined) {
+          // The start waits for a running-agent slot. The message is held on
+          // the agent's queue and delivered when it starts: not a failure.
+          const threadId = options.threadId ?? message.threadId ?? message.id;
+          if (this.hold(channel, message, sessionName, result.prompt, threadId)) {
+            // The held prompt already carries what the agent overheard.
+            this.contextBacklog.take(sessionName, channel.id, message.id);
+            result = { ok: true, queued: true, deferred: true };
+          }
+        } else if (activated) {
+          result = await attempt(sessionName, responseMode);
         }
-        if (activated) result = await attempt(sessionName, responseMode);
       }
       if (result.ok) {
         const silent = isSilentByDefault(options.peopleAddressing, responseMode, namedExplicitly.has(sessionName));
-        outcomes.push({ sessionName, responseMode, dispatched: true, ...(silent ? { silentByDefault: true } : {}), ...(result.queued ? { queued: true } : {}) });
+        outcomes.push({ sessionName, responseMode, dispatched: true, ...(silent ? { silentByDefault: true } : {}), ...(result.queued ? { queued: true } : {}), ...(result.deferred ? { deferred: true } : {}) });
         anyDispatched = true;
         this.noteOriginThread(sessionName, channel.id, options.threadId ?? message.threadId ?? message.id);
       } else {
@@ -1702,16 +1812,15 @@ export class ChatV2DispatcherService {
           channelId: channel.id,
           agentSession: channel.agentSession,
         });
-        let activated = false;
-        try {
-          activated = await this.activateAgent(channel.agentSession);
-        } catch (err) {
-          this.logger.warn('chat-v2 activate-on-send failed', {
-            agentSession: channel.agentSession,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (activated) {
+        const activated = await this.activateWithRetry(channel.agentSession);
+        if (activated === 'deferred') {
+          // The start waits for a running-agent slot: hold the message on the
+          // agent's queue; it is delivered when the agent starts.
+          if (this.hold(channel, message, channel.agentSession, prompt, message.threadId ?? undefined)) {
+            this.noteOriginThread(channel.agentSession, channel.id, undefined);
+            return { dispatched: true, deferred: true };
+          }
+        } else if (activated) {
           try {
             result = await this.sendToAgent(channel, message, channel.agentSession, prompt, message.threadId ?? undefined);
           } catch (err) {

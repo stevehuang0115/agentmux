@@ -289,10 +289,10 @@ describe('relaxing after a long wait', () => {
 		try {
 			const { svc, stopped } = setup([agent('protected', 9e6), agent('young', 60_000)], { protected: 'it owns open ticket T-1' });
 			await enter(svc);
-			const first = svc.requestStart('new', true);
+			const first = svc.requestStart('new', false);
 			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS + 10);
 			expect(await first).toBe(false);
-			expect(await svc.requestStart('new', true)).toBe(true);
+			expect(await svc.requestStart('new', false)).toBe(true);
 			expect(stopped).toEqual(['young']);
 		} finally {
 			jest.useRealTimers();
@@ -305,6 +305,55 @@ describe('relaxing after a long wait', () => {
 			const { svc, stopped } = setup([agent('a', 9e6)], { a: 'it owns open ticket T-1' });
 			await enter(svc);
 			const p = svc.requestStart('new', true);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
+			expect(await p).toBe(false);
+			expect(stopped).toEqual([]);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+});
+
+describe('owner-triggered start under the cap', () => {
+	function setup(running: RunningAgent[], reasons: Record<string, string> = {}) {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		let list = [...running];
+		svc.setDeps({
+			limits: async () => ({ maxRunning: running.length, idleTimeoutMinutes: 10 }),
+			listRunning: async () => list,
+			hasOwnerMessage: () => false,
+			protectedReason: async (n) => reasons[n] ?? null,
+			stopAgent: async (n) => { stopped.push(n); list = list.filter((r) => r.sessionName !== n); },
+		});
+		return { svc, stopped };
+	}
+
+	it('stops the longest-idle agent at once even when every agent is under the idle timeout', async () => {
+		const { svc, stopped } = setup([agent('a', 60_000), agent('b', 120_000)]);
+		await enter(svc);
+		expect(await svc.requestStart('new', true)).toBe(true);
+		expect(stopped).toEqual(['b']);
+	});
+
+	it('still keeps an agent with pending work, an open ticket or an open delegation', async () => {
+		jest.useFakeTimers();
+		try {
+			const { svc, stopped } = setup([agent('a', 60_000), agent('b', 120_000)], { b: 'work item w1 is queued for it' });
+			await enter(svc);
+			expect(await svc.requestStart('new', true)).toBe(true);
+			expect(stopped).toEqual(['a']);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('an ordinary (not owner) start still respects the idle timeout', async () => {
+		jest.useFakeTimers();
+		try {
+			const { svc, stopped } = setup([agent('a', 60_000)]);
+			await enter(svc);
+			const p = svc.requestStart('new', false);
 			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
 			expect(await p).toBe(false);
 			expect(stopped).toEqual([]);
