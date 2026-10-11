@@ -197,7 +197,7 @@ describe('end and recap', () => {
     expect(h.calls.find((c) => c.method === 'POST' && c.url.endsWith('/replies'))?.body).toMatchObject({ recap: true, nextStep: false });
     expect(h.closed).toEqual([['ella', 'dm-ella']]);
     // Closed: no more replies to it.
-    await expect(h.service.agentReply('ella', SID, { text: 'more', interim: false, recap: false })).rejects.toMatchObject({ status: 404 });
+    await expect(h.service.agentReply('ella', SID, { text: 'more', interim: false, recap: false })).rejects.toMatchObject({ status: 404, message: expect.stringContaining('closed at') });
   });
 
   it('a recap naming a next step keeps it tracked (nextStep true)', async () => {
