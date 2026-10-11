@@ -422,6 +422,28 @@ describe('per-person access (issue #968)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('clearCacheFor(account) drops that account only; undefined means the default slot, not everything', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(tokenBody('ya29.x', 3600_000)));
+    await runAsActor(info, () => service.getAccessToken({ account: 'a@x.com' }));
+    await runAsActor(info, () => service.getAccessToken({ account: 'b@x.com' }));
+    await runAsActor(info, () => service.getAccessToken());
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    service.clearCacheFor(undefined);
+    await runAsActor(info, () => service.getAccessToken({ account: 'a@x.com' }));
+    await runAsActor(info, () => service.getAccessToken({ account: 'b@x.com' }));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await runAsActor(info, () => service.getAccessToken());
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    service.clearCacheFor('a@x.com');
+    await runAsActor(info, () => service.getAccessToken({ account: 'b@x.com' }));
+    await runAsActor(info, () => service.getAccessToken());
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await runAsActor(info, () => service.getAccessToken({ account: 'a@x.com' }));
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
   it('grantedScopes reads the scopes cached for this account and this person only', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(tokenBody('ya29.info', 3600_000)));
     expect(service.grantedScopes()).toBeUndefined();

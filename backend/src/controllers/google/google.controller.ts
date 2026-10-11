@@ -28,6 +28,18 @@ import {
   getHeldSend,
   clearHeldSend,
 } from '../../services/google/gmail-send-gate.js';
+import {
+  holdDocComment,
+  getDocCommentBatch,
+  listDocCommentBatches,
+  clearDocCommentBatch,
+  decideBatchSend,
+  buildHoldMessage,
+  buildBatchRefusalMessage,
+  DOC_COMMENT_CONFIRM_SCAN_LIMIT,
+  type HeldDocComment,
+} from '../../services/google/docs-comment-gate.js';
+import { getChatV2Service } from '../../services/chat-v2/chat-v2.singleton.js';
 import { GmailService, buildRfc822, type GmailSendInput } from '../../services/google/gmail.service.js';
 import { CalendarService } from '../../services/google/calendar.service.js';
 import { DriveService } from '../../services/google/drive.service.js';
@@ -113,9 +125,18 @@ function getDeps(): GoogleControllerDeps {
  * @returns The service set to use
  */
 function depsForRequest(req: Request): GoogleControllerDeps {
-  if (override) return override;
   const raw = typeof req.query.account === 'string' ? req.query.account : req.get('X-Google-Account') ?? '';
-  const account = raw.trim();
+  return depsForAccount(raw.trim() || undefined);
+}
+
+/**
+ * The services for one Google account (or the default set when none).
+ *
+ * @param account - Google account email; undefined for the default connection
+ * @returns The service set to use
+ */
+function depsForAccount(account: string | undefined): GoogleControllerDeps {
+  if (override) return override;
   if (!account) return getDeps();
   let set = byAccount.get(account);
   if (!set) {
@@ -793,7 +814,44 @@ export async function docsCommentsList(req: Request, res: Response): Promise<voi
 }
 
 /**
+ * Hold an agent's Doc comment action instead of posting it.
+ *
+ * A comment on a shared Doc is visible to collaborators under the owner's
+ * name, so it is outbound like `gmail-send`: only the owner credential posts
+ * directly. Anyone else queues it into their open batch, and the owner
+ * authorizes the whole batch with one 「发 C<n>」 (see docs-comment-gate).
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ * @param item - The action to hold
+ * @returns True when the request was held (response sent); false when the caller may post
+ */
+function holdDocCommentUnlessOwner(req: Request, res: Response, item: HeldDocComment): boolean {
+  if (isOwnerCaller(req)) return false;
+  const agentSession = readAgentSessionHeader(req) ?? UNIDENTIFIED_SENDER;
+  const batch = holdDocComment(agentSession, item, readAuthorizationClaim(req));
+  logger.warn('Doc comment held — awaiting the owner', {
+    agentSession,
+    code: batch.code,
+    action: item.action,
+    docId: item.docId,
+    citedAuthorization: readAuthorizationClaim(req) ?? '(none given)',
+  });
+  res.status(202).json({
+    success: true,
+    data: {
+      held: true,
+      batch: batch.code,
+      queued: batch.items.length,
+      message: buildHoldMessage(batch),
+    },
+  });
+  return true;
+}
+
+/**
  * POST /api/google/docs/:id/comments — body `{ text, quote? }`.
+ * An agent's comment is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -802,7 +860,13 @@ export async function docsCommentsAdd(req: Request, res: Response): Promise<void
   try {
     const body = (req.body ?? {}) as { text?: unknown; quote?: unknown };
     const quote = typeof body.quote === 'string' ? body.quote : undefined;
-    const data = await depsForRequest(req).docComments.add(String(req.params.id ?? ''), String(body.text ?? ''), quote);
+    const docId = String(req.params.id ?? '');
+    const text = String(body.text ?? '');
+    if (!isOwnerCaller(req)) {
+      if (!text.trim()) throw new GoogleWorkspaceError(400, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION, 'Comment text is required.');
+      if (holdDocCommentUnlessOwner(req, res, { action: 'add', docId, text, ...(quote ? { quote } : {}), ...accountField(req) })) return;
+    }
+    const data = await depsForRequest(req).docComments.add(docId, text, quote);
     logger.info('Google Doc comment added', { docId: data.docId, commentId: data.id });
     res.json({ success: true, data });
   } catch (err) {
@@ -812,6 +876,7 @@ export async function docsCommentsAdd(req: Request, res: Response): Promise<void
 
 /**
  * POST /api/google/docs/:id/comments/:commentId/replies — body `{ text }`.
+ * An agent's reply is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -819,7 +884,14 @@ export async function docsCommentsAdd(req: Request, res: Response): Promise<void
 export async function docsCommentsReply(req: Request, res: Response): Promise<void> {
   try {
     const body = (req.body ?? {}) as { text?: unknown };
-    const data = await depsForRequest(req).docComments.reply(String(req.params.id ?? ''), String(req.params.commentId ?? ''), String(body.text ?? ''));
+    const docId = String(req.params.id ?? '');
+    const commentId = String(req.params.commentId ?? '');
+    const text = String(body.text ?? '');
+    if (!isOwnerCaller(req)) {
+      if (!text.trim()) throw new GoogleWorkspaceError(400, GOOGLE_WORKSPACE_CONSTANTS.ERROR_CODES.VALIDATION, 'Reply text is required.');
+      if (holdDocCommentUnlessOwner(req, res, { action: 'reply', docId, commentId, text, ...accountField(req) })) return;
+    }
+    const data = await depsForRequest(req).docComments.reply(docId, commentId, text);
     logger.info('Google Doc comment replied', { docId: data.docId, commentId: data.commentId });
     res.json({ success: true, data });
   } catch (err) {
@@ -829,6 +901,7 @@ export async function docsCommentsReply(req: Request, res: Response): Promise<vo
 
 /**
  * POST /api/google/docs/:id/comments/:commentId/resolve — body `{ text? }`.
+ * An agent's resolve is queued for the owner's OK, not posted.
  *
  * @param req - Incoming request
  * @param res - Response
@@ -837,12 +910,137 @@ export async function docsCommentsResolve(req: Request, res: Response): Promise<
   try {
     const body = (req.body ?? {}) as { text?: unknown };
     const text = typeof body.text === 'string' ? body.text : undefined;
-    const data = await depsForRequest(req).docComments.resolve(String(req.params.id ?? ''), String(req.params.commentId ?? ''), text);
+    const docId = String(req.params.id ?? '');
+    const commentId = String(req.params.commentId ?? '');
+    if (holdDocCommentUnlessOwner(req, res, { action: 'resolve', docId, commentId, ...(text ? { text } : {}), ...accountField(req) })) return;
+    const data = await depsForRequest(req).docComments.resolve(docId, commentId, text);
     logger.info('Google Doc comment resolved', { docId: data.docId, commentId: data.commentId });
     res.json({ success: true, data });
   } catch (err) {
     await sendGoogleError(req, res, err);
   }
+}
+
+/** `{ account }` when the request names a Google account, else nothing. */
+function accountField(req: Request): { account?: string } {
+  const account = accountOf(req);
+  return account ? { account } : {};
+}
+
+/**
+ * GET /api/google/doc-comment-batches — comments agents have queued for the
+ * owner. Each batch carries what the agent cited as authorization.
+ *
+ * @param _req - Incoming request
+ * @param res - Response
+ */
+export function docCommentBatchesList(_req: Request, res: Response): void {
+  res.json({ success: true, data: { batches: listDocCommentBatches() } });
+}
+
+/**
+ * POST /api/google/doc-comment-batches/:code/send — post a whole batch.
+ *
+ * Owner credential: allowed (the click is the confirmation). Agent: only
+ * after the owner's 「发 C<n>」 in chat that post-dates the batch's last
+ * change. Items post in order; the first failure stops the run and the
+ * unposted items stay queued, so a retry never double-posts.
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ */
+export async function docCommentBatchSend(req: Request, res: Response): Promise<void> {
+  const batch = getDocCommentBatch(String(req.params.code ?? ''));
+  if (!batch) {
+    res.status(404).json({ success: false, error: 'not_found', message: `No queued comment batch ${req.params.code}` });
+    return;
+  }
+  if (batch.sending) {
+    res.status(409).json({ success: false, error: 'already_sending', message: `Batch ${batch.code} is already being posted.` });
+    return;
+  }
+  const owner = isOwnerCaller(req);
+  const agentSession = owner ? undefined : (readAgentSessionHeader(req) ?? UNIDENTIFIED_SENDER);
+  const decision = decideBatchSend({
+    batch,
+    agentSession,
+    ownerMessagesSince: (since) => getChatV2Service().getRecentOwnerMessageContents(since, DOC_COMMENT_CONFIRM_SCAN_LIMIT),
+    now: Date.now(),
+  });
+  if (!decision.allowed) {
+    logger.warn('Agent doc comment batch send refused', { code: batch.code, agentSession, reason: decision.reason });
+    res.status(403).json({
+      success: false,
+      error: 'needs_owner_confirmation',
+      reason: decision.reason,
+      message: buildBatchRefusalMessage(batch.code, decision.reason),
+    });
+    return;
+  }
+
+  batch.sending = true;
+  const posted: Array<{ action: string; docId: string; commentId?: string; id?: string }> = [];
+  try {
+    while (batch.items.length > 0) {
+      const item = batch.items[0];
+      const deps = depsForAccount(item.account);
+      try {
+        if (item.action === 'add') {
+          const r = await deps.docComments.add(item.docId, item.text ?? '', item.quote);
+          posted.push({ action: 'add', docId: r.docId, id: r.id });
+        } else if (item.action === 'reply') {
+          const r = await deps.docComments.reply(item.docId, item.commentId ?? '', item.text ?? '');
+          posted.push({ action: 'reply', docId: r.docId, commentId: r.commentId, id: r.id });
+        } else {
+          const r = await deps.docComments.resolve(item.docId, item.commentId ?? '', item.text);
+          posted.push({ action: 'resolve', docId: r.docId, commentId: r.commentId, id: r.id });
+        }
+        batch.items.shift();
+      } catch (err) {
+        logger.warn('Doc comment batch stopped on a failure', { code: batch.code, posted: posted.length, remaining: batch.items.length });
+        if (posted.length === 0) {
+          // Any reconnect card must name the account the item acted as.
+          if (item.account) req.query.account = item.account;
+          await sendGoogleError(req, res, err);
+        } else {
+          res.status(207).json({
+            success: false,
+            error: 'partial',
+            message: `Posted ${posted.length}, stopped on the next one: ${err instanceof Error ? err.message : String(err)}. ${batch.items.length} still queued under ${batch.code}; send again to retry them.`,
+            data: { batch: batch.code, posted: posted.length, remaining: batch.items.length, results: posted },
+          });
+        }
+        return;
+      }
+    }
+    clearDocCommentBatch(batch.code);
+    logger.info('Doc comment batch posted', { code: batch.code, posted: posted.length, via: decision.via });
+    res.json({ success: true, data: { batch: batch.code, posted: posted.length, remaining: 0, results: posted } });
+  } finally {
+    batch.sending = false;
+  }
+}
+
+/**
+ * POST /api/google/doc-comment-batches/:code/discard — drop a queued batch.
+ * Safe for anyone: it only removes comments that would have been posted.
+ *
+ * @param req - Incoming request
+ * @param res - Response
+ */
+export function docCommentBatchDiscard(req: Request, res: Response): void {
+  const batch = getDocCommentBatch(String(req.params.code ?? ''));
+  if (!batch) {
+    res.status(404).json({ success: false, error: 'not_found', message: `No queued comment batch ${req.params.code}` });
+    return;
+  }
+  if (batch.sending) {
+    res.status(409).json({ success: false, error: 'already_sending', message: `Batch ${batch.code} is being posted.` });
+    return;
+  }
+  clearDocCommentBatch(batch.code);
+  logger.info('Doc comment batch discarded', { code: batch.code, dropped: batch.items.length });
+  res.json({ success: true, data: { discarded: true, batch: batch.code, dropped: batch.items.length } });
 }
 
 // ---------------------------------------------------------------------------
