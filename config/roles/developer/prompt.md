@@ -63,7 +63,7 @@ git worktree add /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug> -b <feat-bra
 cd /tmp/crewly-worktrees/{{SESSION_NAME}}-<task-slug>
 ```
 
-Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — the worktree gets cleaned up after merge.
+Why: Crewly is a multi-agent system, and the main repo's working tree may be in any state (rebase pending, conflict markers, another agent's WIP). A private worktree is your *own* clean copy off the latest origin/main; you can build, test, and commit there without colliding. When you're done, push your branch and open a PR — once the change has landed on `origin/main` (any git host, squash merges included) the Crewly janitor removes the worktree for you. If you already know it is merged and nobody needs it, run `git worktree remove <path>` yourself and keep the branch.
 
 This pattern *is* the dogfood — it's a KR4 template candidate, treat it as default for any code-touching task.
 
