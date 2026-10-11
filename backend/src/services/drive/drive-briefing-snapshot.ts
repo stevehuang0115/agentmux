@@ -13,7 +13,8 @@
  *  - items: project tickets and work items not linked to a ticket, in order
  *    of attention, done / cancelled ones only from the last 24 h;
  *  - waiting: the briefing queue's live owner items (cards, questions,
- *    reviews — stale and duplicate ones are already dropped there).
+ *    reviews — stale and duplicate ones are already dropped there);
+ *  - org: the whole organisation at a glance (drive-org-overview.ts).
  *
  * Every text field is made speakable, passed through the secret redactor
  * and clipped; the whole snapshot is kept under
@@ -28,6 +29,8 @@ import { redactSecrets } from '../../utils/secret-redactor.js';
 import { clip, speakable } from '../briefing/briefing.utils.js';
 import type { OwnerTurnMark } from '../briefing/briefing-cards.js';
 import { messagesToOwner, type RecallFeedMessage } from './drive-recall.js';
+import { buildOrgOverview, trimOrg } from './drive-org-overview.js';
+import type { RosterTeam } from '../team-roster/team-roster.builder.js';
 import type { BriefingAgent, BriefingAgentState, BriefingItem, BriefingItemStatus, BriefingSnapshot, BriefingTeam, BriefingWaiting } from './drive-briefing.contract.js';
 
 const C = DRIVE_BRIEFING_CONSTANTS;
@@ -115,6 +118,8 @@ export interface SnapshotSources {
   workItems: SnapshotWorkItemSource[];
   waiting: SnapshotWaitingSource[];
   ownerFeed: { messages: RecallFeedMessage[]; ownerTurns: OwnerTurnMark[] };
+  /** The team roster (charters, chore-free work lists), when it could be read */
+  roster?: RosterTeam[];
 }
 
 /** Order of attention. */
@@ -348,6 +353,8 @@ export function buildBriefingSnapshot(src: SnapshotSources): BriefingSnapshot {
     agents,
     items: items.slice(0, C.MAX_ITEMS).map(({ session: _session, ...i }) => i),
     waiting,
+    // The whole organisation at a glance: which teams work, on what, what blocks them (all items, not only the capped list).
+    org: buildOrgOverview({ teams, agents, items, waiting, roster: src.roster, now: src.now }),
   };
   return capSnapshot(snapshot, C.MAX_BYTES);
 }
@@ -428,7 +435,7 @@ export function waitingRef(w: Pick<SnapshotWaitingSource, 'id' | 'kind' | 'answe
  * @returns A snapshot within the cap
  */
 export function capSnapshot(s: BriefingSnapshot, maxBytes: number): BriefingSnapshot {
-  const out: BriefingSnapshot = { ...s, items: [...s.items], waiting: [...s.waiting], agents: s.agents.map((a) => ({ ...a })) };
+  const out: BriefingSnapshot = { ...s, items: [...s.items], waiting: [...s.waiting], agents: s.agents.map((a) => ({ ...a })), ...(s.org ? { org: { ...s.org, teams: s.org.teams.map((t) => ({ ...t })) } } : {}) };
   const size = (): number => Buffer.byteLength(JSON.stringify(out), 'utf8');
   while (size() > maxBytes) {
     const done = out.items.map((i) => i.status).lastIndexOf('done');
@@ -441,6 +448,7 @@ export function capSnapshot(s: BriefingSnapshot, maxBytes: number): BriefingSnap
       chatty.lastToOwner = chatty.lastToOwner?.slice(0, 1);
       continue;
     }
+    if (out.org && trimOrg(out.org)) continue;
     if (out.items.length > 0) {
       out.items.pop();
       continue;

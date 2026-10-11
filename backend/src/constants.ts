@@ -8013,6 +8013,15 @@ export const DRIVE_CONSTANTS = {
 	STATUS_CHECK_MAX_AGENTS: 6,
 	/** Status check: items listed to one agent at most */
 	STATUS_CHECK_MAX_ITEMS: 5,
+	/** Session logs Cloud copies here (`op:'log'`): directory under CREWLY_HOME, `<date>-<sessionId>.md` + `.jsonl` */
+	LOG_DIRNAME: 'drive-logs',
+	/** Local session logs are deleted this long after they were written (ms) */
+	LOG_KEEP_MS: 30 * 24 * 60 * 60 * 1000,
+	/** A log file larger than this is refused (bytes) */
+	LOG_MAX_BYTES: 2 * 1024 * 1024,
+	/** `GET /api/drive-logs`: default and largest page */
+	LOG_LIST_DEFAULT: 10,
+	LOG_LIST_MAX: 50,
 } as const;
 
 /**

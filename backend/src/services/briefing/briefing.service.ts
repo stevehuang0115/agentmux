@@ -112,6 +112,12 @@ export interface BriefingDeps {
    * not read out. Absent or unknown = keep the card.
    */
   isCardTicketClosed?: (ticket: { projectId: string; projectPath: string; id: string }) => Promise<boolean>;
+  /**
+   * The owner decided a card by voice: write it into the project ticket the
+   * card belongs to right away (a log line), so the records say so before
+   * the team has acted on it. Best effort; a failure never blocks the answer.
+   */
+  noteDecision?: (input: { ticket: { projectId: string; projectPath: string; id: string }; agentName: string; summary: string; answer: string }) => Promise<void>;
   store: BriefingStateStore;
   now?: () => Date;
   logger?: ComponentLogger;
@@ -358,6 +364,12 @@ export class BriefingService {
         optionKey ? decisions.chooseFromDashboard(decisionId, matchOptionKey(item, optionKey)?.key ?? optionKey, 'voice') : decisions.answerInWords(decisionId, text as string, 'voice'),
       );
       await this.deps.store.update(item.id, () => null);
+      // The decision is in the ticket's record now, not only in what was said.
+      const decidedTicket = g.decision?.ticket;
+      if (decidedTicket && this.deps.noteDecision) {
+        const answer = optionKey ? (matchOptionKey(item, optionKey)?.label ?? optionKey) : (text as string);
+        await this.deps.noteDecision({ ticket: decidedTicket, agentName: item.agentName, summary: item.summary, answer }).catch((err) => this.logger.warn('Briefing: decision not noted on its ticket', { itemId: item.id, error: err instanceof Error ? err.message : String(err) }));
+      }
       this.logger.info('Briefing: decision answered by voice', { itemId: item.id, how: optionKey ? 'option' : 'words' });
       return { status: 'done', itemId: item.id, spoken: `Done. ${item.agentName} has your answer.` };
     }

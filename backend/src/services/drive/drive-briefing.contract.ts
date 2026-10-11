@@ -91,6 +91,34 @@ export interface BriefingWaiting {
   refs?: string[];
 }
 
+/** Where a team stands, for the high-level overview. */
+export type BriefingOrgState = 'active' | 'needs_you' | 'blocked' | 'quiet' | 'paused';
+
+/** One team in the high-level overview. */
+export interface BriefingOrgTeam {
+  name: string;
+  /** What the team is for (its charter's first sentence); absent for a derived charter */
+  purpose?: string;
+  members: number;
+  state: BriefingOrgState;
+  /** Finished in the last 24 h */
+  doneRecent: number;
+  /** Titles of what finished (at most 2) */
+  done?: string[];
+  /** Titles of what is in progress (at most 2) */
+  doing?: string[];
+  blocked: number;
+  /** Items waiting on the owner */
+  needsYou: number;
+  lastActivityAt?: string;
+}
+
+/** The whole organisation at a glance. */
+export interface BriefingOrg {
+  teams: BriefingOrgTeam[];
+  agents: { total: number; working: number; idle: number; stopped: number };
+}
+
 /** The snapshot this machine pushes. */
 export interface BriefingSnapshot {
   v: 1;
@@ -99,4 +127,6 @@ export interface BriefingSnapshot {
   agents: BriefingAgent[];
   items: BriefingItem[];
   waiting: BriefingWaiting[];
+  /** High-level overview of every team, from the team roster, tickets, work items and decisions (v4) */
+  org?: BriefingOrg;
 }

@@ -26,10 +26,14 @@
  *    is about to check with the teams: ask the agents that hold the owner's
  *    open items to bring them up to date, then rebuild and upload the
  *    status snapshot so the voice reads fresh state (`deps.refreshStatus`);
+ *  - `log` (push `op:'log'`, v4): Cloud keeps every session's log; this
+ *    machine stores a copy as `~/.crewly/drive-logs/<date>-<sessionId>.md` +
+ *    `.jsonl` (see drive-log.store.ts), readable by a local Claude Code;
  *  - two-phase answers (v3): the delivered words ask for `reply --drive
  *    --ack` within seconds, then the full result.
  *
- * Nothing the owner or the agents say is logged.
+ * Nothing the owner or the agents say is written to this machine's server
+ * logs; the session log above is a separate file, kept 30 days.
  *
  * @module services/drive/drive-agent.service
  */
@@ -37,6 +41,7 @@
 import { DRIVE_CONSTANTS } from '../../constants.js';
 import { LoggerService, type ComponentLogger } from '../core/logger.service.js';
 import { clip, speakable } from '../briefing/briefing.utils.js';
+import { getDriveLogStore, type DriveLogStore } from './drive-log.store.js';
 import type { OwnerTurnMark } from '../briefing/briefing-cards.js';
 import type { IncomingMessage } from '../cloud/cloud-sync.types.js';
 import { isDriveModeRow } from './drive-row.utils.js';
@@ -136,6 +141,8 @@ export interface DriveAgentDeps {
    * the status snapshot. Resolves when the fresh snapshot is uploaded.
    */
   refreshStatus?: () => Promise<void>;
+  /** Where session logs are kept (default: `~/.crewly/drive-logs`) */
+  logStore?: DriveLogStore;
   fetchImpl?: (input: string, init: RequestInit) => Promise<Response>;
   now?: () => Date;
   logger?: ComponentLogger;
@@ -208,6 +215,7 @@ export class DriveAgentService {
       else if (data.op === 'recall') await this.recall(data, instanceId);
       else if (data.op === 'warm') await this.warm(data, instanceId);
       else if (data.op === 'refresh') await this.deps.refreshStatus?.();
+      else if (data.op === 'log') await this.saveLog(data, instanceId);
       else await this.end(data, instanceId);
       return 'done';
     } catch (error) {
@@ -402,6 +410,14 @@ export class DriveAgentService {
     const fresh = registry.set(data.sessionId, state.warm, state.warmUntil);
     if (fresh.length) this.logger.info('Drive mode: keeping agents warm', { sessionId: data.sessionId, agents: fresh });
     for (const agent of fresh) await this.deps.prestart?.(agent).catch(() => undefined);
+  }
+
+  /** Keep the session log (`op:'log'`): fetch it from Cloud and write it under `~/.crewly/drive-logs/`. */
+  private async saveLog(data: DriveRelayData, instanceId: string): Promise<void> {
+    const raw = (await this.cloudGet(`/${data.sessionId}/machine/log?instanceId=${encodeURIComponent(instanceId)}`)) as { base?: unknown; markdown?: unknown; jsonl?: unknown } | null;
+    if (!raw || typeof raw.base !== 'string' || typeof raw.markdown !== 'string' || typeof raw.jsonl !== 'string') throw new Error('Cloud sent a malformed session log');
+    const file = await (this.deps.logStore ?? getDriveLogStore()).save(raw.base, raw.markdown, raw.jsonl);
+    this.logger.info('Drive mode: session log saved', { sessionId: data.sessionId, file });
   }
 
   private async end(data: DriveRelayData, instanceId: string): Promise<void> {
