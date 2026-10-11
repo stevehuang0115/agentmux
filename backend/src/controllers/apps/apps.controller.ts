@@ -173,6 +173,11 @@ export const addDoc = handle((req, caller) => getAppsParts().service.addDoc(req.
 /** GET /api/apps/:appId/data/:collection/:docId */
 export const getDoc = handle((req, caller) => getAppsParts().service.getDoc(req.params.appId, req.params.collection, req.params.docId, caller));
 
+/** GET /api/apps/:appId/data/:collection/:docId/field?path=/photo — the full, unshortened value of one field (crewly#1145) */
+export const getDocField = handle((req, caller) =>
+  getAppsParts().service.getDocField(req.params.appId, req.params.collection, req.params.docId, req.query.path, caller),
+);
+
 /** PUT /api/apps/:appId/data/:collection/:docId `{ data }` */
 export const setDoc = handle((req, caller) =>
   getAppsParts().service.setDoc(req.params.appId, req.params.collection, req.params.docId, body(req).data, caller),
