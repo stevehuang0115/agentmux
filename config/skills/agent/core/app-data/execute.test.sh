@@ -24,6 +24,18 @@ class H(BaseHTTPRequestHandler):
         def send(code, obj):
             self.send_response(code); self.send_header('Content-Type', 'application/json'); self.end_headers()
             self.wfile.write(json.dumps(obj).encode())
+        if self.path.endswith('/pretty'):
+            self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers()
+            return self.wfile.write(json.dumps({'success': True, 'data': {'id': 'pretty', 'data': {'text': 'line1\nline2'}, 'rev': 3, 'updatedAt': 't'}}, indent=2).encode())
+        if '/field' in self.path:
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query).get('path', [''])[0]
+            if q == '/photo':
+                return send(200, {'success': True, 'data': {'field': q, 'type': 'string', 'chars': 38, 'value': 'data:image/png;base64,aGVsbG8gd29ybGQ='}})
+            if q == '/n':
+                return send(200, {'success': True, 'data': {'field': q, 'type': 'number', 'value': 1}})
+        if self.path.endswith('/trunc'):
+            return send(200, {'success': True, 'data': {'id': 'trunc', 'data': {'photo': 'xx'}, 'rev': 1, 'updatedAt': 't', 'truncated': [{'field': '/photo', 'chars': 70000}], 'truncatedHint': 'cut'}})
         if self.path.endswith('/missing'):
             return send(404, {'success': False, 'error': 'not_found', 'message': 'Document not found.', 'hint': 'No such app, document or version for this account.'})
         if self.path.endswith('/collaborators') and method == 'GET':
@@ -88,6 +100,15 @@ check "list: path" "$(jq -r .path "$STUB_LOG")" "/api/apps/$A/data/items?limit=5
 
 OUT=$(run --app $A --get items milk)
 check "get" "$OUT" '{"success":true,"id":"milk","data":{"name":"milk","done":false},"rev":2,"updatedAt":"t"}'
+
+# A multi-line (pretty-printed) response body must survive whole (#1122).
+OUT=$(run --app $A --get items pretty)
+check "get: multi-line body kept whole" "$OUT" '{"success":true,"id":"pretty","data":{"text":"line1\nline2"},"rev":3,"updatedAt":"t"}'
+# The missing-session warning goes to stderr and must not break the JSON (#1122).
+OUT=$(env "${ENVS[@]}" CREWLY_SESSION_NAME= bash "$EXEC" --app $A --get items pretty 2>/dev/null)
+check "get: stderr warning does not pollute stdout" "$(printf '%s' "$OUT" | jq -r .id)" "pretty"
+OUT=$(env "${ENVS[@]}" CREWLY_SESSION_NAME= bash "$EXEC" --app $A --get items missing 2>/dev/null; true)
+check "error with warning: reason still parsed" "$(printf '%s' "$OUT" | jq -r .reason)" "not_found"
 
 OUT=$(run --app $A --get items missing; true)
 check "get missing → not_found" "$(printf '%s' "$OUT" | jq -c '{success, status, reason}')" '{"success":false,"status":404,"reason":"not_found"}'
@@ -194,6 +215,27 @@ OUT=$(run_err --app $A --upload "$WORK/proj/nourl.png" || true)
 check "upload: 2xx without a url fails, not success with nulls" "$(printf '%s' "$OUT" | grep -c 'without a url')" "1"
 OUT=$(run_err --app $A --upload || true)
 check "upload needs a path" "$(printf '%s' "$OUT" | grep -c 'requires a file path')" "1"
+
+# --get / --list carry the truncation flag through (#1145).
+OUT=$(run --app $A --get items trunc)
+check "get: truncation flag passed through" "$(printf '%s' "$OUT" | jq -c '.truncated')" '[{"field":"/photo","chars":70000}]'
+
+# --get-field --out writes the full value to a file and prints no content (#1145).
+OUT=$(run --app $A --get-field items milk --field /photo --out "$WORK/proj/photo.txt")
+check "get-field: path" "$(jq -r .path "$STUB_LOG")" "/api/apps/$A/data/items/milk/field?path=%2Fphoto"
+check "get-field: file holds the raw value" "$(cat "$WORK/proj/photo.txt")" 'data:image/png;base64,aGVsbG8gd29ybGQ='
+check "get-field: prints a receipt, not the value" "$(printf '%s' "$OUT" | jq -c '{success, bytes, chars}')" '{"success":true,"bytes":38,"chars":38}'
+run --app $A --get-field items milk --field /photo --out "$WORK/proj/photo.bin" --decode >/dev/null
+check "get-field --decode: data URL decoded to bytes" "$(cat "$WORK/proj/photo.bin")" 'hello world'
+OUT=$(run_err --app $A --get-field items milk --field /photo --out "$WORK/outside-photo.txt" || true)
+check "get-field: --out outside the project refused" "$(printf '%s' "$OUT" | grep -c 'inside your project')" "1"
+ln -s "$WORK/outside.json" "$WORK/proj/out-link.txt"
+OUT=$(run_err --app $A --get-field items milk --field /photo --out "$WORK/proj/out-link.txt" || true)
+check "get-field: symlink --out refused" "$(printf '%s' "$OUT" | grep -c 'symbolic link')" "1"
+OUT=$(run_err --app $A --get-field items milk --field /n --out "$WORK/proj/n.txt" || true)
+check "get-field: non-string field refused" "$(printf '%s' "$OUT" | grep -c 'not a string')" "1"
+OUT=$(run_err --app $A --get-field items milk --out "$WORK/proj/x.txt" || true)
+check "get-field: --field required" "$(printf '%s' "$OUT" | grep -c -- '--field is required')" "1"
 
 echo "app-data: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

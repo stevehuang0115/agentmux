@@ -504,6 +504,43 @@ describe('P3: app data sanitised for the agent (§4)', () => {
   });
 });
 
+describe('long strings in app data (crewly#1145)', () => {
+  const LONG = 'A'.repeat(70_000);
+  const who = { agentSession: 'dev-ella' };
+
+  it('flags a cut string on get and list instead of cropping silently', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    const doc = { id: 'd1', rev: 1, data: { name: 'x', photo: LONG, nested: [{ img: LONG }] } };
+    request.mockResolvedValueOnce(doc);
+    const got = (await service.getDoc(ID, 'items', 'd1', who)) as Record<string, any>;
+    expect(got.truncated).toEqual([
+      { field: '/photo', chars: 70_000 },
+      { field: '/nested/0/img', chars: 70_000 },
+    ]);
+    expect(got.truncatedHint).toMatch(/--get-field/);
+    expect(got.data.photo.length).toBeLessThan(70_000);
+    request.mockResolvedValueOnce({ docs: [doc], next: null });
+    const list = (await service.listDocs(ID, 'items', {}, who)) as Record<string, any>;
+    expect(list.truncated[0]).toEqual({ id: 'd1', field: '/photo', chars: 70_000 });
+  });
+
+  it('adds no flag when nothing was cut', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValueOnce({ id: 'd1', rev: 1, data: { a: 'short' } });
+    expect(await service.getDoc(ID, 'items', 'd1', who)).not.toHaveProperty('truncated');
+  });
+
+  it('getDocField returns the whole raw string, and refuses bad or missing pointers', async () => {
+    await registry.upsert(ID, { name: 'G', agentSession: 'dev-ella' });
+    request.mockResolvedValue({ id: 'd1', rev: 1, data: { photo: LONG, 'a/b': { 'c~d': ['z'] } } });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', who)).resolves.toEqual({ field: '/photo', type: 'string', chars: 70_000, value: LONG });
+    await expect(service.getDocField(ID, 'items', 'd1', '/a~1b/c~0d/0', who)).resolves.toMatchObject({ value: 'z' });
+    await expect(service.getDocField(ID, 'items', 'd1', '/nope', who)).rejects.toMatchObject({ status: 404 });
+    await expect(service.getDocField(ID, 'items', 'd1', 'photo', who)).rejects.toMatchObject({ status: 400 });
+    await expect(service.getDocField(ID, 'items', 'd1', '/photo', { agentSession: 'dev-bob' })).rejects.toMatchObject({ code: 'not_your_app' });
+  });
+});
+
 describe('P3: public app names and re-approval (crewly-services #33)', () => {
   const pending = { publicRead: ['items'], publicSubmit: [], note: null, requestedBy: 'system', requestedAt: 't' };
 

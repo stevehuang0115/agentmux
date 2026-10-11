@@ -4425,6 +4425,11 @@ void (async () => {
 			// CREWLY_WORKTREE_JANITOR=0.
 			try {
 				WorktreeJanitorService.getInstance().setLowDiskNotifier(slackOwnerAlertNotifier);
+				// A runaway file in an agent's dir: the agent is told through normal delivery.
+				WorktreeJanitorService.getInstance().setAgentNotifier(async (session, message) => {
+					const r = await this.apiController.agentRegistrationService.sendMessageToAgent(session, message);
+					return r.success;
+				});
 				if (WorktreeJanitorService.getInstance().start()) {
 					this.logger.info('WorktreeJanitorService scheduled');
 				} else {

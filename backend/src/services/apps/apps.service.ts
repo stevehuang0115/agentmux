@@ -13,7 +13,7 @@ import { CREWLY_APPS_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constant
 import { AppsCloudClient, AppsCloudError, type AppsRequestOptions } from './apps-cloud.client.js';
 import type { AppRegistryEntry, AppsRegistryService } from './apps-registry.service.js';
 import { toOpenLinkInfos, usableMintedLink, type MintedOpenLink, type OpenLinkInfo } from './app-open-link.js';
-import { sanitizeAppData } from './app-wake-message.js';
+import { findTruncatedFields, resolveJsonPointer, sanitizeAppData } from './app-wake-message.js';
 
 const C = CREWLY_APPS_CONSTANTS;
 
@@ -1168,10 +1168,8 @@ export class AppsService {
     const after = opts.after !== undefined && opts.after !== '' ? requireDocId(opts.after) : undefined;
     const path = `/apps/${requireAppId(appId)}/data/${requireCollection(collection)}`;
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, {
-      query: { limit, after },
-      agent: caller.agentSession,
-    });
+    const raw = await this.deps.client.request<unknown>('GET', path, { query: { limit, after }, agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'list');
   }
 
   /**
@@ -1186,7 +1184,58 @@ export class AppsService {
   async getDoc(appId: unknown, collection: unknown, docId: unknown, caller: AppsCaller): Promise<unknown> {
     const path = this.docPath(appId, collection, docId);
     await this.assertDataAccess(appId as string, caller);
-    return this.dataRequest('GET', path, { agent: caller.agentSession });
+    const raw = await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession });
+    return this.withTruncationFlags(raw, 'doc');
+  }
+
+  /**
+   * The full, unshortened value of one field of a document (crewly#1145).
+   * Reads of a document cut strings over 64K characters for display and flag
+   * them in `truncated`; this returns the whole string so a caller (the
+   * app-data skill's `--get-field --out`) can write it to a file. The value
+   * is NOT sanitised: it is meant for a file, never for a terminal.
+   *
+   * @param appId - App id
+   * @param collection - Collection
+   * @param docId - Document id
+   * @param field - RFC 6901 JSON pointer into the document's `data` (`/photo`)
+   * @param caller - Agent or owner
+   * @returns `{ field, type, chars?, value }`
+   * @throws AppsCloudError validation (bad pointer), not_found (no such field)
+   */
+  async getDocField(appId: unknown, collection: unknown, docId: unknown, field: unknown, caller: AppsCaller): Promise<unknown> {
+    if (typeof field !== 'string' || !field.startsWith('/') || field.length > 1024) throw validation('field must be a JSON pointer into the document data, like /photo or /items/0/image.');
+    const path = this.docPath(appId, collection, docId);
+    await this.assertDataAccess(appId as string, caller);
+    const doc = (await this.deps.client.request<unknown>('GET', path, { agent: caller.agentSession })) as { data?: unknown } | null;
+    const hit = resolveJsonPointer(doc?.data, field);
+    if (!hit.found) throw new AppsCloudError(404, 'not_found', 'That document has no such field.');
+    const v = hit.value;
+    const type = v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v;
+    return { field, type, ...(typeof v === 'string' ? { chars: v.length } : {}), value: v };
+  }
+
+  /**
+   * Sanitise a document read for the agent and say which strings were cut.
+   * Adds `truncated: [{ field, chars }]` (per document for a list, with the
+   * doc `id`) only when something was cut, so a cropped base64 value is never
+   * mistaken for the whole.
+   */
+  private withTruncationFlags(raw: unknown, kind: 'doc' | 'list'): unknown {
+    const out = sanitizeAppData(raw) as Record<string, unknown> | null;
+    if (!out || typeof out !== 'object' || !raw || typeof raw !== 'object') return out;
+    const r = raw as Record<string, unknown>;
+    const hint = 'Strings over 65,536 characters are cut in this view. Fetch the whole value with app-data --get-field <collection> <docId> --field <field> --out <file>.';
+    if (kind === 'doc') {
+      const truncated = findTruncatedFields(r.data);
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    } else if (Array.isArray(r.docs)) {
+      const truncated = (r.docs as Array<{ id?: unknown; data?: unknown }>).flatMap((d) =>
+        findTruncatedFields(d?.data).map((t) => ({ id: d?.id, ...t })),
+      );
+      if (truncated.length > 0) Object.assign(out, { truncated, truncatedHint: hint });
+    }
+    return out;
   }
 
   /**

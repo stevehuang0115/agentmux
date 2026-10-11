@@ -12,6 +12,7 @@
  * - GET    /:appId/data/:collection                — `?limit&after`
  * - POST   /:appId/data/:collection                — add `{ data }`
  * - GET    /:appId/data/:collection/:docId         — one doc
+ * - GET    /:appId/data/:collection/:docId/field   — `?path=/pointer` full value of one field
  * - PUT    /:appId/data/:collection/:docId         — replace `{ data }`
  * - PATCH  /:appId/data/:collection/:docId         — merge `{ data, ifRev? }`
  * - DELETE /:appId/data/:collection/:docId         — delete
@@ -72,6 +73,7 @@ import {
   listDocs,
   addDoc,
   getDoc,
+  getDocField,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -225,6 +227,7 @@ export function createAppsRouter(): Router {
   router.get('/:appId/data/:collection', listDocs);
   router.post('/:appId/data/:collection', addDoc);
   router.get('/:appId/data/:collection/:docId', getDoc);
+  router.get('/:appId/data/:collection/:docId/field', getDocField);
   router.put('/:appId/data/:collection/:docId', setDoc);
   router.patch('/:appId/data/:collection/:docId', updateDoc);
   router.delete('/:appId/data/:collection/:docId', deleteDoc);

@@ -64,6 +64,15 @@
  * the janitor left and why; below 5 GB the notice is urgent and repeats at
  * most every 6 h.
  *
+ * ## Runaway files
+ * Once a minute a watcher scans agent scratch dirs and worktrees for a single
+ * file that grows without bound (a 40 GB `all.md` filled a disk, crewly#1078):
+ * a file over 5 GB that is still growing, or any file growing over 1 GB/min,
+ * has its writer stopped, is cut to its first 1 MB, the agent working there is
+ * told and the owner is alerted once through the low-disk notifier. A big file
+ * that is not growing is only reported. See
+ * {@link module:services/worktree/runaway-file-watcher}.
+ *
  * Runs every 30 minutes (first run 10 minutes after boot). Kill switch:
  * `CREWLY_WORKTREE_JANITOR=0` (also stops the low-disk guard). Never throws;
  * logs one summary line per sweep.
@@ -91,6 +100,7 @@ import {
 } from './low-disk-guard.js';
 import { defaultScratchRoots, sweepScratch, type ScratchSweepSummary } from './scratch-janitor.js';
 import { reclaimDocker, type DockerReclaimResult } from './docker-reclaim.js';
+import { RunawayFileWatcher, runawayWatchRoots, type RunawayOutcome } from './runaway-file-watcher.js';
 import { getTraceStore, type TraceDiskResult } from '../trace/trace-store.js';
 import {
 	canonicalPath,
@@ -299,6 +309,10 @@ export class WorktreeJanitorService {
 	private lastPassAt: number | null = null;
 	private memoryNoticeState: LowDiskNoticeState = {};
 	private notifier: LowDiskNotifier | null;
+	private agentNotifier: ((sessionName: string, message: string) => Promise<boolean>) | null = null;
+	private runawayTimer: NodeJS.Timeout | null = null;
+	private runawayWatcher: RunawayFileWatcher | null = null;
+	private runawayInFlight = false;
 
 	/**
 	 * @param options - Injectable dependencies; defaults use the live backend
@@ -316,6 +330,66 @@ export class WorktreeJanitorService {
 	 */
 	setLowDiskNotifier(notifier: LowDiskNotifier | null): void {
 		this.notifier = notifier;
+	}
+
+	/**
+	 * Set how an agent is told its working dir had a runaway file (the server
+	 * wires the normal agent message delivery here).
+	 *
+	 * @param notifier - Sender (true when delivered), or null to skip agent notices
+	 */
+	setAgentNotifier(notifier: ((sessionName: string, message: string) => Promise<boolean>) | null): void {
+		this.agentNotifier = notifier;
+	}
+
+	/**
+	 * One runaway-file scan now (also what the minute timer runs). Never
+	 * throws; overlapping scans are skipped. Honours the kill switch.
+	 *
+	 * @returns What was flagged and done (empty when nothing is wrong)
+	 */
+	async checkRunawayFiles(): Promise<RunawayOutcome[]> {
+		if (this.isDisabled() || this.runawayInFlight) return [];
+		this.runawayInFlight = true;
+		try {
+			if (!this.runawayWatcher) {
+				this.runawayWatcher = new RunawayFileWatcher({
+					listRoots: async () => {
+						const repos = await (this.opts.listRepoPaths ?? defaultListRepoPaths)().catch(() => [] as string[]);
+						return runawayWatchRoots(this.scratchRoots(), this.tmpRoots(), repos);
+					},
+					notifyOwner: async (notice) => (this.notifier ? this.notifier(notice) : false),
+					notifyAgents: (file, message) => this.notifyAgentsNear(file, message),
+					now: () => this.now(),
+					logger: this.logger,
+				});
+			}
+			return await this.runawayWatcher.scan();
+		} finally {
+			this.runawayInFlight = false;
+		}
+	}
+
+	/** Sessions whose cwd holds `file`, or sits in the same scratch session dir; told via the agent notifier. */
+	private async notifyAgentsNear(file: string, message: string): Promise<string[]> {
+		const notifier = this.agentNotifier;
+		if (!notifier) return [];
+		const told: string[] = [];
+		try {
+			const { getSessionBackendSync } = await import('../session/session-backend.factory.js');
+			const backend = getSessionBackendSync();
+			const unit = /^(.*[\\/]claude-\d+[\\/][^\\/]+[\\/][0-9a-f-]{36})(?:[\\/]|$)/i.exec(file)?.[1];
+			for (const name of backend?.listSessions() ?? []) {
+				const cwd = backend?.getSession(name)?.cwd;
+				if (!cwd) continue;
+				if (isPathInside(file, cwd) || (unit && isPathInside(cwd, unit))) {
+					if (await notifier(name, message).catch(() => false)) told.push(name);
+				}
+			}
+		} catch {
+			// no session backend — the owner alert still goes out
+		}
+		return told;
 	}
 
 	/**
@@ -361,6 +435,8 @@ export class WorktreeJanitorService {
 		this.firstRunTimer.unref?.();
 		this.diskTimer = setInterval(() => void this.checkDisk(), WORKTREE_JANITOR_CONSTANTS.LOW_DISK_CHECK_INTERVAL_MS);
 		this.diskTimer.unref?.();
+		this.runawayTimer = setInterval(() => void this.checkRunawayFiles(), WORKTREE_JANITOR_CONSTANTS.RUNAWAY_CHECK_INTERVAL_MS);
+		this.runawayTimer.unref?.();
 		return true;
 	}
 
@@ -369,6 +445,8 @@ export class WorktreeJanitorService {
 		if (this.firstRunTimer) clearTimeout(this.firstRunTimer);
 		if (this.intervalTimer) clearInterval(this.intervalTimer);
 		if (this.diskTimer) clearInterval(this.diskTimer);
+		if (this.runawayTimer) clearInterval(this.runawayTimer);
+		this.runawayTimer = null;
 		this.firstRunTimer = null;
 		this.intervalTimer = null;
 		this.diskTimer = null;

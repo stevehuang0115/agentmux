@@ -236,6 +236,57 @@ export function sanitizeAppData(value: unknown, depth = 0): unknown {
   return Object.fromEntries(entries);
 }
 
+/** One string in an app document that {@link sanitizeAppData} would cut for display. */
+export interface TruncatedAppField {
+  /** RFC 6901 JSON pointer into the document's `data` (e.g. `/photo`), for `getDocField` */
+  field: string;
+  /** Length of the full string, in characters */
+  chars: number;
+}
+
+/**
+ * Find the strings in a document's `data` that the display sanitiser cuts
+ * (longer than {@link CREWLY_APPS_CONSTANTS.DATA_SANITIZE}.MAX_STRING_CHARS),
+ * so the agent is told a value is incomplete rather than left to parse a
+ * silently cropped one (crewly#1145). Object keys are not reported (they are
+ * not fetchable). Depth is capped like the sanitiser.
+ *
+ * @param value - Raw `data` of one document
+ * @param pointer - Current JSON pointer (internal)
+ * @param depth - Current depth (internal)
+ * @returns One entry per cut string, in document order
+ */
+export function findTruncatedFields(value: unknown, pointer = '', depth = 0): TruncatedAppField[] {
+  if (typeof value === 'string') return value.length > C.DATA_SANITIZE.MAX_STRING_CHARS ? [{ field: pointer || '/', chars: value.length }] : [];
+  if (value === null || typeof value !== 'object' || depth >= C.DATA_SANITIZE.MAX_DEPTH) return [];
+  const entries: Array<[string, unknown]> = Array.isArray(value)
+    ? value.map((v, i) => [String(i), v])
+    : Object.entries(value as Record<string, unknown>);
+  return entries.flatMap(([k, v]) => findTruncatedFields(v, `${pointer}/${k.replace(/~/g, '~0').replace(/\//g, '~1')}`, depth + 1));
+}
+
+/**
+ * Resolve an RFC 6901 JSON pointer inside a value.
+ *
+ * @param root - A JSON value
+ * @param pointer - `/a/0/b`; must start with `/`
+ * @returns `{ found: true, value }` or `{ found: false }`
+ */
+export function resolveJsonPointer(root: unknown, pointer: string): { found: true; value: unknown } | { found: false } {
+  if (!pointer.startsWith('/')) return { found: false };
+  let cur: unknown = root;
+  for (const raw of pointer.slice(1).split('/')) {
+    const key = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(cur)) {
+      if (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= cur.length) return { found: false };
+      cur = cur[Number(key)];
+    } else if (cur !== null && typeof cur === 'object' && Object.prototype.hasOwnProperty.call(cur, key)) {
+      cur = (cur as Record<string, unknown>)[key];
+    } else return { found: false };
+  }
+  return { found: true, value: cur };
+}
+
 /**
  * Quote cleaned text: every line starts with `| `, indented under its label.
  *

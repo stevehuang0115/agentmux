@@ -39,6 +39,7 @@ beforeEach(() => {
     listDocs: jest.fn().mockResolvedValue({ docs: [], next: null }),
     addDoc: jest.fn().mockResolvedValue({ id: 'n', rev: 1 }),
     getDoc: jest.fn().mockResolvedValue({ id: 'milk', data: {}, rev: 1 }),
+    getDocField: jest.fn().mockResolvedValue({ field: '/photo', type: 'string', chars: 3, value: 'abc' }),
     setDoc: jest.fn().mockResolvedValue({ id: 'milk', rev: 2 }),
     updateDoc: jest.fn().mockResolvedValue({ id: 'milk', rev: 3 }),
     deleteDoc: jest.fn().mockResolvedValue({ deleted: true }),
@@ -459,6 +460,9 @@ describe('Crewly Apps controller', () => {
     expect(service.addDoc).toHaveBeenCalledWith(ID, 'items', { n: 1 }, who);
     await request(app).get(`/api/apps/${ID}/data/items/milk`).set(h);
     expect(service.getDoc).toHaveBeenCalledWith(ID, 'items', 'milk', who);
+    const field = await request(app).get(`/api/apps/${ID}/data/items/milk/field?path=%2Fphoto`).set(h);
+    expect(field.body.data.value).toBe('abc');
+    expect(service.getDocField).toHaveBeenCalledWith(ID, 'items', 'milk', '/photo', who);
     await request(app).put(`/api/apps/${ID}/data/items/milk`).set(h).send({ data: { a: 1 } });
     expect(service.setDoc).toHaveBeenCalledWith(ID, 'items', 'milk', { a: 1 }, who);
     await request(app).patch(`/api/apps/${ID}/data/items/milk`).set(h).send({ data: { a: 2 }, ifRev: 2 });

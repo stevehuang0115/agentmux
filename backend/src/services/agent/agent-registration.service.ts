@@ -47,6 +47,7 @@ import {
 	ORC_CONVERSATION_CONSTANTS,
 	SLACK_THREAD_KEY_CONSTANTS,
 	OPEN_ITEMS_CONSTANTS,
+	WORKTREE_JANITOR_CONSTANTS,
 	SPEND_CAP_CONSTANTS,
 	RUNTIME_INPUT_SAFETY,
 	TUI_INPUT_GUARD,
@@ -2715,7 +2716,9 @@ export class AgentRegistrationService {
 				+ 'Browser skills (e.g. remote-browser) are the preferred way to perform browser tasks. '
 				+ 'Bash skills in the Crewly skills directory are available for team communication and status reporting.'
 				// specs/2026-10-01-reply-open-items.md — promises and questions in replies are tracked.
-				+ '\n\n' + OPEN_ITEMS_CONSTANTS.PROMPT_LINE;
+				+ '\n\n' + OPEN_ITEMS_CONSTANTS.PROMPT_LINE
+				// crewly#1078 — a 40 GB runaway file in a scratch dir filled a disk.
+				+ '\n\n' + WORKTREE_JANITOR_CONSTANTS.PROMPT_HINT;
 
 			// Inject Team Lead addon for members that may delegate (a lead by the
 			// team-lead rule, or canDelegate=true) and have members to direct.
