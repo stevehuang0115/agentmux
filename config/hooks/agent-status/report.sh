@@ -112,19 +112,23 @@ if [ -n "${CREWLY_AGENT_AUTHORIZATION:-}" ]; then
 	ARGS+=(-H "X-Agent-Authorization: b64:$(printf '%s' "$CREWLY_AGENT_AUTHORIZATION" | base64 | tr -d '\n')")
 fi
 
-# Only a PostToolUse with a tool name can get a note back; everything else
-# discards the response.
-if [ "$EVENT" != "PostToolUse" ] || [ -z "$TOOL_NAME" ]; then
+# Only a PostToolUse with a tool name, or a SessionStart after a compact or
+# clear (the orchestrator gets its team roster back, specs/2026-10-10-team-
+# roster.md), can get a note back; everything else discards the response.
+WANTS_NOTE="false"
+if [ "$EVENT" = "PostToolUse" ] && [ -n "$TOOL_NAME" ]; then WANTS_NOTE="true"; fi
+if [ "$EVENT" = "SessionStart" ] && { [ "$SOURCE" = "compact" ] || [ "$SOURCE" = "clear" ]; }; then WANTS_NOTE="true"; fi
+if [ "$WANTS_NOTE" != "true" ]; then
 	curl "${ARGS[@]}" -o /dev/null --data "$BODY" >/dev/null 2>&1 || true
 	exit 0
 fi
 
 RESPONSE="$(curl "${ARGS[@]}" --data "$BODY" 2>/dev/null || true)"
 [ -z "$RESPONSE" ] && exit 0
-# Print {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":<note>}}
+# Print {"hookSpecificOutput":{"hookEventName":"<event>","additionalContext":<note>}}
 # when the response carries a string additionalContext; nothing otherwise.
 if command -v jq >/dev/null 2>&1; then
-	printf '%s' "$RESPONSE" | jq -c 'if type == "object" and (.additionalContext | type) == "string" and (.additionalContext | length) > 0 then {hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: .additionalContext}} else empty end' 2>/dev/null || true
+	printf '%s' "$RESPONSE" | jq -c --arg ev "$EVENT" 'if type == "object" and (.additionalContext | type) == "string" and (.additionalContext | length) > 0 then {hookSpecificOutput: {hookEventName: $ev, additionalContext: .additionalContext}} else empty end' 2>/dev/null || true
 elif command -v node >/dev/null 2>&1; then
 	printf '%s' "$RESPONSE" | node -e '
 		let s = "";
@@ -133,9 +137,9 @@ elif command -v node >/dev/null 2>&1; then
 			try {
 				const o = JSON.parse(s);
 				if (o && typeof o.additionalContext === "string" && o.additionalContext.length > 0) {
-					process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: o.additionalContext } }));
+					process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: process.argv[1], additionalContext: o.additionalContext } }));
 				}
 			} catch { /* not JSON: no note */ }
-		});' 2>/dev/null || true
+		});' "$EVENT" 2>/dev/null || true
 fi
 exit 0

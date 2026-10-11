@@ -12,7 +12,8 @@
  */
 
 import type { Request, Response } from 'express';
-import { AGENT_STATUS_HOOK_CONSTANTS, CREDENTIAL_GUARD_CONSTANTS, TL_DELEGATION_CONSTANTS, TRACE_CONSTANTS, TURN_STATE_CONSTANTS } from '../../constants.js';
+import { AGENT_STATUS_HOOK_CONSTANTS, CREDENTIAL_GUARD_CONSTANTS, ORCHESTRATOR_SESSION_NAME, TEAM_ROSTER_CONSTANTS, TL_DELEGATION_CONSTANTS, TRACE_CONSTANTS, TURN_STATE_CONSTANTS } from '../../constants.js';
+import { TeamRosterService } from '../../services/team-roster/team-roster.service.js';
 import { TlDelegationService } from '../../services/tl-delegation/tl-delegation.service.js';
 import { CredentialGuardAlertService } from '../../services/monitoring/credential-guard-alerts.js';
 import { recordHookEvent } from '../../services/monitoring/agent-hook-state.js';
@@ -36,6 +37,8 @@ const SESSION_HEADER = 'x-agent-session';
  *   about waiting or turns, e.g. an idle prompt)
  * - `toolUseId` / `agentId` are optional; anything but a plain identifier is a 400
  * - `source` (SessionStart) must be startup / resume / clear / compact
+ * - A `SessionStart` of the orchestrator after a `compact` or `clear` answers the team roster as
+ *   `additionalContext` (the context just lost the prompt that carried it; specs/2026-10-10-team-roster.md)
  * - `SubagentSendBack` (from the subagent guard) is recorded in the session's
  *   run trace only; 202 with `recorded` = whether the session had a trace
  *
@@ -125,6 +128,22 @@ export function receiveAgentHook(req: Request, res: Response): void {
 	const signal = recordHookEvent(sessionName, event, notificationType);
 	const turnChanged = AgentTurnStateService.getInstance().recordHook(sessionName, event, ids);
 	const recorded = signal !== null || turnChanged;
+	// The orchestrator's context was just compacted or cleared: the roster in
+	// its start prompt is gone, so hand it back (never blocks: no note on failure).
+	if (
+		event === 'SessionStart' &&
+		sessionName === ORCHESTRATOR_SESSION_NAME &&
+		ids.source !== undefined &&
+		(TEAM_ROSTER_CONSTANTS.REINJECT_SOURCES as readonly string[]).includes(ids.source)
+	) {
+		void TeamRosterService.getInstance()
+			.renderForPrompt()
+			.catch(() => '')
+			.then((roster) => {
+				res.status(202).json({ success: true, recorded, ...(roster ? { additionalContext: roster } : {}) });
+			});
+		return;
+	}
 	// A PostToolUse with a tool name may come back with notes the hook hands
 	// to Claude Code as additionalContext: an owner message waiting in the
 	// queue (handed over at this tool boundary instead of at the end of the

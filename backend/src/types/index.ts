@@ -213,6 +213,18 @@ export interface Team {
 
   /** Team mission statement — displayed in get-team-status and org chart. */
   mission?: string;
+  /**
+   * What this team is responsible for, in the lead's own words (a few
+   * sentences). The orchestrator routes owner requests with it (team roster,
+   * specs/2026-10-10-team-roster.md); a lead keeps it current with
+   * `update-charter`. Absent = the roster falls back to `description`, then
+   * to a charter derived from roles, projects and recent tickets.
+   */
+  charter?: string;
+  /** ISO time the charter was last written */
+  charterUpdatedAt?: string;
+  /** Who wrote it: `owner`, `orchestrator`, or the lead's session */
+  charterUpdatedBy?: string;
 
   /** Token/cost budget configuration for the team. */
   budget?: TeamBudget;
