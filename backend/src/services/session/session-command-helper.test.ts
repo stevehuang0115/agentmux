@@ -1593,6 +1593,13 @@ describe('unreadable input ladder: repaint → enlarge → read again (2026-10-0
 		expect(SessionCommandHelper.unreadableReadCount('ella-1')).toBe(1);
 	});
 
+	it('keeps a redacted excerpt of the unreadable screen for owner alerts, cleared once it reads again', async () => {
+		await expect(helper.sendMessage('ella-x', 'hello Ella')).rejects.toMatchObject({ name: 'TuiInputGuardError' });
+		expect(typeof SessionCommandHelper.unreadableExcerpt('ella-x')).toBe('string');
+		await helper.sendMessage('ella-x', 'hello Ella');
+		expect(SessionCommandHelper.unreadableExcerpt('ella-x')).toBe('');
+	});
+
 	it('second unreadable read: enlarged to 200x60, the box reads empty and the message is delivered', async () => {
 		await expect(helper.sendMessage('ella-2', 'hello Ella')).rejects.toMatchObject({ name: 'TuiInputGuardError' });
 		await helper.sendMessage('ella-2', 'hello Ella');

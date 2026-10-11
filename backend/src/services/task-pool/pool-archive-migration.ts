@@ -27,6 +27,7 @@ import { promises as fs } from 'fs';
 import { atomicWriteJson, ensureDir } from '../../utils/file-io.utils.js';
 import { POOL_ARCHIVE_CONSTANTS } from '../../constants.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
+import type { TaskClaim } from '../../types/v2/claim.types.js';
 import type { ComponentLogger } from '../core/logger.service.js';
 
 /** Why an item was archived. */
@@ -44,8 +45,10 @@ export interface ArchivablePool {
 export interface PoolArchiveFile {
   version: 1;
   /** One entry per run that added items */
-  runs: Array<{ archivedAt: string; migration: string; added: number }>;
+  runs: Array<{ archivedAt: string; migration: string; added: number; addedClaims?: number }>;
   workItems: Array<WorkItem & { archiveReason?: ArchiveReason }>;
+  /** Ended claims moved out by the ongoing prune (absent in older files) */
+  claims?: TaskClaim[];
 }
 
 /** Counts reported (and logged) by a run. */
@@ -134,7 +137,7 @@ export function archiveFileName(now: Date): string {
  * @param p - Path
  * @returns True when it does
  */
-async function exists(p: string): Promise<boolean> {
+export async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
     return true;
@@ -149,11 +152,16 @@ async function exists(p: string): Promise<boolean> {
  * @param file - Archive path
  * @returns The parsed archive, or null when it cannot be read as one
  */
-async function readArchive(file: string): Promise<PoolArchiveFile | null> {
+export async function readArchive(file: string): Promise<PoolArchiveFile | null> {
   try {
     const parsed = JSON.parse(await fs.readFile(file, 'utf-8')) as Partial<PoolArchiveFile>;
     if (!parsed || !Array.isArray(parsed.workItems)) return null;
-    return { version: 1, runs: Array.isArray(parsed.runs) ? parsed.runs : [], workItems: parsed.workItems };
+    return {
+      version: 1,
+      runs: Array.isArray(parsed.runs) ? parsed.runs : [],
+      workItems: parsed.workItems,
+      ...(Array.isArray(parsed.claims) ? { claims: parsed.claims } : {}),
+    };
   } catch {
     return null;
   }
@@ -217,6 +225,7 @@ export async function runPoolArchiveMigration(
         { archivedAt: now.toISOString(), migration: POOL_ARCHIVE_CONSTANTS.MARKER_FILENAME, added: added.length },
       ],
       workItems: [...archived, ...added.map(({ workItem, reason }) => ({ ...workItem, archiveReason: reason }))],
+      ...(existing.claims ? { claims: existing.claims } : {}),
     };
     // Archive first: only once it is on disk do the items leave the pool.
     await atomicWriteJson(archiveFile, next);

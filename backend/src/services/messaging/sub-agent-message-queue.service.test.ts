@@ -87,6 +87,97 @@ describe('SubAgentMessageQueue', () => {
 			expect(outcome).toEqual({ delivered: 1, deferred: 1, failed: 0, skippedStale: 0 });
 		});
 
+		// crewly#1035: flush matched queue entries by text, and ran unlocked.
+		it('serializes flushes for the same agent so they cannot overlap or reorder', async () => {
+			queue.enqueue('ella', 'one');
+			queue.enqueue('ella', 'two');
+			const events: string[] = [];
+			let release!: () => void;
+			const gate = new Promise<void>((r) => (release = r));
+			const first = queue.flush('ella', async (data) => {
+				events.push(`start ${data}`);
+				if (data === 'one') await gate;
+				events.push(`end ${data}`);
+				return {};
+			});
+			const second = queue.flush('ella', async (data) => {
+				events.push(`second ${data}`);
+				return {};
+			});
+			await new Promise((r) => setTimeout(r, 10));
+			expect(events).toEqual(['start one']);
+			release();
+			await Promise.all([first, second]);
+			expect(events).toEqual(['start one', 'end one', 'start two', 'end two']);
+		});
+
+		it('does not serialize flushes of different agents', async () => {
+			queue.enqueue('ella', 'a');
+			queue.enqueue('owen', 'b');
+			let release!: () => void;
+			const gate = new Promise<void>((r) => (release = r));
+			const seen: string[] = [];
+			const p1 = queue.flush('ella', async () => {
+				await gate;
+				return {};
+			});
+			await queue.flush('owen', async (d) => {
+				seen.push(d);
+				return {};
+			});
+			expect(seen).toEqual(['b']);
+			release();
+			await p1;
+		});
+
+		it('a failed flush does not block the next one', async () => {
+			queue.enqueue('ella', 'a');
+			await expect(
+				queue.flush('ella', async () => {
+					throw new Error('boom');
+				}),
+			).resolves.toMatchObject({ failed: 1 });
+			const out = await queue.flush('ella', async () => ({}));
+			expect(out.delivered).toBe(1);
+		});
+
+		it('keeps a same-text message queued during a failing send (matches by id, not text)', async () => {
+			queue.enqueue('ella', 'dup');
+			await queue.flush('ella', async () => {
+				// A different producer queues the same text while the send is running.
+				queue.enqueue('ella', 'dup');
+				return { success: false, error: 'x' };
+			});
+			const left = queue.dequeueAll('ella');
+			expect(left.map((m) => m.data)).toEqual(['dup', 'dup']);
+			expect(new Set(left.map((m) => m.id)).size).toBe(2);
+			expect(left[0].attempts).toBe(1);
+		});
+
+		it('removes only the copy send re-queued, keeping the original entry id and place', async () => {
+			queue.enqueue('ella', 'first');
+			queue.enqueue('ella', 'second');
+			const [firstEntry] = [...(queue as any).pendingMessages.get('ella')] as QueuedAgentMessage[];
+			await queue.flush('ella', async (data) => {
+				queue.enqueue('ella', data); // what sendMessageToAgent does when busy
+				return { queued: true };
+			});
+			const left = queue.dequeueAll('ella');
+			expect(left.map((m) => m.data)).toEqual(['first', 'second']);
+			expect(left[0].id).toBe(firstEntry.id);
+			expect(left[0].queuedAt).toBe(firstEntry.queuedAt);
+		});
+
+		it('gives entries from an older store an id when loaded', () => {
+			const legacy = path.join(os.tmpdir(), `saq-legacy-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+			fs.writeFileSync(legacy, JSON.stringify({ queues: { ella: [{ data: 'old', queuedAt: Date.now(), sessionName: 'ella' }] } }));
+			SubAgentMessageQueue.resetInstance();
+			const loaded = SubAgentMessageQueue.getInstance(legacy);
+			const [entry] = loaded.dequeueAll('ella');
+			expect(entry.data).toBe('old');
+			expect(typeof entry.id).toBe('string');
+		});
+
 		// crewly#1015 review: a /deliver brief held by the restart drain keeps
 		// its WorkItem; the hand-over (dedup, fresh conversation) runs when it
 		// is finally written.

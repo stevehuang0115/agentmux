@@ -298,6 +298,43 @@ assert_json_field "fifo body types[0]" "$FIFO_BODY" ".filters.types[0]" "delegat
 assert_json_field "fifo body types[1]" "$FIFO_BODY" ".filters.types[1]" "project_task"
 
 # ---------------------------------------------------------------------------
+# Test 9: a claim that times out is reported as pending, not as a failure
+# (crewly#1108). Runs the real execute.sh against a stub curl: GETs answer
+# with one queued item, the claim POST "times out" (curl exit 28).
+# ---------------------------------------------------------------------------
+echo "Test 9: claim timeout is reported as claimPending"
+
+STUB_DIR=$(mktemp -d)
+cat > "$STUB_DIR/curl" <<'STUB'
+#!/bin/bash
+method=GET
+for a in "$@"; do
+  if [ "$prev" = "-X" ]; then method="$a"; fi
+  prev="$a"
+done
+if [ "$method" = "POST" ]; then
+  [ "$STUB_MODE" = "http504" ] && { printf '{"error":"gateway"}\n504'; exit 0; }
+  [ "$STUB_MODE" = "http500" ] && { printf '{"error":"boom"}\n500'; exit 0; }
+  exit 28
+fi
+printf '{"success":true,"count":1,"data":[{"id":"wi-1","title":"t","description":"d"}]}\n200'
+STUB
+chmod +x "$STUB_DIR/curl"
+
+OUTPUT=$(PATH="$STUB_DIR:$PATH" STUB_MODE=timeout CREWLY_SESSION_NAME=agent-1 bash "$SCRIPT_DIR/execute.sh" '{"sessionName":"agent-1"}' </dev/null 2>/dev/null) && EXIT_CODE=$? || EXIT_CODE=$?
+assert_eq "timeout exits 0" "0" "$EXIT_CODE"
+assert_json_field "timeout: claimPending" "$OUTPUT" ".claimPending" "true"
+assert_json_field "timeout: claimed false" "$OUTPUT" ".claimed" "false"
+assert_contains "timeout: tells the agent not to retry" "Do NOT retry" "$OUTPUT"
+
+OUTPUT=$(PATH="$STUB_DIR:$PATH" STUB_MODE=http504 CREWLY_SESSION_NAME=agent-1 bash "$SCRIPT_DIR/execute.sh" '{"sessionName":"agent-1"}' </dev/null 2>/dev/null) && EXIT_CODE=$? || EXIT_CODE=$?
+assert_json_field "504: claimPending" "$OUTPUT" ".claimPending" "true"
+
+OUTPUT=$(PATH="$STUB_DIR:$PATH" STUB_MODE=http500 CREWLY_SESSION_NAME=agent-1 bash "$SCRIPT_DIR/execute.sh" '{"sessionName":"agent-1"}' </dev/null 2>&1) && EXIT_CODE=$? || EXIT_CODE=$?
+assert_eq "a real 500 is still an error" "1" "$EXIT_CODE"
+rm -rf "$STUB_DIR"
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
