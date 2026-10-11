@@ -120,10 +120,19 @@ export function getStatus(_req: Request, res: Response): void {
 		...(i.deviceId ? { deviceId: i.deviceId } : {}),
 	}));
 
+	const drivable = proxy.isAvailable();
 	res.json({
 		...bridgeStatus,
 		transport: 'cloud-relay-ws',
-		drivable: proxy.isAvailable(),
+		drivable,
+		// `clientCount` above counts DIRECT local WebSocket extensions only. A
+		// browser reached through the Cloud relay never appears in it, so
+		// clientCount 0 with drivable true is normal; this says which it is
+		// (crewly#1080). null when nothing is drivable.
+		drivableVia: drivable ? 'proxy-relay' : null,
+		drivableNote: drivable
+			? 'drivable through the Cloud relay; clientCount counts direct local WebSocket extensions only'
+			: 'no browser is registered on the Cloud relay (clientCount counts direct local WebSocket extensions only)',
 		proxy: {
 			state: proxy.getState(),
 			available: proxy.isAvailable(),
@@ -575,14 +584,49 @@ async function sendToolCommand(
 	if (agentSession) {
 		traceBrowserAction({ session: agentSession, tool, params, url: getBrowserSessions().getSession(agentSession)?.url, outcome: 'failed', reason: 'no browser path' });
 	}
-	const errorDetail = errors.length > 0
-		? `All connection paths failed: ${errors.join('; ')}`
-		: 'No Chrome browser connected. Please connect the Crewly Chrome Extension first.';
-	res.status(503).json({
+	const failure = classifyDispatchFailure(tool, errors);
+	res.status(failure.status).json({
 		success: false,
-		error: errorDetail,
-		code: 'NO_BROWSER_CLIENT',
+		error: failure.error,
+		code: failure.code,
 	});
+}
+
+/**
+ * Turn the per-path errors of a failed dispatch into an honest response.
+ * "All paths failed" used to be 503 NO_BROWSER_CLIENT even when the browser
+ * was connected and simply did not answer in time (a screenshot of a busy
+ * page), which sent callers hunting for a missing extension (crewly#1080).
+ *
+ * - no path was attempted: 503 `NO_BROWSER_CLIENT`
+ * - every attempt timed out: 504 `BROWSER_COMMAND_TIMEOUT`
+ * - an attempt failed on message / payload size: 413 `BROWSER_PAYLOAD_TOO_LARGE`
+ * - anything else: 503 `NO_BROWSER_CLIENT` with the per-path detail
+ *
+ * @param tool - Browser tool that failed
+ * @param errors - One message per attempted path
+ * @returns HTTP status, machine code and a message naming the real cause
+ */
+export function classifyDispatchFailure(tool: string, errors: string[]): { status: number; code: string; error: string } {
+	if (errors.length === 0) {
+		return { status: 503, code: 'NO_BROWSER_CLIENT', error: 'No Chrome browser connected. Please connect the Crewly Chrome Extension first.' };
+	}
+	const detail = errors.join('; ');
+	if (errors.some((e) => /too large|payload|message size|max.*size|\b1009\b/i.test(e))) {
+		return {
+			status: 413,
+			code: 'BROWSER_PAYLOAD_TOO_LARGE',
+			error: `The browser answered '${tool}' but the result is too large to relay. Try a smaller viewport or a plain screenshot instead of a full-page one. (${detail})`,
+		};
+	}
+	if (errors.every((e) => /timed out after/i.test(e))) {
+		return {
+			status: 504,
+			code: 'BROWSER_COMMAND_TIMEOUT',
+			error: `A browser is connected but did not answer '${tool}' in time (the page may be busy or the capture too large). Retry, or use read-text / a smaller capture. (${detail})`,
+		};
+	}
+	return { status: 503, code: 'NO_BROWSER_CLIENT', error: `All connection paths failed: ${detail}` };
 }
 
 /** Tools whose hold decision depends on the site the tab is on. */
@@ -725,7 +769,7 @@ export async function navigate(req: Request, res: Response): Promise<void> {
  * @param res - Express response
  */
 export async function screenshot(req: Request, res: Response): Promise<void> {
-	await sendToolCommand(req, res, 'screenshot');
+	await sendToolCommand(req, res, 'screenshot', undefined, BROWSER_BRIDGE_CONSTANTS.SCREENSHOT_TIMEOUT_MS);
 }
 
 /**
@@ -944,7 +988,7 @@ export async function getConsole(req: Request, res: Response): Promise<void> {
  * @param res - Express response
  */
 export async function fullPageScreenshot(req: Request, res: Response): Promise<void> {
-	await sendToolCommand(req, res, 'fullPageScreenshot');
+	await sendToolCommand(req, res, 'fullPageScreenshot', undefined, BROWSER_BRIDGE_CONSTANTS.SCREENSHOT_TIMEOUT_MS);
 }
 
 /**

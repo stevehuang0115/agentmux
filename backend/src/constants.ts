@@ -469,6 +469,13 @@ export const BROWSER_BRIDGE_CONSTANTS = {
 	/** Default timeout for commands sent to Chrome Extension (ms) */
 	COMMAND_TIMEOUT_MS: 30000,
 	/**
+	 * Timeout for screenshot / full-page-screenshot (ms). Capturing a heavy
+	 * page (Slack web, long feeds) and relaying a multi-MB base64 image takes
+	 * well beyond the 30 s default; the shorter limit made them look like a
+	 * missing browser (crewly#1080).
+	 */
+	SCREENSHOT_TIMEOUT_MS: 90000,
+	/**
 	 * Per-tab dispatch (1 agent : 1 tab) — see
 	 * `.crewly/specs/crewly-in-chrome-per-tab-fix-2026-04-25.md`.
 	 */
