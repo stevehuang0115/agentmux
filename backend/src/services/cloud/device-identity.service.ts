@@ -8,7 +8,8 @@
  * @module services/cloud/device-identity.service
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, mkdir } from 'fs/promises';
+import { atomicWriteJson } from '../../utils/file-io.utils.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir, hostname } from 'os';
@@ -162,7 +163,7 @@ export class DeviceIdentityService {
       if (!existsSync(this.crewlyHome)) {
         await mkdir(this.crewlyHome, { recursive: true });
       }
-      await writeFile(this.deviceFilePath, JSON.stringify(identity, null, 2), 'utf-8');
+      await atomicWriteJson(this.deviceFilePath, identity);
     } catch (error) {
       this.logger.error('Failed to persist device identity', {
         error: error instanceof Error ? error.message : String(error),

@@ -28,6 +28,16 @@ jest.mock('../core/logger.service.js', () => ({
   },
 }));
 
+// The remembered queue id is written atomically (tmp + fsync + rename: several real I/O ticks).
+// These tests run on fake timers and poll with flushPromises, so use a one-step write here;
+// the atomic writer itself is covered in file-io.atomic-repair.test.ts.
+jest.mock('../../utils/file-io.utils.js', () => ({
+  ...jest.requireActual('../../utils/file-io.utils.js'),
+  atomicWriteJson: async (file: string, data: unknown) => {
+    await jest.requireActual('fs').promises.writeFile(file, JSON.stringify(data, null, 2), 'utf-8');
+  },
+}));
+
 jest.mock('../core/storage.service.js', () => ({
   StorageService: {
     getInstance: () => ({

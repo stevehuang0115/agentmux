@@ -60,6 +60,30 @@ jest.mock('./device-identity.service.js', () => ({
 import { readFile } from 'fs/promises';
 const mockReadFile = jest.mocked(readFile);
 
+// Config reads are synchronous and writes atomic in cloud-config-file.ts; route them to the
+// fs/promises mocks below / a controllable read result so these tests stay about the service.
+jest.mock('./cloud-config-file.js', () => {
+  const actual = jest.requireActual('./cloud-config-file.js');
+  const nodePath = jest.requireActual('path');
+  return {
+    ...actual,
+    readCloudConfigFile: jest.fn(() => ({ status: 'missing' })),
+    writeCloudConfigFile: jest.fn(async (config: unknown) => {
+      const fsp = jest.requireMock('fs/promises');
+      const file = actual.getCloudConfigPath();
+      await fsp.mkdir(nodePath.dirname(file), { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(config, null, 2), 'utf-8');
+    }),
+  };
+});
+import { readCloudConfigFile, validateCloudConfig } from './cloud-config-file.js';
+const mockReadConfig = jest.mocked(readCloudConfigFile);
+/** What readCloudConfigFile returns for a config object the test "put on disk". */
+const cfgRead = (c: unknown) =>
+  validateCloudConfig(c)
+    ? ({ status: 'damaged', reason: String(validateCloudConfig(c)), quarantinedTo: null } as const)
+    : ({ status: 'ok', config: c as never, repaired: false } as const);
+
 describe('CloudInitializer', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -78,7 +102,7 @@ describe('CloudInitializer', () => {
 	});
 
 	it('should skip when no persisted config exists', async () => {
-		mockReadFile.mockRejectedValue(new Error('ENOENT'));
+		mockReadConfig.mockReturnValue({ status: 'missing' });
 
 		const result = await initializeCloudIfConfigured();
 
@@ -93,7 +117,7 @@ describe('CloudInitializer', () => {
 			tier: 'pro',
 			connectedAt: '2026-03-20T00:00:00Z',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 
 		const result = await initializeCloudIfConfigured();
 
@@ -106,7 +130,7 @@ describe('CloudInitializer', () => {
 	});
 
 	it('should handle invalid config file gracefully', async () => {
-		mockReadFile.mockResolvedValue('{ invalid json');
+		mockReadConfig.mockReturnValue({ status: 'damaged', reason: 'bad json', quarantinedTo: null });
 
 		const result = await initializeCloudIfConfigured();
 
@@ -115,7 +139,7 @@ describe('CloudInitializer', () => {
 	});
 
 	it('should handle config with missing required fields', async () => {
-		mockReadFile.mockResolvedValue(JSON.stringify({ cloudUrl: 'https://example.com' }));
+		mockReadConfig.mockReturnValue(cfgRead({ cloudUrl: 'https://example.com' }));
 
 		const result = await initializeCloudIfConfigured();
 
@@ -134,7 +158,7 @@ describe('CloudInitializer', () => {
 			tier: 'pro',
 			connectedAt: '2026-03-20T00:00:00Z',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 
 		await initializeCloudIfConfigured();
 		await new Promise((r) => setImmediate(r));
@@ -149,7 +173,7 @@ describe('CloudInitializer', () => {
 			tier: 'pro',
 			connectedAt: '2026-03-20T00:00:00Z',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 
 		await initializeCloudIfConfigured();
 
@@ -169,7 +193,7 @@ describe('CloudInitializer', () => {
 			connectedAt: '2026-03-20T00:00:00Z',
 			refreshToken: 'refresh-token-persisted',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 
 		const result = await initializeCloudIfConfigured();
 
@@ -191,7 +215,7 @@ describe('CloudInitializer', () => {
 			connectedAt: '2026-03-20T00:00:00Z',
 			refreshToken: 'rt-123',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 
 		const result = await initializeCloudIfConfigured();
 
@@ -206,7 +230,7 @@ describe('CloudInitializer', () => {
 			tier: 'pro',
 			connectedAt: '2026-03-20T00:00:00Z',
 		};
-		mockReadFile.mockResolvedValue(JSON.stringify(config));
+		mockReadConfig.mockReturnValue(cfgRead(config));
 		mockSyncStart.mockImplementation(() => { throw new Error('Sync start failed'); });
 
 		const result = await initializeCloudIfConfigured();

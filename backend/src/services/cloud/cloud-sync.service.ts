@@ -17,6 +17,7 @@
 
 import { EventEmitter } from 'events';
 import { promises as fsp } from 'fs';
+import { atomicWriteJson } from '../../utils/file-io.utils.js';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
@@ -781,7 +782,7 @@ export class CloudSyncService extends EventEmitter {
     const file = this.fallbackQueueFile();
     try {
       await fsp.mkdir(dirname(file), { recursive: true });
-      await fsp.writeFile(file, JSON.stringify({ queueId, takenAt: new Date().toISOString() }, null, 2), 'utf-8');
+      await atomicWriteJson(file, { queueId, takenAt: new Date().toISOString() }, { mode: 0o600 });
     } catch (err) {
       this.logger.warn('Could not persist the fallback queue id — a restart will take another', {
         error: err instanceof Error ? err.message : String(err),
