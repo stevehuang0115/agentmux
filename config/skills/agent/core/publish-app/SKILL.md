@@ -1,7 +1,7 @@
 ---
 name: Publish App
 description: Publish a small web app (HTML/JS) you wrote to https://apps.crewlyai.com/<appId> so the owner can open it on their phone. Creates the app the first time, uploads a new version each time after (same app for the same directory), supports rollback, and can post an "Open app" card to the owner (a one-tap signed link, in your DM with them). Can ask the owner to make an app public, or to publish it as a template on the Crewly Marketplace (only the owner can approve either). The owner's edits, comments on elements, and anonymous visitors' submissions on a public app, come back to you as an [APP CHANGES] message.
-version: 1.6.0
+version: 1.7.0
 category: productivity
 skillType: claude-skill
 assignableRoles:
@@ -248,6 +248,15 @@ The page runs in a **sandboxed iframe** on a phone. Inside it:
 - **`data-crewly-id` on important elements** so the owner's comments point at
   them exactly (see Comments).
 - Relative links between your own files work (`./style.css`, `./app.js`).
+- **Old iPads too (iOS 12 / Safari 12).** The owner's family uses one, so
+  every app must work there:
+  - Images: no WebP or AVIF only — ship PNG/JPEG (or a `<picture>` PNG fallback).
+  - CSS: no flexbox `gap`, `aspect-ratio`, `inset:` or `:is()`/`:where()` without a
+    fallback (margins, padding-top ratio boxes, top/right/bottom/left);
+    `-webkit-backdrop-filter` next to `backdrop-filter`.
+  - JS: ES2019 at most — no `?.`, `??`, class fields, `replaceAll`, `.at()`,
+    `structuredClone`; guard `ResizeObserver` / `IntersectionObserver`.
+  - Keep modern browsers unchanged; test the layout without those features.
 
 ### `window.crewly` (all calls return promises)
 
