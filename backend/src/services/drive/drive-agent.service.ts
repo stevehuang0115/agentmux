@@ -294,7 +294,18 @@ export class DriveAgentService {
     if (!text) throw new DriveAgentError(400, 'Reply text is required.');
     if (text.length > C.TEXT_MAX_CHARS) throw new DriveAgentError(400, `Too long for Drive mode (max ${C.TEXT_MAX_CHARS} characters) — say it short; details go in a normal reply.`);
     const conv = pickConversation(await this.deps.store.list(), sessionId, agentSession, input.recap);
-    if (!conv) throw new DriveAgentError(404, 'You have no open Drive mode conversation in that session. Answer the usual way (reply).');
+    if (!conv) {
+      // Say WHY: a conversation that closed reads differently from one that never existed.
+      const closed = (await this.deps.store.list())
+        .filter((c) => c.sessionId === sessionId && c.closedAt && (c.agentSession === agentSession || (c.members ?? []).includes(agentSession)))
+        .sort((a, b) => Date.parse(b.closedAt as string) - Date.parse(a.closedAt as string))[0];
+      throw new DriveAgentError(
+        404,
+        closed
+          ? `That Drive mode conversation closed at ${closed.closedAt}, so the owner is no longer listening on the phone. Answer the usual way (reply).`
+          : 'You have no open Drive mode conversation in that session. Answer the usual way (reply).',
+      );
+    }
     if (input.recap) return this.recap(conv, agentSession, text);
     const interim = input.interim || input.ack === true;
     await this.deps.recordAgentTurn({ agentSession, channelId: conv.channelId, ...(conv.threadId ? { threadId: conv.threadId } : {}), text, interim, sessionId });
