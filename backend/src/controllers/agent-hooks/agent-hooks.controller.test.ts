@@ -250,3 +250,55 @@ describe('receiveAgentHook — team-lead execution nudge (crewly#1083)', () => {
 		expect(call(SESSION, { event: 'PostToolUse', toolName: 'Edit; rm -rf /' })).toEqual({ status: 400, json: { success: false, error: 'invalid toolName' } });
 	});
 });
+
+describe('receiveAgentHook — team roster after a compaction (specs/2026-10-10-team-roster.md)', () => {
+	/** Run the handler and wait for its (possibly async) response. */
+	function callAsync(headers: Record<string, string>, body: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+		return new Promise((resolve) => {
+			const out = { status: 0, json: {} as Record<string, unknown> };
+			const res = {
+				status(code: number) { out.status = code; return this; },
+				json(payload: Record<string, unknown>) { out.json = payload; resolve(out); return this; },
+			} as unknown as Response;
+			receiveAgentHook({ headers, body } as unknown as Request, res);
+		});
+	}
+
+	const ORC = { 'x-agent-session': 'crewly-orc' };
+	let render: jest.SpyInstance;
+
+	beforeEach(async () => {
+		resetHookState();
+		AgentTurnStateService.resetInstance();
+		const { TeamRosterService } = await import('../../services/team-roster/team-roster.service.js');
+		render = jest.spyOn(TeamRosterService.prototype, 'renderForPrompt');
+	});
+
+	afterEach(() => render.mockRestore());
+
+	it('hands the orchestrator the roster as additionalContext after a compact or a clear', async () => {
+		render.mockResolvedValue('## Team Roster\n### CE');
+		for (const source of ['compact', 'clear']) {
+			const r = await callAsync(ORC, { event: 'SessionStart', source });
+			expect(r.status).toBe(202);
+			expect(r.json).toMatchObject({ success: true, additionalContext: '## Team Roster\n### CE' });
+		}
+	});
+
+	it('does not hand it back on a fresh start or a resume, nor to any other agent', async () => {
+		render.mockResolvedValue('## Team Roster');
+		expect(call(ORC, { event: 'SessionStart', source: 'startup' }).json).not.toHaveProperty('additionalContext');
+		expect(call(ORC, { event: 'SessionStart', source: 'resume' }).json).not.toHaveProperty('additionalContext');
+		expect(call(SESSION, { event: 'SessionStart', source: 'compact' }).json).not.toHaveProperty('additionalContext');
+		expect(render).not.toHaveBeenCalled();
+	});
+
+	it('answers without a note when the roster is empty or cannot be built', async () => {
+		render.mockResolvedValue('');
+		expect((await callAsync(ORC, { event: 'SessionStart', source: 'compact' })).json).not.toHaveProperty('additionalContext');
+		render.mockRejectedValue(new Error('boom'));
+		const r = await callAsync(ORC, { event: 'SessionStart', source: 'compact' });
+		expect(r.status).toBe(202);
+		expect(r.json).not.toHaveProperty('additionalContext');
+	});
+});

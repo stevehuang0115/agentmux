@@ -63,6 +63,7 @@ import { createGoogleRouter } from '../controllers/google/google.routes.js';
 import { createDesktopRouter } from '../controllers/desktop/desktop.routes.js';
 import { createTalkTranscribeRouter } from '../controllers/talk/talk-transcribe.routes.js';
 import { createTalkLiveTokenRouter } from '../controllers/talk/talk-live-token.controller.js';
+import { createTeamRosterRouter } from '../controllers/team-roster/team-roster.controller.js';
 import { createBriefingRouter } from '../controllers/briefing/briefing.controller.js';
 import { createCanvaRouter } from '../controllers/canva/canva.routes.js';
 import { createAppsRouter } from '../controllers/apps/apps.routes.js';
@@ -239,6 +240,8 @@ export function createApiRoutes(apiController: ApiController): Router {
   // and the Gemini Live token the phone's voice briefer connects with.
   router.use('/talk/live-token', createTalkLiveTokenRouter());
   router.use('/briefing', createBriefingRouter());
+  // Team roster (specs/2026-10-10-team-roster.md): who owns what, ranked owner lookup
+  router.use('/team-roster', createTeamRosterRouter());
 
   // Harness onboarding (specs/onboarding-harness-login.md): detect, install,
   // choose the orc harness and log in — shared engine with the CLI

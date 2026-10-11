@@ -201,6 +201,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - Colleagues on OTHER machines: talk to them in a shared Slack team channel (@ their name; `list-colleagues` shows who exists). The old `send-to-remote` / `reply-remote` / `list-devices` skills are deprecated — only answer a `[REMOTE:...]` message with `reply-remote`, never start one.',
 				'  - `delegate-task` / `assign-task` — assign work to agents',
 				'  - `get-team-status` / `get-agent-status` — monitor team state',
+				'  - `team-roster` / `find-owner-for "<request>"` — who owns what; route an owner request that names no agent',
 				'  - `create-team` / `update-team` / `start-team` / `stop-team` — team management',
 				'  - `start-agent` / `stop-agent` / `terminate-agent` — agent lifecycle',
 				'  - `create-cron` / `list-cron` / `update-cron` / `cancel-cron` — recurring tasks',
@@ -216,6 +217,7 @@ export class SkillsReferenceModule implements PromptModule {
 				'  - `delegate-task` — assign tasks to subordinates',
 				'  - `verify-output` — check completed work quality',
 				'  - `schedule-check` — schedule follow-up reminders',
+				'  - `update-charter` — keep your team\'s charter current (the orchestrator routes owner requests by it)',
 			);
 		} else {
 			lines.push(

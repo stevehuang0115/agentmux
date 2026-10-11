@@ -8108,3 +8108,48 @@ export const TALK_LIVE_CONSTANTS = {
 		FAILED: 'failed',
 	},
 } as const;
+
+/**
+ * Team roster (specs/2026-10-10-team-roster.md): the harness-generated map of
+ * who owns what, injected into the orchestrator's prompt and served by the
+ * `team-roster` / `find-owner-for` skills.
+ */
+export const TEAM_ROSTER_CONSTANTS = {
+	/** Token budget of the roster section in the orchestrator prompt */
+	PROMPT_MAX_TOKENS: 2500,
+	/** How long a built roster is reused before it is rebuilt (ms) */
+	CACHE_TTL_MS: 60_000,
+	/** Window of "recently finished" work (days) */
+	RECENT_DAYS: 7,
+	/** Window of ticket titles that feed matching, beyond open and recent work (days) */
+	MATCH_HISTORY_DAYS: 30,
+	/** Longest charter a lead may store (chars) */
+	CHARTER_MAX_CHARS: 400,
+	/** A description with fewer words (CJK: characters) than this is not a charter; one is derived instead */
+	MIN_DESCRIPTION_TOKENS: 5,
+	/** Work titles are cut to this many chars in the roster */
+	TITLE_MAX_CHARS: 70,
+	/** Member specialties shown per member */
+	MAX_SPECIALTIES: 3,
+	/** Default number of candidates `find-owner-for` returns */
+	FIND_DEFAULT_LIMIT: 3,
+	/** Hard cap on candidates */
+	FIND_MAX_LIMIT: 8,
+	/** A runner-up scoring at least this share of the best one makes the match ambiguous */
+	AMBIGUOUS_SCORE_RATIO: 0.85,
+	/** Longest request text matched (chars) */
+	QUERY_MAX_CHARS: 600,
+	/** Heading of the roster section */
+	HEADING: '## Team Roster',
+	/** SessionStart sources after which the orchestrator's context lost the prompt: the hook hands the roster back */
+	REINJECT_SOURCES: ['compact', 'clear'],
+	/** Boost for a request that names a member or team outright */
+	NAME_MATCH_BOOST: 6,
+	/** Detail tiers, richest first: open items, finished items, charter chars */
+	TIERS: [
+		{ open: 4, done: 3, charter: 260, specialties: true },
+		{ open: 2, done: 1, charter: 160, specialties: true },
+		{ open: 0, done: 0, charter: 120, specialties: true },
+		{ open: 0, done: 0, charter: 80, specialties: false },
+	],
+} as const;
