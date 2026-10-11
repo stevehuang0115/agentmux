@@ -124,6 +124,12 @@ fi
 #
 # WORK_ITEM_ID was read from the input up top alongside the other params,
 # so the identifier is known before any of the legacy path handling runs.
+# An id of any kind (taskId, absoluteTaskPath) that is not a workItemId means
+# the caller named SOMETHING: never swap it for whatever happens to be running
+# (#1134 - a complete-task naming one item closed the agent's active, unfinished one).
+if [ -z "$WORK_ITEM_ID" ] && { [ -n "$TASK_ID" ] || [ -n "$ABSOLUTE_TASK_PATH" ]; }; then
+  error_exit "Nothing was completed: you passed ${TASK_ID:+taskId '${TASK_ID}'}${ABSOLUTE_TASK_PATH:+ absoluteTaskPath '${ABSOLUTE_TASK_PATH}'} but no 'workItemId', and this skill does not guess which WorkItem you meant. Pass 'workItemId' (find it with GET /api/task-pool/items?target=${SESSION_NAME}) and call again."
+fi
 if [ -z "$WORK_ITEM_ID" ]; then
   POOL_RESP=$(api_call_full GET "/task-pool/items?status=running&target=${SESSION_NAME}" 2>/dev/null || echo '{}')
   WORK_ITEM_ID=$(echo "$POOL_RESP" | jq -r '.workItems[0].id // .data[0].id // empty' 2>/dev/null || true)

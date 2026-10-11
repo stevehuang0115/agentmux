@@ -344,10 +344,21 @@ if [ "$DELIVER_OK" = "false" ]; then
 
       if [ -n "$WORKER_MEMBER_ID" ]; then
         echo '{"info":"Worker '"$TO"' appears offline — auto-starting..."}' >&2
-        START_RESULT=$(api_call POST "/teams/${TEAM_ID}/members/${WORKER_MEMBER_ID}/start" '{}' 2>/dev/null || true)
+        # A refused start answers non-2xx and api_call prints its body on stderr:
+        # keep it, to tell a start the running-agent cap deferred from a broken one.
+        START_ERR_FILE=$(mktemp)
+        START_RESULT=$(api_call POST "/teams/${TEAM_ID}/members/${WORKER_MEMBER_ID}/start" '{}' 2>"$START_ERR_FILE" || true)
+        START_ERR=$(cat "$START_ERR_FILE" 2>/dev/null || true)
+        rm -f "$START_ERR_FILE"
         START_OK=$(echo "$START_RESULT" | jq -r '.success // false' 2>/dev/null || echo "false")
 
-        if [ "$START_OK" = "true" ]; then
+        if [ "$START_OK" != "true" ] && printf '%s' "$START_ERR" | grep -q 'RESOURCE_PRESSURE_CAP'; then
+          # Deferred, not failed (#1135): the running-agent cap holds the start.
+          # The WorkItem stays queued and targeted; the harness starts the worker
+          # and delivers it when a slot frees. Nothing to retry here.
+          echo '{"info":"Worker '"$TO"' start is deferred by the running-agent cap — the task is queued and will start when a slot frees."}' >&2
+          STARTED=true
+        elif [ "$START_OK" = "true" ]; then
           echo '{"info":"Worker '"$TO"' start triggered — retrying delivery in 10s..."}' >&2
           sleep 10
           # Retry delivery after agent boots

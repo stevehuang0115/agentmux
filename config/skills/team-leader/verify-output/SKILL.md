@@ -159,6 +159,15 @@ passed: false → Call handle-failure with the failure details
 requiresReview: true → TL must manually evaluate these steps
 ```
 
+### Accept finished work; never cancel it
+
+When the work is done and checks pass, ACCEPT it: complete the item (for a
+"Verify: ..." item, `complete-task` with `"verdict":"verified"` and your
+evidence). Do not cancel a WorkItem that was done or verified, even with a
+"verified" note: a cancel is for work that should not happen, and a project
+ticket whose WorkItem is cancelled can go back to the queue so the same work
+is picked up twice. Cancel only work that is NOT done.
+
 ## Related Skills
 
 - `handle-failure` — Handle verification failures
