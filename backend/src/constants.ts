@@ -1820,8 +1820,10 @@ export const SLACK_TYPING_CONSTANTS = {
 	/** Shown when a cold start is taking longer than WAKING_SLOW_MS */
 	WAKING_SLOW_TEXT: '🌙 {name} is still starting up (a cold start takes 1–2 minutes)…',
 	WAKING_SLOW_MS: 60 * 1000,
-	/** Shown when the agent could not be started or the message could not be delivered */
-	FAILED_TEXT: '⚠️ {name} could not be reached right now — please try again in a minute.',
+	/** Shown while the agent's start waits for a free slot: the message is held and delivered when it starts (not a failure) */
+	QUEUED_TEXT: '🕐 {name} will pick this up shortly — the reply will follow here.',
+	/** Shown when the message could not be delivered even after Crewly retried; never asks the owner to resend */
+	FAILED_TEXT: "⚠️ {name} couldn't take this message just now — Crewly will keep trying and the reply will follow here if it gets through.",
 	/** What the placeholder becomes when the agent has not replied in time */
 	TIMEOUT_TEXT: '⏱ {name} is still working on this — the reply will follow.',
 	/** How long a placeholder waits for the reply before it is edited to TIMEOUT_TEXT */

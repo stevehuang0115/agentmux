@@ -1387,6 +1387,8 @@ describe('mirrorOutbound', () => {
 
   it('ignores user messages, Slack-origin messages, unmapped channels, and offline Slack', async () => {
     expect(await service.mirrorOutbound(agentMessage({ senderType: 'user' }))).toBe(false);
+    // A colleague agent on another machine: already posted in Slack by that machine.
+    expect(await service.mirrorOutbound(agentMessage({ senderType: 'user', metadata: { remoteAgentSession: 'rednote-team-rex-4fdd66d7' } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ metadata: { source: 'slack' } }))).toBe(false);
     expect(await service.mirrorOutbound(agentMessage({ channelId: 'huddle-zzz' }))).toBe(false);
     // Drive mode replies are spoken on the phone, never mirrored to Slack.
@@ -1672,6 +1674,30 @@ describe('one pair of eyes per agent that receives it', () => {
     const eyes = slack.reactions.filter((r) => r.ts === '503.1');
     expect(eyes).toHaveLength(1);
     expect(eyes[0].botToken).toBeUndefined();
+  });
+
+  it('a deferred start keeps the placeholder tracked as queued; a real failure still fails it', async () => {
+    typing = { begin: jest.fn().mockResolvedValue(null), resolve: jest.fn(), setPhase: jest.fn().mockResolvedValue(undefined), fail: jest.fn().mockResolvedValue(undefined) };
+    planning([['crewly-alpha-sam', 'required'], ['crewly-alpha-leo', 'required']]);
+    dispatcher!.dispatchMessage.mockResolvedValue({
+      strategy: 'huddle-broadcast',
+      dispatched: true,
+      huddleOutcomes: [
+        { sessionName: 'crewly-alpha-sam', responseMode: 'required', dispatched: true, queued: true, deferred: true },
+        { sessionName: 'crewly-alpha-leo', responseMode: 'required', dispatched: false, error: 'boom' },
+      ],
+    });
+    service = makeService();
+    await service.ensureTeamChannel(team());
+    identities!.install('crewly-alpha-sam', 'USAM', 'xoxb-sam');
+    identities!.install('crewly-alpha-leo', 'ULEO', 'xoxb-leo');
+
+    await service.routeInbound(inbound({ text: 'hello', ts: '507.1' }));
+
+    expect(typing.setPhase).toHaveBeenCalledWith(expect.objectContaining({ agentSession: 'crewly-alpha-sam' }), 'queued');
+    expect(typing.fail).toHaveBeenCalledTimes(1);
+    expect(typing.fail).toHaveBeenCalledWith(expect.objectContaining({ agentSession: 'crewly-alpha-leo' }));
+    typing = null;
   });
 
   it('shows a placeholder only for agents that owe a reply', async () => {

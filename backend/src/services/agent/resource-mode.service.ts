@@ -311,7 +311,7 @@ export class ResourceModeService {
 					const rec = this.waitingSince.get(head.name);
 					if (rec) rec.touched = now;
 					const waitedMs = rec ? now - rec.since : 0;
-					const { victim, skipped, relaxedBecause } = await this.pickVictim(pool, idleTimeoutMinutes, waitedMs >= RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS);
+					const { victim, skipped, relaxedBecause } = await this.pickVictim(pool, idleTimeoutMinutes, waitedMs >= RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS, head.owner);
 					if (victim && relaxedBecause !== undefined) {
 						this.logger.warn('A start has waited too long for a slot; relaxing the eviction rules', {
 							waiter: head.name,
@@ -362,15 +362,17 @@ export class ResourceModeService {
 	 * @param running - Running agents
 	 * @param idleTimeoutMinutes - Pressure idle timeout; a younger idle is never stopped
 	 * @param relax - The first waiter has waited past RELAX_AFTER_MS: when no agent passes the rules, stop the best one anyway
+	 * @param ownerWaiter - The first waiter carries an owner message: the idle timeout does not protect an agent (the longest-idle one goes at once); busy, owner-message, Drive-warm and pending-work/ticket/delegation protections still apply
 	 * @returns The victim (if any), why each skipped agent was kept, and, when the rules were relaxed, why the victim had been kept
 	 */
 	private async pickVictim(
 		running: RunningAgent[],
 		idleTimeoutMinutes: number,
 		relax = false,
+		ownerWaiter = false,
 	): Promise<{ victim?: RunningAgent; skipped: string[]; relaxedBecause?: string }> {
 		const waiting = new Set(this.waiters.map((w) => w.name));
-		const minIdleMs = Math.max(0, idleTimeoutMinutes) * 60_000;
+		const minIdleMs = ownerWaiter ? 0 : Math.max(0, idleTimeoutMinutes) * 60_000;
 		const skipped: string[] = [];
 		const ordered = running
 			.filter((r) => !r.busy

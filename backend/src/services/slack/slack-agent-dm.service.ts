@@ -518,7 +518,7 @@ export class SlackAgentDmService {
     }
     autoWatch?.delivered(deliveredSessions(dispatch, agentSession));
     if (typing) {
-      if (dispatch?.dispatched) await typing.setPhase(typingKey, 'typing');
+      if (dispatch?.dispatched) await typing.setPhase(typingKey, dispatch.deferred ? 'queued' : 'typing');
       else await typing.fail(typingKey);
     }
 

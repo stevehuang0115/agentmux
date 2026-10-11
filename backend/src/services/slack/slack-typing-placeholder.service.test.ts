@@ -81,8 +81,11 @@ describe('SlackTypingPlaceholderService', () => {
     expect(updated.at(-1)).toMatchObject({ ts: 'ts-1', text: '⚙️ Ella is working on it…' });
     await svc.setPhase(key, 'typing'); // idempotent
     expect(updated).toHaveLength(2);
+    await svc.setPhase(key, 'queued');
+    expect(updated.at(-1)?.text).toBe('🕐 Ella will pick this up shortly — the reply will follow here.');
     await svc.fail(key);
-    expect(updated.at(-1)?.text).toContain('could not be reached');
+    expect(updated.at(-1)?.text).toContain("couldn't take this message");
+    expect(updated.at(-1)?.text).not.toMatch(/try again/i);
     expect(svc.pendingCount).toBe(0);
     expect(await svc.resolve(key, 'late reply', ella)).toBe('posted');
   });

@@ -1126,10 +1126,54 @@ describe('ChatV2DispatcherService', () => {
       const dispatcher = new ChatV2DispatcherService({
         agentSink: sink,
         activateAgent: async () => false,
+        activateRetryDelayMs: 0,
       });
 
       const result = await dispatcher.dispatchToAgent(makeChannel(), makeMessage());
       expect(result).toEqual({ dispatched: false, error: 'Session does not exist' });
+    });
+
+    it('retries a failed activation once before it counts', async () => {
+      let up = false;
+      const sink: AgentMessageSink = {
+        async sendMessageToAgent() {
+          return up ? { success: true } : { success: false, error: 'Session does not exist' };
+        },
+      };
+      let tries = 0;
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateRetryDelayMs: 0,
+        activateAgent: async () => {
+          tries += 1;
+          if (tries === 1) return false;
+          up = true;
+          return true;
+        },
+      });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: true });
+      expect(tries).toBe(2);
+    });
+
+    it('holds the message on the queue when the start is deferred: delivered later, not failed', async () => {
+      const { sink } = makeSink({ success: false, error: 'Session does not exist' });
+      const held: Array<{ session: string; prompt: string }> = [];
+      const dispatcher = new ChatV2DispatcherService({
+        agentSink: sink,
+        activateAgent: async () => 'deferred',
+        holdForStart: (session, prompt) => held.push({ session, prompt }),
+        activateRetryDelayMs: 0,
+      });
+      const result = await dispatcher.dispatchToAgent(makeChannel(), makeMessage());
+      expect(result).toEqual({ dispatched: true, deferred: true });
+      expect(held).toHaveLength(1);
+      expect(held[0].session).toBe('crewly-product-sam-dd2b46f7');
+    });
+
+    it('a deferred start with no queue to hold on is still a failure', async () => {
+      const { sink } = makeSink({ success: false, error: 'Session does not exist' });
+      const dispatcher = new ChatV2DispatcherService({ agentSink: sink, activateAgent: async () => 'deferred', activateRetryDelayMs: 0 });
+      expect(await dispatcher.dispatchToAgent(makeChannel(), makeMessage())).toEqual({ dispatched: false, error: 'Session does not exist' });
     });
 
     it('treats thrown errors as a clean, reportable failure', async () => {
@@ -1683,6 +1727,7 @@ describe('ChatV2DispatcherService', () => {
             up.add(s);
             return true;
           },
+          activateRetryDelayMs: 0,
         });
         // Nobody addressed → only the leader is woken; the researchers stay asleep.
         const leaderOnly = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: [] }));
@@ -1690,9 +1735,25 @@ describe('ChatV2DispatcherService', () => {
         expect(leaderOnly.huddleOutcomes).toEqual([{ sessionName: 'tt-atlas', responseMode: 'optional', dispatched: true }]);
         // An @ to an agent that cannot start is reported, not swallowed.
         const kai = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['tt-kai'] }));
-        expect(activated).toEqual(['tt-atlas', 'tt-kai']);
+        expect(activated).toEqual(['tt-atlas', 'tt-kai', 'tt-kai']); // a failed start is tried twice
         expect(kai.dispatched).toBe(false);
         expect(kai.huddleOutcomes?.[0]).toMatchObject({ sessionName: 'tt-kai', dispatched: false });
+      });
+
+      it('a member whose start is deferred has the prompt held on its queue and reports dispatched + deferred', async () => {
+        const sink: AgentMessageSink = { async sendMessageToAgent() { return { success: false, error: 'Session does not exist' }; } };
+        const held: string[] = [];
+        const dispatcher = new ChatV2DispatcherService({
+          agentSink: sink,
+          huddleMembersFor: () => ['ella'],
+          activateAgent: async () => 'deferred',
+          holdForStart: (session) => held.push(session),
+          activateRetryDelayMs: 0,
+        });
+        const r = await dispatcher.dispatchMessage(makeHuddle(), makeMessage({ mentions: ['ella'] }));
+        expect(held).toEqual(['ella']);
+        expect(r.dispatched).toBe(true);
+        expect(r.huddleOutcomes).toEqual([{ sessionName: 'ella', responseMode: 'required', dispatched: true, queued: true, deferred: true }]);
       });
 
       it('skips agent-origin messages (no self-loopback)', async () => {
