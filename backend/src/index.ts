@@ -4430,6 +4430,12 @@ void (async () => {
 					const r = await this.apiController.agentRegistrationService.sendMessageToAgent(session, message);
 					return r.success;
 				});
+				// Finished work cleans up after itself: a WorkItem / ticket reaching
+				// done or verified schedules one debounced janitor pass (safe rules
+				// unchanged — only landed, clean, unattended worktrees go).
+				this.eventBusService.onInProcess(['task:done', 'task:verified'], () => {
+					WorktreeJanitorService.getInstance().requestTidy();
+				});
 				if (WorktreeJanitorService.getInstance().start()) {
 					this.logger.info('WorktreeJanitorService scheduled');
 				} else {

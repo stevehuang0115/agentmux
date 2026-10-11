@@ -2674,6 +2674,27 @@ export const WORKTREE_JANITOR_CONSTANTS = {
 	 * instead of 24 h). `worktree-agent-` is Claude Code's automatic subagent branch.
 	 */
 	AGENT_BRANCH_PREFIXES: ['worktree-agent-'] as readonly string[],
+	/**
+	 * Untracked paths under a directory with one of these names (or a `*.log`
+	 * file) are regenerable output and do not make a worktree "dirty". Nested
+	 * packages often do not ignore their own `node_modules` / `.next`, so
+	 * `git status` lists them as untracked.
+	 */
+	REGENERABLE_DIRS: ['node_modules', '.next', 'dist', 'build', '.turbo', 'coverage', '.cache', 'logs'] as readonly string[],
+	/** File suffixes treated as regenerable output (logs). */
+	REGENERABLE_FILE_SUFFIXES: ['.log'] as readonly string[],
+	/** Directories deleted from kept (dirty / not-merged) worktrees under low disk — reinstalled by `npm install` / rebuilt by `next build`. */
+	RECLAIM_DIRS: ['node_modules', '.next'] as readonly string[],
+	/** A kept worktree must be idle this long before its regenerable dirs are reclaimed under low disk (24 hours). */
+	RECLAIM_MIN_IDLE_MS: 24 * 60 * 60 * 1000,
+	/** How deep under a worktree reclaimable dirs are searched for (root = 0; `web/node_modules` = 1). */
+	RECLAIM_SEARCH_DEPTH: 3,
+	/** Work completion (task done / verified) schedules one tidy pass after this quiet period (2 minutes); bursts share it. */
+	COMPLETION_TIDY_DELAY_MS: 2 * 60 * 1000,
+	/** Idle needed by a completion-triggered pass: the agent said it is finished, so far less than the periodic threshold (10 minutes). */
+	COMPLETION_MIN_IDLE_MS: 10 * 60 * 1000,
+	/** Commits of the default branch searched for a squash-merge patch-equivalent of a branch. */
+	SQUASH_SEARCH_MAX_COMMITS: 300,
 	/** Branches that are never deleted, whatever the verdict. */
 	PROTECTED_BRANCHES: ['main', 'master', 'develop', 'HEAD'] as readonly string[],
 	/** Timeout of one local git command (ms). */

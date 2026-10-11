@@ -201,14 +201,16 @@ describe('WorktreeJanitorService', () => {
 		expect(fs.existsSync(wt)).toBe(false);
 	});
 
-	it('keeps a worktree whose symlinked node_modules is not ignored (a symlink does not match `node_modules/`)', async () => {
+	it('treats an un-ignored symlinked node_modules as regenerable and never follows it when removing', async () => {
 		const shared = path.join(fx.root, 'shared-node-modules');
 		fs.mkdirSync(shared);
+		fs.writeFileSync(path.join(shared, 'keep.js'), '');
 		const wt = addWorktree(fx, agentPath(fx, 'symlink-unignored'), 'feat/symlink-unignored');
 		landOnOrigin(wt);
 		fs.symlinkSync(shared, path.join(wt, 'node_modules'));
 		const summary = await janitor(fx).run();
-		expect(verdictFor(summary, wt)).toMatchObject({ decision: 'keep', reason: 'dirty' });
+		expect(verdictFor(summary, wt)).toMatchObject({ removed: true });
+		expect(fs.existsSync(path.join(shared, 'keep.js'))).toBe(true);
 	});
 
 	it('does not follow an ignored symlinked node_modules when removing', async () => {
@@ -359,6 +361,170 @@ describe('WorktreeJanitorService', () => {
 			const wt = addWorktree(fx, agentPath(fx, 'nogh'), 'feat/nogh');
 			const summary = await janitor(fx, { ghBin: path.join(fx.root, 'does-not-exist') }).run();
 			expect(verdictFor(summary, wt)).toMatchObject({ decision: 'keep', reason: 'not-merged' });
+		});
+	});
+
+	describe('squash merges on a non-GitHub host (Bitbucket-style)', () => {
+		/** Land a branch as ONE squash commit on origin/main, authored elsewhere. */
+		function squashOnOrigin(fxx: Fixture, wt: string, extra?: (other: string) => void): void {
+			const other = path.join(fxx.root, `squash-${path.basename(wt)}`);
+			git(fxx.root, 'clone', '--quiet', fxx.origin, other);
+			const mb = git(wt, 'merge-base', 'HEAD', 'origin/main');
+			const diff = execFileSync('git', ['diff', '--binary', mb, 'HEAD'], { cwd: wt, env: GIT_ENV, maxBuffer: 1 << 26 });
+			execFileSync('git', ['apply', '-'], { cwd: other, env: GIT_ENV, input: diff });
+			git(other, 'add', '.');
+			git(other, 'commit', '--quiet', '-m', 'squashed PR');
+			extra?.(other);
+			git(other, 'push', '--quiet', 'origin', 'main');
+		}
+
+		function useBitbucketRemote(fxx: Fixture): void {
+			// The janitor only reads the URL; fetches use an insteadOf rewrite to the local bare repo.
+			git(fxx.repo, 'config', `url.${fxx.origin}.insteadOf`, 'git@bitbucket.org:team/repo.git');
+			git(fxx.repo, 'remote', 'set-url', 'origin', 'git@bitbucket.org:team/repo.git');
+		}
+
+		it('removes a squash-merged worktree: content is contained in origin/main', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'sq1'), 'feat/sq1');
+			fs.writeFileSync(path.join(wt, 'second.txt'), '2\n');
+			git(wt, 'add', '.');
+			git(wt, 'commit', '--quiet', '-m', 'second commit');
+			squashOnOrigin(fx, wt);
+			useBitbucketRemote(fx);
+			const gh = path.join(fx.root, 'gh-must-not-run');
+			fs.writeFileSync(gh, `#!/bin/sh\necho called >> "${path.join(fx.root, 'gh-ran')}"\nexit 0\n`, { mode: 0o755 });
+			const summary = await janitor(fx, { ghBin: gh }).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ reason: 'content-landed', removed: true, branchDeleted: true });
+			expect(fs.existsSync(wt)).toBe(false);
+			expect(fs.existsSync(path.join(fx.root, 'gh-ran'))).toBe(false);
+		});
+
+		it('removes it via squash patch-equivalence when main has since changed the same file', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'sq2'), 'feat/sq2');
+			fs.appendFileSync(path.join(wt, 'README.md'), 'branch line\n');
+			git(wt, 'commit', '--quiet', '-am', 'edit readme');
+			squashOnOrigin(fx, wt, (other) => {
+				fs.appendFileSync(path.join(other, 'README.md'), 'later change on main\n');
+				git(other, 'commit', '--quiet', '-am', 'follow-up on main');
+			});
+			useBitbucketRemote(fx);
+			const summary = await janitor(fx).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ reason: 'content-landed', detail: expect.stringContaining('squash-equivalent'), removed: true });
+		});
+
+		it('keeps a worktree with unmerged commits that exist on no remote', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'sq3'), 'feat/sq3');
+			useBitbucketRemote(fx);
+			const summary = await janitor(fx).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ decision: 'keep', reason: 'not-merged' });
+			expect(branchExists(fx.repo, 'feat/sq3')).toBe(true);
+		});
+
+		it('keeps it when a commit was added after the squash merge', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'sq4'), 'feat/sq4');
+			squashOnOrigin(fx, wt);
+			fs.writeFileSync(path.join(wt, 'followup.md'), 'x\n');
+			git(wt, 'add', '.');
+			git(wt, 'commit', '--quiet', '-m', 'after merge');
+			useBitbucketRemote(fx);
+			const summary = await janitor(fx).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ decision: 'keep', reason: 'not-merged' });
+		});
+	});
+
+	describe('regenerable output is not dirty', () => {
+		it('removes a landed worktree whose nested package has un-ignored node_modules, .next and logs', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'nested'), 'feat/nested');
+			landOnOrigin(wt);
+			for (const d of ['web/node_modules/pkg', 'web/.next/cache', 'web/dist', 'logs']) {
+				fs.mkdirSync(path.join(wt, d), { recursive: true });
+				fs.writeFileSync(path.join(wt, d, 'f.js'), 'x');
+			}
+			fs.writeFileSync(path.join(wt, 'debug.log'), 'x');
+			// make `web/` itself tracked so its children show up as separate untracked dirs
+			fs.writeFileSync(path.join(wt, 'web', 'package.json'), '{}');
+			git(wt, 'add', 'web/package.json');
+			git(wt, 'commit', '--quiet', '-m', 'web pkg');
+			landOnOrigin(wt);
+			const summary = await janitor(fx).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ reason: 'merged', removed: true });
+			expect(fs.existsSync(wt)).toBe(false);
+		});
+
+		it('still keeps a worktree with an untracked source file next to node_modules', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'src-next-to-nm'), 'feat/src-next-to-nm');
+			landOnOrigin(wt);
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'node_modules', 'x.js'), '');
+			fs.writeFileSync(path.join(wt, 'new-source.ts'), 'export {}\n');
+			const summary = await janitor(fx).run();
+			expect(verdictFor(summary, wt)).toMatchObject({ decision: 'keep', reason: 'dirty' });
+			expect(fs.existsSync(path.join(wt, 'new-source.ts'))).toBe(true);
+		});
+	});
+
+	describe('low disk: reclaiming kept worktrees', () => {
+		function lowDiskJanitor(extra: WorktreeJanitorOptions = {}): WorktreeJanitorService {
+			return janitor(fx, { statfs: statfsWith(() => 3), now: () => Date.now() + 3 * 24 * HOUR, ...extra });
+		}
+
+		it('deletes node_modules and .next of an idle unmerged worktree but keeps the worktree and its files', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'kept'), 'feat/kept');
+			fs.mkdirSync(path.join(wt, 'node_modules', 'p'), { recursive: true });
+			fs.mkdirSync(path.join(wt, 'web', '.next'), { recursive: true });
+			fs.writeFileSync(path.join(wt, 'web', '.next', 'a'), 'x');
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const summary = await lowDiskJanitor().run();
+			const v = verdictFor(summary, wt)!;
+			expect(v).toMatchObject({ decision: 'keep', reason: 'dirty' });
+			expect(v.reclaimed?.dirs.length).toBe(2);
+			expect(summary.reclaimedBytes).toBe(2 * GB);
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(false);
+			expect(fs.existsSync(path.join(wt, 'web', '.next'))).toBe(false);
+			expect(fs.existsSync(path.join(wt, 'wip.ts'))).toBe(true);
+		});
+
+		it('leaves a worktree idle for less than a day alone', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'fresh'), 'feat/fresh');
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const summary = await lowDiskJanitor({ now: () => Date.now() + 5 * HOUR }).run();
+			expect(verdictFor(summary, wt)?.reclaimed).toBeUndefined();
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(true);
+		});
+
+		it('does nothing when disk is fine, and a dry run only lists', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'ok'), 'feat/ok');
+			fs.mkdirSync(path.join(wt, 'node_modules'));
+			fs.writeFileSync(path.join(wt, 'wip.ts'), 'x');
+			const ok = await janitor(fx, { now: () => Date.now() + 3 * 24 * HOUR }).run();
+			expect(verdictFor(ok, wt)?.reclaimed).toBeUndefined();
+			const plan = await lowDiskJanitor().plan();
+			expect(verdictFor(plan, wt)?.reclaimed?.dirs.length).toBe(1);
+			expect(fs.existsSync(path.join(wt, 'node_modules'))).toBe(true);
+		});
+	});
+
+	describe('requestTidy (work completion)', () => {
+		it('runs one debounced pass with a short idle threshold and removes a landed worktree', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'done'), 'feat/done');
+			landOnOrigin(wt);
+			// 20 minutes idle: below the 2 h periodic threshold, above the 10 min completion one.
+			const j = janitor(fx, { now: () => Date.now() + 20 * 60 * 1000, tidyDelayMs: 10 });
+			j.requestTidy();
+			j.requestTidy();
+			await new Promise((r) => setTimeout(r, 1500));
+			expect(fs.existsSync(wt)).toBe(false);
+			expect(j.getLastSummary()?.removed).toBe(1);
+		});
+
+		it('does nothing when the janitor is disabled', async () => {
+			const wt = addWorktree(fx, agentPath(fx, 'off'), 'feat/off');
+			landOnOrigin(wt);
+			const j = janitor(fx, { env: { CREWLY_WORKTREE_JANITOR: '0' }, tidyDelayMs: 10 });
+			j.requestTidy();
+			await new Promise((r) => setTimeout(r, 200));
+			expect(fs.existsSync(wt)).toBe(true);
 		});
 	});
 
