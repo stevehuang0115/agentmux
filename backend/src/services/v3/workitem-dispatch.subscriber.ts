@@ -635,7 +635,7 @@ export class WorkItemDispatchSubscriber {
       const errorText = err instanceof Error ? err.message : String(err);
       // Info, not debug: this is the one line that says why a brief did not
       // land (404 session gone, 409 input box not ours, 5xx, no response).
-      this.logger.info('Dispatch HTTP write failed — the brief did not reach the agent', {
+      this.logger.warn('Dispatch HTTP write failed — the brief did not reach the agent', {
         workItemId: workItem.id,
         target: workItem.target,
         status: status ?? 'no-response',
