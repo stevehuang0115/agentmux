@@ -310,8 +310,10 @@ export class TeamMoveImporter {
       }
       if (!repo.remoteUrl) {
         const plain = repo.note?.startsWith('not a git repository') || repo.note?.startsWith('project folder does not exist');
-        if (plain) warnings.push(`${repo.projectName}: ${repo.note}.`);
-        else failed.push({ name: repo.projectName, reason: repo.note ?? 'no git remote on the source; copy the code by hand' });
+        const carried = (manifest.projects.find((p) => p.id === repo.projectId)?.work?.files ?? 0) > 0;
+        if (plain) {
+          if (!carried) warnings.push(`${repo.projectName}: ${repo.note}.`);
+        } else failed.push({ name: repo.projectName, reason: repo.note ?? 'no git remote on the source; copy the code by hand' });
         continue;
       }
       const result = await this.restore(mapping.to, repo);
@@ -391,6 +393,8 @@ export class TeamMoveImporter {
       const src = path.join(staging, 'projects', p.id, 'data');
       const dest = this.projectDataDir(p, mapping.to);
       add(await this.copyTree(src, dest, rewrites, tag));
+      // Working files of a project that is not a git repository: copied as they are (no path rewriting in user files).
+      if (p.work) add(await this.copyTree(path.join(staging, 'projects', p.id, 'files'), mapping.to, [], tag));
     }
     for (const member of manifest.team.members) {
       add(await this.copyTree(path.join(staging, 'agents', member.sessionName), path.join(this.home, 'agents', member.sessionName), rewrites, tag));
@@ -530,6 +534,11 @@ export class TeamMoveImporter {
     const warnings: string[] = [...repoOutcome.warnings];
     for (const p of manifest.projects) {
       if (p.skipped.length > 0) warnings.push(`${p.name}: ${p.skipped.length} project file(s) were left out (size caps or secret scan).`);
+      const left = p.work?.skipped ?? [];
+      if (left.length > 0) {
+        const names = left.slice(0, 5).map((f) => `${f.path} (${f.reason.replace('_', ' ')})`).join(', ');
+        warnings.push(`${p.name}: ${left.length} working file(s) were not moved: ${names}${left.length > 5 ? ', ...' : ''}. Copy them by hand if needed.`);
+      }
       if (p.sharedWithTeams.length > 0) warnings.push(`${p.name} is also used by ${p.sharedWithTeams.join(', ')}; its Crewly data was copied and stays on the source too.`);
     }
     if ((data['filesReplaced'] ?? 0) > 0) warnings.push(`${data['filesReplaced']} existing file(s) were replaced by the moved version; the old copies are next to them as *.pre-move-*.`);

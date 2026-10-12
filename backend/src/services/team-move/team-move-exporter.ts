@@ -111,6 +111,36 @@ export interface ExportDeps {
   knownSecrets?: () => Promise<SecretEnvValue[]>;
   inspectRepo?: typeof defaultInspectRepo;
   now?: () => string;
+  /** Caps for the working files of non-git projects; default from constants / env. */
+  workLimits?: WorkFileLimits;
+}
+
+/** Size caps for the working files of projects that are not git repositories. */
+export interface WorkFileLimits {
+  /** All such projects together. */
+  totalBytes: number;
+  /** One file. */
+  fileBytes: number;
+}
+
+/**
+ * The caps for non-git project files: constants, overridable in megabytes by
+ * `CREWLY_TEAM_MOVE_WORK_MAX_MB` and `CREWLY_TEAM_MOVE_WORK_FILE_MAX_MB`.
+ *
+ * @param env - Environment to read overrides from
+ * @returns The caps in bytes
+ */
+export function resolveWorkFileLimits(env: NodeJS.ProcessEnv = process.env): WorkFileLimits {
+  const mb = (name: string, fallback: number): number => {
+    const n = Number(env[name]);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n * 1024 * 1024) : fallback;
+  };
+  return { totalBytes: mb(C.WORK_FILES_MAX_MB_ENV, C.WORK_FILES_MAX_BYTES), fileBytes: mb(C.WORK_FILE_MAX_MB_ENV, C.WORK_FILE_MAX_BYTES) };
+}
+
+/** Whether a repo record says the folder is not a git repository (its files travel instead of being cloned). */
+export function isPlainFolder(repo: PackageRepo): boolean {
+  return !!repo.note?.startsWith('not a git repository');
 }
 
 /** Options of one export. */
@@ -275,6 +305,7 @@ export class TeamMoveExporter {
     // 5. Project-local Crewly data, within the size caps.
     const allTeams = await this.deps.getTeams();
     const packageProjects = await this.collectProjects(staging, projects, allTeams, team.id, counts);
+    await this.collectWorkFiles(staging, repos, packageProjects, counts);
 
     // 6. Required tools and runtimes.
     const { tools: requiredTools, connectors: requiredConnectors } = await this.detectNeeds(staging, team);
@@ -291,12 +322,20 @@ export class TeamMoveExporter {
         const bytes = staging.files().find((e) => e.path === finding.path)?.bytes ?? 0;
         await staging.remove(finding.path);
         excludedFiles += 1;
-        const projectMatch = /^projects\/([^/]+)\//.exec(finding.path);
+        const projectMatch = /^projects\/([^/]+)\/(data|files)\/(.*)$/.exec(finding.path);
         const project = projectMatch ? packageProjects.find((p) => p.id === projectMatch[1]) : undefined;
-        project?.skipped.push({ path: finding.path.replace(/^projects\/[^/]+\/data\//, ''), bytes, reason: 'secret_scan' });
-        if (project) {
-          project.files -= 1;
-          project.bytes -= bytes;
+        if (project && projectMatch) {
+          const skipped: SkippedFile = { path: projectMatch[3]!, bytes, reason: 'secret_scan' };
+          if (projectMatch[2] === 'files' && project.work) {
+            project.work.skipped.push(skipped);
+            project.work.files -= 1;
+            project.work.bytes -= bytes;
+            counts['workFiles'] = Math.max(0, (counts['workFiles'] ?? 0) - 1);
+          } else {
+            project.skipped.push(skipped);
+            project.files -= 1;
+            project.bytes -= bytes;
+          }
         }
       }
     }
@@ -347,7 +386,7 @@ export class TeamMoveExporter {
     return [
       'Credentials, API keys, OAuth/connector grants and runtime logins (Claude, Codex, ...)',
       'Slack bot tokens (Crewly Cloud re-points the agents\' Slack apps to the target)',
-      'Source code (cloned from each repository on the target)',
+      'Source code of git projects (cloned from each repository on the target; projects that are not git repositories travel in the package)',
       'Chat message history (channels and rooms move, messages stay on the source)',
       'Running sessions, logs, transcripts, build output and node_modules',
       'Short-lived agent reminders (they are set again by the agents)',
@@ -463,6 +502,49 @@ export class TeamMoveExporter {
       out.push(entry);
     }
     return out;
+  }
+
+  /**
+   * Copy the working files of projects that are not git repositories (a git
+   * project is cloned on the target instead). Dependencies, build output,
+   * logs and `.DS_Store` stay out; the caps leave the biggest files behind
+   * and every skipped file is listed in the manifest.
+   */
+  private async collectWorkFiles(staging: StagingArea, repos: PackageRepo[], packageProjects: PackageProject[], counts: Record<string, number>): Promise<void> {
+    const limits = this.deps.workLimits ?? resolveWorkFileLimits();
+    const excluded = new Set<string>(C.WORK_EXCLUDED_DIRS);
+    let remaining = limits.totalBytes;
+    for (const repo of repos) {
+      const entry = packageProjects.find((p) => p.id === repo.projectId);
+      if (!entry || !isPlainFolder(repo) || isInsidePackageTree(repo.path)) continue;
+      const work = { files: 0, bytes: 0, skipped: [] as SkippedFile[] };
+      entry.work = work;
+      const candidates: Array<{ abs: string; rel: string; size: number }> = [];
+      for await (const f of walkFiles(repo.path, excluded)) {
+        if (f.rel.endsWith('.log')) continue;
+        candidates.push(f);
+      }
+      candidates.sort((a, b) => a.size - b.size || (a.rel < b.rel ? -1 : 1));
+      for (const c of candidates) {
+        const skip = (reason: SkippedFile['reason']): void => {
+          work.skipped.push({ path: c.rel, bytes: c.size, reason });
+        };
+        if (c.size > limits.fileBytes) skip('too_large');
+        else if (c.size > remaining) skip('size_cap');
+        else {
+          try {
+            await staging.copyIn(c.abs, `projects/${entry.id}/files/${c.rel}`);
+            remaining -= c.size;
+            work.files += 1;
+            work.bytes += c.size;
+          } catch {
+            skip('unreadable');
+          }
+        }
+      }
+      work.skipped.sort((a, b) => b.bytes - a.bytes);
+      counts['workFiles'] = (counts['workFiles'] ?? 0) + work.files;
+    }
   }
 
   /** Tools and connectors the team's own words mention (prompts, norms, SOPs, cron tasks). */

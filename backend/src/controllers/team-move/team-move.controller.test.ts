@@ -13,8 +13,9 @@ jest.mock('../../middleware/caller-identity.middleware.js', () => ({
 }));
 
 const machines: MachineView[] = [
-  { instanceId: 'me', name: 'Mac', online: true, isLocal: true },
-  { instanceId: 'air-id', name: 'Air', online: true, isLocal: false },
+  { instanceId: 'me', name: 'Mac', online: true, isLocal: true, canReceive: true },
+  { instanceId: 'air-id', name: 'Air', online: true, isLocal: false, canReceive: true },
+  { instanceId: 'old-id', name: 'Old', online: true, isLocal: false, canReceive: false, crewlyVersion: '1.20.100' },
 ];
 
 describe('team moves routes', () => {
@@ -50,7 +51,15 @@ describe('team moves routes', () => {
 
   it('lists the machines it can move to', async () => {
     const res = await request(app()).get('/api/team-moves/machines');
-    expect(res.body.data.machines).toHaveLength(2);
+    expect(res.body.data.machines).toHaveLength(3);
+    expect(res.body.data.hints).toEqual([expect.stringContaining('Update Crewly on Old')]);
+  });
+
+  it('refuses a target that cannot receive a team yet and says to update it', async () => {
+    const res = await request(app()).post('/api/team-moves').send({ teamName: 'ce', targetName: 'old' });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Update Crewly on Old/);
+    expect(driver.startMove).not.toHaveBeenCalled();
   });
 
   it('lists moves and one move', async () => {
@@ -78,7 +87,7 @@ describe('team moves routes', () => {
   it('answers 404 with the machine names when the target is unknown, and never moves to itself', async () => {
     const res = await request(app()).post('/api/team-moves').send({ teamName: 'CE', targetName: 'Mac' });
     expect(res.status).toBe(404);
-    expect(res.body.error).toMatch(/Machines: Air/);
+    expect(res.body.error).toMatch(/can receive a team: Air$/);
     expect((await request(app()).post('/api/team-moves').send({ teamName: 'Nope', targetName: 'Air' })).status).toBe(404);
   });
 

@@ -40,6 +40,8 @@ interface Machine {
   name: string;
   online: boolean;
   isLocal: boolean;
+  canReceive?: boolean;
+  crewlyVersion?: string;
 }
 
 /** A move as the backend lists it. */
@@ -166,8 +168,11 @@ export async function teamMachinesCommand(print: Print = (l) => console.log(l), 
     return 1;
   }
   const machines = ((res.json['data'] as { machines?: Machine[] } | undefined)?.machines ?? []) as Machine[];
-  if (machines.length === 0) print(chalk.gray('No machines. Sign in to Crewly Cloud on each machine (crewly cloud login).'));
-  for (const m of machines) print(`${m.name.padEnd(24)} ${m.online ? chalk.green('online ') : chalk.gray('offline')} ${m.isLocal ? '(this machine)' : ''}`);
+  const remote = machines.filter((m) => !m.isLocal);
+  const receivable = remote.filter((m) => m.canReceive);
+  if (remote.length === 0) print(chalk.gray('No other machines are online. Sign in to Crewly Cloud on each machine (crewly cloud login).'));
+  for (const m of receivable) print(`${m.name.padEnd(24)} ${chalk.green('ready')}${m.crewlyVersion ? chalk.gray(`  Crewly ${m.crewlyVersion}`) : ''}`);
+  for (const m of remote.filter((x) => !x.canReceive)) print(chalk.yellow(`Update Crewly on ${m.name}${m.crewlyVersion ? ` (now ${m.crewlyVersion})` : ''} to move teams to it.`));
   return 0;
 }
 

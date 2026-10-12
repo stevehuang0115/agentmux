@@ -2,7 +2,7 @@
  * Team move REST controller (crewly#1189).
  *
  *   GET  /api/team-moves             moves of this account (Cloud) with local progress
- *   GET  /api/team-moves/machines    the account's other machines
+ *   GET  /api/team-moves/machines    the account's other live machines (with canReceive and update hints)
  *   POST /api/team-moves/check       what would block a move of a team (unpushed work)
  *   POST /api/team-moves/preview     dry run: build the package here, report what and how big (nothing is sent)
  *   POST /api/team-moves             start a move (owner, or the orchestrator after the owner said yes)
@@ -19,26 +19,20 @@ import { Router, type Request, type Response } from 'express';
 import { getCallerIdentity, requireOwner } from '../../middleware/caller-identity.middleware.js';
 import { containsApprovalToken } from '../../services/orchestrator/commitment-approval-guard.js';
 import { getChatV2Service } from '../../services/chat-v2/chat-v2.singleton.js';
-import { CloudSyncService } from '../../services/cloud/cloud-sync.service.js';
+import { CloudClientService } from '../../services/cloud/cloud-client.service.js';
 import { DeviceIdentityService } from '../../services/cloud/device-identity.service.js';
 import { StorageService } from '../../services/core/storage.service.js';
 import { TeamMoveBlockedError } from '../../services/team-move/team-move-exporter.js';
 import { TeamMoveSecretScanError } from '../../services/team-move/team-move-secret-scan.js';
 import { TeamMoveCloudError } from '../../services/team-move/team-move-cloud.client.js';
 import { getTeamMoveDriver, type TeamMoveDriver } from '../../services/team-move/team-move-driver.service.js';
+import { fetchMachines, updateHints, type MachineView } from '../../services/team-move/team-move-machines.js';
 import { isMoveId } from '../../services/team-move/team-move-journal.js';
 
 /** How recent the owner's "yes" must be when the orchestrator starts a move. */
 export const MOVE_APPROVAL_LOOKBACK_MS = 30 * 60 * 1000;
 
-/** A machine of the account. */
-export interface MachineView {
-  instanceId: string;
-  name: string;
-  online: boolean;
-  isLocal: boolean;
-  version?: string;
-}
+export type { MachineView };
 
 /** Collaborators (injectable for tests). */
 export interface TeamMoveControllerDeps {
@@ -51,20 +45,13 @@ export interface TeamMoveControllerDeps {
 }
 
 /**
- * The account's machines as Cloud sync knows them.
+ * The account's live remote machines from Cloud's instance registry.
  *
- * @returns Machines including this one
+ * @returns Machines other than this one
  */
 async function defaultMachines(): Promise<MachineView[]> {
-  const sync = CloudSyncService.getInstance();
   const local = await DeviceIdentityService.getInstance().getOrCreateIdentity().catch(() => null);
-  return sync.getDevices().map((d) => ({
-    instanceId: d.deviceId,
-    name: d.deviceName,
-    online: d.status === 'online',
-    isLocal: local ? d.deviceId === local.deviceId : false,
-    ...(d.version ? { version: d.version } : {}),
-  }));
+  return fetchMachines(CloudClientService.getInstance(), local?.deviceId ?? null);
 }
 
 const fail = (res: Response, status: number, error: string, extra: Record<string, unknown> = {}): void => {
@@ -116,7 +103,8 @@ export function createTeamMovesRouter(deps: Partial<TeamMoveControllerDeps> = {}
 
   router.get('/machines', async (_req: Request, res: Response) => {
     try {
-      res.json({ success: true, data: { machines: await machines() } });
+      const list = await machines();
+      res.json({ success: true, data: { machines: list, hints: updateHints(list) } });
     } catch (error) {
       sendError(res, error);
     }
@@ -133,7 +121,8 @@ export function createTeamMovesRouter(deps: Partial<TeamMoveControllerDeps> = {}
     const target =
       all.find((m) => m.instanceId === body['targetInstanceId']) ??
       (typeof body['targetName'] === 'string' ? all.filter((m) => m.name.toLowerCase() === (body['targetName'] as string).toLowerCase()) : []).at(0);
-    if (!target) return { error: `Target machine not found. Machines: ${all.map((m) => m.name).join(', ') || 'none'}` };
+    if (!target) return { error: `Target machine not found. Machines that can receive a team: ${all.filter((m) => m.canReceive).map((m) => m.name).join(', ') || 'none'}` };
+    if (!target.canReceive) return { error: `Update Crewly on ${target.name} first: it does not support team moves yet${target.crewlyVersion ? ` (it runs ${target.crewlyVersion})` : ''}.` };
     return { teamId: team.id, targetInstanceId: target.instanceId, targetName: target.name };
   };
 

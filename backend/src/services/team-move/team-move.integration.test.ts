@@ -336,6 +336,79 @@ describe('team move between two homes', () => {
     expect(result.manifest.files.some((f) => f.path.endsWith('huge.bin'))).toBe(false);
   });
 
+  /** Add a second project that is a plain folder (not a git repository) to the team. */
+  async function addPlainProject(files: Record<string, string | Buffer>): Promise<{ id: string; dir: string }> {
+    const id = '44444444-4444-4444-8444-444444444444';
+    const dir = path.join(fx.root, 'source-projects', 'biblestudy');
+    for (const [rel, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+      await fs.writeFile(path.join(dir, rel), content);
+    }
+    const projectsFile = path.join(fx.home, 'projects.json');
+    const projects = JSON.parse(await fs.readFile(projectsFile, 'utf8')) as Array<Record<string, unknown>>;
+    projects.push({ id, name: 'Bible Study', path: dir, teams: {}, status: 'stopped', createdAt: 'x', updatedAt: 'x' });
+    await fs.writeFile(projectsFile, JSON.stringify(projects));
+    const configFile = path.join(fx.home, 'teams', F.teamId, 'config.json');
+    const config = JSON.parse(await fs.readFile(configFile, 'utf8')) as { projectIds: string[] };
+    config.projectIds.push(id);
+    await fs.writeFile(configFile, JSON.stringify(config));
+    return { id, dir };
+  }
+
+  it('moves the working files of a project that is not a git repository, leaving out dependencies and build output', async () => {
+    const plain = await addPlainProject({
+      'AGENTS.md': `# Agents\nsee ${fx.projectDir}\n`,
+      'reviews/ch1.md': 'review one',
+      'node_modules/dep/index.js': 'x',
+      '.next/cache/a.js': 'x',
+      'dist/out.js': 'x',
+      'build/out.js': 'x',
+      '.cache/c': 'x',
+      'debug.log': 'noise',
+      '.DS_Store': 'x',
+      '.crewly/tickets/BS-1-a.md': '---\nid: BS-1\n---\n',
+    });
+    const { key, enc, file, result } = await exportAndEncrypt();
+    const entry = result.manifest.projects.find((p) => p.id === plain.id)!;
+    const packaged = result.manifest.files.map((f) => f.path).filter((p) => p.startsWith(`projects/${plain.id}/files/`));
+    expect(packaged.sort()).toEqual([`projects/${plain.id}/files/AGENTS.md`, `projects/${plain.id}/files/reviews/ch1.md`]);
+    expect(entry.work).toMatchObject({ files: 2, skipped: [] });
+    expect(result.manifest.counts['workFiles']).toBe(2);
+    // The git project is unaffected: nothing of its working tree travels.
+    expect(result.manifest.files.some((f) => f.path.startsWith(`projects/${F.projectId}/files/`))).toBe(false);
+
+    const report = await importer().run({ moveId: MOVE_ID, packageFile: file, privateKey: key.privateKey, expectedSha256: enc.sha256 });
+    const moved = (await targetStorage.getProjects()).find((p) => p.id === plain.id)!;
+    expect(await fs.readFile(path.join(moved.path, 'reviews', 'ch1.md'), 'utf8')).toBe('review one');
+    expect(await fs.readFile(path.join(moved.path, 'AGENTS.md'), 'utf8')).toContain(fx.projectDir);
+    await expect(fs.stat(path.join(moved.path, 'node_modules'))).rejects.toThrow();
+    expect((await fs.stat(path.join(moved.path, '.crewly', 'tickets', 'BS-1-a.md'))).isFile()).toBe(true);
+    expect(report.warnings.join('\n')).not.toMatch(/not a git repository/);
+    expect(report.paths.some((p) => p.projectId === plain.id)).toBe(true);
+  });
+
+  it('lists non-git files over the caps in the manifest and the report', async () => {
+    const plain = await addPlainProject({ 'small.md': 'ok', 'big.bin': Buffer.alloc(2048, 1), 'mid.bin': Buffer.alloc(300, 1) });
+    const limited = exporter({ workLimits: { totalBytes: 1000, fileBytes: 1024 } });
+    const staging = path.join(fx.root, 'staging-caps');
+    const result = await limited.export({ teamId: F.teamId, moveId: MOVE_ID, stagingDir: staging });
+    const entry = result.manifest.projects.find((p) => p.id === plain.id)!;
+    expect(entry.work!.skipped).toEqual([expect.objectContaining({ path: 'big.bin', reason: 'too_large' })]);
+    expect(entry.work!.files).toBe(2);
+    const tight = await exporter({ workLimits: { totalBytes: 100, fileBytes: 1024 } }).export({ teamId: F.teamId, moveId: MOVE_ID, stagingDir: path.join(fx.root, 'staging-caps2') });
+    expect(tight.manifest.projects.find((p) => p.id === plain.id)!.work!.skipped.map((s) => [s.path, s.reason])).toEqual([['big.bin', 'too_large'], ['mid.bin', 'size_cap']]);
+  });
+
+  it('runs the secret scan over non-git files: blocks, or leaves the file out with skipFlagged', async () => {
+    const plain = await addPlainProject({ 'notes.md': 'fine', 'keys.txt': `token: ${FAKE_SLACK}\n` });
+    await expect(exportAndEncrypt()).rejects.toBeInstanceOf(TeamMoveSecretScanError);
+    const ok = await exportAndEncrypt({ skipFlagged: true });
+    const entry = ok.result.manifest.projects.find((p) => p.id === plain.id)!;
+    expect(entry.work!.skipped).toEqual([expect.objectContaining({ path: 'keys.txt', reason: 'secret_scan' })]);
+    expect(entry.work!.files).toBe(1);
+    expect(ok.result.manifest.files.some((f) => f.path.endsWith('keys.txt'))).toBe(false);
+  });
+
   it('archives the team on the source and restores it on rollback', async () => {
     const poolFile = path.join(fx.home, 'task-pool', 'pool.json');
     const decisionStatus: Record<string, string> = { 'D-1': 'open' };
