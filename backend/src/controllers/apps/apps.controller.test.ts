@@ -633,3 +633,29 @@ describe('Crewly Apps controller: file handoff', () => {
     expect(res.body).toMatchObject({ success: false, error: 'quota_exceeded' });
   });
 });
+
+describe('Crewly Apps controller: owner upload requests', () => {
+  const RID = 'ur_AbCdEfGhIjKlMnOpQrStUv';
+  let client: { request: jest.Mock };
+  beforeEach(() => {
+    client = { request: jest.fn().mockResolvedValue({ requestId: RID, url: `https://crewlyai.com/portal/upload/${RID}` }) };
+    setAppsParts({ client: client as unknown as AppsCloudClient, registry: {} as unknown as AppsRegistryService, service: service as unknown as AppsService });
+  });
+
+  it('create forwards only the known fields to Cloud as the verified agent and answers 201 with the link', async () => {
+    const res = await request(app).post('/api/apps/upload-requests').set(agentAuthHeaders('dev-ella')).send({ purpose: 'raw footage', agentName: 'Ella', maxFiles: 2, evil: 'x' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.url).toContain('/portal/upload/');
+    expect(client.request).toHaveBeenCalledWith('POST', '/upload-requests', { body: { purpose: 'raw footage', agentName: 'Ella', maxFiles: 2 }, agent: 'dev-ella' });
+  });
+
+  it('get and cancel route to the Cloud paths; a malformed id never reaches Cloud', async () => {
+    await request(app).get(`/api/apps/upload-requests/${RID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('GET', `/upload-requests/${RID}`, { agent: 'dev-ella' });
+    await request(app).delete(`/api/apps/upload-requests/${RID}`).set(agentAuthHeaders('dev-ella')).expect(200);
+    expect(client.request).toHaveBeenLastCalledWith('DELETE', `/upload-requests/${RID}`, { agent: 'dev-ella' });
+    client.request.mockClear();
+    await request(app).get('/api/apps/upload-requests/..%2Fx').set(agentAuthHeaders('dev-ella')).expect(404);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});

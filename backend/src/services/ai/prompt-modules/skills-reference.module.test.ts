@@ -249,6 +249,13 @@ describe('SkillsReferenceModule', () => {
 			expect(out).toContain('prefer these over Drive or Slack');
 		});
 
+		it('points agents at request-file when the owner\'s file is too large, never at compression or Drive', async () => {
+			const out = await module.build(baseConfig);
+
+			expect(out).toContain('core/request-file');
+			expect(out).toContain('Never ask the owner to compress a file or put it in Drive');
+		});
+
 		it('names every connector family, not just Drive', async () => {
 			const out = await module.build(baseConfig);
 

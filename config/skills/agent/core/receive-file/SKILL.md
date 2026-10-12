@@ -49,5 +49,9 @@ Prints:
   24 hours pass).
 - An interrupted download keeps its `.part` file and resumes on the next run.
 - `--no-ack` keeps the server copy so another run can fetch it again.
+- Also how an **owner's upload** reaches you: when the owner uploads a file for a
+  link you made with `request-file`, you get a message with the handoff id and this
+  command (file kept up to 7 days). If the owner has a file that is too large for
+  Slack, use `request-file` instead of asking them to compress it or use Drive.
 - A handoff is gone once received, cancelled or expired (24 h): ask the sender
   to send it again.

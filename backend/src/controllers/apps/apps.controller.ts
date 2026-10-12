@@ -418,3 +418,32 @@ export const ackHandoff = handle(async (req, caller) => {
 
 /** DELETE /api/apps/handoffs/:handoffId — withdraw */
 export const cancelHandoff = handle((req, caller) => handoffCall('DELETE', `/handoffs/${handoffIdOf(req)}`, caller));
+
+/** An upload request id from the URL, or a 404 that names nothing. */
+function uploadRequestIdOf(req: Request): string {
+  const id = req.params.requestId;
+  if (!/^ur_[A-Za-z0-9_-]{22}$/.test(id)) throw new AppsCloudError(404, 'not_found', 'No such upload request.');
+  return id;
+}
+
+/**
+ * POST /api/apps/upload-requests `{ purpose, agentName?, maxFiles? }` — ask the owner for a file.
+ * Cloud answers a link (`url`) the agent posts to the owner; the file arrives as a handoff.
+ */
+export const createUploadRequest = handle(async (req, caller) => {
+  const b = body(req);
+  const result = await handoffCall<{ requestId?: string }>(
+    'POST',
+    '/upload-requests',
+    caller,
+    { purpose: b.purpose, agentName: b.agentName, maxFiles: b.maxFiles },
+  );
+  logger.info('Owner upload requested', { requestId: result.requestId, agent: caller.agentSession ?? 'owner' });
+  return result;
+}, 201);
+
+/** GET /api/apps/upload-requests/:requestId — status, limits, files */
+export const getUploadRequest = handle((req, caller) => handoffCall('GET', `/upload-requests/${uploadRequestIdOf(req)}`, caller));
+
+/** DELETE /api/apps/upload-requests/:requestId — cancel the link */
+export const cancelUploadRequest = handle((req, caller) => handoffCall('DELETE', `/upload-requests/${uploadRequestIdOf(req)}`, caller));
