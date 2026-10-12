@@ -33,6 +33,7 @@ import { createDecryptStream } from './team-move-crypto.js';
 import { hasTextExtension, looksLikeText, pathExists, rewritePathPrefix, sha256File, slugify, walkFiles, writeFileAtomic } from './team-move-fs.js';
 import { applyCarry } from './team-move-carry.js';
 import { restoreRepo } from './team-move-git.js';
+import { applyBundle, restoreFromBundle } from './team-move-bundle.js';
 import { runtimeLabel } from '../runtime-fallback/runtime-fallback.types.js';
 import { MoveJournal } from './team-move-journal.js';
 import { checkTools, hasRoomFor } from './team-move-preflight.js';
@@ -40,6 +41,7 @@ import type {
   CarryIndex,
   ImportStep,
   PackageProject,
+  PackageRepo,
   ReconnectItem,
   RuntimeStandIn,
   TeamMoveImportReport,
@@ -323,6 +325,13 @@ export class TeamMoveImporter {
       if (mapping.existing) {
         // The project was already here under this id: its checkout is not ours to move.
         warnings.push(`${repo.projectName} already exists on this machine (${mapping.to}); its checkout was left as it is.`);
+        if (repo.bundle?.file) {
+          // Same for the repository itself: keep the bundle next to the checkout (git fetch <bundle> to use it).
+          const keptBundle = path.join(mapping.to, '.crewly', 'move-carry-pending', manifest.moveId, 'repo.bundle');
+          await fs.mkdir(path.dirname(keptBundle), { recursive: true });
+          await fs.copyFile(path.join(staging, ...repo.bundle.file.split('/')), keptBundle).catch(() => undefined);
+          warnings.push(`${repo.projectName}: the repository from the source was not applied; its git bundle is saved in ${keptBundle}.`);
+        }
         if (repo.carry) {
           // The carried work cannot go on top of a checkout that is not ours; keep it next to it.
           const kept = path.join(mapping.to, '.crewly', 'move-carry-pending', manifest.moveId);
@@ -332,7 +341,7 @@ export class TeamMoveImporter {
         }
         continue;
       }
-      if (!repo.remoteUrl) {
+      if (!repo.remoteUrl && !repo.bundle?.file) {
         const plain = repo.note?.startsWith('not a git repository') || repo.note?.startsWith('project folder does not exist');
         const carried = (manifest.projects.find((p) => p.id === repo.projectId)?.work?.files ?? 0) > 0;
         if (plain) {
@@ -341,9 +350,14 @@ export class TeamMoveImporter {
         continue;
       }
       // Carried work sits on top of a commit the remote has (not the source's local head).
-      const result = await this.restore(mapping.to, repo.carry ? { ...repo, headSha: repo.carry.baseSha } : repo);
+      let result;
+      if (repo.bundle?.file) {
+        result = await this.restoreViaBundle(mapping.to, repo, path.join(staging, ...repo.bundle.file.split('/')));
+      } else {
+        result = await this.restore(mapping.to, repo.carry ? { ...repo, headSha: repo.carry.baseSha } : repo);
+      }
       for (const w of result.warnings) warnings.push(`${repo.projectName}: ${w}`);
-      if (result.ok) cloned.push({ name: repo.projectName, path: mapping.to, branch: result.branch, headSha: result.headSha });
+      if (result.ok) cloned.push({ name: repo.projectName, path: mapping.to, branch: result.branch, headSha: result.headSha, ...(repo.bundle?.file ? { viaBundle: true } : {}) });
       else failed.push({ name: repo.projectName, reason: result.error ?? 'clone failed' });
       if (result.ok && repo.carry) {
         const carryDir = path.join(staging, 'projects', repo.projectId, 'carry');
@@ -363,6 +377,29 @@ export class TeamMoveImporter {
       }
     }
     return { repos: { cloned, failed, ...(carried.length > 0 ? { carried } : {}) }, warnings };
+  }
+
+  /**
+   * Put a repository carried as a git bundle in place, then delete the bundle
+   * (it can be hundreds of MB).
+   *
+   * - `full`: the repository is built from the bundle (no remote exists).
+   * - `unpushed`: clone the remote as usual, then fetch the bundle (the
+   *   commits the remote lacks) on top.
+   */
+  private async restoreViaBundle(dest: string, repo: PackageRepo, bundleFile: string): ReturnType<typeof restoreRepo> {
+    const recorded = { branch: repo.branch, headSha: repo.headSha };
+    let result;
+    if (repo.bundle?.mode === 'unpushed' && repo.remoteUrl) {
+      const base = await this.restore(dest, { ...repo, headSha: null });
+      if (!base.ok) return base;
+      const applied = await applyBundle(dest, bundleFile, recorded);
+      result = { ...applied, warnings: [...base.warnings, ...applied.warnings] };
+    } else {
+      result = await restoreFromBundle(dest, bundleFile, recorded);
+    }
+    if (result.ok) await fs.rm(bundleFile, { force: true });
+    return result;
   }
 
   /** The parsed `carry.json` of a repository, or null when missing or unreadable. */

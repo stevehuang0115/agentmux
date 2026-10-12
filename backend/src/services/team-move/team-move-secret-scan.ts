@@ -84,12 +84,19 @@ async function scanFile(abs: string, known: readonly SecretEnvValue[]): Promise<
  * @param staging - The package being built
  * @param files - Its files
  * @param known - Exact secret values (env, settings) to look for
+ * @param skip - Package paths that are not scanned (git bundles: binary packs, encrypted for the target)
  * @returns Files scanned and the findings
  */
-export async function scanStaging(staging: StagingArea, files: readonly PackageFileEntry[], known: readonly SecretEnvValue[] = []): Promise<SecretScanResult> {
+export async function scanStaging(
+  staging: StagingArea,
+  files: readonly PackageFileEntry[],
+  known: readonly SecretEnvValue[] = [],
+  skip: (packagePath: string) => boolean = () => false,
+): Promise<SecretScanResult> {
   const findings: SecretFinding[] = [];
   let filesScanned = 0;
   for (const f of files) {
+    if (skip(f.path)) continue;
     const { matches, scanned } = await scanFile(staging.abs(f.path), known);
     if (scanned) filesScanned += 1;
     if (matches > 0) findings.push({ path: f.path, matches });

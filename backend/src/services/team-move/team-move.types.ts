@@ -145,6 +145,20 @@ export interface RepoPreflight {
   filesTruncated: boolean;
   /** Whether the changes can travel in the package ("Carry uncommitted changes"). */
   carry: { possible: boolean; files: number; bytes: number; flattenedCommits: number; reason?: string } | null;
+  /**
+   * The repository travels in the package as a git bundle (no remote, or local
+   * commits the remote lacks) instead of being cloned. Null when it is cloned.
+   */
+  bundle?: {
+    mode: 'full' | 'unpushed';
+    /** Estimated size (exact for the real package); null when it cannot be known beforehand. */
+    bytes: number | null;
+    possible: boolean;
+    /** Why it cannot be carried (over the cap, no commits, ...). */
+    reason?: string;
+    /** One line for the owner, e.g. "no remote — will be carried in the package (0.8 GB)". */
+    message: string;
+  } | null;
 }
 
 /** A file the secret scan flagged. */
@@ -207,6 +221,21 @@ export interface PackageRepo {
   carry?: PackageCarry;
   /** Why uncommitted work could not be carried (asked for, but too big, ...). */
   carryError?: string;
+  /** The repository itself travels in the package as a git bundle (see {@link PackageBundle}). */
+  bundle?: PackageBundle;
+}
+
+/** A repository carried as a `git bundle` inside the package. */
+export interface PackageBundle {
+  /** `full`: every branch and tag (the repository has no remote); `unpushed`: only the commits the remote lacks. */
+  mode: 'full' | 'unpushed';
+  /** Package path, `projects/<id>/bundle/repo.bundle`; absent in a dry run. */
+  file?: string;
+  /** Size in bytes (an estimate in a dry run). */
+  bytes: number;
+  sha256?: string;
+  /** Refs in the bundle. */
+  refs?: number;
 }
 
 /** Uncommitted work of a repository that travels in the package. */
@@ -361,7 +390,7 @@ export interface TeamMoveImportReport {
   /** Moved counts by kind; Cloud shows these. */
   moved: Record<string, number>;
   repos: {
-    cloned: Array<{ name: string; path: string; branch: string | null; headSha: string | null }>;
+    cloned: Array<{ name: string; path: string; branch: string | null; headSha: string | null; viaBundle?: boolean }>;
     failed: Array<{ name: string; reason: string }>;
     /** Uncommitted work carried from the source and applied on top of the clone. */
     carried?: Array<{ name: string; applied: number; untracked: number; failed: Array<{ path: string; reason: string }>; flattenedCommits: number; leftBehind: number }>;

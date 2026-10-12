@@ -65,6 +65,11 @@ jest.mock('../utils/safe-shutdown.js', () => {
 	};
 });
 
+const mockWriteShutdownMarker = jest.fn();
+jest.mock('../utils/shutdown-marker.js', () => ({
+	writeShutdownMarker: (...args: unknown[]) => mockWriteShutdownMarker(...args),
+}));
+
 import { stopCommand } from './stop.js';
 
 const actualWaitForPidExit = jest.requireActual('../utils/safe-shutdown.js').waitForPidExit;
@@ -175,6 +180,15 @@ describe('stopCommand', () => {
 		errorSpy.mockRestore();
 		exitSpy.mockRestore();
 		process.exitCode = 0;
+	});
+
+	describe('deliberate stop marker', () => {
+		it('writes the shutdown marker so the supervisor and the launchd watchdog do not relaunch', async () => {
+			mockBackend({});
+			mockExec();
+			await stopCommand({});
+			expect(mockWriteShutdownMarker).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe('graceful stop (safe-restart drain kept)', () => {

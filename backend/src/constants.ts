@@ -8329,9 +8329,26 @@ export const TEAM_MOVE_CONSTANTS = {
 	/** `git clone`/`fetch` timeout (ms). */
 	GIT_TIMEOUT_MS: 15 * 60 * 1000,
 	/** "Carry uncommitted changes": most bytes of patches and untracked files taken from one repository. */
-	CARRY_MAX_BYTES: 100 * 1024 * 1024,
+	CARRY_MAX_BYTES: 512 * 1024 * 1024,
 	/** ...largest single patch or untracked file. */
-	CARRY_FILE_MAX_BYTES: 25 * 1024 * 1024,
+	CARRY_FILE_MAX_BYTES: 128 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two carry caps above. */
+	CARRY_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_CARRY_MAX_MB',
+	CARRY_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_CARRY_FILE_MAX_MB',
+	/** Env vars (megabytes) overriding the `.crewly` project-file caps (PROJECT_FILE_MAX_BYTES / PROJECT_FILES_MAX_BYTES). */
+	PROJECT_FILE_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_PROJECT_FILE_MAX_MB',
+	PROJECT_FILES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_PROJECT_FILES_MAX_MB',
+	/** Git bundle ("carry the repo"): largest bundle of one repository. Streamed to disk, never held in memory. */
+	BUNDLE_REPO_MAX_BYTES: 2 * 1024 * 1024 * 1024,
+	/** ...all bundles of one move together. */
+	BUNDLES_MAX_BYTES: 3 * 1024 * 1024 * 1024,
+	/** Env vars (megabytes) overriding the two bundle caps above. */
+	BUNDLE_REPO_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_BUNDLE_MAX_MB',
+	BUNDLES_MAX_MB_ENV: 'CREWLY_TEAM_MOVE_BUNDLES_MAX_MB',
+	/** Package path (below `projects/<id>/`) of a repository's bundle. */
+	BUNDLE_FILE: 'bundle/repo.bundle',
+	/** `git bundle create` timeout (ms). */
+	BUNDLE_TIMEOUT_MS: 30 * 60 * 1000,
 	/** ...most changed files (patches plus untracked files) per repository. */
 	CARRY_MAX_FILES: 2000,
 	/** Changed files named per repository in a preflight report. */

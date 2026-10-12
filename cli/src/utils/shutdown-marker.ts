@@ -37,6 +37,25 @@ export function hasShutdownMarker(crewlyHome?: string): boolean {
 }
 
 /**
+ * Write the marker: the owner stopped Crewly on purpose (`crewly stop`), so the
+ * supervisor and the launchd watchdog must not bring it back. Best-effort.
+ *
+ * @param crewlyHome - Crewly home
+ * @param by - Who asked, for whoever finds the file
+ * @returns True when written
+ */
+export function writeShutdownMarker(crewlyHome?: string, by = 'crewly stop'): boolean {
+	try {
+		const file = shutdownMarkerPath(crewlyHome);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, `${JSON.stringify({ requestedAt: new Date().toISOString(), pid: process.pid, by })}\n`, 'utf-8');
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Remove the marker (a fresh start); absent is fine.
  *
  * @param crewlyHome - Crewly home
