@@ -123,6 +123,7 @@ import { parseSlackThreadKey } from './services/slack/slack-thread-key.js';
 import { LIVENESS_MONITOR_CONSTANTS, INPUT_CIRCUIT_CONSTANTS, INPUT_BLOCKED_RETRY_CONSTANTS } from './constants.js';
 import { InputBlockedRetryService } from './services/messaging/input-blocked-retry.service.js';
 import { driveCapabilities } from './services/drive/drive-agent.service.js';
+import { teamMoveCapabilities } from './services/team-move/team-move-driver.service.js';
 import { SUB_AGENT_QUEUE_CONSTANTS, CHAT_CONTEXT_CONSTANTS, SAFE_RESTART, AUTO_UPDATE_CONSTANTS, PROCESS_EXIT_CODES, CLAUDE_STARTUP_CONSTANTS, WEB_CONSTANTS, TICKET_CONSTANTS, UNASSIGNED_ROUTE_CONSTANTS, CLOUD_TALK_CONSTANTS, STANDING_ANSWERS_CONSTANTS, TICKET_AUTOPILOT_CONSTANTS, TICKET_HYGIENE_CONSTANTS, EXPERIMENT_CONSTANTS, WORK_ITEM_DESTINATION_CONSTANTS, CODEX_USAGE_SYNC_CONSTANTS, ANTIGRAVITY_USAGE_SYNC_CONSTANTS, OWNER_AUTH_CONSTANTS, CREWLY_APPS_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, BRIEFING_CONSTANTS, DRIVE_CONSTANTS, POOL_PRUNE_CONSTANTS } from './constants.js';
 import { randomUUID } from 'crypto';
 import { PtyActivityTrackerService } from './services/agent/pty-activity-tracker.service.js';
@@ -3034,6 +3035,24 @@ void (async () => {
 							});
 						}
 
+						// Team move (crewly#1189): Cloud tells this machine what to do in a
+						// move of a team to or from another machine. Starting the driver is
+						// what advertises `teamMove:1` to Cloud, and it resumes pending moves.
+						try {
+							const [{ createTeamMoveDriver }, { setTeamMoveDriver }] = await Promise.all([
+								import('./services/team-move/team-move-runtime.js'),
+								import('./services/team-move/team-move-driver.service.js'),
+							]);
+							const moveDriver = createTeamMoveDriver({ storage: this.storageService, relay: sync });
+							setTeamMoveDriver(moveDriver);
+							moveDriver.start();
+							void moveDriver.housekeeping().catch(() => undefined);
+						} catch (moveErr) {
+							this.logger.warn('Team move handler wiring skipped', {
+								error: moveErr instanceof Error ? moveErr.message : String(moveErr),
+							});
+						}
+
 						// "Let me check with the teams" (Drive kickoff): set below, once the
 						// status snapshot sync exists, and read by the Drive handler at run time.
 						let driveStatusCheck: { run: () => Promise<unknown> } | null = null;
@@ -3925,7 +3944,7 @@ void (async () => {
 					this.storageService.onStorageEvent(async (event) => {
 						if (event.kind === 'team-saved') {
 							await reconciler.reconcile(event.team);
-						} else if (event.kind === 'team-deleted') {
+						} else if (event.kind === 'team-deleted' || event.kind === 'team-moved-away') {
 							await reconciler.unregisterAll(event.teamId);
 						}
 					});
@@ -5863,7 +5882,7 @@ void (async () => {
 				// whether this machine takes `talk_message` — also for machines
 				// without Slack, which never send the registry heartbeat.
 				roster: async () => buildAgentRoster(await this.storageService.getTeams()),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onNewMessage: (listener) => {
 					chat.on('chat_message', listener);
 					return () => chat.off('chat_message', listener);
@@ -5949,7 +5968,7 @@ void (async () => {
 							.filter((a) => a.displayName)
 							.map((a) => [a.agentSession, a.displayName as string]),
 					),
-				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities()],
+				capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
 				onTicketChange: (listener) => RequestService.getInstance().onChange(() => listener()),
 			});
 			setWaitingItemsSyncService(service);

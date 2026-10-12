@@ -811,6 +811,28 @@ describe('listTeamsWithMappings / getTeam', () => {
   });
 });
 
+describe('adoptMapping (team move, crewly#1189)', () => {
+  const incoming = { teamId: 'team-moved', slackChannelId: 'CMOVED', slackChannelName: 'moved', chatChannelId: 'huddle-moved', createdAt: '2026-09-12T00:00:00.000Z', autoCreated: true };
+
+  it('takes over a mapping once, so the arriving team keeps its channel', async () => {
+    expect(await service.adoptMapping(incoming)).toBe(true);
+    expect(service.findByTeamId('team-moved')?.slackChannelId).toBe('CMOVED');
+    expect(await service.adoptMapping(incoming)).toBe(false);
+    expect(await service.adoptMapping({ ...incoming, teamId: 'other-team' })).toBe(false); // the Slack channel is taken
+    expect(await service.adoptMapping({ teamId: 'x' } as never)).toBe(false);
+    // Persisted for the next boot.
+    const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'slack-team-channels.json'), 'utf8')) as { mappings: Array<{ teamId: string }> };
+    expect(raw.mappings.map((m) => m.teamId)).toEqual(['team-moved']);
+  });
+
+  it('keeps the Slack channel when a team moves away, unlike a delete', async () => {
+    await service.ensureTeamChannel(team());
+    await service.handleStorageEvent({ kind: 'team-moved-away', teamId: 'team-alpha' });
+    expect(service.findByTeamId('team-alpha')).not.toBeNull();
+    expect(slack.archived).toEqual([]);
+  });
+});
+
 describe('unlinkTeam', () => {
   it('drops the mapping, archives the huddle, and archives Slack only when asked', async () => {
     await service.ensureTeamChannel(team());

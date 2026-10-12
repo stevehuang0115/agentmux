@@ -1071,6 +1071,31 @@ describe('TaskPoolService', () => {
     });
   });
 
+  describe('team move (crewly#1189)', () => {
+    it('imports work items exactly as they were and skips ones already in the pool', async () => {
+      const blocked = { ...makeWorkItem({ title: 'blocked one', target: 'a-1' }), status: 'blocked' as const };
+      const queued = makeWorkItem({ title: 'queued one', target: 'a-1' });
+      expect(await service.importWorkItems([blocked, queued, { nonsense: true } as never])).toBe(2);
+      expect(await service.importWorkItems([blocked, queued])).toBe(0);
+      const all = await service.getAllItems();
+      expect(all.map((w) => w.id).sort()).toEqual([blocked.id, queued.id].sort());
+      expect(all.find((w) => w.id === blocked.id)!.status).toBe('blocked');
+    });
+
+    it('removes the items of a moved team together with their claims', async () => {
+      const a = makeWorkItem({ title: 'a', target: 'x-1' });
+      const b = makeWorkItem({ title: 'b', target: 'y-1' });
+      await service.addToPool(a);
+      await service.addToPool(b);
+      await service.claimFromPool('x-1');
+      expect(await service.getActiveClaims()).toHaveLength(1);
+      expect(await service.removeWorkItemsForMove([a.id])).toBe(1);
+      expect((await service.getAllItems()).map((w) => w.id)).toEqual([b.id]);
+      expect(await service.getActiveClaims()).toHaveLength(0);
+      expect(await service.removeWorkItemsForMove([])).toBe(0);
+    });
+  });
+
   describe('retargetQueuedItem', () => {
     it('moves a queued item and records where it came from; leaves running work alone', async () => {
       const wi = makeWorkItem({ title: 'metrics', target: 'old-scribe-45506487' });

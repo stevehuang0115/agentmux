@@ -8249,3 +8249,73 @@ export const TEAM_ROSTER_CONSTANTS = {
 		{ open: 0, done: 0, charter: 80, specialties: false },
 	],
 } as const;
+
+/**
+ * Team move (crewly#1189): move a whole team to another machine of the same
+ * account through Crewly Cloud. Cloud only relays an end-to-end encrypted
+ * package; both machines run this code. See specs/2026-10-12-team-move.md.
+ */
+export const TEAM_MOVE_CONSTANTS = {
+	/** Capability advertised to Cloud in the heartbeat once the driver runs. */
+	CAPABILITY: 'teamMove:1',
+	/** Relay message `type` Cloud pushes (`{moveId, role, action}`). */
+	RELAY_MESSAGE_TYPE: 'team_move',
+	/** Cloud REST path (under the Cloud base URL). */
+	CLOUD_PATH: '/api/cloud/team-moves',
+	/** Package schema version; bump on any breaking layout change. */
+	SCHEMA_VERSION: 1,
+	/** Package kind written to the manifest. */
+	PACKAGE_KIND: 'crewly-team-move',
+	/** Directory under CREWLY_HOME holding per-move state (journal, keys, archive). */
+	HOME_DIR: 'team-moves',
+	/** Upload/download chunk size (matches Cloud's 8 MiB chunks). */
+	TRANSFER_CHUNK_BYTES: 8 * 1024 * 1024,
+	/** Plaintext frame size of the encrypted stream. */
+	CRYPTO_FRAME_BYTES: 64 * 1024,
+	/** The source keeps the archived team this long for rollback. */
+	ARCHIVE_RETENTION_MS: 7 * 24 * 60 * 60 * 1000,
+	/** Per-file cap for project-local `.crewly` files in a package. */
+	PROJECT_FILE_MAX_BYTES: 10 * 1024 * 1024,
+	/** Total cap for project-local `.crewly` files in a package (all projects). */
+	PROJECT_FILES_MAX_BYTES: 150 * 1024 * 1024,
+	/** Newest handover notes kept per agent. */
+	HANDOVERS_PER_AGENT: 10,
+	/** Largest text file that is path-rewritten and secret-scanned in memory. */
+	TEXT_FILE_MAX_BYTES: 8 * 1024 * 1024,
+	/** Free disk the target needs beyond the package (bytes): 2x package + this. */
+	DISK_HEADROOM_BYTES: 512 * 1024 * 1024,
+	/** Oldest Crewly version that can take part in a move. */
+	MIN_CREWLY_VERSION: '1.20.304',
+	/** Folder (under the target's home dir) projects are relocated to. */
+	DEFAULT_PROJECTS_DIR_NAME: 'crewly-projects',
+	/** Env var that overrides the target's projects root. */
+	PROJECTS_ROOT_ENV: 'CREWLY_PROJECTS_ROOT',
+	/** Cloud request timeout (ms). */
+	REQUEST_TIMEOUT_MS: 30_000,
+	/** Upload/download retries per chunk. */
+	CHUNK_RETRIES: 4,
+	/** Backoff base between retries (ms). */
+	RETRY_BASE_MS: 1_000,
+	/** How often the driver re-reads pending moves from Cloud (ms). */
+	POLL_INTERVAL_MS: 5 * 60 * 1000,
+	/** Delay before the first pending-move check after boot (ms). */
+	BOOT_DELAY_MS: 20_000,
+	/** `git clone`/`fetch` timeout (ms). */
+	GIT_TIMEOUT_MS: 15 * 60 * 1000,
+	/** Tools a package may require; found by name in prompts, norms and SOPs. */
+	KNOWN_TOOLS: ['ffmpeg', 'docker', 'xcodebuild', 'gh', 'python3', 'node', 'git', 'jq', 'yt-dlp', 'imagemagick', 'whisper-cli'],
+	/** Binary each known tool is looked up by on PATH. */
+	TOOL_BINARIES: {
+		ffmpeg: 'ffmpeg',
+		docker: 'docker',
+		xcodebuild: 'xcodebuild',
+		gh: 'gh',
+		python3: 'python3',
+		node: 'node',
+		git: 'git',
+		jq: 'jq',
+		'yt-dlp': 'yt-dlp',
+		imagemagick: 'convert',
+		'whisper-cli': 'whisper-cli',
+	},
+} as const;

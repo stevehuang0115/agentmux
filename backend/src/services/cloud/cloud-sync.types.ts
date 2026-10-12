@@ -196,7 +196,10 @@ export type MessageType =
   // "Waiting on you" (Phase 5): the owner accepted / sent back a ticket from
   // the portal. `data` is `{v, actionId, itemId, instanceId, ticketId}` — no
   // text; WaitingActionsInboundService fetches the action from Cloud.
-  | 'waiting_action';
+  | 'waiting_action'
+  // Team move (crewly#1189): Cloud tells this machine what to do in a move.
+  // `data` is `{moveId, role, action}`; TeamMoveDriver fetches the truth from Cloud.
+  | 'team_move';
 
 /** Valid message type values for runtime validation. */
 export const MESSAGE_TYPES: readonly MessageType[] = [
@@ -217,6 +220,7 @@ export const MESSAGE_TYPES: readonly MessageType[] = [
   'slack_event',
   'talk_message',
   'waiting_action',
+  'team_move',
 ] as const;
 
 /**

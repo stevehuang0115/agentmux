@@ -1414,6 +1414,26 @@ export class SlackTeamChannelService {
   }
 
   /**
+   * Take over a team's mapping from another machine (team move, crewly#1189).
+   * Adds it unless this machine already maps the team or the Slack channel, so
+   * the arriving team reuses its channel instead of getting a second one.
+   *
+   * @param mapping - The mapping as the source machine had it
+   * @returns True when the mapping was added
+   */
+  async adoptMapping(mapping: SlackTeamChannelMapping): Promise<boolean> {
+    if (!isMapping(mapping)) return false;
+    return this.serialised(mapping.teamId, async () => {
+      const store = await this.load();
+      if (store.mappings.some((m) => m.teamId === mapping.teamId || m.slackChannelId === mapping.slackChannelId)) return false;
+      store.mappings.push({ ...mapping });
+      await this.save();
+      this.logger.info('Team channel adopted from another machine', { teamId: mapping.teamId, slackChannel: `#${mapping.slackChannelName}` });
+      return true;
+    });
+  }
+
+  /**
    * Remove a team's mapping. Optionally archives the Slack channel; the
    * huddle is always archived (it is Crewly's own object).
    *
@@ -1540,6 +1560,9 @@ export class SlackTeamChannelService {
         await this.unlinkTeam(event.teamId, { archiveSlackChannel: true });
         return;
       }
+      // A team that moved to another machine keeps its Slack channel (Cloud
+      // re-points it); the mover unlinks the mapping itself (crewly#1189).
+      if (event.kind === 'team-moved-away') return;
       const team = event.team;
       await this.load();
       const mapping = this.findByTeamId(team.id);

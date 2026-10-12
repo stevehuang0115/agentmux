@@ -135,6 +135,35 @@ describe('listSince (Settings › Security)', () => {
   });
 });
 
+describe('team move (crewly#1189)', () => {
+  it('withdraws and reopens decisions without touching their Slack cards', async () => {
+    const h = await harness();
+    const d = await h.service.ask('crewly-orc', ticketAsk);
+    const updatesBefore = h.slack.updates.length;
+    expect(await h.service.setMovedStatus([d.id, 'D-missing'])).toBe(1);
+    expect((await h.service.get(d.id))!.status).toBe('cancelled');
+    expect(await h.service.setMovedStatus([d.id])).toBe(0); // already withdrawn
+    expect(h.slack.updates).toHaveLength(updatesBefore);
+    expect(await h.service.setMovedStatus([d.id], true)).toBe(1);
+    expect(await h.service.get(d.id)).toMatchObject({ status: 'open' });
+    // A decision the owner settled themselves is not reopened.
+    await h.service.cancelWhere((x) => x.id === d.id, 'owner skipped');
+    expect(await h.service.setMovedStatus([d.id], true)).toBe(0);
+  });
+
+  it('takes over decisions from a moved team with new ids, keeps the card, skips known cards', async () => {
+    const h = await harness();
+    const incoming = [
+      { id: 'D-9', question: 'Ship?', options: [], defaultKey: 'wait', deadline: 'x', requestedBy: 's', asker: 's', status: 'open', card: { slackChannelId: 'C1', messageTs: '1.1', postedBy: 'crewly' }, createdAt: 'x', updatedAt: 'x' },
+    ];
+    expect(await h.service.importMoved(incoming)).toBe(1);
+    expect(await h.service.importMoved(incoming)).toBe(0);
+    const [only] = await h.service.list('all');
+    expect(only!.id).not.toBe('D-9');
+    expect(only).toMatchObject({ question: 'Ship?', card: { slackChannelId: 'C1', messageTs: '1.1' } });
+  });
+});
+
 describe('ask + routing', () => {
   it('a ticket ask is posted by the ASSIGNEE bot in the ticket thread; the first ask creates the thread', async () => {
     const h = await harness();

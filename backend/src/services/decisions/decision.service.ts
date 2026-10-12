@@ -416,6 +416,9 @@ function threadReplyFingerprint(m: ThreadReplyMessage): string {
   return [m.userId ?? '', m.authorAgentSession ?? '', String(m.files?.length ?? 0), m.text ?? ''].join('\u0000');
 }
 
+/** Why a decision was withdrawn because its team moved to another machine. */
+const MOVED_REASON = 'The team moved to another machine';
+
 /**
  * Decision cards service.
  */
@@ -1324,6 +1327,49 @@ export class DecisionService {
       this.logger.info('Owner decision withdrawn', { decisionId: d.id, note });
     }
     return open.length;
+  }
+
+  /**
+   * Withdraw the decisions of a team that moved to another machine, without
+   * touching their Slack cards (the target keeps the live copy; team move,
+   * crewly#1189).
+   *
+   * @param ids - Decision ids
+   * @param reopen - True to bring them back (rollback)
+   * @returns How many changed
+   */
+  async setMovedStatus(ids: readonly string[], reopen = false): Promise<number> {
+    let changed = 0;
+    for (const id of ids) {
+      const done = await this.deps.store.update(id, (cur) => {
+        if (reopen) return cur.status === 'cancelled' && cur.closedReason === MOVED_REASON ? { status: 'open', closedReason: undefined } : null;
+        return PENDING_DECISION_STATUSES.has(cur.status) ? { status: 'cancelled', closedReason: MOVED_REASON } : null;
+      });
+      if (done) changed += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * Take over open decisions from a team that moved here (crewly#1189). Each
+   * gets a new id; the Slack card reference is kept, so a tap on the existing
+   * card resolves the copy. A decision whose card is already known is skipped.
+   *
+   * @param incoming - Decisions as the source had them
+   * @returns How many were added
+   */
+  async importMoved(incoming: ReadonlyArray<Record<string, unknown>>): Promise<number> {
+    const existing = await this.deps.store.list();
+    const known = new Set(existing.filter((d) => d.card).map((d) => `${d.card!.slackChannelId}:${d.card!.messageTs}`));
+    let added = 0;
+    for (const raw of incoming) {
+      const { id: _id, createdAt: _c, updatedAt: _u, ...draft } = raw as Record<string, unknown>;
+      const card = (draft['card'] ?? null) as { slackChannelId?: string; messageTs?: string } | null;
+      if (card?.slackChannelId && card.messageTs && known.has(`${card.slackChannelId}:${card.messageTs}`)) continue;
+      await this.deps.store.create(draft as unknown as Omit<OwnerDecision, 'id' | 'createdAt' | 'updatedAt'>);
+      added += 1;
+    }
+    return added;
   }
 
   /**
