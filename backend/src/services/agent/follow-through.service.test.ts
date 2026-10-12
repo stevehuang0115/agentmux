@@ -27,7 +27,9 @@ describe('AgentFollowThroughService', () => {
 		expect(await svc.onTurnEnd('pia')).toBe('nudged');
 		expect(nudgeAgent).toHaveBeenCalledTimes(1);
 		const text = (nudgeAgent.mock.calls[0] as unknown as [string, string])[1];
-		expect(text).toContain("Start it now, in this turn; don't reply again until there's a result or a real blocker.");
+		expect(text).toContain("Start it now, in this turn.");
+		expect(text).toContain("proceed with the default you stated");
+		expect(text).toContain("Don't reply again until there's a result or a real blocker.");
 		expect(text).toContain('breaking down the reference shot list');
 		// at most once per statement
 		expect(await svc.onTurnEnd('pia')).toBe('none');
@@ -35,11 +37,78 @@ describe('AgentFollowThroughService', () => {
 	});
 
 	it('does not nudge when a tool ran after the statement', async () => {
-		const { svc, nudgeAgent } = setup({ toolStartsSince: () => 2 });
+		const { svc, nudgeAgent } = setup({ toolStartsSince: () => C.TOOLS_TO_COUNT });
 		svc.noteAgentPost({ agent: 'pia', text: SAID });
 		expect(await svc.onTurnEnd('pia')).toBe('worked');
 		expect(nudgeAgent).not.toHaveBeenCalled();
 		expect(svc.holdsIntent('pia')).toBe(false);
+	});
+
+	it('housekeeping tool calls after the reply do not count as starting the work', async () => {
+		const { svc, nudgeAgent } = setup({ toolStartsSince: () => 2 });
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		expect(await svc.onTurnEnd('pia')).toBe('nudged');
+		expect(nudgeAgent).toHaveBeenCalledTimes(1);
+	});
+
+	it('nudges the exact Chinese reply from the 2026-10-12 incident', async () => {
+		const { svc, nudgeAgent } = setup();
+		svc.noteAgentPost({ agent: 'pia', text: '对，v3 还没做。我现在开始做（新配乐 + 中英双语字幕），做好发在这个帖子里。如果你有音乐偏好回复我，否则我用鼓点欢快的。' });
+		expect(await svc.onTurnEnd('pia')).toBe('nudged');
+		expect((nudgeAgent.mock.calls[0] as unknown as [string, string])[1]).toContain('我现在开始做');
+	});
+
+	it('makes the statement a WorkItem once, and closes it when the agent answers for real', async () => {
+		const commit = jest.fn(async () => 'wi-1');
+		const settle = jest.fn(async () => undefined);
+		const { svc } = setup({ commit, settle });
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(commit).toHaveBeenCalledTimes(1);
+		expect(svc.takeIntent('pia')?.workItemId).toBe('wi-1');
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		await Promise.resolve();
+		await Promise.resolve();
+		svc.noteAgentPost({ agent: 'pia', text: 'Done - the video is attached.' });
+		expect(settle).toHaveBeenCalledWith('wi-1');
+	});
+
+	it('an interim mark does not close the WorkItem', async () => {
+		const settle = jest.fn(async () => undefined);
+		const { svc } = setup({ commit: async () => 'wi-1', settle });
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		await Promise.resolve();
+		await Promise.resolve();
+		svc.noteAgentPost({ agent: 'pia', text: 'still working', interim: true });
+		expect(settle).not.toHaveBeenCalled();
+	});
+
+	it('sweep nudges a quiet agent after a minute without a turn-end event, and leaves a busy one', async () => {
+		let quiet = false;
+		const { svc, nudgeAgent, advance } = setup({ isQuiet: () => quiet });
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		advance(C.SWEEP_AFTER_MS - 1);
+		expect(await svc.sweep()).toEqual([]);
+		advance(2);
+		expect(await svc.sweep()).toEqual([]); // still mid-turn
+		quiet = true;
+		expect(await svc.sweep()).toEqual(['pia']);
+		expect(nudgeAgent).toHaveBeenCalledTimes(1);
+		expect(await svc.sweep()).toEqual([]);
+	});
+
+	it('a nudge held back by the cooldown does not use up the statement', async () => {
+		const { svc, nudgeAgent, advance } = setup();
+		svc.noteAgentPost({ agent: 'pia', text: SAID });
+		expect(await svc.onTurnEnd('pia')).toBe('nudged');
+		advance(1000);
+		svc.noteAgentPost({ agent: 'pia', text: 'I am now rebuilding the intro.' });
+		expect(await svc.onTurnEnd('pia')).toBe('cooldown');
+		advance(C.NUDGE_COOLDOWN_MS);
+		expect(await svc.onTurnEnd('pia')).toBe('nudged');
+		expect(nudgeAgent).toHaveBeenCalledTimes(2);
 	});
 
 	it('after a restart the harness register-self call does not count as work', async () => {

@@ -61,6 +61,7 @@ export class IdleDetectionService {
 	private agentRegistrationService: AgentRegistrationService | null = null;
 	private pendingWorkCheck: PendingWorkCheck | null = null;
 	private workReleaser: WorkReleaser | null = null;
+	private owedStopHook: ((sessionName: string) => void) | null = null;
 
 	// Observability: surfaces silent hangs that previously caused the
 	// loop to "stop" for hours with no log evidence (2026-05-14 incident).
@@ -458,7 +459,9 @@ export class IdleDetectionService {
 						// pressure mode, where memory wins; then the work is put back
 						// in the queue first so the next start redelivers it.
 						const held = await this.holdReason(member.sessionName);
-						if (held && !pressure) {
+						// A promise made to the owner minutes ago is spared even under
+						// pressure; only the emergency stop overrides it.
+						if (held === 'fresh_promise' || (held && !pressure)) {
 							this.logger.info('Agent idle but has queued work, keeping alive', {
 								sessionName: member.sessionName,
 								role: member.role,
@@ -494,6 +497,7 @@ export class IdleDetectionService {
 									'idle_exit'
 								);
 								reportOwnerThreadBlocking(member.sessionName, { kind: 'stopped', why: 'idle' });
+								if (held) this.runOwedStopHook(member.sessionName);
 							} catch (err) {
 								this.logger.error('Failed to stop idle agent', {
 									sessionName: member.sessionName,
@@ -534,6 +538,16 @@ export class IdleDetectionService {
 	 * @param sessionName - Agent session
 	 * @returns A reason, or null when nothing holds it or the check fails
 	 */
+	/**
+	 * Inject what happens after an agent that still owed work was stopped for
+	 * memory: it is brought back when a slot frees (the work is already queued).
+	 *
+	 * @param hook - Called once per such stop, or null
+	 */
+	setOwedStopHook(hook: ((sessionName: string) => void) | null): void {
+		this.owedStopHook = hook;
+	}
+
 	private async holdReason(sessionName: string): Promise<string | null> {
 		if (!this.pendingWorkCheck) return null;
 		try {
@@ -542,6 +556,14 @@ export class IdleDetectionService {
 			return r ? 'work' : null;
 		} catch {
 			return null;
+		}
+	}
+
+	private runOwedStopHook(sessionName: string): void {
+		try {
+			this.owedStopHook?.(sessionName);
+		} catch {
+			/* best-effort */
 		}
 	}
 
@@ -648,6 +670,7 @@ export class IdleDetectionService {
 						'idle_exit_pressure'
 					);
 					reportOwnerThreadBlocking(member.sessionName, { kind: 'stopped', why: 'pressure' });
+					this.runOwedStopHook(member.sessionName);
 					stoppedCount++;
 				} catch (err) {
 					this.logger.error('Failed to force-stop agent', {

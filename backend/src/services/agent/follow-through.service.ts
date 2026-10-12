@@ -32,6 +32,18 @@ export const FOLLOW_THROUGH_CONSTANTS = {
 	OUTPUT_WORK_MS: 45_000,
 	/** After a runtime restart the first tool call is the harness's own register-self */
 	TOOLS_AFTER_RESTART: 2,
+	/**
+	 * Tool calls after the statement that count as having started. One is not
+	 * enough: the reply itself is followed by housekeeping (status mark,
+	 * memory write) that is not the promised work (Pia, 2026-10-11).
+	 */
+	TOOLS_TO_COUNT: 3,
+	/** A statement this old whose agent is quiet is checked without waiting for a turn-end event */
+	SWEEP_AFTER_MS: 60_000,
+	/** How often open statements are swept */
+	SWEEP_INTERVAL_MS: 20_000,
+	/** Quiet for this long = the agent is not mid-turn */
+	QUIET_MS: 15_000,
 } as const;
 
 /** What the guard needs from the rest of the backend. */
@@ -50,6 +62,12 @@ export interface FollowThroughDeps {
 	waitingOnOwner?: (session: string) => Promise<boolean>;
 	/** Owner-stopped or team-paused agents are never nudged */
 	isHeldBack?: (session: string) => boolean;
+	/** The agent produced no output for {@link FOLLOW_THROUGH_CONSTANTS.QUIET_MS} (sweep only) */
+	isQuiet?: (session: string) => boolean;
+	/** Make the statement a durable WorkItem for the agent; returns its id */
+	commit?: (session: string, sentence: string, at: number) => Promise<string | null>;
+	/** The statement was answered: close its WorkItem */
+	settle?: (workItemId: string) => Promise<void>;
 	now?: () => number;
 }
 
@@ -58,6 +76,10 @@ interface Statement {
 	at: number;
 	sentence: string;
 	nudged: boolean;
+	/** The durable WorkItem made for it, once known */
+	workItemId?: string;
+	/** The WorkItem is being made */
+	committing?: boolean;
 }
 
 /** What a turn end did. */
@@ -69,9 +91,10 @@ export type TurnEndOutcome = 'none' | 'stale' | 'worked' | 'handed_off' | 'waiti
  */
 export function followThroughNudge(sentence: string): string {
 	return (
-		`[FOLLOW-THROUGH] You told the owner you would do this now: "${sentence}". ` +
-		'Your turn ended without starting it. Start it now, in this turn; ' +
-		"don't reply again until there's a result or a real blocker."
+		`[FOLLOW-THROUGH] You told the owner you're starting this now: "${sentence}". ` +
+		'Your turn ended without starting it. Start it now, in this turn. ' +
+		'If you were waiting on an answer, proceed with the default you stated; a question with a default is not a reason to wait. ' +
+		"Don't reply again until there's a result or a real blocker."
 	);
 }
 
@@ -104,11 +127,42 @@ export class AgentFollowThroughService {
 		if (!input.agent || input.agent === ORCHESTRATOR_SESSION_NAME) return;
 		const at = input.at ?? this.now();
 		const found = detectStatedIntent(input.text);
+		const prior = this.statements.get(input.agent);
 		if (found) {
-			this.statements.set(input.agent, { at, sentence: found.sentence, nudged: false });
+			const stmt: Statement = {
+				at,
+				sentence: found.sentence,
+				nudged: false,
+				...(prior?.workItemId ? { workItemId: prior.workItemId } : {}),
+				...(prior?.committing ? { committing: true } : {}),
+			};
+			this.statements.set(input.agent, stmt);
+			// Durable: the promise becomes a WorkItem for the agent (the answer goes to the
+			// owner's thread), so a stop or restart does not lose it.
+			if (!stmt.workItemId && !stmt.committing && this.deps.commit) {
+				stmt.committing = true;
+				const agent = input.agent;
+				void this.deps.commit(agent, found.sentence, at).then(
+					(id) => {
+						// The statement may have been replaced meanwhile: attach to the live one.
+						const live = this.statements.get(agent);
+						if (id && live) {
+							live.workItemId = id;
+							live.committing = false;
+						} else if (id) {
+							void this.deps.settle?.(id).catch(() => undefined);
+						}
+					},
+					() => {
+						const live = this.statements.get(agent);
+						if (live) live.committing = false;
+					},
+				);
+			}
 			return;
 		}
 		this.statements.delete(input.agent);
+		if (prior?.workItemId && !input.interim) void this.deps.settle?.(prior.workItemId).catch(() => undefined);
 		if (!input.interim) this.lastReplyAt.set(input.agent, at);
 	}
 
@@ -141,11 +195,22 @@ export class AgentFollowThroughService {
 	 * @param agent - Session
 	 * @returns The sentence, or null
 	 */
-	takeIntent(agent: string): { sentence: string; at: number } | null {
+	takeIntent(agent: string): { sentence: string; at: number; workItemId?: string } | null {
 		const s = this.statements.get(agent);
 		if (!s) return null;
 		this.statements.delete(agent);
-		return { sentence: s.sentence, at: s.at };
+		return { sentence: s.sentence, at: s.at, ...(s.workItemId ? { workItemId: s.workItemId } : {}) };
+	}
+
+	/**
+	 * Age of the agent's open stated intent.
+	 *
+	 * @param agent - Session
+	 * @returns Milliseconds, or null when none is open
+	 */
+	intentAgeMs(agent: string): number | null {
+		const s = this.statements.get(agent);
+		return s ? this.now() - s.at : null;
 	}
 
 	/**
@@ -175,9 +240,9 @@ export class AgentFollowThroughService {
 			if (await this.deps.waitingOnOwner?.(agent).catch(() => false)) return 'waiting';
 			if (this.deps.isHeldBack?.(agent)) return 'held';
 			// One nudge per statement; one per agent per cooldown, whatever it says next.
-			s.nudged = true;
 			const last = this.lastNudgeAt.get(agent);
 			if (last !== undefined && now - last < FOLLOW_THROUGH_CONSTANTS.NUDGE_COOLDOWN_MS) return 'cooldown';
+			s.nudged = true;
 			const ok = await this.deps.nudgeAgent(agent, followThroughNudge(s.sentence)).catch(() => false);
 			this.logger.info('Stated intent without action — agent nudged', { agent, sentence: s.sentence, delivered: ok });
 			if (!ok) return 'not_delivered';
@@ -189,12 +254,29 @@ export class AgentFollowThroughService {
 		}
 	}
 
+	/**
+	 * Check statements whose agent went quiet without a turn-end event reaching
+	 * us (the post can land after the turn-end settle ran). Called on a timer.
+	 *
+	 * @returns Agents nudged
+	 */
+	async sweep(): Promise<string[]> {
+		const out: string[] = [];
+		const now = this.now();
+		for (const [agent, s] of [...this.statements]) {
+			if (s.nudged || now - s.at < FOLLOW_THROUGH_CONSTANTS.SWEEP_AFTER_MS) continue;
+			if (this.deps.isQuiet && !this.deps.isQuiet(agent)) continue;
+			if ((await this.onTurnEnd(agent)) === 'nudged') out.push(agent);
+		}
+		return out;
+	}
+
 	/** Whether the agent did anything after the statement. */
 	private followed(agent: string, s: Statement): boolean {
 		const tools = this.deps.toolStartsSince(agent, s.at);
 		if (tools !== null) {
 			const restarted = (this.deps.runtimeStartedAt?.(agent) ?? 0) > s.at;
-			return tools >= (restarted ? FOLLOW_THROUGH_CONSTANTS.TOOLS_AFTER_RESTART : 1);
+			return tools >= FOLLOW_THROUGH_CONSTANTS.TOOLS_TO_COUNT + (restarted ? FOLLOW_THROUGH_CONSTANTS.TOOLS_AFTER_RESTART : 0);
 		}
 		const span = this.deps.outputSpanSince?.(agent, s.at);
 		// No hooks and no output reading: cannot tell, so do not nag.

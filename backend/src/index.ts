@@ -215,7 +215,7 @@ import { getRuntimeFallbackService } from './services/runtime-fallback/runtime-f
 import { getSlackAgentIdentityService } from './services/slack/slack-agent-identity.service.js';
 import { getChatV2Service } from './services/chat-v2/chat-v2.singleton.js';
 import { isOwnerStopped } from './services/agent/owner-stopped.registry.js';
-import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop } from './services/agent/follow-through.wiring.js';
+import { createFollowThrough, settleFollowThrough, idlePendingWorkCheck, releaseWorkForStop, owedWorkReminder } from './services/agent/follow-through.wiring.js';
 import { isSessionPaused } from './services/team/team-pause.registry.js';
 import { findPackageRoot } from './utils/package-root.js';
 import { getLocalApiBaseUrl, setLocalApiPort } from './utils/local-api-url.utils.js';
@@ -2253,6 +2253,24 @@ void (async () => {
 			// be, but its work goes back to the queue first and is redelivered.
 			idleDetection.setPendingWorkCheck(idlePendingWorkCheck());
 			idleDetection.setWorkReleaser((sessionName, why) => releaseWorkForStop(sessionName, why));
+			// An agent stopped for memory that still owed work is brought back when
+			// a slot frees, with a reminder of what it promised (the work itself is
+			// already queued for it by the releaser).
+			idleDetection.setOwedStopHook((sessionName) => {
+				void (async () => {
+					const reminder = owedWorkReminder(await TaskPoolService.getInstance().getAllItems(), sessionName);
+					if (!reminder) return;
+					SubAgentMessageQueue.getInstance().enqueue(sessionName, reminder);
+					this.logger.info('Stopped agent owes work — it will be restarted when a slot frees', { sessionName });
+					const { scheduleDeferredStartRetry } = await import('./services/messaging/deferred-start-retry.js');
+					const { activateAgentBySession } = await import('./controllers/team/team.controller.js');
+					await scheduleDeferredStartRetry(sessionName, {
+						activate: (name) => activateAgentBySession(this.apiController, name),
+						hasPending: (name) => SubAgentMessageQueue.getInstance().hasPending(name),
+						firstPauseMs: 60_000,
+					});
+				})().catch(() => undefined);
+			});
 			idleDetection.start();
 
 			// Adaptive agent limits (pressure mode cap + start queue).

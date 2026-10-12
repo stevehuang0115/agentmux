@@ -16,6 +16,14 @@ describe('scheduleDeferredStartRetry', () => {
 		expect(activate).toHaveBeenCalledTimes(3);
 	});
 
+	it('waits the first pause before the first round when one is given', async () => {
+		const pauses: number[] = [];
+		const activate = jest.fn(async () => ({ success: false, deferred: true }));
+		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => true, sleep: async (ms) => void pauses.push(ms), firstPauseMs: 60_000 });
+		expect(pauses[0]).toBe(60_000);
+		expect(pauses[1]).toBe(DEFERRED_START_RETRY_CONSTANTS.ROUND_PAUSE_MS);
+	});
+
 	it('stops when the queue has emptied', async () => {
 		const activate = jest.fn(async () => ({ success: true }));
 		await scheduleDeferredStartRetry('ella', { activate, hasPending: () => false, sleep });

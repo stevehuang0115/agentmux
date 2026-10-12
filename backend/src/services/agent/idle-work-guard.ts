@@ -23,7 +23,15 @@ export const HELD_WORK_STATUSES: ReadonlySet<WorkItemStatus> = new Set<WorkItemS
 const OWED_TICKET_STATUSES: ReadonlySet<string> = new Set(['open', 'ready', 'running']);
 
 /** Why an agent must not be idle-stopped. */
-export type HoldReason = 'work_item' | 'ticket' | 'promise' | 'stated_intent';
+export type HoldReason = 'work_item' | 'ticket' | 'promise' | 'stated_intent' | 'fresh_promise';
+
+/**
+ * A promise or stated intent younger than this is kept even under memory
+ * pressure (the emergency stop is the only thing that overrides it): stopping
+ * an agent minutes after it told the owner "starting now" strands the work
+ * (Pia, 2026-10-12).
+ */
+export const FRESH_PROMISE_MS = 30 * 60_000;
 
 /** What the guard reads. */
 export interface IdleWorkGuardDeps {
@@ -33,6 +41,8 @@ export interface IdleWorkGuardDeps {
 	owesOwner: (session: string) => boolean;
 	/** An unfulfilled "I'm doing X now" */
 	holdsIntent: (session: string) => boolean;
+	/** Age in ms of the newest promise / stated intent / unanswered owner message, or null */
+	owedAgeMs?: (session: string) => number | null;
 	now?: () => number;
 }
 
@@ -47,6 +57,8 @@ export const TICKET_HOLD_MAX_AGE_MS = 48 * 60 * 60_000;
  * @returns The first reason found
  */
 export async function holdReasonFor(session: string, deps: IdleWorkGuardDeps): Promise<HoldReason | null> {
+	const age = deps.owedAgeMs?.(session);
+	if (age !== null && age !== undefined && age <= FRESH_PROMISE_MS) return 'fresh_promise';
 	if (deps.owesOwner(session)) return 'promise';
 	if (deps.holdsIntent(session)) return 'stated_intent';
 	const items = await deps.listWorkItems();
@@ -75,6 +87,8 @@ export interface ReleaseWorkDeps {
 	releaseBack: (workItemId: string, reason: string) => Promise<void>;
 	/** Turn an unfulfilled "doing X now" into queued work for the agent; returns its id */
 	parkIntent?: (session: string) => Promise<string | null>;
+	/** Turn a promise to the owner that is not a stated intent into queued work; returns its id */
+	parkPromise?: (session: string) => Promise<string | null>;
 }
 
 /**
@@ -100,7 +114,7 @@ export async function releaseHeldWork(session: string, why: string, deps: Releas
 				/* already moved on */
 			}
 		}
-		const parked = await deps.parkIntent?.(session);
+		const parked = (await deps.parkIntent?.(session)) ?? (await deps.parkPromise?.(session));
 		if (parked) out.push(parked);
 	} catch {
 		/* best-effort: a failed release must not block freeing memory */

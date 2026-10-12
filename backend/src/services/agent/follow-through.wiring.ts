@@ -8,7 +8,7 @@
  */
 
 import { PROJECT_TICKET_CONSTANTS } from '../../constants.js';
-import { createWorkItem, type WorkItem } from '../../types/v2/work-item.types.js';
+import { createWorkItem, TERMINAL_WORK_ITEM_STATUSES, type WorkItem } from '../../types/v2/work-item.types.js';
 import { LoggerService } from '../core/logger.service.js';
 import { RequestService } from '../v3/request.service.js';
 import { getTicketReviewService } from '../v3/ticket-review.service.js';
@@ -20,7 +20,7 @@ import { AgentTurnStateService } from '../monitoring/agent-turn-state.js';
 import { isOwnerStopped } from './owner-stopped.registry.js';
 import { pausedTeamOfSession } from '../team/team-pause.registry.js';
 import { PtyActivityTrackerService } from './pty-activity-tracker.service.js';
-import { AgentFollowThroughService, getFollowThrough, setFollowThrough } from './follow-through.service.js';
+import { AgentFollowThroughService, FOLLOW_THROUGH_CONSTANTS, getFollowThrough, setFollowThrough } from './follow-through.service.js';
 import { holdReasonFor, releaseHeldWork, type IdleWorkGuardDeps, type ReleaseWorkDeps } from './idle-work-guard.js';
 
 const logger = LoggerService.getInstance().createComponentLogger('FollowThroughWiring');
@@ -38,8 +38,13 @@ const logger = LoggerService.getInstance().createComponentLogger('FollowThroughW
 export function handedOffSince(items: readonly WorkItem[], session: string, since: number): boolean {
 	return items.some((wi) => {
 		if (Date.parse(wi.createdAt) < since) return false;
-		if (wi.target === session) return true;
 		const m = (wi.metadata ?? {}) as Record<string, unknown>;
+		if (wi.target === session) {
+			// An item the harness queued for the agent (the promise's own WorkItem,
+			// a ticket's) is not the agent starting: it waits until the agent does.
+			const waiting = wi.status === 'queued' || wi.status === 'proposed' || wi.status === 'scheduled' || wi.status === 'blocked';
+			if (!(waiting && typeof m['harnessCreated'] === 'string')) return true;
+		}
 		return m['delegatedBy'] === session || m['createdBy'] === session || m[PROJECT_TICKET_CONSTANTS.DELEGATION_CALLER_METADATA_KEY] === session;
 	});
 }
@@ -76,9 +81,76 @@ export function createFollowThrough(deps: FollowThroughWiringDeps): AgentFollowT
 			return open.length > 0;
 		},
 		isHeldBack: (session) => isOwnerStopped(session) || !!pausedTeamOfSession(session),
+		isQuiet: (session) => !tracker.hasActivity(session) || tracker.getIdleTimeMs(session) >= FOLLOW_THROUGH_CONSTANTS.QUIET_MS,
+		commit: (session, sentence) => commitStatedIntent(session, sentence),
+		settle: (workItemId) => settleStatedIntent(workItemId),
 	});
 	setFollowThrough(service);
+	// A post can land after the turn-end settle ran: sweep quiet agents too.
+	if (sweepTimer) clearInterval(sweepTimer);
+	sweepTimer = setInterval(() => {
+		void service.sweep().catch(() => undefined);
+	}, FOLLOW_THROUGH_CONSTANTS.SWEEP_INTERVAL_MS);
+	sweepTimer.unref?.();
 	return service;
+}
+
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Metadata marker on WorkItems made for a stated intent. */
+export const STATED_INTENT_MARKER = 'stated-intent';
+
+/**
+ * Make "I'm starting X now" a WorkItem for the agent, so it survives a stop or
+ * restart. Created with the agent as creator, so the answer goes to the owner
+ * thread the agent is in (the pool stamps the origin). One open item per agent.
+ *
+ * @param session - The agent
+ * @param sentence - What it said
+ * @returns The WorkItem id, or null when none could be made
+ */
+export async function commitStatedIntent(session: string, sentence: string): Promise<string | null> {
+	const pool = TaskPoolService.getInstance();
+	const open = (await pool.getAllItems()).find(
+		(wi) => wi.target === session && (wi.metadata as Record<string, unknown> | undefined)?.['harnessCreated'] === STATED_INTENT_MARKER && !TERMINAL_WORK_ITEM_STATUSES.has(wi.status),
+	);
+	if (open) return open.id;
+	const wi = createWorkItem({
+		type: 'delegate',
+		owner: 'agent',
+		target: session,
+		title: `Follow through: ${sentence.slice(0, 70)}`,
+		description: stateIntentBrief(sentence),
+		metadata: { harnessCreated: STATED_INTENT_MARKER },
+	});
+	await pool.addToPool(wi, { creatorSession: session });
+	return wi.id;
+}
+
+/**
+ * @param sentence - What the agent told the owner
+ * @returns The brief put on the promise's WorkItem (harness text)
+ */
+export function stateIntentBrief(sentence: string): string {
+	return (
+		`You told the owner: "${sentence}". Do it now, and reply in the owner's thread when there is a result or a real blocker. ` +
+		'If you asked a question and stated a default, go ahead with the default.'
+	);
+}
+
+/**
+ * The promise was answered: close its WorkItem (queued ones are cancelled,
+ * started ones completed). Never throws.
+ *
+ * @param workItemId - The promise's WorkItem
+ */
+export async function settleStatedIntent(workItemId: string): Promise<void> {
+	const pool = TaskPoolService.getInstance();
+	try {
+		await pool.cancelQueued(workItemId, 'answered by the agent', { cancelledBy: 'system' });
+	} catch {
+		await pool.completeSimpleItem(workItemId, 'system').catch(() => undefined);
+	}
 }
 
 const settling = new Set<string>();
@@ -121,6 +193,10 @@ export function idleWorkGuardDeps(): IdleWorkGuardDeps {
 		listTickets: () => RequestService.getInstance().listAll(),
 		owesOwner: (session) => getOwnerThreadSentinel()?.owesOwner(session) ?? false,
 		holdsIntent: (session) => getFollowThrough()?.holdsIntent(session) ?? false,
+		owedAgeMs: (session) => {
+			const ages = [getOwnerThreadSentinel()?.owedAgeMs(session) ?? null, getFollowThrough()?.intentAgeMs(session) ?? null].filter((a): a is number => a !== null);
+			return ages.length > 0 ? Math.min(...ages) : null;
+		},
 	};
 }
 
@@ -138,6 +214,8 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 		parkIntent: async (session) => {
 			const intent = getFollowThrough()?.takeIntent(session);
 			if (!intent) return null;
+			// Already a WorkItem since the statement: nothing more to park.
+			if (intent.workItemId) return intent.workItemId;
 			const wi = createWorkItem({
 				type: 'delegate',
 				owner: 'system',
@@ -151,7 +229,40 @@ export function releaseWorkDeps(): ReleaseWorkDeps {
 			await pool.addToPool(wi, { creatorSession: session });
 			return wi.id;
 		},
+		parkPromise: async (session) => {
+			const text = getOwnerThreadSentinel()?.promiseText(session);
+			if (!text) return null;
+			const wi = createWorkItem({
+				type: 'delegate',
+				owner: 'system',
+				target: session,
+				title: `Follow through: ${text.slice(0, 70)}`,
+				description: `You promised the owner: "${text}". Crewly stopped you (memory) before you delivered. Deliver it; reply in the owner's thread with the result or a real blocker.`,
+				metadata: { harnessCreated: 'owner-promise' },
+			});
+			await pool.addToPool(wi, { creatorSession: session });
+			return wi.id;
+		},
 	};
+}
+
+/**
+ * After an agent that owes work was stopped for memory: build the reminder it
+ * gets when it is brought back, from the WorkItems queued for it. Null when
+ * nothing is queued for it.
+ *
+ * @param items - Pool items
+ * @param session - The stopped agent
+ * @returns Reminder text, or null
+ */
+export function owedWorkReminder(items: readonly WorkItem[], session: string): string | null {
+	const queued = items.filter((wi) => wi.target === session && wi.status === 'queued');
+	if (queued.length === 0) return null;
+	const lines = queued.slice(0, 5).map((wi) => `- ${wi.title}`);
+	return (
+		'[FOLLOW-THROUGH] You were stopped to free memory while you still owed the owner this. It is still yours; start it now and reply in the owner thread with the result:\n' +
+		lines.join('\n')
+	);
 }
 
 /**

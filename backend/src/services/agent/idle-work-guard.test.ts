@@ -1,4 +1,4 @@
-import { holdReasonFor, releaseHeldWork, TICKET_HOLD_MAX_AGE_MS, type IdleWorkGuardDeps } from './idle-work-guard.js';
+import { holdReasonFor, releaseHeldWork, FRESH_PROMISE_MS, TICKET_HOLD_MAX_AGE_MS, type IdleWorkGuardDeps } from './idle-work-guard.js';
 import type { WorkItem } from '../../types/v2/work-item.types.js';
 import type { Request } from '../../types/v2/request.types.js';
 
@@ -54,7 +54,25 @@ describe('holdReasonFor', () => {
 	});
 });
 
+describe('fresh promises', () => {
+	it('a promise made minutes ago is kept even under pressure (its own reason)', async () => {
+		expect(await holdReasonFor('pia', deps({ owesOwner: () => true, owedAgeMs: () => 5 * 60_000 }))).toBe('fresh_promise');
+		expect(await holdReasonFor('pia', deps({ owesOwner: () => true, owedAgeMs: () => FRESH_PROMISE_MS + 1 }))).toBe('promise');
+		expect(await holdReasonFor('pia', deps({ owedAgeMs: () => null }))).toBeNull();
+	});
+});
+
 describe('releaseHeldWork', () => {
+	it('parks a promise that was not a stated intent', async () => {
+		const out = await releaseHeldWork('pia', 'memory', {
+			listWorkItems: async () => [],
+			releaseBack: async () => undefined,
+			parkIntent: async () => null,
+			parkPromise: async () => 'promise-wi',
+		});
+		expect(out).toEqual(['promise-wi']);
+	});
+
 	it('puts only the agent\'s running items back and parks an open intent', async () => {
 		const releaseBack = jest.fn(async () => undefined);
 		const out = await releaseHeldWork('pia', 'memory', {

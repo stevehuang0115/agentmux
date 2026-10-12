@@ -480,6 +480,40 @@ export class OwnerThreadSentinelService {
   }
 
   /**
+   * Age in ms of the newest promise (or unanswered owner message) the agent
+   * owes in a watched thread, or null when it owes none.
+   *
+   * @param agent - The agent
+   * @returns Milliseconds, or null
+   */
+  owedAgeMs(agent: string): number | null {
+    const now = this.now();
+    let best: number | null = null;
+    for (const e of this.entries.values()) {
+      if (e.agent !== agent) continue;
+      const ages: number[] = [];
+      if (e.ownerAt && (!e.agentPostAt || e.ownerAt > e.agentPostAt)) ages.push(now - e.ownerAt);
+      if (e.promise) ages.push(now - e.promise.at);
+      for (const a of ages) if (best === null || a < best) best = a;
+    }
+    return best;
+  }
+
+  /**
+   * What the agent last promised the owner (the preview of its post), for the
+   * reminder it gets when it is brought back after a stop.
+   *
+   * @param agent - The agent
+   * @returns Text, or null when it has no open promise
+   */
+  promiseText(agent: string): string | null {
+    for (const e of this.entries.values()) {
+      if (e.agent === agent && e.promise && e.agentPreview) return e.agentPreview;
+    }
+    return null;
+  }
+
+  /**
    * The owner thread `agent` owes right now (the newest one active within
    * CARD_THREAD_MAX_AGE_MS), for placing a card it asks.
    *
