@@ -35,6 +35,7 @@ import { SlackConfig, SlackNotification, SlackNotificationType } from '../../typ
 import { SLACK_IMAGE_CONSTANTS, SLACK_FILE_UPLOAD_CONSTANTS, SLACK_CLOUD_CONSTANTS, ORCHESTRATOR_SESSION_NAME } from '../../constants.js';
 import { OrcReplyRouteService } from '../../services/orc/orc-reply-route.service.js';
 import { readAgentSessionHeader } from '../../utils/agent-caller.utils.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { rejectNonOwner } from '../../middleware/caller-identity.middleware.js';
 import { LoggerService } from '../../services/core/logger.service.js';
 import type { SlackCloudWorkspaceSummary } from '../../types/slack.types.js';
@@ -1628,6 +1629,8 @@ router.post('/post', async (req: Request, res: Response, next: NextFunction) => 
       return;
     }
     const { target, text, threadTs, newTopLevel } = req.body ?? {};
+    // Owner board: the agent is messaging a channel (an id shows as plain "Slack")
+    getBoardActivity().recordMessage(agentSession, typeof target === 'string' && /^[#@]?[A-Za-z][\w.-]{0,38}$/.test(target) ? target.replace(/^@/, '') : 'Slack');
     try {
       const result = await service.post({
         agentSession,

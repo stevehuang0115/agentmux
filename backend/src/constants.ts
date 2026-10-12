@@ -8332,3 +8332,58 @@ export const TEAM_MOVE_CONSTANTS = {
 		'whisper-cli': 'whisper-cli',
 	},
 } as const;
+
+/**
+ * Owner Board, machine side (crewly#1247): the activity normalizer, the
+ * snapshot builder and the push to Crewly Cloud. Wire contract:
+ * `services/board/board.types.ts`.
+ */
+export const BOARD_CONSTANTS = {
+	/** Kill switch: `CREWLY_BOARD_PUSH=0` turns the push off (the local `GET /api/board` still works) */
+	ENV_SWITCH: 'CREWLY_BOARD_PUSH',
+	/** Machine → Cloud: full snapshot */
+	SNAPSHOT_PATH: '/api/cloud/board/snapshot',
+	/** Machine → Cloud: changed agent rows + timeline events */
+	DELTA_PATH: '/api/cloud/board/delta',
+	/** Header carrying this machine's Cloud instance id */
+	INSTANCE_HEADER: 'X-Crewly-Instance-Id',
+	/** Push a full snapshot at least this often (ms); Cloud may ask for another cadence */
+	FULL_INTERVAL_MS: 60_000,
+	/** A change is pushed within this long (ms); later changes join the same delta */
+	DELTA_DELAY_MS: 2_000,
+	/** First failure waits this long, doubling up to the max (ms) */
+	BACKOFF_INITIAL_MS: 5_000,
+	BACKOFF_MAX_MS: 5 * 60_000,
+	/** Cloud answered 404 / 400 / 503: not deployed or refusing; look again after this (ms) */
+	UNAVAILABLE_RETRY_MS: 30 * 60_000,
+	/** Request timeout (ms) */
+	REQUEST_TIMEOUT_MS: 15_000,
+	/** Cloud's body limit (bytes) */
+	MAX_BODY_BYTES: 256 * 1024,
+	/** Text fields never exceed this many characters */
+	MAX_TEXT: 140,
+	/** Timeline kept per agent (events) and for how long (ms) */
+	TIMELINE_MAX_EVENTS: 200,
+	TIMELINE_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** Timeline events sent in one delta, per agent */
+	DELTA_TIMELINE_MAX: 40,
+	/** After a tool ends, its activity still shows this long (ms), then the agent is "thinking" */
+	ACTIVITY_LINGER_MS: 20_000,
+	/** A tool start without an end is dropped after this long (a lost PostToolUse) (ms) */
+	OPEN_TOOL_MAX_MS: 30 * 60_000,
+	/** Rows per outcome list */
+	MAX_DONE: 50,
+	MAX_WAITING: 50,
+	MAX_STUCK: 30,
+	MAX_SUMMARY_PHRASES: 6,
+	/** A queued WorkItem older than this is "stuck" (ms) */
+	STUCK_QUEUED_MS: 2 * 60 * 60 * 1000,
+	/** A running WorkItem older than this is "stuck" (ms) */
+	STUCK_RUNNING_MS: 12 * 60 * 60 * 1000,
+	/** A failed WorkItem stays on the stuck list this long (ms) */
+	STUCK_FAILED_MAX_AGE_MS: 24 * 60 * 60 * 1000,
+	/** An agent's ledger unit counts as its current task if it had usage this recently (ms) */
+	LEDGER_TASK_MAX_AGE_MS: 2 * 60 * 60 * 1000,
+	/** Project-ticket scan is cached this long (ms) */
+	PROJECT_TICKET_CACHE_MS: 5 * 60_000,
+} as const;

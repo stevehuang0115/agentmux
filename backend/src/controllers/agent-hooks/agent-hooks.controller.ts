@@ -5,7 +5,8 @@
  * `config/hooks/agent-status/report.sh` (#815). The hook sends only an event
  * name, a notification type, a tool-use id, a subagent id and its session
  * (X-Agent-Session); anything else in the body is ignored and never stored
- * or logged. Events feed both the waiting-on-human signal and the runtime
+ * or logged (the one exception: a PreToolUse's `toolInput` slice, reduced at once by the
+ * owner board's normalizer and never kept raw, crewly#1247). Events feed both the waiting-on-human signal and the runtime
  * turn state (specs/2026-10-02-restart-busy-and-resume.md).
  *
  * @module controllers/agent-hooks/agent-hooks.controller
@@ -21,6 +22,8 @@ import { AgentTurnStateService, type TurnHookIds } from '../../services/monitori
 import { traceSubagentSendBack } from '../../services/trace/trace-recorder.js';
 import { joinHookNotes, ownerHookNoteFor } from '../../services/messaging/owner-hook-message.js';
 import { WindDownService } from '../../services/system/wind-down.service.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
+import { parseToolInput } from '../../services/board/board-activity.normalizer.js';
 
 /** Header the hook identifies its session with (same as the skills' lib.sh). */
 const SESSION_HEADER = 'x-agent-session';
@@ -125,6 +128,19 @@ export function receiveAgentHook(req: Request, res: Response): void {
 		toolName = body.toolName;
 	}
 
+	// Owner board (crewly#1247): what the agent is doing. The tool input slice (PreToolUse
+	// only) is reduced to a path / command name / host here and never stored raw.
+	try {
+		getBoardActivity().recordHook(sessionName, event, {
+			...(toolName ? { toolName } : {}),
+			...(event === 'PreToolUse' ? { toolInput: parseToolInput((req.body as { toolInput?: unknown }).toolInput) } : {}),
+			...(ids.toolUseId ? { toolUseId: ids.toolUseId } : {}),
+			...(notificationType ? { notificationType } : {}),
+			...(ids.agentId ? { isSubagent: true } : {}),
+		});
+	} catch {
+		// the board must never break a hook
+	}
 	const signal = recordHookEvent(sessionName, event, notificationType);
 	const turnChanged = AgentTurnStateService.getInstance().recordHook(sessionName, event, ids);
 	const recorded = signal !== null || turnChanged;

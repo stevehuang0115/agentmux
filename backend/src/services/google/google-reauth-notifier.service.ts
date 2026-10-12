@@ -221,6 +221,22 @@ export class GoogleReauthNotifier {
   }
 
   /**
+   * Reconnects the owner has been asked for and has not done yet (read only;
+   * the Owner Board lists them as waiting on the owner).
+   *
+   * @returns One entry per product and account with a card in flight
+   */
+  listPending(): Array<{ product: GoogleProduct; kind: ReauthKind; account?: string; since: number; waiters: string[] }> {
+    return [...this.pending.values()].map((p) => ({
+      product: p.trigger.product,
+      kind: p.trigger.kind,
+      ...(p.trigger.account ? { account: p.trigger.account } : {}),
+      since: p.sentAtMs,
+      waiters: [...p.waiters],
+    }));
+  }
+
+  /**
    * Ask the owner to reconnect, unless a card for this product and account
    * went out within the throttle window — then only remember that this
    * agent is waiting too.
