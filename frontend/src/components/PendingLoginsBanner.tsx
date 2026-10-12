@@ -41,6 +41,7 @@ import {
   type ObservedLoginState,
 } from '../utils/harness-login-marks';
 import type { PendingLogin } from '../types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 /**
  * Stable key for a pending-login set so dismissal survives re-polls of the
@@ -116,7 +117,7 @@ function useHarnessLoginStates(onTransition: () => void): Record<string, Observe
 
   useEffect(() => {
     void check();
-    const timer = setInterval(() => void check(), SIGN_IN_CONSTANTS.HARNESS_RECHECK_INTERVAL_MS);
+    const timer = setVisibleInterval(() => void check(), SIGN_IN_CONSTANTS.HARNESS_RECHECK_INTERVAL_MS);
     const onFocus = (): void => void check();
     window.addEventListener('focus', onFocus);
     return () => {

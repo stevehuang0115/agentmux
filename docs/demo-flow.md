@@ -243,7 +243,7 @@ Starting Crewly...
 Opening browser...
 ```
 
-The dashboard opens automatically. From there, start your team as described above.
+Open the printed dashboard URL (or start with `crewly start --open`). From there, start your team as described above.
 
 ### What happens behind the scenes
 
@@ -521,8 +521,8 @@ crewly stop --force
 ```bash
 crewly init                    # First-time setup wizard
 crewly init --yes              # Non-interactive setup with defaults
-crewly start                   # Start backend + open dashboard
-crewly start --no-browser      # Start without opening browser
+crewly start                   # Start backend (prints the dashboard URL)
+crewly start --open            # Start and open the dashboard in your browser
 crewly status                  # Check what's running
 crewly status --verbose        # Detailed status with process info
 crewly logs -f                 # Follow logs in real time

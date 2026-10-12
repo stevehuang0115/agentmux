@@ -45,6 +45,7 @@ import {
 import { useFullscreen } from '../../hooks/useFullscreen';
 import { BrowserOwnerControls } from './BrowserOwnerControls';
 import { LiveFrameStage } from './LiveFrameStage';
+import { setVisibleInterval } from '../../utils/visible-interval';
 
 /** How often an expanded card asks for a fresh frame. */
 const FRAME_POLL_MS = 1500;
@@ -124,7 +125,7 @@ export const BrowserSessionCard: React.FC<BrowserSessionCardProps> = ({
 
 	useEffect(() => {
 		if (!expanded) return;
-		const id = setInterval(() => setTick((t) => t + 1), driving ? OWNER_FRAME_POLL_MS : FRAME_POLL_MS);
+		const id = setVisibleInterval(() => setTick((t) => t + 1), driving ? OWNER_FRAME_POLL_MS : FRAME_POLL_MS);
 		return () => clearInterval(id);
 	}, [expanded, driving]);
 

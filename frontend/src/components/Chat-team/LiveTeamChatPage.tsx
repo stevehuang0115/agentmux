@@ -72,6 +72,7 @@ import { usePinnedChats } from '../../hooks/usePinnedChats';
 import { markChatSeen, readChatSeen, type ChatSeenRecord } from '../../hooks/useChatUnreadCount';
 import { ORCHESTRATOR_SESSION } from '../../utils/team-chat.utils';
 import { channelsService, type ChannelsApi, type CrewlyChannel } from '../../services/channels.service';
+import { setVisibleInterval } from '../../utils/visible-interval';
 
 /** How often the conversation list is re-read so unread dots stay current (ms). */
 export const CHAT_LIST_POLL_MS = 30_000;
@@ -308,7 +309,7 @@ function LiveTeamChatPageBody({
   }, [channelsApi]);
   useEffect(() => {
     void refreshCrewlyChannels();
-    const timer = setInterval(() => void refreshCrewlyChannels(), CHAT_LIST_POLL_MS);
+    const timer = setVisibleInterval(() => void refreshCrewlyChannels(), CHAT_LIST_POLL_MS);
     return () => clearInterval(timer);
   }, [refreshCrewlyChannels]);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
@@ -322,7 +323,7 @@ function LiveTeamChatPageBody({
   // Re-read the list now and then so unread dots and ordering stay current
   // (useChannels loads once).
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), CHAT_LIST_POLL_MS);
+    const timer = setVisibleInterval(() => void refresh(), CHAT_LIST_POLL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
   const client = useChatApiClient();
@@ -590,11 +591,15 @@ function LiveTeamChatPageBody({
   // thread channel into one timeline (the user's Slack DMs land in ChatDB as
   // `slack-*` channels; surfacing them inline keeps the orc feed whole). Every
   // other conversation is a single-channel feed (`null`).
+  // Keyed on the active conversation's id (not the row object, which is rebuilt
+  // whenever `groups` is) so the array — and the effects below — stay stable.
+  const activeConversationRowId = activeConversation?.id;
   const mergeChannelIds = useMemo<string[] | null>(() => {
-    if (!orcChannelId || activeConversation?.id !== orcChannelId) return null;
+    if (!orcChannelId || activeConversationRowId !== orcChannelId) return null;
     if (slackChannelIds.length === 0) return null;
     return [orcChannelId, ...slackChannelIds];
-  }, [activeConversation, orcChannelId, slackChannelIds]);
+  }, [activeConversationRowId, orcChannelId, slackChannelIds]);
+  const mergeChannelKey = mergeChannelIds ? mergeChannelIds.join('|') : '';
 
   // Last activity of a row; the orchestrator's includes its merged Slack threads.
   const lastActivityOf = useCallback(
@@ -620,14 +625,14 @@ function LiveTeamChatPageBody({
   useEffect(() => {
     if (!resolvedConversationId || resolvedConversationId.startsWith(VIRTUAL_DM_PREFIX)) return;
     const now = Date.now();
-    const ids = [resolvedConversationId, ...(mergeChannelIds ?? [])];
+    const ids = [resolvedConversationId, ...(mergeChannelKey ? mergeChannelKey.split('|') : [])];
     for (const id of ids) markChatSeen(id, now);
     setSeen((prev) => {
       const next = { ...prev };
       for (const id of ids) next[id] = now;
       return next;
     });
-  }, [resolvedConversationId, activeLastAt, mergeChannelIds]);
+  }, [resolvedConversationId, activeLastAt, mergeChannelKey]);
 
   // With nothing open (empty workspace, still loading), phones show the list.
   const view = activeConversation ? mobileView : 'list';

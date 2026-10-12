@@ -1529,6 +1529,18 @@ void (async () => {
 			if ((event.type === 'agent:idle' || event.type === 'agent:busy') && event.sessionName) {
 				ResourceModeService.getInstance().noteWorkingStatus(event.sessionName, event.type === 'agent:idle');
 			}
+			// Idle turn end starts the idle-tab clock; working again cancels it.
+			if ((event.type === 'agent:idle' || event.type === 'agent:busy') && event.sessionName) {
+				const sessionName = event.sessionName;
+				const idle = event.type === 'agent:idle';
+				void import('./services/browser/browser-bridge.service.js')
+					.then(({ BrowserBridgeService }) => {
+						const bridge = BrowserBridgeService.getInstance();
+						if (idle) bridge.noteAgentTurnEnded(sessionName);
+						else bridge.noteAgentBusy(sessionName);
+					})
+					.catch(() => undefined);
+			}
 			if (event.type === 'agent:inactive' && event.sessionName) {
 				// A runtime that exited while the agent owed work: same hook as the other stop paths.
 				void this.restoreStoppedOwing(event.sessionName, 'runtime exited');
@@ -2653,6 +2665,17 @@ void (async () => {
 					},
 				}));
 				browserSessions.start();
+
+				// Automatic tab cleanup never closes a tab the owner is using: they
+				// took control, are watching the live view, or an action is held.
+				browserBridge.setCloseGuard((agentSession) => {
+					const session = browserSessions.getSession(agentSession);
+					if (!session) return null;
+					if (session.control === 'owner') return 'owner has control';
+					if (session.pending) return 'action held for the owner';
+					if (browserSessions.isWatched(agentSession)) return 'owner is watching';
+					return null;
+				});
 
 				// Let the browser controller reach agents, so taking the wheel
 				// and answering a held action actually tell the agent what
@@ -7003,6 +7026,24 @@ void (async () => {
 	}
 
 	/**
+	 * Close the Chrome tab a stopped agent opened. Best-effort and silent: no
+	 * binding, no browser, or the owner using the tab all end in "nothing to do".
+	 *
+	 * @param sessionName - The agent that stopped
+	 */
+	private async closeBrowserTabForStoppedAgent(sessionName: string): Promise<void> {
+		try {
+			const { BrowserBridgeService } = await import('./services/browser/browser-bridge.service.js');
+			await BrowserBridgeService.getInstance().closeTabForStoppedAgent(sessionName);
+		} catch (error) {
+			this.logger.debug('Could not close the stopped agent\'s browser tab', {
+				sessionName,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
 	 * The one hook every stop path runs: what the stopped agent owes goes back
 	 * in the queue and the agent is brought back with a reminder.
 	 *
@@ -7011,6 +7052,8 @@ void (async () => {
 	 * @returns True when the agent is being brought back
 	 */
 	private restoreStoppedOwing(sessionName: string, why: string): Promise<boolean> {
+		// A stopped agent's Chrome tab goes with it (the owner's own tabs never do).
+		void this.closeBrowserTabForStoppedAgent(sessionName);
 		if (sessionName === ORCHESTRATOR_SESSION_NAME) return Promise.resolve(false);
 		return restoreStoppedOwingWork(sessionName, why, {
 			listWorkItems: () => TaskPoolService.getInstance().getAllItems(),

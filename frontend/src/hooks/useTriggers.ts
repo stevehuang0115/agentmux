@@ -14,6 +14,7 @@ import type {
   TriggerEngineStatus,
   CreateTriggerInput,
 } from '../types/trigger.types';
+import { setVisibleInterval } from '../utils/visible-interval';
 
 // ========================= Types =========================
 
@@ -112,7 +113,7 @@ export function useTriggers(): UseTriggersResult {
 
     init();
 
-    const intervalId = setInterval(fetchAll, POLL_INTERVAL_MS);
+    const intervalId = setVisibleInterval(fetchAll, POLL_INTERVAL_MS);
 
     return () => {
       isMountedRef.current = false;

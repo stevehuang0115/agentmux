@@ -1168,7 +1168,7 @@ export async function unbindTab(req: Request, res: Response): Promise<void> {
 
 	const closeTab = (req.body as { closeTab?: unknown } | undefined)?.closeTab !== false;
 
-	const result = await bridge.unbindAgentTab(agentSession, { closeTab });
+	const result = await bridge.unbindAgentTab(agentSession, { closeTab, reason: 'agent_done' });
 	res.json({
 		success: true,
 		data: {

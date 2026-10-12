@@ -157,6 +157,13 @@ const DEFAULT_PONG_TIMEOUT_MS = 10_000;
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
 
 /**
+ * Ceiling for the reconnect backoff. A fixed 1 s retry per channel, with an
+ * orchestrator timeline merging dozens of channels, became a reconnect storm
+ * (hundreds of sockets a minute) whenever the backend was down or hung.
+ */
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
+/**
  * Generate a UUID v4 for the `clientMessageId` field.
  *
  * Prefer the platform `crypto.randomUUID()` when available; fall back to
@@ -488,6 +495,15 @@ export class HttpChatApiClient implements ChatApiClient {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let lastSeenSeq = 0;
     let stopped = false;
+    let failedAttempts = 0;
+    let visibilityListener: (() => void) | null = null;
+
+    const clearVisibilityListener = () => {
+      if (visibilityListener && typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', visibilityListener);
+      }
+      visibilityListener = null;
+    };
 
     const clearTimers = () => {
       if (pingTimer) {
@@ -521,10 +537,28 @@ export class HttpChatApiClient implements ChatApiClient {
     const scheduleReconnect = () => {
       if (stopped) return;
       clearTimers();
+      // A background tab does not retry: wait until it is visible again.
+      if (typeof document !== 'undefined' && document.hidden) {
+        if (!visibilityListener) {
+          visibilityListener = () => {
+            if (document.hidden) return;
+            clearVisibilityListener();
+            failedAttempts = 0;
+            connect();
+          };
+          document.addEventListener('visibilitychange', visibilityListener);
+        }
+        return;
+      }
+      // Exponential backoff (the first retry uses the configured delay), with
+      // jitter from the third failure on so channels do not retry in lockstep.
+      const attempt = failedAttempts++;
+      const base = Math.min(this.reconnectDelayMs * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
+      const delay = attempt >= 2 ? Math.round(base * (1 + Math.random() * 0.2)) : base;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connect();
-      }, this.reconnectDelayMs);
+      }, delay);
     };
 
     const sendPing = () => {
@@ -597,6 +631,7 @@ export class HttpChatApiClient implements ChatApiClient {
       };
 
       const handleOpen = () => {
+        failedAttempts = 0;
         // Start the heartbeat loop.
         if (pingTimer) clearInterval(pingTimer);
         pingTimer = setInterval(sendPing, this.heartbeatIntervalMs);
@@ -619,6 +654,7 @@ export class HttpChatApiClient implements ChatApiClient {
       close() {
         stopped = true;
         clearTimers();
+        clearVisibilityListener();
         closeSocket();
       },
     };

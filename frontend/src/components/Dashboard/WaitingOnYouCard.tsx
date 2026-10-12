@@ -25,6 +25,7 @@ import { chooseDecision, listOpenDecisions, remindDecisionTomorrow, skipAllDecis
 import type { OwnerDecision } from '../../types/decision.types';
 import { formatRelativeTimeCompact } from '../../utils/time';
 import { REPLY_OPTION_LABEL, resolveAgent, splitDecisionOptions, type AgentDirectory } from './dashboard.utils';
+import { setVisibleInterval } from '../../utils/visible-interval';
 
 /** How often the list is refreshed (ms). */
 export const WAITING_ON_YOU_POLL_MS = 30_000;
@@ -219,7 +220,7 @@ export const WaitingOnYouCard: React.FC<WaitingOnYouCardProps> = ({ directory = 
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), WAITING_ON_YOU_POLL_MS);
+    const timer = setVisibleInterval(() => void refresh(), WAITING_ON_YOU_POLL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
 
