@@ -14,6 +14,7 @@ import { BrowserProxyService } from '../../services/browser/browser-proxy.servic
 import { CloudClientService } from '../../services/cloud/cloud-client.service.js';
 import { getBrowserSessions, matchIrreversible } from '../../services/browser/browser-session.service.js';
 import { traceBrowserAction } from '../../services/trace/turn-origin.js';
+import { getBoardActivity } from '../../services/board/board-activity.tracker.js';
 import { getBrowserApprovals } from '../../services/browser/browser-approval.service.js';
 import {
 	parseOwnerInput,
@@ -745,6 +746,7 @@ function noteBrowserSessionAction(
 		// Every agent browser action is traced (2026-10-03: the LinkedIn post
 		// and the clicks before it were in no trace).
 		traceBrowserAction({ session: agentSession, tool, params, url: getBrowserSessions().getSession(agentSession)?.url, outcome: 'ok' });
+		getBoardActivity().recordBrowser(agentSession, tool, getBrowserSessions().getSession(agentSession)?.url);
 	} catch {
 		// Never let session bookkeeping affect the agent's command.
 	}

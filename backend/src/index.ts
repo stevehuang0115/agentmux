@@ -432,6 +432,7 @@ export class CrewlyServer {
 	/** Gaps in this backend's life are told to the owner (crewly#1015 §12) */
 	private livenessMonitor: LivenessMonitorService | null = null;
 	private waitingItemsSync: import('./services/cloud/waiting-items-sync.service.js').WaitingItemsSyncService | null = null;
+	private ownerBoard: import('./services/board/board.service.js').BoardService | null = null;
 	/** Epoch ms of the last shutdown signal acted on (dedups process-group delivery) */
 	private lastShutdownSignalAt = 0;
 	/** Interrupted turns loaded at boot, resumed once their agents are back */
@@ -4296,6 +4297,10 @@ void (async () => {
 			// snapshots, so the portal lists them for every machine.
 			void this.startWaitingItemsSync();
 
+			// Owner board (crewly#1247): outcomes + live activity, pushed to Cloud
+			// every 60 s and on change. CREWLY_BOARD_PUSH=0 turns the push off.
+			void this.startOwnerBoard();
+
 			// V3-only as of spec 2026-05-06-task-management-v1-deprecation.md.
 			// The legacy `TaskTrackingService.startAutoSync()` is gone — V3
 			// task-pool reconciler owns lifecycle cleanup now.
@@ -5981,6 +5986,49 @@ void (async () => {
 		}
 	}
 	/**
+	 * Start the owner board: the local `GET /api/board` always works; the push
+	 * to Crewly Cloud runs while the machine is signed in. Never throws.
+	 */
+	private async startOwnerBoard(): Promise<void> {
+		try {
+			const [{ BoardService, setBoardService }, { createProductionBoardSources }, { CloudClientService }, { getBoardActivity }] = await Promise.all([
+				import('./services/board/board.service.js'),
+				import('./services/board/board.sources.js'),
+				import('./services/cloud/cloud-client.service.js'),
+				import('./services/board/board-activity.tracker.js'),
+			]);
+			const cloud = CloudClientService.getInstance();
+			// Project roots turn file paths into repo-relative ones
+			getBoardActivity().setRootsResolver((session) => this.boardProjectRoots(session));
+			const service = new BoardService({
+				sources: createProductionBoardSources({ storage: this.storageService }),
+				cloud: { getToken: () => cloud.getToken(), getCloudUrl: () => cloud.getCloudUrl(), tryRefreshToken: () => cloud.tryRefreshToken() },
+			});
+			setBoardService(service);
+			service.start();
+			this.ownerBoard = service;
+		} catch (error) {
+			this.logger.warn('Owner board not started (non-fatal)', { error: error instanceof Error ? error.message : String(error) });
+		}
+	}
+
+	/** Cached project paths for the board's relative file paths. */
+	private boardRootsCache: { at: number; roots: string[] } = { at: 0, roots: [] };
+
+	private boardProjectRoots(_session: string): string[] {
+		if (Date.now() - this.boardRootsCache.at > 60_000) {
+			this.boardRootsCache.at = Date.now();
+			void this.storageService
+				.getProjects()
+				.then((projects) => {
+					this.boardRootsCache.roots = projects.map((p) => p.path).filter(Boolean);
+				})
+				.catch(() => undefined);
+		}
+		return this.boardRootsCache.roots;
+	}
+
+	/**
 	 * Load interrupted turns left by the previous shutdown (fresh ones only).
 	 */
 	private loadInterruptedTurnsAtBoot(): void {
@@ -7311,6 +7359,7 @@ void (async () => {
 		this.cloudDisconnectNotice?.stop();
 		this.conversationCloudSync?.stop();
 		this.waitingItemsSync?.stop();
+		this.ownerBoard?.stop();
 
 		// Safe restart: stop delivering, wait for agents mid-turn, persist the rest.
 		// Runs before the force-exit timer below, which only bounds the teardown.

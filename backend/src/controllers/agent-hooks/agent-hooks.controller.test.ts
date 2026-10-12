@@ -10,6 +10,7 @@ import { AgentTurnStateService } from '../../services/monitoring/agent-turn-stat
 import { CredentialGuardAlertService } from '../../services/monitoring/credential-guard-alerts.js';
 import { ownerHookNoteFor } from '../../services/messaging/owner-hook-message.js';
 import { WindDownService } from '../../services/system/wind-down.service.js';
+import { BoardActivityTracker, getBoardActivity } from '../../services/board/board-activity.tracker.js';
 
 // The owner-message note reads the real queue; stub that one lookup (the
 // joining stays real).
@@ -300,5 +301,39 @@ describe('receiveAgentHook — team roster after a compaction (specs/2026-10-10-
 		const r = await callAsync(ORC, { event: 'SessionStart', source: 'compact' });
 		expect(r.status).toBe(202);
 		expect(r.json).not.toHaveProperty('additionalContext');
+	});
+
+	describe('owner board activity (crewly#1247)', () => {
+		beforeEach(() => BoardActivityTracker.resetInstance());
+
+		it('a PreToolUse with a tool input slice becomes a redacted activity; the raw command is not kept', () => {
+			const secret = 'sk-ant-api03-THISISAFAKEKEYFORTESTING0123456789abcdef';
+			expect(
+				call(SESSION, {
+					event: 'PreToolUse',
+					toolUseId: 'toolu_1',
+					toolName: 'Bash',
+					toolInput: { command: `git push --token ${secret}`, content: 'IGNORED', filePath: '/tmp/x.txt' },
+				}).status,
+			).toBe(202);
+			const live = getBoardActivity().live('crewly-dev-1', true);
+			expect(live.activity).toMatchObject({ type: 'command', detail: 'git push' });
+			expect(JSON.stringify([live, getBoardActivity().timeline('crewly-dev-1'), getBoardActivity().peekUnsent()])).not.toMatch(/sk-ant|IGNORED/);
+		});
+
+		it('ignores a toolInput on other events and junk shapes', () => {
+			call(SESSION, { event: 'PostToolUse', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'rm -rf /' } });
+			call(SESSION, { event: 'PreToolUse', toolUseId: 'toolu_2', toolName: 'Edit', toolInput: 'not an object' });
+			expect(getBoardActivity().live('crewly-dev-1', true).activity?.type).toBe('coding');
+			expect(getBoardActivity().timeline('crewly-dev-1').map((e) => e.text)).toEqual(['Edited a file']);
+		});
+
+		it('Stop ends the activity and a permission prompt is a wait on the owner', () => {
+			call(SESSION, { event: 'PreToolUse', toolUseId: 'toolu_1', toolName: 'Read', toolInput: { filePath: '/tmp/a.txt' } });
+			call(SESSION, { event: 'Notification', notificationType: 'permission_prompt' });
+			expect(getBoardActivity().live('crewly-dev-1', true).activity?.type).toBe('waiting_owner');
+			call(SESSION, { event: 'Stop' });
+			expect(getBoardActivity().live('crewly-dev-1', false).activity).toBeNull();
+		});
 	});
 });

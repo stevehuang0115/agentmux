@@ -181,13 +181,64 @@ describe('agent-status hook (report.sh)', () => {
 	});
 
 	it('sends the tool-use id for tool events and the subagent id for subagent events (runtime turn state)', async () => {
-		await runHook({ hook_event_name: 'PreToolUse', tool_use_id: 'toolu_01DCgEGybopgPqvXvaCDeSsY', tool_input: { command: SECRET }, agent_id: 'ignored' });
+		await runHook({ hook_event_name: 'PreToolUse', tool_use_id: 'toolu_01DCgEGybopgPqvXvaCDeSsY', agent_id: 'ignored' });
 		await runHook({ hook_event_name: 'SubagentStart', agent_id: 'a1d4d935dea1c5443', agent_type: 'Explore', tool_use_id: 'ignored' });
 		expect(received.map((r) => JSON.parse(r.body))).toEqual([
 			{ event: 'PreToolUse', toolUseId: 'toolu_01DCgEGybopgPqvXvaCDeSsY' },
 			{ event: 'SubagentStart', agentId: 'a1d4d935dea1c5443' },
 		]);
-		expect(received[0].body).not.toContain(SECRET);
+	});
+
+	describe('owner board tool input (crewly#1247)', () => {
+		const PRE = {
+			hook_event_name: 'PreToolUse',
+			tool_use_id: 'toolu_1',
+			tool_name: 'Edit',
+			tool_input: { file_path: '/work/app/src/a.ts', old_string: SECRET, new_string: SECRET, command: 'git push', url: 'https://x.io/a?k=1', content: SECRET },
+			transcript_path: `/tmp/${SECRET}`,
+		};
+
+		it('PreToolUse sends the tool name and ONLY file path, command and url from tool_input', async () => {
+			await runHook(PRE);
+			expect(JSON.parse(received[0].body)).toEqual({
+				event: 'PreToolUse',
+				toolUseId: 'toolu_1',
+				toolName: 'Edit',
+				toolInput: { filePath: '/work/app/src/a.ts', command: 'git push', url: 'https://x.io/a?k=1' },
+			});
+			expect(received[0].body).not.toContain(SECRET);
+		});
+
+		it('the node path sends the same', async () => {
+			const bin = pathWith([...BASE_TOOLS, 'node']);
+			await runHook(PRE, { PATH: bin });
+			rmSync(bin, { recursive: true, force: true });
+			expect(JSON.parse(received[0].body).toolInput).toEqual({ filePath: '/work/app/src/a.ts', command: 'git push', url: 'https://x.io/a?k=1' });
+			expect(received[0].body).not.toContain(SECRET);
+		});
+
+		it('cuts long values to 600 characters and skips non-strings', async () => {
+			await runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'a'.repeat(5000), url: 42 } });
+			const body = JSON.parse(received[0].body);
+			expect(body.toolInput.command).toHaveLength(600);
+			expect(body.toolInput.url).toBeUndefined();
+		});
+
+		it('does not read a tool_input nested elsewhere, and sends no toolInput without one', async () => {
+			await runHook({ hook_event_name: 'PreToolUse', tool_name: 'Bash', other: { tool_input: { command: SECRET } } });
+			expect(JSON.parse(received[0].body)).toEqual({ event: 'PreToolUse', toolName: 'Bash' });
+		});
+
+		it('CREWLY_BOARD_PUSH=0 stops the script sending tool input at all', async () => {
+			await runHook(PRE, { CREWLY_BOARD_PUSH: '0' });
+			expect(JSON.parse(received[0].body)).toEqual({ event: 'PreToolUse', toolUseId: 'toolu_1', toolName: 'Edit' });
+		});
+
+		it('other events never carry tool input', async () => {
+			await runHook({ ...PRE, hook_event_name: 'PostToolUse' });
+			await runHook({ ...PRE, hook_event_name: 'Notification' });
+			for (const r of received) expect(r.body).not.toContain('toolInput');
+		});
 	});
 
 	it('sends the SessionStart source', async () => {
