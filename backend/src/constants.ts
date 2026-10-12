@@ -347,6 +347,17 @@ export const TURN_STATE_CONSTANTS = {
 	HOOK_SILENCE_MS: 10 * 60 * 1000,
 	/** An open tool call or a running subagent / background task expires after this (ms) */
 	OPEN_WORK_MAX_MS: 60 * 60 * 1000,
+	/**
+	 * A background subagent / fork whose transcript has not grown for this long,
+	 * while the agent's own turn is over, is stalled: it stops counting as busy
+	 * and the agent is told (ms). Pia's fork died after 2 minutes and the agent
+	 * stayed "busy" for the full OPEN_WORK_MAX_MS (2026-10-12).
+	 */
+	BACKGROUND_STALL_MS: 10 * 60 * 1000,
+	/** Progress probes (a directory read plus a few stats) are reused for this long (ms) */
+	BACKGROUND_PROBE_CACHE_MS: 30_000,
+	/** How often the stalled-background watchdog looks (ms) */
+	BACKGROUND_WATCHDOG_INTERVAL_MS: 60_000,
 	/** After a delivery, wait this long for the runtime to report the turn started (ms) */
 	DELIVERY_START_MS: 2 * 60 * 1000,
 	/** A transcript that says "mid-turn" counts only if it changed within this window (ms) */

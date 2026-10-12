@@ -36,6 +36,8 @@
  * @module services/monitoring/agent-turn-state
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { TURN_STATE_CONSTANTS } from '../../constants.js';
 import { claudeTranscriptTurnState, type TranscriptTurnState } from './claude-transcript-turn.js';
 
@@ -93,6 +95,16 @@ const RUNTIME_START_SOURCES = new Set(['startup', 'resume']);
 /** Prefix of synthetic ids for subagents that reported none. */
 const ANON = '\u0000anon-';
 
+/** A background subagent that stopped making progress. */
+export interface StalledBackground {
+	/** Subagent ids still open in the hooks' view */
+	agentIds: string[];
+	/** Epoch ms of the last sign of life (newest subagent transcript write, or the launch) */
+	lastProgressAt: number;
+	/** The launch description (from the subagent's meta file), when readable */
+	description?: string;
+}
+
 const UNKNOWN: TurnVerdict = { state: 'unknown', longRunning: false, since: null, source: 'none' };
 
 /**
@@ -117,6 +129,8 @@ export class AgentTurnStateService {
 	private transcriptLocator: TranscriptLocator | null = null;
 	/** Located transcript per session, re-resolved after LOCATOR_CACHE_MS */
 	private readonly located = new Map<string, { file: string | null; at: number }>();
+	/** Cached progress probes of background subagents, per session */
+	private readonly progress = new Map<string, { at: number; result: StalledBackground | null }>();
 
 	/**
 	 * @returns The singleton
@@ -151,6 +165,7 @@ export class AgentTurnStateService {
 	noteRuntimeStart(sessionName: string, now: number = Date.now()): void {
 		this.records.delete(sessionName);
 		this.located.delete(sessionName);
+		this.progress.delete(sessionName);
 		const r = this.recordFor(sessionName, now);
 		r.runtimeStartedAt = now;
 	}
@@ -231,6 +246,92 @@ export class AgentTurnStateService {
 	forget(sessionName: string): void {
 		this.records.delete(sessionName);
 		this.located.delete(sessionName);
+		this.progress.delete(sessionName);
+	}
+
+	/**
+	 * Whether the session's background subagents (the turn ended, they still
+	 * run) have stopped making progress: none of their transcripts under
+	 * `<transcript>/subagents/agent-<id>.jsonl` was written for
+	 * BACKGROUND_STALL_MS. Only stat calls, cached for BACKGROUND_PROBE_CACHE_MS.
+	 * Null when the agent's own turn is active, nothing is held, or any
+	 * subagent still makes progress.
+	 *
+	 * @param sessionName - Session
+	 * @param now - Clock
+	 * @returns The stalled work, or null
+	 */
+	stalledBackground(sessionName: string, now: number = Date.now()): StalledBackground | null {
+		const r = this.records.get(sessionName);
+		if (!r || r.active) return null;
+		const cached = this.progress.get(sessionName);
+		if (cached && now - cached.at < TURN_STATE_CONSTANTS.BACKGROUND_PROBE_CACHE_MS) return cached.result;
+		const open = new Map<string, number>([...r.heldSubagents, ...r.subagents]);
+		let result: StalledBackground | null = null;
+		if (open.size > 0) {
+			const dir = this.subagentsDir(sessionName, now);
+			let newest = 0;
+			for (const [id, startedAt] of open) {
+				newest = Math.max(newest, startedAt);
+				if (!dir || id.startsWith(ANON)) continue;
+				try {
+					newest = Math.max(newest, fs.statSync(path.join(dir, `agent-${id}.jsonl`)).mtimeMs);
+				} catch {
+					/* no transcript file: the launch time stands */
+				}
+			}
+			if (now - newest >= TURN_STATE_CONSTANTS.BACKGROUND_STALL_MS) {
+				const agentIds = [...open.keys()];
+				result = { agentIds, lastProgressAt: newest };
+				const description = dir ? this.subagentDescription(dir, agentIds) : undefined;
+				if (description) result.description = description;
+			}
+		}
+		if (this.progress.size >= TURN_STATE_CONSTANTS.MAX_TRACKED_SESSIONS) this.progress.clear();
+		this.progress.set(sessionName, { at: now, result });
+		return result;
+	}
+
+	/**
+	 * Stop counting the session's stalled background subagents (they are told
+	 * about, not waited for). A late SubagentStop is harmless.
+	 *
+	 * @param sessionName - Session
+	 */
+	dropBackground(sessionName: string): void {
+		const r = this.records.get(sessionName);
+		if (!r) return;
+		r.subagents.clear();
+		r.heldSubagents.clear();
+		this.progress.delete(sessionName);
+	}
+
+	/** Directory of the session's subagent transcripts, when its transcript is known. */
+	private subagentsDir(sessionName: string, now: number): string | null {
+		let file = this.located.get(sessionName)?.file ?? null;
+		if (!file && this.transcriptLocator) {
+			try {
+				file = this.transcriptLocator(sessionName);
+			} catch {
+				file = null;
+			}
+			this.located.set(sessionName, { file, at: now });
+		}
+		return file ? path.join(file.replace(/\.jsonl$/, ''), 'subagents') : null;
+	}
+
+	/** First readable `description` among the subagents' meta files (truncated). */
+	private subagentDescription(dir: string, ids: string[]): string | undefined {
+		for (const id of ids) {
+			if (id.startsWith(ANON)) continue;
+			try {
+				const meta = JSON.parse(fs.readFileSync(path.join(dir, `agent-${id}.meta.json`), 'utf8')) as { description?: unknown };
+				if (typeof meta.description === 'string' && meta.description.trim()) return meta.description.trim().slice(0, 100);
+			} catch {
+				/* no meta file */
+			}
+		}
+		return undefined;
 	}
 
 	/**
@@ -345,6 +446,8 @@ export class AgentTurnStateService {
 		const hooks = this.hookVerdict(sessionName, now);
 		if (hooks.state === 'turn') return hooks;
 		if (hooks.state === 'background') {
+			// Background work that stopped writing is not busy work (2026-10-12).
+			if (this.stalledBackground(sessionName, now)) return { state: 'idle', longRunning: false, since: null, source: 'hooks' };
 			// Held subagents need Claude Code's own word that they still run.
 			// (A transcript still mid-flush — its last entry the turn's tool
 			// result — agrees too when it lists the launch as pending.)

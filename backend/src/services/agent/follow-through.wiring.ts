@@ -260,9 +260,65 @@ export function owedWorkReminder(items: readonly WorkItem[], session: string): s
 	if (queued.length === 0) return null;
 	const lines = queued.slice(0, 5).map((wi) => `- ${wi.title}`);
 	return (
-		'[FOLLOW-THROUGH] You were stopped to free memory while you still owed the owner this. It is still yours; start it now and reply in the owner thread with the result:\n' +
+		'[FOLLOW-THROUGH] Crewly stopped your session (to free a slot or memory, or your runtime exited) while you still owed the owner this. It is still yours; start it now and reply in the owner thread with the result:\n' +
 		lines.join('\n')
 	);
+}
+
+/** Marker at the start of the reminder {@link owedWorkReminder} builds. */
+export const OWED_REMINDER_MARKER = '[FOLLOW-THROUGH]';
+
+/** Seams of {@link restoreStoppedOwingWork}. */
+export interface StoppedOwingDeps {
+	/** Put the agent's running work back in the queue (default: {@link releaseWorkForStop}) */
+	release?: (session: string, why: string) => Promise<unknown>;
+	/** All pool items */
+	listWorkItems: () => Promise<WorkItem[]>;
+	/** Stopped on purpose (owner stop, paused team): leave it alone */
+	isHeldBack: (session: string) => boolean;
+	/** A reminder is already waiting on the agent's queue */
+	hasReminder: (session: string) => boolean;
+	/** Queue the reminder for the agent's next start */
+	enqueue: (session: string, text: string) => void;
+	/** Keep the agent's typing placeholders up while it is down (it owes the answer) */
+	holdPlaceholders?: (session: string) => Promise<unknown>;
+	/** Bring the agent back (retries while the running-agent cap defers it) */
+	restart: (session: string) => Promise<void>;
+}
+
+const restoring = new Set<string>();
+
+/**
+ * The one hook every stop path runs (idle stop, memory-pressure stop, slot
+ * eviction, reconciler eviction, runtime exit): put the work the agent holds
+ * back in the queue, and if it still owes anything, queue a reminder and bring
+ * it back. Stop paths used to do this separately; slot eviction did not do it
+ * at all and Pia's promise was stranded (2026-10-12). Idempotent; never throws.
+ *
+ * @param session - The agent that stopped
+ * @param why - Reason text for the release
+ * @param deps - Seams
+ * @returns True when the agent is being brought back
+ */
+export async function restoreStoppedOwingWork(session: string, why: string, deps: StoppedOwingDeps): Promise<boolean> {
+	if (restoring.has(session)) return false;
+	restoring.add(session);
+	try {
+		if (deps.isHeldBack(session)) return false;
+		await (deps.release ?? releaseWorkForStop)(session, why);
+		const reminder = owedWorkReminder(await deps.listWorkItems(), session);
+		if (!reminder) return false;
+		await deps.holdPlaceholders?.(session).catch(() => undefined);
+		if (!deps.hasReminder(session)) deps.enqueue(session, reminder);
+		logger.info('Stopped agent still owes work — it will be restarted', { session, why });
+		await deps.restart(session);
+		return true;
+	} catch (err) {
+		logger.warn('Could not restore a stopped agent that owes work', { session, error: err instanceof Error ? err.message : String(err) });
+		return false;
+	} finally {
+		restoring.delete(session);
+	}
 }
 
 /**

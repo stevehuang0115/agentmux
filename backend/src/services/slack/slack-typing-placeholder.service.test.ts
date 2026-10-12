@@ -281,6 +281,44 @@ describe('SlackTypingPlaceholderService — a placeholder that cannot be posted'
     expect(updated.at(-1)?.text).toBe('✓ Ella read this — no reply needed.');
   });
 
+  it('holdForRestart keeps an owed placeholder up, as "queued", through the stop\'s turn-end settle (Pia, 2026-10-12)', async () => {
+    const deleted: string[] = [];
+    const { slack, updated } = makeSlack({ deleteMessage: async (_c, ts) => { deleted.push(ts); } });
+    const svc = new SlackTypingPlaceholderService({ slack, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => undefined });
+    const t0 = Date.now();
+    await svc.begin(key, ella);
+    // The "starting now" ack counted as an answer in the thread...
+    svc.noteAnswerPosted(key.slackChannelId, key.threadTs);
+
+    expect(await svc.holdForRestart('mk-ella')).toBe(1);
+    expect(updated.at(-1)?.text).toContain('will pick this up shortly');
+    // ...yet the settle the stop triggers takes nothing down.
+    expect(await svc.settleTurnWithoutReply('mk-ella', t0 + 60_000)).toBe(0);
+    expect(deleted).toEqual([]);
+    expect(svc.owes(key)).toBe(true);
+  });
+
+  it('the hold ends when the answer is posted, or when the agent runs again', async () => {
+    const deleted: string[] = [];
+    const { slack } = makeSlack({ deleteMessage: async (_c, ts) => { deleted.push(ts); } });
+    const svc = new SlackTypingPlaceholderService({ slack, setTimer: () => 0 as unknown as ReturnType<typeof setTimeout>, clearTimer: () => undefined });
+    const t0 = Date.now();
+    await svc.begin(key, ella);
+    svc.noteAnswerPosted(key.slackChannelId, key.threadTs);
+    await svc.holdForRestart('mk-ella');
+    svc.releaseHold('mk-ella');
+    expect(await svc.settleTurnWithoutReply('mk-ella', t0 + 60_000)).toBe(1);
+
+    await svc.begin(key, ella);
+    await svc.holdForRestart('mk-ella');
+    expect(await svc.resolve(key, 'done', ella)).not.toBeNull();
+    expect(svc.owes(key)).toBe(false);
+    // A later placeholder for the same key is not held by the old hold.
+    await svc.begin(key, ella);
+    svc.noteAnswerPosted(key.slackChannelId, key.threadTs);
+    expect(await svc.settleTurnWithoutReply('mk-ella', t0 + 120_000)).toBe(1);
+  });
+
   it('settling puts ✅ on the person\'s message the placeholder answered', async () => {
     const reactions: Array<{ ts: string; emoji: string; botToken?: string }> = [];
     const { slack } = makeSlack({

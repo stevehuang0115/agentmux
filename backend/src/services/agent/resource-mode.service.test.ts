@@ -388,12 +388,49 @@ describe('owner threads (specs/2026-10-08-owner-thread-sentinel.md)', () => {
 		expect(told).toEqual(['kai']);
 	});
 
-	it('still frees a slot from an owing agent when it is the only candidate', async () => {
+	it('never frees a slot from an owing agent: the waiter waits (Pia, 2026-10-12)', async () => {
 		const { svc, stopped, told } = makeOwing([agent('atlas', 9e6), agent('busy', 1e5, true)], ['atlas']);
 		await enter(svc);
-		expect(await svc.requestStart('new', false)).toBe(true);
+		jest.useFakeTimers();
+		try {
+			const p = svc.requestStart('new', false);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS + 10);
+			expect(await p).toBe(false);
+			expect(stopped).toEqual([]);
+			expect(told).toEqual([]);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('does not evict an owing agent even when the start has waited past the relax limit', async () => {
+		const { svc, stopped } = makeOwing([agent('atlas', 9e6)], ['atlas'], 1);
+		await enter(svc);
+		jest.useFakeTimers();
+		try {
+			const p = svc.requestStart('new', true);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.RELAX_AFTER_MS + 20_000);
+			expect(stopped).toEqual([]);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS);
+			expect(await p).toBe(false);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('stops an owing agent only when memory is critical', async () => {
+		const { svc, stopped } = makeOwing([agent('atlas', 9e6)], ['atlas'], 1);
+		await enter(svc);
+		svc.memoryStats = () => ({ ...tight, usedPercent: 97 });
+		expect(await svc.requestStart('new', true)).toBe(true);
 		expect(stopped).toEqual(['atlas']);
-		expect(told).toEqual(['atlas']);
+	});
+
+	it('an owner-triggered start takes a non-owing agent and leaves the owing one', async () => {
+		const { svc, stopped } = makeOwing([agent('atlas', 9e6), agent('kai', 1e6)], ['atlas']);
+		await enter(svc);
+		expect(await svc.requestStart('new', true)).toBe(true);
+		expect(stopped).toEqual(['kai']);
 	});
 
 	it('reports a start that waited for a slot and got none', async () => {
@@ -415,6 +452,43 @@ describe('owner threads (specs/2026-10-08-owner-thread-sentinel.md)', () => {
 			await jest.advanceTimersByTimeAsync(2 * 60_000 + 10);
 			expect(await p).toBe(false);
 			expect(deferred).toEqual(['nova']);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+});
+
+describe('idle time counts from when the agent became idle (Pia, 2026-10-12)', () => {
+	it('an agent that just turned idle after a silent hour is not "idle for 60 min"', async () => {
+		const { svc, stopped } = make([agent('pia', 60 * 60_000), agent('kai', 20 * 60_000)], [], 2);
+		await enter(svc);
+		svc.noteWorkingStatus('pia', true, Date.now() - 1000);
+		expect(await svc.requestStart('new', false)).toBe(true);
+		expect(stopped).toEqual(['kai']);
+	});
+
+	it('a busy sighting by the pump also restarts the clock', async () => {
+		const svc = ResourceModeService.getInstance();
+		const stopped: string[] = [];
+		let piaBusy = true;
+		svc.setDeps({
+			limits: async () => ({ maxRunning: 1, idleTimeoutMinutes: 10 }),
+			listRunning: async () => [agent('pia', 60 * 60_000, piaBusy)],
+			hasOwnerMessage: () => false,
+			stopAgent: async (n) => { stopped.push(n); },
+		});
+		await enter(svc);
+		jest.useFakeTimers();
+		try {
+			const p = svc.requestStart('new', false);
+			await jest.advanceTimersByTimeAsync(1000);
+			piaBusy = false;
+			await jest.advanceTimersByTimeAsync(10_500);
+			expect(stopped).toEqual([]);
+			await svc.pump();
+			expect(stopped).toEqual([]);
+			await jest.advanceTimersByTimeAsync(RESOURCE_MODE_CONSTANTS.START_WAIT_MS);
+			expect(await p).toBe(false);
 		} finally {
 			jest.useRealTimers();
 		}
