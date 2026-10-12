@@ -12,6 +12,7 @@
  * @module services/team-move/team-move-runtime
  */
 
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { safeReadJson, atomicWriteJson } from '../../utils/file-io.utils.js';
@@ -24,6 +25,7 @@ import { internalCredentialHeaders } from '../core/owner-auth.service.js';
 import type { StorageService } from '../core/storage.service.js';
 import { DecisionService } from '../decisions/decision.service.js';
 import { getHarnessService } from '../harness/harness.service.js';
+import { getRuntimeFallbackService } from '../runtime-fallback/runtime-fallback.service.js';
 import { collectSettingsSecretValues } from '../security/secret-scrub.service.js';
 import { getSlackTeamChannelService } from '../slack/slack-team-channel.service.js';
 import type { SlackTeamChannelMapping } from '../../types/slack.types.js';
@@ -177,7 +179,24 @@ export function createTeamMoveDriver(input: TeamMoveRuntimeInput): TeamMoveDrive
           const service = getSlackTeamChannelService();
           return service ? service.adoptMapping(mapping as unknown as SlackTeamChannelMapping) : adoptMappingInFile(home, mapping);
         },
-        startTeam: (teamId) => teamRoute(teamId, 'start'),
+        startTeam: async (teamId) => {
+          // A login may have landed since the last look: start from fresh availability,
+          // so a member whose runtime is missing here starts on its fallback chain.
+          getRuntimeFallbackService()?.invalidateAvailability();
+          return teamRoute(teamId, 'start');
+        },
+        getStandIns: async (teamId) => {
+          const fallback = getRuntimeFallbackService();
+          const team = (await storage.getTeams()).find((t) => t.id === teamId);
+          if (!fallback || !team) return [];
+          const out = [];
+          for (const member of team.members) {
+            const view = member.sessionName ? fallback.overrideView(member.sessionName) : null;
+            if (view) out.push({ member: member.name, configured: view.primaryLabel, runningOn: view.runtimeLabel });
+          }
+          return out;
+        },
+        machineName: async () => (await identity().catch(() => null))?.deviceName || os.hostname(),
         runtimeLogins,
         freeDisk: freeDiskBytes,
       }),

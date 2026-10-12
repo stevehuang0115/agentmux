@@ -73,8 +73,8 @@ export function computeRuntimeAvailability(input: AvailabilityInput): RuntimeAva
 		if (runtime === RUNTIME_TYPES.GEMINI_CLI) return { runtime, label, selectable: false, reason: 'Retired (enterprise only)' };
 		if (runtime === RUNTIME_TYPES.OPENCODE_CLI) return { runtime, label, selectable: false, reason: "Crewly can't check its sign-in" };
 		const harness = input.harnesses.find((h) => h.id === runtime);
-		if (!harness || !harness.installed) return { runtime, label, selectable: false, reason: 'Not installed' };
-		if (harness.loginState === 'logged_out') return { runtime, label, selectable: false, reason: 'Not signed in' };
+		if (!harness || !harness.installed) return { runtime, label, selectable: false, reason: 'Not installed', loginProblem: true };
+		if (harness.loginState === 'logged_out') return { runtime, label, selectable: false, reason: 'Not signed in', loginProblem: true };
 		if (harness.loginState !== 'logged_in') return { runtime, label, selectable: false, reason: "Sign-in couldn't be checked" };
 		const terms = input.termsBlocked?.(runtime) ?? null;
 		if (terms) return { runtime, label, selectable: false, reason: terms, termsBlocked: true };
