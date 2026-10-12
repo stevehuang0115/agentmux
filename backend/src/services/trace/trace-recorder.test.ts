@@ -37,6 +37,7 @@ import { createWorkItem, type WorkItem } from '../../types/v2/work-item.types.js
 import type { OwnerDecision } from '../../types/decision.types.js';
 import { PROJECT_TICKET_CONSTANTS } from '../../constants.js';
 import { TokenUsageService } from '../monitoring/token-usage.service.js';
+import { setRequestObserver, type RequestMeta } from '../usage-ledger/ledger-hooks.js';
 
 const WI_ID = '2c2a1c55-2222-4222-8222-222222222222';
 
@@ -148,6 +149,20 @@ describe('trace-recorder', () => {
 	});
 
 	describe('requests', () => {
+		it('tells the usage ledger what a new request is about', () => {
+			const seen: RequestMeta[] = [];
+			setRequestObserver((m) => seen.push(m));
+			try {
+				const r = request({ origin: { channel: 'slack-dm', ref: 'msg-1', threadRef: '1700.1', author: 'U1' } });
+				const id = assignRequestTrace(r)!;
+				expect(seen).toEqual([
+					expect.objectContaining({ traceId: id, requestId: r.id, ticketId: 'TKT-012', title: 'Build the landing page', channel: 'slack-dm', threadRef: '1700.1' }),
+				]);
+			} finally {
+				setRequestObserver(null);
+			}
+		});
+
 		it('an owner ticket starts a request trace', async () => {
 			const r = request();
 			const id = assignRequestTrace(r)!;

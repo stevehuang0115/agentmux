@@ -233,6 +233,53 @@ describe('TraceContext', () => {
 		expect(ctx.traceAt('nobody')).toBeNull();
 	});
 
+	it('shares a span between the traces one delivery names (tracesAt)', () => {
+		const a = ctx.startTrace({ kind: 'goal', summary: 'a', actor: { kind: 'owner' } })!;
+		const b = ctx.startTrace({ kind: 'goal', summary: 'b', actor: { kind: 'owner' } })!;
+		ctx.noteTurnDelivery('dev-1', `batch [TRACE:${a}] [TRACE:${b}]`);
+		expect(ctx.tracesAt('dev-1')).toEqual([a, b]);
+		// A later delivery about one trace ends the sharing.
+		clock += 1_000;
+		ctx.noteTurnDelivery('dev-1', `next [TRACE:${a}]`);
+		expect(ctx.tracesAt('dev-1')).toEqual([a]);
+		expect(ctx.tracesAt('nobody')).toEqual([]);
+	});
+
+	describe('listeners (usage ledger)', () => {
+		it('tells listeners about recorded events, even when the trace file refused them', () => {
+			const id = ctx.startTrace({ kind: 'goal', summary: 'g', actor: { kind: 'owner' } })!;
+			const seen: Array<[string, number]> = [];
+			const off = ctx.addListener((e, meta) => seen.push([e.type, meta.share]));
+			ctx.record({ traceId: id, type: 'usage', actor: { kind: 'system' }, summary: 'u' });
+			ctx.record({ traceId: id, type: 'usage', actor: { kind: 'system' }, summary: 'u', share: 0.5 });
+			off();
+			ctx.record({ traceId: id, type: 'usage', actor: { kind: 'system' }, summary: 'u' });
+			expect(seen).toEqual([['usage', 1], ['usage', 0.5]]);
+		});
+
+		it('survives a throwing listener', () => {
+			const id = ctx.startTrace({ kind: 'goal', summary: 'g', actor: { kind: 'owner' } })!;
+			ctx.addListener(() => {
+				throw new Error('boom');
+			});
+			expect(ctx.record({ traceId: id, type: 'usage', actor: { kind: 'system' }, summary: 'u' })).toBe(true);
+		});
+
+		it('splits a busy period shared by two traces between their turn.ended events', () => {
+			const a = ctx.startTrace({ kind: 'goal', summary: 'a', actor: { kind: 'owner' } })!;
+			const b = ctx.startTrace({ kind: 'goal', summary: 'b', actor: { kind: 'owner' } })!;
+			ctx.noteTurnDelivery('dev-1', `batch [TRACE:${a}] [TRACE:${b}]`);
+			const shares: Array<[string, number]> = [];
+			ctx.addListener((e, meta) => {
+				if (e.type === 'turn.ended') shares.push([e.traceId, meta.share]);
+			});
+			ctx.noteTurnActivity('dev-1', true);
+			clock += 60_000;
+			ctx.noteTurnActivity('dev-1', false);
+			expect(shares).toEqual([[a, 0.5], [b, 0.5]]);
+		});
+	});
+
 	it('never throws when the store does', () => {
 		const broken = new TraceContext(() => {
 			throw new Error('no store');

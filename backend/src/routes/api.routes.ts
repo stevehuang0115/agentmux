@@ -54,6 +54,7 @@ import { createBundleRouter } from '../controllers/bundle/bundle.routes.js';
 import { createReconcilerRouter } from '../controllers/reconciler/reconciler.routes.js';
 import { createWorktreeJanitorRouter } from '../controllers/worktree-janitor/worktree-janitor.routes.js';
 import { createTeamHealthRouter } from '../controllers/team-health/team-health.routes.js';
+import { createUsageLedgerRouter } from '../controllers/usage-ledger/usage-ledger.routes.js';
 import { createFissionRouter } from '../controllers/fission/fission.routes.js';
 import { createMissionPolicyRouter } from '../controllers/mission/mission-policy.routes.js';
 import { createV2WorkspaceRouter } from '../controllers/v2-workspace/workspace.routes.js';
@@ -272,6 +273,9 @@ export function createApiRoutes(apiController: ApiController): Router {
 
   // Team-Health-Watchdog (THW) — Layer 4 liveness aggregator routes
   router.use('/team-health', createTeamHealthRouter());
+
+  // Usage ledger: per-ticket time / token reports and the owner's report categories
+  router.use('/usage-ledger', createUsageLedgerRouter());
 
   // Fission guardrail routes for config, stats, violations, and pre-checks
   router.use('/fission', createFissionRouter());

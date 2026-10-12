@@ -269,6 +269,7 @@ import {
 	type AlertDecision,
 } from './services/team-health/index.js';
 import { createTeamHealthRouter } from './controllers/team-health/team-health.routes.js';
+import { getUsageLedger } from './services/usage-ledger/usage-ledger.runtime.js';
 import { traceHarness, traceTurnActivity } from './services/trace/trace-recorder.js';
 import { inputCircuitStats, setInputCircuitOpenListener } from './services/session/input-circuit-breaker.js';
 import { looksLikeShellPrompt } from './utils/screen-excerpt.js';
@@ -4271,6 +4272,10 @@ void (async () => {
 				await tokenUsageService.loadFromDisk();
 				tokenUsageService.startPeriodicFlush();
 
+				// Per-ticket time / token accounting (specs/2026-10-11-usage-ledger.md):
+				// records facts from here on and rebuilds history once, shortly after boot.
+				await getUsageLedger().start();
+
 				// Read Claude Code's own session transcripts on an interval so
 				// the Usage dashboard reflects claude-code agents, and so the
 				// context monitor gets a real context size for them (Claude
@@ -7510,6 +7515,15 @@ void (async () => {
 
 			// Stop auditor scheduler
 			AuditorSchedulerService.getInstance().stop();
+
+			// Write the usage ledger's buffered buckets
+			try {
+				await getUsageLedger().stop();
+			} catch (ledgerErr) {
+				this.logger.warn('Usage ledger flush on shutdown failed (non-fatal)', {
+					error: ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr),
+				});
+			}
 
 			// Persist the token ledger: it flushes every 5 minutes, so a restart
 			// used to drop everything recorded since the last tick (2026-09-18).

@@ -16,6 +16,7 @@ import type { OwnerDecision } from '../../types/decision.types.js';
 import { readProjectTicketLink } from '../../types/project-ticket.types.js';
 import { formatTicketNumber } from '../../types/v2/ticket.types.js';
 import { getTraceContext } from './trace-context.service.js';
+import { notifyRequest } from '../usage-ledger/ledger-hooks.js';
 import { appendTraceMarker, formatTraceMarker, skillLabel } from './trace-markers.js';
 import { TERMINAL_INPUT_MAX_LENGTH } from '../../utils/security.js';
 import { isTraceId, type TraceActor, type TraceEventType, type TraceOutcome, type TraceRefKind, type TraceRefs } from './trace.types.js';
@@ -299,6 +300,16 @@ export function assignRequestTrace(request: Request, opts: { traceId?: string; c
 		}
 		if (!traceId) return null;
 		request.traceId = traceId;
+		notifyRequest({
+			traceId,
+			requestId: request.id,
+			...(label ? { ticketId: label } : {}),
+			title: request.title,
+			description: request.description,
+			...(request.origin?.channel ? { channel: request.origin.channel } : {}),
+			...(request.origin?.threadRef ? { threadRef: request.origin.threadRef } : {}),
+			createdAt: request.createdAt,
+		});
 		store.linkRef('request', request.id, traceId);
 		if (label) store.linkRef('ticket', label, traceId);
 		ctx.record({
