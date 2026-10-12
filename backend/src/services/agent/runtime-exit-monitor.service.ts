@@ -91,6 +91,9 @@ interface MonitoredSession {
 	toolCheckLoopTimestamps: number[];
 }
 
+/** How long a noted exit cause stays valid for the exit notice (2 minutes). */
+const EXIT_CAUSE_TTL_MS = 2 * 60 * 1000;
+
 /**
  * Service that monitors PTY sessions for runtime exit patterns.
  *
@@ -140,11 +143,11 @@ export class RuntimeExitMonitorService {
 		this.exitCauses.set(sessionName, { cause, at: Date.now() });
 	}
 
-	/** Cause noted within the last 2 minutes, if any (consumed on read). */
+	/** Cause noted within EXIT_CAUSE_TTL_MS, if any (consumed on read). */
 	private takeExitCause(sessionName: string): string | undefined {
 		const rec = this.exitCauses.get(sessionName);
 		this.exitCauses.delete(sessionName);
-		return rec && Date.now() - rec.at < 120_000 ? rec.cause : undefined;
+		return rec && Date.now() - rec.at < EXIT_CAUSE_TTL_MS ? rec.cause : undefined;
 	}
 	private onExitDetectedCallback?: (sessionName: string) => void;
 	private agentRegistrationService: AgentRegistrationService | null = null;
