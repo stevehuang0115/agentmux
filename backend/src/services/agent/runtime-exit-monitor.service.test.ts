@@ -1319,6 +1319,16 @@ describe('RuntimeExitMonitorService', () => {
 			mockDeliverForcedMessage.mockResolvedValue({ status: 'delivered', inProcess: false });
 		});
 
+		it('names the cause when Crewly itself ended the runtime, once (GH #1260)', () => {
+			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
+			service.noteExitCause('agent-sage', 'recovery-ctrl-c');
+			notify('agent-sage', 'runtime_exited', [], true);
+			expect(delivered().message).toContain('Cause: recovery-ctrl-c');
+			mockDeliverForcedMessage.mockClear();
+			notify('agent-sage', 'runtime_exited', [], true);
+			expect(delivered().message).not.toContain('Cause:');
+		});
+
 		it('delivers in process (no HTTP hop) with active tasks and restart succeeded (#1024)', () => {
 			const notify = (service as any).notifyOrchestratorOfFailure.bind(service);
 			const httpMod = jest.requireMock('http') as { request: jest.Mock };

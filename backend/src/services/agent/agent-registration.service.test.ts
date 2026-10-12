@@ -1224,6 +1224,38 @@ describe('AgentRegistrationService', () => {
 			expect(result.message).toContain('recovered');
 		});
 
+		describe('GH #1260: a healthy, registered, mid-turn agent is never interrupted', () => {
+			const registeredTeams = [{
+				id: 'team-1',
+				members: [{ sessionName: 'test-session', role: 'developer', agentStatus: 'active' }],
+			}];
+
+			it('sends no Ctrl+C and no kill when the runtime is alive and registered but undetectable (mid-turn)', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				(mockSessionHelper as any).getBackend = jest.fn().mockReturnValue({ isChildProcessAlive: () => true });
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+				mockStorageService.getTeams.mockResolvedValue(registeredTeams as any);
+
+				const result = await service.createAgentSession({ sessionName: 'test-session', role: 'developer' });
+
+				expect(result.success).toBe(true);
+				expect(result.message).toContain('already running');
+				expect(mockSessionHelper.sendCtrlC).not.toHaveBeenCalled();
+				expect(mockSessionHelper.killSession).not.toHaveBeenCalled();
+			});
+
+			it('still recovers when the runtime process is gone (shell only)', async () => {
+				mockSessionHelper.sessionExists.mockReturnValue(true);
+				(mockSessionHelper as any).getBackend = jest.fn().mockReturnValue({ isChildProcessAlive: () => false });
+				mockRuntimeService.detectRuntimeWithCommand.mockResolvedValue(false);
+				mockStorageService.getTeams.mockResolvedValue(registeredTeams as any);
+
+				await service.createAgentSession({ sessionName: 'test-session', role: 'developer' });
+
+				expect(mockSessionHelper.sendCtrlC).toHaveBeenCalled();
+			});
+		});
+
 		it('should fall back to session recreation when recovery fails', async () => {
 			mockSessionHelper.sessionExists
 				.mockReturnValueOnce(true)  // Initial check

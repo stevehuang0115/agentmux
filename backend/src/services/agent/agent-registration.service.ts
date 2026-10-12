@@ -3141,6 +3141,28 @@ Loop until done, blocked, or explicitly reassigned:
 	}
 
 	/**
+	 * True when the agent is registered active AND its runtime process is alive.
+	 * Such a session must never get recovery keystrokes (GH #1260).
+	 *
+	 * @param sessionName - Agent session
+	 * @param role - Agent role
+	 * @returns Whether the session is healthy and registered
+	 */
+	private async isAlreadyRunningAndRegistered(sessionName: string, role: string): Promise<boolean> {
+		try {
+			const helper = await this.getSessionHelper();
+			const backend =
+				typeof (helper as { getBackend?: () => { isChildProcessAlive?: (name: string) => boolean } }).getBackend === 'function'
+					? (helper as { getBackend: () => { isChildProcessAlive?: (name: string) => boolean } }).getBackend()
+					: getSessionBackendSync();
+			if (backend?.isChildProcessAlive?.(sessionName) !== true) return false;
+			return await this.checkAgentRegistration(sessionName, role);
+		} catch {
+			return false;
+		}
+	}
+
+	/**
 	 * Check if agent is properly registered
 	 */
 	private async checkAgentRegistration(sessionName: string, role: string): Promise<boolean> {
@@ -3996,6 +4018,18 @@ Loop until done, blocked, or explicitly reassigned:
 					};
 				}
 
+				// GH #1260: a registered agent whose runtime process is alive is
+				// healthy — mid-turn it cannot be detected with a slash command, and
+				// Ctrl+C would kill it. This also drops a queued start released late.
+				if (await this.isAlreadyRunningAndRegistered(sessionName, role)) {
+					this.logger.info('Session already running and registered — no recovery, no Ctrl+C', { sessionName });
+					return {
+						success: true,
+						sessionName,
+						message: 'Agent session is already running and registered',
+					};
+				}
+
 				this.logger.info(
 					'Session already exists, attempting intelligent recovery instead of killing',
 					{
@@ -4060,6 +4094,8 @@ Loop until done, blocked, or explicitly reassigned:
 							}
 						);
 
+						// Name the cause on the exit notice if this ends the runtime (GH #1260)
+						RuntimeExitMonitorService.getInstance().noteExitCause(sessionName, 'recovery-ctrl-c');
 						// Send Ctrl+C twice to try to restart Claude
 						await (await this.getSessionHelper()).sendCtrlC(sessionName);
 						await delay(1000);

@@ -124,6 +124,28 @@ export class RuntimeExitMonitorService {
 	private static instance: RuntimeExitMonitorService | null = null;
 	private logger: ComponentLogger;
 	private sessions = new Map<string, MonitoredSession>();
+
+	/** Why Crewly itself is about to end a session's runtime (session -> cause + time). */
+	private exitCauses = new Map<string, { cause: string; at: number }>();
+
+	/**
+	 * Record that Crewly itself is ending this session's runtime (idle stop,
+	 * slot eviction, recovery Ctrl+C), so the exit notice names the cause
+	 * instead of a bare `runtime_exited` (GH #1260).
+	 *
+	 * @param sessionName - Session whose runtime is about to end
+	 * @param cause - Short cause label, e.g. `recovery-ctrl-c`
+	 */
+	noteExitCause(sessionName: string, cause: string): void {
+		this.exitCauses.set(sessionName, { cause, at: Date.now() });
+	}
+
+	/** Cause noted within the last 2 minutes, if any (consumed on read). */
+	private takeExitCause(sessionName: string): string | undefined {
+		const rec = this.exitCauses.get(sessionName);
+		this.exitCauses.delete(sessionName);
+		return rec && Date.now() - rec.at < 120_000 ? rec.cause : undefined;
+	}
 	private onExitDetectedCallback?: (sessionName: string) => void;
 	private agentRegistrationService: AgentRegistrationService | null = null;
 	private eventBusService: EventBusService | null = null;
@@ -1289,15 +1311,17 @@ export class RuntimeExitMonitorService {
 			? activeTasks.map(t => `${t.taskName} (${t.status})`).join(', ')
 			: '';
 
+		const cause = this.takeExitCause(sessionName);
 		const message = [
 			`Agent failure notification: ${sessionName} became inactive.`,
 			`Reason: ${reason}`,
+			cause ? `Cause: ${cause} (Crewly ended the runtime itself)` : '',
 			`Error classification: ${errorClass}`,
 			activeTasks.length > 0 ? `Active tasks: ${taskSummary}` : 'No active tasks.',
 			restartSucceeded
 				? 'Automatic restart succeeded — agent is recovering.'
 				: 'Automatic restart FAILED — please restart the agent or reassign its tasks.',
-		].join('\n');
+		].filter(Boolean).join('\n');
 
 		// Send via chat API (fire-and-forget)
 		const backend = getSessionBackendSync();
