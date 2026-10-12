@@ -38,7 +38,13 @@ export type StorageEvent =
        */
       created: boolean;
     }
-  | { kind: 'team-deleted'; teamId: string };
+  | { kind: 'team-deleted'; teamId: string }
+  /**
+   * The team was moved to another machine (crewly#1189). Local schedulers must
+   * let go of it like a deleted team, but Slack and Cloud must NOT treat it as
+   * a delete: its channel stays and its agent apps now belong to the target.
+   */
+  | { kind: 'team-moved-away'; teamId: string };
 
 export type StorageListener = (event: StorageEvent) => Promise<void> | void;
 
@@ -818,6 +824,23 @@ export class StorageService {
       });
       throw error;
     }
+  }
+
+  /**
+   * Remove a team from this machine because it moved to another one
+   * (crewly#1189). Unlike {@link deleteTeam} this announces `team-moved-away`,
+   * not `team-deleted`: the Slack channel is kept and the team's agent apps are
+   * not removed from Cloud (they now belong to the target machine).
+   *
+   * @param id - The team ID
+   */
+  async detachTeamForMove(id: string): Promise<void> {
+    const teamDir = this.getTeamDir(id);
+    await fs.rm(teamDir, { recursive: true, force: true });
+    this.logger.info('Team detached after a move', { teamId: id, teamDir });
+    this.updateTeamsBackup();
+    noteTeamDeleted(id);
+    this.emit({ kind: 'team-moved-away', teamId: id });
   }
 
   // ---------------------------------------------------------------------------

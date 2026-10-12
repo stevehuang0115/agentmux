@@ -719,6 +719,45 @@ export class TaskPoolService {
   // -----------------------------------------------------------------------
 
   /**
+   * Add work items that came with a team from another machine (team move,
+   * crewly#1189), exactly as they were: ids, status and links are kept, no
+   * routing or request inference is applied. Items already in the pool are
+   * skipped, so a resumed import adds nothing twice.
+   *
+   * @param items - Work items from the package
+   * @returns How many were added
+   */
+  async importWorkItems(items: readonly WorkItem[]): Promise<number> {
+    let added = 0;
+    for (const item of items) {
+      if (!isWorkItem(item)) continue;
+      if (await this.storage.findWorkItem(item.id)) continue;
+      await this.storage.addWorkItem(item);
+      added += 1;
+    }
+    if (added > 0) await this.storage.flush();
+    return added;
+  }
+
+  /**
+   * Remove the work items of a team that moved to another machine (team move,
+   * crewly#1189) together with their claims, so nothing here tries to wake
+   * agents that live elsewhere now. The mover keeps copies for rollback.
+   *
+   * @param ids - Work item ids
+   * @returns How many items were removed
+   */
+  async removeWorkItemsForMove(ids: readonly string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const idSet = new Set(ids);
+    const claimIds = new Set((await this.storage.getClaims()).filter((c) => idSet.has(c.workItemId)).map((c) => c.id));
+    const removed = await this.storage.removeWorkItems(idSet);
+    await this.storage.removeClaims(claimIds);
+    await this.storage.flush();
+    return removed;
+  }
+
+  /**
    * Adds an execution-ready WorkItem to the pool.
    *
    * Accepted statuses:

@@ -33,6 +33,7 @@ import { cloudTalkCapabilities } from '../cloud/cloud-talk-inbound.service.js';
 import { driveCapabilities } from '../drive/drive-agent.service.js';
 import { talkTranscribeCapabilities } from '../talk/talk-transcribe.service.js';
 import { waitingActionCapabilities } from '../cloud/waiting-actions-inbound.service.js';
+import { teamMoveCapabilities } from '../team-move/team-move-driver.service.js';
 import { SlackConfig, SlackCloudConfig } from '../../types/slack.types.js';
 import { SLACK_CLOUD_CONSTANTS, CREWLY_CONSTANTS, SLACK_AGENT_DM_CONSTANTS, SLACK_TYPING_CONSTANTS } from '../../constants.js';
 import * as path from 'path';
@@ -648,7 +649,7 @@ export async function ensureSlackInstanceRegistry(): Promise<SlackInstanceRegist
       getTeamChannels: () => getSlackTeamChannelService(),
       getBoundWorkspaceId: () => getSlackCloudConfigService()?.getConfig()?.workspace.slackTeamId || null,
       isAgentAwake: (agentSession) => sessionBackendExists(agentSession),
-      capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities()],
+      capabilities: () => [...cloudTalkCapabilities(), ...waitingActionCapabilities(), ...talkTranscribeCapabilities(), ...driveCapabilities(), ...teamMoveCapabilities()],
     });
     setSlackInstanceRegistryService(registry);
   }
